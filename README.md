@@ -42,8 +42,8 @@ rampage disasm  <file> [--at <addr|symbol>] [--count N]
 rampage strings <file> [--min-len N]         # ASCII and UTF-16LE
 rampage funcs   <file> [--name TEXT]         # recursive-descent function discovery
 rampage xrefs   <file> --to|--from <addr|name>
-rampage rename  <file> <addr|name> <new name> [--clear]
-rampage comment <file> <addr|name> <text> [--clear]
+rampage rename  <file> <addr|name> <new name|--clear>
+rampage comment <file> <addr|name> <text|--clear>
 rampage annotations <file>                   # the user's names and comments
 rampage mcp                                  # MCP server on stdin/stdout
 
@@ -57,7 +57,8 @@ a `"0x…"` string, because JSON numbers lose precision above 2^53 in common con
 
 Names and comments are saved beside the binary in `<file>.rampage` (`<file>.<arch>.rampage` for a slice of a
 universal binary): an append-only JSON Lines log of edits, each recording the value it replaced, so undo is just
-another edit and the file is a full history.
+another edit and the file is a full history. Several clients can share it: the UI picks up names an agent saves
+through MCP within a second.
 
 ## Desktop UI
 
@@ -67,17 +68,18 @@ cargo run --release -p rampage-ui -- <file> [--arch aarch64]
 
 An egui app over the same API: docked functions, strings, imports and exports lists, a disassembly listing with
 clickable references (or a hex view for data), cross-references, triage, and a navigation band across the image.
-Keys: G go to, Esc back, N rename, `;` comment, Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo. Drop a file on the window
-to open it. Analysis runs in the background; on Chrome's framework (190,000 functions, 930,000 strings) frames
-take a few milliseconds. `cargo test -p rampage-ui` renders the UI offscreen into `crates/rampage-ui/tests/snapshots`.
+Keys: G go to, Esc or Alt+Left back, Alt+Right forward, N rename, `;` comment, Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z
+redo. Drop a file on the window to open it. Analysis runs in the background; on Chrome's framework (190,000
+functions, 930,000 strings) frames take a few milliseconds. `cargo test -p rampage-ui` renders the UI offscreen into
+`crates/rampage-ui/tests/snapshots`.
 
 ## Using it from an AI agent
 
 `rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the tools
 `triage`, `binary_info`, `list_functions`, `disassemble`, `list_strings`, `list_imports`, `list_exports`, `xrefs`,
-`rename`, `set_comment`, `undo` and `list_annotations`. Agents' names and comments land in the same log the UI and
-CLI use. Analysis runs once per binary and is
-cached for the session. To add it to Claude Code:
+`rename`, `set_comment`, `undo`, `redo` and `list_annotations`. Agents' names and comments land in the same log the
+UI and CLI use, and the UI shows them as they arrive. Analysis runs once per binary and is cached for the session.
+To add it to Claude Code:
 
 ```
 claude mcp add rampage -- /path/to/rampage mcp
