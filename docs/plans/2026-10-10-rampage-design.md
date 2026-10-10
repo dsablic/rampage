@@ -75,3 +75,11 @@ land when benchmarks show they are needed.
 5. Projects: transaction log, persistence, annotations, undo.
 6. IR and lifters for both architectures.
 7. `rampage sql`, benchmarks, performance work.
+
+## Decision: Capstone as the fallback decoder (2026-10-10)
+
+Native decoders generated from machine-readable specifications remain the goal (AArch64 is done; A32/T32 come
+from the same Arm data next). To support every major architecture now, architectures without a native decoder
+use Capstone behind the same `Disassembler` trait: 32-bit ARM and Thumb, MIPS, PowerPC, RISC-V, SPARC,
+z/Architecture and m68k. Analysis is architecture-neutral: decoders report control flow, delay slots and data
+references, and `Binary::decoder` builds them with the image's endianness and Thumb regions.

@@ -11,8 +11,11 @@ Triage and a first desktop UI are in. See [the design](docs/plans/2026-10-10-ram
 ## Supported today
 
 - Formats: ELF, PE, Mach-O (including universal binaries)
-- Disassembly: x86 and x86-64 (via [iced-x86](https://github.com/icedland/iced)), and AArch64 including SVE and
-  SME, decoded from tables generated out of Arm's open-source
+- Architectures: x86 and x86-64 (via [iced-x86](https://github.com/icedland/iced)) and AArch64 decode natively;
+  32-bit ARM (A32 and Thumb), MIPS, PowerPC, RISC-V, SPARC, z/Architecture and m68k decode through
+  [Capstone](https://www.capstone-engine.org) for now, in either byte order, with MIPS and SPARC delay slots kept in
+  their branch's block. Native decoders replace Capstone where a machine-readable specification exists.
+- AArch64 includes SVE and SME, decoded from tables generated out of Arm's open-source
   [machine-readable architecture specification](https://developer.arm.com/Architectures/A-Profile%20Architecture).
   Its output matches `llvm-mc` on every instruction sampled from Chrome's arm64 code and on 99.85% of words
   across all encodings. On AArch64, function
@@ -46,7 +49,7 @@ rampage mcp                                  # MCP server on stdin/stdout
 
 # global flags
 --json                 machine-readable output for every command
---arch x86_64|aarch64  pick a slice from a universal Mach-O
+--arch x86_64|aarch64|arm|...  pick a slice from a universal Mach-O
 ```
 
 Addresses accept `0x` hex, decimal, symbol and export names, or `sub_<hex>`. In JSON output every address is
