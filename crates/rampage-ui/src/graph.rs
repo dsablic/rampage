@@ -22,47 +22,44 @@ pub struct Layout {
     pub size: egui::Vec2,
     /// Edges that go back up the layers (loops), drawn around the side.
     back_edges: Vec<bool>,
-    /// Each block's layer.
-    layer: Vec<usize>,
-}
-
-impl Layout {
-    /// The horizontal extent of the boxes in the layers strictly between `from` and `to`.
-    fn span_between(&self, from: usize, to: usize) -> Option<(f32, f32)> {
-        let boxes = (0..self.boxes.len()).filter(|&block| self.layer[block] > from && self.layer[block] < to);
-        boxes
-            .map(|block| (self.boxes[block].left(), self.boxes[block].right()))
-            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
-    }
+    /// For edges that skip layers, the horizontal extent of the boxes in between, which they route around.
+    detours: Vec<Option<(f32, f32)>>,
+    /// Hex digits shown for addresses.
+    address_width: usize,
 }
 
 /// Lays `graph` out in layers: each block one layer below the deepest predecessor reached without looping back,
 /// ordered within its layer by its predecessors' positions.
-pub fn layout(graph: FunctionGraph) -> Layout {
+pub fn layout(graph: FunctionGraph, address_width: usize) -> Layout {
     let count = graph.blocks.len();
-    let entry = graph.entry().unwrap_or(0);
-    // Depth-first search from the entry finds the edges that close loops.
+    let mut successors = vec![Vec::new(); count];
+    let mut predecessors = vec![Vec::new(); count];
+    for (index, edge) in graph.edges.iter().enumerate() {
+        successors[edge.from].push((index, edge.to));
+        predecessors[edge.to].push(edge.from);
+    }
+    // Depth-first search finds the edges that close loops: from the entry first, then from blocks only an
+    // indirect jump reaches (switch cases).
     let mut back_edges = vec![false; graph.edges.len()];
     let mut state = vec![0u8; count]; // 0 unseen, 1 on the stack, 2 done
-    let successors = |block: usize| {
-        graph.edges.iter().enumerate().filter(move |(_, edge)| edge.from == block).map(|(index, edge)| (index, edge.to))
-    };
-    let mut stack = vec![(entry, false)];
-    while let Some((block, leaving)) = stack.pop() {
-        if leaving {
-            state[block] = 2;
-            continue;
-        }
-        if state[block] != 0 {
-            continue;
-        }
-        state[block] = 1;
-        stack.push((block, true));
-        for (index, to) in successors(block) {
-            match state[to] {
-                0 => stack.push((to, false)),
-                1 => back_edges[index] = true,
-                _ => {}
+    for root in graph.entry().into_iter().chain(0..count) {
+        let mut stack = vec![(root, false)];
+        while let Some((block, leaving)) = stack.pop() {
+            if leaving {
+                state[block] = 2;
+                continue;
+            }
+            if state[block] != 0 {
+                continue;
+            }
+            state[block] = 1;
+            stack.push((block, true));
+            for &(index, to) in &successors[block] {
+                match state[to] {
+                    0 => stack.push((to, false)),
+                    1 => back_edges[index] = true,
+                    _ => {}
+                }
             }
         }
     }
@@ -86,9 +83,14 @@ pub fn layout(graph: FunctionGraph) -> Layout {
         rows[layer[block]].push(block);
     }
 
+    let text_column = address_width + 2;
     let size_of = |block: usize| {
         let lines = &graph.blocks[block].lines;
-        let widest = lines.iter().map(|line| line.text.len() + 10).max().unwrap_or(10);
+        let width = |line: &rampage_api::DisassemblyLine| {
+            let comment = line.note.as_ref().or(line.comment.as_ref()).map_or(0, |comment| comment.len() + 4);
+            text_column + line.text.len() + comment
+        };
+        let widest = lines.iter().map(width).max().unwrap_or(text_column);
         vec2(widest as f32 * CHAR_WIDTH + 2.0 * PADDING, lines.len() as f32 * LINE_HEIGHT + 2.0 * PADDING)
     };
     let sizes: Vec<egui::Vec2> = (0..count).map(size_of).collect();
@@ -99,11 +101,10 @@ pub fn layout(graph: FunctionGraph) -> Layout {
     for row in &mut rows {
         // Order by the average center of each block's placed predecessors.
         let key = |block: usize| {
-            let parents: Vec<f32> = graph
-                .edges
+            let parents: Vec<f32> = predecessors[block]
                 .iter()
-                .filter(|edge| edge.to == block && layer[edge.from] < layer[block])
-                .map(|edge| centers[edge.from])
+                .filter(|&&parent| layer[parent] < layer[block])
+                .map(|&parent| centers[parent])
                 .collect();
             if parents.is_empty() { block as f32 * 1e-3 } else { parents.iter().sum::<f32>() / parents.len() as f32 }
         };
@@ -129,8 +130,26 @@ pub fn layout(graph: FunctionGraph) -> Layout {
             boxes[block] = boxes[block].translate(vec2(shift, 0.0));
         }
     }
+    // Each layer's horizontal extent, for routing edges that skip layers.
+    let span = |a: (f32, f32), b: (f32, f32)| (a.0.min(b.0), a.1.max(b.1));
+    let extents: Vec<Option<(f32, f32)>> = rows
+        .iter()
+        .map(|row| row.iter().map(|&block| (boxes[block].left(), boxes[block].right())).reduce(span))
+        .collect();
+    let detours = graph
+        .edges
+        .iter()
+        .enumerate()
+        .map(|(index, edge)| {
+            let (from, to) = (layer[edge.from], layer[edge.to]);
+            if back_edges[index] || to <= from + 1 {
+                return None;
+            }
+            extents[from + 1..to].iter().flatten().copied().reduce(span)
+        })
+        .collect();
     let size = vec2(width + 2.0 * MARGIN + 40.0, y + MARGIN);
-    Layout { graph, boxes, size, back_edges, layer }
+    Layout { graph, boxes, size, back_edges, detours, address_width }
 }
 
 fn edge_color(kind: EdgeKind) -> Color32 {
@@ -197,7 +216,7 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
                     pos2(end.x, end.y - 10.0 * zoom),
                     end,
                 ]
-            } else if let Some((left, right)) = layout.span_between(layout.layer[edge.from], layout.layer[edge.to]) {
+            } else if let Some((left, right)) = layout.detours[index] {
                 // Edges that skip layers run down a channel beside the boxes in between, on the nearer side.
                 let (left, right) = (left * zoom + origin.x, right * zoom + origin.x);
                 let lane = 6.0 * zoom * (index % 4) as f32;
@@ -217,8 +236,13 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
         }
 
         let font = FontId::monospace(12.0 * zoom);
+        let visible = ui.clip_rect();
         for (index, block) in layout.graph.blocks.iter().enumerate() {
             let rect = place(layout.boxes[index]);
+            // Large functions have many boxes; draw only those on screen.
+            if !rect.intersects(visible) {
+                continue;
+            }
             let is_entry = block.start == layout.graph.address;
             painter.rect_filled(rect, 3.0 * zoom, theme::PANEL);
             let border = if is_entry { theme::LABEL } else { theme::FAINT };
@@ -233,7 +257,7 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
                 painter.text(
                     pos2(left, top),
                     Align2::LEFT_TOP,
-                    format!("{:x}", line.address & 0xffff_ffff),
+                    format!("{:0width$x}", line.address, width = layout.address_width),
                     font.clone(),
                     theme::ADDRESS,
                 );
@@ -244,7 +268,8 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
                     text.push_str("  ; ");
                     text.push_str(comment);
                 }
-                painter.text(pos2(left + 10.0 * CHAR_WIDTH * zoom, top), Align2::LEFT_TOP, text, font.clone(), color);
+                let text_left = left + (layout.address_width + 2) as f32 * CHAR_WIDTH * zoom;
+                painter.text(pos2(text_left, top), Align2::LEFT_TOP, text, font.clone(), color);
                 if response.hover_pos().is_some_and(|position| line_rect.contains(position)) {
                     if response.double_clicked() {
                         followed = match line.flow {

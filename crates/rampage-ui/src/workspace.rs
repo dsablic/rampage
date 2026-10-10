@@ -280,11 +280,21 @@ impl Workspace {
 
     /// Lays out the graph of the listing's function, once per function.
     pub fn want_graph(&mut self) {
-        let Some(address) = self.listing_address().filter(|_| self.analysis_ready()) else { return };
+        if !self.analysis_ready() {
+            return;
+        }
+        // Outside any function (data, or code analysis did not reach) there is no graph to show.
+        let Some(address) =
+            self.listing_address().filter(|_| self.project.function_containing(self.cursor).ok().flatten().is_some())
+        else {
+            self.graph = Some((self.cursor, Err(format!("No function contains {:#x}", self.cursor))));
+            return;
+        };
         if self.graph.as_ref().is_some_and(|(cached, _)| *cached == address) {
             return;
         }
-        let layout = self.project.function_graph(address).map(crate::graph::layout).map_err(text);
+        let width = self.address_width;
+        let layout = self.project.function_graph(address).map(|graph| crate::graph::layout(graph, width)).map_err(text);
         self.graph = Some((address, layout));
     }
 

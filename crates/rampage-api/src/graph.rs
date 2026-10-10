@@ -1,5 +1,7 @@
 //! A function's control-flow graph: its basic blocks and the branches between them.
 
+use std::collections::HashMap;
+
 use rampage_arch::Flow;
 use serde::Serialize;
 
@@ -60,13 +62,17 @@ impl Project {
             .into_iter()
             .filter_map(|lines| Some(GraphBlock { start: lines.first()?.address, lines }))
             .collect();
-        let index_of = |address: u64| blocks.iter().position(|block| block.start == address);
+        let starts: HashMap<u64, usize> =
+            blocks.iter().enumerate().map(|(index, block)| (block.start, index)).collect();
+        let index_of = |address: u64| starts.get(&address).copied();
         let mut edges = Vec::new();
         for (from, block) in blocks.iter().enumerate() {
             let Some(last) = block.lines.last() else { continue };
-            // With delay slots, the branch sits before its slot at the end of the block.
-            let branch = block.lines.len().checked_sub(1 + delay_slots).and_then(|index| block.lines.get(index));
-            let flow = branch.map_or(last.flow, |line| line.flow);
+            // With delay slots, the branch sits before its slot at the end of the block, unless the slot is a
+            // branch target and so starts a block of its own.
+            let branches = |line: &&DisassemblyLine| !matches!(line.flow, Flow::Next | Flow::Invalid);
+            let before_slot = block.lines.len().checked_sub(1 + delay_slots).and_then(|index| block.lines.get(index));
+            let flow = before_slot.filter(|_| delay_slots > 0).filter(branches).map_or(last.flow, |line| line.flow);
             let end = last.address + (last.bytes.len() / 2) as u64;
             let mut add = |to: Option<usize>, kind| {
                 if let Some(to) = to {

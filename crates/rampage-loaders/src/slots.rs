@@ -49,7 +49,11 @@ fn elf(parsed: &object::File) -> Vec<ImportSlot> {
             _ => None,
         })
         .collect();
-    slots.extend(mips_global_got(parsed).into_iter().filter_map(|(address, index)| slot(address, index)));
+    // Every dynamic symbol from DT_MIPS_GOTSYM on has a global GOT entry, the ones a library defines and exports
+    // as well as its imports; only the undefined ones are imports.
+    let undefined = |index| symbols.symbol_by_index(index).is_ok_and(|symbol| symbol.is_undefined());
+    let imported = mips_global_got(parsed).into_iter().filter(|&(_, index)| undefined(index));
+    slots.extend(imported.filter_map(|(address, index)| slot(address, index)));
     slots
 }
 

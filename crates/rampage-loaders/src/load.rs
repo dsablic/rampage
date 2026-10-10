@@ -56,6 +56,11 @@ pub struct Binary {
     code_big_endian: bool,
     #[serde(skip)]
     code_ranges: Vec<Range<u64>>,
+    /// What decoders get: the ABI's global pointer and the GOT, found once at load.
+    #[serde(skip)]
+    global_pointer: Option<u64>,
+    #[serde(skip)]
+    got: Option<rampage_arch::Got>,
     #[serde(skip)]
     data: Mmap,
     #[serde(skip)]
@@ -247,10 +252,14 @@ impl Binary {
             code_big_endian,
             thumb,
             code_ranges: Vec::new(),
+            global_pointer: None,
+            got: None,
             data,
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
+        binary.global_pointer = binary.find_global_pointer();
+        binary.got = binary.read_got();
         if let Some(directory) = exception_directory {
             let (starts, warning) = starts::pe(&binary, &directory);
             function_starts.extend(starts);
@@ -272,14 +281,14 @@ impl Binary {
             arch: self.arch,
             big_endian: self.code_big_endian,
             thumb: self.thumb.clone().into(),
-            global_pointer: self.global_pointer(),
-            got: self.got(),
+            global_pointer: self.global_pointer,
+            got: self.got.clone(),
         }
     }
 
     /// The ABI's global-pointer value: the linker's symbol for it, or else its conventional place relative to the
     /// GOT (MIPS `_gp` is `.got + 0x7ff0`; the PowerPC64 TOC base is `.got + 0x8000`).
-    fn global_pointer(&self) -> Option<u64> {
+    fn find_global_pointer(&self) -> Option<u64> {
         let symbol = |name: &str| self.symbol_by_name(name).map(|symbol| symbol.address);
         let got = |offset: u64| {
             let got = self.sections.iter().find(|section| section.name == ".got")?;
@@ -294,7 +303,7 @@ impl Binary {
     }
 
     /// The `.got` section's entries, in the image's byte order.
-    fn got(&self) -> Option<rampage_arch::Got> {
+    fn read_got(&self) -> Option<rampage_arch::Got> {
         let section = self.sections.iter().find(|section| section.name == ".got")?;
         let bytes = self.read(section.address, section.size)?;
         let size = usize::from(self.arch.pointer_size());
