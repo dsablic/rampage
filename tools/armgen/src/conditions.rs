@@ -66,7 +66,8 @@ impl Conditions {
     pub fn emit(&self, out: &mut String) -> std::fmt::Result {
         writeln!(out, "/// Evaluates decode condition `id` against instruction word `w`.")?;
         writeln!(out, "#[allow(clippy::all, unused_parens)]")?;
-        writeln!(out, "pub fn condition(id: u16, w: u32) -> bool {{")?;
+        writeln!(out, "pub fn condition(id: u16, w: u32, state: State) -> bool {{")?;
+        writeln!(out, "    let _ = state;")?;
         writeln!(out, "    let w = w as u64;")?;
         writeln!(out, "    match id {{")?;
         for (id, code) in self.codes.iter().enumerate().skip(1) {

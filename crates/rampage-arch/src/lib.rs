@@ -1,6 +1,7 @@
 pub mod a64;
 mod cs;
 pub mod hex;
+mod mrs;
 mod track;
 mod x86;
 

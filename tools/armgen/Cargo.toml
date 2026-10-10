@@ -1,5 +1,5 @@
 [package]
-name = "a64gen"
+name = "armgen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

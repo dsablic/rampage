@@ -103,8 +103,8 @@ arm64 slice in about 1.4 s. Repeated MCP queries are answered from the cached an
 | `rampage-cli` | The `rampage` binary |
 | `rampage-ui` | The desktop UI |
 
-`tools/a64gen` regenerates `crates/rampage-arch/src/a64/spec.rs` from an AARCHMRS release:
-`cargo run --release -p a64gen -- <AARCHMRS directory> crates/rampage-arch/src/a64/spec.rs`.
+`tools/armgen` regenerates the decoder tables from an AARCHMRS release, one instruction set at a time:
+`cargo run --release -p armgen -- <AARCHMRS directory> A64 crates/rampage-arch/src/a64/spec.rs`.
 
 Test fixtures live in `tests/fixtures`; `tests/fixtures/build.sh` rebuilds them (needs zig and Apple clang).
 

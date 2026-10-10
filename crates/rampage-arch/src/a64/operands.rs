@@ -4,6 +4,8 @@
 //! descriptions. Output follows LLVM's conventions.
 
 use super::helpers::{decode_bit_masks, ones, pc_relative, sign_extend, system_operation};
+pub use crate::mrs::Value;
+
 use super::spec_types::{Operand, SysKind, Token};
 use super::{Decoded, extract, lookup, spec};
 
@@ -13,14 +15,6 @@ pub enum LabelStyle {
     Absolute,
     /// As signed offsets from the instruction (`#-8`), the way `llvm-mc` prints them.
     Relative,
-}
-
-pub enum Value {
-    Text(String),
-    /// The operand's default value; an optional group holding only defaults is left out.
-    Default(String),
-    /// No rendering exists for this encoding; the enclosing alternative does not apply.
-    Invalid,
 }
 
 pub struct Context<'a> {
