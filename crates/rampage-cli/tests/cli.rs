@@ -72,9 +72,7 @@ fn disasm_at_symbol_starts_at_that_symbol() {
 
 #[test]
 fn disasm_on_arm64_reports_unsupported_architecture() {
-    rampage(&["disasm"], "hello-arm64.macho")
-        .failure()
-        .stderr(predicates::str::contains("unsupported architecture"));
+    rampage(&["disasm"], "hello-arm64.macho").failure().stderr(predicates::str::contains("unsupported architecture"));
 }
 
 #[test]
@@ -92,4 +90,15 @@ fn non_binary_input_is_an_error() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("cannot parse binary"));
+}
+
+#[test]
+fn arch_flag_selects_universal_slice() {
+    assert_eq!(json(&["--json", "info"], "hello-universal.macho")["arch"], "x86_64");
+    let arm = json(&["--json", "--arch", "arm64", "info"], "hello-universal.macho");
+    assert_eq!(arm["arch"], "aarch64");
+    assert_eq!(arm["slices"], serde_json::json!(["x86_64", "aarch64"]));
+    rampage(&["--arch", "x86", "info"], "hello-universal.macho")
+        .failure()
+        .stderr(predicates::str::contains("x86 slice; the file contains x86_64, aarch64"));
 }

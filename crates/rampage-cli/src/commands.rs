@@ -3,12 +3,17 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use rampage_analysis::{functions, strings};
-use rampage_arch::{Flow, decoder_for};
+use rampage_arch::{Arch, Flow, decoder_for};
 use rampage_loaders::{Binary, Perms};
 use serde::Serialize;
 
-fn open(path: &Path) -> Result<Binary> {
-    Binary::open(path).with_context(|| format!("{}", path.display()))
+pub struct Options {
+    pub json: bool,
+    pub arch: Option<Arch>,
+}
+
+fn open(path: &Path, options: &Options) -> Result<Binary> {
+    Binary::open_with(path, options.arch).with_context(|| format!("{}", path.display()))
 }
 
 fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result<()> {
@@ -22,18 +27,17 @@ fn perms_text(perms: Perms) -> String {
     [flag(perms.read, 'r'), flag(perms.write, 'w'), flag(perms.execute, 'x')].iter().collect()
 }
 
-pub fn info(out: &mut impl Write, path: &Path, json: bool) -> Result<()> {
-    let binary = open(path)?;
-    if json {
-        #[derive(Serialize)]
-        struct Info<'a> {
-            #[serde(flatten)]
-            binary: &'a Binary,
-        }
-        return write_json(out, &Info { binary: &binary });
+pub fn info(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let binary = open(path, options)?;
+    if options.json {
+        return write_json(out, &binary);
     }
     writeln!(out, "format    {:?}", binary.format)?;
-    writeln!(out, "arch      {:?}", binary.arch)?;
+    writeln!(out, "arch      {}", binary.arch)?;
+    if binary.slices.len() > 1 {
+        let slices: Vec<_> = binary.slices.iter().map(Arch::to_string).collect();
+        writeln!(out, "slices    {}", slices.join(", "))?;
+    }
     writeln!(out, "entry     {:#x}", binary.entry)?;
     writeln!(out, "symbols   {}", binary.symbols.len())?;
     writeln!(out, "imports   {}", binary.imports.len())?;
@@ -64,8 +68,8 @@ fn resolve_address(binary: &Binary, text: &str) -> Result<u64> {
     symbol.or_else(export).with_context(|| format!("no symbol or export named {text:?}"))
 }
 
-pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize, json: bool) -> Result<()> {
-    let binary = open(path)?;
+pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize, options: &Options) -> Result<()> {
+    let binary = open(path, options)?;
     let mut decoder = decoder_for(binary.arch)?;
     let start = at.map_or(Ok(binary.entry), |text| resolve_address(&binary, text))?;
     let Some(code) = binary.read_to_segment_end(start) else {
@@ -90,7 +94,7 @@ pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize,
         lines.push(Line { address, bytes: hex(bytes), text: insn.text, flow: insn.flow });
     }
 
-    if json {
+    if options.json {
         return write_json(out, &lines);
     }
     for line in &lines {
@@ -106,10 +110,10 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-pub fn strings(out: &mut impl Write, path: &Path, min_len: usize, json: bool) -> Result<()> {
-    let binary = open(path)?;
+pub fn strings(out: &mut impl Write, path: &Path, min_len: usize, options: &Options) -> Result<()> {
+    let binary = open(path, options)?;
     let found = strings::scan(&binary, min_len);
-    if json {
+    if options.json {
         return write_json(out, &found);
     }
     for string in &found {
@@ -122,10 +126,10 @@ pub fn strings(out: &mut impl Write, path: &Path, min_len: usize, json: bool) ->
     Ok(())
 }
 
-pub fn funcs(out: &mut impl Write, path: &Path, json: bool) -> Result<()> {
-    let binary = open(path)?;
+pub fn funcs(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let binary = open(path, options)?;
     let found = functions::from_symbols(&binary);
-    if json {
+    if options.json {
         return write_json(out, &found);
     }
     for function in &found {

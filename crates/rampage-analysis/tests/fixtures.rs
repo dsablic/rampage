@@ -20,11 +20,9 @@ fn finds_greeting_in_every_fixture() {
 
 #[test]
 fn lists_add_main_and_entry_as_functions() {
-    for (name, add, main) in [
-        ("hello-x64.elf", "add", "main"),
-        ("hello-x64.exe", "add", "entry"),
-        ("hello-x64.macho", "_add", "_main"),
-    ] {
+    for (name, add, main) in
+        [("hello-x64.elf", "add", "main"), ("hello-x64.exe", "add", "entry"), ("hello-x64.macho", "_add", "_main")]
+    {
         let binary = open(name);
         let found = functions::from_symbols(&binary);
         let names: Vec<_> = found.iter().map(|function| function.name.as_str()).collect();

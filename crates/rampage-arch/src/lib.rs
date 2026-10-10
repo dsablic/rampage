@@ -10,6 +10,16 @@ pub enum Arch {
     Aarch64,
 }
 
+impl std::fmt::Display for Arch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Arch::X86 => "x86",
+            Arch::X86_64 => "x86_64",
+            Arch::Aarch64 => "aarch64",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "target", rename_all = "snake_case")]
 pub enum Flow {
@@ -37,7 +47,7 @@ pub trait Disassembler {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("unsupported architecture: {0:?}")]
+#[error("unsupported architecture: {0}")]
 pub struct UnsupportedArch(pub Arch);
 
 pub fn decoder_for(arch: Arch) -> Result<Box<dyn Disassembler>, UnsupportedArch> {

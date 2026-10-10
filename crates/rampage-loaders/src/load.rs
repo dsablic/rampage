@@ -1,7 +1,9 @@
 use std::fs::File;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
+use object::read::macho::{FatArch, FatArch32, FatArch64, MachOFatFile};
 use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol, SegmentFlags};
 use rampage_arch::Arch;
 use serde::Serialize;
@@ -14,6 +16,8 @@ pub enum LoadError {
     Io { path: PathBuf, source: std::io::Error },
     #[error("cannot parse binary: {0}")]
     Parse(#[from] object::Error),
+    #[error("malformed binary: {0}")]
+    Malformed(String),
     #[error("unsupported {0}")]
     Unsupported(String),
 }
@@ -28,19 +32,35 @@ pub struct Binary {
     pub symbols: Vec<Symbol>,
     pub imports: Vec<Import>,
     pub exports: Vec<Export>,
+    /// Architectures present in the file: several for a universal Mach-O, otherwise just `arch`.
+    pub slices: Vec<Arch>,
     #[serde(skip)]
     data: Mmap,
+    #[serde(skip)]
+    image: Range<usize>,
 }
 
 impl Binary {
+    /// Opens a binary. For a universal Mach-O this picks the x86_64 slice when present, else the first one.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, LoadError> {
+        Self::open_with(path, None)
+    }
+
+    /// Opens a binary, requiring the given architecture when one is requested.
+    pub fn open_with(path: impl AsRef<Path>, wanted: Option<Arch>) -> Result<Self, LoadError> {
         let path = path.as_ref();
         let io_error = |source| LoadError::Io { path: path.to_owned(), source };
         let file = File::open(path).map_err(io_error)?;
         // SAFETY: the mapping is read-only; a concurrent external truncation of the input is out of scope,
         // the same assumption every mmap-based binary tool makes.
         let data = unsafe { Mmap::map(&file) }.map_err(io_error)?;
-        let parsed = object::File::parse(&*data)?;
+
+        let (slices, image) = match object::FileKind::parse(&*data)? {
+            object::FileKind::MachOFat32 => select_slice(fat_slices::<FatArch32>(&data)?, wanted)?,
+            object::FileKind::MachOFat64 => select_slice(fat_slices::<FatArch64>(&data)?, wanted)?,
+            _ => (Vec::new(), 0..data.len()),
+        };
+        let parsed = object::File::parse(&data[image.clone()])?;
 
         let format = match parsed.format() {
             object::BinaryFormat::Elf => Format::Elf,
@@ -48,12 +68,12 @@ impl Binary {
             object::BinaryFormat::MachO => Format::MachO,
             other => return Err(LoadError::Unsupported(format!("format {other:?}"))),
         };
-        let arch = match parsed.architecture() {
-            object::Architecture::I386 => Arch::X86,
-            object::Architecture::X86_64 => Arch::X86_64,
-            object::Architecture::Aarch64 => Arch::Aarch64,
-            other => return Err(LoadError::Unsupported(format!("architecture {other:?}"))),
-        };
+        let arch = arch_of(parsed.architecture())
+            .ok_or_else(|| LoadError::Unsupported(format!("architecture {:?}", parsed.architecture())))?;
+        if wanted.is_some_and(|wanted| wanted != arch) {
+            return Err(LoadError::Unsupported(format!("{} slice; the file contains {arch}", wanted.unwrap())));
+        }
+        let slices = if slices.is_empty() { vec![arch] } else { slices };
 
         let segments: Vec<Segment> = parsed
             .segments()
@@ -123,7 +143,7 @@ impl Binary {
             None => parsed.entry(),
         };
         drop(parsed);
-        Ok(Self { format, arch, entry, segments, sections, symbols, imports, exports, data })
+        Ok(Self { format, arch, entry, segments, sections, symbols, imports, exports, slices, data, image })
     }
 
     pub fn segment_containing(&self, address: u64) -> Option<&Segment> {
@@ -144,7 +164,7 @@ impl Binary {
         }
         let start = usize::try_from(segment.file_offset.checked_add(offset)?).ok()?;
         let end = start.checked_add(usize::try_from(len).ok()?)?;
-        self.data.get(start..end)
+        self.data[self.image.clone()].get(start..end)
     }
 
     /// Returns the file-backed bytes from `address` to the end of its segment's file data.
@@ -152,6 +172,49 @@ impl Binary {
         let segment = self.segment_containing(address)?;
         let available = segment.file_size.checked_sub(address - segment.address)?;
         self.read(address, available)
+    }
+}
+
+struct Slice {
+    arch: Option<Arch>,
+    range: Range<usize>,
+}
+
+fn fat_slices<Fat: FatArch>(data: &[u8]) -> Result<Vec<Slice>, LoadError> {
+    let fat = MachOFatFile::<Fat>::parse(data)?;
+    fat.arches()
+        .iter()
+        .map(|slice| {
+            let start = usize::try_from(slice.offset().into()).ok();
+            let len = usize::try_from(slice.size().into()).ok();
+            let range = start.zip(len).and_then(|(start, len)| Some(start..start.checked_add(len)?));
+            let range = range.filter(|range| range.end <= data.len());
+            let range = range.ok_or_else(|| LoadError::Malformed("universal slice out of bounds".to_owned()))?;
+            Ok(Slice { arch: arch_of(slice.architecture()), range })
+        })
+        .collect()
+}
+
+fn select_slice(slices: Vec<Slice>, wanted: Option<Arch>) -> Result<(Vec<Arch>, Range<usize>), LoadError> {
+    let present: Vec<Arch> = slices.iter().filter_map(|slice| slice.arch).collect();
+    let chosen = match wanted {
+        Some(wanted) => slices.iter().find(|slice| slice.arch == Some(wanted)),
+        None => slices.iter().find(|slice| slice.arch == Some(Arch::X86_64)).or_else(|| slices.first()),
+    };
+    let Some(chosen) = chosen else {
+        let present = present.iter().map(Arch::to_string).collect::<Vec<_>>().join(", ");
+        let wanted = wanted.map_or_else(|| "any".to_owned(), |wanted| wanted.to_string());
+        return Err(LoadError::Unsupported(format!("{wanted} slice; the file contains {present}")));
+    };
+    Ok((present, chosen.range.clone()))
+}
+
+fn arch_of(architecture: object::Architecture) -> Option<Arch> {
+    match architecture {
+        object::Architecture::I386 => Some(Arch::X86),
+        object::Architecture::X86_64 => Some(Arch::X86_64),
+        object::Architecture::Aarch64 => Some(Arch::Aarch64),
+        _ => None,
     }
 }
 

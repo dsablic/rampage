@@ -48,7 +48,7 @@ pub fn scan_bytes(bytes: &[u8], base_address: u64, min_len: usize) -> Vec<FoundS
 }
 
 fn utf16le_run(bytes: &[u8]) -> usize {
-    bytes.chunks_exact(2).take_while(|pair| is_printable(pair[0]) && pair[1] == 0).count()
+    bytes.as_chunks::<2>().0.iter().take_while(|&&[low, high]| is_printable(low) && high == 0).count()
 }
 
 fn is_printable(byte: u8) -> bool {

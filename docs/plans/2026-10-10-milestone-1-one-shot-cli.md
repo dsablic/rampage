@@ -33,13 +33,13 @@ Verify: `cargo build` succeeds, `cargo test` runs zero tests. Commit.
 ### Task 2: Test fixtures
 
 **Files:**
-- Create: `tests/fixtures/src/hello.c`, `tests/fixtures/build.sh`, built binaries `tests/fixtures/bin/hello-x64.{elf,exe,macho}`
-  and `hello-arm64.macho`
+- Create: `tests/fixtures/src/hello.c`, `tests/fixtures/build.sh`
+- Create: built binaries `tests/fixtures/bin/hello-x64.{elf,exe,macho}` and `hello-arm64.macho`
 
 `hello.c` has a known string (`"rampage fixture greeting"`), a known exported function `add`, and `main`.
 `build.sh` uses `zig cc -target x86_64-linux-musl -O1 -g0`, `zig cc -target x86_64-windows-gnu -O1 -g0` and
 `clang -arch {x86_64,arm64} -O1`. The binaries are committed so tests do not depend on compiler versions.
-A shared `rampage-testdata` helper is not needed: tests locate fixtures via `env!("CARGO_MANIFEST_DIR")/../../tests/fixtures/bin`.
+Tests locate fixtures via `env!("CARGO_MANIFEST_DIR")/../../tests/fixtures/bin`.
 
 Commit.
 
