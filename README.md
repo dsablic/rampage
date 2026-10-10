@@ -46,7 +46,7 @@ claude mcp add rampage -- /path/to/rampage mcp
 ## Performance
 
 On the 493 MB Chrome framework (x86_64 slice, stripped, no function-start metadata), on an M1 Max:
-`funcs` discovers 176,480 functions and 17.7 million instructions in about 1.4 s, and repeated MCP queries are
+`funcs` discovers 176,480 functions and 14.5 million instructions in about 1.4 s, and repeated MCP queries are
 answered from the cached analysis in milliseconds.
 
 ## Layout
