@@ -290,8 +290,12 @@ mod tests {
         // swp x2, x0, [x3] and cas x1, x2, [x3] overwrite x0 and x1.
         assert_eq!(data_refs(&[0x9000_0000, 0xf822_8060, 0x9100_2001], page)[2], None);
         assert_eq!(data_refs(&[0x9000_0001, 0xc8a1_7c62, 0x9100_2022], page)[2], None);
-        // bl clobbers caller-saved registers.
+        // bl and svc clobber caller-saved registers.
         assert_eq!(data_refs(&[0x9000_0000, 0x9400_0002, 0x9100_2001], page)[2], None);
+        assert_eq!(data_refs(&[0x9000_0000, 0xd400_0001, 0xf940_0401], page)[2], None);
+        // SVE incb x8 and lastb x8, p0, z0.d overwrite x8.
+        assert_eq!(data_refs(&[0x9000_0008, 0x0430_e3e8, 0xf940_0501], page)[2], None);
+        assert_eq!(data_refs(&[0x9000_0008, 0x05e1_a008, 0xf940_0501], page)[2], None);
     }
 
     #[test]

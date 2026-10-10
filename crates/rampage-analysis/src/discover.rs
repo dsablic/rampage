@@ -85,10 +85,10 @@ where
     M: Memory,
     F: Fn() -> Box<dyn Disassembler> + Sync,
 {
-    let explore_all = |starts: &[u64], known: &BTreeSet<u64>| -> Vec<Explored> {
+    let explore_all = |starts: &[u64], known: &BTreeSet<u64>, joins: Option<&[u64]>| -> Vec<Explored> {
         starts
             .par_iter()
-            .map_init(&new_decoder, |decoder, &start| explore(memory, decoder.as_mut(), known, start))
+            .map_init(&new_decoder, |decoder, &start| explore(memory, decoder.as_mut(), known, joins, start))
             .collect()
     };
 
@@ -96,9 +96,11 @@ where
     let mut pending: Vec<u64> = known.iter().copied().collect();
     let mut first_jumper: HashMap<u64, u64> = HashMap::new();
     let mut empty = BTreeSet::new();
+    let mut branch_targets = Vec::new();
     while !pending.is_empty() {
         let mut next = BTreeSet::new();
-        for result in explore_all(&pending, &known) {
+        for result in explore_all(&pending, &known, None) {
+            branch_targets.extend_from_slice(&result.branch_targets);
             let start = result.function.address;
             if result.function.blocks.is_empty() {
                 empty.insert(start);
@@ -120,10 +122,13 @@ where
     }
     known.retain(|start| !empty.contains(start));
 
+    // Phase 1 saw every branch; a fall-through that is also a branch target joins paths and starts afresh.
+    branch_targets.sort_unstable();
+    branch_targets.dedup();
     let starts: Vec<u64> = known.iter().copied().collect();
     let mut functions = Vec::with_capacity(starts.len());
     let mut xrefs = Vec::new();
-    for result in explore_all(&starts, &known) {
+    for result in explore_all(&starts, &known, Some(&branch_targets)) {
         xrefs.extend(result.xrefs);
         functions.push(result.function);
     }
@@ -138,9 +143,19 @@ struct Explored {
     new_seeds: Vec<u64>,
     /// Targets of unconditional jumps that leave for code outside this function's known starts.
     jump_targets: Vec<u64>,
+    /// Targets of every branch taken while exploring.
+    branch_targets: Vec<u64>,
 }
 
-fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSet<u64>, start: u64) -> Explored {
+/// Explores the function at `start`. `joins`, when given, lists every branch target in the program: a conditional
+/// branch's fall-through keeps the decoder state (AArch64 ADRP pages) of the path into it unless it is one.
+fn explore(
+    memory: &impl Memory,
+    decoder: &mut dyn Disassembler,
+    known: &BTreeSet<u64>,
+    joins: Option<&[u64]>,
+    start: u64,
+) -> Explored {
     let is_other_function = |address: u64| address != start && known.contains(&address);
     let trust_immediates = memory.immediates_may_be_addresses();
     let mut blocks: BTreeMap<u64, u64> = BTreeMap::new();
@@ -148,14 +163,21 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
     let mut xrefs = Vec::new();
     let mut new_seeds = Vec::new();
     let mut jump_targets = Vec::new();
+    let mut branch_targets = Vec::new();
     let mut worklist = vec![start];
-    // A conditional branch's fall-through is explored next and keeps the decoder state (AArch64 ADRP pages) of
-    // the path into it; every other block starts afresh.
+    // A conditional branch's fall-through is explored next; it keeps the decoder state only when no branch joins
+    // it there.
     let mut fall_through = None;
+    let carries_state = |address: u64| joins.is_some_and(|joins| joins.binary_search(&address).is_err());
 
     loop {
         let block_start = match fall_through.take() {
-            Some(next) => next,
+            Some(next) => {
+                if !carries_state(next) {
+                    decoder.reset();
+                }
+                next
+            }
             None => {
                 let Some(next) = worklist.pop() else { break };
                 decoder.reset();
@@ -198,6 +220,7 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
                 }
                 Flow::ConditionalJump(target) => {
                     xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
+                    branch_targets.push(target);
                     if !is_other_function(target) {
                         worklist.push(target);
                     }
@@ -209,6 +232,7 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
                 }
                 Flow::Jump(target) => {
                     xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
+                    branch_targets.push(target);
                     if !is_other_function(target) {
                         worklist.push(target);
                         jump_targets.push(target);
@@ -232,7 +256,7 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
     jump_targets.dedup();
     let blocks = blocks.into_iter().map(|(start, end)| Block { start, end }).collect();
     let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len() };
-    Explored { function, xrefs, new_seeds, jump_targets }
+    Explored { function, xrefs, new_seeds, jump_targets, branch_targets }
 }
 
 /// Splits the block containing `address` so that a new block starts there. Misaligned decoding can leave smaller
@@ -268,6 +292,19 @@ mod tests {
         let memory = FlatMemory { base: 0, bytes };
         let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
         assert!(program.xrefs.contains(&Xref { to: 0x18, from: 8, kind: XrefKind::Data }), "{:?}", program.xrefs);
+    }
+
+    #[test]
+    fn a_fall_through_that_is_also_a_branch_target_starts_afresh() {
+        // 0: adrp x8, 0x1000; 4: cbz w0, 0x10; 8: adrp x8, 0; c: cbz w1, 0x18; 10: ldr x1, [x8, #0x18]; 14: ret
+        let words: [u32; 7] =
+            [0xb000_0008, 0x3400_0060, 0x9000_0008, 0x3400_0061, 0xf940_0d01, 0xd65f_03c0, 0xd65f_03c0];
+        let mut bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        bytes.resize(0x2000, 0);
+        let memory = FlatMemory { base: 0, bytes };
+        let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
+        let from_load: Vec<_> = program.xrefs.iter().filter(|xref| xref.from == 0x10).collect();
+        assert!(from_load.is_empty(), "{from_load:?}");
     }
 
     #[test]

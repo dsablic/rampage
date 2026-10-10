@@ -96,6 +96,8 @@ struct Info {
     written: Vec<Written>,
     /// Pre- and post-indexed forms update the base register.
     writeback: Option<Written>,
+    /// Calls and supervisor calls may change every caller-saved register.
+    clobbers_caller_saved: bool,
 }
 
 static INFO: LazyLock<Vec<Info>> = LazyLock::new(|| ENCODINGS.iter().map(info_for).collect());
@@ -135,7 +137,7 @@ fn info_for(encoding: &Encoding) -> Info {
     let written_by = |register: &str| -> bool {
         let starts = |prefixes: &[&str]| prefixes.iter().any(|p| prefix.starts_with(p));
         match register {
-            "Rd" => true,
+            "Rd" | "Rdn" => true,
             "Rt" => starts(&["LD", "MRS", "MRRS", "SWP", "CAS", "RCW", "SYSL", "GCSPOP"]),
             "Rt2" => starts(&["LD"]),
             // Store-exclusive status and compare-and-swap old values.
@@ -152,7 +154,10 @@ fn info_for(encoding: &Encoding) -> Info {
             base = Some(Written { start: register.start, width: register.width, plus: 0 });
         }
         // Only W and X operands are general-purpose registers; SIMD&FP destinations use the same field names.
-        let general = operand.name.starts_with("<W") || operand.name.starts_with("<X");
+        // SVE writes some as <R><d>, where <R> picks W or X.
+        let general = operand.name.starts_with("<W")
+            || operand.name.starts_with("<X")
+            || matches!(operand.name, "<d>" | "<dn>") && encoding.syntax.operands.iter().any(|o| o.name == "<R>");
         if general && written_by(register.name) {
             let plus = u8::from(operand.name.contains("+1"));
             written.push(Written { start: register.start, width: register.width, plus });
@@ -160,7 +165,9 @@ fn info_for(encoding: &Encoding) -> Info {
     }
     // CPY* and SET* advance all three of their registers.
     let indexed = ["post", "pre", "asisdlsep", "asisdlsop", "memcms", "memset_go"].iter().any(|n| name.contains(n));
-    Info { flow, effect, written, writeback: base.filter(|_| indexed) }
+    let clobbers_caller_saved =
+        matches!(flow, FlowClass::Call | FlowClass::IndirectCall) || matches!(prefix, "SVC" | "HVC" | "SMC");
+    Info { flow, effect, written, writeback: base.filter(|_| indexed), clobbers_caller_saved }
 }
 
 /// The PC-relative target of a branch or literal load: imm26, imm19, imm14 or imm9 words.
@@ -240,7 +247,7 @@ pub fn analyze(decoded: &Decoded, address: u64, addresses: &mut Addresses) -> (F
     if decoded.encoding.name.contains("ldst_pac") && decoded.field("W") == Some(1) {
         addresses.clear(decoded.field("Rn").unwrap_or(31));
     }
-    if matches!(flow, Flow::Call(_) | Flow::IndirectCall) {
+    if info.clobbers_caller_saved {
         addresses.clobber_caller_saved();
     }
     if let (Some((value, page)), Some(rd)) = (produced, decoded.field("Rd")) {
