@@ -1,3 +1,5 @@
 /target
 # Git worktrees that review agents create
 /.claude/worktrees/
+# Annotation logs that tools save beside binaries.
+*.rampage

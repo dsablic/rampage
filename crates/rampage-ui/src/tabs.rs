@@ -16,6 +16,7 @@ pub enum Tab {
     Disassembly,
     Graph,
     Xrefs,
+    Assistant,
     Triage,
 }
 
@@ -49,6 +50,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             },
             Tab::Graph => "Graph".to_owned(),
             Tab::Xrefs => "Xrefs".to_owned(),
+            Tab::Assistant => "Assistant".to_owned(),
             Tab::Triage => "Triage".to_owned(),
         };
         title.into()
@@ -66,6 +68,12 @@ impl egui_dock::TabViewer for Viewer<'_> {
                 graph::show(ui, self.workspace);
             }
             Tab::Xrefs => xrefs(ui, self.workspace),
+            Tab::Assistant => {
+                if crate::assistant::show(ui, &mut self.workspace.assistant) {
+                    let project = std::sync::Arc::clone(&self.workspace.project);
+                    self.workspace.assistant.ask(&project, ui.ctx());
+                }
+            }
             Tab::Triage => triage(ui, self.workspace),
         }
     }

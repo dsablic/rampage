@@ -146,3 +146,20 @@ fn function_graph() {
     harness.run();
     harness.snapshot("graph");
 }
+
+#[test]
+fn assistant_panel() {
+    use rampage_ui::assistant::Entry;
+    let mut harness = harness(App::blocking());
+    harness.run();
+    let ctx = harness.ctx.clone();
+    let app = harness.state_mut();
+    app.open(&ctx, fixture("hello-x64-dyn.elf"), None);
+    app.focus_tab(rampage_ui::Tab::Assistant);
+    let assistant = &mut app.workspace_mut().unwrap().assistant;
+    assistant.transcript.push(Entry::Question("What does main do?".to_owned()));
+    assistant.transcript.push(Entry::Tool { summary: "disassemble main".to_owned(), failed: false });
+    assistant.transcript.push(Entry::Answer("main passes the greeting to puts and returns 5.".to_owned()));
+    harness.run();
+    harness.snapshot("assistant");
+}

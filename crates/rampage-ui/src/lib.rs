@@ -1,5 +1,6 @@
 //! The rampage desktop UI: an egui front end over the same API the CLI and MCP server use.
 
+pub mod assistant;
 mod band;
 mod graph;
 mod listing;
@@ -34,7 +35,7 @@ fn default_layout() -> DockState<Tab> {
     let surface = dock.main_surface_mut();
     let [center, _] =
         surface.split_left(NodeIndex::root(), 0.20, vec![Tab::Functions, Tab::Strings, Tab::Imports, Tab::Exports]);
-    surface.split_right(center, 0.76, vec![Tab::Xrefs]);
+    surface.split_right(center, 0.72, vec![Tab::Xrefs, Tab::Assistant]);
     dock
 }
 

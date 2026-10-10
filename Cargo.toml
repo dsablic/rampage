@@ -11,6 +11,7 @@ license = "MIT OR Apache-2.0"
 rampage-arch = { path = "crates/rampage-arch" }
 rampage-loaders = { path = "crates/rampage-loaders" }
 rampage-analysis = { path = "crates/rampage-analysis" }
+rampage-agent = { path = "crates/rampage-agent" }
 rampage-api = { path = "crates/rampage-api" }
 rampage-mcp = { path = "crates/rampage-mcp" }
 anyhow = "1.0.104"

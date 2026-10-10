@@ -171,6 +171,7 @@ pub struct Workspace {
     pub graph_zoom: f32,
     /// The UI pass in which the graph was last shown, to keep navigation in the graph while it is in use.
     pub graph_shown_pass: Option<u64>,
+    pub assistant: crate::assistant::Assistant,
     annotations_checked: Instant,
 }
 
@@ -218,6 +219,7 @@ impl Workspace {
             graph: None,
             graph_zoom: 1.0,
             graph_shown_pass: None,
+            assistant: crate::assistant::Assistant::default(),
             annotations_checked: Instant::now(),
         };
         let project = Arc::clone(&workspace.project);
@@ -247,6 +249,13 @@ impl Workspace {
         self.triage.poll();
         if analyzed {
             self.refresh_cursor_views();
+        }
+        let effects = self.assistant.poll();
+        if effects.annotations_changed {
+            self.annotations_changed(None);
+        }
+        if let Some(target) = effects.show {
+            self.goto_text(&target);
         }
         if !self.blocking {
             if self.annotations_checked.elapsed() >= ANNOTATION_REFRESH {

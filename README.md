@@ -75,6 +75,11 @@ comment, Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo. Drop a file on the window to op
 background; on Chrome's framework (190,000 functions, 930,000 strings) frames take a few milliseconds. `cargo test
 -p rampage-ui` renders the UI offscreen into `crates/rampage-ui/tests/snapshots`.
 
+The Assistant tab talks to Claude about the open binary: the model reads functions, graphs, strings and
+cross-references through rampage's tools, renames and comments what it works out, and points the listing at what it
+discusses. Set `ANTHROPIC_API_KEY` (and optionally `RAMPAGE_MODEL`) to use it; questions and the code the model reads
+are sent to Anthropic's API.
+
 ## Using it from an AI agent
 
 `rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the tools

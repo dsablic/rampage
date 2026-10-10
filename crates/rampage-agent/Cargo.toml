@@ -1,0 +1,16 @@
+[package]
+name = "rampage-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rampage-api.workspace = true
+rampage-arch.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "2.12.1", features = ["json"] }
+
+[dev-dependencies]
+rampage-loaders.workspace = true
