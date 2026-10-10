@@ -1,0 +1,22 @@
+[package]
+name = "rampage-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rampage-ui"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.36.2"
+egui = "0.36.2"
+egui_dock = "0.21.1"
+egui_extras = "0.36.2"
+rampage-api.workspace = true
+rampage-analysis.workspace = true
+rampage-arch.workspace = true
+rampage-loaders.workspace = true
+
+[dev-dependencies]
+egui_kittest = { version = "0.36.2", features = ["wgpu", "snapshot", "eframe"] }

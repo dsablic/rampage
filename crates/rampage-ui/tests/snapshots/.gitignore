@@ -1,0 +1,4 @@
+# Comparison artifacts written when a snapshot test fails
+*.diff.png
+*.new.png
+*.old.png
