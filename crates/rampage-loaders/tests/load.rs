@@ -14,9 +14,10 @@ fn check_x64_fixture(name: &str, format: Format, add_symbol: &str) {
     assert_eq!(binary.format, format);
     assert_eq!(binary.arch, Arch::X86_64);
 
-    let entry_segment = binary.segment_containing(binary.entry).expect("entry inside a segment");
+    let entry = binary.entry.expect("executable has an entry point");
+    let entry_segment = binary.segment_containing(entry).expect("entry inside a segment");
     assert!(entry_segment.perms.execute, "entry segment {:?} not executable", entry_segment.name);
-    assert_eq!(binary.read(binary.entry, 16).map(<[u8]>::len), Some(16));
+    assert_eq!(binary.read(entry, 16).map(<[u8]>::len), Some(16));
 
     let add_address = match binary.symbol_by_name(add_symbol) {
         Some(symbol) => {
@@ -78,8 +79,8 @@ fn universal_binary_defaults_to_x86_64_slice() {
     assert_eq!(binary.arch, Arch::X86_64);
     assert_eq!(binary.slices, [Arch::X86_64, Arch::Aarch64]);
     let main = binary.symbol_by_name("_main").unwrap();
-    assert_eq!(binary.entry, main.address);
-    assert_eq!(binary.read(binary.entry, 1), Some(&[0x55][..]), "push rbp");
+    assert_eq!(binary.entry, Some(main.address));
+    assert_eq!(binary.read(main.address, 1), Some(&[0x55][..]), "push rbp");
 }
 
 #[test]
@@ -88,7 +89,7 @@ fn universal_binary_slice_can_be_selected() {
     assert_eq!(binary.arch, Arch::Aarch64);
     assert!(binary.imports.iter().any(|import| import.name == "_puts"));
     let thin = Binary::open(fixture("hello-arm64.macho")).unwrap();
-    assert_eq!(binary.read(binary.entry, 16), thin.read(thin.entry, 16));
+    assert_eq!(binary.read(binary.entry.unwrap(), 16), thin.read(thin.entry.unwrap(), 16));
 }
 
 #[test]
@@ -102,4 +103,11 @@ fn thin_binary_reports_itself_as_only_slice_and_rejects_other_arch() {
     let binary = Binary::open(fixture("hello-x64.elf")).unwrap();
     assert_eq!(binary.slices, [Arch::X86_64]);
     assert!(Binary::open_with(fixture("hello-x64.elf"), Some(Arch::Aarch64)).is_err());
+}
+
+#[test]
+fn library_without_entry_point_has_no_entry() {
+    let binary = Binary::open(fixture("hello-x64.dylib")).unwrap();
+    assert_eq!(binary.entry, None);
+    assert!(binary.symbol_by_name("_add").is_some());
 }

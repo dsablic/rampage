@@ -21,7 +21,7 @@ pub fn from_symbols(binary: &Binary) -> Vec<Function> {
         .filter(|symbol| symbol.kind == SymbolKind::Function)
         .map(|symbol| (symbol.address, symbol.size, symbol.name.as_str()));
     let exports = binary.exports.iter().map(|export| (export.address, 0, export.name.as_str()));
-    let entry = std::iter::once((binary.entry, 0, "entry"));
+    let entry = binary.entry.map(|entry| (entry, 0, "entry"));
 
     for (address, size, name) in symbols.chain(exports).chain(entry) {
         if !executable(address) {

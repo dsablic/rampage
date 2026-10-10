@@ -26,7 +26,7 @@ pub enum LoadError {
 pub struct Binary {
     pub format: Format,
     pub arch: Arch,
-    pub entry: u64,
+    pub entry: Option<u64>,
     pub segments: Vec<Segment>,
     pub sections: Vec<Section>,
     pub symbols: Vec<Symbol>,
@@ -138,9 +138,11 @@ impl Binary {
             }
         }
 
+        // A zero entry (relative to the image base, which PE adds) is how every format spells "none".
         let entry = match macho_main_entry_offset(&parsed) {
-            Some(offset) => file_offset_to_address(&segments, offset).unwrap_or(offset),
-            None => parsed.entry(),
+            Some(0) => None,
+            Some(offset) => file_offset_to_address(&segments, offset),
+            None => Some(parsed.entry()).filter(|&entry| entry != parsed.relative_address_base()),
         };
         drop(parsed);
         Ok(Self { format, arch, entry, segments, sections, symbols, imports, exports, slices, data, image })

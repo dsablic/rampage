@@ -38,7 +38,10 @@ pub fn info(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> 
         let slices: Vec<_> = binary.slices.iter().map(Arch::to_string).collect();
         writeln!(out, "slices    {}", slices.join(", "))?;
     }
-    writeln!(out, "entry     {:#x}", binary.entry)?;
+    match binary.entry {
+        Some(entry) => writeln!(out, "entry     {entry:#x}")?,
+        None => writeln!(out, "entry     none")?,
+    }
     writeln!(out, "symbols   {}", binary.symbols.len())?;
     writeln!(out, "imports   {}", binary.imports.len())?;
     writeln!(out, "exports   {}", binary.exports.len())?;
@@ -71,7 +74,10 @@ fn resolve_address(binary: &Binary, text: &str) -> Result<u64> {
 pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize, options: &Options) -> Result<()> {
     let binary = open(path, options)?;
     let mut decoder = decoder_for(binary.arch)?;
-    let start = at.map_or(Ok(binary.entry), |text| resolve_address(&binary, text))?;
+    let start = match at {
+        Some(text) => resolve_address(&binary, text)?,
+        None => binary.entry.context("no entry point; pass --at <address or symbol>")?,
+    };
     let Some(code) = binary.read_to_segment_end(start) else {
         bail!("address {start:#x} is not backed by file data");
     };

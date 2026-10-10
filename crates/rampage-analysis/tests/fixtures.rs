@@ -28,6 +28,6 @@ fn lists_add_main_and_entry_as_functions() {
         let names: Vec<_> = found.iter().map(|function| function.name.as_str()).collect();
         assert!(names.contains(&add) && names.contains(&main), "{name}: {names:?}");
         assert!(found.windows(2).all(|pair| pair[0].address < pair[1].address), "{name}: not sorted or duplicated");
-        assert!(found.iter().any(|function| function.address == binary.entry), "{name}: entry missing");
+        assert!(found.iter().any(|function| Some(function.address) == binary.entry), "{name}: entry missing");
     }
 }

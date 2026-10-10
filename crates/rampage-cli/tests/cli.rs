@@ -35,6 +35,7 @@ fn info_json_reports_format_and_entry() {
     assert_eq!(info["format"], "elf");
     assert_eq!(info["arch"], "x86_64");
     assert!(info["entry"].as_u64().unwrap() > 0);
+    assert!(json(&["--json", "info"], "hello-x64.dylib")["entry"].is_null());
 }
 
 #[test]
@@ -101,4 +102,12 @@ fn arch_flag_selects_universal_slice() {
     rampage(&["--arch", "x86", "info"], "hello-universal.macho")
         .failure()
         .stderr(predicates::str::contains("x86 slice; the file contains x86_64, aarch64"));
+}
+
+#[test]
+fn library_without_entry_needs_explicit_disasm_address() {
+    rampage(&["disasm"], "hello-x64.dylib").failure().stderr(predicates::str::contains("no entry point"));
+    rampage(&["disasm", "--at", "_add"], "hello-x64.dylib").success();
+    let funcs = json(&["--json", "funcs"], "hello-x64.dylib");
+    assert!(funcs.as_array().unwrap().iter().all(|function| function["name"] != "entry"));
 }
