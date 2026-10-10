@@ -54,10 +54,7 @@ const STUB_SECTIONS: [&str; 6] = ["__stubs", "__auth_stubs", ".plt", ".plt.sec",
 /// through. A stub runs from just after the previous one's final jump (skipping NOP padding) to its own.
 pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
     let Ok(mut decoder) = binary.decoder() else { return Vec::new() };
-    let slot_name = |address: u64| {
-        let index = binary.import_slots.binary_search_by_key(&address, |slot| slot.address).ok()?;
-        Some(binary.import_slots[index].name.as_str())
-    };
+    let slot_name = |address| binary.import_slot(address).map(|slot| slot.name.as_str());
     let mut names = Vec::new();
     for section in binary.sections.iter().filter(|section| STUB_SECTIONS.contains(&section.name.as_str())) {
         let end = section.address.saturating_add(section.size);
@@ -96,10 +93,7 @@ pub fn thunk_names(binary: &Binary) -> Vec<(u64, String)> {
     if binary.format != Format::Pe || !matches!(binary.arch, Arch::X86 | Arch::X86_64) {
         return Vec::new();
     }
-    let slot_name = |address: u64| {
-        let index = binary.import_slots.binary_search_by_key(&address, |slot| slot.address).ok()?;
-        Some(binary.import_slots[index].name.clone())
-    };
+    let slot_name = |address| binary.import_slot(address).map(|slot| slot.name.clone());
     let mut names = Vec::new();
     for section in binary.sections.iter().filter(|section| section.kind == SectionKind::Code) {
         let Some(bytes) = binary.read(section.address, section.size) else { continue };

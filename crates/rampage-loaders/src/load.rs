@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 use object::read::macho::{FatArch, FatArch32, FatArch64, MachOFatFile};
-use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol, SegmentFlags};
+use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol, SegmentFlags, SymbolFlags};
 use rampage_arch::Arch;
 use serde::Serialize;
 
@@ -48,7 +48,7 @@ pub struct Binary {
     pub details: Details,
     pub big_endian: bool,
     /// ARM only: the sorted address ranges holding Thumb code.
-    pub thumb: Vec<std::ops::Range<u64>>,
+    pub thumb: Vec<Range<u64>>,
     /// Data appended past everything the image's structures describe.
     pub overlay: Option<Overlay>,
     #[serde(skip)]
@@ -80,7 +80,8 @@ impl Binary {
             object::FileKind::MachOFat64 => select_slice(fat_slices::<FatArch64>(&data)?, wanted)?,
             _ => (Vec::new(), 0..data.len()),
         };
-        let parsed = object::File::parse(&data[image.clone()])?;
+        let image_bytes = &data[image.clone()];
+        let parsed = object::File::parse(image_bytes)?;
 
         let format = match parsed.format() {
             object::BinaryFormat::Elf => Format::Elf,
@@ -90,8 +91,10 @@ impl Binary {
         };
         let arch = arch_of(parsed.architecture())
             .ok_or_else(|| LoadError::Unsupported(format!("architecture {:?}", parsed.architecture())))?;
-        if wanted.is_some_and(|wanted| wanted != arch) {
-            return Err(LoadError::Unsupported(format!("{} slice; the file contains {arch}", wanted.unwrap())));
+        if let Some(wanted) = wanted
+            && wanted != arch
+        {
+            return Err(LoadError::Unsupported(format!("{wanted} slice; the file contains {arch}")));
         }
         let slices = if slices.is_empty() { vec![arch] } else { slices };
         // ARM marks Thumb code addresses with the low bit; code itself lives at the even address.
@@ -114,7 +117,7 @@ impl Binary {
             })
             .collect();
 
-        let sections = parsed
+        let sections: Vec<Section> = parsed
             .sections()
             .map(|section| {
                 let file_range = section.file_range();
@@ -135,12 +138,13 @@ impl Binary {
             .filter(|symbol| symbol.is_definition())
             .filter_map(|symbol| {
                 let name = symbol.name().ok().filter(|name| !name.is_empty())?;
-                if arch == Arch::Arm && arm_mapping_symbol(name).is_some() {
+                if matches!(arch, Arch::Arm | Arch::Aarch64) && arm_mapping_symbol(name).is_some() {
                     return None;
                 }
+                let code = symbol.kind() == object::SymbolKind::Text;
                 Some(Symbol {
                     name: name.to_owned(),
-                    address: code_address(symbol.address()),
+                    address: if code { code_address(symbol.address()) } else { symbol.address() },
                     size: symbol.size(),
                     kind: symbol_kind_of(symbol.kind()),
                 })
@@ -176,7 +180,10 @@ impl Binary {
                 for export in exports {
                     let export = export?;
                     if let object::ExportTarget::Address { address } = export.target() {
-                        found.push(Export { name: name_of(export.name()), address: code_address(address) });
+                        // Exports carry no kind: only an address in executable memory is code.
+                        let executable = |address| segments.iter().any(|s| s.perms.execute && s.contains(address));
+                        let address = if executable(code_address(address)) { code_address(address) } else { address };
+                        found.push(Export { name: name_of(export.name()), address });
                     }
                 }
                 Ok(found)
@@ -192,19 +199,20 @@ impl Binary {
             Some(offset) => file_offset_to_address(&segments, offset),
             None => Some(parsed.entry()).filter(|&entry| entry != parsed.relative_address_base()),
         };
-        let thumb = if arch == Arch::Arm { thumb_ranges(&parsed, raw_entry, &segments) } else { Vec::new() };
-        let entry = raw_entry.map(code_address);
-        let big_endian = !parsed.is_little_endian();
         let text_address = segments.iter().find(|segment| segment.name == "__TEXT").map(|segment| segment.address);
-        let mut function_starts = text_address
-            .map(|text_address| starts::macho(&parsed, &data[image.clone()], text_address))
-            .unwrap_or_default();
+        let macho_starts =
+            text_address.map(|text_address| starts::macho(&parsed, image_bytes, text_address)).unwrap_or_default();
+        let thumb = match arch {
+            Arch::Arm => thumb_ranges(&parsed, raw_entry, &segments, &sections, &macho_starts),
+            _ => Vec::new(),
+        };
+        let entry = raw_entry.map(code_address);
+        let mut function_starts: Vec<u64> = macho_starts.into_iter().map(code_address).collect();
+        let big_endian = !parsed.is_little_endian();
         let exception_directory = starts::pe_exception_directory(&parsed);
-        let image_base = parsed.relative_address_base();
-        let import_slots = crate::slots::collect(&parsed, &data[image.clone()], &mut warnings);
+        let import_slots = crate::slots::collect(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
-        let overlay = crate::details::overlay(&parsed, &data[image.clone()])
-            .map(|overlay| Overlay { file_offset: image.start as u64 + overlay.offset, ..overlay });
+        let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64);
         drop(parsed);
 
         let mut binary = Self {
@@ -230,7 +238,7 @@ impl Binary {
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
         if let Some(directory) = exception_directory {
-            let (starts, warning) = starts::pe(&binary, image_base, directory);
+            let (starts, warning) = starts::pe(&binary, &directory);
             function_starts.extend(starts);
             binary.warnings.extend(warning);
         }
@@ -287,6 +295,12 @@ impl Binary {
         self.code_ranges.get(index).filter(|range| range.contains(&address))
     }
 
+    /// The import slot at exactly `address`.
+    pub fn import_slot(&self, address: u64) -> Option<&ImportSlot> {
+        let index = self.import_slots.binary_search_by_key(&address, |slot| slot.address).ok()?;
+        Some(&self.import_slots[index])
+    }
+
     pub fn symbol_by_name(&self, name: &str) -> Option<&Symbol> {
         self.symbols.iter().find(|symbol| symbol.name == name)
     }
@@ -301,7 +315,7 @@ impl Binary {
         }
         let start = usize::try_from(segment.file_offset.checked_add(offset)?).ok()?;
         let end = start.checked_add(usize::try_from(len).ok()?)?;
-        self.data[self.image.clone()].get(start..end)
+        self.image_bytes().get(start..end)
     }
 
     /// Returns the file-backed bytes from `address` to the end of its segment's file data.
@@ -327,10 +341,15 @@ fn code_ranges(sections: &[Section], segments: &[Segment]) -> Vec<Range<u64>> {
         ranges = segments
             .iter()
             .filter(|segment| segment.perms.execute && segment.size > 0)
-            .map(|segment| segment.address..segment.address + segment.size)
+            .map(|segment| segment.address..segment.address.saturating_add(segment.size))
             .collect();
     }
-    ranges.sort_unstable_by_key(|range| range.start);
+    merged(ranges)
+}
+
+/// Sorts `ranges` and merges the overlapping and adjacent ones.
+fn merged(mut ranges: Vec<Range<u64>>) -> Vec<Range<u64>> {
+    ranges.sort_unstable_by_key(|range| (range.start, range.end));
     let mut merged: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
     for range in ranges {
         match merged.last_mut() {
@@ -400,16 +419,33 @@ fn arch_of(architecture: object::Architecture) -> Option<Arch> {
     })
 }
 
-/// ARM mapping symbols mark where A32 code (`$a`), Thumb code (`$t`) and data (`$d`) begin.
+/// Mapping symbols mark where ARM code (`$a`), Thumb code (`$t`), AArch64 code (`$x`) and data (`$d`) begin.
 fn arm_mapping_symbol(name: &str) -> Option<char> {
-    let kind = name.strip_prefix('$')?.chars().next()?;
-    let rest = &name[2..];
-    (matches!(kind, 'a' | 't' | 'd') && (rest.is_empty() || rest.starts_with('.'))).then_some(kind)
+    let mut chars = name.strip_prefix('$')?.chars();
+    let kind = chars.next()?;
+    let rest = chars.as_str();
+    (matches!(kind, 'a' | 't' | 'x' | 'd') && (rest.is_empty() || rest.starts_with('.'))).then_some(kind)
 }
 
-/// The address ranges of Thumb code: regions that start at a `$t` mapping symbol, and Thumb functions, which ARM
-/// symbol tables mark with the low address bit. Without either, a Thumb entry point makes all code Thumb.
-fn thumb_ranges(parsed: &object::File, entry: Option<u64>, code: &[Segment]) -> Vec<std::ops::Range<u64>> {
+/// The address ranges of Thumb code. A `$t` mapping symbol starts a range that runs to the next mapping symbol or
+/// the end of its section. Thumb functions add theirs: ELF marks them with the low address bit, Mach-O with
+/// `N_ARM_THUMB_DEF` or an odd `LC_FUNCTION_STARTS` entry, and one without a size runs to the next function.
+/// Without any of these, a Thumb entry point makes all code Thumb.
+fn thumb_ranges(
+    parsed: &object::File,
+    entry: Option<u64>,
+    segments: &[Segment],
+    sections: &[Section],
+    function_starts: &[u64],
+) -> Vec<Range<u64>> {
+    let container_end = |address: u64| {
+        let in_section = |section: &&Section| address >= section.address && address - section.address < section.size;
+        let section = sections.iter().find(in_section).map(|section| section.address.saturating_add(section.size));
+        let segment = || segments.iter().find(|segment| segment.contains(address));
+        section
+            .or_else(|| segment().map(|segment| segment.address.saturating_add(segment.size)))
+            .unwrap_or(address.saturating_add(2))
+    };
     let mut ranges = Vec::new();
     let mut mapping: Vec<(u64, char)> = parsed
         .symbols()
@@ -418,37 +454,50 @@ fn thumb_ranges(parsed: &object::File, entry: Option<u64>, code: &[Segment]) -> 
     mapping.sort_unstable();
     for (index, &(address, kind)) in mapping.iter().enumerate() {
         if kind == 't' {
-            let end = mapping.get(index + 1).map_or(u64::MAX, |&(next, _)| next);
-            ranges.push(address..end);
+            let end = container_end(address);
+            ranges.push(address..mapping.get(index + 1).map_or(end, |&(next, _)| next.min(end)));
         }
     }
-    for symbol in parsed.symbols().chain(parsed.dynamic_symbols()) {
-        if symbol.kind() == object::SymbolKind::Text && symbol.address() & 1 == 1 {
-            let start = symbol.address() & !1;
-            ranges.push(start..start + symbol.size().max(2));
+
+    // (start, size, thumb) of every function the file records.
+    let thumb_def =
+        |flags| matches!(flags, SymbolFlags::MachO { n_desc, .. } if n_desc.0 & object::macho::N_ARM_THUMB_DEF.0 != 0);
+    let mut functions: Vec<(u64, u64, bool)> = parsed
+        .symbols()
+        .chain(parsed.dynamic_symbols())
+        .filter(|symbol| symbol.kind() == object::SymbolKind::Text)
+        .map(|symbol| (symbol.address() & !1, symbol.size(), symbol.address() & 1 == 1 || thumb_def(symbol.flags())))
+        .chain(function_starts.iter().map(|&start| (start & !1, 0, start & 1 == 1)))
+        .collect();
+    functions.sort_unstable();
+    for (index, &(start, size, thumb)) in functions.iter().enumerate() {
+        if !thumb {
+            continue;
         }
+        let end = match size {
+            0 => {
+                let next = functions[index + 1..].iter().map(|&(next, _, _)| next).find(|&next| next > start);
+                next.map_or(container_end(start), |next| next.min(container_end(start)))
+            }
+            _ => start.saturating_add(size),
+        };
+        ranges.push(start..end);
     }
+
     if mapping.is_empty() && entry.is_some_and(|entry| entry & 1 == 1) {
         ranges.extend(
-            code.iter()
+            segments
+                .iter()
                 .filter(|segment| segment.perms.execute)
                 .map(|segment| segment.address..segment.address.saturating_add(segment.size)),
         );
     }
-    ranges.sort_unstable_by_key(|range| (range.start, range.end));
-    let mut merged: Vec<std::ops::Range<u64>> = Vec::new();
-    for range in ranges {
-        match merged.last_mut() {
-            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
-            _ => merged.push(range),
-        }
-    }
-    merged
+    merged(ranges)
 }
 
 /// `LC_MAIN` stores the entry point as a file offset, which `object` passes through unchanged.
 fn macho_main_entry_offset(parsed: &object::File) -> Option<u64> {
-    let (mut commands, endian) = starts::macho_load_commands(parsed)?;
+    let (mut commands, endian) = crate::macho::load_commands(parsed)?;
     while let Ok(Some(command)) = commands.next() {
         if let Ok(Some(main)) = command.entry_point() {
             return Some(main.entryoff.get(endian));

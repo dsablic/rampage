@@ -54,6 +54,14 @@ impl Arch {
         all
     };
 
+    /// Bytes in a pointer.
+    pub fn pointer_size(self) -> u8 {
+        match self {
+            Arch::X86 | Arch::Arm | Arch::Mips | Arch::PowerPc | Arch::Riscv32 | Arch::Sparc | Arch::M68k => 4,
+            _ => 8,
+        }
+    }
+
     fn names(self) -> &'static [&'static str] {
         NAMES.iter().find(|(arch, _)| *arch == self).map_or(&[], |(_, names)| names)
     }
@@ -169,7 +177,7 @@ pub trait Disassembler {
     fn format(&mut self, bytes: &[u8], address: u64) -> String;
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("unsupported architecture: {0}")]
 pub struct UnsupportedArch(pub Arch);
 

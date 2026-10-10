@@ -1,8 +1,7 @@
 //! Function start addresses recorded by the toolchain in format metadata.
 
-use object::Endianness;
 use object::LittleEndian as LE;
-use object::read::macho::{LoadCommandIterator, LoadCommandVariant};
+use object::read::macho::LoadCommandVariant;
 use object::{Object, macho, pe};
 
 use crate::Binary;
@@ -26,7 +25,7 @@ pub(crate) fn macho(parsed: &object::File, image: &[u8], text_address: u64) -> V
 }
 
 fn macho_function_starts_data<'a>(parsed: &object::File, image: &'a [u8]) -> Option<&'a [u8]> {
-    let (mut commands, endian) = macho_load_commands(parsed)?;
+    let (mut commands, endian) = crate::macho::load_commands(parsed)?;
     while let Ok(Some(command)) = commands.next() {
         if command.cmd() != macho::LC_FUNCTION_STARTS {
             continue;
@@ -37,16 +36,6 @@ fn macho_function_starts_data<'a>(parsed: &object::File, image: &'a [u8]) -> Opt
         return image.get(start..start.checked_add(len)?);
     }
     None
-}
-
-pub(crate) fn macho_load_commands<'data>(
-    parsed: &object::File<'data>,
-) -> Option<(LoadCommandIterator<'data, Endianness>, Endianness)> {
-    match parsed {
-        object::File::MachO32(file) => Some((file.macho_load_commands().ok()?, file.endian())),
-        object::File::MachO64(file) => Some((file.macho_load_commands().ok()?, file.endian())),
-        _ => None,
-    }
 }
 
 fn read_uleb128(bytes: &[u8]) -> Option<(u64, &[u8])> {
@@ -64,9 +53,16 @@ fn read_uleb128(bytes: &[u8]) -> Option<(u64, &[u8])> {
     None
 }
 
-/// The x64 exception directory (`.pdata`) location as an absolute address and size. Other machines use different
-/// `RUNTIME_FUNCTION` layouts (ARM64 entries are 8 bytes), so they are not read here.
-pub(crate) fn pe_exception_directory(parsed: &object::File) -> Option<(u64, u64)> {
+/// Where an x64 image's exception directory (`.pdata`) lies: the image base, and the directory's absolute address
+/// and size. Other machines use different `RUNTIME_FUNCTION` layouts (ARM64 entries are 8 bytes), so they are not
+/// read here.
+pub(crate) struct ExceptionDirectory {
+    image_base: u64,
+    address: u64,
+    size: u64,
+}
+
+pub(crate) fn pe_exception_directory(parsed: &object::File) -> Option<ExceptionDirectory> {
     if parsed.architecture() != object::Architecture::X86_64 {
         return None;
     }
@@ -75,8 +71,9 @@ pub(crate) fn pe_exception_directory(parsed: &object::File) -> Option<(u64, u64)
         object::File::Pe32(file) => file.data_directory(pe::IMAGE_DIRECTORY_ENTRY_EXCEPTION),
         _ => None,
     }?;
-    let address = parsed.relative_address_base().checked_add(directory.virtual_address.get(LE).into())?;
-    Some((address, directory.size.get(LE).into()))
+    let image_base = parsed.relative_address_base();
+    let address = image_base.checked_add(directory.virtual_address.get(LE).into())?;
+    Some(ExceptionDirectory { image_base, address, size: directory.size.get(LE).into() })
 }
 
 const RUNTIME_FUNCTION_SIZE: usize = 12;
@@ -84,7 +81,8 @@ const UNW_FLAG_CHAININFO: u8 = 0x4;
 
 /// Reads x64 `RUNTIME_FUNCTION` entries, skipping chained entries, which describe fragments of another function.
 /// A directory larger than its file data is read as far as the data goes, with a warning.
-pub(crate) fn pe(binary: &Binary, image_base: u64, (address, size): (u64, u64)) -> (Vec<u64>, Option<String>) {
+pub(crate) fn pe(binary: &Binary, directory: &ExceptionDirectory) -> (Vec<u64>, Option<String>) {
+    let ExceptionDirectory { image_base, address, size } = *directory;
     let available = binary.read_to_segment_end(address).unwrap_or_default();
     let warning = (size > available.len() as u64)
         .then(|| format!(".pdata directory claims {size:#x} bytes but only {:#x} are present", available.len()));
@@ -120,12 +118,12 @@ pub(crate) fn eh_frame(binary: &Binary) -> (Vec<u64>, Option<String>) {
     };
     let available = binary.read_to_segment_end(section.address).unwrap_or_default();
     let data = &available[..section.size.min(available.len() as u64) as usize];
-    let pointer_size = if binary.arch == rampage_arch::Arch::X86 { 4 } else { 8 };
+    let pointer_size = usize::from(binary.arch.pointer_size());
     let mut starts = Vec::new();
     let mut cies: std::collections::HashMap<usize, Option<u8>> = std::collections::HashMap::new();
     let mut offset = 0;
     while offset < data.len() {
-        match eh_frame_record(data, section.address, offset, pointer_size, &mut cies) {
+        match eh_frame_record(data, binary.big_endian, section.address, offset, pointer_size, &mut cies) {
             Some((next, start)) => {
                 starts.extend(start);
                 offset = next;
@@ -143,12 +141,13 @@ pub(crate) fn eh_frame(binary: &Binary) -> (Vec<u64>, Option<String>) {
 /// `cies` caches each CIE's FDE pointer encoding (`None` for the default absolute encoding).
 fn eh_frame_record(
     data: &[u8],
+    big_endian: bool,
     base: u64,
     offset: usize,
     pointer_size: usize,
     cies: &mut std::collections::HashMap<usize, Option<u8>>,
 ) -> Option<(usize, Option<u64>)> {
-    let mut cursor = Cursor { data, position: offset };
+    let mut cursor = Cursor { data, position: offset, big_endian };
     let length = cursor.u32()?;
     if length == 0 {
         // A zero length is a terminator.
@@ -160,7 +159,7 @@ fn eh_frame_record(
     let id_position = cursor.position;
     let id = cursor.u32()?;
     if id == 0 {
-        let mut cie = Cursor { data: &data[..end], position: cursor.position };
+        let mut cie = Cursor { data: &data[..end], ..cursor };
         cies.insert(offset, cie_pointer_encoding(&mut cie, pointer_size)?);
         return Some((end, None));
     }
@@ -169,7 +168,7 @@ fn eh_frame_record(
         Some(&encoding) => encoding,
         None => return Some((end, None)),
     };
-    let mut cursor = Cursor { data: &data[..end], position: cursor.position };
+    let mut cursor = Cursor { data: &data[..end], ..cursor };
     let start = cursor.encoded_pointer(encoding.unwrap_or(0), base, pointer_size)?;
     let range = cursor.encoded_pointer(encoding.unwrap_or(0) & 0x0f, base, pointer_size)?;
     Some((end, (range != 0 && start != 0).then_some(start)))
@@ -193,7 +192,7 @@ fn cie_pointer_encoding(cursor: &mut Cursor, pointer_size: usize) -> Option<Opti
     // Read the augmentation data on its own, so that a misread entry cannot run into the CIE's instructions.
     let length = usize::try_from(cursor.uleb128()?).ok()?;
     let augmentation_data = cursor.take(length)?;
-    let mut cursor = Cursor { data: augmentation_data, position: 0 };
+    let mut cursor = Cursor { data: augmentation_data, position: 0, ..*cursor };
     for flag in flags.chars() {
         match flag {
             'R' => return Some(Some(cursor.u8()?)),
@@ -211,16 +210,25 @@ fn cie_pointer_encoding(cursor: &mut Cursor, pointer_size: usize) -> Option<Opti
     Some(None)
 }
 
+#[derive(Clone, Copy)]
 struct Cursor<'a> {
     data: &'a [u8],
     position: usize,
+    big_endian: bool,
 }
 
-impl Cursor<'_> {
-    fn take(&mut self, len: usize) -> Option<&[u8]> {
+impl<'a> Cursor<'a> {
+    fn take(&mut self, len: usize) -> Option<&'a [u8]> {
         let bytes = self.data.get(self.position..self.position.checked_add(len)?)?;
         self.position += len;
         Some(bytes)
+    }
+
+    /// A `len`-byte unsigned integer in the data's byte order.
+    fn unsigned(&mut self, len: usize) -> Option<u64> {
+        let bytes = self.take(len)?;
+        let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
+        Some(if self.big_endian { bytes.iter().fold(0, fold) } else { bytes.iter().rev().fold(0, fold) })
     }
 
     fn u8(&mut self) -> Option<u8> {
@@ -228,11 +236,11 @@ impl Cursor<'_> {
     }
 
     fn u32(&mut self) -> Option<u32> {
-        self.take(4).map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+        self.unsigned(4).map(|value| value as u32)
     }
 
     fn u64(&mut self) -> Option<u64> {
-        self.take(8).map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap()))
+        self.unsigned(8)
     }
 
     fn c_string(&mut self) -> Option<String> {
@@ -272,16 +280,13 @@ impl Cursor<'_> {
     fn encoded_pointer(&mut self, encoding: u8, base: u64, pointer_size: usize) -> Option<u64> {
         let field = base.checked_add(self.position as u64)?;
         let value = match encoding & 0x0f {
-            0x00 => match pointer_size {
-                4 => u64::from(self.u32()?),
-                _ => self.u64()?,
-            },
+            0x00 => self.unsigned(pointer_size)?,
             0x01 => self.uleb128()?,
-            0x02 => u64::from(u16::from_le_bytes(self.take(2)?.try_into().unwrap())),
+            0x02 => self.unsigned(2)?,
             0x03 => u64::from(self.u32()?),
             0x04 | 0x0c => self.u64()?,
             0x09 => self.sleb128()? as u64,
-            0x0a => i16::from_le_bytes(self.take(2)?.try_into().unwrap()) as i64 as u64,
+            0x0a => self.unsigned(2)? as i16 as i64 as u64,
             0x0b => self.u32()? as i32 as i64 as u64,
             _ => return None,
         };
@@ -312,13 +317,13 @@ mod tests {
         let fde: &[u8] = &[0x14, 0, 0, 0, 0x1c, 0, 0, 0, 0xf0, 0xff, 0xff, 0xff, 0x20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let data = [cie, fde].concat();
         let mut cies = std::collections::HashMap::new();
-        let (next, start) = super::eh_frame_record(&data, 0x1000, 0, 8, &mut cies).unwrap();
+        let (next, start) = super::eh_frame_record(&data, false, 0x1000, 0, 8, &mut cies).unwrap();
         assert_eq!((next, start), (cie.len(), None));
-        let (_, start) = super::eh_frame_record(&data, 0x1000, next, 8, &mut cies).unwrap();
+        let (_, start) = super::eh_frame_record(&data, false, 0x1000, next, 8, &mut cies).unwrap();
         assert_eq!(start, Some(0x1000 + cie.len() as u64 + 8 - 0x10));
         for len in 0..data.len() {
             let mut cies = std::collections::HashMap::new();
-            let _ = super::eh_frame_record(&data[..len], 0x1000, 0, 8, &mut cies);
+            let _ = super::eh_frame_record(&data[..len], false, 0x1000, 0, 8, &mut cies);
         }
     }
 
@@ -333,10 +338,23 @@ mod tests {
         let fde: &[u8] = &[0x10, 0, 0, 0, 0x23, 0, 0, 0, 0x00, 0x90, 0x04, 0x08, 0x10, 0, 0, 0, 0, 0, 0, 0];
         let data = [cie, fde].concat();
         let mut cies = std::collections::HashMap::new();
-        let (next, _) = super::eh_frame_record(&data, 0x1000, 0, 4, &mut cies).unwrap();
+        let (next, _) = super::eh_frame_record(&data, false, 0x1000, 0, 4, &mut cies).unwrap();
         assert_eq!(next, cie.len());
-        let (_, start) = super::eh_frame_record(&data, 0x1000, next, 4, &mut cies).unwrap();
+        let (_, start) = super::eh_frame_record(&data, false, 0x1000, next, 4, &mut cies).unwrap();
         assert_eq!(start, Some(0x0804_9000));
+    }
+
+    #[test]
+    fn eh_frame_reads_big_endian_records() {
+        // The first test's records, byte-swapped: a CIE with "zR" and pcrel|sdata4 pointers, then one FDE.
+        let cie: &[u8] =
+            &[0, 0, 0, 0x14, 0, 0, 0, 0, 1, b'z', b'R', 0, 1, 0x78, 0x10, 1, 0x1b, 0x0c, 7, 8, 0x90, 1, 0, 0];
+        let fde: &[u8] = &[0, 0, 0, 0x14, 0, 0, 0, 0x1c, 0xff, 0xff, 0xff, 0xf0, 0, 0, 0, 0x20, 0, 0, 0, 0, 0, 0, 0, 0];
+        let data = [cie, fde].concat();
+        let mut cies = std::collections::HashMap::new();
+        let (next, _) = super::eh_frame_record(&data, true, 0x1000, 0, 8, &mut cies).unwrap();
+        let (_, start) = super::eh_frame_record(&data, true, 0x1000, next, 8, &mut cies).unwrap();
+        assert_eq!(start, Some(0x1000 + cie.len() as u64 + 8 - 0x10));
     }
 
     #[test]

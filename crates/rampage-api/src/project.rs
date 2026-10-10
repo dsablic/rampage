@@ -418,7 +418,7 @@ impl Project {
             let bytes = &code[offset..(offset + usize::from(insn.len)).min(code.len())];
             lines.push(DisassemblyLine {
                 address,
-                bytes: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
+                bytes: rampage_arch::hex::bytes(bytes),
                 text: decoder.format(bytes, address),
                 flow: insn.flow,
                 data_ref: insn.data_ref,

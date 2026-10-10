@@ -15,6 +15,14 @@ pub struct Perms {
     pub execute: bool,
 }
 
+/// `rwx`, with `-` for each permission not granted.
+impl std::fmt::Display for Perms {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let flag = |set, letter| if set { letter } else { '-' };
+        write!(f, "{}{}{}", flag(self.read, 'r'), flag(self.write, 'w'), flag(self.execute, 'x'))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Segment {
     pub name: String,

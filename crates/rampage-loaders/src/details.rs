@@ -1,13 +1,13 @@
 //! Format-specific header facts that triage cares about: build metadata, linked libraries, hardening flags, and
 //! data appended past the end of the image (an overlay).
 
-use object::read::elf::{ElfFile, FileHeader, ProgramHeader};
+use object::read::elf::{Dyn, ElfFile, FileHeader, ProgramHeader};
 use object::read::macho::{LoadCommandVariant, MachHeader};
 use object::read::pe::{ImageNtHeaders, ImageOptionalHeader, PeFile};
 use object::{LittleEndian as LE, Object, ObjectSection, ReadRef};
 use serde::Serialize;
 
-use crate::starts::macho_load_commands;
+use crate::macho;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "format", rename_all = "lowercase")]
@@ -24,7 +24,7 @@ pub struct PeDetails {
     /// Link time from the COFF header, seconds since 1970 (often a hash in reproducible builds).
     pub timestamp: u32,
     pub timestamp_utc: String,
-    pub subsystem: String,
+    pub subsystem: &'static str,
     pub linker_version: String,
     pub checksum: u32,
     /// Mitigations from DllCharacteristics: aslr, high_entropy_va, dep, cfg, force_integrity, no_seh, ...
@@ -66,7 +66,7 @@ pub struct ElfDetails {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MachODetails {
-    pub file_type: String,
+    pub file_type: &'static str,
     pub flags: Vec<&'static str>,
     pub dylibs: Vec<String>,
     pub rpaths: Vec<String>,
@@ -95,69 +95,62 @@ pub(crate) fn collect(parsed: &object::File) -> Details {
         object::File::Pe64(file) => Details::Pe(pe(file)),
         object::File::Elf32(file) => Details::Elf(elf(file)),
         object::File::Elf64(file) => Details::Elf(elf(file)),
-        object::File::MachO32(_) | object::File::MachO64(_) => Details::MachO(macho(parsed)),
+        object::File::MachO32(_) | object::File::MachO64(_) => Details::MachO(macho_details(parsed)),
         _ => Details::None,
     }
 }
 
-/// The overlay of `image`: data following everything its structures describe. Zero padding does not count, and
-/// neither does a PE certificate table at the very end of the file, though any payload in front of one does.
-/// Structures that claim to extend past the end of the file are ignored.
-pub(crate) fn overlay(parsed: &object::File, image: &[u8]) -> Option<Overlay> {
+/// The overlay of `image`, which starts at `image_start` in the file: data following everything its structures
+/// describe. Zero padding does not count, and neither does a PE certificate table at the very end of the file,
+/// though any payload in front of one does. Structures that run past the end of a truncated file account for
+/// everything up to it.
+pub(crate) fn overlay(parsed: &object::File, image: &[u8], image_start: u64) -> Option<Overlay> {
     let len = image.len() as u64;
-    let mut end = 0u64;
-    let mut cover = |offset: u64, size: u64| {
-        if let Some(range_end) = offset.checked_add(size).filter(|&range_end| range_end <= len) {
-            end = end.max(range_end);
-        }
-    };
-    for segment in parsed.segments() {
-        let (offset, size) = object::ObjectSegment::file_range(&segment);
-        cover(offset, size);
-    }
-    for section in parsed.sections() {
-        if let Some((offset, size)) = section.file_range() {
-            cover(offset, size);
-        }
-    }
+    let mut ranges: Vec<(u64, u64)> =
+        parsed.segments().map(|segment| object::ObjectSegment::file_range(&segment)).collect();
+    ranges.extend(parsed.sections().filter_map(|section| section.file_range()));
     let mut certificate = None;
     match parsed {
-        object::File::Elf32(file) => {
-            let (offset, size) = elf_section_headers(file);
-            cover(offset, size);
-        }
-        object::File::Elf64(file) => {
-            let (offset, size) = elf_section_headers(file);
-            cover(offset, size);
-        }
+        object::File::Elf32(file) => ranges.extend(elf_headers(file)),
+        object::File::Elf64(file) => ranges.extend(elf_headers(file)),
         object::File::Pe32(file) => {
-            cover(0, pe_raw_data_end(file));
+            ranges.extend(pe_headers(file));
             certificate = pe_certificate(file);
         }
         object::File::Pe64(file) => {
-            cover(0, pe_raw_data_end(file));
+            ranges.extend(pe_headers(file));
             certificate = pe_certificate(file);
         }
-        object::File::MachO32(_) | object::File::MachO64(_) => {
-            for (offset, size) in macho_tables(parsed) {
-                cover(offset, size);
-            }
-        }
+        object::File::MachO32(_) | object::File::MachO64(_) => ranges.extend(macho_tables(parsed)),
         _ => {}
     }
+    let end = ranges
+        .into_iter()
+        .filter(|&(offset, _)| offset < len)
+        .map(|(offset, size)| offset.saturating_add(size).min(len))
+        .max()
+        .unwrap_or(0);
     // A certificate table that ends the file belongs to the image; whatever lies before it does not.
     let stop = match certificate {
         Some((offset, size)) if offset >= end && offset.checked_add(size) == Some(len) => offset,
         _ => len,
     };
     let tail = image.get(usize::try_from(end).ok()?..usize::try_from(stop).ok()?)?;
-    tail.iter().any(|&byte| byte != 0).then(|| Overlay { offset: end, size: stop - end, file_offset: end })
+    tail.iter().any(|&byte| byte != 0).then(|| Overlay {
+        offset: end,
+        size: stop - end,
+        file_offset: image_start + end,
+    })
 }
 
-/// File ranges of a Mach-O's link-edit data and section relocations, which follow the segments in object files.
+/// File ranges of a Mach-O's header and load commands, link-edit data, and section relocations (which follow the
+/// segments in object files).
 fn macho_tables(parsed: &object::File) -> Vec<(u64, u64)> {
     let mut ranges = Vec::new();
-    let Some((mut commands, endian)) = macho_load_commands(parsed) else { return ranges };
+    if let Some(header) = macho_header(parsed) {
+        ranges.push((0, header.end));
+    }
+    let Some((mut commands, endian)) = macho::load_commands(parsed) else { return ranges };
     let symbol_size: u64 = if parsed.is_64() { 16 } else { 12 };
     let mut add = |offset: u32, count: u32, size: u64| ranges.push((u64::from(offset), u64::from(count) * size));
     while let Ok(Some(command)) = commands.next() {
@@ -197,13 +190,44 @@ fn macho_tables(parsed: &object::File) -> Vec<(u64, u64)> {
     ranges
 }
 
-/// The section header table's file range.
-fn elf_section_headers<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> (u64, u64) {
+struct MachoHeader {
+    file_type: u32,
+    flags: u32,
+    /// The file offset just past the load commands.
+    end: u64,
+}
+
+fn macho_header(parsed: &object::File) -> Option<MachoHeader> {
+    fn read<Mach: MachHeader<Endian = object::Endianness>>(header: &Mach, endian: object::Endianness) -> MachoHeader {
+        let size = std::mem::size_of::<Mach>() as u64;
+        MachoHeader {
+            file_type: header.filetype(endian).0,
+            flags: header.flags(endian).0,
+            end: size + u64::from(header.sizeofcmds(endian)),
+        }
+    }
+    match parsed {
+        object::File::MachO32(file) => Some(read(file.macho_header(), file.endian())),
+        object::File::MachO64(file) => Some(read(file.macho_header(), file.endian())),
+        _ => None,
+    }
+}
+
+/// File ranges of the ELF header, the program header table and the section header table.
+fn elf_headers<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> [(u64, u64); 3] {
     let header = file.elf_header();
     let endian = file.endian();
-    let count: u64 = header.e_shnum(endian).into();
-    let size: u64 = header.e_shentsize(endian).into();
-    (header.e_shoff(endian).into(), count.saturating_mul(size))
+    let table = |offset: u64, count: u16, size: u16| (offset, u64::from(count) * u64::from(size));
+    [
+        (0, header.e_ehsize(endian).into()),
+        table(header.e_phoff(endian).into(), header.e_phnum(endian), header.e_phentsize(endian)),
+        table(header.e_shoff(endian).into(), header.e_shnum(endian), header.e_shentsize(endian)),
+    ]
+}
+
+/// File ranges of the PE headers (`SizeOfHeaders`) and of the sections' raw data.
+fn pe_headers<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>) -> [(u64, u64); 2] {
+    [(0, file.nt_headers().optional_header().size_of_headers().into()), (0, pe_raw_data_end(file))]
 }
 
 /// The end of the sections' raw data including its file-alignment padding (`SizeOfRawData`).
@@ -246,6 +270,7 @@ fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>)
         1 => "native",
         2 => "windows_gui",
         3 => "windows_cui",
+        8 => "native_windows",
         5 => "os2_cui",
         7 => "posix_cui",
         9 => "windows_ce_gui",
@@ -257,9 +282,6 @@ fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>)
         16 => "windows_boot_application",
         _ => "unknown",
     };
-    let signed = file
-        .data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_SECURITY)
-        .is_some_and(|directory| directory.size.get(LE) != 0);
     let rich = file
         .rich_header_info()
         .map(|info| {
@@ -280,11 +302,11 @@ fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>)
         dotnet,
         timestamp,
         timestamp_utc: utc(timestamp.into()),
-        subsystem: subsystem.to_owned(),
+        subsystem,
         linker_version: format!("{}.{}", optional.major_linker_version(), optional.minor_linker_version()),
         checksum: optional.check_sum(),
         characteristics: MITIGATIONS.iter().filter(|(bit, _)| flags & bit != 0).map(|&(_, name)| name).collect(),
-        signed,
+        signed: pe_certificate(file).is_some(),
         rich,
     }
 }
@@ -293,29 +315,21 @@ fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>)
 /// the library's .dll/.ocx/.sys extension removed and ordinals written `ord<n>`, joined by commas.
 fn imphash<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>) -> Option<String> {
     use md5::{Digest, Md5};
-    let table = file.import_table().ok()??;
     let mut entries = Vec::new();
-    let mut descriptors = table.descriptors().ok()?;
-    while let Ok(Some(descriptor)) = descriptors.next() {
-        let library = String::from_utf8_lossy(table.name(descriptor.name.get(LE)).ok()?).to_lowercase();
+    crate::slots::pe_imports(file, |library, _, import| {
+        let library = String::from_utf8_lossy(library.unwrap_or_default()).to_lowercase();
         let library = match library.rsplit_once('.') {
             Some((stem, "dll" | "ocx" | "sys")) => stem.to_owned(),
             _ => library,
         };
-        let lookup = match descriptor.original_first_thunk.get(LE) {
-            0 => descriptor.first_thunk.get(LE),
-            lookup => lookup,
+        let function = match import {
+            object::read::pe::Import::Name(_, name) => String::from_utf8_lossy(name).to_lowercase(),
+            object::read::pe::Import::Ordinal(ordinal) => format!("ord{ordinal}"),
         };
-        let mut thunks = table.thunks(lookup).ok()?;
-        while let Ok(Some(thunk)) = thunks.next::<Pe>() {
-            let function = match table.import::<Pe>(thunk).ok()? {
-                object::read::pe::Import::Name(_, name) => String::from_utf8_lossy(name).to_lowercase(),
-                object::read::pe::Import::Ordinal(ordinal) => format!("ord{ordinal}"),
-            };
-            entries.push(format!("{library}.{function}"));
-        }
-    }
-    (!entries.is_empty()).then(|| hex(&Md5::digest(entries.join(",").as_bytes())))
+        entries.push(format!("{library}.{function}"));
+    })
+    .ok()?;
+    (!entries.is_empty()).then(|| rampage_arch::hex::bytes(&Md5::digest(entries.join(",").as_bytes())))
 }
 
 /// `YYYY-MM-DD HH:MM:SS` for seconds since 1970 (Howard Hinnant's civil-from-days).
@@ -390,7 +404,7 @@ fn elf<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>)
             (true, false) => "partial",
             (true, true) => "full",
         },
-        build_id: file.build_id().ok().flatten().map(hex),
+        build_id: file.build_id().ok().flatten().map(rampage_arch::hex::bytes),
         stripped: file.section_by_name(".symtab").is_none(),
     }
 }
@@ -402,26 +416,12 @@ fn dynamic<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf,
     let headers = file.elf_program_headers();
     let data = file.data();
     let bytes = |offset: u64, size: u64| data.read_bytes_at(offset, size).ok();
-    let Some(dynamic) = headers.iter().find(|header| header.p_type(endian) == object::elf::PT_DYNAMIC) else {
-        return (Vec::new(), &[]);
-    };
-    let Some(raw) = bytes(dynamic.p_offset(endian).into(), dynamic.p_filesz(endian).into()) else {
-        return (Vec::new(), &[]);
-    };
-    let wide = file.is_64();
-    let little = file.is_little_endian();
-    let word = |bytes: &[u8]| -> u64 {
-        match (wide, little) {
-            (true, true) => u64::from_le_bytes(bytes.try_into().unwrap()),
-            (true, false) => u64::from_be_bytes(bytes.try_into().unwrap()),
-            (false, true) => u32::from_le_bytes(bytes.try_into().unwrap()).into(),
-            (false, false) => u32::from_be_bytes(bytes.try_into().unwrap()).into(),
-        }
-    };
-    let size = if wide { 8 } else { 4 };
-    let entries: Vec<(u64, u64)> = raw
-        .chunks_exact(2 * size)
-        .map(|entry| (word(&entry[..size]), word(&entry[size..])))
+    let entries: Vec<(u64, u64)> = headers
+        .iter()
+        .find_map(|header| header.dynamic(endian, data).ok().flatten())
+        .unwrap_or_default()
+        .iter()
+        .map(|entry| (entry.d_tag(endian).0 as u64, entry.d_val(endian).into()))
         .take_while(|&(tag, _)| tag != 0)
         .collect();
     let value = |tag| entries.iter().find(|(t, _)| *t == tag).map(|(_, value)| *value);
@@ -440,22 +440,8 @@ fn dynamic<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf,
     (entries, strings.unwrap_or_default())
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn macho(parsed: &object::File) -> MachODetails {
-    let (file_type, flags) = match parsed {
-        object::File::MachO32(file) => {
-            let header = file.macho_header();
-            (header.filetype(file.endian()).0, header.flags(file.endian()).0)
-        }
-        object::File::MachO64(file) => {
-            let header = file.macho_header();
-            (header.filetype(file.endian()).0, header.flags(file.endian()).0)
-        }
-        _ => (0, 0),
-    };
+fn macho_details(parsed: &object::File) -> MachODetails {
+    let (file_type, flags) = macho_header(parsed).map_or((0, 0), |header| (header.file_type, header.flags));
     const FLAGS: [(u32, &str); 12] = [
         (0x1, "noundefs"),
         (0x4, "dyldlink"),
@@ -483,22 +469,21 @@ fn macho(parsed: &object::File) -> MachODetails {
         _ => "other",
     };
     let mut details = MachODetails {
-        file_type: file_type.to_owned(),
+        file_type,
         flags: FLAGS.iter().filter(|(bit, _)| flags & bit != 0).map(|&(_, name)| name).collect(),
-        dylibs: Vec::new(),
+        dylibs: macho::dylibs(parsed).into_iter().flatten().collect(),
         rpaths: Vec::new(),
         platform: None,
         min_os: None,
         sdk: None,
-        uuid: parsed.mach_uuid().ok().flatten().map(|uuid| hex(&uuid)),
+        uuid: parsed.mach_uuid().ok().flatten().map(|uuid| rampage_arch::hex::bytes(&uuid)),
         code_signature: false,
         encrypted: false,
     };
-    let Some((mut commands, endian)) = macho_load_commands(parsed) else { return details };
+    let Some((mut commands, endian)) = macho::load_commands(parsed) else { return details };
     while let Ok(Some(command)) = commands.next() {
         let string = |name| command.string(endian, name).ok().map(|bytes| String::from_utf8_lossy(bytes).into_owned());
         match command.variant() {
-            Ok(LoadCommandVariant::Dylib(dylib)) => details.dylibs.extend(string(dylib.dylib.name)),
             Ok(LoadCommandVariant::Rpath(rpath)) => details.rpaths.extend(string(rpath.path)),
             Ok(LoadCommandVariant::BuildVersion(build, _)) => {
                 details.platform = Some(platform(build.platform.get(endian).0));

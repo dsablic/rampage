@@ -314,6 +314,8 @@ fn overlays_respect_certificates_and_ignore_impossible_ranges() {
         let overlay = Binary::open(malformed(name)).unwrap().overlay.unwrap_or_else(|| panic!("{name}: no overlay"));
         assert_eq!((overlay.offset, overlay.size), (0x35c00, 512), "{name}");
     }
+    // A truncated file's segments run past its end, and still account for all of it.
+    assert_eq!(Binary::open(malformed("trunc.elf")).unwrap().overlay, None);
     // Object files keep symbols and relocations past their sections; none of it is overlay.
     for name in ["hello-x64.o", "hello-x64-elf.o"] {
         assert_eq!(Binary::open(fixture(name)).unwrap().overlay, None, "{name}");
@@ -350,4 +352,23 @@ fn import_slots_know_their_library() {
     let macho = Binary::open(fixture("hello-arm64.macho")).unwrap();
     let puts = macho.import_slots.iter().find(|slot| slot.name == "_puts").unwrap();
     assert_eq!(puts.library.as_deref(), Some("/usr/lib/libSystem.B.dylib"));
+}
+
+#[test]
+fn big_endian_eh_frame_gives_function_starts() {
+    for name in ["hello-ppc.elf", "hello-mips.elf", "hello-s390x.elf"] {
+        let binary = Binary::open(fixture(name)).unwrap();
+        assert!(binary.big_endian && binary.warnings.is_empty(), "{name}: {:?}", binary.warnings);
+        let main = binary.symbol_by_name("main").unwrap().address;
+        assert!(binary.function_starts.contains(&main), "{name}: main {main:#x} not among the starts");
+    }
+}
+
+#[test]
+fn thumb_functions_cover_their_whole_body() {
+    let binary = Binary::open(fixture("hello-thumb.elf")).unwrap();
+    let main = binary.symbol_by_name("main").unwrap();
+    let target = binary.target();
+    assert!(target.is_thumb(main.address) && target.is_thumb(main.address + main.size - 2));
+    assert!(binary.thumb.iter().all(|range| range.end != u64::MAX));
 }

@@ -9,7 +9,6 @@ use rampage_analysis::strings::Encoding;
 use rampage_api::{FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery};
 use rampage_arch::Arch;
 use rampage_loaders::Details;
-use rampage_loaders::Perms;
 use serde::Serialize;
 
 pub struct Options {
@@ -27,11 +26,6 @@ fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result<()> {
     json.push(b'\n');
     out.write_all(&json)?;
     Ok(())
-}
-
-fn perms_text(perms: Perms) -> String {
-    let flag = |set, letter| if set { letter } else { '-' };
-    [flag(perms.read, 'r'), flag(perms.write, 'w'), flag(perms.execute, 'x')].iter().collect()
 }
 
 pub fn info(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
@@ -59,7 +53,7 @@ pub fn info(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> 
     writeln!(out, "\nsegments")?;
     for segment in summary.segments {
         let end = segment.address.saturating_add(segment.size);
-        let perms = perms_text(segment.perms);
+        let perms = segment.perms;
         writeln!(out, "  {:#018x}-{:#018x} {perms} {}", segment.address, end, segment.name)?;
     }
     writeln!(out, "\nsections")?;

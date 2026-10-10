@@ -4,10 +4,11 @@
 
 use object::read::macho::LoadCommandVariant;
 use object::read::pe::{ImageNtHeaders, PeFile};
-use object::{Object, ObjectSegment, ObjectSymbol, ObjectSymbolTable, RelocationTarget, macho};
+use object::{
+    LittleEndian as LE, Object, ObjectSegment, ObjectSymbol, ObjectSymbolTable, ReadRef, RelocationTarget, macho,
+};
 
 use crate::model::ImportSlot;
-use crate::starts::macho_load_commands;
 
 /// Collects the import slots of `parsed`. `image` is the file data of this (possibly fat-sliced) image.
 /// Unreadable tables add a warning rather than failing the load.
@@ -35,7 +36,11 @@ fn elf(parsed: &object::File) -> Vec<ImportSlot> {
     relocations
         .filter_map(|(address, relocation)| {
             let RelocationTarget::Symbol(index) = relocation.target() else { return None };
-            let name = symbols.symbol_by_index(index).ok()?.name().ok()?;
+            let symbol = symbols.symbol_by_index(index).ok()?;
+            if !symbol.is_undefined() && symbol.kind() != object::SymbolKind::Text {
+                return None;
+            }
+            let name = symbol.name().ok()?;
             (!name.is_empty()).then(|| ImportSlot { address, name: name.to_owned(), library: None })
         })
         .collect()
@@ -67,22 +72,12 @@ fn macho(parsed: &object::File, image: &[u8]) -> Result<Vec<ImportSlot>, String>
     let text_address =
         parsed.segments().find(|segment| segment.name().ok().flatten() == Some("__TEXT")).map_or(0, |s| s.address());
     let pointer_size: u64 = if parsed.is_64() { 8 } else { 4 };
-    // No valid stream binds more pointers than the segments hold; a longer one is a crafted loop.
-    let limit = segments.iter().map(|segment| segment.size / pointer_size).fold(0u64, u64::saturating_add);
-    let Some((mut commands, endian)) = macho_load_commands(parsed) else { return Ok(Vec::new()) };
-    // Bind ordinals count the linked dylibs from 1, in load-command order.
-    let mut dylibs = Vec::new();
-    if let Some((mut scan, _)) = macho_load_commands(parsed) {
-        while let Ok(Some(command)) = scan.next() {
-            if let Ok(LoadCommandVariant::Dylib(dylib)) = command.variant() {
-                dylibs.push(
-                    command.string(endian, dylib.dylib.name).ok().map(|n| String::from_utf8_lossy(n).into_owned()),
-                );
-            }
-        }
-    }
+    // No valid stream binds more pointers than the segments' file data holds; a longer one is a crafted loop.
+    let limit = segments.iter().map(|segment| segment.data.len() as u64 / pointer_size).sum::<u64>();
+    let Some((mut commands, endian)) = crate::macho::load_commands(parsed) else { return Ok(Vec::new()) };
+    let dylibs = crate::macho::dylibs(parsed);
     let library = |dylib: macho::BindDylib| -> Option<String> {
-        dylib.index().and_then(|ordinal| dylibs.get(ordinal as usize - 1).cloned().flatten())
+        dylib.index().and_then(|ordinal| dylibs.get((ordinal as usize).checked_sub(1)?).cloned().flatten())
     };
     let mut slots = Vec::new();
     while let Some(command) = commands.next().map_err(|error| error.to_string())? {
@@ -148,34 +143,43 @@ fn chained_fixups(
 }
 
 fn pe_iat<Pe: ImageNtHeaders>(file: &PeFile<Pe>) -> object::Result<Vec<ImportSlot>> {
-    let Some(table) = file.import_table()? else { return Ok(Vec::new()) };
     let image_base = file.relative_address_base();
-    let slot_size = if file.is_64() { 8 } else { 4 };
     let mut slots = Vec::new();
+    pe_imports(file, |library, slot, import| {
+        let name = match import {
+            object::read::pe::Import::Name(_, name) => String::from_utf8_lossy(name).into_owned(),
+            object::read::pe::Import::Ordinal(ordinal) => format!("#{ordinal}"),
+        };
+        if let Some(address) = image_base.checked_add(slot) {
+            let library = library.map(|library| String::from_utf8_lossy(library).into_owned());
+            slots.push(ImportSlot { address, name, library });
+        }
+    })?;
+    Ok(slots)
+}
+
+/// Walks the regular (not delay-load) import table, calling `visit` with each import's library name (`None` when
+/// unreadable), the RVA of its import address table slot, and the import itself.
+pub(crate) fn pe_imports<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(
+    file: &PeFile<'data, Pe, R>,
+    mut visit: impl FnMut(Option<&'data [u8]>, u64, object::read::pe::Import<'data>),
+) -> object::Result<()> {
+    let Some(table) = file.import_table()? else { return Ok(()) };
+    let slot_size = if file.is_64() { 8 } else { 4 };
     let mut descriptors = table.descriptors()?;
     while let Some(descriptor) = descriptors.next()? {
-        let first_thunk = descriptor.first_thunk.get(object::LittleEndian);
-        let lookup = match descriptor.original_first_thunk.get(object::LittleEndian) {
+        let first_thunk = descriptor.first_thunk.get(LE);
+        let lookup = match descriptor.original_first_thunk.get(LE) {
             0 => first_thunk,
             lookup => lookup,
         };
-        let library =
-            table.name(descriptor.name.get(object::LittleEndian)).ok().map(|n| String::from_utf8_lossy(n).into_owned());
+        let library = table.name(descriptor.name.get(LE)).ok();
         let mut thunks = table.thunks(lookup)?;
-        let mut index = 0u64;
+        let mut slot = u64::from(first_thunk);
         while let Some(thunk) = thunks.next::<Pe>()? {
-            let name = match table.import::<Pe>(thunk)? {
-                object::read::pe::Import::Name(_, name) => String::from_utf8_lossy(name).into_owned(),
-                object::read::pe::Import::Ordinal(ordinal) => format!("#{ordinal}"),
-            };
-            let address = image_base
-                .checked_add(u64::from(first_thunk))
-                .and_then(|address| address.checked_add(index * slot_size));
-            if let Some(address) = address {
-                slots.push(ImportSlot { address, name, library: library.clone() });
-            }
-            index += 1;
+            visit(library, slot, table.import::<Pe>(thunk)?);
+            slot += slot_size;
         }
     }
-    Ok(slots)
+    Ok(())
 }

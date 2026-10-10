@@ -21,7 +21,10 @@ pub enum Field {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Edit {
     pub field: Field,
-    #[serde(with = "hex_address")]
+    #[serde(
+        serialize_with = "rampage_arch::hex::address",
+        deserialize_with = "rampage_arch::hex::deserialize_address"
+    )]
     pub address: u64,
     pub value: Option<String>,
     pub previous: Option<String>,
@@ -30,20 +33,6 @@ pub struct Edit {
 impl Edit {
     fn inverse(&self) -> Edit {
         Edit { field: self.field, address: self.address, value: self.previous.clone(), previous: self.value.clone() }
-    }
-}
-
-mod hex_address {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(address: &u64, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(&format_args!("{address:#x}"))
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        let digits = text.strip_prefix("0x").ok_or_else(|| serde::de::Error::custom("address must start with 0x"))?;
-        u64::from_str_radix(digits, 16).map_err(serde::de::Error::custom)
     }
 }
 

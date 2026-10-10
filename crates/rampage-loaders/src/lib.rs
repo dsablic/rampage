@@ -1,5 +1,6 @@
 mod details;
 mod load;
+mod macho;
 mod model;
 mod slots;
 mod starts;

@@ -339,7 +339,7 @@ fn triage(ui: &mut Ui, workspace: &mut Workspace) {
             match &triage.details {
                 Details::Pe(pe) => {
                     field(ui, "Built", &format!("{} UTC", pe.timestamp_utc));
-                    field(ui, "Subsystem", &pe.subsystem);
+                    field(ui, "Subsystem", pe.subsystem);
                     field(ui, "Mitigations", &pe.characteristics.join(", "));
                     field(ui, "Signed", if pe.signed { "yes" } else { "no" });
                 }
@@ -352,7 +352,7 @@ fn triage(ui: &mut Ui, workspace: &mut Workspace) {
                     field(ui, "Hardening", &format!("NX {}, RELRO {}", if elf.nx { "yes" } else { "no" }, elf.relro));
                 }
                 Details::MachO(macho) => {
-                    field(ui, "Type", &macho.file_type);
+                    field(ui, "Type", macho.file_type);
                     if let (Some(platform), Some(min_os)) = (&macho.platform, &macho.min_os) {
                         field(ui, "Platform", &format!("{platform} {min_os}"));
                     }

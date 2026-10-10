@@ -89,14 +89,15 @@ pub fn entropy(bytes: &[u8]) -> f64 {
     ((bits * 100.0).round() / 100.0).max(0.0)
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 fn hashes(bytes: &[u8]) -> Hashes {
     let ((md5, sha1), sha256) = rayon::join(
-        || rayon::join(|| hex(&Md5::digest(bytes)), || hex(&Sha1::digest(bytes))),
-        || hex(&Sha256::digest(bytes)),
+        || {
+            rayon::join(
+                || rampage_arch::hex::bytes(&Md5::digest(bytes)),
+                || rampage_arch::hex::bytes(&Sha1::digest(bytes)),
+            )
+        },
+        || rampage_arch::hex::bytes(&Sha256::digest(bytes)),
     );
     Hashes { md5, sha1, sha256 }
 }
@@ -148,15 +149,7 @@ pub fn triage(binary: &Binary) -> Triage {
             // ELF sections that are not loaded (symbol and string tables) have address 0.
             let loaded = section.address != 0 || binary.format != Format::Elf;
             let perms = binary.segment_containing(section.address).filter(|_| loaded).map(|segment| segment.perms);
-            let perms = perms.map_or_else(
-                || "---".to_owned(),
-                |perms| {
-                    [(perms.read, 'r'), (perms.write, 'w'), (perms.execute, 'x')]
-                        .iter()
-                        .map(|&(set, letter)| if set { letter } else { '-' })
-                        .collect()
-                },
-            );
+            let perms = perms.unwrap_or_default().to_string();
             SectionTriage {
                 name: section.name.clone(),
                 address: section.address,
