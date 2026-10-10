@@ -1,7 +1,7 @@
-//! The analysis tools an AI model can call: each has a name, a description, a JSON schema for its input, and a
-//! handler that runs it against a project.
+//! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
+//! description, a JSON schema for its input, and a handler that runs it against a project.
 
-use rampage_api::{ApiError, FunctionsQuery, ListQuery, Project, StringsQuery, XrefQuery};
+use crate::{ApiError, FunctionsQuery, ListQuery, Project, StringsQuery, XrefQuery};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -17,10 +17,16 @@ pub struct Tool {
     pub name: &'static str,
     pub description: &'static str,
     pub input_schema: Value,
+    /// Acts on a person's view of the binary (`show_address`), so only clients with one offer it.
+    pub interactive: bool,
     handler: Handler,
 }
 
 impl Tool {
+    fn interactive(self) -> Self {
+        Self { interactive: true, ..self }
+    }
+
     /// The tool as the Anthropic Messages API describes one.
     pub fn definition(&self) -> Value {
         serde_json::json!({ "name": self.name, "description": self.description, "input_schema": self.input_schema })
@@ -47,7 +53,7 @@ where
         let result = run(project, arguments).map_err(|error| error.to_string())?;
         serde_json::to_value(result).map_err(|error| error.to_string())
     };
-    Tool { name, description, input_schema: schema::<A>(), handler: Box::new(handler) }
+    Tool { name, description, input_schema: schema::<A>(), interactive: false, handler: Box::new(handler) }
 }
 
 /// No arguments.
@@ -64,7 +70,7 @@ pub struct At {
 pub struct DisassembleArgs {
     /// Start address or name; defaults to the entry point.
     pub at: Option<String>,
-    /// Number of instructions (default 40, at most 500).
+    /// Number of instructions (default 40, at most 1000).
     pub count: Option<usize>,
 }
 
@@ -84,16 +90,32 @@ pub struct XrefsArgs {
 pub struct RenameArgs {
     /// The address or current name to rename.
     pub at: String,
-    /// The new name, an identifier not used elsewhere. Omit to remove the user's name.
+    /// The new name, an identifier not used elsewhere. Required unless `clear` is set.
     pub name: Option<String>,
+    /// Remove the user's name instead of setting one.
+    #[serde(default)]
+    pub clear: bool,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
 pub struct CommentArgs {
     /// The address or name to comment.
     pub at: String,
-    /// The comment. Omit to remove it.
+    /// The comment. Required unless `clear` is set.
     pub text: Option<String>,
+    /// Remove the comment instead of setting one.
+    #[serde(default)]
+    pub clear: bool,
+}
+
+/// The value an edit sets: `value`, or nothing with `clear`; exactly one must be given, so that a forgotten
+/// argument never erases a name.
+fn edit_value(value: Option<String>, clear: bool, what: &str) -> Result<Option<String>, ApiError> {
+    match (value, clear) {
+        (Some(value), false) => Ok(Some(value)),
+        (None, true) => Ok(None),
+        _ => Err(ApiError::Invalid(format!("pass either `{what}` or `clear: true`"))),
+    }
 }
 
 fn page_limit(limit: Option<usize>) -> Option<usize> {
@@ -128,7 +150,8 @@ pub fn tools() -> Vec<Tool> {
             "disassemble",
             "Disassemble instructions from an address or name, with control flow, references and names.",
             |project, arguments: DisassembleArgs| {
-                project.disassemble(arguments.at.as_deref(), arguments.count.unwrap_or(40).min(500))
+                let count = arguments.count.unwrap_or(crate::DEFAULT_INSTRUCTIONS).min(1000);
+                project.disassemble(arguments.at.as_deref(), count)
             },
         ),
         tool(
@@ -178,13 +201,17 @@ pub fn tools() -> Vec<Tool> {
             "rename",
             "Name a function or address. Names show everywhere and are saved beside the binary; record what you \
              learn as you go.",
-            |project, arguments: RenameArgs| project.rename(project.resolve(&arguments.at)?, arguments.name.as_deref()),
+            |project, arguments: RenameArgs| {
+                let name = edit_value(arguments.name, arguments.clear, "name")?;
+                project.rename(project.resolve(&arguments.at)?, name.as_deref())
+            },
         ),
         tool(
             "set_comment",
             "Comment an instruction or address; comments show in the disassembly and are saved beside the binary.",
             |project, arguments: CommentArgs| {
-                project.comment(project.resolve(&arguments.at)?, arguments.text.as_deref())
+                let text = edit_value(arguments.text, arguments.clear, "text")?;
+                project.comment(project.resolve(&arguments.at)?, text.as_deref())
             },
         ),
         tool("list_annotations", "Every user name and comment, by address.", |project, _: Nothing| {
@@ -196,7 +223,16 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: At| {
                 Ok(serde_json::json!({ "address": format!("{:#x}", project.resolve(&arguments.at)?) }))
             },
+        )
+        .interactive(),
+        tool(
+            "undo",
+            "Undo the last rename or comment made in this session. Returns the edit, or null.",
+            |project, _: Nothing| project.undo(),
         ),
+        tool("redo", "Redo the last edit undone in this session. Returns the edit, or null.", |project, _: Nothing| {
+            project.redo()
+        }),
     ]
 }
 
@@ -211,7 +247,7 @@ pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (Str
             if text.len() > MAX_RESULT_CHARS {
                 let cut = (0..=MAX_RESULT_CHARS).rev().find(|&index| text.is_char_boundary(index)).unwrap_or(0);
                 text.truncate(cut);
-                text.push_str("... (truncated: page with offset and limit, or ask for less)");
+                text.push_str("... (truncated: ask for a narrower range, a smaller count, or a page)");
             }
             (text, false)
         }

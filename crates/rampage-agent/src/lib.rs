@@ -1,12 +1,9 @@
 //! An AI assistant for an open binary: a conversation with a Claude model that answers by calling rampage's
 //! analysis tools on the project, through the Anthropic Messages API.
 
-pub mod tools;
-
 use rampage_api::Project;
+use rampage_api::tools::{self, Tool};
 use serde_json::{Value, json};
-
-pub use tools::Tool;
 
 /// The model used unless `RAMPAGE_MODEL` names another.
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
@@ -35,7 +32,11 @@ impl Anthropic {
 
 impl Transport for Anthropic {
     fn send(&self, request: &Value) -> Result<Value, String> {
-        let response = ureq::post(&self.url)
+        let response = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(15))
+            .timeout_read(std::time::Duration::from_secs(300))
+            .build()
+            .post(&self.url)
             .set("x-api-key", &self.api_key)
             .set("anthropic-version", "2023-06-01")
             .send_json(request);
@@ -83,8 +84,24 @@ impl Agent {
         Self { model, system, messages: Vec::new(), tools: tools::tools() }
     }
 
-    /// Asks `question`, running the tools the model calls until it answers. Reports progress to `on_event`.
+    /// Asks `question`, running the tools the model calls until it answers. Reports progress to `on_event`. On
+    /// failure the conversation returns to where it was before the question, so it stays valid for the API.
     pub fn ask(
+        &mut self,
+        transport: &dyn Transport,
+        project: &Project,
+        question: &str,
+        on_event: &mut dyn FnMut(Event),
+    ) -> Result<(), String> {
+        let checkpoint = self.messages.len();
+        let result = self.answer(transport, project, question, on_event);
+        if result.is_err() {
+            self.messages.truncate(checkpoint);
+        }
+        result
+    }
+
+    fn answer(
         &mut self,
         transport: &dyn Transport,
         project: &Project,
@@ -94,6 +111,7 @@ impl Agent {
         self.messages.push(json!({ "role": "user", "content": question }));
         let definitions: Vec<Value> = self.tools.iter().map(Tool::definition).collect();
         for _ in 0..MAX_TURNS {
+            self.elide_old_results();
             let request = json!({
                 "model": self.model,
                 "max_tokens": MAX_TOKENS,
@@ -101,18 +119,14 @@ impl Agent {
                 "tools": definitions,
                 "messages": self.messages,
             });
-            let response = match transport.send(&request) {
-                Ok(response) => response,
-                Err(error) => {
-                    // Forget the unanswered question so that the conversation can go on.
-                    self.messages.pop_if(|message| message["role"] == "user");
-                    return Err(error);
-                }
+            let response = transport.send(&request)?;
+            let content = match response["content"].as_array() {
+                Some(content) if !content.is_empty() => content.clone(),
+                _ => return Err("the model returned an empty reply".to_owned()),
             };
-            let content = response["content"].clone();
             self.messages.push(json!({ "role": "assistant", "content": content }));
             let mut results = Vec::new();
-            for block in content.as_array().into_iter().flatten() {
+            for block in &content {
                 match block["type"].as_str() {
                     Some("text") => on_event(Event::Text(block["text"].as_str().unwrap_or("").to_owned())),
                     Some("tool_use") => {
@@ -130,14 +144,42 @@ impl Agent {
                     _ => {}
                 }
             }
-            if response["stop_reason"] != "tool_use" || results.is_empty() {
+            // Every tool call needs its result before the conversation goes on, whatever made the reply stop.
+            if results.is_empty() {
+                if response["stop_reason"] == "max_tokens" {
+                    on_event(Event::Text("(The answer was cut off at the length limit.)".to_owned()));
+                }
                 return Ok(());
             }
             self.messages.push(json!({ "role": "user", "content": results }));
         }
         Err(format!("stopped after {MAX_TURNS} model turns"))
     }
+
+    /// Keeps the conversation within budget by replacing the oldest tool results with a note: the model has
+    /// already read them, and its answers carry what it learned.
+    fn elide_old_results(&mut self) {
+        let size = |messages: &[Value]| messages.iter().map(|message| message.to_string().len()).sum::<usize>();
+        let mut total = size(&self.messages);
+        for message in &mut self.messages {
+            if total <= MAX_CONVERSATION_CHARS {
+                break;
+            }
+            let Some(blocks) = message["content"].as_array_mut() else { continue };
+            for block in blocks.iter_mut().filter(|block| block["type"] == "tool_result") {
+                let before = block["content"].to_string().len();
+                if before > ELIDED.len() {
+                    block["content"] = json!(ELIDED);
+                    total -= before - ELIDED.len();
+                }
+            }
+        }
+    }
 }
+
+/// The conversation size, in characters of JSON, beyond which old tool results are dropped.
+const MAX_CONVERSATION_CHARS: usize = 300_000;
+const ELIDED: &str = "(earlier result elided to save space; call the tool again if needed)";
 
 #[cfg(test)]
 mod tests {
@@ -218,6 +260,60 @@ mod tests {
         let mut agent = Agent::new(&project);
         assert!(agent.ask(&script, &project, "hello", &mut |_| {}).is_err());
         assert!(agent.messages.is_empty());
+    }
+
+    #[test]
+    fn a_failure_after_tool_calls_rolls_the_conversation_back() {
+        let project = project("hello-x64.elf");
+        let tool_turn = json!({
+            "stop_reason": "max_tokens",
+            "content": [{ "type": "tool_use", "id": "t1", "name": "binary_info", "input": {} }]
+        });
+        // The tool turn is followed by an error: nothing of the question may stay behind.
+        let script = Script { responses: Mutex::new(vec![tool_turn]), requests: Mutex::new(Vec::new()) };
+        let mut agent = Agent::new(&project);
+        assert!(agent.ask(&script, &project, "hello", &mut |_| {}).is_err());
+        assert!(agent.messages.is_empty());
+        // A reply cut off with a tool call still gets its result and goes on.
+        let script = Script {
+            responses: Mutex::new(vec![
+                json!({
+                    "stop_reason": "max_tokens",
+                    "content": [{ "type": "tool_use", "id": "t1", "name": "binary_info", "input": {} }]
+                }),
+                json!({ "stop_reason": "end_turn", "content": [{ "type": "text", "text": "done" }] }),
+            ]),
+            requests: Mutex::new(Vec::new()),
+        };
+        agent.ask(&script, &project, "hello", &mut |_| {}).unwrap();
+        let roles: Vec<&str> = agent.messages.iter().map(|message| message["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["user", "assistant", "user", "assistant"]);
+        // An empty reply is an error, not an empty turn.
+        let script = Script {
+            responses: Mutex::new(vec![json!({ "stop_reason": "end_turn", "content": [] })]),
+            requests: Mutex::new(Vec::new()),
+        };
+        assert!(agent.ask(&script, &project, "again", &mut |_| {}).is_err());
+        assert_eq!(agent.messages.len(), 4);
+    }
+
+    #[test]
+    fn old_tool_results_are_elided_to_fit_the_budget() {
+        let project = project("hello-x64.elf");
+        let mut agent = Agent::new(&project);
+        let big = "x".repeat(200_000);
+        for id in 0..3 {
+            agent.messages.push(json!({ "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": format!("t{id}"), "content": big }
+            ]}));
+        }
+        agent.elide_old_results();
+        let kept: Vec<bool> = agent
+            .messages
+            .iter()
+            .map(|message| message["content"][0]["content"].as_str() == Some(big.as_str()))
+            .collect();
+        assert_eq!(kept, [false, false, true]);
     }
 
     #[test]

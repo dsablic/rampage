@@ -6,6 +6,7 @@ mod listing;
 mod project;
 mod rows;
 mod session;
+pub mod tools;
 mod xrefs;
 
 use std::path::PathBuf;

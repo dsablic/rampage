@@ -8,8 +8,6 @@ license.workspace = true
 rampage-api.workspace = true
 rampage-arch.workspace = true
 rmcp.workspace = true
-schemars.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 

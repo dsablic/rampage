@@ -3235,10 +3235,7 @@ name = "rampage-agent"
 version = "0.1.0"
 dependencies = [
  "rampage-api",
- "rampage-arch",
  "rampage-loaders",
- "schemars",
- "serde",
  "serde_json",
  "ureq",
 ]
@@ -3316,8 +3313,6 @@ dependencies = [
  "rampage-api",
  "rampage-arch",
  "rmcp",
- "schemars",
- "serde",
  "serde_json",
  "tokio",
 ]
