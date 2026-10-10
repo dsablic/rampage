@@ -245,6 +245,14 @@ fn special(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
         "pstatefield" => pstate_field(value),
         "option" => barrier(context, operand, value),
         "prfop" if context.is_sve() => sve_prefetch(operand, value),
+        "rprfop" => match range_prefetch_operation(context) {
+            0 => Value::Text("pldkeep".to_owned()),
+            1 => Value::Text("pstkeep".to_owned()),
+            4 => Value::Text("pldstrm".to_owned()),
+            5 => Value::Text("pststrm".to_owned()),
+            _ => Value::Invalid,
+        },
+        "imm6" if context.mnemonic() == "RPRFM" => Value::Text(range_prefetch_operation(context).to_string()),
         "prfop" => prefetch(value),
         "mod" if context.field_names(operand) == ["msz"] => {
             if value == 0 {
@@ -345,6 +353,10 @@ fn barrier(context: &Context, operand: &Operand, value: u64) -> Value {
     if context.mnemonic() == "ISB" {
         return if value == 15 { Value::Default(String::new()) } else { Value::Invalid };
     }
+    if context.field_names(operand) == ["imm2"] {
+        // DSB ... nXS
+        return Value::Text(["osh", "nsh", "ish", "sy"][value as usize & 3].to_owned());
+    }
     if context.field_names(operand) != ["CRm"] {
         return match ranked_choice(context, operand) {
             Some(text) => Value::Text(text),
@@ -444,7 +456,7 @@ fn shift(context: &Context, operand: &Operand, value: u64, width: u32) -> Value 
         }
         _ => match ranked_choice(context, operand) {
             Some(text) => Value::Text(text),
-            None => Value::Text(sign_extend(value, width).to_string()),
+            None => Value::Text(value.to_string()),
         },
     }
 }
@@ -510,7 +522,7 @@ fn extend(context: &Context, option: u64) -> Value {
 
 fn bitfield_lsb(context: &Context, value: u64) -> Value {
     let width = if context.field("sf") == Some(1) { 64 } else { 32 };
-    if context.mnemonic().ends_with("BFIZ") || context.mnemonic() == "BFI" {
+    if matches!(context.mnemonic(), "BFI" | "BFC" | "SBFIZ" | "UBFIZ") {
         // UBFIZ/SBFIZ/BFI: lsb = -immr MOD width.
         let immr = context.field("immr").unwrap_or(value);
         return Value::Text(((width - immr) % width).to_string());
@@ -521,7 +533,7 @@ fn bitfield_lsb(context: &Context, value: u64) -> Value {
 fn bitfield_width(context: &Context) -> Value {
     let imms = context.field("imms").unwrap_or(0);
     let immr = context.field("immr").unwrap_or(0);
-    if context.mnemonic().ends_with("BFIZ") || context.mnemonic() == "BFI" {
+    if matches!(context.mnemonic(), "BFI" | "BFC" | "SBFIZ" | "UBFIZ") {
         return Value::Text((imms + 1).to_string());
     }
     Value::Text((imms + 1 - immr.min(imms + 1)).to_string())
@@ -557,15 +569,16 @@ fn element_index(context: &Context, operand: &Operand, value: u64) -> Value {
     } else if fields == ["imm5"] {
         let imm5 = context.field("imm5").unwrap_or(0);
         imm5 >> (imm5.trailing_zeros() + 1).min(5)
-    } else if has("H") && !context.is_sve() {
+    } else if has("H") && !context.is_sve() && (has("size") || has("sz")) {
+        // The element size picks how many of H, L and M form the index. FCMLA indexes pairs of elements.
         let h = context.field("H").unwrap_or(0);
         let l = context.field("L").unwrap_or(0);
         let m = context.field("M").unwrap_or(0);
-        match element_bits(context) {
-            Some(16) => (h << 2) | (l << 1) | m,
-            Some(32) => (h << 1) | l,
-            Some(64) => h,
-            _ => (h << 1) | l,
+        let bits = element_bits(context).unwrap_or(32) * if context.mnemonic() == "FCMLA" { 2 } else { 1 };
+        match bits {
+            16 => (h << 2) | (l << 1) | m,
+            32 => (h << 1) | l,
+            _ => h,
         }
     } else if has("Q") && has("S") && !context.is_sve() {
         // Single-structure loads and stores: Q:S:size holds the byte index of the lane.
@@ -581,6 +594,10 @@ fn element_index(context: &Context, operand: &Operand, value: u64) -> Value {
         } else {
             bytes >> 2
         }
+    } else if has("H") && has("Rm") && !context.is_sve() {
+        // FP8 by-element forms list Rm among the index fields; the index is H:L:M.
+        let h = context.field("H").unwrap_or(0);
+        (h << 2) | (context.field("L").unwrap_or(0) << 1) | context.field("M").unwrap_or(0)
     } else if fields == ["Q"] && !context.is_sve() {
         value
     } else if has("imm4") && has("Q") {
@@ -611,6 +628,14 @@ fn register(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
     } else {
         0
     };
+    // A pair's second register shares the first's field when the pair is consecutive (SYSP <Xt1>, <Xt2>).
+    let shares_first = name.ends_with('2')
+        && !name.contains('+')
+        && context.decoded.syntax.operands.iter().any(|other| {
+            other.name.trim_start_matches('<').trim_end_matches('>') == format!("{}1", &name[..name.len() - 1])
+                && other.fields == operand.fields
+        });
+    let offset = if shares_first { 1 } else { offset };
     let number = (value + offset) % 32;
     let allows_sp = name.contains("|SP") || name.contains("|WSP");
     Some(Value::Text(match base {
@@ -633,7 +658,8 @@ fn register(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
                 match (allows_sp, base) {
                     (true, "W") => "wsp".to_owned(),
                     (true, _) => "sp".to_owned(),
-                    _ => format!("{prefix}zr"),
+                    // XZR is the default of optional register operands (SYS, TLBI, IRG).
+                    _ => return Some(Value::Default(format!("{prefix}zr"))),
                 }
             } else if number == 30 && context.mnemonic().starts_with("RET") {
                 return Some(Value::Default("x30".to_owned()));
@@ -644,10 +670,11 @@ fn register(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
         "B" | "H" | "S" | "D" | "Q" => format!("{}{number}", base.to_ascii_lowercase()),
         "V" => {
             if fields.contains(&"M") && fields.contains(&"Rm") {
-                // By-element forms: Rm is 4 bits wide for 16-bit elements.
+                // By-element forms: Rm is 4 bits wide for 16-bit elements (M joins the index), except in FCMLA.
                 let rm = context.field("Rm").unwrap_or(0);
                 let m = context.field("M").unwrap_or(0);
-                if element_bits(context) == Some(16) { format!("v{rm}") } else { format!("v{}", (m << 4) | rm) }
+                let narrow = element_bits(context) == Some(16) && context.mnemonic() != "FCMLA";
+                if narrow { format!("v{rm}") } else { format!("v{}", (m << 4) | rm) }
             } else {
                 format!("v{number}")
             }
@@ -722,6 +749,14 @@ fn arrangement(context: &Context, operand: &Operand, name: &str) -> Option<Value
     let fields = context.field_names(operand);
     let (value, width) = context.raw(operand);
     let has = |name| fields.contains(&name);
+    if fields.is_empty() && name == "V" {
+        // FP16 across-lanes forms fix the element size: take it from the <T> arrangement.
+        let arrangement_operand = context.decoded.syntax.operands.iter().find(|other| other.name == "<T>")?;
+        return match arrangement(context, arrangement_operand, "T")? {
+            Value::Text(text) => Some(Value::Text(text.trim_start_matches(|c: char| c.is_ascii_digit()).to_owned())),
+            other => Some(other),
+        };
+    }
     if name == "R" {
         let is_x = match fields.as_slice() {
             ["size"] | ["sz"] => value == (1 << width) - 1,
@@ -815,6 +850,13 @@ fn immediate(context: &Context, operand: &Operand, name: &str) -> Option<Value> 
             let mask = if register_width == 64 { u64::MAX } else { 0xffff_ffff };
             let inverted = context.encoding_name().starts_with("MOVN");
             signed_for_width(if inverted { !shifted & mask } else { shifted & mask }, register_width)
+        }
+        "imm" if context.encoding_name().starts_with("MSR_SI") => pstate_immediate(context).to_string(),
+        "imm" if context.mnemonic() == "CLREX" && value == 15 => return Some(Value::Default("15".to_owned())),
+        "imm" | "simm" | "uimm6" if memory_tagging(context) => {
+            // MTE offsets and tag-granule adjustments count 16-byte granules.
+            let granules = if name == "uimm6" { value as i64 } else { sign_extend(value, width) };
+            return Some(default_if_zero(granules * 16));
         }
         "imm" if context.encoding_name().ends_with("_exception") => {
             if value == 0 {
@@ -1009,4 +1051,32 @@ fn sve_register_count(context: &Context) -> i64 {
 /// SVE narrowing operations encode the wide source element size; the destination has half-width elements.
 fn narrowing(mnemonic: &str) -> bool {
     mnemonic.ends_with("NB") || mnemonic.ends_with("NT") || mnemonic.ends_with('N')
+}
+
+/// RPRFM's operation: option<2>:option<0>:S:Rt<2:0>.
+fn range_prefetch_operation(context: &Context) -> u64 {
+    let option = context.field("option").unwrap_or(0);
+    let s = context.field("S").unwrap_or(0);
+    let rt = context.field("Rt").unwrap_or(0);
+    (((option >> 2) & 1) << 5) | ((option & 1) << 4) | (s << 3) | (rt & 7)
+}
+
+/// The immediate of MSR (immediate): the CRm bits the PSTATE field leaves free (all four for DAIFSet and
+/// DAIFClr, one bit for most others).
+fn pstate_immediate(context: &Context) -> u64 {
+    let (op1, crm, op2) =
+        (context.field("op1").unwrap_or(0), context.field("CRm").unwrap_or(0), context.field("op2").unwrap_or(0));
+    let lookup = |crm: u64| {
+        let key = ((op1 << 7) | (crm << 3) | op2) as u16;
+        spec::PSTATE_FIELDS.binary_search_by_key(&key, |&(k, _)| k).ok().map(|index| spec::PSTATE_FIELDS[index].1)
+    };
+    let name = lookup(crm);
+    let shared = (0..16).filter(|&other| lookup(other) == name).count() as u64;
+    crm & (shared.next_power_of_two() - 1)
+}
+
+/// Memory tagging loads, stores and address arithmetic, whose offsets are in 16-byte granules.
+fn memory_tagging(context: &Context) -> bool {
+    let name = context.encoding_name();
+    name.contains("ldsttags") || name.contains("immtags") || name.starts_with("STGP")
 }

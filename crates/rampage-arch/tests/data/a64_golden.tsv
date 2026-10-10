@@ -3176,7 +3176,7 @@ c40d818c	ldnt1sb { z12.d }, p0/z, [z12.d, x13]
 c49995bf	ldnt1sh { z31.d }, p5/z, [z13.d, x25]
 c51b9894	ldnt1sw { z20.d }, p6/z, [z4.d, x27]
 c582c9b9	ldnt1d { z25.d }, p2/z, [z13.d, x2]
-c410deb2	ldnt1b { z18.d }, p7/z, [z21.d, x16]
+c41fda53	ldnt1b { z19.d }, p6/z, [z18.d]
 c48bc329	ldnt1h { z9.d }, p0/z, [z25.d, x11]
 c512dcfa	ldnt1w { z26.d }, p7/z, [z7.d, x18]
 c408f8c2	prfb pldl2keep, p6, [z6.d, #8]
@@ -4138,6 +4138,8 @@ f3b68fbf	autibsppc #-184820
 b178b5bb	adds x27, x13, #3629, lsl #12
 d1673c79	sub x25, x3, #2511, lsl #12
 f13bb5a0	subs x0, x13, #3821
+91ba3986	addg x6, x12, #928, #14
+d1ad07cd	subg x13, x30, #720, #1
 11c1ead0	smax w16, w22, #122
 11c5918b	umax w11, w12, #100
 11c8b95c	smin w28, w10, #46
@@ -4228,6 +4230,8 @@ d503359f	dsb nshld
 d5033cbf	dmb #12
 d50335df	isb #5
 d50330ff	sb
+d5033a3f	dsb ishnxs
+d50343ff	msr DAIFClr, #3
 d500401f	cfinv
 d500403f	xaflag
 d500405f	axflag
@@ -4235,6 +4239,7 @@ d50adf7b	sys #2, c13, c15, #3, x27
 d52ee7ce	sysl x14, #6, c14, c7, #6
 d514ff83	msr S2_4_C15_C15_4, x3
 d539b6fd	mrs x29, S3_1_C11_C6_7
+d54e2f92	sysp #6, c2, c15, #4, x18, x19
 d55d1a66	msrr S3_5_C1_C10_3, x6, x7
 d57463f0	mrrs x16, x17, S2_4_C6_C3_7
 d61f089f	braaz x4
@@ -4512,9 +4517,21 @@ c9d37c96	casat x19, x22, [x4]
 c9cbfdbb	casalt x11, x27, [x13]
 d91f0d8e	gcsstr x14, [x12]
 d91f1c93	gcssttr x19, [x4]
+d92ba59a	stg x26, [x12], #2976
+d929c998	stg x24, [x12, #2496]
+d9210eb6	stg x22, [x21, #256]!
 d920004d	stzgm x13, [x2]
-d96008e3	stzg x3, [x7]
+d9658092	ldg x18, [x4, #1408]
+d9657786	stzg x6, [x28], #1392
+d9659832	stzg x18, [x1, #1424]
+d96a5f36	stzg x22, [x25, #2640]!
+d9ae84c6	st2g x6, [x6], #3712
+d9ba2a21	st2g x1, [x17, #-1504]
+d9b95f3f	st2g sp, [x25, #-1712]!
 d9a00123	stgm x3, [x9]
+d9e59428	stz2g x8, [x1], #1424
+d9eedb94	stz2g x20, [x28, #3792]
+d9febf8e	stz2g x14, [x28, #-336]!
 d9e000a3	ldgm x3, [x5]
 882c43c4	stxp w12, w4, w16, [x30]
 88248879	stlxp w4, w25, w2, [x3]
@@ -4807,6 +4824,7 @@ ec486643	ldtnp q3, q25, [x18, #256]
 28f0b17f	ldp wzr, w12, [x11], #-124
 2c8a056d	stp s13, s1, [x11], #80
 2ce0e6a5	ldp s5, s25, [x21], #-252
+68847e96	stgp x22, xzr, [x20], #128
 68c4d870	ldpsw x16, x22, [x3], #36
 6cbd47bc	stp d28, d17, [x29], #-48
 6ccfbcbc	ldp d28, d15, [x5], #248
@@ -4822,6 +4840,7 @@ ece08043	ldtp q3, q0, [x2], #-1008
 29440f77	ldp w23, w3, [x27, #32]
 2d2ed031	stp s17, s20, [x1, #-140]
 2d456619	ldp s25, s25, [x16, #40]
+69303a30	stgp x16, x14, [x17, #-512]
 6949637e	ldpsw x30, x24, [x27, #72]
 6d090b9f	stp d31, d2, [x28, #144]
 6d5799c3	ldp d3, d6, [x14, #376]
@@ -4837,6 +4856,7 @@ ed7a0df3	ldtp q19, q3, [x15, #-192]
 29fe7c35	ldp w21, wzr, [x1, #-16]!
 2db178a8	stp s8, s30, [x5, #-120]!
 2dd31b32	ldp s18, s6, [x25, #152]!
+699e6f4a	stgp x10, x27, [x26, #960]!
 69d3e890	ldpsw x16, x26, [x4, #156]!
 6d968795	stp d21, d1, [x28, #360]!
 6dc19575	ldp d21, d5, [x11, #24]!
@@ -5255,6 +5275,7 @@ bc6b7a03	ldr s3, [x16, x11, lsl #2]
 f83d7bcd	str x13, [x30, x29, lsl #3]
 f863e823	ldr x3, [x1, x3, sxtx]
 f8a57ad2	prfm pstl2keep, [x22, x5, lsl #3]
+f8a5f87d	rprfm #61, x5, [x3]
 fc265909	str d9, [x8, w6, uxtw #3]
 fc6f5b25	ldr d5, [x25, w15, uxtw #3]
 f838951d	ldraa x29, [x8, #3144]
@@ -5405,7 +5426,7 @@ da0201ff	sbc xzr, x15, x2
 fa0301ed	sbcs x13, x15, x3
 9a0e3a78	addpt x24, x19, x14, lsl #6
 da032685	subpt x5, x20, x3, lsl #1
-ba0c84e5	rmif x7, #25, #5
+ba1504ac	rmif x5, #42, #12
 3a000b2d	setf8 w25
 3a00486d	setf16 w3
 3a4d81ec	ccmn w15, w13, #12, hi
@@ -5591,15 +5612,15 @@ da9c66ff	csneg xzr, x23, x28, vs
 5f53bbf4	sqdmull s20, h31, v3.h[5]
 5f57cb49	sqdmulh h9, h26, v7.h[5]
 5f73d80a	sqrdmulh h10, h0, v3.h[7]
-5f001101	fmla h1, h8, v0.h[0]
-5f0b531f	fmls h31, h24, v11.h[0]
-5f0f936f	fmul h15, h27, v15.h[0]
+5f3a11b6	fmla h22, h13, v10.h[3]
+5f3e51e4	fmls h4, h15, v14.h[3]
+5f229970	fmul h16, h11, v2.h[6]
 5fbe113c	fmla s28, s9, v30.s[1]
 5fcb5a5f	fmls d31, d18, v11.d[1]
 5fc498c1	fmul d1, d6, v4.d[1]
 7facd109	sqrdmlah s9, s8, v12.s[1]
 7f8cf8af	sqrdmlsh s15, s5, v12.s[2]
-7f08934c	fmulx h12, h26, v8.h[0]
+7f379a12	fmulx h18, h16, v7.h[7]
 7fdd9371	fmulx d17, d27, v29.d[0]
 4e1e0161	tbl v1.16b, { v11.16b }, v30.16b
 0e041098	tbx v24.8b, { v4.16b }, v4.8b
@@ -5786,6 +5807,10 @@ da9c66ff	csneg xzr, x23, x28, vs
 0e70a948	smaxv h8, v10.4h
 4e71aafa	sminv h26, v23.8h
 4e31b8a8	addv b8, v5.16b
+0e30c870	fmaxnmv h16, v3.4h
+4e30f958	fmaxv h24, v10.8h
+0eb0c9d9	fminnmv h25, v14.4h
+0eb0f8c2	fminv h2, v6.4h
 2e3038c6	uaddlv h6, v6.8b
 6e70a87a	umaxv h26, v3.8h
 2e71aab0	uminv h16, v21.4h
@@ -5958,20 +5983,20 @@ da9c66ff	csneg xzr, x23, x28, vs
 0fb6d9d2	sqrdmulh v18.2s, v14.2s, v22.s[3]
 0fb6e3ed	sdot v13.2s, v31.8b, v22.4b[1]
 4f1e0982	fdot v2.4s, v12.16b, v30.4b[2]
-0f0a11ea	fmla v10.4h, v15.4h, v10.h[0]
-0f0b5309	fmls v9.4h, v24.4h, v11.h[0]
-4f0592ac	fmul v12.8h, v21.8h, v5.h[0]
+0f1e1beb	fmla v11.4h, v31.4h, v14.h[5]
+4f1d586b	fmls v11.8h, v3.8h, v13.h[5]
+0f3a92ac	fmul v12.4h, v21.4h, v10.h[3]
 4f2bfb1a	sudot v26.4s, v24.16b, v11.4b[3]
 4f620ac9	fdot v9.8h, v22.16b, v2.2b[6]
-4f4f90fd	fdot v29.4s, v7.8h, v15.2h[0]
-0f4af05a	bfdot v26.2s, v2.4h, v10.2h[0]
+4f629a96	fdot v22.4s, v20.8h, v2.2h[3]
+4f6ef2cd	bfdot v13.4s, v22.8h, v14.2h[1]
 4fde1167	fmla v7.2d, v11.2d, v30.d[0]
 4fd658c8	fmls v8.2d, v6.2d, v22.d[1]
 4fd29865	fmul v5.2d, v3.2d, v18.d[1]
 0f87019d	fmlal v29.2s, v12.2h, v7.h[0]
-0f824332	fmlsl v18.2s, v25.2h, v2.h[0]
+4fa743ae	fmlsl v14.4s, v29.4h, v7.h[2]
 0fb3fabb	usdot v27.2s, v21.8b, v19.4b[3]
-4fcef03a	bfmlalt v26.4s, v1.8h, v14.h[0]
+0fe4f8fb	bfmlalb v27.4s, v7.8h, v4.h[6]
 2f8202d7	mla v23.2s, v22.2s, v2.s[0]
 6f982909	umlal2 v9.2d, v8.4s, v24.s[2]
 6fb64166	mls v6.4s, v11.4s, v22.s[1]
@@ -5980,9 +6005,11 @@ da9c66ff	csneg xzr, x23, x28, vs
 6f86d953	sqrdmlah v19.4s, v10.4s, v6.s[2]
 6f91e814	udot v20.4s, v0.16b, v17.4b[2]
 2f88fbd1	sqrdmlsh v17.2s, v30.2s, v8.s[2]
-6f0491ee	fmulx v14.8h, v15.8h, v4.h[0]
+6f369ad0	fmulx v16.8h, v22.8h, v6.h[7]
+6f773236	fcmla v22.8h, v17.8h, v23.h[1], #90
 6f889345	fmulx v5.4s, v26.4s, v8.s[0]
-6f8cc122	fmlsl2 v2.4s, v9.4h, v12.h[0]
+2f9982fb	fmlal2 v27.2s, v23.2h, v9.h[1]
+6fadc240	fmlsl2 v0.4s, v18.4h, v13.h[2]
 0fc00350	fmlalb v16.8h, v26.16b, v0.b[0]
 2f078260	fmlallbb v0.4s, v19.16b, v7.b[0]
 2f4383f4	fmlallbt v20.4s, v31.16b, v3.b[0]

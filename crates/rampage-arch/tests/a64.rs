@@ -34,6 +34,30 @@ fn absolute_labels_resolve_against_the_instruction_address() {
     assert_eq!(format_word(0x36f8_00a8, 0x1000, LabelStyle::Absolute).as_deref(), Some("tbz w8, #31, 0x1014"));
 }
 
+#[test]
+fn operand_forms_found_in_review() {
+    let cases = [
+        (0xd503_42df, "msr DAIFSet, #2"),
+        // Arm's preferred alias; LLVM prints `bfi w0, wzr, #3, #2`.
+        (0x331d_07e0, "bfc w0, #3, #2"),
+        (0x4f3f_1923, "fmla v3.8h, v9.8h, v15.h[7]"),
+        (0x6f7c_1973, "fcmla v19.8h, v11.8h, v28.h[3], #0"),
+        (0x693e_6d5d, "stgp x29, x27, [x10, #-64]"),
+        (0xd966_009a, "ldg x26, [x4, #1536]"),
+        (0xd182_2d98, "subg x24, x12, #32, #11"),
+        (0xd503_3a3f, "dsb ishnxs"),
+        (0xf8b1_4bfd, "rprfm pststrm, x17, [sp]"),
+        (0xd548_7720, "sysp #0, c7, c7, #1, x0, x1"),
+        (0xd508_831f, "tlbi vmalle1is"),
+        (0xba1d_07e1, "rmif xzr, #58, #1"),
+        (0x0e30_f847, "fmaxv h7, v2.4h"),
+        (0xd503_3f5f, "clrex"),
+    ];
+    for (word, expected) in cases {
+        assert_eq!(format_word(word, 0, LabelStyle::Relative).as_deref(), Some(expected), "{word:#010x}");
+    }
+}
+
 /// A small deterministic generator so the sweep covers the same words on every run.
 fn words(seed: u64, count: usize) -> impl Iterator<Item = u32> {
     let mut state = seed;
