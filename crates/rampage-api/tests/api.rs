@@ -104,11 +104,19 @@ fn disassembly_comments_name_targets_and_strings() {
 }
 
 #[test]
-fn pe_import_thunks_are_named_after_analysis() {
+fn names_do_not_depend_on_whether_analysis_has_run() {
+    let label = |project: &rampage_api::Project| project.disassemble(Some("0x140028d60"), 1).unwrap()[0].label.clone();
     let project = Session::default().open(&fixture("hello-x64.exe"), None).unwrap();
-    let thunk = project.resolve("puts").unwrap();
-    let rows = project.xrefs(&XrefQuery::To(thunk)).unwrap();
-    assert!(rows.iter().any(|row| row.to_name.as_deref() == Some("puts")), "{rows:?}");
-    let functions = project.functions(&FunctionsQuery { name_contains: Some("puts".into()), ..Default::default() });
-    assert!(functions.unwrap().items.iter().any(|function| function.name == "puts"));
+    let before = label(&project);
+    project.functions(&FunctionsQuery::default()).unwrap();
+    assert_eq!(before.as_deref(), Some("puts"));
+    assert_eq!(label(&project), before);
+}
+
+#[test]
+fn bare_import_names_resolve_to_elf_plt_stubs() {
+    let project = Session::default().open(&fixture("hello-x64-dyn.elf"), None).unwrap();
+    let stub = project.resolve("puts").unwrap();
+    let rows = project.xrefs(&XrefQuery::To(stub)).unwrap();
+    assert!(rows.iter().any(|row| row.to_name.as_deref() == Some("puts@plt")), "{rows:?}");
 }

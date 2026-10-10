@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
+use rampage_arch::Arch;
 use rampage_arch::{Flow, UnsupportedArch, decoder_for};
-use rampage_loaders::{Binary, SymbolKind};
+use rampage_loaders::{Binary, Format, SectionKind, SymbolKind};
 use serde::Serialize;
 
 use crate::discover::{Program, discover};
@@ -72,7 +73,10 @@ pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
             if stub_start == address && decoder.format(bytes, address).starts_with("nop") {
                 stub_start = next;
             } else if let Some(name) = insn.data_ref.and_then(slot_name).filter(|_| !named) {
-                names.push((stub_start, name.to_owned()));
+                // ELF stubs take objdump's `@plt` suffix: in a shared library the import may be one of its own
+                // exported functions, whose name the stub must not take.
+                let name = if binary.format == Format::Elf { format!("{name}@plt") } else { name.to_owned() };
+                names.push((stub_start, name));
                 named = true;
             }
             if matches!(insn.flow, Flow::IndirectJump | Flow::Jump(_) | Flow::Return | Flow::Halt | Flow::Invalid) {
@@ -86,28 +90,42 @@ pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
     names
 }
 
-/// Names import thunks found by analysis outside stub sections: functions that consist of a single jump through
-/// an import slot (MinGW and incrementally linked PE images have these in `.text`).
-pub fn thunk_names(binary: &Binary, program: &Program) -> Vec<(u64, String)> {
-    let Ok(mut decoder) = decoder_for(binary.arch) else { return Vec::new() };
-    program
-        .functions
-        .iter()
-        .filter(|function| function.instruction_count == 1)
-        .filter_map(|function| {
-            let insn = decoder.decode(binary.code_from(function.address)?, function.address);
-            if insn.flow != Flow::IndirectJump {
-                return None;
+/// Names PE import thunks outside stub sections after their import: `jmp [slot]` instructions in code
+/// (MinGW and incrementally linked images put these in `.text`). Found by scanning, so names never depend on
+/// whether analysis has run.
+pub fn thunk_names(binary: &Binary) -> Vec<(u64, String)> {
+    if binary.format != Format::Pe || !matches!(binary.arch, Arch::X86 | Arch::X86_64) {
+        return Vec::new();
+    }
+    let slot_name = |address: u64| {
+        let index = binary.import_slots.binary_search_by_key(&address, |slot| slot.address).ok()?;
+        Some(binary.import_slots[index].name.clone())
+    };
+    let mut names = Vec::new();
+    for section in binary.sections.iter().filter(|section| section.kind == SectionKind::Code) {
+        let Some(bytes) = binary.read(section.address, section.size) else { continue };
+        for (offset, window) in bytes.windows(6).enumerate() {
+            // FF 25 disp32: jmp [rip + disp32] on x86-64, jmp [disp32] on x86.
+            if window[0] != 0xff || window[1] != 0x25 {
+                continue;
             }
-            let slot = insn.data_ref?;
-            let index = binary.import_slots.binary_search_by_key(&slot, |slot| slot.address).ok()?;
-            Some((function.address, binary.import_slots[index].name.clone()))
-        })
-        .collect()
+            let displacement = i32::from_le_bytes(window[2..6].try_into().unwrap());
+            let address = section.address + offset as u64;
+            let slot = match binary.arch {
+                Arch::X86_64 => address.wrapping_add(6).wrapping_add(displacement as i64 as u64),
+                _ => u64::from(displacement as u32),
+            };
+            if let Some(name) = slot_name(slot) {
+                names.push((address, name));
+            }
+        }
+    }
+    names
 }
 
 /// Names for addresses: function symbols first, then exports, the entry point and other symbols, then import
-/// stubs (named after their import) and import slots (`__imp_` and the import's name).
+/// stubs and thunks (named after their import, with `@plt` on ELF) and import slots (`__imp_` and the import's
+/// name).
 pub struct Names(BTreeMap<u64, String>);
 
 impl Names {
@@ -117,20 +135,13 @@ impl Names {
         for symbol in &binary.symbols {
             names.entry(symbol.address).or_insert_with(|| symbol.name.clone());
         }
-        for (address, name) in stub_names(binary) {
+        for (address, name) in stub_names(binary).into_iter().chain(thunk_names(binary)) {
             names.entry(address).or_insert(name);
         }
         for slot in &binary.import_slots {
             names.entry(slot.address).or_insert_with(|| format!("__imp_{}", slot.name));
         }
         Self(names)
-    }
-
-    /// Adds names for addresses that have none yet.
-    pub fn extend(&mut self, names: impl IntoIterator<Item = (u64, String)>) {
-        for (address, name) in names {
-            self.0.entry(address).or_insert(name);
-        }
     }
 
     pub fn get(&self, address: u64) -> Option<&str> {

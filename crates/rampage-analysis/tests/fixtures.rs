@@ -104,16 +104,16 @@ fn names_prefer_symbols_and_fall_back_to_sub() {
 
 #[test]
 fn stubs_are_named_after_the_imports_they_jump_through() {
-    for (name, puts) in [
-        ("hello-x64.macho", "_puts"),
-        ("hello-arm64.macho", "_puts"),
-        ("hello-x64-dyn.elf", "puts"),
-        ("hello-arm64.elf", "puts"),
+    for (name, puts, stub_name) in [
+        ("hello-x64.macho", "_puts", "_puts"),
+        ("hello-arm64.macho", "_puts", "_puts"),
+        ("hello-x64-dyn.elf", "puts", "puts@plt"),
+        ("hello-arm64.elf", "puts", "puts@plt"),
     ] {
         let binary = open(name);
         let program = functions::analyze(&binary).unwrap();
         let names = functions::Names::new(&binary);
-        let stub = names.address_of(puts).unwrap_or_else(|| panic!("{name}: no stub named {puts}"));
+        let stub = names.address_of(stub_name).unwrap_or_else(|| panic!("{name}: no stub named {stub_name}"));
         // The stub is the function main calls.
         let main = binary.symbol_by_name(if name.ends_with("macho") { "_main" } else { "main" }).unwrap().address;
         let main = program.function_at(main).unwrap();
@@ -138,4 +138,22 @@ fn arm64_plt_padding_does_not_shift_stub_names() {
     for (address, _) in &stubs {
         assert_eq!(binary.read(*address, 4).map(|bytes| bytes[3] & 0x9f), Some(0x90), "not an ADRP at {address:#x}");
     }
+}
+
+#[test]
+fn plt_stubs_do_not_take_the_name_of_a_function_the_library_defines() {
+    let binary = open("libhelper-x64.so");
+    let names = functions::Names::new(&binary);
+    let helper = symbol_address(&binary, "helper");
+    assert_eq!(names.address_of("helper"), Some(helper));
+    let stub = names.address_of("helper@plt").expect("stub named helper@plt");
+    assert_ne!(stub, helper);
+}
+
+#[test]
+fn pe_import_thunks_are_named_without_analysis() {
+    let binary = open("hello-x64.exe");
+    let names = functions::Names::new(&binary);
+    let thunk = names.address_of("puts").expect("thunk named puts");
+    assert_eq!(binary.read(thunk, 2), Some(&[0xff, 0x25][..]));
 }

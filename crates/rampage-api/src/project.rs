@@ -51,8 +51,6 @@ pub struct Project {
 
 struct Analysis {
     program: Program,
-    /// The project's names plus names only analysis can find (import thunks).
-    names: Names,
     /// The program's cross-references sorted by source address.
     xrefs_by_source: Vec<Xref>,
     /// Every block as (start, end, function), sorted by start, for address-to-function lookups.
@@ -197,19 +195,9 @@ impl Project {
             blocks.sort_unstable();
             let mut xrefs_by_source = program.xrefs.clone();
             xrefs_by_source.sort_unstable_by_key(|xref| (xref.from, xref.to));
-            let mut names = Names::new(&self.binary);
-            names.extend(functions::thunk_names(&self.binary, &program));
-            Ok(Analysis { program, names, xrefs_by_source, blocks })
+            Ok(Analysis { program, xrefs_by_source, blocks })
         });
         analysis.as_ref().map_err(|error| ApiError::Unsupported(UnsupportedArch(error.0)))
-    }
-
-    /// Names known so far: the binary's own, plus analysis-found ones once analysis has run.
-    fn names(&self) -> &Names {
-        match self.analysis.get() {
-            Some(Ok(analysis)) => &analysis.names,
-            _ => &self.names,
-        }
     }
 
     /// Parses `0x` hex, decimal, a symbol or export name, or a `sub_<hex>` name.
@@ -222,14 +210,8 @@ impl Project {
         if let Ok(address) = text.parse() {
             return Ok(address);
         }
-        if let Some(address) = self.names.address_of(text) {
-            return Ok(address);
-        }
-        // Import thunks are only named once analysis has found them.
-        if !text.starts_with("sub_")
-            && let Ok(analysis) = self.analysis()
-            && let Some(address) = analysis.names.address_of(text)
-        {
+        // ELF import stubs are named `<import>@plt`; a bare import name finds its stub.
+        if let Some(address) = self.names.address_of(text).or_else(|| self.names.address_of(&format!("{text}@plt"))) {
             return Ok(address);
         }
         if let Some(address) = text.strip_prefix("sub_").and_then(|hex| u64::from_str_radix(hex, 16).ok()) {
@@ -246,7 +228,7 @@ impl Project {
             .iter()
             .map(|function| FunctionRow {
                 address: function.address,
-                name: self.names().function_name(function.address),
+                name: self.names.function_name(function.address),
                 size: function.blocks.iter().map(|block| block.end - block.start).sum(),
                 blocks: function.blocks.len(),
                 instructions: function.instruction_count,
@@ -295,7 +277,7 @@ impl Project {
                 flow: insn.flow,
                 data_ref: insn.data_ref,
                 immediate: insn.immediate,
-                label: self.names().get(address).map(str::to_owned),
+                label: self.names.get(address).map(str::to_owned),
                 comment: self.describe_reference(&insn),
             });
             offset += usize::from(insn.len);
@@ -310,12 +292,12 @@ impl Project {
             Flow::Call(target) | Flow::Jump(target) | Flow::ConditionalJump(target) => Some(target),
             _ => None,
         };
-        if let Some(name) = target.and_then(|target| self.names().get(target)) {
+        if let Some(name) = target.and_then(|target| self.names.get(target)) {
             return Some(name.to_owned());
         }
         // A pointer-sized immediate (x86 `mov`/`push`) counts only when it names something or points at a string.
         let data = insn.data_ref.or(insn.immediate)?;
-        if let Some(name) = self.names().get(data) {
+        if let Some(name) = self.names.get(data) {
             return Some(name.to_owned());
         }
         string_at(&self.binary, data).map(|text| format!("{text:?}"))
@@ -359,8 +341,8 @@ impl Project {
                     kind: xref.kind,
                     from_function: self
                         .function_containing(xref.from)?
-                        .map(|function| self.names().function_name(function)),
-                    to_name: self.names().get(xref.to).map(str::to_owned),
+                        .map(|function| self.names.function_name(function)),
+                    to_name: self.names.get(xref.to).map(str::to_owned),
                 })
             })
             .collect::<Result<Vec<_>, ApiError>>()?;
