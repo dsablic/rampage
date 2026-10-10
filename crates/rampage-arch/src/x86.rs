@@ -10,7 +10,14 @@ pub struct X86Disassembler {
 
 impl X86Disassembler {
     pub fn new(bitness: u32) -> Self {
-        Self { bitness, formatter: IntelFormatter::new(), text: String::new() }
+        let mut formatter = IntelFormatter::new();
+        let options = formatter.options_mut();
+        options.set_hex_prefix("0x");
+        options.set_hex_suffix("");
+        options.set_uppercase_hex(false);
+        options.set_space_after_operand_separator(true);
+        options.set_branch_leading_zeros(false);
+        Self { bitness, formatter, text: String::new() }
     }
 }
 
@@ -67,7 +74,7 @@ mod tests {
     fn decodes_prologue_and_return() {
         let insns = decode_all(&[0x55, 0x48, 0x89, 0xe5, 0xc3], 0x1000);
         let texts: Vec<_> = insns.iter().map(|i| i.text.as_str()).collect();
-        assert_eq!(texts, ["push rbp", "mov rbp,rsp", "ret"]);
+        assert_eq!(texts, ["push rbp", "mov rbp, rsp", "ret"]);
         assert_eq!(insns[0].flow, Flow::Next);
         assert_eq!(insns[2].flow, Flow::Return);
         assert_eq!(insns[1].address, 0x1001);
@@ -78,6 +85,11 @@ mod tests {
         assert_eq!(decode_all(&[0xe8, 0, 0, 0, 0], 0x1000)[0].flow, Flow::Call(0x1005));
         assert_eq!(decode_all(&[0x74, 0x02], 0x1000)[0].flow, Flow::ConditionalJump(0x1004));
         assert_eq!(decode_all(&[0xeb, 0xfe], 0x1000)[0].flow, Flow::Jump(0x1000));
+    }
+
+    #[test]
+    fn formats_hex_with_0x_prefix() {
+        assert_eq!(decode_all(&[0xe8, 0, 0, 0, 0], 0x1000)[0].text, "call 0x1005");
     }
 
     #[test]
