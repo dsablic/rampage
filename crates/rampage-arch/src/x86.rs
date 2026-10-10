@@ -62,6 +62,7 @@ fn flow_of(instruction: &Instruction) -> Flow {
     match instruction.flow_control() {
         FlowControl::Next | FlowControl::Interrupt | FlowControl::XbeginXabortXend => match instruction.mnemonic() {
             Mnemonic::Hlt => Flow::Halt,
+            Mnemonic::Xbegin => direct_target().map_or(Flow::Next, Flow::ConditionalJump),
             _ => Flow::Next,
         },
         FlowControl::UnconditionalBranch => direct_target().map_or(Flow::IndirectJump, Flow::Jump),
@@ -78,6 +79,8 @@ fn data_ref_of(instruction: &Instruction) -> Option<u64> {
     let mut immediate = None;
     for operand in 0..instruction.op_count() {
         match instruction.op_kind(operand) {
+            // FS/GS point at thread-local blocks, so their offsets are not addresses in the image.
+            OpKind::Memory if matches!(instruction.memory_segment(), Register::FS | Register::GS) => {}
             OpKind::Memory if instruction.is_ip_rel_memory_operand() => {
                 return Some(instruction.ip_rel_memory_address());
             }
@@ -86,8 +89,13 @@ fn data_ref_of(instruction: &Instruction) -> Option<u64> {
             {
                 return Some(instruction.memory_displacement64());
             }
-            OpKind::Immediate32 | OpKind::Immediate64 | OpKind::Immediate32to64 => {
-                immediate = Some(instruction.immediate(operand)).filter(|&value| value >= MIN_IMMEDIATE_ADDRESS);
+            kind @ (OpKind::Immediate32 | OpKind::Immediate64 | OpKind::Immediate32to64 | OpKind::Immediate8to64) => {
+                let value = instruction.immediate(operand);
+                let sign_extended_negative =
+                    matches!(kind, OpKind::Immediate32to64 | OpKind::Immediate8to64) && (value as i64) < 0;
+                if value >= MIN_IMMEDIATE_ADDRESS && !sign_extended_negative {
+                    immediate = Some(value);
+                }
             }
             _ => {}
         }
@@ -177,6 +185,27 @@ mod tests {
     fn branches_and_register_memory_have_no_data_ref() {
         assert_eq!(decode_all(&[0xe8, 0, 0, 0, 0], 0x1000)[0].data_ref, None);
         assert_eq!(decode_all(&[0x8b, 0x07], 0)[0].data_ref, None, "mov eax, [rdi]");
+    }
+
+    #[test]
+    fn segment_relative_memory_is_not_a_data_ref() {
+        let insn = &decode_all(&[0x64, 0x48, 0x8b, 0x04, 0x25, 0x28, 0, 0, 0], 0)[0];
+        assert_eq!(insn.data_ref, None, "mov rax, fs:[0x28]");
+        let insn = &decode_all(&[0x65, 0x48, 0x8b, 0x04, 0x25, 0x30, 0, 0, 0], 0)[0];
+        assert_eq!(insn.data_ref, None, "mov rax, gs:[0x30]");
+    }
+
+    #[test]
+    fn negative_immediates_are_not_data_refs() {
+        assert_eq!(decode_all(&[0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff], 0)[0].data_ref, None, "mov rax, -1");
+        assert_eq!(decode_all(&[0x48, 0x83, 0xe4, 0xf0], 0)[0].data_ref, None, "and rsp, -16");
+        assert_eq!(decode_all(&[0x48, 0x81, 0xe4, 0x00, 0xf0, 0xff, 0xff], 0)[0].data_ref, None, "and rsp, -0x1000");
+    }
+
+    #[test]
+    fn xbegin_is_a_conditional_jump_to_the_abort_handler() {
+        let insn = &decode_all(&[0xc7, 0xf8, 0x10, 0, 0, 0], 0x1000)[0];
+        assert_eq!(insn.flow, Flow::ConditionalJump(0x1016));
     }
 
     #[test]
