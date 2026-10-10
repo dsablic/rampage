@@ -1,0 +1,78 @@
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Format {
+    Elf,
+    Pe,
+    MachO,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Perms {
+    pub read: bool,
+    pub write: bool,
+    pub execute: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Segment {
+    pub name: String,
+    pub address: u64,
+    pub size: u64,
+    pub file_offset: u64,
+    pub file_size: u64,
+    pub perms: Perms,
+}
+
+impl Segment {
+    pub fn contains(&self, address: u64) -> bool {
+        address >= self.address && address - self.address < self.size
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionKind {
+    Code,
+    Data,
+    ReadOnlyData,
+    UninitializedData,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Section {
+    pub name: String,
+    pub address: u64,
+    pub size: u64,
+    pub kind: SectionKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SymbolKind {
+    Function,
+    Data,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Symbol {
+    pub name: String,
+    pub address: u64,
+    pub size: u64,
+    pub kind: SymbolKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Import {
+    pub library: Option<String>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Export {
+    pub name: String,
+    pub address: u64,
+}
