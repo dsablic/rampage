@@ -26,9 +26,15 @@ impl Disassembler for X86Disassembler {
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
         let instruction = self.decode_raw(bytes, address);
         if instruction.is_invalid() {
-            return Insn { address, len: 1, flow: Flow::Invalid, data_ref: None };
+            return Insn { address, len: 1, flow: Flow::Invalid, data_ref: None, immediate: None };
         }
-        Insn { address, len: instruction.len() as u8, flow: flow_of(&instruction), data_ref: data_ref_of(&instruction) }
+        Insn {
+            address,
+            len: instruction.len() as u8,
+            flow: flow_of(&instruction),
+            data_ref: memory_ref_of(&instruction),
+            immediate: pointer_immediate_of(&instruction),
+        }
     }
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {
@@ -75,32 +81,38 @@ fn flow_of(instruction: &Instruction) -> Flow {
     }
 }
 
-fn data_ref_of(instruction: &Instruction) -> Option<u64> {
-    let mut immediate = None;
-    for operand in 0..instruction.op_count() {
-        match instruction.op_kind(operand) {
-            // FS/GS point at thread-local blocks, so their offsets are not addresses in the image.
-            OpKind::Memory if matches!(instruction.memory_segment(), Register::FS | Register::GS) => {}
-            OpKind::Memory if instruction.is_ip_rel_memory_operand() => {
-                return Some(instruction.ip_rel_memory_address());
-            }
-            OpKind::Memory
-                if instruction.memory_base() == Register::None && instruction.memory_index() == Register::None =>
-            {
-                return Some(instruction.memory_displacement64());
-            }
-            kind @ (OpKind::Immediate32 | OpKind::Immediate64 | OpKind::Immediate32to64 | OpKind::Immediate8to64) => {
-                let value = instruction.immediate(operand);
-                let sign_extended_negative =
-                    matches!(kind, OpKind::Immediate32to64 | OpKind::Immediate8to64) && (value as i64) < 0;
-                if value >= MIN_IMMEDIATE_ADDRESS && !sign_extended_negative {
-                    immediate = Some(value);
-                }
-            }
-            _ => {}
+fn memory_ref_of(instruction: &Instruction) -> Option<u64> {
+    (0..instruction.op_count()).find_map(|operand| {
+        if instruction.op_kind(operand) != OpKind::Memory {
+            return None;
         }
+        // FS/GS point at thread-local blocks, so their offsets are not addresses in the image.
+        if matches!(instruction.memory_segment(), Register::FS | Register::GS) {
+            return None;
+        }
+        if instruction.is_ip_rel_memory_operand() {
+            return Some(instruction.ip_rel_memory_address());
+        }
+        (instruction.memory_base() == Register::None && instruction.memory_index() == Register::None)
+            .then(|| instruction.memory_displacement64())
+    })
+}
+
+/// Only moves and pushes put pointers in registers or on the stack; immediates in arithmetic and comparisons are
+/// numbers even when they happen to fall inside the image.
+fn pointer_immediate_of(instruction: &Instruction) -> Option<u64> {
+    if !matches!(instruction.mnemonic(), Mnemonic::Mov | Mnemonic::Push) {
+        return None;
     }
-    immediate
+    (0..instruction.op_count()).find_map(|operand| {
+        let kind = instruction.op_kind(operand);
+        if !matches!(kind, OpKind::Immediate32 | OpKind::Immediate64 | OpKind::Immediate32to64) {
+            return None;
+        }
+        let value = instruction.immediate(operand);
+        let sign_extended_negative = kind == OpKind::Immediate32to64 && (value as i64) < 0;
+        (value >= MIN_IMMEDIATE_ADDRESS && !sign_extended_negative).then_some(value)
+    })
 }
 
 #[cfg(test)]
@@ -176,9 +188,18 @@ mod tests {
     }
 
     #[test]
-    fn address_sized_immediate_is_a_data_ref() {
-        assert_eq!(decode_all(&[0xbf, 0x00, 0x10, 0x40, 0x00], 0)[0].data_ref, Some(0x401000), "mov edi, 0x401000");
-        assert_eq!(decode_all(&[0xb8, 5, 0, 0, 0], 0)[0].data_ref, None, "mov eax, 5");
+    fn moved_or_pushed_address_sized_immediate_is_a_possible_pointer() {
+        let mov = &decode_all(&[0xbf, 0x00, 0x10, 0x40, 0x00], 0)[0];
+        assert_eq!((mov.immediate, mov.data_ref), (Some(0x401000), None), "mov edi, 0x401000");
+        assert_eq!(decode_all(&[0x68, 0x00, 0x10, 0x40, 0x00], 0)[0].immediate, Some(0x401000), "push 0x401000");
+        assert_eq!(decode_all(&[0xb8, 5, 0, 0, 0], 0)[0].immediate, None, "mov eax, 5");
+    }
+
+    #[test]
+    fn arithmetic_and_comparison_immediates_are_not_pointers() {
+        assert_eq!(decode_all(&[0x48, 0x69, 0xc6, 0x9a, 0x28, 0, 0], 0)[0].immediate, None, "imul rax, rsi, 0x289a");
+        assert_eq!(decode_all(&[0x81, 0xf9, 0x91, 0x37, 0, 0], 0)[0].immediate, None, "cmp ecx, 0x3791");
+        assert_eq!(decode_all(&[0x48, 0x05, 0x00, 0x10, 0x40, 0x00], 0)[0].immediate, None, "add rax, 0x401000");
     }
 
     #[test]
@@ -197,9 +218,8 @@ mod tests {
 
     #[test]
     fn negative_immediates_are_not_data_refs() {
-        assert_eq!(decode_all(&[0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff], 0)[0].data_ref, None, "mov rax, -1");
-        assert_eq!(decode_all(&[0x48, 0x83, 0xe4, 0xf0], 0)[0].data_ref, None, "and rsp, -16");
-        assert_eq!(decode_all(&[0x48, 0x81, 0xe4, 0x00, 0xf0, 0xff, 0xff], 0)[0].data_ref, None, "and rsp, -0x1000");
+        assert_eq!(decode_all(&[0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff], 0)[0].immediate, None, "mov rax, -1");
+        assert_eq!(decode_all(&[0x48, 0x83, 0xe4, 0xf0], 0)[0].immediate, None, "and rsp, -16");
     }
 
     #[test]

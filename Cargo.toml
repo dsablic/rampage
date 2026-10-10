@@ -12,6 +12,7 @@ rampage-arch = { path = "crates/rampage-arch" }
 rampage-loaders = { path = "crates/rampage-loaders" }
 rampage-analysis = { path = "crates/rampage-analysis" }
 rampage-api = { path = "crates/rampage-api" }
+rampage-mcp = { path = "crates/rampage-mcp" }
 anyhow = "1.0.104"
 assert_cmd = "2.2.2"
 clap = { version = "4.6.7", features = ["derive"] }

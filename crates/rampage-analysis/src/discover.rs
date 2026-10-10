@@ -119,6 +119,7 @@ struct Explored {
 
 fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSet<u64>, start: u64) -> Explored {
     let is_other_function = |address: u64| address != start && known.contains(&address);
+    let trust_immediates = memory.immediates_may_be_addresses();
     let mut blocks: BTreeMap<u64, u64> = BTreeMap::new();
     let mut instructions: BTreeSet<u64> = BTreeSet::new();
     let mut xrefs = Vec::new();
@@ -146,7 +147,8 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
             }
             instructions.insert(address);
             let next = address + u64::from(insn.len);
-            if let Some(target) = insn.data_ref.filter(|&target| memory.is_mapped(target)) {
+            let immediate = insn.immediate.filter(|_| trust_immediates);
+            for target in insn.data_ref.into_iter().chain(immediate).filter(|&target| memory.is_mapped(target)) {
                 xrefs.push(Xref { to: target, from: address, kind: XrefKind::Data });
                 if memory.is_executable(target) {
                     new_seeds.push(target);
@@ -276,6 +278,35 @@ mod tests {
         let program = run(&[0x48, 0x8d, 0x05, 0x03, 0, 0, 0, 0xc3, 0xcc, 0xcc, 0xc3], &[0]);
         assert!(program.function_at(0xa).is_some());
         assert_eq!(program.xrefs_to(0xa), [Xref { to: 0xa, from: 0, kind: XrefKind::Data }]);
+    }
+
+    fn run_at(base: u64, bytes: &[u8], seeds: &[u64]) -> Program {
+        let memory = FlatMemory { base, bytes: bytes.to_vec() };
+        discover(&memory, || decoder_for(Arch::X86_64).unwrap(), seeds)
+    }
+
+    /// 0: mov esi, base+0x1000; 5: ret; then padding and a `ret` at base+0x1000.
+    fn moves_code_address(base: u64) -> Vec<u8> {
+        let target = u32::try_from(base + 0x1000).unwrap().to_le_bytes();
+        let mut bytes = vec![0xbe, target[0], target[1], target[2], target[3], 0xc3];
+        bytes.resize(0x1000, 0xcc);
+        bytes.push(0xc3);
+        bytes
+    }
+
+    #[test]
+    fn immediate_code_address_is_a_seed_in_an_image_based_high() {
+        let base = 0x400000;
+        let program = run_at(base, &moves_code_address(base), &[base]);
+        assert!(program.function_at(base + 0x1000).is_some());
+        assert_eq!(program.xrefs_to(base + 0x1000)[0].kind, XrefKind::Data);
+    }
+
+    #[test]
+    fn immediates_are_just_numbers_in_an_image_based_at_zero() {
+        let program = run_at(0, &moves_code_address(0), &[0]);
+        assert!(program.function_at(0x1000).is_none());
+        assert!(program.xrefs_to(0x1000).is_empty());
     }
 
     #[test]

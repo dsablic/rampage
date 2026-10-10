@@ -214,3 +214,34 @@ fn json_addresses_are_hex_strings() {
     assert!(info["segments"][0]["address"].as_str().unwrap().starts_with("0x"));
     assert!(info["segments"][0]["size"].is_u64(), "sizes stay numeric");
 }
+
+#[test]
+fn mcp_subcommand_speaks_json_rpc_over_stdio() {
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "test", "version": "0" },
+        },
+    });
+    let requests = [
+        initialize.to_string(),
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.to_owned(),
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#.to_owned(),
+    ];
+    let output = Command::cargo_bin("rampage")
+        .unwrap()
+        .arg("mcp")
+        .write_stdin(requests.join("\n") + "\n")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let responses: Vec<Value> = stdout.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    let tools = responses.iter().find(|response| response["id"] == 2).expect("tools/list response");
+    let names: Vec<_> = tools["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].clone()).collect();
+    assert!(names.contains(&Value::from("list_functions")), "{names:?}");
+}

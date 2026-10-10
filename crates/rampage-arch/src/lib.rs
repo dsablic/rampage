@@ -11,6 +11,19 @@ pub enum Arch {
     Aarch64,
 }
 
+impl std::str::FromStr for Arch {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text.to_ascii_lowercase().as_str() {
+            "x86" | "i386" | "i686" => Ok(Arch::X86),
+            "x86_64" | "x64" | "amd64" => Ok(Arch::X86_64),
+            "aarch64" | "arm64" => Ok(Arch::Aarch64),
+            _ => Err(format!("unknown architecture {text:?}; expected x86, x86_64 or aarch64")),
+        }
+    }
+}
+
 impl std::fmt::Display for Arch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -66,9 +79,13 @@ pub struct Insn {
     pub address: u64,
     pub len: u8,
     pub flow: Flow,
-    /// Absolute address referenced by a memory or immediate operand; direct branch targets are in `flow`.
+    /// Absolute address of a memory operand (RIP-relative or absolute displacement).
     #[serde(serialize_with = "crate::hex::optional_address")]
     pub data_ref: Option<u64>,
+    /// An address-sized immediate that the instruction moves or pushes, which may be a pointer. Only callers that
+    /// know immediates are meaningful as addresses (images not based at zero) should treat it as one.
+    #[serde(serialize_with = "crate::hex::optional_address")]
+    pub immediate: Option<u64>,
 }
 
 pub trait Disassembler {

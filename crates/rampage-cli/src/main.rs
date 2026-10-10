@@ -56,6 +56,8 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Serve the Model Context Protocol over stdin/stdout for AI agents
+    Mcp,
     /// List code and data cross-references to or from an address, symbol or function
     #[command(group(clap::ArgGroup::new("direction").required(true)))]
     Xrefs {
@@ -88,6 +90,9 @@ impl From<ArchArg> for Arch {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Command::Mcp = cli.command {
+        return serve_mcp();
+    }
     let options = Options { json: cli.json, arch: cli.arch.map(Arch::from) };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match cli.command {
@@ -109,6 +114,7 @@ fn main() -> ExitCode {
             };
             commands::xrefs(&mut out, &file, query, &options)
         }
+        Command::Mcp => unreachable!("handled before opening stdout"),
     }
     .and_then(|()| out.flush().map_err(Into::into));
 
@@ -117,6 +123,23 @@ fn main() -> ExitCode {
         Err(error) if is_broken_pipe(&error) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("rampage: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn serve_mcp() -> ExitCode {
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("rampage: cannot start async runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match runtime.block_on(rampage_mcp::serve_stdio()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("rampage: mcp server failed: {error}");
             ExitCode::FAILURE
         }
     }

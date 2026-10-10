@@ -124,6 +124,9 @@ pub struct DisassemblyLine {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub data_ref: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
+    pub immediate: Option<u64>,
     /// Symbol or function name at this address, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -266,6 +269,7 @@ impl Project {
                 text: decoder.format(bytes, address),
                 flow: insn.flow,
                 data_ref: insn.data_ref,
+                immediate: insn.immediate,
                 label: self.names.get(address).map(str::to_owned),
             });
             offset += usize::from(insn.len);
