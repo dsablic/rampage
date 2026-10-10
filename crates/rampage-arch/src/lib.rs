@@ -38,12 +38,16 @@ pub enum Flow {
 pub struct Insn {
     pub address: u64,
     pub len: u8,
-    pub text: String,
     pub flow: Flow,
+    /// Absolute address referenced by a memory or immediate operand; direct branch targets are in `flow`.
+    pub data_ref: Option<u64>,
 }
 
 pub trait Disassembler {
-    fn decode_one(&mut self, bytes: &[u8], address: u64) -> Insn;
+    /// Decodes one instruction. Undecodable bytes yield a one-byte `Flow::Invalid` instruction.
+    fn decode(&mut self, bytes: &[u8], address: u64) -> Insn;
+    /// Renders one instruction as assembly text.
+    fn format(&mut self, bytes: &[u8], address: u64) -> String;
 }
 
 #[derive(Debug, thiserror::Error)]

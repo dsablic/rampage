@@ -88,16 +88,19 @@ pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize,
         bytes: String,
         text: String,
         flow: Flow,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data_ref: Option<u64>,
     }
 
     let mut lines = Vec::with_capacity(count.min(4096));
     let mut offset = 0;
     while lines.len() < count && offset < code.len() {
         let address = start + offset as u64;
-        let insn = decoder.decode_one(&code[offset..], address);
+        let insn = decoder.decode(&code[offset..], address);
         let bytes = &code[offset..offset + insn.len as usize];
+        let text = decoder.format(bytes, address);
         offset += insn.len as usize;
-        lines.push(Line { address, bytes: hex(bytes), text: insn.text, flow: insn.flow });
+        lines.push(Line { address, bytes: hex(bytes), text, flow: insn.flow, data_ref: insn.data_ref });
     }
 
     if options.json {
