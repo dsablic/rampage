@@ -4,18 +4,11 @@
 //! descriptions. Output follows LLVM's conventions.
 
 use super::helpers::{decode_bit_masks, ones, pc_relative, sign_extend, system_operation};
-pub use crate::mrs::Value;
+use crate::mrs::is_literal;
+pub use crate::mrs::{LabelStyle, Value};
 
 use super::spec_types::{Operand, SysKind, Token};
-use super::{Decoded, extract, lookup, spec};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LabelStyle {
-    /// Branch targets and literals as absolute addresses (`0x1000`).
-    Absolute,
-    /// As signed offsets from the instruction (`#-8`), the way `llvm-mc` prints them.
-    Relative,
-}
+use super::{Decoded, lookup, spec};
 
 pub struct Context<'a> {
     pub decoded: &'a Decoded,
@@ -37,14 +30,12 @@ impl Context<'_> {
 
     /// The operand's fields concatenated in the specification's order, with their total width.
     fn raw(&self, operand: &Operand) -> (u64, u32) {
-        let mut value = 0u64;
-        let mut width = 0u32;
-        for &index in operand.fields {
-            let field = &self.decoded.encoding.fields[index as usize];
-            value = (value << field.width) | extract(self.word(), field.start, field.width);
-            width += field.width as u32;
-        }
-        (value, width)
+        self.decoded.encoding.operand_bits(self.word(), operand)
+    }
+
+    /// The legal values of an operand's fields: those for which the word still decodes as this encoding.
+    fn valid_values(&self, operand: &Operand) -> Vec<u64> {
+        self.decoded.encoding.valid_values(self.word(), operand, &lookup)
     }
 
     fn field_names(&self, operand: &Operand) -> Vec<&'static str> {
@@ -144,57 +135,16 @@ impl Context<'_> {
             LabelStyle::Relative => Value::Text(format!("#{offset}")),
         }
     }
-
-    /// The legal values of an operand's fields: those for which the word still decodes as this encoding.
-    fn valid_values(&self, operand: &Operand) -> Vec<u64> {
-        let fields: Vec<_> = operand.fields.iter().map(|&i| &self.decoded.encoding.fields[i as usize]).collect();
-        let width: u32 = fields.iter().map(|f| f.width as u32).sum();
-        if width > 8 {
-            return Vec::new();
-        }
-        let mut cleared = self.word();
-        for field in &fields {
-            cleared &= !((ones(field.width.into()) as u32) << field.start);
-        }
-        (0..1u64 << width)
-            .filter(|&candidate| {
-                let mut word = cleared;
-                let mut remaining = width;
-                for field in &fields {
-                    remaining -= field.width as u32;
-                    let bits = (candidate >> remaining) & ones(field.width.into());
-                    word |= (bits as u32) << field.start;
-                }
-                lookup(word).is_some_and(|encoding| std::ptr::eq(encoding, self.decoded.encoding))
-            })
-            .collect()
-    }
 }
 
 fn default_if_zero(number: i64) -> Value {
     if number == 0 { Value::Default("0".to_owned()) } else { Value::Text(number.to_string()) }
 }
 
-fn is_literal(choices: &[&str]) -> bool {
-    !choices.is_empty() && choices.iter().all(|choice| !choice.contains('<') && !choice.contains('['))
-}
-
 /// Maps the operand's value onto its list of legal spellings: the choices name the values that decode to
 /// this encoding, in increasing order.
 fn ranked_choice(context: &Context, operand: &Operand) -> Option<String> {
-    if !is_literal(operand.choices) {
-        return None;
-    }
-    let (value, width) = context.raw(operand);
-    if operand.choices.len() == 1 << width {
-        return Some(operand.choices[value as usize].to_ascii_lowercase());
-    }
-    let valid = context.valid_values(operand);
-    if valid.len() != operand.choices.len() {
-        return None;
-    }
-    let rank = valid.iter().position(|&v| v == value)?;
-    Some(operand.choices[rank].to_ascii_lowercase())
+    context.decoded.encoding.ranked_choice(context.word(), operand, &lookup)
 }
 
 /// Renders one operand.

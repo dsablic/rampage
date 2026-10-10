@@ -30,13 +30,8 @@ pub struct Decoded {
 impl Decoded {
     /// The value of the named encoding field.
     pub fn field(&self, name: &str) -> Option<u64> {
-        let field = self.encoding.fields.iter().find(|field| field.name == name)?;
-        Some(extract(self.word, field.start, field.width))
+        self.encoding.field(self.word, name)
     }
-}
-
-fn extract(word: u32, start: u8, width: u8) -> u64 {
-    ((word as u64) >> start) & helpers::ones(width.into())
 }
 
 /// Finds the encoding of `word`, or `None` when it is unallocated.

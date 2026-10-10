@@ -129,7 +129,8 @@ fn run() -> Result<()> {
     writeln!(
         out,
         "pub static TABLES: Tables = Tables {{ encodings: &ENCODINGS, nodes: &NODES, candidates: &CANDIDATES, \
-         condition }};"
+         condition, specific_aliases_last: {} }};",
+        set_name == "A64"
     )?;
     writeln!(out)?;
     generator.conditions.emit(&mut out)?;

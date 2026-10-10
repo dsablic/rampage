@@ -110,6 +110,9 @@ fn compile(ast: &Value, scope: &Scope) -> Result<Expr> {
         }
         "AST.UnaryOp" => match (str_of(&ast["op"]), compile(&ast["expr"], scope)?) {
             ("!", Expr::Bool(code)) => Ok(Expr::Bool(negate(&code))),
+            ("NOT", Expr::Bits(code, width)) => {
+                Ok(Expr::Bits(format!("(!{code} & {:#x})", (1u64 << width) - 1), width))
+            }
             (op, _) => bail!("unsupported unary {op}"),
         },
         "AST.BinaryOp" => binary(ast, scope),
@@ -117,8 +120,22 @@ fn compile(ast: &Value, scope: &Scope) -> Result<Expr> {
             let Expr::Bits(var, _) = compile(&ast["var"], scope)? else { bail!("slice of non-bits") };
             let arguments = ast["arguments"].as_array().map(Vec::as_slice).unwrap_or_default();
             let [index] = arguments else { bail!("unsupported slice {ast}") };
-            let index = index["value"].as_u64().ok_or_else(|| anyhow::anyhow!("slice index {index}"))?;
-            Ok(Expr::Bits(format!("(({var} >> {index}) & 1)"), 1))
+            // A single bit `x[3]`, or a range `x[5:3]`.
+            let (high, low) = match str_of(&index["_type"]) {
+                "AST.Slice" => (index["left"]["value"].as_u64(), index["right"]["value"].as_u64()),
+                _ => (index["value"].as_u64(), index["value"].as_u64()),
+            };
+            let (Some(high), Some(low)) = (high, low) else {
+                // A computed index, such as `registers[UInt(Rn)]`.
+                let index = match compile(index, scope)? {
+                    Expr::Int(code) | Expr::Bits(code, _) => code,
+                    _ => bail!("slice index {index}"),
+                };
+                return Ok(Expr::Bits(format!("(({var} >> ({index})) & 1)"), 1));
+            };
+            let width = (high - low + 1) as u32;
+            let mask = if width == 1 { "1".to_owned() } else { format!("{:#x}", (1u64 << width) - 1) };
+            Ok(Expr::Bits(format!("(({var} >> {low}) & {mask})"), width))
         }
         "AST.Function" => function(ast, scope),
         other => bail!("unsupported AST node {other}: {ast}"),
@@ -185,7 +202,25 @@ fn binary(ast: &Value, scope: &Scope) -> Result<Expr> {
         ("::", Expr::Bits(a, wa), Expr::Bits(b, wb)) => {
             return Ok(Expr::Bits(format!("(({a} << {wb}) | {b})"), wa + wb));
         }
+        ("XOR" | "EOR" | "AND" | "OR", Expr::Bits(a, wa), Expr::Bits(b, wb)) if wa == wb => {
+            let operator = match op {
+                "AND" => "&",
+                "OR" => "|",
+                _ => "^",
+            };
+            return Ok(Expr::Bits(format!("({a} {operator} {b})"), wa));
+        }
         ("+", Expr::Int(a), Expr::Int(b)) => return Ok(Expr::Int(format!("({a} + {b})"))),
+        ("+" | "-" | "*" | "MOD" | "DIV", a, b)
+            if matches!(a, Expr::Int(_) | Expr::Bits(..)) && matches!(b, Expr::Int(_) | Expr::Bits(..)) =>
+        {
+            let operator = match op {
+                "MOD" => "%",
+                "DIV" => "/",
+                other => other,
+            };
+            return Ok(Expr::Int(format!("({} {operator} {})", numeric(a)?, numeric(b)?)));
+        }
         ("==" | "!=" | "<" | ">" | "<=" | ">=", a, b) => {
             let a = numeric(a)?;
             let b = numeric(b)?;
@@ -228,6 +263,9 @@ fn function(ast: &Value, scope: &Scope) -> Result<Expr> {
     if name == "IsFeatureImplemented" {
         return Ok(Expr::Bool("true".to_owned()));
     }
+    if name == "InITBlock" {
+        return Ok(Expr::Bool("state.in_it_block".to_owned()));
+    }
     let mut compiled = Vec::new();
     for argument in &arguments {
         compiled.push(compile(argument, scope)?);
@@ -241,6 +279,18 @@ fn function(ast: &Value, scope: &Scope) -> Result<Expr> {
     let bit_args = || -> Result<Vec<String>> { compiled.iter().map(|e| bits(e).map(|(code, _)| code)).collect() };
     Ok(match name {
         "UInt" => Expr::Int(bits(&compiled[0])?.0),
+        "SInt" => {
+            let (code, width) = bits(&compiled[0])?;
+            Expr::Int(format!("sign_extend({code}, {width})"))
+        }
+        "T32ExpandImm" => Expr::Bits(format!("t32_expand_imm({})", bits(&compiled[0])?.0), 32),
+        // Whether another (shorter) encoding of the instruction can hold this value; aliases that must name
+        // their encoding explicitly (MOVW, B.W) are preferred then.
+        "A32EncodingExists" | "T32EncodingExists" => {
+            let (code, width) = bits(&compiled[0])?;
+            let helper = if name == "A32EncodingExists" { "a32_encoding_exists" } else { "t32_encoding_exists" };
+            Expr::Bool(format!("{helper}({code}, {width})"))
+        }
         "BitCount" => Expr::Int(format!("({}).count_ones()", bits(&compiled[0])?.0)),
         "IsZero" => Expr::Bool(format!("({} == 0)", bits(&compiled[0])?.0)),
         "IsOnes" => {

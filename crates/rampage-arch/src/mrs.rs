@@ -18,10 +18,103 @@ pub struct Encoding {
     pub aliases: &'static [Alias],
 }
 
+impl Encoding {
+    /// The value of the named field in `word`.
+    pub fn field(&self, word: u32, name: &str) -> Option<u64> {
+        let field = self.fields.iter().find(|field| field.name == name)?;
+        Some(field.extract(word))
+    }
+
+    /// The operand's fields concatenated in the specification's order, with their total width.
+    pub fn operand_bits(&self, word: u32, operand: &Operand) -> (u64, u32) {
+        let mut value = 0u64;
+        let mut width = 0u32;
+        for &index in operand.fields {
+            let field = &self.fields[index as usize];
+            value = (value << field.width) | field.extract(word);
+            width += u32::from(field.width);
+        }
+        (value, width)
+    }
+
+    /// The values of `operand`'s fields (up to 8 bits of them) for which `word` still decodes as this encoding.
+    pub fn valid_values(
+        &self,
+        word: u32,
+        operand: &Operand,
+        lookup: &dyn Fn(u32) -> Option<&'static Encoding>,
+    ) -> Vec<u64> {
+        let fields: Vec<&Field> = operand.fields.iter().map(|&index| &self.fields[index as usize]).collect();
+        let width: u32 = fields.iter().map(|field| u32::from(field.width)).sum();
+        if width > 8 {
+            return Vec::new();
+        }
+        let cleared = fields.iter().fold(word, |word, field| word & !(field.mask() << field.start));
+        (0..1u64 << width)
+            .filter(|&candidate| {
+                let mut word = cleared;
+                let mut remaining = width;
+                for field in &fields {
+                    remaining -= u32::from(field.width);
+                    word |= (((candidate >> remaining) as u32) & field.mask()) << field.start;
+                }
+                lookup(word).is_some_and(|encoding| std::ptr::eq(encoding, self))
+            })
+            .collect()
+    }
+
+    /// Maps `operand`'s value onto its list of legal spellings: the choices name the values that decode to this
+    /// encoding, in increasing order. `None` when the choices are not plain spellings or do not line up.
+    pub fn ranked_choice(
+        &self,
+        word: u32,
+        operand: &Operand,
+        lookup: &dyn Fn(u32) -> Option<&'static Encoding>,
+    ) -> Option<String> {
+        if !is_literal(operand.choices) {
+            return None;
+        }
+        let (value, width) = self.operand_bits(word, operand);
+        if operand.choices.len() == 1 << width {
+            return Some(operand.choices[value as usize].to_ascii_lowercase());
+        }
+        let valid = self.valid_values(word, operand, lookup);
+        if valid.len() != operand.choices.len() {
+            return None;
+        }
+        let rank = valid.iter().position(|&candidate| candidate == value)?;
+        Some(operand.choices[rank].to_ascii_lowercase())
+    }
+}
+
+/// A syntax's mnemonic without a flag-setting `S` suffix (`ADDS` and `ADD` share `ADD`).
+fn root_mnemonic(syntax: &Syntax) -> &'static str {
+    let mnemonic = match syntax.tokens.first() {
+        Some(Token::Text(text)) => text.split([' ', '.', '{']).next().unwrap_or(""),
+        _ => "",
+    };
+    mnemonic.strip_suffix('S').unwrap_or(mnemonic)
+}
+
+/// Whether `choices` are plain spellings, rather than placeholders or syntax.
+pub fn is_literal(choices: &[&str]) -> bool {
+    !choices.is_empty() && choices.iter().all(|choice| !choice.contains('<') && !choice.contains('['))
+}
+
 pub struct Field {
     pub name: &'static str,
     pub start: u8,
     pub width: u8,
+}
+
+impl Field {
+    fn mask(&self) -> u32 {
+        if self.width >= 32 { u32::MAX } else { (1 << self.width) - 1 }
+    }
+
+    pub fn extract(&self, word: u32) -> u64 {
+        u64::from((word >> self.start) & self.mask())
+    }
 }
 
 pub struct Alias {
@@ -114,6 +207,9 @@ pub struct Tables {
     pub nodes: &'static [Node],
     pub candidates: &'static [u16],
     pub condition: fn(u16, u32, State) -> bool,
+    /// Whether the more specific of several applicable aliases comes later, as in A64 (LSL after UBFIZ); in
+    /// A32 and T32 it comes first (ASRS before MOVS).
+    pub specific_aliases_last: bool,
 }
 
 impl Tables {
@@ -149,13 +245,46 @@ impl Tables {
     }
 
     /// The syntax to display `encoding` with: its preferred alias, or its own. When several aliases apply (LSL
-    /// and UBFIZ both describe some UBFM encodings), the specification lists the more specific one later.
+    /// and UBFIZ both describe some UBFM encodings), the more specific one wins.
     pub fn preferred_syntax(&self, encoding: &'static Encoding, word: u32, state: State) -> &'static Syntax {
-        let applies = |alias: &&Alias| {
-            (self.condition)(alias.condition, word, state) && (self.condition)(alias.preferred, word, state)
-        };
-        encoding.aliases.iter().rev().find(applies).map_or(&encoding.syntax, |alias| &alias.syntax)
+        self.preferred_syntax_among(encoding, word, state, &|_| true)
     }
+
+    /// [`Tables::preferred_syntax`], considering only the aliases `eligible` accepts.
+    pub fn preferred_syntax_among(
+        &self,
+        encoding: &'static Encoding,
+        word: u32,
+        state: State,
+        eligible: &dyn Fn(&Alias) -> bool,
+    ) -> &'static Syntax {
+        let applies = |alias: &&Alias| {
+            eligible(alias)
+                && (self.condition)(alias.condition, word, state)
+                && (self.condition)(alias.preferred, word, state)
+        };
+        let alias = match self.specific_aliases_last {
+            true => encoding.aliases.iter().rev().find(applies),
+            // A32 and T32 list aliases in no reliable order: prefer one that renames the operation (LSLS for
+            // MOVS with a shift) over one that only respells it (MOVS for MOV), then the first.
+            false => {
+                let base = root_mnemonic(&encoding.syntax);
+                let mut applicable = encoding.aliases.iter().filter(applies);
+                let renaming =
+                    encoding.aliases.iter().filter(applies).find(|alias| root_mnemonic(&alias.syntax) != base);
+                renaming.or_else(|| applicable.next())
+            }
+        };
+        alias.map_or(&encoding.syntax, |alias| &alias.syntax)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelStyle {
+    /// Branch targets and literals as absolute addresses (`0x1000`).
+    Absolute,
+    /// As signed offsets from the program counter (`#-8`), the way `llvm-mc` prints them.
+    Relative,
 }
 
 pub enum Value {

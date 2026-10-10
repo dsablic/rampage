@@ -38,7 +38,12 @@ pub fn emit(rules: &Map<String, Value>, node: &Value, fields: &[Field]) -> Resul
     let mut encoded_in = BTreeMap::new();
     if let Some(map) = node["_meta"]["encoded_in"].as_object() {
         for (placeholder, sources) in map {
-            let names = sources.as_array().into_iter().flatten().map(|s| str_of(&s["value"]).to_owned()).collect();
+            // Usually plain field names; T32 branch offsets also compute bits (`NOT(J1 EOR S)`), so take every
+            // identifier inside, once.
+            let mut names = Vec::new();
+            for source in sources.as_array().into_iter().flatten() {
+                identifiers(source, &mut names);
+            }
             encoded_in.insert(placeholder.clone(), names);
         }
     }
@@ -51,6 +56,21 @@ pub fn emit(rules: &Map<String, Value>, node: &Value, fields: &[Field]) -> Resul
         .map(|operand| format!("op({:?}, &{:?}, &{:?})", operand.name, operand.fields, operand.choices))
         .collect();
     Ok(format!("syn({}, &[{}])", tokens_code(&tokens), operands.join(", ")))
+}
+
+/// The identifiers in an expression, in order, without repeats.
+fn identifiers(ast: &Value, names: &mut Vec<String>) {
+    match ast {
+        Value::Object(map) if map.get("_type").and_then(Value::as_str) == Some("AST.Identifier") => {
+            let name = str_of(&ast["value"]).to_owned();
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        Value::Object(map) => map.values().for_each(|value| identifiers(value, names)),
+        Value::Array(items) => items.iter().for_each(|item| identifiers(item, names)),
+        _ => {}
+    }
 }
 
 fn tokens_code(tokens: &[Token]) -> String {
@@ -203,6 +223,10 @@ impl Flattener<'_> {
                     1 => alternatives.pop().unwrap_or_default(),
                     _ => vec![Token::Choice(alternatives)],
                 };
+                // An optional `#` before an immediate (`{#}<imm>`) is always printed, as LLVM does.
+                if has_empty && body == [Token::Text("#".to_owned())] {
+                    return Ok(body);
+                }
                 Ok(if has_empty { vec![Token::Optional(body)] } else { body })
             }
             other => bail!("unexpected rule type {other}"),

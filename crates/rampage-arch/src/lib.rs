@@ -1,4 +1,5 @@
 pub mod a64;
+pub mod aarch32;
 mod cs;
 pub mod hex;
 mod mrs;
