@@ -33,6 +33,8 @@ header execution and unsupported graph shapes remain explicit. This does not yet
 Conditional selects and common bitfield shift/extract aliases now retain semantics in IR/SSA. Optimized native
 C fixtures exercise arithmetic and select paths end-to-end, alongside boundary-level execution comparisons.
 Per-RET integer-return candidates retain X0/X1 definitions and constants without claiming a recovered signature.
+SSA removes redundant phi aliases without expression expansion; changing loop values retain predecessor inputs.
+Native checks cover all condition codes and all NZCV combinations.
 
 ## General-purpose reverse-engineering roadmap
 

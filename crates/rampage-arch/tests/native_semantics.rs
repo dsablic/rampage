@@ -125,4 +125,43 @@ mod aarch64 {
             }
         }
     }
+
+    #[test]
+    fn every_condition_code_matches_native_nzcv_tests() {
+        for flags in 0..16u64 {
+            let mut observed = [0u64; 16];
+            unsafe {
+                std::arch::asm!(
+                    "mrs {saved}, nzcv", "msr nzcv, {flags}",
+                    "cset {value}, eq", "str {value}, [{output}, #0]",
+                    "cset {value}, ne", "str {value}, [{output}, #8]",
+                    "cset {value}, hs", "str {value}, [{output}, #16]",
+                    "cset {value}, lo", "str {value}, [{output}, #24]",
+                    "cset {value}, mi", "str {value}, [{output}, #32]",
+                    "cset {value}, pl", "str {value}, [{output}, #40]",
+                    "cset {value}, vs", "str {value}, [{output}, #48]",
+                    "cset {value}, vc", "str {value}, [{output}, #56]",
+                    "cset {value}, hi", "str {value}, [{output}, #64]",
+                    "cset {value}, ls", "str {value}, [{output}, #72]",
+                    "cset {value}, ge", "str {value}, [{output}, #80]",
+                    "cset {value}, lt", "str {value}, [{output}, #88]",
+                    "cset {value}, gt", "str {value}, [{output}, #96]",
+                    "cset {value}, le", "str {value}, [{output}, #104]",
+                    "csel {value}, {one}, xzr, al", "str {value}, [{output}, #112]",
+                    "csel {value}, {one}, xzr, nv", "str {value}, [{output}, #120]",
+                    "msr nzcv, {saved}",
+                    saved = out(reg) _, value = out(reg) _, flags = in(reg) flags << 28,
+                    output = in(reg) observed.as_mut_ptr(), one = in(reg) 1u64,
+                    options(nostack),
+                );
+            }
+            for (condition, value) in observed.into_iter().enumerate() {
+                assert_eq!(
+                    ir::condition(flags, condition as u8),
+                    Some(value != 0),
+                    "flags={flags} condition={condition}"
+                );
+            }
+        }
+    }
 }

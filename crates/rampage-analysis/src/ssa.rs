@@ -674,3 +674,121 @@ fn rewrite(value: &mut Expression, remap: &[usize]) {
         _ => {}
     }
 }
+
+fn representative(aliases: &mut [usize], id: usize) -> usize {
+    let mut root = id;
+    while aliases[root] != root {
+        root = aliases[root];
+    }
+    let mut at = id;
+    while aliases[at] != at {
+        let next = aliases[at];
+        aliases[at] = root;
+        at = next;
+    }
+    root
+}
+
+/// Removes phi aliases without substituting expression trees or merging distinct predecessor values.
+pub fn simplify(ssa: &mut Ssa) -> Result<usize, String> {
+    crate::pseudocode::validate(ssa, &[])?;
+    let count = ssa.definitions.len();
+    let mut aliases: Vec<_> = (0..count).collect();
+    let mut users = vec![Vec::new(); count];
+    let mut statement_owned = vec![false; count];
+    for statement in ssa.blocks.iter().flat_map(|block| &block.statements) {
+        for &id in &statement.definitions {
+            statement_owned[id] = true;
+        }
+    }
+    for definition in &ssa.definitions {
+        if let Expression::Phi { inputs } = &definition.expression {
+            for input in inputs {
+                users[input.definition].push(definition.id);
+            }
+        }
+    }
+    let mut queue: VecDeque<_> = ssa
+        .definitions
+        .iter()
+        .filter(|definition| !statement_owned[definition.id] && matches!(definition.expression, Expression::Phi { .. }))
+        .map(|definition| definition.id)
+        .collect();
+    let mut queued = vec![false; count];
+    for &id in &queue {
+        queued[id] = true;
+    }
+    let mut removed = 0;
+    while let Some(id) = queue.pop_front() {
+        queued[id] = false;
+        if aliases[id] != id || statement_owned[id] {
+            continue;
+        }
+        let Expression::Phi { inputs } = &ssa.definitions[id].expression else { continue };
+        let mut candidate = None;
+        let mut conflict = false;
+        for input in inputs {
+            let value = representative(&mut aliases, input.definition);
+            if value == id {
+                continue;
+            }
+            if candidate.is_some_and(|candidate| candidate != value) {
+                conflict = true;
+                break;
+            }
+            candidate = Some(value);
+        }
+        let Some(target) = candidate else { continue };
+        if conflict || ssa.definitions[id].variable != ssa.definitions[target].variable {
+            continue;
+        }
+        aliases[id] = target;
+        removed += 1;
+        let mut affected = std::mem::take(&mut users[id]);
+        affected.retain(|&user| aliases[user] == user && !statement_owned[user]);
+        affected.sort_unstable();
+        affected.dedup();
+        for &user in &affected {
+            if !queued[user] {
+                queued[user] = true;
+                queue.push_back(user);
+            }
+        }
+        users[target].extend(affected);
+    }
+    if removed == 0 {
+        return Ok(0);
+    }
+    for id in 0..count {
+        representative(&mut aliases, id);
+    }
+    let mut compact = vec![0; count];
+    let mut next = 0;
+    for (id, &root) in aliases.iter().enumerate() {
+        if id == root {
+            compact[id] = next;
+            next += 1;
+        }
+    }
+    let remap: Vec<_> = aliases.iter().map(|&root| compact[root]).collect();
+    for block in &mut ssa.blocks {
+        block.phis.retain(|&id| aliases[id] == id);
+        for id in &mut block.phis {
+            *id = remap[*id];
+        }
+        for statement in &mut block.statements {
+            for id in &mut statement.definitions {
+                *id = remap[*id];
+            }
+            for observation in &mut statement.observations {
+                rewrite(observation, &remap);
+            }
+        }
+    }
+    ssa.definitions.retain(|definition| aliases[definition.id] == definition.id);
+    for definition in &mut ssa.definitions {
+        definition.id = remap[definition.id];
+        rewrite(&mut definition.expression, &remap);
+    }
+    Ok(removed)
+}

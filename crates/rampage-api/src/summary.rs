@@ -69,7 +69,12 @@ impl Project {
                 .ok_or_else(|| "graph has no entry block".to_owned())
                 .and_then(|entry| ssa::build(&blocks, &edges, entry));
             match result {
-                Ok(ssa) => Some(ssa),
+                Ok(mut ssa) => {
+                    if let Err(error) = ssa::simplify(&mut ssa) {
+                        limitations.push(format!("SSA simplification omitted: {error}"));
+                    }
+                    Some(ssa)
+                }
                 Err(error) => {
                     limitations.push(format!("SSA omitted: {error}"));
                     None

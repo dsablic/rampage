@@ -20,6 +20,7 @@ milestone; the Arm-derived decoder tables keep their existing license.
 Instruction encodings are checked with LLVM. Integer operation/NZCV evaluators are compared with native
 AArch64 execution on controlled boundary cases. Synthetic snapshots exercise CFGs, register joins, calls,
 stack slots and unknown outcomes. Passing these cases is not full ISA or decompiler coverage.
+All sixteen condition codes are checked against native execution for all sixteen NZCV combinations.
 An opt-in macOS ARM64 test compiles and executes an optimized C fixture, then executes its lifted arithmetic
 and select operations against fixed boundary results. It requires clang and an SDK and is run explicitly:
 `cargo test -p rampage-api --test compiled_arm64 -- --ignored`.
@@ -65,6 +66,8 @@ evidence for later control-flow reconstruction, not a claim that irreducible cyc
 Selected reducible shapes also expose `structured_control` regions referencing SSA blocks: sequences, branches
 with shared joins, and simple single-body loops. Loop-header effects/phis execute before the test on each
 iteration. Complex graphs, unknown dispatch and ambiguous/external successors retain the labeled fallback.
+Phi simplification aliases only identical incoming definitions (ignoring the phi's own backedge). It does not
+inline expression trees or merge distinct predecessor values; changing loop-carried values retain their phis.
 
 The next gates are more scalar/FP/SIMD semantics, alias-aware memory analysis, broader control-flow structuring,
 typed arguments/returns, automatic dispatch recovery and live runtime integration. PAC, exceptions, TLS, varargs,
