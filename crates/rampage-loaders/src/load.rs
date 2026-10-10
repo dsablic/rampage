@@ -27,6 +27,7 @@ pub enum LoadError {
 pub struct Binary {
     pub format: Format,
     pub arch: Arch,
+    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub entry: Option<u64>,
     pub segments: Vec<Segment>,
     pub sections: Vec<Section>,
@@ -34,6 +35,7 @@ pub struct Binary {
     pub imports: Vec<Import>,
     pub exports: Vec<Export>,
     /// Function start addresses from format metadata (Mach-O `LC_FUNCTION_STARTS`, PE `.pdata`), sorted.
+    #[serde(serialize_with = "rampage_arch::hex::addresses")]
     pub function_starts: Vec<u64>,
     /// Architectures present in the file: several for a universal Mach-O, otherwise just `arch`.
     pub slices: Vec<Arch>,

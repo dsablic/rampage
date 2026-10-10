@@ -8,6 +8,7 @@ use crate::discover::{Program, discover};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Function {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub size: u64,
     pub name: String,

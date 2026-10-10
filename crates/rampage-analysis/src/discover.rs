@@ -10,12 +10,15 @@ use crate::memory::Memory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Block {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub start: u64,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub end: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiscoveredFunction {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub blocks: Vec<Block>,
     pub instruction_count: usize,
@@ -37,7 +40,9 @@ pub enum XrefKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Xref {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub to: u64,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub from: u64,
     pub kind: XrefKind,
 }

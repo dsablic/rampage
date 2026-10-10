@@ -14,6 +14,11 @@ fn rampage(args: &[&str], file: &str) -> assert_cmd::assert::Assert {
     Command::cargo_bin("rampage").unwrap().args(args).arg(fixture(file)).assert()
 }
 
+fn address(value: &Value) -> u64 {
+    let text = value.as_str().unwrap_or_else(|| panic!("address is not a string: {value}"));
+    u64::from_str_radix(text.strip_prefix("0x").expect("0x prefix"), 16).unwrap()
+}
+
 fn json(args: &[&str], file: &str) -> Value {
     let output = rampage(args, file).success().get_output().stdout.clone();
     serde_json::from_slice(&output).unwrap()
@@ -36,7 +41,7 @@ fn info_json_reports_format_and_entry() {
     let info = json(&["--json", "info"], "hello-x64.elf");
     assert_eq!(info["format"], "elf");
     assert_eq!(info["arch"], "x86_64");
-    assert!(info["entry"].as_u64().unwrap() > 0);
+    assert!(address(&info["entry"]) > 0);
     assert!(json(&["--json", "info"], "hello-x64.dylib")["entry"].is_null());
 }
 
@@ -60,13 +65,12 @@ fn funcs_include_add() {
 fn disasm_at_symbol_starts_at_that_symbol() {
     for (file, add) in X64_FIXTURES {
         let funcs = json(&["--json", "funcs"], file);
-        let add_address = funcs.as_array().unwrap().iter().find(|function| function["name"] == add).unwrap()["address"]
-            .as_u64()
-            .unwrap();
+        let add_address =
+            address(&funcs.as_array().unwrap().iter().find(|function| function["name"] == add).unwrap()["address"]);
         let lines = json(&["--json", "disasm", "--count", "3", "--at", add], file);
         let lines = lines.as_array().unwrap();
         assert_eq!(lines.len(), 3, "{file}");
-        assert_eq!(lines[0]["address"].as_u64(), Some(add_address), "{file}");
+        assert_eq!(address(&lines[0]["address"]), add_address, "{file}");
         let hex_at = format!("{add_address:#x}");
         let by_hex = json(&["--json", "disasm", "--count", "3", "--at", &hex_at], file);
         assert_eq!(&by_hex, &Value::Array(lines.clone()), "{file}");
@@ -159,8 +163,7 @@ fn function_named<'a>(funcs: &'a Value, name: &str) -> Option<&'a Value> {
 
 #[test]
 fn funcs_discovers_stripped_functions() {
-    let add =
-        function_named(&json(&["--json", "funcs"], "hello-x64.macho"), "_add").unwrap()["address"].as_u64().unwrap();
+    let add = address(&function_named(&json(&["--json", "funcs"], "hello-x64.macho"), "_add").unwrap()["address"]);
     let stripped = json(&["--json", "funcs"], "hello-x64-stripped.macho");
     let found = function_named(&stripped, &format!("sub_{add:x}")).expect("add found without symbols");
     assert!(found["instructions"].as_u64().unwrap() >= 2);
@@ -190,7 +193,7 @@ fn xrefs_requires_a_direction() {
 #[test]
 fn sub_names_resolve_as_addresses() {
     let lines = json(&["--json", "disasm", "--count", "1", "--at", "sub_1001910"], "hello-x64.elf");
-    assert_eq!(lines[0]["address"].as_u64(), Some(0x1001910));
+    assert_eq!(lines[0]["address"], "0x1001910");
 }
 
 #[test]
@@ -199,4 +202,15 @@ fn funcs_ignores_headers_and_strings_in_executable_segments() {
     let names: Vec<_> = funcs.as_array().unwrap().iter().map(|function| function["name"].as_str().unwrap()).collect();
     assert!(!names.contains(&"__mh_execute_header"), "{names:?}");
     assert!(funcs.as_array().unwrap().iter().all(|function| function["instructions"].as_u64().unwrap() < 100));
+}
+
+#[test]
+fn json_addresses_are_hex_strings() {
+    let lines = json(&["--json", "disasm", "--count", "4", "--at", "main"], "hello-x64.elf");
+    assert_eq!(lines[0]["address"], "0x1001910");
+    let call = lines.as_array().unwrap().iter().find(|line| line["flow"]["kind"] == "call").unwrap();
+    assert!(call["flow"]["target"].as_str().unwrap().starts_with("0x"));
+    let info = json(&["--json", "info"], "hello-x64.elf");
+    assert!(info["segments"][0]["address"].as_str().unwrap().starts_with("0x"));
+    assert!(info["segments"][0]["size"].is_u64(), "sizes stay numeric");
 }

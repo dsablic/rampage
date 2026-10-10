@@ -1,3 +1,4 @@
+pub mod hex;
 mod x86;
 
 use serde::Serialize;
@@ -20,8 +21,7 @@ impl std::fmt::Display for Arch {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", content = "target", rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
     Next,
     Jump(u64),
@@ -34,12 +34,40 @@ pub enum Flow {
     Invalid,
 }
 
+/// Serializes as `{"kind": "call", "target": "0x…"}`, with `target` only for direct branches.
+impl Serialize for Flow {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let (kind, target) = match *self {
+            Flow::Next => ("next", None),
+            Flow::Jump(target) => ("jump", Some(target)),
+            Flow::ConditionalJump(target) => ("conditional_jump", Some(target)),
+            Flow::Call(target) => ("call", Some(target)),
+            Flow::IndirectJump => ("indirect_jump", None),
+            Flow::IndirectCall => ("indirect_call", None),
+            Flow::Return => ("return", None),
+            Flow::Halt => ("halt", None),
+            Flow::Invalid => ("invalid", None),
+        };
+        let mut state = serializer.serialize_struct("Flow", 2)?;
+        state.serialize_field("kind", kind)?;
+        if let Some(target) = target {
+            state.serialize_field("target", &format!("{target:#x}"))?;
+        } else {
+            state.skip_field("target")?;
+        }
+        state.end()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Insn {
+    #[serde(serialize_with = "crate::hex::address")]
     pub address: u64,
     pub len: u8,
     pub flow: Flow,
     /// Absolute address referenced by a memory or immediate operand; direct branch targets are in `flow`.
+    #[serde(serialize_with = "crate::hex::optional_address")]
     pub data_ref: Option<u64>,
 }
 

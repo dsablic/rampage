@@ -93,6 +93,7 @@ pub struct Summary<'a> {
     pub format: Format,
     pub arch: Arch,
     pub slices: &'a [Arch],
+    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub entry: Option<u64>,
     pub segments: &'a [Segment],
     pub sections: &'a [Section],
@@ -105,6 +106,7 @@ pub struct Summary<'a> {
 
 #[derive(Debug, Serialize)]
 pub struct FunctionRow {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub name: String,
     pub size: u64,
@@ -114,11 +116,13 @@ pub struct FunctionRow {
 
 #[derive(Debug, Serialize)]
 pub struct DisassemblyLine {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub bytes: String,
     pub text: String,
     pub flow: Flow,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub data_ref: Option<u64>,
     /// Symbol or function name at this address, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,7 +131,9 @@ pub struct DisassemblyLine {
 
 #[derive(Debug, Serialize)]
 pub struct XrefRow {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub from: u64,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub to: u64,
     pub kind: XrefKind,
     pub from_function: Option<String>,

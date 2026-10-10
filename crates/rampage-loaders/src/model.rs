@@ -18,6 +18,7 @@ pub struct Perms {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Segment {
     pub name: String,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub size: u64,
     pub file_offset: u64,
@@ -44,6 +45,7 @@ pub enum SectionKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Section {
     pub name: String,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub size: u64,
     pub kind: SectionKind,
@@ -60,6 +62,7 @@ pub enum SymbolKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Symbol {
     pub name: String,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub size: u64,
     pub kind: SymbolKind,
@@ -74,5 +77,6 @@ pub struct Import {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Export {
     pub name: String,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
 }

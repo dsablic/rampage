@@ -10,6 +10,7 @@ pub enum Encoding {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FoundString {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub encoding: Encoding,
     pub text: String,
