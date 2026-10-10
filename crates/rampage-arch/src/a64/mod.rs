@@ -153,12 +153,12 @@ fn render(context: &operands::Context, syntax: &Syntax, tokens: &[Token], out: &
 
 #[derive(Default)]
 pub struct A64Disassembler {
-    pages: flow::Pages,
+    addresses: flow::Addresses,
 }
 
 impl Disassembler for A64Disassembler {
     fn reset(&mut self) {
-        self.pages = flow::Pages::default();
+        self.addresses = flow::Addresses::default();
     }
 
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
@@ -173,7 +173,7 @@ impl Disassembler for A64Disassembler {
         };
         match decode_word(word) {
             Some(decoded) => {
-                let (flow, data_ref) = flow::analyze(&decoded, address, &mut self.pages);
+                let (flow, data_ref) = flow::analyze(&decoded, address, &mut self.addresses);
                 Insn { address, len: 4, flow, data_ref, immediate: None }
             }
             None => Insn { address, len: 4, flow: Flow::Invalid, data_ref: None, immediate: None },
@@ -250,6 +250,41 @@ mod tests {
         assert_eq!(decode(&mut d, 0xf940_0610, 0x1_0000_048c).data_ref, Some(0x1_0000_4008));
         // Literal loads reference their target directly: ldr x0, #8
         assert_eq!(decode(&mut d, 0x5800_0040, 0x2000).data_ref, Some(0x2008));
+    }
+
+    /// Decodes a straight-line sequence from `address` and returns each instruction's data reference.
+    fn data_refs(words: &[u32], address: u64) -> Vec<Option<u64>> {
+        let mut d = A64Disassembler::default();
+        words.iter().enumerate().map(|(i, &word)| decode(&mut d, word, address + 4 * i as u64).data_ref).collect()
+    }
+
+    #[test]
+    fn loads_through_a_formed_address_reference_its_fields() {
+        // adrp x8, page; add x8, x8, #0x10; ldr x0, [x8, #8]
+        assert_eq!(data_refs(&[0x9000_0008, 0x9100_4108, 0xf940_0500], 0x1000), [None, Some(0x1010), Some(0x1018)]);
+    }
+
+    #[test]
+    fn writes_through_other_fields_forget_addresses() {
+        let page = 0x1_0000_0000;
+        // ldp x0, x1, [sp] overwrites x1.
+        assert_eq!(data_refs(&[0x9000_0001, 0xa940_07e0, 0x9100_2022], page)[2], None);
+        // ldr x0, [x16, #8]! moves x16 past the page.
+        assert_eq!(data_refs(&[0x9000_0010, 0xf840_8e00, 0x9100_4201], page)[2], None);
+        // mrs x0, tpidr_el0 overwrites x0.
+        assert_eq!(data_refs(&[0x9000_0000, 0xd53b_d040, 0x9100_2001], page)[2], None);
+        // swp x2, x0, [x3] and cas x1, x2, [x3] overwrite x0 and x1.
+        assert_eq!(data_refs(&[0x9000_0000, 0xf822_8060, 0x9100_2001], page)[2], None);
+        assert_eq!(data_refs(&[0x9000_0001, 0xc8a1_7c62, 0x9100_2022], page)[2], None);
+        // bl clobbers caller-saved registers.
+        assert_eq!(data_refs(&[0x9000_0000, 0x9400_0002, 0x9100_2001], page)[2], None);
+    }
+
+    #[test]
+    fn simd_destinations_leave_general_registers_alone() {
+        // adrp x8, page; fadd d8, d8, d2; ldr x1, [x8, #8]
+        let page = 0x1_0000_0000;
+        assert_eq!(data_refs(&[0x9000_0008, 0x1e62_2908, 0xf940_0501], page)[2], Some(page + 8));
     }
 
     #[test]

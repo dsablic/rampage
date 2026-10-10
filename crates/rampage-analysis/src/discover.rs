@@ -149,8 +149,19 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
     let mut new_seeds = Vec::new();
     let mut jump_targets = Vec::new();
     let mut worklist = vec![start];
+    // A conditional branch's fall-through is explored next and keeps the decoder state (AArch64 ADRP pages) of
+    // the path into it; every other block starts afresh.
+    let mut fall_through = None;
 
-    while let Some(block_start) = worklist.pop() {
+    loop {
+        let block_start = match fall_through.take() {
+            Some(next) => next,
+            None => {
+                let Some(next) = worklist.pop() else { break };
+                decoder.reset();
+                next
+            }
+        };
         if blocks.contains_key(&block_start) {
             continue;
         }
@@ -159,7 +170,6 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
             continue;
         }
         let mut address = block_start;
-        decoder.reset();
         loop {
             if address != block_start && (instructions.contains(&address) || is_other_function(address)) {
                 split_block(&mut blocks, address);
@@ -188,10 +198,11 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
                 }
                 Flow::ConditionalJump(target) => {
                     xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
-                    for successor in [target, next] {
-                        if !is_other_function(successor) {
-                            worklist.push(successor);
-                        }
+                    if !is_other_function(target) {
+                        worklist.push(target);
+                    }
+                    if !is_other_function(next) {
+                        fall_through = Some(next);
                     }
                     address = next;
                     break;
@@ -246,6 +257,17 @@ mod tests {
 
     fn blocks(program: &Program, address: u64) -> Vec<(u64, u64)> {
         program.function_at(address).unwrap().blocks.iter().map(|block| (block.start, block.end)).collect()
+    }
+
+    #[test]
+    fn adrp_pages_reach_a_conditional_branchs_fall_through() {
+        // 0: adrp x8, 0; 4: cbz w0, 0x10; 8: ldr x1, [x8, #0x18]; c: ret; 10: ret
+        let words: [u32; 5] = [0x9000_0008, 0x3400_0060, 0xf940_0d01, 0xd65f_03c0, 0xd65f_03c0];
+        let mut bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        bytes.resize(0x20, 0);
+        let memory = FlatMemory { base: 0, bytes };
+        let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
+        assert!(program.xrefs.contains(&Xref { to: 0x18, from: 8, kind: XrefKind::Data }), "{:?}", program.xrefs);
     }
 
     #[test]
