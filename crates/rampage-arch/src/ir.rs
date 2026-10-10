@@ -224,6 +224,41 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
             word & (1 << 30) != 0,
             word & (1 << 29) != 0,
         );
+    } else if name.ends_with("_addsub_ext") {
+        lifted.bits = width;
+        let option = ((word >> 13) & 7) as u8;
+        let shift = ((word >> 10) & 7) as u8;
+        if shift > 4 {
+            lifted.effects.push(Effect::Barrier { reason: "unallocated extended-register shift".to_owned() });
+            return lifted;
+        }
+        let source_bits = [8, 16, 32, 64][usize::from(option & 3)].min(width);
+        let mut right = operation(
+            Operation::And,
+            register(((word >> 16) & 31) as u8, false),
+            Value::Constant { value: crate::mrs::ones(u32::from(source_bits)) },
+            width,
+        );
+        if option & 4 != 0 && source_bits < width {
+            let amount = Value::Constant { value: u64::from(width - source_bits) };
+            right = operation(
+                Operation::ArithmeticShiftRight,
+                operation(Operation::ShiftLeft, right, amount.clone(), width),
+                amount,
+                width,
+            );
+        }
+        if shift != 0 {
+            right = operation(Operation::ShiftLeft, right, Value::Constant { value: u64::from(shift) }, width);
+        }
+        arithmetic(
+            &mut lifted,
+            register(rd, word & (1 << 29) == 0),
+            register(rn, true),
+            right,
+            word & (1 << 30) != 0,
+            word & (1 << 29) != 0,
+        );
     } else if name.ends_with("_addsub_shift") {
         lifted.bits = width;
         let shift = match (word >> 22) & 3 {

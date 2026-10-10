@@ -164,4 +164,34 @@ mod aarch64 {
             }
         }
     }
+
+    #[test]
+    fn extended_arithmetic_matches_native_width_and_sign_rules() {
+        for right in [0, 1, 0x7f, 0x80, 0xff, 0x7fff, 0x8000, 0xffff, 0x8000_0000, u64::MAX] {
+            let (byte, word, narrow): (u64, u64, u64);
+            let left = 0xffff_ffff_1234_5678u64;
+            unsafe {
+                std::arch::asm!(
+                    "add {byte}, {left}, {right:w}, sxtb #1",
+                    "add {word}, {left}, {right:w}, uxtw #3",
+                    "sub {narrow:w}, {left:w}, {right:w}, sxth #2",
+                    left = in(reg) left, right = in(reg) right, byte = out(reg) byte,
+                    word = out(reg) word, narrow = out(reg) narrow,
+                    options(nomem, nostack),
+                );
+            }
+            let mut registers = [0; 31];
+            registers[1] = left;
+            registers[2] = right;
+            for (word, expected) in [(0x8b22_8420u32, byte), (0x8b22_4c20, word), (0x4b22_a820, narrow)] {
+                let bytes = word.to_le_bytes();
+                let insn = decoder(&Target::new(Arch::Aarch64)).unwrap().decode(&bytes, 0x1000);
+                let lifted = ir::lift(Arch::Aarch64, &bytes, &insn);
+                assert!(lifted.complete);
+                let Effect::Assign { value: expr, .. } = &lifted.effects[0] else { panic!("missing assignment") };
+                let mask = if lifted.bits == 32 { 0xffff_ffff } else { u64::MAX };
+                assert_eq!(value(expr, &registers) & mask, expected, "{word:08x}");
+            }
+        }
+    }
 }

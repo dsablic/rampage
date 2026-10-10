@@ -73,6 +73,8 @@ The next gates are more scalar/FP/SIMD semantics, alias-aware memory analysis, b
 typed arguments/returns, automatic dispatch recovery and live runtime integration. PAC, exceptions, TLS, varargs,
 platform-specific ABI differences and protection wrappers must not be treated as solved by integer SSA.
 Integer conditional selects (CSEL/CSINC/CSINV/CSNEG and their aliases) retain NZCV conditions in SSA.
+Extended-register ADD/SUB preserves signed/unsigned byte, halfword and word extensions and SP/ZR rules;
+reserved shifts remain barriers. Boundary tests compare extended arithmetic with native ARM64 execution.
 Common non-wrapping bitfield aliases, including shifts and signed/unsigned extracts, are supported;
 unsupported wrapping field shapes remain barriers. Native optimized integer/select fixtures cover both paths.
 

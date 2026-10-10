@@ -35,6 +35,7 @@ C fixtures exercise arithmetic and select paths end-to-end, alongside boundary-l
 Per-RET integer-return candidates retain X0/X1 definitions and constants without claiming a recovered signature.
 SSA removes redundant phi aliases without expression expansion; changing loop values retain predecessor inputs.
 Native checks cover all condition codes and all NZCV combinations.
+Extended-register ADD/SUB, including SP address calculations and signed/unsigned extensions, is now lifted.
 
 ## General-purpose reverse-engineering roadmap
 

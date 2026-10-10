@@ -142,3 +142,21 @@ fn common_bitfield_aliases_have_correct_width_and_sign_semantics() {
         assert_eq!(value(expr, &registers, 0) & mask, expected, "{word:08x}");
     }
 }
+
+#[test]
+fn extended_arithmetic_handles_sign_zero_stack_and_discard_operands() {
+    let mut registers = [0; 31];
+    registers[1] = 0xffff_ffff_8000_00ff;
+    registers[2] = 0xffff_ffff_ffff_ffff;
+    for (word, expected) in [(0x8b21_4fe0, 0x4_0000_17f8), (0xcb21_63ff, 0x8000_0f01), (0x0b22_8420, 0x8000_00fd)] {
+        let lifted = lift(word);
+        assert!(lifted.complete, "{word:08x}");
+        let Effect::Assign { value: expr, .. } = &lifted.effects[0] else { panic!("missing assignment") };
+        let mask = if lifted.bits == 32 { 0xffff_ffff } else { u64::MAX };
+        assert_eq!(value(expr, &registers, 0x1000) & mask, expected, "{word:08x}");
+    }
+    let lifted = lift(0xab21_cbff);
+    assert!(matches!(lifted.effects[0], Effect::SetFlags { .. }));
+    assert!(matches!(lifted.effects[1], Effect::Discard { .. }));
+    assert!(!lift(0x8b21_57e0).complete);
+}
