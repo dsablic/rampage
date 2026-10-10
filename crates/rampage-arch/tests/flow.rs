@@ -22,7 +22,7 @@ fn check(target: Target, cases: &[(&str, Flow)]) {
 }
 
 fn big_endian(arch: Arch) -> Target {
-    Target { big_endian: true, ..Target::new(arch) }
+    Target { big_endian: true, data_big_endian: true, ..Target::new(arch) }
 }
 
 #[test]

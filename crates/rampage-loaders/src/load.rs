@@ -280,6 +280,7 @@ impl Binary {
         rampage_arch::Target {
             arch: self.arch,
             big_endian: self.code_big_endian,
+            data_big_endian: self.big_endian,
             thumb: self.thumb.clone().into(),
             global_pointer: self.global_pointer,
             got: self.got.clone(),

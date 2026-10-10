@@ -102,6 +102,8 @@ pub struct Target {
     pub arch: Arch,
     /// The byte order of instructions (little-endian in ARM BE8 images, whose data is big-endian).
     pub big_endian: bool,
+    /// The byte order of data, such as literal pools within code.
+    pub data_big_endian: bool,
     /// ARM only: the sorted address ranges that hold Thumb (T32) code.
     pub thumb: std::sync::Arc<[std::ops::Range<u64>]>,
     /// The value the ABI keeps in its global-pointer register (MIPS `$gp`, PowerPC64 `r2`, RISC-V `gp`), through
@@ -131,7 +133,7 @@ impl Got {
 impl Target {
     /// A little-endian target with no Thumb code.
     pub fn new(arch: Arch) -> Self {
-        Self { arch, big_endian: false, thumb: std::sync::Arc::new([]), global_pointer: None, got: None }
+        Self { arch, big_endian: false, data_big_endian: false, thumb: std::sync::Arc::new([]), global_pointer: None, got: None }
     }
 
     /// Whether `address` lies in Thumb code.
