@@ -53,7 +53,7 @@ mod arm64 {
                         .unwrap();
                         continue;
                     }
-                    Effect::Control { .. } | Effect::Discard { .. } => continue,
+                    Effect::Control { .. } | Effect::Discard { .. } | Effect::Return { .. } => continue,
                     _ => panic!("unexpected effect in straight-line fixture: {effect:?}"),
                 };
                 let Value::Register { number } = destination else { panic!("unexpected destination") };
@@ -101,11 +101,14 @@ mod arm64 {
             assert_eq!(execute(&summary.ir, left, right), expected);
         }
         assert!(summary.dataflow.is_some());
+        assert_eq!(summary.dataflow.as_ref().unwrap().integer_returns.len(), 1);
+        assert_eq!(summary.dataflow.as_ref().unwrap().argument_registers, [0, 1]);
         assert!(summary.pseudocode.is_some());
         assert!(summary.structured_control.is_some());
         let choose = project.function_summary(project.resolve("_choose").unwrap()).unwrap();
         assert!(choose.ir.iter().all(|instruction| instruction.complete), "{:#?}", choose.graph);
         assert_eq!(choose.graph.blocks.len(), 1);
+        assert_eq!(choose.dataflow.as_ref().unwrap().argument_registers, [0]);
         assert!(
             choose
                 .ir

@@ -66,6 +66,11 @@ pub enum Variable {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expression {
+    Return {
+        target: Box<Expression>,
+        integer_values: [usize; 2],
+        memory: usize,
+    },
     Select {
         flags: usize,
         condition: u8,
@@ -203,6 +208,11 @@ fn define(definitions: &mut Vec<Definition>, state: &mut [usize; VARIABLES], ind
 
 pub(crate) fn references(value: &Expression, out: &mut Vec<usize>) {
     match value {
+        Expression::Return { target, integer_values, memory } => {
+            references(target, out);
+            out.extend(integer_values);
+            out.push(*memory);
+        }
         Expression::Select { flags, when_true, when_false, .. } => {
             out.push(*flags);
             references(when_true, out);
@@ -276,6 +286,12 @@ fn budget(input: &[InputBlock]) -> Result<(), String> {
         }
         for effect in &insn.effects {
             match effect {
+                Effect::Return { target } => {
+                    if insn.flow != Flow::Return {
+                        return Err("return effect requires return flow".to_owned());
+                    }
+                    validate_values(&[target], &mut nodes)?;
+                }
                 Effect::Select { destination, condition, when_true, when_false } => {
                     if *condition > 15 {
                         return Err("invalid select condition".to_owned());
@@ -433,6 +449,11 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
             } else {
                 for effect in &insn.effects {
                     match effect {
+                        Effect::Return { target } => statement.observations.push(Expression::Return {
+                            target: Box::new(expression(target, state, 0)?),
+                            integer_values: [state[0], state[1]],
+                            memory: state[MEMORY],
+                        }),
                         Effect::Select { destination: target, condition, when_true, when_false } => {
                             let value = narrow(
                                 Expression::Select {
@@ -605,6 +626,13 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
 
 fn rewrite(value: &mut Expression, remap: &[usize]) {
     match value {
+        Expression::Return { target, integer_values, memory } => {
+            rewrite(target, remap);
+            for value in integer_values {
+                *value = remap[*value];
+            }
+            *memory = remap[*memory];
+        }
         Expression::Select { flags, when_true, when_false, .. } => {
             *flags = remap[*flags];
             rewrite(when_true, remap);

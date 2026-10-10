@@ -78,7 +78,13 @@ impl Project {
         } else {
             None
         };
-        let dataflow = ssa.as_ref().map(rampage_analysis::dataflow::analyze);
+        let dataflow = match ssa.as_ref().map(rampage_analysis::dataflow::analyze).transpose() {
+            Ok(dataflow) => dataflow,
+            Err(error) => {
+                limitations.push(format!("Dataflow omitted: {error}"));
+                None
+            }
+        };
         let edges: Vec<_> = graph.edges.iter().map(|edge| (edge.from, edge.to)).collect();
         let control = match ssa.as_ref().map(|ssa| rampage_analysis::control::analyze(ssa, &edges)).transpose() {
             Ok(control) => control,

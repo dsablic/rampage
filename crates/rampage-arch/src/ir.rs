@@ -139,6 +139,7 @@ pub fn condition(nzcv: u64, condition: u8) -> Option<bool> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Effect {
+    Return { target: Value },
     Select { destination: Value, condition: u8, when_true: Value, when_false: Value },
     SetFlags { operation: FlagOperation, left: Value, right: Value },
     FlagsConditional { condition: u8 },
@@ -530,7 +531,10 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
             bit,
         });
         lifted.complete = true;
-    } else if word & 0xffff_fc1f == 0xd61f_0000 || word & 0xffff_fc1f == 0xd65f_0000 {
+    } else if word & 0xffff_fc1f == 0xd65f_0000 {
+        lifted.effects.push(Effect::Return { target: register(rn, false) });
+        lifted.complete = true;
+    } else if word & 0xffff_fc1f == 0xd61f_0000 {
         lifted.effects.push(Effect::Control { inputs: vec![register(rn, false)] });
         lifted.complete = true;
     }

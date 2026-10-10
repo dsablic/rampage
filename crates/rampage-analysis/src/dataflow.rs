@@ -18,8 +18,17 @@ pub struct DataFlow {
     pub constants: Vec<Constant>,
     pub stack_slots: Vec<StackSlot>,
     pub argument_registers: Vec<u8>,
+    pub integer_returns: Vec<IntegerReturn>,
     pub incomplete_instructions: usize,
     pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntegerReturn {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub definitions: [usize; 2],
+    pub constant_values: [Option<String>; 2],
 }
 
 #[derive(Debug, Serialize)]
@@ -100,7 +109,8 @@ fn evaluate(expr: &Expression, values: &[Known]) -> Known {
     }
 }
 
-pub fn analyze(ssa: &Ssa) -> DataFlow {
+pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
+    crate::pseudocode::validate(ssa, &[])?;
     let mut values = vec![Known::Pending; ssa.definitions.len()];
     let mut users = vec![Vec::new(); values.len()];
     for definition in &ssa.definitions {
@@ -164,20 +174,56 @@ pub fn analyze(ssa: &Ssa) -> DataFlow {
             accessed(expression, statement.address);
         }
     }
-    let arguments: BTreeSet<_> = ssa
-        .definitions
+    let mut arguments = BTreeSet::new();
+    let mut work = Vec::new();
+    for statement in ssa.blocks.iter().filter(|block| block.reachable).flat_map(|block| &block.statements) {
+        work.extend(&statement.definitions);
+        for observation in &statement.observations {
+            match observation {
+                Expression::Return { target, memory, .. } => {
+                    crate::ssa::references(target, &mut work);
+                    work.push(*memory);
+                }
+                _ => crate::ssa::references(observation, &mut work),
+            }
+        }
+    }
+    let mut visited = vec![false; ssa.definitions.len()];
+    while let Some(id) = work.pop() {
+        if std::mem::replace(&mut visited[id], true) {
+            continue;
+        }
+        let definition = &ssa.definitions[id];
+        if matches!(definition.expression, Expression::Input) {
+            if let Variable::Register { number } = definition.variable
+                && number < 8
+            {
+                arguments.insert(number);
+            }
+        } else {
+            crate::ssa::references(&definition.expression, &mut work);
+        }
+    }
+    let integer_returns = ssa
+        .blocks
         .iter()
-        .filter_map(|definition| {
-            if !matches!(definition.expression, Expression::Input) {
-                return None;
-            }
-            match definition.variable {
-                Variable::Register { number } if number < 8 => Some(number),
-                _ => None,
-            }
+        .filter(|block| block.reachable)
+        .flat_map(|block| &block.statements)
+        .flat_map(|statement| {
+            statement.observations.iter().filter_map(|observation| {
+                let Expression::Return { integer_values, .. } = observation else { return None };
+                Some(IntegerReturn {
+                    address: statement.address,
+                    definitions: *integer_values,
+                    constant_values: integer_values.map(|id| match values[id] {
+                        Known::Constant(value) => Some(format!("{value:#x}")),
+                        _ => None,
+                    }),
+                })
+            })
         })
         .collect();
-    DataFlow {
+    Ok(DataFlow {
         constants: values
             .iter()
             .enumerate()
@@ -188,6 +234,7 @@ pub fn analyze(ssa: &Ssa) -> DataFlow {
             .collect(),
         stack_slots: slots.into_values().collect(),
         argument_registers: arguments.into_iter().collect(),
+        integer_returns,
         incomplete_instructions: ssa
             .blocks
             .iter()
@@ -195,9 +242,13 @@ pub fn analyze(ssa: &Ssa) -> DataFlow {
             .filter(|statement| statement.barrier)
             .count(),
         limitations: vec![
-            "Argument registers are input-use evidence, not a recovered function signature.".to_owned(),
+            "Argument registers are input-use evidence excluding speculative return candidates, \
+             not a recovered signature."
+                .to_owned(),
+            "X0/X1 at RET are possible integer return values; void, aggregate and FP/SIMD signatures remain unknown."
+                .to_owned(),
             "Loads are not constant-folded; stack offsets require agreement at joins and may be unknown.".to_owned(),
             "Conflicting values and unsupported semantics remain unknown; no pointer alias analysis.".to_owned(),
         ],
-    }
+    })
 }

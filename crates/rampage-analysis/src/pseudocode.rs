@@ -31,7 +31,7 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
         return Err("pseudocode edge outside graph".to_owned());
     }
     let mut nodes = 0usize;
-    let mut check = |root: &Expression| -> Result<(), String> {
+    let mut check = |root: &Expression, allow_return: bool| -> Result<(), String> {
         let mut stack = vec![(root, 0usize)];
         while let Some((expr, depth)) = stack.pop() {
             nodes += 1;
@@ -40,6 +40,16 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
             }
             let valid = |id: usize| id < ssa.definitions.len();
             match expr {
+                Expression::Return { target, integer_values, memory } => {
+                    if !allow_return || depth != 0 {
+                        return Err("return must be a return-statement observation".to_owned());
+                    }
+                    if !valid(*memory) || integer_values.iter().any(|&id| !valid(id)) {
+                        return Err("invalid return inputs".to_owned());
+                    }
+                    nodes += integer_values.len();
+                    stack.push((target, depth + 1));
+                }
                 Expression::Select { flags, when_true, when_false, .. } => {
                     if !valid(*flags) {
                         return Err("invalid select flags".to_owned());
@@ -106,7 +116,7 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
         if definition.id != id {
             return Err("inconsistent SSA definition id".to_owned());
         }
-        check(&definition.expression)?;
+        check(&definition.expression, false)?;
     }
     let mut statements = 0;
     for block in &ssa.blocks {
@@ -119,7 +129,7 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
                 return Err("invalid or oversized statement definitions".to_owned());
             }
             for observation in &statement.observations {
-                check(observation)?;
+                check(observation, statement.flow == Flow::Return)?;
             }
         }
     }
@@ -156,6 +166,13 @@ fn name(id: usize, ssa: &Ssa) -> String {
 fn expression(expr: &Expression, ssa: &Ssa, remaining: &mut usize) -> Result<String, String> {
     *remaining = remaining.checked_sub(1).ok_or("pseudocode expression budget exceeded")?;
     Ok(match expr {
+        Expression::Return { target, integer_values, memory } => format!(
+            "integer_return_candidates([{}, {}], memory={}, target={})",
+            name(integer_values[0], ssa),
+            name(integer_values[1], ssa),
+            name(*memory, ssa),
+            expression(target, ssa, remaining)?
+        ),
         Expression::Select { flags, condition, when_true, when_false } => format!(
             "(condition({}, {condition}) ? {} : {})",
             name(*flags, ssa),
@@ -295,6 +312,11 @@ pub fn render(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<Pseudocode, String>
                     line!(text, "  goto {label};");
                 }
                 Flow::Return => {
+                    let candidates =
+                        statement.observations.iter().find(|value| matches!(value, Expression::Return { .. }));
+                    if let Some(candidates) = candidates {
+                        line!(text, "  {};", expression(candidates, ssa, &mut remaining)?);
+                    }
                     line!(text, "  return; // return value/type not inferred");
                 }
                 Flow::IndirectJump => {
