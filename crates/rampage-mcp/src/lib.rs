@@ -107,6 +107,14 @@ pub struct DisassembleArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GraphArgs {
+    #[serde(flatten)]
+    pub binary: BinaryArgs,
+    /// An address or name inside the function.
+    pub at: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct XrefsArgs {
     #[serde(flatten)]
     pub binary: BinaryArgs,
@@ -256,6 +264,14 @@ impl RampageServer {
         let count = args.count.unwrap_or(DEFAULT_INSTRUCTIONS).min(MAX_INSTRUCTIONS);
         let at = args.at;
         self.run(args.binary, move |project| project.disassemble(at.as_deref(), count)).await
+    }
+
+    #[tool(description = "The control-flow graph of the function containing an address or name: its basic blocks \
+                          (with disassembly) and the edges between them, each unconditional, taken or not_taken. \
+                          Edges index into `blocks`.")]
+    async fn function_graph(&self, Parameters(args): Parameters<GraphArgs>) -> Result<CallToolResult, ErrorData> {
+        let at = args.at;
+        self.run(args.binary, move |project| project.function_graph(project.resolve(&at)?)).await
     }
 
     #[tool(description = "Printable ASCII and UTF-16LE strings with their addresses. Filter with `contains`; \

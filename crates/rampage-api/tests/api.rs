@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rampage_api::{ApiError, FunctionsQuery, Session, StringsQuery, XrefQuery};
+use rampage_api::{ApiError, EdgeKind, FunctionsQuery, Session, StringsQuery, XrefQuery};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -196,4 +196,22 @@ fn a_slice_opens_once_however_it_is_asked_for() {
     let other = default.binary.slices.iter().copied().find(|&arch| arch != default.binary.arch).unwrap();
     assert!(!std::sync::Arc::ptr_eq(&default, &session.open(&path, Some(other)).unwrap()));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn function_graphs_connect_blocks_by_their_branches() {
+    let project = Session::default().open(&fixture("hello-x64.elf"), None).unwrap();
+    let functions = project.functions(&FunctionsQuery::default()).unwrap().items;
+    let largest = functions.iter().max_by_key(|function| function.blocks).unwrap();
+    let graph = project.function_graph(largest.address).unwrap();
+    assert_eq!(graph.blocks.len(), largest.blocks);
+    assert!(graph.entry().is_some());
+    assert!(graph.edges.iter().all(|edge| edge.from < graph.blocks.len() && edge.to < graph.blocks.len()));
+    // Every conditional branch has both of its edges.
+    for (index, block) in graph.blocks.iter().enumerate() {
+        if matches!(block.lines.last().unwrap().flow, rampage_arch::Flow::ConditionalJump(_)) {
+            let kinds: Vec<_> = graph.edges.iter().filter(|edge| edge.from == index).map(|edge| edge.kind).collect();
+            assert!(kinds.contains(&EdgeKind::Taken) && kinds.contains(&EdgeKind::NotTaken), "block {index}");
+        }
+    }
 }

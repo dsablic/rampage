@@ -51,6 +51,7 @@ async fn lists_all_tools_with_instructions() {
     let expected = [
         "binary_info",
         "disassemble",
+        "function_graph",
         "list_annotations",
         "list_exports",
         "list_functions",
