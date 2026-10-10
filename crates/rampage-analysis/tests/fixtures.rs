@@ -199,3 +199,11 @@ fn triage_measures_sections_from_their_own_bytes() {
     let object = rampage_analysis::triage::triage(&open("hello-x64.o"));
     assert!(!object.hints.iter().any(|hint| hint.contains("writable and executable")), "{:?}", object.hints);
 }
+
+#[test]
+fn strings_skip_code_sections() {
+    let binary = open("hello-x64.exe");
+    let found = strings::scan(&binary, 4);
+    assert!(found.iter().all(|string| !binary.is_code(string.address)));
+    assert!(found.iter().any(|string| string.text == "rampage fixture greeting"));
+}

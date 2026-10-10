@@ -16,11 +16,14 @@ pub struct FoundString {
     pub text: String,
 }
 
+/// Strings in the image's data. Runs inside code sections are left out: there they are instruction bytes that
+/// happen to be printable (push sequences such as `UAWAVAUATVWSH`), not text.
 pub fn scan(binary: &Binary, min_len: usize) -> Vec<FoundString> {
     let mut found = Vec::new();
     for segment in &binary.segments {
         if let Some(bytes) = binary.read_to_segment_end(segment.address) {
-            found.extend(scan_bytes(bytes, segment.address, min_len));
+            found
+                .extend(scan_bytes(bytes, segment.address, min_len).into_iter().filter(|s| !binary.is_code(s.address)));
         }
     }
     found
