@@ -159,6 +159,7 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
             continue;
         }
         let mut address = block_start;
+        decoder.reset();
         loop {
             if address != block_start && (instructions.contains(&address) || is_other_function(address)) {
                 split_block(&mut blocks, address);
