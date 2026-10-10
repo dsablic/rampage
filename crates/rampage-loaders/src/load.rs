@@ -51,6 +51,9 @@ pub struct Binary {
     pub thumb: Vec<Range<u64>>,
     /// Data appended past everything the image's structures describe.
     pub overlay: Option<Overlay>,
+    /// Whether instructions are big-endian, which differs from `big_endian` for ARM BE8 images.
+    #[serde(skip)]
+    code_big_endian: bool,
     #[serde(skip)]
     code_ranges: Vec<Range<u64>>,
     #[serde(skip)]
@@ -209,10 +212,20 @@ impl Binary {
         let entry = raw_entry.map(code_address);
         let mut function_starts: Vec<u64> = macho_starts.into_iter().map(code_address).collect();
         let big_endian = !parsed.is_little_endian();
+        // ARMv6 and later big-endian images (BE8) store instructions little-endian; older BE32 ones do not.
+        let be8_flag = |flags| match flags {
+            object::FileFlags::Elf { e_flags, .. } => e_flags.0 & object::elf::EF_ARM_BE8.0 != 0,
+            _ => false,
+        };
+        let be8 = arch == Arch::Arm && be8_flag(parsed.flags());
+        let code_big_endian = big_endian && !be8;
         let exception_directory = starts::pe_exception_directory(&parsed);
         let import_slots = crate::slots::collect(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
-        let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64);
+        let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64).unwrap_or_else(|warning| {
+            warnings.push(warning);
+            None
+        });
         drop(parsed);
 
         let mut binary = Self {
@@ -231,6 +244,7 @@ impl Binary {
             details,
             overlay,
             big_endian,
+            code_big_endian,
             thumb,
             code_ranges: Vec::new(),
             data,
@@ -254,7 +268,7 @@ impl Binary {
 
     /// What a decoder needs to read this image's code.
     pub fn target(&self) -> rampage_arch::Target {
-        rampage_arch::Target { arch: self.arch, big_endian: self.big_endian, thumb: self.thumb.clone().into() }
+        rampage_arch::Target { arch: self.arch, big_endian: self.code_big_endian, thumb: self.thumb.clone().into() }
     }
 
     /// A decoder for this image's code.
@@ -470,15 +484,19 @@ fn thumb_ranges(
         .chain(function_starts.iter().map(|&start| (start & !1, 0, start & 1 == 1)))
         .collect();
     functions.sort_unstable();
-    for (index, &(start, size, thumb)) in functions.iter().enumerate() {
+    // Walking backwards, `following` is the next function start above the current one.
+    let mut following = None;
+    for (index, &(start, size, thumb)) in functions.iter().enumerate().rev() {
+        if let Some(&(next, _, _)) = functions.get(index + 1)
+            && next > start
+        {
+            following = Some(next);
+        }
         if !thumb {
             continue;
         }
         let end = match size {
-            0 => {
-                let next = functions[index + 1..].iter().map(|&(next, _, _)| next).find(|&next| next > start);
-                next.map_or(container_end(start), |next| next.min(container_end(start)))
-            }
+            0 => following.map_or(container_end(start), |next| next.min(container_end(start))),
             _ => start.saturating_add(size),
         };
         ranges.push(start..end);

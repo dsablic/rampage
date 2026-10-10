@@ -314,8 +314,10 @@ fn overlays_respect_certificates_and_ignore_impossible_ranges() {
         let overlay = Binary::open(malformed(name)).unwrap().overlay.unwrap_or_else(|| panic!("{name}: no overlay"));
         assert_eq!((overlay.offset, overlay.size), (0x35c00, 512), "{name}");
     }
-    // A truncated file's segments run past its end, and still account for all of it.
-    assert_eq!(Binary::open(malformed("trunc.elf")).unwrap().overlay, None);
+    // A truncated file has nothing after its image, but says that it is truncated.
+    let truncated = Binary::open(malformed("trunc.elf")).unwrap();
+    assert_eq!(truncated.overlay, None);
+    assert!(truncated.warnings.iter().any(|warning| warning.contains("past the end")), "{:?}", truncated.warnings);
     // Object files keep symbols and relocations past their sections; none of it is overlay.
     for name in ["hello-x64.o", "hello-x64-elf.o"] {
         assert_eq!(Binary::open(fixture(name)).unwrap().overlay, None, "{name}");
@@ -371,4 +373,17 @@ fn thumb_functions_cover_their_whole_body() {
     let target = binary.target();
     assert!(target.is_thumb(main.address) && target.is_thumb(main.address + main.size - 2));
     assert!(binary.thumb.iter().all(|range| range.end != u64::MAX));
+}
+
+#[test]
+fn a_size_field_hiding_an_overlay_is_reported() {
+    let mut bytes = std::fs::read(malformed("overlay.exe")).unwrap();
+    // The section header's SizeOfRawData lies 16 bytes after its name.
+    let header = bytes.windows(8).position(|window| window == b".reloc\0\0").unwrap();
+    bytes[header + 16..header + 20].copy_from_slice(&0x7fff_ffffu32.to_le_bytes());
+    let path = std::env::temp_dir().join(format!("rampage-hidden-overlay-{}.exe", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let binary = Binary::open(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(binary.warnings.iter().any(|warning| warning.contains("past the end")), "{:?}", binary.warnings);
 }

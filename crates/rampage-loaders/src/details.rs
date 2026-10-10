@@ -102,9 +102,8 @@ pub(crate) fn collect(parsed: &object::File) -> Details {
 
 /// The overlay of `image`, which starts at `image_start` in the file: data following everything its structures
 /// describe. Zero padding does not count, and neither does a PE certificate table at the very end of the file,
-/// though any payload in front of one does. Structures that run past the end of a truncated file account for
-/// everything up to it.
-pub(crate) fn overlay(parsed: &object::File, image: &[u8], image_start: u64) -> Option<Overlay> {
+/// though any payload in front of one does. Fails, with a warning, when structures run past the end of the file.
+pub(crate) fn overlay(parsed: &object::File, image: &[u8], image_start: u64) -> Result<Option<Overlay>, String> {
     let len = image.len() as u64;
     let mut ranges: Vec<(u64, u64)> =
         parsed.segments().map(|segment| object::ObjectSegment::file_range(&segment)).collect();
@@ -124,23 +123,25 @@ pub(crate) fn overlay(parsed: &object::File, image: &[u8], image_start: u64) -> 
         object::File::MachO32(_) | object::File::MachO64(_) => ranges.extend(macho_tables(parsed)),
         _ => {}
     }
-    let end = ranges
-        .into_iter()
-        .filter(|&(offset, _)| offset < len)
-        .map(|(offset, size)| offset.saturating_add(size).min(len))
-        .max()
-        .unwrap_or(0);
+    // An image whose structures run past the end of the file is truncated: nothing follows it. A size field that
+    // claims so falsely could hide an overlay, so the loader warns about it.
+    if ranges.iter().any(|&(offset, size)| offset < len && offset.saturating_add(size) > len) {
+        return Err(format!("structures extend past the end of the file ({len:#x} bytes): truncated or corrupt"));
+    }
+    let end =
+        ranges.into_iter().filter(|&(offset, _)| offset < len).map(|(offset, size)| offset + size).max().unwrap_or(0);
     // A certificate table that ends the file belongs to the image; whatever lies before it does not.
     let stop = match certificate {
         Some((offset, size)) if offset >= end && offset.checked_add(size) == Some(len) => offset,
         _ => len,
     };
-    let tail = image.get(usize::try_from(end).ok()?..usize::try_from(stop).ok()?)?;
-    tail.iter().any(|&byte| byte != 0).then(|| Overlay {
+    // Both lie within the image, which is in memory.
+    let tail = &image[end as usize..stop as usize];
+    Ok(tail.iter().any(|&byte| byte != 0).then(|| Overlay {
         offset: end,
         size: stop - end,
         file_offset: image_start + end,
-    })
+    }))
 }
 
 /// File ranges of a Mach-O's header and load commands, link-edit data, and section relocations (which follow the

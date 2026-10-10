@@ -89,6 +89,7 @@ impl std::fmt::Display for Arch {
 #[derive(Debug, Clone)]
 pub struct Target {
     pub arch: Arch,
+    /// The byte order of instructions (little-endian in ARM BE8 images, whose data is big-endian).
     pub big_endian: bool,
     /// ARM only: the sorted address ranges that hold Thumb (T32) code.
     pub thumb: std::sync::Arc<[std::ops::Range<u64>]>,
