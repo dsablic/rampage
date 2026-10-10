@@ -226,6 +226,7 @@ pub fn decoder(target: &Target) -> Result<Box<dyn Disassembler>, UnsupportedArch
         Arch::X86 => Ok(Box::new(x86::X86Disassembler::new(32))),
         Arch::X86_64 => Ok(Box::new(x86::X86Disassembler::new(64))),
         Arch::Aarch64 => Ok(Box::new(a64::A64Disassembler::default())),
+        Arch::Arm => Ok(Box::new(aarch32::Aarch32Disassembler::new(target))),
         _ => cs::CapstoneDisassembler::new(target).map(|decoder| Box::new(decoder) as Box<dyn Disassembler>),
     }
 }

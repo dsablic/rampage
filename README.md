@@ -11,10 +11,12 @@ Triage and a first desktop UI are in. See [the design](docs/plans/2026-10-10-ram
 ## Supported today
 
 - Formats: ELF, PE, Mach-O (including universal binaries)
-- Architectures: x86 and x86-64 (via [iced-x86](https://github.com/icedland/iced)) and AArch64 decode natively;
-  32-bit ARM (A32 and Thumb), MIPS, PowerPC, RISC-V, SPARC, z/Architecture and m68k decode through
-  [Capstone](https://www.capstone-engine.org) for now, in either byte order, with MIPS and SPARC delay slots kept in
-  their branch's block. Native decoders replace Capstone where a machine-readable specification exists.
+- Architectures: x86 and x86-64 (via [iced-x86](https://github.com/icedland/iced)), AArch64 and 32-bit ARM (A32 and
+  Thumb, with VFP and Advanced SIMD) decode natively; MIPS, PowerPC, RISC-V, SPARC, z/Architecture and m68k decode
+  through [Capstone](https://www.capstone-engine.org) for now, in either byte order, with MIPS and SPARC delay slots
+  kept in their branch's block. Native decoders replace Capstone where a machine-readable specification exists.
+- 32-bit ARM is generated from the same specification as AArch64; on words sampled across every encoding its output
+  matches `llvm-mc` on 97.7% (A32), 100% (16-bit Thumb) and 97.2% (32-bit Thumb).
 - AArch64 includes SVE and SME, decoded from tables generated out of Arm's open-source
   [machine-readable architecture specification](https://developer.arm.com/Architectures/A-Profile%20Architecture).
   Its output matches `llvm-mc` on every instruction sampled from Chrome's arm64 code and on 99.85% of words

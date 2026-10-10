@@ -1,5 +1,5 @@
-//! Capstone-based decoding for the architectures that have no native decoder yet: 32-bit ARM (A32 and Thumb),
-//! MIPS, PowerPC, RISC-V, SPARC, z/Architecture and m68k. Capstone decodes and renders instructions; control flow
+//! Capstone-based decoding for the architectures that have no native decoder yet: MIPS, PowerPC, RISC-V,
+//! SPARC, z/Architecture and m68k. Capstone decodes and renders instructions; control flow
 //! comes from per-architecture mnemonic rules, because Capstone's instruction groups miss many calls and returns
 //! and do not say whether a branch is conditional.
 
@@ -11,24 +11,14 @@ use crate::{Arch, Disassembler, Flow, Insn as Decoded, Target, UnsupportedArch};
 
 pub struct CapstoneDisassembler {
     target: Target,
-    primary: Capstone,
-    /// ARM only: a second engine for Thumb code.
-    thumb: Option<Capstone>,
-    /// Thumb only: the address of the next instruction an IT block covers, and how many it still covers.
-    it_block: Option<(u64, usize)>,
-    /// Register values, for each engine (their register numbering is the same, but a run never mixes them).
+    engine: Capstone,
+    /// Register values known within a straight-line run.
     tracker: Tracker,
-    thumb_tracker: Tracker,
 }
 
-fn engine(arch: Arch, big_endian: bool, thumb: bool) -> Option<Capstone> {
+fn engine(arch: Arch, big_endian: bool) -> Option<Capstone> {
     let endian = if big_endian { Endian::Big } else { Endian::Little };
     let built = match arch {
-        Arch::Arm => {
-            let mode = if thumb { arch::arm::ArchMode::Thumb } else { arch::arm::ArchMode::Arm };
-            let v8 = [arch::arm::ArchExtraMode::V8];
-            Capstone::new().arm().mode(mode).extra_mode(v8.into_iter()).endian(endian).detail(true).build()
-        }
         Arch::Mips | Arch::Mips64 => {
             let mode = if arch == Arch::Mips { arch::mips::ArchMode::Mips32 } else { arch::mips::ArchMode::Mips64 };
             Capstone::new().mips().mode(mode).endian(endian).detail(true).build()
@@ -47,32 +37,22 @@ fn engine(arch: Arch, big_endian: bool, thumb: bool) -> Option<Capstone> {
         Arch::Sparc64 => Capstone::new().sparc().mode(arch::sparc::ArchMode::V9).detail(true).build(),
         Arch::S390x => Capstone::new().sysz().mode(arch::sysz::ArchMode::Default).detail(true).build(),
         Arch::M68k => Capstone::new().m68k().mode(arch::m68k::ArchMode::M68k040).detail(true).build(),
-        Arch::X86 | Arch::X86_64 | Arch::Aarch64 => return None,
+        Arch::X86 | Arch::X86_64 | Arch::Aarch64 | Arch::Arm => return None,
     };
     built.ok()
 }
 
 impl CapstoneDisassembler {
     pub fn new(target: &Target) -> Result<Self, UnsupportedArch> {
-        let primary = engine(target.arch, target.big_endian, false).ok_or(UnsupportedArch(target.arch))?;
-        let thumb = if target.arch == Arch::Arm { engine(Arch::Arm, target.big_endian, true) } else { None };
-        let tracker = Tracker::new(target.arch, &primary, target.global_pointer, target.got.clone());
-        let thumb_tracker = Tracker::new(target.arch, &primary, target.global_pointer, target.got.clone());
-        Ok(Self { target: target.clone(), primary, thumb, it_block: None, tracker, thumb_tracker })
-    }
-
-    fn engine_at(&self, address: u64) -> (&Capstone, bool) {
-        match &self.thumb {
-            Some(thumb) if self.target.is_thumb(address) => (thumb, true),
-            _ => (&self.primary, false),
-        }
+        let engine = engine(target.arch, target.big_endian).ok_or(UnsupportedArch(target.arch))?;
+        let tracker = Tracker::new(target.arch, &engine, target.global_pointer, target.got.clone());
+        Ok(Self { target: target.clone(), engine, tracker })
     }
 
     /// The smallest instruction, which is how far an undecodable one is skipped.
-    fn minimum_length(&self, thumb: bool) -> u8 {
+    fn minimum_length(&self) -> u8 {
         match self.target.arch {
             Arch::Riscv32 | Arch::Riscv64 | Arch::S390x | Arch::M68k => 2,
-            Arch::Arm if thumb => 2,
             _ => 4,
         }
     }
@@ -107,26 +87,6 @@ const CALL: Kind = Kind::Call { direct: true };
 const INDIRECT_CALL: Kind = Kind::Call { direct: false };
 const JUMP: Kind = Kind::Jump { direct: true };
 const INDIRECT_JUMP: Kind = Kind::Jump { direct: false };
-
-/// ARM, with the condition already stripped from `mnemonic` and reported by `conditional`.
-fn arm(mnemonic: &str, operands: &str, conditional: bool) -> Option<Branch> {
-    let writes_pc = operands.starts_with("pc,");
-    let kind = match mnemonic {
-        "bl" | "blx" => CALL,
-        "b" => JUMP,
-        "cbz" | "cbnz" => return branch(JUMP, true),
-        "bx" if operands == "lr" => Kind::Return,
-        "bx" | "bxj" | "tbb" | "tbh" => INDIRECT_JUMP,
-        "mov" | "movs" if writes_pc && operands == "pc, lr" => Kind::Return,
-        "ldr" if operands.starts_with("pc, [sp]") => Kind::Return,
-        "mov" | "movs" | "add" | "sub" if writes_pc => INDIRECT_JUMP,
-        "ldr" if writes_pc => INDIRECT_JUMP,
-        "pop" | "ldm" | "ldmia" | "ldmib" | "ldmda" | "ldmdb" | "ldmfd" if operands.contains("pc}") => Kind::Return,
-        "udf" => Kind::Halt,
-        _ => return None,
-    };
-    branch(kind, conditional)
-}
 
 fn mips(mnemonic: &str, operands: &str, is_branch: bool) -> Option<Branch> {
     let kind = match mnemonic {
@@ -238,41 +198,8 @@ fn m68k(mnemonic: &str) -> Option<Branch> {
     branch(kind, false)
 }
 
-/// ARM condition-code suffixes.
-const CONDITIONS: [&str; 15] =
-    ["eq", "ne", "hs", "cs", "lo", "cc", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt"];
-
-/// `mnemonic` without its width qualifier and, when `conditional`, its condition suffix (`bxeq` to `bx`).
-fn arm_base(mnemonic: &str, conditional: bool) -> &str {
-    let mnemonic = mnemonic.trim_end_matches(".w").trim_end_matches(".n");
-    if !conditional {
-        return mnemonic;
-    }
-    CONDITIONS
-        .iter()
-        .chain(&["le", "al"])
-        .find_map(|condition| mnemonic.strip_suffix(condition))
-        .filter(|base| !base.is_empty())
-        .unwrap_or(mnemonic)
-}
-
-/// The instruction's control flow and, for an ARM PC-relative load, the address it reads. `it_block` tracks the
-/// An instruction's control flow; whether it executes only under a condition (ARM); and its mnemonic without
-/// ARM's condition and width suffixes.
-struct Classified<'a> {
-    flow: Flow,
-    conditional: bool,
-    mnemonic: &'a str,
-}
-
-/// Classifies `insn`'s control flow. `it_block` tracks the Thumb IT block it may lie in.
-fn classify<'a>(
-    arch: Arch,
-    it_block: &mut Option<(u64, usize)>,
-    engine_is_thumb: bool,
-    insn: &'a Insn,
-    detail: &capstone::InsnDetail,
-) -> Classified<'a> {
+/// Classifies `insn`'s control flow.
+fn classify(arch: Arch, insn: &Insn, detail: &capstone::InsnDetail) -> Flow {
     {
         let address = insn.address();
         let mnemonic = insn.mnemonic().unwrap_or("");
@@ -284,38 +211,18 @@ fn classify<'a>(
         let arch_detail = detail.arch_detail();
         let operands = arch_detail.operands();
 
-        let mut mnemonic_base = mnemonic;
-        let mut predicated = false;
-        let branch = match (arch, &arch_detail) {
-            (Arch::Arm, capstone::arch::ArchDetail::ArmDetail(arm_detail)) => {
-                let in_it_block = it_block.is_some_and(|(next, left)| next == address && left > 0);
-                *it_block = match mnemonic.strip_prefix("it") {
-                    Some(pattern) if engine_is_thumb && pattern.len() < 4 => {
-                        Some((address + insn.len() as u64, pattern.len() + 1))
-                    }
-                    _ => it_block.filter(|_| in_it_block).map(|(_, left)| (address + insn.len() as u64, left - 1)),
-                };
-                let has_condition =
-                    !matches!(arm_detail.cc(), arch::arm::ArmCC::ARM_CC_AL | arch::arm::ArmCC::ARM_CC_INVALID);
-                mnemonic_base = arm_base(mnemonic, has_condition);
-                predicated = has_condition || in_it_block;
-                arm(mnemonic_base, operands_text, predicated)
-            }
-            (Arch::Mips | Arch::Mips64, _) => mips(mnemonic, operands_text, is_branch),
-            (Arch::PowerPc | Arch::PowerPc64, _) => powerpc(mnemonic, is_branch),
-            (Arch::Riscv32 | Arch::Riscv64, _) => riscv(mnemonic, operands_text),
-            (Arch::Sparc | Arch::Sparc64, _) => sparc(mnemonic, operands_text, is_branch),
-            (Arch::S390x, _) => s390x(mnemonic, operands_text, is_branch),
-            (Arch::M68k, _) => m68k(mnemonic.split('.').next().unwrap_or(mnemonic)),
+        let branch = match arch {
+            Arch::Mips | Arch::Mips64 => mips(mnemonic, operands_text, is_branch),
+            Arch::PowerPc | Arch::PowerPc64 => powerpc(mnemonic, is_branch),
+            Arch::Riscv32 | Arch::Riscv64 => riscv(mnemonic, operands_text),
+            Arch::Sparc | Arch::Sparc64 => sparc(mnemonic, operands_text, is_branch),
+            Arch::S390x => s390x(mnemonic, operands_text, is_branch),
+            Arch::M68k => m68k(mnemonic.split('.').next().unwrap_or(mnemonic)),
             _ => None,
         };
 
         // A direct branch's target is its last immediate or displacement operand.
         let target = operands.iter().rev().find_map(|operand| match operand {
-            ArchOperand::ArmOperand(operand) => match operand.op_type {
-                arch::arm::ArmOperandType::Imm(value) => Some(u64::from(value as u32)),
-                _ => None,
-            },
             ArchOperand::MipsOperand(arch::mips::MipsOperand::Imm(value))
             | ArchOperand::PpcOperand(arch::ppc::PpcOperand::Imm(value))
             | ArchOperand::SparcOperand(arch::sparc::SparcOperand::Imm(value))
@@ -332,7 +239,7 @@ fn classify<'a>(
         });
 
         let next = address + insn.len() as u64;
-        let flow = match branch {
+        match branch {
             None => Flow::Next,
             Some(Branch { kind, conditional }) => match kind {
                 Kind::Halt => Flow::Halt,
@@ -351,38 +258,24 @@ fn classify<'a>(
                 Kind::Jump { direct: false } if conditional => Flow::Next,
                 Kind::Jump { direct: false } => Flow::IndirectJump,
             },
-        };
-        Classified { flow, conditional: predicated, mnemonic: mnemonic_base }
+        }
     }
 }
 
 impl Disassembler for CapstoneDisassembler {
     fn decode(&mut self, bytes: &[u8], address: u64) -> Decoded {
-        let (engine, thumb) = match &self.thumb {
-            Some(thumb) if self.target.is_thumb(address) => (thumb, true),
-            _ => (&self.primary, false),
-        };
         let invalid =
-            Decoded { address, len: self.minimum_length(thumb), flow: Flow::Invalid, data_ref: None, immediate: None };
-        let Ok(instructions) = engine.disasm_count(bytes, address, 1) else { return invalid };
+            Decoded { address, len: self.minimum_length(), flow: Flow::Invalid, data_ref: None, immediate: None };
+        let Ok(instructions) = self.engine.disasm_count(bytes, address, 1) else { return invalid };
         let Some(insn) = instructions.iter().next() else { return invalid };
-        let Ok(detail) = engine.insn_detail(insn) else { return invalid };
+        let Ok(detail) = self.engine.insn_detail(insn) else { return invalid };
         let arch = self.target.arch;
-        let Classified { flow, conditional, mnemonic } = classify(arch, &mut self.it_block, thumb, insn, &detail);
-
+        let flow = classify(arch, insn, &detail);
+        let mnemonic = insn.mnemonic().unwrap_or("");
         let operands = track::operands(&detail);
         let writes = track::written_registers(arch, mnemonic, &detail, &operands);
-        // ARM reads PC as the instruction plus 8 (A32) or plus 4, word-aligned for addressing (Thumb).
-        let pc = match (arch, thumb) {
-            (Arch::Arm, true) => (address + 4) & !3,
-            (Arch::Arm, false) => address + 8,
-            _ => address,
-        };
-        let big_endian = self.target.big_endian;
-        let literal = |at: u64| track::word(bytes.get(usize::try_from(at.checked_sub(address)?).ok()?..)?, big_endian);
         let is_call = matches!(flow, Flow::Call(_) | Flow::IndirectCall);
-        let tracker = if thumb { &mut self.thumb_tracker } else { &mut self.tracker };
-        let found = tracker.step(mnemonic, &operands, &writes, address, pc, conditional, is_call, literal);
+        let found = self.tracker.step(mnemonic, &operands, &writes, address, is_call);
         let flow = match (flow, found.branch_target) {
             (Flow::IndirectCall, Some(target)) => Flow::Call(target),
             (Flow::IndirectJump, Some(target)) => Flow::Jump(target),
@@ -392,8 +285,7 @@ impl Disassembler for CapstoneDisassembler {
     }
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {
-        let (engine, _) = self.engine_at(address);
-        let Ok(instructions) = engine.disasm_count(bytes, address, 1) else { return "(bad)".to_owned() };
+        let Ok(instructions) = self.engine.disasm_count(bytes, address, 1) else { return "(bad)".to_owned() };
         match instructions.iter().next() {
             Some(insn) => match insn.op_str() {
                 Some(operands) if !operands.is_empty() => format!("{} {operands}", insn.mnemonic().unwrap_or("")),
@@ -404,9 +296,7 @@ impl Disassembler for CapstoneDisassembler {
     }
 
     fn reset(&mut self) {
-        self.it_block = None;
         self.tracker.reset();
-        self.thumb_tracker.reset();
     }
 
     fn delay_slots(&self) -> u8 {

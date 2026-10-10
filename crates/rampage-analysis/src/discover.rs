@@ -173,8 +173,9 @@ fn explore(
         let immediate = insn.immediate.filter(|_| trust_immediates);
         for target in insn.data_ref.into_iter().chain(immediate).filter(|&target| memory.is_mapped(target)) {
             xrefs.push(Xref { to: target, from: insn.address, kind: XrefKind::Data });
-            if memory.is_executable(target) {
-                new_seeds.push(target);
+            let code = memory.code_address(target);
+            if memory.is_executable(code) {
+                new_seeds.push(code);
             }
         }
     };

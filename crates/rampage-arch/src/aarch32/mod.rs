@@ -7,6 +7,7 @@
 #[allow(clippy::all)]
 #[rustfmt::skip]
 mod a32_spec;
+mod flow;
 mod operands;
 mod spec_types;
 #[allow(clippy::all)]
@@ -20,6 +21,7 @@ mod wide;
 use crate::mrs::{self, Encoding, State, Syntax, Tables};
 
 pub use crate::mrs::LabelStyle;
+pub use flow::Aarch32Disassembler;
 
 /// Which table an instruction comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

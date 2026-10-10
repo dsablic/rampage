@@ -112,6 +112,7 @@ pub fn render(context: &Context, operand: &Operand) -> Value {
         "<shift>" | "<type>" if !is_simd(context) => shift_type(context, operand),
         "<amount>" => shift_amount(context, operand),
         "<registers>" | "<registers_with_pc>" | "<registers_without_pc>" => register_list(context),
+        "<single_register_list>" => Value::Text(format!("{{{}}}", register_name(context.field("Rt").unwrap_or(0)))),
         "<lsb>" => Value::Text(bitfield_lsb(context).to_string()),
         "<width>" => width(context),
         "<x>" | "<y>" | "<z>" => it_suffix(context, operand.name),
@@ -317,6 +318,21 @@ fn condition(context: &Context, operand: &Operand) -> Value {
 }
 
 fn label(context: &Context) -> Value {
+    match label_parts(context) {
+        Some((base, offset)) => context.label(base, offset),
+        None => Value::Invalid,
+    }
+}
+
+/// The absolute address a `<label>` operand names, for flow analysis.
+pub fn label_target(decoded: &Decoded, address: u64) -> Option<u64> {
+    let context = Context { decoded, address, labels: LabelStyle::Absolute };
+    let (base, offset) = label_parts(&context)?;
+    Some(base.wrapping_add(offset as u64) & 0xffff_ffff)
+}
+
+/// A label as the base it counts from (PC, or PC aligned down to a word) and the offset from it.
+fn label_parts(context: &Context) -> Option<(u64, i64)> {
     let field = |name| context.field(name);
     let pc = context.pc();
     let aligned_pc = pc & !3;
@@ -325,17 +341,17 @@ fn label(context: &Context) -> Value {
         let h = if context.mnemonic() == "BLX" { field("H").unwrap_or(0) } else { 0 };
         let offset = sign_extend(imm24 << 2 | h << 1, 26);
         // BLX switches to Thumb from a word-aligned A32 address, so its target is relative to PC.
-        return context.label(pc, offset);
+        return Some((pc, offset));
     }
     if let (Some(s), Some(j1), Some(j2), Some(imm11)) = (field("S"), field("J1"), field("J2"), field("imm11")) {
         if let Some(imm6) = field("imm6") {
             let offset = sign_extend(s << 20 | j2 << 19 | j1 << 18 | imm6 << 12 | imm11 << 1, 21);
-            return context.label(pc, offset);
+            return Some((pc, offset));
         }
         let (i1, i2) = (!(j1 ^ s) & 1, !(j2 ^ s) & 1);
         let imm10 = field("imm10").unwrap_or(0);
         let offset = sign_extend(s << 24 | i1 << 23 | i2 << 22 | imm10 << 12 | imm11 << 1, 25);
-        return context.label(pc, offset);
+        return Some((pc, offset));
     }
     if let (Some(s), Some(j1), Some(j2), Some(high), Some(low)) =
         (field("S"), field("J1"), field("J2"), field("imm10H"), field("imm10L"))
@@ -343,21 +359,21 @@ fn label(context: &Context) -> Value {
         // BLX to A32 code: the target is word-aligned.
         let (i1, i2) = (!(j1 ^ s) & 1, !(j2 ^ s) & 1);
         let offset = sign_extend(s << 24 | i1 << 23 | i2 << 22 | high << 12 | low << 2, 25);
-        return context.label(aligned_pc, offset);
+        return Some((aligned_pc, offset));
     }
     if let (Some(i), Some(imm5)) = (field("i"), field("imm5")) {
         // CBZ and CBNZ.
-        return context.label(pc, (i << 6 | imm5 << 1) as i64);
+        return Some((pc, (i << 6 | imm5 << 1) as i64));
     }
     if context.decoded.set == Set::T16 {
         if let Some(imm11) = field("imm11") {
-            return context.label(pc, sign_extend(imm11 << 1, 12));
+            return Some((pc, sign_extend(imm11 << 1, 12)));
         }
         if let Some(imm8) = field("imm8") {
             return match context.mnemonic() {
-                "B" => context.label(pc, sign_extend(imm8 << 1, 9)),
+                "B" => Some((pc, sign_extend(imm8 << 1, 9))),
                 // ADR and literal loads count words from the aligned PC.
-                _ => context.label(aligned_pc, (imm8 << 2) as i64),
+                _ => Some((aligned_pc, (imm8 << 2) as i64)),
             };
         }
     }
@@ -371,15 +387,13 @@ fn label(context: &Context) -> Value {
         high << 4 | low
     } else if let (Some(i), Some(imm3), Some(imm8)) = (field("i"), field("imm3"), field("imm8")) {
         i << 11 | imm3 << 8 | imm8
-    } else if let Some(imm8) = field("imm8") {
-        imm8 << 2
     } else {
-        return Value::Invalid;
+        field("imm8")? << 2
     };
     // ADR's encoding T2 subtracts, as A32's SUB form does.
     let negative = field("U") == Some(0) || context.mnemonic() == "SUB" || context.decoded.encoding.name == "ADR_T2";
     let offset = if negative { -(magnitude as i64) } else { magnitude as i64 };
-    context.label(aligned_pc, offset)
+    Some((aligned_pc, offset))
 }
 
 /// `<const>`: an A32 or T32 modified immediate.

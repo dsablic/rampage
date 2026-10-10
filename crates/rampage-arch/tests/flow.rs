@@ -1,5 +1,5 @@
-//! Control flow of the Capstone-backed architectures. Encodings were checked with llvm-mc 22 (m68k, which llvm-mc
-//! lacks, against the 68000 manual); every instruction is decoded at 0x1000.
+//! Control flow and address tracking of the 32-bit ARM, Thumb and Capstone-backed decoders. Encodings were
+//! checked with llvm-mc 22 (m68k, which llvm-mc lacks, against the 68000 manual); each is decoded at 0x1000.
 
 use rampage_arch::{Arch, Flow, Target, decoder};
 

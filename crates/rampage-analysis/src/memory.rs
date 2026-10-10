@@ -9,6 +9,10 @@ pub trait Memory: Sync {
     /// Whether address-sized immediates may be pointers. Position-independent images based at zero reach code and
     /// data RIP-relatively, and small integers there land inside code, so their immediates are just numbers.
     fn immediates_may_be_addresses(&self) -> bool;
+    /// The address of the code a pointer to `address` runs. ARM marks pointers to Thumb code with the low bit.
+    fn code_address(&self, address: u64) -> u64 {
+        address
+    }
 }
 
 /// Images whose code starts below this are treated as based at zero.
@@ -25,6 +29,10 @@ impl Memory for Binary {
 
     fn is_executable(&self, address: u64) -> bool {
         self.is_code(address)
+    }
+
+    fn code_address(&self, address: u64) -> u64 {
+        if self.arch == rampage_arch::Arch::Arm { address & !1 } else { address }
     }
 
     fn immediates_may_be_addresses(&self) -> bool {
