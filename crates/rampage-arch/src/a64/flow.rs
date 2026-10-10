@@ -7,14 +7,10 @@
 use std::sync::LazyLock;
 
 use super::Decoded;
+use super::helpers::{ones, pc_relative};
 use super::spec::ENCODINGS;
 use super::spec_types::Encoding;
 use crate::Flow;
-
-fn sign_extend(value: u64, width: u32) -> i64 {
-    let shift = 64 - width;
-    ((value << shift) as i64) >> shift
-}
 
 /// Addresses known to be held by general-purpose registers: ADRP pages, and the full addresses an ADD forms
 /// from them.
@@ -163,8 +159,10 @@ fn info_for(encoding: &Encoding) -> Info {
             written.push(Written { start: register.start, width: register.width, plus });
         }
     }
-    // CPY* and SET* advance all three of their registers.
-    let indexed = ["post", "pre", "asisdlsep", "asisdlsop", "memcms", "memset_go"].iter().any(|n| name.contains(n));
+    // CPY* and SET* advance all three of their registers; LDRAA and LDRAB write back when W is set.
+    let indexed = ["post", "pre", "asisdlsep", "asisdlsop", "memcms", "memset_go", "64W_ldst_pac"]
+        .iter()
+        .any(|n| name.contains(n));
     let clobbers_caller_saved =
         matches!(flow, FlowClass::Call | FlowClass::IndirectCall) || matches!(prefix, "SVC" | "HVC" | "SMC");
     Info { flow, effect, written, writeback: base.filter(|_| indexed), clobbers_caller_saved }
@@ -175,18 +173,14 @@ fn relative_target(decoded: &Decoded, address: u64) -> Option<u64> {
     let (raw, width) = [("imm26", 26), ("imm19", 19), ("imm14", 14), ("imm9", 9)]
         .into_iter()
         .find_map(|(name, width)| decoded.field(name).map(|raw| (raw, width)))?;
-    Some(address.wrapping_add((sign_extend(raw, width) << 2) as u64))
+    Some(pc_relative(address, raw, width, 2).0)
 }
 
 /// ADR/ADRP targets; ADRP yields the 4 KiB page.
 fn address_target(decoded: &Decoded, address: u64) -> Option<u64> {
     let raw = (decoded.field("immhi")? << 2) | decoded.field("immlo")?;
-    let offset = sign_extend(raw, 21);
-    if decoded.encoding.name.starts_with("ADRP") {
-        Some((address & !0xfff).wrapping_add((offset << 12) as u64))
-    } else {
-        Some(address.wrapping_add(offset as u64))
-    }
+    let scale = if decoded.encoding.name.starts_with("ADRP") { 12 } else { 0 };
+    Some(pc_relative(address, raw, 21, scale).0)
 }
 
 fn index_of(encoding: &'static Encoding) -> usize {
@@ -209,7 +203,7 @@ pub fn analyze(decoded: &Decoded, address: u64, addresses: &mut Addresses) -> (F
     };
 
     let word = u64::from(decoded.word);
-    let register = |w: Written| ((word >> w.start) & ((1 << w.width) - 1)) + u64::from(w.plus);
+    let register = |w: Written| ((word >> w.start) & ones(w.width.into())) + u64::from(w.plus);
     let base = || decoded.field("Rn").and_then(|rn| addresses.get(rn));
     // A register's new known address, and whether it is an ADRP page.
     let mut produced = None;
@@ -243,9 +237,6 @@ pub fn analyze(decoded: &Decoded, address: u64, addresses: &mut Addresses) -> (F
     }
     if let Some(base) = info.writeback {
         addresses.clear(register(base));
-    }
-    if decoded.encoding.name.contains("ldst_pac") && decoded.field("W") == Some(1) {
-        addresses.clear(decoded.field("Rn").unwrap_or(31));
     }
     if info.clobbers_caller_saved {
         addresses.clobber_caller_saved();

@@ -36,7 +36,7 @@ impl Decoded {
 }
 
 fn extract(word: u32, start: u8, width: u8) -> u64 {
-    ((word as u64) >> start) & ((1u64 << width) - 1)
+    ((word as u64) >> start) & helpers::ones(width.into())
 }
 
 /// Finds the encoding of `word`, or `None` when it is unallocated.

@@ -4,8 +4,21 @@
 use super::spec::SYSTEM_OPERATIONS;
 use super::spec_types::SysKind;
 
-fn ones(width: u32) -> u64 {
+pub fn ones(width: u32) -> u64 {
     if width >= 64 { u64::MAX } else { (1 << width) - 1 }
+}
+
+pub fn sign_extend(value: u64, width: u32) -> i64 {
+    let shift = 64 - width.clamp(1, 64);
+    ((value << shift) as i64) >> shift
+}
+
+/// The target of a PC-relative offset `raw` of `width` bits counting `1 << scale` bytes, and the offset itself.
+/// ADRP (scale 12) counts pages from the instruction's 4 KiB page.
+pub fn pc_relative(address: u64, raw: u64, width: u32, scale: u32) -> (u64, i64) {
+    let offset = sign_extend(raw, width) << scale;
+    let base = if scale == 12 { address & !0xfff } else { address };
+    (base.wrapping_add(offset as u64), offset)
 }
 
 fn highest_set_bit(value: u64) -> Option<u32> {

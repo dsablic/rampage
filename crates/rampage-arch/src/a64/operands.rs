@@ -3,8 +3,8 @@
 //! their legal spellings, but not the mapping from field values; that follows the Arm ARM operand
 //! descriptions. Output follows LLVM's conventions.
 
-use super::helpers::{decode_bit_masks, system_operation};
-use super::spec_types::{Operand, SysKind};
+use super::helpers::{decode_bit_masks, ones, pc_relative, sign_extend, system_operation};
+use super::spec_types::{Operand, SysKind, Token};
 use super::{Decoded, extract, lookup, spec};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +60,7 @@ impl Context<'_> {
     /// The mnemonic of the displayed syntax, uppercase as the specification writes it.
     fn mnemonic(&self) -> &'static str {
         match self.decoded.syntax.tokens.first() {
-            Some(super::spec_types::Token::Text(text)) => text.split([' ', '{']).next().unwrap_or(""),
+            Some(Token::Text(text)) => text.split([' ', '{']).next().unwrap_or(""),
             _ => "",
         }
     }
@@ -76,8 +76,7 @@ impl Context<'_> {
 
     /// Whether the displayed syntax contains `needle` in its literal text, such as `MUL VL`.
     fn has_text(&self, needle: &str) -> bool {
-        fn search(tokens: &[super::spec_types::Token], needle: &str) -> bool {
-            use super::spec_types::Token;
+        fn search(tokens: &[Token], needle: &str) -> bool {
             tokens.iter().any(|token| match token {
                 Token::Text(text) => text.contains(needle),
                 Token::Operand(_) => false,
@@ -101,6 +100,11 @@ impl Context<'_> {
         }
     }
 
+    /// The width of the general-purpose registers selected by `sf`.
+    fn register_width(&self) -> u32 {
+        if self.field("sf") == Some(1) { 64 } else { 32 }
+    }
+
     fn has_operand(&self, name: &str) -> bool {
         self.decoded.syntax.operands.iter().any(|operand| operand.name == name)
     }
@@ -119,8 +123,7 @@ impl Context<'_> {
                 Some(b'S') => 4,
                 Some(b'D') => 8,
                 Some(b'Q') => 16,
-                Some(b'X') | Some(b'W') if name.starts_with("Xn") || name.starts_with("Xm") => continue,
-                Some(b'X') | Some(b'W') if name.starts_with("Xs") || name.starts_with("Ws") => continue,
+                Some(b'X') | Some(b'W') if ["Xn", "Xm", "Xs", "Ws"].iter().any(|p| name.starts_with(p)) => continue,
                 Some(b'X') => 8,
                 Some(b'W') => 4,
                 _ => continue,
@@ -157,7 +160,7 @@ impl Context<'_> {
         }
         let mut cleared = self.word();
         for field in &fields {
-            cleared &= !((((1u64 << field.width) - 1) as u32) << field.start);
+            cleared &= !((ones(field.width.into()) as u32) << field.start);
         }
         (0..1u64 << width)
             .filter(|&candidate| {
@@ -165,7 +168,7 @@ impl Context<'_> {
                 let mut remaining = width;
                 for field in &fields {
                     remaining -= field.width as u32;
-                    let bits = (candidate >> remaining) & ((1 << field.width) - 1);
+                    let bits = (candidate >> remaining) & ones(field.width.into());
                     word |= (bits as u32) << field.start;
                 }
                 lookup(word).is_some_and(|encoding| std::ptr::eq(encoding, self.decoded.encoding))
@@ -174,9 +177,8 @@ impl Context<'_> {
     }
 }
 
-fn sign_extend(value: u64, width: u32) -> i64 {
-    let shift = 64 - width.clamp(1, 64);
-    ((value << shift) as i64) >> shift
+fn default_if_zero(number: i64) -> Value {
+    if number == 0 { Value::Default("0".to_owned()) } else { Value::Text(number.to_string()) }
 }
 
 fn is_literal(choices: &[&str]) -> bool {
@@ -299,17 +301,18 @@ fn special(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
 fn label(context: &Context, operand: &Operand) -> Value {
     let (raw, width) = context.raw(operand);
     let encoding = context.encoding_name();
-    let (offset, base) = if encoding.starts_with("ADRP") {
-        (sign_extend(raw, width) << 12, context.address & !0xfff)
+    let (target, offset) = if encoding.starts_with("ADRP") {
+        pc_relative(context.address, raw, width, 12)
     } else if encoding.starts_with("ADR_") {
-        (sign_extend(raw, width), context.address)
+        pc_relative(context.address, raw, width, 0)
     } else if context.field_names(operand) == ["imm16"] {
         // AUTIASPPC and friends: the label lies before the instruction.
-        (-((raw << 2) as i64), context.address)
+        let offset = -((raw << 2) as i64);
+        (context.address.wrapping_add(offset as u64), offset)
     } else {
-        (sign_extend(raw, width) << 2, context.address)
+        pc_relative(context.address, raw, width, 2)
     };
-    context.label(base.wrapping_add(offset as u64), offset)
+    context.label(target, offset)
 }
 
 fn system_register(context: &Context, encoded: u64) -> Value {
@@ -340,11 +343,13 @@ fn pstate_field(encoded: u64) -> Value {
     let crm = (encoded >> 6) & 0xf;
     let op1 = (encoded >> 3) & 0x7;
     let op2 = encoded & 0x7;
+    pstate_name(op1, crm, op2).map_or(Value::Invalid, |name| Value::Text(name.to_owned()))
+}
+
+/// Looks up a PSTATE field by `op1:CRm:op2`.
+fn pstate_name(op1: u64, crm: u64, op2: u64) -> Option<&'static str> {
     let key = ((op1 << 7) | (crm << 3) | op2) as u16;
-    match spec::PSTATE_FIELDS.binary_search_by_key(&key, |&(k, _)| k) {
-        Ok(index) => Value::Text(spec::PSTATE_FIELDS[index].1.to_owned()),
-        Err(_) => Value::Invalid,
-    }
+    spec::PSTATE_FIELDS.binary_search_by_key(&key, |&(k, _)| k).ok().map(|index| spec::PSTATE_FIELDS[index].1)
 }
 
 fn barrier(context: &Context, operand: &Operand, value: u64) -> Value {
@@ -356,10 +361,7 @@ fn barrier(context: &Context, operand: &Operand, value: u64) -> Value {
         return Value::Text(["osh", "nsh", "ish", "sy"][value as usize & 3].to_owned());
     }
     if context.field_names(operand) != ["CRm"] {
-        return match ranked_choice(context, operand) {
-            Some(text) => Value::Text(text),
-            None => Value::Invalid,
-        };
+        return ranked_choice(context, operand).map_or(Value::Invalid, Value::Text);
     }
     let name = match value {
         0b0001 => "oshld",
@@ -420,17 +422,14 @@ fn system_operation_name(context: &Context) -> Value {
 
 fn shift(context: &Context, operand: &Operand, value: u64) -> Value {
     let fields = context.field_names(operand);
-    let register_width = if context.field("sf") == Some(1) { 64 } else { 32 };
+    let register_width = u64::from(context.register_width());
     match fields.as_slice() {
         ["shift"] => {
             let name = ["lsl", "lsr", "asr", "ror"][value as usize & 3];
             let amount = context.field("imm6").unwrap_or(0);
             if value == 0 && amount == 0 { Value::Default(name.to_owned()) } else { Value::Text(name.to_owned()) }
         }
-        ["hw"] => {
-            let amount = value * 16;
-            if amount == 0 { Value::Default("0".to_owned()) } else { Value::Text(amount.to_string()) }
-        }
+        ["hw"] => default_if_zero((value * 16) as i64),
         ["sh"] if operand.choices.len() == 2 => {
             let text = operand.choices[value as usize & 1].to_ascii_lowercase();
             // SVE folds the shift into the immediate, except for #0, lsl #8.
@@ -444,19 +443,22 @@ fn shift(context: &Context, operand: &Operand, value: u64) -> Value {
         ["imms"] => Value::Text(value.to_string()),
         ["size"] if context.mnemonic().starts_with("SHLL") => Value::Text((8u64 << value).to_string()),
         _ if fields.contains(&"immh") && fields.contains(&"immb") => {
-            let shift = (context.field("immh").unwrap_or(0) << 3) | context.field("immb").unwrap_or(0);
-            let element = 8u64 << (63 - (shift >> 3).max(1).leading_zeros()).min(3);
+            let (shift, element) = immediate_shift(context);
             if right_shift(context.mnemonic()) {
                 Value::Text((2 * element - shift).to_string())
             } else {
                 Value::Text((shift - element).to_string())
             }
         }
-        _ => match ranked_choice(context, operand) {
-            Some(text) => Value::Text(text),
-            None => Value::Text(value.to_string()),
-        },
+        _ => Value::Text(ranked_choice(context, operand).unwrap_or_else(|| value.to_string())),
     }
+}
+
+/// The raw `immh:immb` shift of an AdvSIMD shift by immediate, and the element size in bits that `immh` selects.
+fn immediate_shift(context: &Context) -> (u64, u64) {
+    let shift = (context.field("immh").unwrap_or(0) << 3) | context.field("immb").unwrap_or(0);
+    let element = 8u64 << (63 - (shift >> 3).max(1).leading_zeros()).min(3);
+    (shift, element)
 }
 
 fn right_shift(mnemonic: &str) -> bool {
@@ -475,13 +477,7 @@ fn amount(context: &Context, operand: &Operand, value: u64) -> Value {
             let shift = context.transfer_size().trailing_zeros();
             if value == 1 { Value::Text(format!("#{shift}")) } else { Value::Default(String::new()) }
         }
-        ["imm6"] | ["imm3"] => {
-            if value == 0 {
-                Value::Default("0".to_owned())
-            } else {
-                Value::Text(value.to_string())
-            }
-        }
+        ["imm6"] | ["imm3"] => default_if_zero(value as i64),
         _ => {
             if let Some(text) = ranked_choice(context, operand) {
                 return if text == "0" { Value::Default(text) } else { Value::Text(text) };
@@ -508,7 +504,7 @@ fn extend(context: &Context, option: u64) -> Value {
         return if option == 0b011 { Value::Default("lsl".to_owned()) } else { Value::Text(name.to_owned()) };
     }
     // ADD/SUB (extended register): with SP as destination or first source, the natural extend is LSL.
-    let is_64 = context.field("sf") == Some(1);
+    let is_64 = context.register_width() == 64;
     let uses_sp = context.field("Rd") == Some(31) && context.field("S") != Some(1) || context.field("Rn") == Some(31);
     let natural = if is_64 { 0b011 } else { 0b010 };
     if uses_sp && option == natural {
@@ -519,7 +515,7 @@ fn extend(context: &Context, option: u64) -> Value {
 }
 
 fn bitfield_lsb(context: &Context, value: u64) -> Value {
-    let width = if context.field("sf") == Some(1) { 64 } else { 32 };
+    let width = u64::from(context.register_width());
     if matches!(context.mnemonic(), "BFI" | "BFC" | "SBFIZ" | "UBFIZ") {
         // UBFIZ/SBFIZ/BFI: lsb = -immr MOD width.
         let immr = context.field("immr").unwrap_or(value);
@@ -543,8 +539,7 @@ fn fixed_point_bits(context: &Context, operand: &Operand, value: u64) -> Value {
         return Value::Text((64 - value).to_string());
     }
     if fields.contains(&"immh") {
-        let shift = (context.field("immh").unwrap_or(0) << 3) | context.field("immb").unwrap_or(0);
-        let element = 8u64 << (63 - (shift >> 3).max(1).leading_zeros()).min(3);
+        let (shift, element) = immediate_shift(context);
         return Value::Text((2 * element - shift).to_string());
     }
     Value::Text(value.to_string())
@@ -608,7 +603,7 @@ fn element_index(context: &Context, operand: &Operand, value: u64) -> Value {
             .filter(|field| field.name.starts_with("tsz"))
             .map(|field| field.width as u32)
             .sum();
-        let tsz = value & ((1 << tsz_width) - 1);
+        let tsz = value & ones(tsz_width);
         value >> (tsz.trailing_zeros() + 1).min(63)
     } else if has("imm4") && has("Q") {
         // EXT: Q only restricts the byte index.
@@ -682,10 +677,8 @@ fn register(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
         "V" => {
             if fields.contains(&"M") && fields.contains(&"Rm") {
                 // By-element forms: Rm is 4 bits wide for 16-bit elements (M joins the index), except in FCMLA.
-                let rm = context.field("Rm").unwrap_or(0);
-                let m = context.field("M").unwrap_or(0);
                 let narrow = element_bits(context) == Some(16) && context.mnemonic() != "FCMLA";
-                if narrow { format!("v{rm}") } else { format!("v{}", (m << 4) | rm) }
+                format!("v{}", by_element_register(context, narrow))
             } else {
                 format!("v{number}")
             }
@@ -711,13 +704,8 @@ fn register(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
         "ZA" => format!("za{value}"),
         "" if matches!(name, "d" | "n" | "m" | "t" | "dn" | "n|SP") => {
             if fields.contains(&"M") && fields.contains(&"size") {
-                let rm = context.field("Rm").unwrap_or(0);
-                let m = context.field("M").unwrap_or(0);
-                return Some(Value::Text(if context.field("size") == Some(1) {
-                    rm.to_string()
-                } else {
-                    ((m << 4) | rm).to_string()
-                }));
+                let narrow = context.field("size") == Some(1);
+                return Some(Value::Text(by_element_register(context, narrow).to_string()));
             }
             if value == 31 && operand.choices.iter().any(|choice| choice.ends_with("ZR")) {
                 return Some(Value::Text("zr".to_owned()));
@@ -731,6 +719,12 @@ fn register(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
     }))
 }
 
+/// The second source of a by-element form: `Rm`, extended by `M` unless the index takes `M` (`narrow`).
+fn by_element_register(context: &Context, narrow: bool) -> u64 {
+    let rm = context.field("Rm").unwrap_or(0);
+    if narrow { rm } else { (context.field("M").unwrap_or(0) << 4) | rm }
+}
+
 /// The register number of a member of a multi-vector list such as `{ <Zn1>.S-<Zn2>.S }`.
 fn multi_vector(context: &Context, operand: &Operand, name: &str, value: u64, width: u32) -> u64 {
     let in_list = name.chars().last().is_some_and(|c| c.is_ascii_digit());
@@ -742,7 +736,7 @@ fn multi_vector(context: &Context, operand: &Operand, name: &str, value: u64, wi
         // Strided lists: T:Zt names the first register, the rest are spaced by 8 (pairs) or 4 (quads).
         let count = if context.has_operand("<Zt4>") || context.has_operand("<Zd4>") { 4 } else { 2 };
         let stride = 16 / count;
-        let first = ((value >> (width - 1)) << 4) | (value & ((1 << (width - 1)) - 1));
+        let first = ((value >> (width - 1)) << 4) | (value & ones(width - 1));
         return (first + (index - 1) * stride) % 32;
     }
     let scale = 1u64 << (5 - width.min(5));
@@ -858,10 +852,7 @@ fn immediate(context: &Context, operand: &Operand, name: &str) -> Option<Value> 
     let fields = context.field_names(operand);
     let (value, width) = context.raw(operand);
     let has = |name| fields.contains(&name);
-    let register_width = if context.field("sf") == Some(1) || context.has_operand("<Xd|SP>") { 64 } else { 32 };
-    let default_if_zero = |number: i64| {
-        if number == 0 { Value::Default("0".to_owned()) } else { Value::Text(number.to_string()) }
-    };
+    let register_width = if context.has_operand("<Xd|SP>") { 64 } else { context.register_width() };
     let text = match name {
         "imm" if has("immr") && has("imms") && !context.is_sve() => {
             let n = context.field("N").unwrap_or(0);
@@ -874,7 +865,7 @@ fn immediate(context: &Context, operand: &Operand, name: &str) -> Option<Value> 
         }
         "imm" if has("imm16") && has("hw") => {
             let shifted = context.field("imm16").unwrap_or(0) << (16 * context.field("hw").unwrap_or(0));
-            let mask = if register_width == 64 { u64::MAX } else { 0xffff_ffff };
+            let mask = ones(register_width);
             let inverted = context.encoding_name().starts_with("MOVN");
             signed_for_width(if inverted { !shifted & mask } else { shifted & mask }, register_width)
         }
@@ -920,21 +911,13 @@ fn immediate(context: &Context, operand: &Operand, name: &str) -> Option<Value> 
             let block = if context.mnemonic().starts_with("LD1RQ") { 16 } else { 32 };
             return Some(default_if_zero(sign_extend(value, width) * block));
         }
-        "imm"
-            if context.is_sve() && fields == ["imm5"] && context.has_text(".S")
-                || context.is_sve() && fields == ["imm5"] && context.has_text(".D") =>
-        {
+        "imm" if context.is_sve() && fields == ["imm5"] && (context.has_text(".S") || context.has_text(".D")) => {
             // Vector plus immediate addressing: an unsigned multiple of the memory element size.
             if context.mnemonic().starts_with("LD")
                 || context.mnemonic().starts_with("ST")
                 || context.mnemonic().starts_with("PRF")
             {
-                let element = if context.mnemonic().starts_with("PRF") {
-                    prefetch_element(context.mnemonic())
-                } else {
-                    context.sve_memory_element()
-                };
-                return Some(default_if_zero((value * element) as i64));
+                return Some(default_if_zero((value * context.sve_memory_element()) as i64));
             }
             sign_extend(value, width).to_string()
         }
@@ -1011,12 +994,10 @@ fn sve_constant(context: &Context, operand: &Operand, value: u64, width: u32) ->
         return Value::Text(fp_immediate(value));
     }
     if fields.first().is_some_and(|f| f.starts_with("tsz")) && fields.last() == Some(&"imm3") {
-        let tsize_width = width - 3;
         let tsize = value >> 3;
         if tsize == 0 {
             return Value::Invalid;
         }
-        let _ = tsize_width;
         let element = 8u64 << (63 - tsize.leading_zeros());
         let mnemonic = context.mnemonic();
         let left = mnemonic.starts_with("LSL") || mnemonic.contains("SHL") || mnemonic.starts_with("SLI");
@@ -1045,20 +1026,9 @@ fn sve_shifted_immediate(context: &Context, imm8: u64) -> Value {
         let value = sign_extend(imm8, 8) << shift;
         sign_extend(value as u64, element_bits).to_string()
     } else {
-        let mask = if element_bits >= 64 { u64::MAX } else { (1u64 << element_bits) - 1 };
-        ((imm8 << shift) & mask).to_string()
+        ((imm8 << shift) & ones(element_bits)).to_string()
     };
     Value::Text(text)
-}
-
-/// Bytes per element of an SVE prefetch (PRFB, PRFH, PRFW, PRFD).
-fn prefetch_element(mnemonic: &str) -> u64 {
-    match mnemonic {
-        "PRFH" => 2,
-        "PRFW" => 4,
-        "PRFD" => 8,
-        _ => 1,
-    }
 }
 
 /// SVE prefetch operations: values 6, 7, 14 and 15 are unnamed.
@@ -1107,12 +1077,8 @@ fn range_prefetch_operation(context: &Context) -> u64 {
 fn pstate_immediate(context: &Context) -> u64 {
     let (op1, crm, op2) =
         (context.field("op1").unwrap_or(0), context.field("CRm").unwrap_or(0), context.field("op2").unwrap_or(0));
-    let lookup = |crm: u64| {
-        let key = ((op1 << 7) | (crm << 3) | op2) as u16;
-        spec::PSTATE_FIELDS.binary_search_by_key(&key, |&(k, _)| k).ok().map(|index| spec::PSTATE_FIELDS[index].1)
-    };
-    let name = lookup(crm);
-    let shared = (0..16).filter(|&other| lookup(other) == name).count() as u64;
+    let name = pstate_name(op1, crm, op2);
+    let shared = (0..16).filter(|&other| pstate_name(op1, other, op2) == name).count() as u64;
     crm & (shared.next_power_of_two() - 1)
 }
 
