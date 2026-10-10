@@ -4,7 +4,7 @@ use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use rampage_api::{FunctionsQuery, ListQuery, StringsQuery};
 use rampage_arch::Arch;
 
@@ -16,9 +16,9 @@ struct Cli {
     /// Emit JSON instead of text
     #[arg(long, global = true)]
     json: bool,
-    /// Architecture slice to load from a universal binary
-    #[arg(long, global = true, value_enum)]
-    arch: Option<ArchArg>,
+    /// Architecture slice to load from a universal binary (x86, x86_64, aarch64, arm, mips, powerpc, riscv64, ...)
+    #[arg(long, global = true, value_parser = parse_arch)]
+    arch: Option<Arch>,
     #[command(subcommand)]
     command: Command,
 }
@@ -109,23 +109,8 @@ enum Command {
     },
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum ArchArg {
-    X86,
-    #[value(name = "x86_64", alias = "x64", alias = "amd64")]
-    X86_64,
-    #[value(alias = "arm64")]
-    Aarch64,
-}
-
-impl From<ArchArg> for Arch {
-    fn from(arch: ArchArg) -> Self {
-        match arch {
-            ArchArg::X86 => Arch::X86,
-            ArchArg::X86_64 => Arch::X86_64,
-            ArchArg::Aarch64 => Arch::Aarch64,
-        }
-    }
+fn parse_arch(text: &str) -> Result<Arch, String> {
+    text.parse()
 }
 
 fn main() -> ExitCode {
@@ -133,7 +118,7 @@ fn main() -> ExitCode {
     if let Command::Mcp = cli.command {
         return serve_mcp();
     }
-    let options = Options { json: cli.json, arch: cli.arch.map(Arch::from) };
+    let options = Options { json: cli.json, arch: cli.arch };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match cli.command {
         Command::Info { file } => commands::info(&mut out, &file, &options),

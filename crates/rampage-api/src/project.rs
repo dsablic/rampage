@@ -8,7 +8,7 @@ use rampage_analysis::discover::{Program, Xref, XrefKind};
 use rampage_analysis::functions::{self, Names};
 use rampage_analysis::strings::{self, FoundString};
 use rampage_analysis::triage::{self, Triage};
-use rampage_arch::{Arch, Flow, UnsupportedArch, decoder_for};
+use rampage_arch::{Arch, Flow, UnsupportedArch};
 use rampage_loaders::{Binary, Export, Format, LoadError, Section, Segment};
 use serde::{Deserialize, Serialize};
 
@@ -403,7 +403,7 @@ impl Project {
 
     /// Decodes up to `count` instructions from `start`, stopping before `end`.
     fn decode_lines(&self, start: u64, end: u64, count: usize) -> Result<Vec<DisassemblyLine>, ApiError> {
-        let mut decoder = decoder_for(self.binary.arch)?;
+        let mut decoder = self.binary.decoder()?;
         let code = self
             .binary
             .read_to_segment_end(start)

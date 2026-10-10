@@ -52,8 +52,7 @@ fn analysis_finds_calls_from_main_in_static_elf() {
 fn analysis_of_entry_alone_reaches_main_through_code_pointer() {
     let binary = open("hello-x64.elf");
     let entry = binary.entry.unwrap();
-    let program =
-        rampage_analysis::discover::discover(&binary, || rampage_arch::decoder_for(binary.arch).unwrap(), &[entry]);
+    let program = rampage_analysis::discover::discover(&binary, || binary.decoder().unwrap(), &[entry]);
     assert!(program.function_at(symbol_address(&binary, "main")).is_some());
 }
 
@@ -206,4 +205,44 @@ fn strings_skip_code_sections() {
     let found = strings::scan(&binary, 4);
     assert!(found.iter().all(|string| !binary.is_code(string.address)));
     assert!(found.iter().any(|string| string.text == "rampage fixture greeting"));
+}
+
+#[test]
+fn every_architecture_finds_main_and_decodes_it() {
+    for (name, arch) in [
+        ("hello-arm.elf", rampage_arch::Arch::Arm),
+        ("hello-thumb.elf", rampage_arch::Arch::Arm),
+        ("hello-mips.elf", rampage_arch::Arch::Mips),
+        ("hello-mipsel.elf", rampage_arch::Arch::Mips),
+        ("hello-ppc.elf", rampage_arch::Arch::PowerPc),
+        ("hello-ppc64le.elf", rampage_arch::Arch::PowerPc64),
+        ("hello-riscv64.elf", rampage_arch::Arch::Riscv64),
+        ("hello-s390x.elf", rampage_arch::Arch::S390x),
+    ] {
+        let binary = open(name);
+        assert_eq!(binary.arch, arch, "{name}");
+        let program = functions::analyze(&binary).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let main = program.function_at(symbol_address(&binary, "main")).unwrap_or_else(|| panic!("{name}: no main"));
+        assert!(main.instruction_count >= 5, "{name}: {main:?}");
+        // main ends in a return: its last block decodes cleanly up to a recognized return.
+        assert!(program.functions.len() >= 3, "{name}: {} functions", program.functions.len());
+    }
+    // Thumb code is marked and decoded as Thumb: main's 2-byte instructions decode.
+    let thumb = open("hello-thumb.elf");
+    let main = symbol_address(&thumb, "main");
+    assert!(thumb.target().is_thumb(main) && main.is_multiple_of(2));
+    let mut decoder = thumb.decoder().unwrap();
+    assert_eq!(decoder.decode(thumb.code_from(main).unwrap(), main).len, 2);
+}
+
+#[test]
+fn delay_slots_stay_in_their_branch_block() {
+    let binary = open("hello-mips.elf");
+    let program = functions::analyze(&binary).unwrap();
+    let main = program.function_at(symbol_address(&binary, "main")).unwrap();
+    // main returns with `jr $ra` and a delay slot: its single block ends 8 bytes after the jump.
+    let mut decoder = binary.decoder().unwrap();
+    let end = main.blocks.last().unwrap().end;
+    let jump = end - 8;
+    assert_eq!(decoder.format(binary.code_from(jump).unwrap(), jump), "jr $ra");
 }

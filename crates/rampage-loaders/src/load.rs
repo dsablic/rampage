@@ -46,6 +46,9 @@ pub struct Binary {
     pub warnings: Vec<String>,
     /// Format-specific header facts (build metadata, linked libraries, hardening).
     pub details: Details,
+    pub big_endian: bool,
+    /// ARM only: the sorted address ranges holding Thumb code.
+    pub thumb: Vec<std::ops::Range<u64>>,
     /// Data appended past everything the image's structures describe.
     pub overlay: Option<Overlay>,
     #[serde(skip)]
@@ -57,7 +60,8 @@ pub struct Binary {
 }
 
 impl Binary {
-    /// Opens a binary. For a universal Mach-O this picks the x86_64 slice when present, else the first one.
+    /// Opens a binary. For a universal Mach-O this picks the x86_64, aarch64 or x86 slice, in that order of
+    /// preference, else the first supported one.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, LoadError> {
         Self::open_with(path, None)
     }
@@ -90,6 +94,8 @@ impl Binary {
             return Err(LoadError::Unsupported(format!("{} slice; the file contains {arch}", wanted.unwrap())));
         }
         let slices = if slices.is_empty() { vec![arch] } else { slices };
+        // ARM marks Thumb code addresses with the low bit; code itself lives at the even address.
+        let code_address = |address: u64| if arch == Arch::Arm { address & !1 } else { address };
 
         let segments: Vec<Segment> = parsed
             .segments()
@@ -129,9 +135,12 @@ impl Binary {
             .filter(|symbol| symbol.is_definition())
             .filter_map(|symbol| {
                 let name = symbol.name().ok().filter(|name| !name.is_empty())?;
+                if arch == Arch::Arm && arm_mapping_symbol(name).is_some() {
+                    return None;
+                }
                 Some(Symbol {
                     name: name.to_owned(),
-                    address: symbol.address(),
+                    address: code_address(symbol.address()),
                     size: symbol.size(),
                     kind: symbol_kind_of(symbol.kind()),
                 })
@@ -167,7 +176,7 @@ impl Binary {
                 for export in exports {
                     let export = export?;
                     if let object::ExportTarget::Address { address } = export.target() {
-                        found.push(Export { name: name_of(export.name()), address });
+                        found.push(Export { name: name_of(export.name()), address: code_address(address) });
                     }
                 }
                 Ok(found)
@@ -178,11 +187,14 @@ impl Binary {
             });
 
         // A zero entry (relative to the image base, which PE adds) is how every format spells "none".
-        let entry = match macho_main_entry_offset(&parsed) {
+        let raw_entry = match macho_main_entry_offset(&parsed) {
             Some(0) => None,
             Some(offset) => file_offset_to_address(&segments, offset),
             None => Some(parsed.entry()).filter(|&entry| entry != parsed.relative_address_base()),
         };
+        let thumb = if arch == Arch::Arm { thumb_ranges(&parsed, raw_entry, &segments) } else { Vec::new() };
+        let entry = raw_entry.map(code_address);
+        let big_endian = !parsed.is_little_endian();
         let text_address = segments.iter().find(|segment| segment.name == "__TEXT").map(|segment| segment.address);
         let mut function_starts = text_address
             .map(|text_address| starts::macho(&parsed, &data[image.clone()], text_address))
@@ -210,6 +222,8 @@ impl Binary {
             warnings,
             details,
             overlay,
+            big_endian,
+            thumb,
             code_ranges: Vec::new(),
             data,
             image,
@@ -228,6 +242,16 @@ impl Binary {
         function_starts.dedup();
         binary.function_starts = function_starts;
         Ok(binary)
+    }
+
+    /// What a decoder needs to read this image's code.
+    pub fn target(&self) -> rampage_arch::Target {
+        rampage_arch::Target { arch: self.arch, big_endian: self.big_endian, thumb: self.thumb.clone().into() }
+    }
+
+    /// A decoder for this image's code.
+    pub fn decoder(&self) -> Result<Box<dyn rampage_arch::Disassembler>, rampage_arch::UnsupportedArch> {
+        rampage_arch::decoder(&self.target())
     }
 
     /// The bytes of this image: the whole file, or one slice of a universal binary.
@@ -341,9 +365,10 @@ fn select_slice(slices: Vec<Slice>, wanted: Option<Arch>) -> Result<(Vec<Arch>, 
     let present: Vec<Arch> = slices.iter().filter_map(|slice| slice.arch).collect();
     let chosen = match wanted {
         Some(wanted) => slices.iter().find(|slice| slice.arch == Some(wanted)),
-        None => slices
+        // Prefer the slices people most often analyze, then whichever supported slice comes first.
+        None => [Arch::X86_64, Arch::Aarch64, Arch::X86]
             .iter()
-            .find(|slice| slice.arch == Some(Arch::X86_64))
+            .find_map(|&preferred| slices.iter().find(|slice| slice.arch == Some(preferred)))
             .or_else(|| slices.iter().find(|slice| slice.arch.is_some())),
     };
     let Some(chosen) = chosen else {
@@ -355,12 +380,70 @@ fn select_slice(slices: Vec<Slice>, wanted: Option<Arch>) -> Result<(Vec<Arch>, 
 }
 
 fn arch_of(architecture: object::Architecture) -> Option<Arch> {
-    match architecture {
-        object::Architecture::I386 => Some(Arch::X86),
-        object::Architecture::X86_64 => Some(Arch::X86_64),
-        object::Architecture::Aarch64 => Some(Arch::Aarch64),
-        _ => None,
+    use object::Architecture as A;
+    Some(match architecture {
+        A::I386 => Arch::X86,
+        A::X86_64 => Arch::X86_64,
+        A::Aarch64 => Arch::Aarch64,
+        A::Arm => Arch::Arm,
+        A::Mips => Arch::Mips,
+        A::Mips64 | A::Mips64_N32 => Arch::Mips64,
+        A::PowerPc => Arch::PowerPc,
+        A::PowerPc64 => Arch::PowerPc64,
+        A::Riscv32 => Arch::Riscv32,
+        A::Riscv64 => Arch::Riscv64,
+        A::Sparc | A::Sparc32Plus => Arch::Sparc,
+        A::Sparc64 => Arch::Sparc64,
+        A::S390x => Arch::S390x,
+        A::M68k => Arch::M68k,
+        _ => return None,
+    })
+}
+
+/// ARM mapping symbols mark where A32 code (`$a`), Thumb code (`$t`) and data (`$d`) begin.
+fn arm_mapping_symbol(name: &str) -> Option<char> {
+    let kind = name.strip_prefix('$')?.chars().next()?;
+    let rest = &name[2..];
+    (matches!(kind, 'a' | 't' | 'd') && (rest.is_empty() || rest.starts_with('.'))).then_some(kind)
+}
+
+/// The address ranges of Thumb code: regions that start at a `$t` mapping symbol, and Thumb functions, which ARM
+/// symbol tables mark with the low address bit. Without either, a Thumb entry point makes all code Thumb.
+fn thumb_ranges(parsed: &object::File, entry: Option<u64>, code: &[Segment]) -> Vec<std::ops::Range<u64>> {
+    let mut ranges = Vec::new();
+    let mut mapping: Vec<(u64, char)> = parsed
+        .symbols()
+        .filter_map(|symbol| Some((symbol.address(), arm_mapping_symbol(symbol.name().ok()?)?)))
+        .collect();
+    mapping.sort_unstable();
+    for (index, &(address, kind)) in mapping.iter().enumerate() {
+        if kind == 't' {
+            let end = mapping.get(index + 1).map_or(u64::MAX, |&(next, _)| next);
+            ranges.push(address..end);
+        }
     }
+    for symbol in parsed.symbols().chain(parsed.dynamic_symbols()) {
+        if symbol.kind() == object::SymbolKind::Text && symbol.address() & 1 == 1 {
+            let start = symbol.address() & !1;
+            ranges.push(start..start + symbol.size().max(2));
+        }
+    }
+    if mapping.is_empty() && entry.is_some_and(|entry| entry & 1 == 1) {
+        ranges.extend(
+            code.iter()
+                .filter(|segment| segment.perms.execute)
+                .map(|segment| segment.address..segment.address.saturating_add(segment.size)),
+        );
+    }
+    ranges.sort_unstable_by_key(|range| (range.start, range.end));
+    let mut merged: Vec<std::ops::Range<u64>> = Vec::new();
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
 }
 
 /// `LC_MAIN` stores the entry point as a file offset, which `object` passes through unchanged.

@@ -123,7 +123,7 @@ async fn failures_are_tool_errors_the_caller_can_read() {
     let ambiguous = call(&client, "xrefs", json!({ "path": path, "to": "main", "from": "main" })).await;
     assert_eq!(ambiguous.is_error, Some(true));
 
-    let bad_arch = call(&client, "binary_info", json!({ "path": path, "arch": "mips" })).await;
+    let bad_arch = call(&client, "binary_info", json!({ "path": path, "arch": "vax" })).await;
     assert!(text(&bad_arch).contains("unknown architecture"));
 
     client.cancel().await.unwrap();

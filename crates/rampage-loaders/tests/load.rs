@@ -155,10 +155,11 @@ fn i386_macho_lc_main_entry_is_an_address() {
 }
 
 #[test]
-fn universal_binary_skips_unsupported_first_slice() {
+fn universal_binary_prefers_common_slices_over_the_first() {
+    // The PowerPC slice comes first (and is not a valid image); x86 is preferred by default.
     let binary = Binary::open(malformed("ppc_i386.fat")).unwrap();
     assert_eq!(binary.arch, Arch::X86);
-    assert_eq!(binary.slices, [Arch::X86]);
+    assert_eq!(binary.slices, [Arch::PowerPc, Arch::X86]);
 }
 
 #[test]

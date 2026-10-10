@@ -158,6 +158,7 @@ fn explore(
 ) -> Explored {
     let is_other_function = |address: u64| address != start && known.contains(&address);
     let trust_immediates = memory.immediates_may_be_addresses();
+    let delay_slots = decoder.delay_slots();
     let mut blocks: BTreeMap<u64, u64> = BTreeMap::new();
     let mut instructions: BTreeSet<u64> = BTreeSet::new();
     let mut xrefs = Vec::new();
@@ -203,7 +204,23 @@ fn explore(
                 break;
             }
             instructions.insert(address);
-            let Some(next) = address.checked_add(u64::from(insn.len)) else { break };
+            let Some(mut next) = address.checked_add(u64::from(insn.len)) else { break };
+            // MIPS and SPARC execute the instruction after a branch before the branch takes effect: it belongs to
+            // the branch's block, and execution falls through past it.
+            if delay_slots > 0 && !matches!(insn.flow, Flow::Next | Flow::Invalid | Flow::Halt) {
+                for _ in 0..delay_slots {
+                    let Some(bytes) = memory.code_from(next) else { break };
+                    let slot = decoder.decode(bytes, next);
+                    if slot.flow == Flow::Invalid {
+                        break;
+                    }
+                    instructions.insert(next);
+                    for target in slot.data_ref.into_iter().filter(|&target| memory.is_mapped(target)) {
+                        xrefs.push(Xref { to: target, from: next, kind: XrefKind::Data });
+                    }
+                    next = next.saturating_add(u64::from(slot.len));
+                }
+            }
             let immediate = insn.immediate.filter(|_| trust_immediates);
             for target in insn.data_ref.into_iter().chain(immediate).filter(|&target| memory.is_mapped(target)) {
                 xrefs.push(Xref { to: target, from: address, kind: XrefKind::Data });

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use rampage_arch::Arch;
-use rampage_arch::{Flow, UnsupportedArch, decoder_for};
+use rampage_arch::{Flow, UnsupportedArch};
 use rampage_loaders::{Binary, Format, SectionKind, SymbolKind};
 use serde::Serialize;
 
@@ -41,11 +41,10 @@ pub fn from_symbols(binary: &Binary) -> Vec<Function> {
 
 /// Discovers functions by recursive descent from every metadata seed.
 pub fn analyze(binary: &Binary) -> Result<Program, UnsupportedArch> {
-    let arch = binary.arch;
-    decoder_for(arch)?;
+    binary.decoder()?;
     let mut seeds: Vec<u64> = from_symbols(binary).iter().map(|function| function.address).collect();
     seeds.extend(&binary.function_starts);
-    Ok(discover(binary, || decoder_for(arch).expect("architecture checked above"), &seeds))
+    Ok(discover(binary, || binary.decoder().expect("architecture checked above"), &seeds))
 }
 
 /// Sections that hold one small jump-through-a-slot stub per import.
@@ -54,7 +53,7 @@ const STUB_SECTIONS: [&str; 6] = ["__stubs", "__auth_stubs", ".plt", ".plt.sec",
 /// Names the stubs in stub sections (Mach-O `__stubs`, ELF `.plt`) after the import whose slot each one jumps
 /// through. A stub runs from just after the previous one's final jump (skipping NOP padding) to its own.
 pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
-    let Ok(mut decoder) = decoder_for(binary.arch) else { return Vec::new() };
+    let Ok(mut decoder) = binary.decoder() else { return Vec::new() };
     let slot_name = |address: u64| {
         let index = binary.import_slots.binary_search_by_key(&address, |slot| slot.address).ok()?;
         Some(binary.import_slots[index].name.as_str())

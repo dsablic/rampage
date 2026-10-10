@@ -61,9 +61,10 @@ fn strings_panel() {
 #[test]
 #[ignore = "needs Google Chrome installed; measures performance"]
 fn large_binary_frames_stay_fast() {
-    let chrome = PathBuf::from(
-        "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/Current/Google Chrome Framework",
-    );
+    let chrome = PathBuf::from(concat!(
+        "/Applications/Google Chrome.app/Contents/Frameworks/",
+        "Google Chrome Framework.framework/Versions/Current/Google Chrome Framework",
+    ));
     if !chrome.exists() {
         return;
     }
