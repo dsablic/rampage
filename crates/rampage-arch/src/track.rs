@@ -145,9 +145,10 @@ impl Tracker {
         found
     }
 
-    /// Whether `mnemonic` finishes forming a constant (rather than starting one, as `lui` does).
+    /// Whether `mnemonic` finishes forming a constant (rather than starting one, as `lui` does; PowerPC64's
+    /// `addis` adds the high half of a TOC offset).
     fn complete(&self, mnemonic: &str) -> bool {
-        !matches!(mnemonic, "lui" | "c.lui" | "lis" | "sethi" | "auipc")
+        !matches!(mnemonic, "lui" | "c.lui" | "lis" | "addis" | "sethi" | "auipc")
     }
 
     /// The register the instruction sets to a known value, and that value.
