@@ -205,6 +205,9 @@ impl Binary {
             function_starts.extend(starts);
             binary.warnings.extend(warning);
         }
+        let (starts, warning) = starts::eh_frame(&binary);
+        function_starts.extend(starts);
+        binary.warnings.extend(warning);
         function_starts.retain(|&start| binary.is_code(start));
         function_starts.sort_unstable();
         function_starts.dedup();

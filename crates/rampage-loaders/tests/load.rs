@@ -237,3 +237,22 @@ fn import_slots_name_the_pointers_each_format_binds() {
         assert!(binary.warnings.is_empty(), "{name}: {:?}", binary.warnings);
     }
 }
+
+#[test]
+fn eh_frame_supplies_function_starts_for_elf() {
+    for name in ["hello-x64.elf", "hello-x64-dyn.elf", "hello-arm64.elf"] {
+        let binary = Binary::open(fixture(name)).unwrap();
+        assert!(binary.function_starts.len() >= 4, "{name}: {:?}", binary.function_starts);
+        let functions: Vec<u64> = binary
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.kind == rampage_loaders::SymbolKind::Function)
+            .map(|symbol| symbol.address)
+            .collect();
+        for start in &binary.function_starts {
+            assert!(functions.contains(start), "{name}: {start:#x} is not a function symbol");
+        }
+        let main = binary.symbol_by_name("main").unwrap().address;
+        assert!(binary.function_starts.contains(&main), "{name}: main missing");
+    }
+}
