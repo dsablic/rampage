@@ -256,3 +256,18 @@ fn eh_frame_supplies_function_starts_for_elf() {
         assert!(binary.function_starts.contains(&main), "{name}: main missing");
     }
 }
+
+#[test]
+fn hostile_bind_streams_and_image_bases_do_not_hang_or_overflow() {
+    // A bind repeated 2^62 times stops with a warning instead of exhausting memory.
+    let binary = Binary::open(malformed("bindloop.macho")).unwrap();
+    assert!(binary.warnings.iter().any(|warning| warning.contains("bind stream")), "{:?}", binary.warnings);
+    // Binds that wrap the address space or fall outside their segment are dropped.
+    for name in ["bindwrap.macho", "bindfar.macho"] {
+        let binary = Binary::open(malformed(name)).unwrap();
+        assert!(binary.import_slots.is_empty(), "{name}: {:?}", binary.import_slots);
+    }
+    // Import address table entries past the top of the address space are dropped.
+    let binary = Binary::open(malformed("highbase.exe")).unwrap();
+    assert!(binary.import_slots.iter().all(|slot| slot.address >= 0xffff_ffff_fffe_0000));
+}

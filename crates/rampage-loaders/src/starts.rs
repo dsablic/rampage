@@ -160,7 +160,8 @@ fn eh_frame_record(
     let id_position = cursor.position;
     let id = cursor.u32()?;
     if id == 0 {
-        cies.insert(offset, cie_pointer_encoding(&mut Cursor { data: &data[..end], position: cursor.position })?);
+        let mut cie = Cursor { data: &data[..end], position: cursor.position };
+        cies.insert(offset, cie_pointer_encoding(&mut cie, pointer_size)?);
         return Some((end, None));
     }
     let cie = id_position.checked_sub(id as usize)?;
@@ -175,7 +176,7 @@ fn eh_frame_record(
 }
 
 /// Skips a CIE's fields up to its augmentation data and returns the FDE pointer encoding (`R`), if any.
-fn cie_pointer_encoding(cursor: &mut Cursor) -> Option<Option<u8>> {
+fn cie_pointer_encoding(cursor: &mut Cursor, pointer_size: usize) -> Option<Option<u8>> {
     let version = cursor.u8()?;
     let augmentation = cursor.c_string()?;
     if augmentation.contains("eh") {
@@ -189,13 +190,16 @@ fn cie_pointer_encoding(cursor: &mut Cursor) -> Option<Option<u8>> {
         cursor.uleb128()?;
     }
     let Some(flags) = augmentation.strip_prefix('z') else { return Some(None) };
-    cursor.uleb128()?; // augmentation data length
+    // Read the augmentation data on its own, so that a misread entry cannot run into the CIE's instructions.
+    let length = usize::try_from(cursor.uleb128()?).ok()?;
+    let augmentation_data = cursor.take(length)?;
+    let mut cursor = Cursor { data: augmentation_data, position: 0 };
     for flag in flags.chars() {
         match flag {
             'R' => return Some(Some(cursor.u8()?)),
             'P' => {
                 let encoding = cursor.u8()?;
-                cursor.encoded_pointer(encoding, 0, 8)?;
+                cursor.encoded_pointer(encoding, 0, pointer_size)?;
             }
             'L' => {
                 cursor.u8()?;
@@ -316,6 +320,23 @@ mod tests {
             let mut cies = std::collections::HashMap::new();
             let _ = super::eh_frame_record(&data[..len], 0x1000, 0, 8, &mut cies);
         }
+    }
+
+    #[test]
+    fn eh_frame_personality_pointers_use_the_target_pointer_size() {
+        // CIE "zPLR" for i386: an absptr personality is 4 bytes, then L and R (absptr) encodings.
+        let cie: &[u8] = &[
+            0x1b, 0, 0, 0, 0, 0, 0, 0, 1, b'z', b'P', b'L', b'R', 0, 1, 0x7c, 8, 7, 0, 0x10, 0x20, 0x30, 0x40, 0, 0,
+            0x0c, 4, 4, 0x88, 1, 0,
+        ];
+        // FDE: initial location 0x08049000, range 0x10, augmentation length 0.
+        let fde: &[u8] = &[0x10, 0, 0, 0, 0x23, 0, 0, 0, 0x00, 0x90, 0x04, 0x08, 0x10, 0, 0, 0, 0, 0, 0, 0];
+        let data = [cie, fde].concat();
+        let mut cies = std::collections::HashMap::new();
+        let (next, _) = super::eh_frame_record(&data, 0x1000, 0, 4, &mut cies).unwrap();
+        assert_eq!(next, cie.len());
+        let (_, start) = super::eh_frame_record(&data, 0x1000, next, 4, &mut cies).unwrap();
+        assert_eq!(start, Some(0x0804_9000));
     }
 
     #[test]

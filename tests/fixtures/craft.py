@@ -52,3 +52,42 @@ pe = bytearray(open(f'{out}/../bin/hello-x64.exe', 'rb').read())
 optional_header = struct.unpack_from('<I', pe, 0x3c)[0] + 24
 struct.pack_into('<I', pe, optional_header + 112 + 3 * 8 + 4, 0x7ffffff0)
 open(f'{out}/bigpdata.exe', 'wb').write(pe)
+
+# The PE fixture rebased so high that import address table entries would overflow 64 bits.
+pe = bytearray(open(f'{out}/../bin/hello-x64.exe', 'rb').read())
+optional_header = struct.unpack_from('<I', pe, 0x3c)[0] + 24
+struct.pack_into('<Q', pe, optional_header + 24, 0xfffffffffffe0000)
+open(f'{out}/highbase.exe', 'wb').write(pe)
+
+
+def uleb(value):
+    encoded = bytearray()
+    while True:
+        byte = value & 0x7f
+        value >>= 7
+        if value:
+            encoded.append(byte | 0x80)
+        else:
+            encoded.append(byte)
+            return bytes(encoded)
+
+
+def macho_with_binds(binds):
+    """An x86_64 Mach-O with __TEXT and __DATA segments and an LC_DYLD_INFO_ONLY bind stream."""
+    def segment(name, vmaddr, fileoff, filesize):
+        return struct.pack('<II16sQQQQiiII', 0x19, 72, name, vmaddr, 0x1000, fileoff, filesize, 7, 7, 0, 0)
+    commands = segment(b'__TEXT', 0x100000000, 0, 0x1000) + segment(b'__DATA', 0x100001000, 0x1000, 0x1000)
+    commands += struct.pack('<II10I', 0x80000022, 48, 0, 0, 0x1800, len(binds), 0, 0, 0, 0, 0, 0)
+    header = struct.pack('<IiiIIIII', 0xfeedfacf, 0x01000007, 3, 2, 3, len(commands), 0, 0)
+    image = bytearray((header + commands).ljust(0x2000, b'\0'))
+    image[0x800:0x804] = b'\x55\x48\x89\xe5'
+    image[0x1800:0x1800 + len(binds)] = binds
+    return bytes(image)
+
+
+# Bind symbol _x from dylib 1 in segment 1, then: repeat 2^62 times; bind at an offset that wraps the address
+# space; bind past the end of the segment.
+bind_x = b'\x11' + b'\x40_x\0' + b'\x51'
+open(f'{out}/bindloop.macho', 'wb').write(macho_with_binds(bind_x + b'\x71' + uleb(0) + b'\xc0' + uleb(2**62) + uleb(0) + b'\0'))
+open(f'{out}/bindwrap.macho', 'wb').write(macho_with_binds(bind_x + b'\x71' + uleb(0xffffffffffffff00) + b'\x90\0'))
+open(f'{out}/bindfar.macho', 'wb').write(macho_with_binds(bind_x + b'\x71' + uleb(0x5000) + b'\x90\0'))
