@@ -5,7 +5,7 @@ use egui_extras::{Column, TableBuilder};
 use rampage_loaders::Details;
 
 use crate::workspace::{Filter, Workspace, matches};
-use crate::{listing, theme};
+use crate::{graph, listing, theme};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -14,6 +14,7 @@ pub enum Tab {
     Imports,
     Exports,
     Disassembly,
+    Graph,
     Xrefs,
     Triage,
 }
@@ -46,6 +47,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
                 None if workspace.analysis_ready() => format!("Hex - {:#x}", workspace.cursor),
                 _ => "Disassembly".to_owned(),
             },
+            Tab::Graph => "Graph".to_owned(),
             Tab::Xrefs => "Xrefs".to_owned(),
             Tab::Triage => "Triage".to_owned(),
         };
@@ -59,6 +61,10 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Imports => imports(ui, self.workspace),
             Tab::Exports => exports(ui, self.workspace),
             Tab::Disassembly => listing::show(ui, self.workspace),
+            Tab::Graph => {
+                self.workspace.graph_shown_pass = Some(ui.ctx().cumulative_pass_nr());
+                graph::show(ui, self.workspace);
+            }
             Tab::Xrefs => xrefs(ui, self.workspace),
             Tab::Triage => triage(ui, self.workspace),
         }

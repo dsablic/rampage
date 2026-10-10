@@ -121,3 +121,28 @@ fn rename_dialog_and_user_comments() {
     harness.snapshot("annotations");
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+#[test]
+fn function_graph() {
+    let mut harness = harness(App::blocking());
+    harness.run();
+    let ctx = harness.ctx.clone();
+    let app = harness.state_mut();
+    app.open(&ctx, fixture("hello-x64.elf"), None);
+    let workspace = app.workspace_mut().unwrap();
+    // A function with a few branches.
+    let function = workspace
+        .functions
+        .ready()
+        .unwrap()
+        .iter()
+        .filter(|function| (6..=10).contains(&function.blocks))
+        .min_by_key(|function| function.size)
+        .map(|function| function.address)
+        .unwrap();
+    workspace.goto(function);
+    app.focus_tab(rampage_ui::Tab::Graph);
+    harness.run();
+    harness.run();
+    harness.snapshot("graph");
+}

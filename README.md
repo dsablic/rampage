@@ -69,11 +69,11 @@ cargo run --release -p rampage-ui -- <file> [--arch aarch64]
 ```
 
 An egui app over the same API: docked functions, strings, imports and exports lists, a disassembly listing with
-clickable references (or a hex view for data), cross-references, triage, and a navigation band across the image.
-Keys: G go to, Esc or Alt+Left back, Alt+Right forward, N rename, `;` comment, Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z
-redo. Drop a file on the window to open it. Analysis runs in the background; on Chrome's framework (190,000
-functions, 930,000 strings) frames take a few milliseconds. `cargo test -p rampage-ui` renders the UI offscreen into
-`crates/rampage-ui/tests/snapshots`.
+clickable references (or a hex view for data), a control-flow graph view, cross-references, triage, and a navigation
+band across the image. Keys: Space listing/graph, G go to, Esc or Alt+Left back, Alt+Right forward, N rename, `;`
+comment, Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo. Drop a file on the window to open it. Analysis runs in the
+background; on Chrome's framework (190,000 functions, 930,000 strings) frames take a few milliseconds. `cargo test
+-p rampage-ui` renders the UI offscreen into `crates/rampage-ui/tests/snapshots`.
 
 ## Using it from an AI agent
 

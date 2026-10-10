@@ -1,6 +1,7 @@
 //! The rampage desktop UI: an egui front end over the same API the CLI and MCP server use.
 
 mod band;
+mod graph;
 mod listing;
 mod tabs;
 pub mod theme;
@@ -29,7 +30,7 @@ pub struct App {
 }
 
 fn default_layout() -> DockState<Tab> {
-    let mut dock = DockState::new(vec![Tab::Disassembly, Tab::Triage]);
+    let mut dock = DockState::new(vec![Tab::Disassembly, Tab::Graph, Tab::Triage]);
     let surface = dock.main_surface_mut();
     let [center, _] =
         surface.split_left(NodeIndex::root(), 0.20, vec![Tab::Functions, Tab::Strings, Tab::Imports, Tab::Exports]);
@@ -110,11 +111,29 @@ impl App {
         }
         self.shortcuts(ui.ctx());
         if self.workspace.as_ref().is_some_and(|workspace| workspace.show_listing) {
-            self.focus_tab(Tab::Disassembly);
+            let code_view = if self.graph_in_use(ui.ctx()) { Tab::Graph } else { Tab::Disassembly };
+            self.focus_tab(code_view);
         }
     }
 
+    /// Whether the graph was on screen in this pass or the last, so navigation should stay in it.
+    fn graph_in_use(&self, ctx: &egui::Context) -> bool {
+        let pass = ctx.cumulative_pass_nr();
+        self.workspace
+            .as_ref()
+            .and_then(|workspace| workspace.graph_shown_pass)
+            .is_some_and(|shown| pass.saturating_sub(shown) <= 1)
+    }
+
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        // Space switches between the listing and the graph, as in IDA.
+        let toggle = !ctx.egui_wants_keyboard_input()
+            && self.workspace.as_ref().is_some_and(|workspace| workspace.editing.is_none())
+            && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Space));
+        if toggle {
+            let view = if self.graph_in_use(ctx) { Tab::Disassembly } else { Tab::Graph };
+            self.focus_tab(view);
+        }
         let typing = std::mem::replace(&mut self.typing, ctx.egui_wants_keyboard_input());
         let Some(workspace) = &mut self.workspace else { return };
         if typing || self.typing || workspace.editing.is_some() {

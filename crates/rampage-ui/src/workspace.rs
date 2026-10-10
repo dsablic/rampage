@@ -166,6 +166,11 @@ pub struct Workspace {
     /// A problem for the status bar: an undo that could not apply, or other clients' edits that cannot be read.
     pub notice: Option<String>,
     pub band: crate::band::Cache,
+    /// The graph of the listing's function, keyed by its address.
+    pub graph: Option<(u64, Result<crate::graph::Layout, String>)>,
+    pub graph_zoom: f32,
+    /// The UI pass in which the graph was last shown, to keep navigation in the graph while it is in use.
+    pub graph_shown_pass: Option<u64>,
     annotations_checked: Instant,
 }
 
@@ -210,6 +215,9 @@ impl Workspace {
             edit_error: None,
             notice: None,
             band: crate::band::Cache::default(),
+            graph: None,
+            graph_zoom: 1.0,
+            graph_shown_pass: None,
             annotations_checked: Instant::now(),
         };
         let project = Arc::clone(&workspace.project);
@@ -259,6 +267,16 @@ impl Workspace {
 
     pub fn analysis_ready(&self) -> bool {
         self.functions.ready().is_some()
+    }
+
+    /// Lays out the graph of the listing's function, once per function.
+    pub fn want_graph(&mut self) {
+        let Some(address) = self.listing_address().filter(|_| self.analysis_ready()) else { return };
+        if self.graph.as_ref().is_some_and(|(cached, _)| *cached == address) {
+            return;
+        }
+        let layout = self.project.function_graph(address).map(crate::graph::layout).map_err(text);
+        self.graph = Some((address, layout));
     }
 
     /// The listing's function, when one is shown.
@@ -337,6 +355,7 @@ impl Workspace {
             self.function_filter.invalidate();
         }
         self.listing = None;
+        self.graph = None;
         self.refresh_cursor_views();
     }
 
