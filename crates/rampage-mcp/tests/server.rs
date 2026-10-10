@@ -90,6 +90,15 @@ async fn pages_are_capped() {
 }
 
 #[tokio::test]
+async fn arm64_functions_are_listed() {
+    let client = connect().await;
+    let arm = call(&client, "list_functions", json!({ "path": fixture("hello-arm64.macho") })).await;
+    assert_eq!(arm.is_error, Some(false));
+    assert!(text(&arm).contains("\"_main\""), "{}", text(&arm));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn failures_are_tool_errors_the_caller_can_read() {
     let client = connect().await;
     let missing = call(&client, "binary_info", json!({ "path": "/nonexistent/binary" })).await;
@@ -103,7 +112,5 @@ async fn failures_are_tool_errors_the_caller_can_read() {
     let bad_arch = call(&client, "binary_info", json!({ "path": path, "arch": "mips" })).await;
     assert!(text(&bad_arch).contains("unknown architecture"));
 
-    let arm = call(&client, "list_functions", json!({ "path": fixture("hello-arm64.macho") })).await;
-    assert!(text(&arm).contains("unsupported architecture: aarch64"), "{}", text(&arm));
     client.cancel().await.unwrap();
 }
