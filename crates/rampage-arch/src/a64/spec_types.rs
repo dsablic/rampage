@@ -59,9 +59,10 @@ pub enum Node {
     Leaf { first: u32, count: u16 },
 }
 
+/// System instruction kinds named in the specification's register data. Operations that take no named operand
+/// (APAS, GCS*, TRCIT) never appear in the generated table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SysKind {
-    Apas,
     At,
     Brb,
     Cfp,
@@ -69,13 +70,6 @@ pub enum SysKind {
     Cpp,
     Dc,
     Dvp,
-    Gcspopcx,
-    Gcspopm,
-    Gcspopx,
-    Gcspushm,
-    Gcspushx,
-    Gcsss1,
-    Gcsss2,
     Gic,
     Gicr,
     Gsb,
@@ -83,7 +77,6 @@ pub enum SysKind {
     Plbi,
     Tlbi,
     Tlbip,
-    Trcit,
 }
 
 // Short constructors that keep the generated tables compact.

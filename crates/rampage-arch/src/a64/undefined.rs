@@ -29,16 +29,14 @@ static RULES: LazyLock<Vec<Rule>> =
     LazyLock::new(|| ENCODINGS.iter().map(|encoding| rule_for(encoding.name)).collect());
 
 fn rule_for(name: &str) -> Rule {
-    let group = name.splitn(2, '_').nth(1).unwrap_or("");
+    let group = name.split_once('_').map_or("", |(_, group)| group);
     if group.ends_with("CPY_memcms") {
         Rule::MemoryCopy
     } else if group.ends_with("SET_memcms") || group.ends_with("memset_go") {
         Rule::MemorySet
     } else if group.contains("comswappr") {
         Rule::EvenPairs
-    } else if group == "32M_bitfield" {
-        Rule::Width32 { field: "imms" }
-    } else if group == "32_extract" {
+    } else if group == "32M_bitfield" || group == "32_extract" {
         Rule::Width32 { field: "imms" }
     } else if group == "32_log_shift" {
         Rule::Width32 { field: "imm6" }

@@ -60,9 +60,7 @@ impl Context<'_> {
     /// The mnemonic of the displayed syntax, uppercase as the specification writes it.
     fn mnemonic(&self) -> &'static str {
         match self.decoded.syntax.tokens.first() {
-            Some(super::spec_types::Token::Text(text)) => {
-                text.split(|c: char| c == ' ' || c == '{').next().unwrap_or("")
-            }
+            Some(super::spec_types::Token::Text(text)) => text.split([' ', '{']).next().unwrap_or(""),
             _ => "",
         }
     }
@@ -263,7 +261,7 @@ fn special(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
         }
         "dc_op" | "ic_op" | "at_op" | "tlbi_op" | "brb_op" | "gsb_op" | "gic_op" | "plbi_op" | "gicr_op"
         | "tlbip_op" => system_operation_name(context),
-        "shift" => shift(context, operand, value, width),
+        "shift" => shift(context, operand, value),
         "amount" => amount(context, operand, value),
         "extend" => extend(context, value),
         "lsb" => bitfield_lsb(context, value),
@@ -420,7 +418,7 @@ fn system_operation_name(context: &Context) -> Value {
     }
 }
 
-fn shift(context: &Context, operand: &Operand, value: u64, width: u32) -> Value {
+fn shift(context: &Context, operand: &Operand, value: u64) -> Value {
     let fields = context.field_names(operand);
     let register_width = if context.field("sf") == Some(1) { 64 } else { 32 };
     match fields.as_slice() {
