@@ -2117,8 +2117,8 @@ b4000208	cbz x8, #64
 04f2918b	asr z11.d, z12.d, #14
 04339fdc	lsl z28.h, z30.h, #3
 047296e4	lsr z4.s, z23.s, #14
-042da1d7	adr z23.d, [z14.d, z13.d, sxtw]
-046ea36d	adr z13.d, [z27.d, z14.d, uxtw]
+0437ab77	adr z23.d, [z27.d, z23.d, sxtw #2]
+0464ac3d	adr z29.d, [z1.d, z4.d, uxtw #3]
 04efa928	adr z8.d, [z9.d, z15.d, lsl #2]
 04bfb1ed	ftssel z13.s, z15.s, z31.s
 04a0b836	fexpa z22.s, z1.s
@@ -2203,8 +2203,13 @@ b4000208	cbz x8, #64
 04beff69	uqdecw x9, #27, mul #15
 04fbf611	uqincd x17, #16, mul #12
 04f9fe3c	uqdecd x28, #17, mul #10
+0501ac8b	orr z11.h, z11.h, #0xf800
+054139da	eor z26.s, z26.s, #0xfe0000ff
+0580d2fd	and z29.s, z29.s, #0x3fffffc0
+05c0564c	dupm z12.b, #0xc1
 05dc3c0c	mov z12.d, p12/z, #-8192
 05d179c1	mov z1.d, p1/m, #-12800
+055bc728	fmov z8.h, p11/m, #25.00000000
 05230571	ext z17.b, z17.b, z11.b, #25
 057e1ae1	ext z1.b, { z23.b, z24.b }, #246
 05ab01e2	zip1 z2.q, z15.q, z11.q
@@ -2213,7 +2218,8 @@ b4000208	cbz x8, #64
 05a204ae	zip2 z14.q, z5.q, z2.q
 05be0d80	uzp2 z0.q, z12.q, z30.q
 05a71f71	trn2 z17.q, z27.q, z7.q
-0528202e	mov z14.d, d1
+05a622c3	mov z3.h, z22.h[17]
+0539268e	dupq z14.b, z20.b[12]
 05602408	extq z8.b, z8.b, z0.b, #0
 052828cb	tbl z11.b, { z6.b, z7.b }, z8.b
 05ff2f5d	tbx z29.d, z26.d, z31.d
@@ -2338,6 +2344,7 @@ b4000208	cbz x8, #64
 2518f18f	rdffr p15.b, p12/z
 2558f08f	rdffrs p15.b, p4/z
 2519f007	rdffr p7.b
+25397dcd	psel p13, p15, p14.h[w13, 1]
 253342d3	whilege pn11.b, x22, x19, vlx2
 25264b73	whilehs pn11.b, x27, x6, vlx2
 25ad431a	whilegt pn10.s, x24, x13, vlx2
@@ -2404,6 +2411,7 @@ b4000208	cbz x8, #64
 25ebc4da	umin z26.d, z26.d, #38
 25f0c8ad	mul z13.d, z13.d, #69
 25f8dc0c	mov z12.d, #-32
+2579ce50	fmov z16.h, #1.12500000
 44df0133	sdot z19.d, z9.h, z31.h
 44580133	sdot z19.h, z9.b, z24.b
 448904b7	udot z23.s, z5.b, z9.b
@@ -2596,8 +2604,8 @@ b4000208	cbz x8, #64
 451e9a3d	smmla z29.s, z17.b, z30.b
 45889b1f	usmmla z31.s, z24.b, z8.b
 45d299e7	ummla z7.s, z15.b, z18.b
-4508a35a	sshllb z26.h, z26.b, #0
-450fa63c	sshllt z28.h, z17.b, #7
+455ba332	sshllb z18.d, z25.s, #27
+451da4c1	sshllt z1.s, z6.h, #13
 450da89e	ushllb z30.h, z4.b, #5
 4509af67	ushllt z7.h, z27.b, #1
 45c4b07b	bext z27.d, z3.d, z4.d
@@ -2707,10 +2715,10 @@ b4000208	cbz x8, #64
 645690cd	fmaxp z13.h, p4/m, z13.h, z6.h
 64d7852e	fminp z14.d, p1/m, z14.d, z9.d
 6450b877	faddqv v23.8h, p6, z3.h
-6454ae8c	fmaxnmqv v12.8h, p3, z20.h
-6455b6a1	fminnmqv v1.8h, p5, z21.h
+6494b624	fmaxnmqv v4.4s, p5, z17.s
+6495b355	fminnmqv v21.4s, p4, z26.s
 6456b1b2	fmaxqv v18.8h, p4, z13.h
-6457a1d9	fminqv v25.8h, p0, z14.h
+64d7b26e	fminqv v14.2d, p4, z19.d
 64d8b5c5	frintp z5.d, p5/z, z14.d
 64d8da80	frintm z0.d, p6/z, z20.d
 64d8e468	frintz z8.d, p1/z, z3.d
@@ -4192,6 +4200,7 @@ d4488700	hlt #0x4438
 d4b76d01	dcps1 #0xbb68
 d4b5e702	dcps2 #0xaf38
 d4bc2fe3	dcps3 #0xe17f
+d4e20de0	tenter #111, nb
 d5031019	wfet x25
 d5031030	wfit x16
 d503203f	yield
@@ -6010,12 +6019,12 @@ da9c66ff	csneg xzr, x23, x28, vs
 6f889345	fmulx v5.4s, v26.4s, v8.s[0]
 2f9982fb	fmlal2 v27.2s, v23.2h, v9.h[1]
 6fadc240	fmlsl2 v0.4s, v18.4h, v13.h[2]
-0fc00350	fmlalb v16.8h, v26.16b, v0.b[0]
-2f078260	fmlallbb v0.4s, v19.16b, v7.b[0]
-2f4383f4	fmlallbt v20.4s, v31.16b, v3.b[0]
-4fc400bc	fmlalt v28.8h, v5.16b, v4.b[0]
-6f0583f2	fmlalltb v18.4s, v31.16b, v5.b[0]
-6f428039	fmlalltt v25.4s, v1.16b, v2.b[0]
+0fd90876	fmlalb v22.8h, v3.16b, v1.b[11]
+2f2c824e	fmlallbb v14.4s, v18.16b, v4.b[5]
+2f4189d6	fmlallbt v22.4s, v14.16b, v1.b[8]
+4ffc0ab2	fmlalt v18.8h, v21.16b, v4.b[15]
+6f3888d8	fmlalltb v24.4s, v6.16b, v0.b[15]
+6f668b62	fmlalltt v2.4s, v27.16b, v6.b[12]
 ce4bb052	sm3tt1a v18.4s, v2.4s, v11.s[3]
 ce57b5b3	sm3tt1b v19.4s, v13.4s, v23.s[3]
 ce5ab8cf	sm3tt2a v15.4s, v6.4s, v26.s[3]
@@ -6446,6 +6455,15 @@ ffffff84
 04239e44	
 04229c15	
 042394ba	
+05019ef0	
+054125f3	
+054176f3	
+05411ff7	
+054015f5	
+0543d7e1	
+058106f2	
+05c0ff78	
+05c1f5e0	
 05202271	
 05302515	
 052591d5	
@@ -6584,17 +6602,8 @@ ffffff84
 45204feb	
 45204d90	
 45204d2e	
-453e6149	
-452e61c6	
-45256375	
-45316389	
-45326252	
-45336abd	
-45376b6e	
-452669e7	
-452a69c8	
-452268da	
-45206921	
-452c7242	
-452b70da	
-453472e2	
+4529d4db	
+456dc712	
+457bc077	
+4576dcb9	
+4567ccb3	

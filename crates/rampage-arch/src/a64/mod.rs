@@ -216,6 +216,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_encoding_formats_without_panicking() {
+        // Random words rarely land on a given encoding, so fill each encoding's free bits instead. Debug builds
+        // trap arithmetic overflow in the operand code.
+        let mut state = 11u64;
+        for encoding in &spec::ENCODINGS {
+            for _ in 0..64 {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let word = ((state >> 32) as u32 & !encoding.mask) | encoding.value;
+                let _ = format_word(word, 0x1000, LabelStyle::Absolute);
+            }
+        }
+    }
+
     fn decode(disassembler: &mut A64Disassembler, word: u32, address: u64) -> Insn {
         disassembler.decode(&word.to_le_bytes(), address)
     }

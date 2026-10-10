@@ -493,7 +493,7 @@ fn amount(context: &Context, operand: &Operand, value: u64) -> Value {
             if is_literal(operand.choices) && valid.len() == operand.choices.len() + 1 {
                 return match valid.iter().position(|&v| v == value) {
                     Some(0) | None => Value::Default(String::new()),
-                    Some(rank) => Value::Text(operand.choices[rank - 1].trim().to_ascii_lowercase()),
+                    Some(rank) => Value::Text(operand.choices[rank - 1].to_ascii_lowercase()),
                 };
             }
             Value::Text(value.to_string())
@@ -595,11 +595,23 @@ fn element_index(context: &Context, operand: &Operand, value: u64) -> Value {
             bytes >> 2
         }
     } else if has("H") && has("Rm") && !context.is_sve() {
-        // FP8 by-element forms list Rm among the index fields; the index is H:L:M.
+        // FP8 by-element forms: the index is H:L:M:Rm<3>, and Rm<2:0> names the register.
         let h = context.field("H").unwrap_or(0);
-        (h << 2) | (context.field("L").unwrap_or(0) << 1) | context.field("M").unwrap_or(0)
+        let hlm = (h << 2) | (context.field("L").unwrap_or(0) << 1) | context.field("M").unwrap_or(0);
+        (hlm << 1) | (context.field("Rm").unwrap_or(0) >> 3)
     } else if fields == ["Q"] && !context.is_sve() {
         value
+    } else if fields.iter().any(|field| field.starts_with("tsz")) {
+        // The bits above the lowest set bit of tsz.
+        let tsz_width: u32 = operand
+            .fields
+            .iter()
+            .map(|&i| &context.decoded.encoding.fields[i as usize])
+            .filter(|field| field.name.starts_with("tsz"))
+            .map(|field| field.width as u32)
+            .sum();
+        let tsz = value & ((1 << tsz_width) - 1);
+        value >> (tsz.trailing_zeros() + 1).min(63)
     } else if has("imm4") && has("Q") {
         // EXT: Q only restricts the byte index.
         context.field("imm4").unwrap_or(0)
@@ -668,6 +680,7 @@ fn register(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
             }
         }
         "B" | "H" | "S" | "D" | "Q" => format!("{}{number}", base.to_ascii_lowercase()),
+        "V" if fields == ["Rm"] && fp8_by_element(context) => format!("v{}", value & 7),
         "V" => {
             if fields.contains(&"M") && fields.contains(&"Rm") {
                 // By-element forms: Rm is 4 bits wide for 16-bit elements (M joins the index), except in FCMLA.
@@ -749,6 +762,22 @@ fn arrangement(context: &Context, operand: &Operand, name: &str) -> Option<Value
     let fields = context.field_names(operand);
     let (value, width) = context.raw(operand);
     let has = |name| fields.contains(&name);
+    if let Some(value) = parallel_choice(context, operand, name) {
+        return Some(value);
+    }
+    if fields.iter().all(|field| field.starts_with("tsz")) && !fields.is_empty() && indexed_by_tsz(context, operand) {
+        // DUP (indexed), DUPQ and PSEL: the lowest set bit of tsz gives the element size, the bits above it
+        // the index.
+        if value == 0 {
+            return Some(Value::Invalid);
+        }
+        let letters = ["b", "h", "s", "d", "q"];
+        return Some(Value::Text(letters[(value.trailing_zeros() as usize).min(4)].to_owned()));
+    }
+    if fields == ["imm13"] {
+        let Some(element) = sve_logical_element(value) else { return Some(Value::Invalid) };
+        return Some(Value::Text(["b", "h", "s", "d"][element.trailing_zeros() as usize - 3].to_owned()));
+    }
     if fields.is_empty() && name == "V" {
         // FP16 across-lanes forms fix the element size: take it from the <T> arrangement.
         let arrangement_operand = context.decoded.syntax.operands.iter().find(|other| other.name == "<T>")?;
@@ -852,13 +881,16 @@ fn immediate(context: &Context, operand: &Operand, name: &str) -> Option<Value> 
             signed_for_width(if inverted { !shifted & mask } else { shifted & mask }, register_width)
         }
         "imm" if context.encoding_name().starts_with("MSR_SI") => pstate_immediate(context).to_string(),
+        "imm" if fields.len() > 1 && fields.iter().any(|field| field.starts_with("tsz")) && !has("imm3") => {
+            return Some(element_index(context, operand, value));
+        }
         "imm" if context.mnemonic() == "CLREX" && value == 15 => return Some(Value::Default("15".to_owned())),
         "imm" | "simm" | "uimm6" if memory_tagging(context) => {
             // MTE offsets and tag-granule adjustments count 16-byte granules.
             let granules = if name == "uimm6" { value as i64 } else { sign_extend(value, width) };
             return Some(default_if_zero(granules * 16));
         }
-        "imm" if context.encoding_name().ends_with("_exception") => {
+        "imm" if context.encoding_name().ends_with("_exception") && !context.encoding_name().starts_with("TENTER") => {
             if value == 0 {
                 "0".to_owned()
             } else {
@@ -969,7 +1001,18 @@ fn sve_pattern(operand: &Operand, value: u64) -> Value {
 /// SVE immediates encoded with the element size, such as shift amounts in `tszh:tszl:imm3`.
 fn sve_constant(context: &Context, operand: &Operand, value: u64, width: u32) -> Value {
     let fields = context.field_names(operand);
-    if fields.first().is_some_and(|f| f.starts_with("tsz")) {
+    if fields == ["imm13"] {
+        let Some(element) = sve_logical_element(value) else { return Value::Invalid };
+        let (n, immr, imms) = (value >> 12, (value >> 6) & 0x3f, value & 0x3f);
+        return match decode_bit_masks(n, imms, immr, true, element as u32) {
+            Some(mask) => Value::Text(format!("{mask:#x}")),
+            None => Value::Invalid,
+        };
+    }
+    if fields == ["imm8"] && matches!(context.mnemonic(), "FDUP" | "FMOV") {
+        return Value::Text(fp_immediate(value));
+    }
+    if fields.first().is_some_and(|f| f.starts_with("tsz")) && fields.last() == Some(&"imm3") {
         let tsize_width = width - 3;
         let tsize = value >> 3;
         if tsize == 0 {
@@ -984,7 +1027,7 @@ fn sve_constant(context: &Context, operand: &Operand, value: u64, width: u32) ->
     if let Some(text) = ranked_choice(context, operand) {
         return Value::Text(text);
     }
-    if right_shift(context.mnemonic()) && fields.len() == 1 && fields[0].starts_with("imm") {
+    if right_shift(context.mnemonic()) && fields.last().is_some_and(|field| field.starts_with("imm")) {
         // Narrowing right shifts by an amount up to the element size, encoded as size - amount.
         return Value::Text(((1u64 << width) - value).to_string());
     }
@@ -1079,4 +1122,43 @@ fn pstate_immediate(context: &Context) -> u64 {
 fn memory_tagging(context: &Context) -> bool {
     let name = context.encoding_name();
     name.contains("ldsttags") || name.contains("immtags") || name.starts_with("STGP")
+}
+
+/// `<Tb>` and `<Ta>` that share `<T>`'s fields and have as many spellings correspond to it one to one: the
+/// specification lists the pairs in the same order (SVE widening, narrowing and multi-vector forms).
+fn parallel_choice(context: &Context, operand: &Operand, name: &str) -> Option<Value> {
+    if !matches!(name, "Tb" | "Ta") || !is_literal(operand.choices) {
+        return None;
+    }
+    let primary = context.decoded.syntax.operands.iter().find(|other| other.name == "<T>")?;
+    if primary.fields != operand.fields || primary.choices.len() != operand.choices.len() {
+        return None;
+    }
+    let Value::Text(text) = arrangement(context, primary, "T")? else { return Some(Value::Invalid) };
+    let index = primary.choices.iter().position(|choice| choice.eq_ignore_ascii_case(&text))?;
+    Some(Value::Text(operand.choices[index].to_ascii_lowercase()))
+}
+
+/// Whether another operand indexes elements with bits above `tsz` (DUP, DUPQ and PSEL by index).
+fn indexed_by_tsz(context: &Context, operand: &Operand) -> bool {
+    context.decoded.syntax.operands.iter().any(|other| {
+        matches!(other.name, "<imm>" | "<index>")
+            && other.fields.len() > operand.fields.len()
+            && operand.fields.iter().all(|field| other.fields.contains(field))
+    })
+}
+
+/// The element size in bits of an SVE logical immediate `N:immr:imms`, or `None` when reserved.
+fn sve_logical_element(imm13: u64) -> Option<u64> {
+    let combined = ((imm13 >> 12) << 6) | (!imm13 & 0x3f);
+    let length = 63u32.checked_sub(combined.leading_zeros())?;
+    (length >= 3).then(|| 1u64 << length)
+}
+
+/// FP8 by-element forms, whose index takes the top bit of Rm.
+fn fp8_by_element(context: &Context) -> bool {
+    context.decoded.syntax.operands.iter().any(|operand| {
+        operand.name == "<index>"
+            && operand.fields.iter().any(|&i| context.decoded.encoding.fields[i as usize].name == "Rm")
+    })
 }
