@@ -271,3 +271,38 @@ fn hostile_bind_streams_and_image_bases_do_not_hang_or_overflow() {
     let binary = Binary::open(malformed("highbase.exe")).unwrap();
     assert!(binary.import_slots.iter().all(|slot| slot.address >= 0xffff_ffff_fffe_0000));
 }
+
+#[test]
+fn details_describe_each_format() {
+    let pe = Binary::open(fixture("hello-x64.exe")).unwrap();
+    let rampage_loaders::Details::Pe(details) = &pe.details else { panic!("{:?}", pe.details) };
+    assert_eq!(details.subsystem, "windows_cui");
+    assert!(details.characteristics.contains(&"aslr") && details.characteristics.contains(&"dep"));
+    assert!(!details.signed);
+
+    let elf = Binary::open(fixture("hello-x64-dyn.elf")).unwrap();
+    let rampage_loaders::Details::Elf(details) = &elf.details else { panic!("{:?}", elf.details) };
+    assert_eq!(details.interpreter.as_deref(), Some("/lib64/ld-linux-x86-64.so.2"));
+    assert_eq!(details.needed, ["libc.so.6"]);
+    assert!(details.nx);
+
+    let macho = Binary::open(fixture("hello-arm64.macho")).unwrap();
+    let rampage_loaders::Details::MachO(details) = &macho.details else { panic!("{:?}", macho.details) };
+    assert_eq!(details.file_type, "execute");
+    assert!(details.flags.contains(&"pie"));
+    assert_eq!(details.dylibs, ["/usr/lib/libSystem.B.dylib"]);
+    assert_eq!(details.platform.as_deref(), Some("macos"));
+    assert!(details.code_signature && details.uuid.is_some());
+}
+
+#[test]
+fn appended_data_is_an_overlay_and_padding_is_not() {
+    for (name, original) in [("overlay.exe", "hello-x64.exe"), ("overlay.elf", "hello-x64-dyn.elf")] {
+        let clean = Binary::open(fixture(original)).unwrap();
+        assert_eq!(clean.overlay, None, "{original}");
+        let binary = Binary::open(malformed(name)).unwrap();
+        let overlay = binary.overlay.unwrap_or_else(|| panic!("{name}: no overlay"));
+        assert_eq!(overlay.size, 512, "{name}");
+        assert_eq!(&binary.image_bytes()[overlay.offset as usize..][..8], b"PAYLOAD!");
+    }
+}

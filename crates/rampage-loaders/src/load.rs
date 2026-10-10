@@ -8,6 +8,7 @@ use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol, SegmentFlags};
 use rampage_arch::Arch;
 use serde::Serialize;
 
+use crate::details::{Details, Overlay};
 use crate::model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
 use crate::starts;
 
@@ -43,6 +44,10 @@ pub struct Binary {
     pub slices: Vec<Arch>,
     /// Problems with optional metadata that did not prevent loading.
     pub warnings: Vec<String>,
+    /// Format-specific header facts (build metadata, linked libraries, hardening).
+    pub details: Details,
+    /// Data appended past everything the image's structures describe.
+    pub overlay: Option<Overlay>,
     #[serde(skip)]
     code_ranges: Vec<Range<u64>>,
     #[serde(skip)]
@@ -180,6 +185,8 @@ impl Binary {
         let exception_directory = starts::pe_exception_directory(&parsed);
         let image_base = parsed.relative_address_base();
         let import_slots = crate::slots::collect(&parsed, &data[image.clone()], &mut warnings);
+        let details = crate::details::collect(&parsed);
+        let overlay = crate::details::overlay(&parsed, &data[image.clone()]);
         drop(parsed);
 
         let mut binary = Self {
@@ -195,6 +202,8 @@ impl Binary {
             function_starts: Vec::new(),
             slices,
             warnings,
+            details,
+            overlay,
             code_ranges: Vec::new(),
             data,
             image,
@@ -213,6 +222,16 @@ impl Binary {
         function_starts.dedup();
         binary.function_starts = function_starts;
         Ok(binary)
+    }
+
+    /// The bytes of this image: the whole file, or one slice of a universal binary.
+    pub fn image_bytes(&self) -> &[u8] {
+        &self.data[self.image.clone()]
+    }
+
+    /// The whole file, including other slices of a universal binary.
+    pub fn file_bytes(&self) -> &[u8] {
+        &self.data
     }
 
     pub fn segment_containing(&self, address: u64) -> Option<&Segment> {

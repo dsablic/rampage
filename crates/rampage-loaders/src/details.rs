@@ -1,0 +1,412 @@
+//! Format-specific header facts that triage cares about: build metadata, linked libraries, hardening flags, and
+//! data appended past the end of the image (an overlay).
+
+use object::read::elf::{ElfFile, FileHeader, ProgramHeader};
+use object::read::macho::{LoadCommandVariant, MachHeader};
+use object::read::pe::{ImageNtHeaders, ImageOptionalHeader, PeFile};
+use object::{LittleEndian as LE, Object, ObjectSection, ReadRef};
+use serde::Serialize;
+
+use crate::starts::macho_load_commands;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "format", rename_all = "lowercase")]
+pub enum Details {
+    Pe(PeDetails),
+    Elf(ElfDetails),
+    #[serde(rename = "macho")]
+    MachO(MachODetails),
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeDetails {
+    /// Link time from the COFF header, seconds since 1970 (often a hash in reproducible builds).
+    pub timestamp: u32,
+    pub timestamp_utc: String,
+    pub subsystem: String,
+    pub linker_version: String,
+    pub checksum: u32,
+    /// Mitigations from DllCharacteristics: aslr, high_entropy_va, dep, cfg, force_integrity, no_seh, ...
+    pub characteristics: Vec<&'static str>,
+    /// Whether the image carries an Authenticode signature (a certificate table).
+    pub signed: bool,
+    /// Rich header entries: the Microsoft tools that built the image.
+    pub rich: Vec<RichEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RichEntry {
+    pub product: u16,
+    pub build: u16,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElfDetails {
+    /// executable, shared, relocatable or core.
+    pub kind: &'static str,
+    pub interpreter: Option<String>,
+    pub needed: Vec<String>,
+    pub soname: Option<String>,
+    pub pie: bool,
+    /// Non-executable stack (PT_GNU_STACK without PF_X).
+    pub nx: bool,
+    /// none, partial (PT_GNU_RELRO) or full (also BIND_NOW).
+    pub relro: &'static str,
+    pub build_id: Option<String>,
+    /// No `.symtab`.
+    pub stripped: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MachODetails {
+    pub file_type: String,
+    pub flags: Vec<&'static str>,
+    pub dylibs: Vec<String>,
+    pub rpaths: Vec<String>,
+    pub platform: Option<String>,
+    pub min_os: Option<String>,
+    pub sdk: Option<String>,
+    pub uuid: Option<String>,
+    pub code_signature: bool,
+    /// LC_ENCRYPTION_INFO with a nonzero cryptid (App Store encryption).
+    pub encrypted: bool,
+}
+
+/// Bytes past the last byte the image's headers, segments and sections account for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Overlay {
+    pub offset: u64,
+    pub size: u64,
+}
+
+pub(crate) fn collect(parsed: &object::File) -> Details {
+    match parsed {
+        object::File::Pe32(file) => Details::Pe(pe(file)),
+        object::File::Pe64(file) => Details::Pe(pe(file)),
+        object::File::Elf32(file) => Details::Elf(elf(file)),
+        object::File::Elf64(file) => Details::Elf(elf(file)),
+        object::File::MachO32(_) | object::File::MachO64(_) => Details::MachO(macho(parsed)),
+        _ => Details::None,
+    }
+}
+
+/// The overlay of `image`: data following everything its structures describe. Zero padding does not count.
+pub(crate) fn overlay(parsed: &object::File, image: &[u8]) -> Option<Overlay> {
+    let len = image.len() as u64;
+    let mut end =
+        parsed.segments().map(|s| object::ObjectSegment::file_range(&s)).map(|(o, s)| o.saturating_add(s)).max()?;
+    for section in parsed.sections() {
+        if let Some((offset, size)) = section.file_range() {
+            end = end.max(offset.saturating_add(size));
+        }
+    }
+    match parsed {
+        object::File::Elf32(file) => end = end.max(elf_section_headers_end(file)),
+        object::File::Elf64(file) => end = end.max(elf_section_headers_end(file)),
+        // The certificate table follows the image by design; it is reported as `signed`, not as an overlay.
+        object::File::Pe32(file) => end = end.max(pe_certificate_end(file)).max(pe_raw_data_end(file)),
+        object::File::Pe64(file) => end = end.max(pe_certificate_end(file)).max(pe_raw_data_end(file)),
+        _ => {}
+    }
+    let tail = image.get(usize::try_from(end).ok()?..)?;
+    tail.iter().any(|&byte| byte != 0).then(|| Overlay { offset: end, size: len - end })
+}
+
+fn elf_section_headers_end<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> u64 {
+    let header = file.elf_header();
+    let endian = file.endian();
+    let count: u64 = header.e_shnum(endian).into();
+    let size: u64 = header.e_shentsize(endian).into();
+    let offset: u64 = header.e_shoff(endian).into();
+    offset.saturating_add(count.saturating_mul(size))
+}
+
+/// The end of the sections' raw data including its file-alignment padding (`SizeOfRawData`).
+fn pe_raw_data_end<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>) -> u64 {
+    file.section_table()
+        .iter()
+        .map(|section| {
+            u64::from(section.pointer_to_raw_data.get(LE)).saturating_add(section.size_of_raw_data.get(LE).into())
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn pe_certificate_end<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>) -> u64 {
+    // The security directory holds a file offset, not an RVA.
+    file.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_SECURITY).map_or(0, |directory| {
+        u64::from(directory.virtual_address.get(LE)).saturating_add(directory.size.get(LE).into())
+    })
+}
+
+fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>) -> PeDetails {
+    let headers = file.nt_headers();
+    let optional = headers.optional_header();
+    let timestamp = headers.file_header().time_date_stamp.get(LE);
+    const MITIGATIONS: [(u16, &str); 11] = [
+        (0x0020, "high_entropy_va"),
+        (0x0040, "aslr"),
+        (0x0080, "force_integrity"),
+        (0x0100, "dep"),
+        (0x0200, "no_isolation"),
+        (0x0400, "no_seh"),
+        (0x0800, "no_bind"),
+        (0x1000, "appcontainer"),
+        (0x2000, "wdm_driver"),
+        (0x4000, "cfg"),
+        (0x8000, "terminal_server_aware"),
+    ];
+    let flags = optional.dll_characteristics().0;
+    let subsystem = match optional.subsystem().0 {
+        1 => "native",
+        2 => "windows_gui",
+        3 => "windows_cui",
+        5 => "os2_cui",
+        7 => "posix_cui",
+        9 => "windows_ce_gui",
+        10 => "efi_application",
+        11 => "efi_boot_service_driver",
+        12 => "efi_runtime_driver",
+        13 => "efi_rom",
+        14 => "xbox",
+        16 => "windows_boot_application",
+        _ => "unknown",
+    };
+    let signed = file
+        .data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_SECURITY)
+        .is_some_and(|directory| directory.size.get(LE) != 0);
+    let rich = file
+        .rich_header_info()
+        .map(|info| {
+            info.unmasked_entries()
+                .map(|entry| RichEntry {
+                    product: (entry.comp_id >> 16) as u16,
+                    build: entry.comp_id as u16,
+                    count: entry.count,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    PeDetails {
+        timestamp,
+        timestamp_utc: utc(timestamp.into()),
+        subsystem: subsystem.to_owned(),
+        linker_version: format!("{}.{}", optional.major_linker_version(), optional.minor_linker_version()),
+        checksum: optional.check_sum(),
+        characteristics: MITIGATIONS.iter().filter(|(bit, _)| flags & bit != 0).map(|&(_, name)| name).collect(),
+        signed,
+        rich,
+    }
+}
+
+/// `YYYY-MM-DD HH:MM:SS` for seconds since 1970 (Howard Hinnant's civil-from-days).
+fn utc(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let time = seconds.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}", time / 3600, time / 60 % 60, time % 60)
+}
+
+const PT_GNU_STACK: u32 = 0x6474_e551;
+const PT_GNU_RELRO: u32 = 0x6474_e552;
+const DT_NEEDED: u64 = 1;
+const DT_SONAME: u64 = 14;
+const DT_BIND_NOW: u64 = 24;
+const DT_FLAGS: u64 = 30;
+const DT_FLAGS_1: u64 = 0x6fff_fffb;
+const DF_BIND_NOW: u64 = 0x8;
+const DF_1_NOW: u64 = 0x1;
+const DF_1_PIE: u64 = 0x0800_0000;
+
+fn elf<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> ElfDetails {
+    let endian = file.endian();
+    let headers = file.elf_program_headers();
+    let interpreter = headers
+        .iter()
+        .find_map(|header| header.interpreter(endian, file.data()).ok().flatten())
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+    let stack = headers.iter().find(|header| header.p_type(endian).0 == PT_GNU_STACK);
+    let nx = stack.is_some_and(|header| header.p_flags(endian).0 & object::elf::PF_X.0 == 0);
+    let has_relro = headers.iter().any(|header| header.p_type(endian).0 == PT_GNU_RELRO);
+
+    let entries = dynamic_entries(file);
+    let strings = file.section_by_name(".dynstr").and_then(|section| section.data().ok()).unwrap_or_default();
+    let string = |offset: u64| {
+        let start = usize::try_from(offset).ok()?;
+        let tail = strings.get(start..)?;
+        let end = tail.iter().position(|&byte| byte == 0)?;
+        Some(String::from_utf8_lossy(&tail[..end]).into_owned())
+    };
+    let value_of = |tag| entries.iter().filter(move |(t, _)| *t == tag).map(|(_, value)| *value);
+    let bind_now = value_of(DT_BIND_NOW).next().is_some()
+        || value_of(DT_FLAGS).any(|flags| flags & DF_BIND_NOW != 0)
+        || value_of(DT_FLAGS_1).any(|flags| flags & DF_1_NOW != 0);
+    let pie_flag = value_of(DT_FLAGS_1).any(|flags| flags & DF_1_PIE != 0);
+
+    let kind = match file.elf_header().e_type(endian) {
+        object::elf::ET_REL => "relocatable",
+        object::elf::ET_EXEC => "executable",
+        object::elf::ET_DYN => "shared",
+        object::elf::ET_CORE => "core",
+        _ => "unknown",
+    };
+    ElfDetails {
+        kind,
+        pie: kind == "shared" && (interpreter.is_some() || pie_flag),
+        interpreter,
+        needed: value_of(DT_NEEDED).filter_map(string).collect(),
+        soname: value_of(DT_SONAME).find_map(string),
+        nx,
+        relro: match (has_relro, bind_now) {
+            (false, _) => "none",
+            (true, false) => "partial",
+            (true, true) => "full",
+        },
+        build_id: file.build_id().ok().flatten().map(hex),
+        stripped: file.section_by_name(".symtab").is_none(),
+    }
+}
+
+/// The `(d_tag, d_val)` pairs of `.dynamic`.
+fn dynamic_entries<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> Vec<(u64, u64)> {
+    let Some(data) = file.section_by_name(".dynamic").and_then(|section| section.data().ok()) else {
+        return Vec::new();
+    };
+    let wide = file.is_64();
+    let little = file.is_little_endian();
+    let word = |bytes: &[u8]| -> u64 {
+        match (wide, little) {
+            (true, true) => u64::from_le_bytes(bytes.try_into().unwrap()),
+            (true, false) => u64::from_be_bytes(bytes.try_into().unwrap()),
+            (false, true) => u32::from_le_bytes(bytes.try_into().unwrap()).into(),
+            (false, false) => u32::from_be_bytes(bytes.try_into().unwrap()).into(),
+        }
+    };
+    let size = if wide { 8 } else { 4 };
+    data.chunks_exact(2 * size)
+        .map(|entry| (word(&entry[..size]), word(&entry[size..])))
+        .take_while(|&(tag, _)| tag != 0)
+        .collect()
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn macho(parsed: &object::File) -> MachODetails {
+    let (file_type, flags) = match parsed {
+        object::File::MachO32(file) => {
+            let header = file.macho_header();
+            (header.filetype(file.endian()).0, header.flags(file.endian()).0)
+        }
+        object::File::MachO64(file) => {
+            let header = file.macho_header();
+            (header.filetype(file.endian()).0, header.flags(file.endian()).0)
+        }
+        _ => (0, 0),
+    };
+    const FLAGS: [(u32, &str); 12] = [
+        (0x1, "noundefs"),
+        (0x4, "dyldlink"),
+        (0x80, "twolevel"),
+        (0x8000, "weak_defines"),
+        (0x10000, "binds_to_weak"),
+        (0x20000, "allow_stack_execution"),
+        (0x40000, "root_safe"),
+        (0x80000, "setuid_safe"),
+        (0x200000, "pie"),
+        (0x800000, "has_tlv_descriptors"),
+        (0x1000000, "no_heap_execution"),
+        (0x2000000, "app_extension_safe"),
+    ];
+    let file_type = match file_type {
+        1 => "object",
+        2 => "execute",
+        4 => "core",
+        6 => "dylib",
+        7 => "dylinker",
+        8 => "bundle",
+        10 => "dsym",
+        11 => "kext_bundle",
+        12 => "fileset",
+        _ => "other",
+    };
+    let mut details = MachODetails {
+        file_type: file_type.to_owned(),
+        flags: FLAGS.iter().filter(|(bit, _)| flags & bit != 0).map(|&(_, name)| name).collect(),
+        dylibs: Vec::new(),
+        rpaths: Vec::new(),
+        platform: None,
+        min_os: None,
+        sdk: None,
+        uuid: parsed.mach_uuid().ok().flatten().map(|uuid| hex(&uuid)),
+        code_signature: false,
+        encrypted: false,
+    };
+    let Some((mut commands, endian)) = macho_load_commands(parsed) else { return details };
+    while let Ok(Some(command)) = commands.next() {
+        let string = |name| command.string(endian, name).ok().map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+        match command.variant() {
+            Ok(LoadCommandVariant::Dylib(dylib)) => details.dylibs.extend(string(dylib.dylib.name)),
+            Ok(LoadCommandVariant::Rpath(rpath)) => details.rpaths.extend(string(rpath.path)),
+            Ok(LoadCommandVariant::BuildVersion(build, _)) => {
+                details.platform = Some(platform(build.platform.get(endian).0));
+                details.min_os = Some(version(build.minos.get(endian).0));
+                details.sdk = Some(version(build.sdk.get(endian).0));
+            }
+            Ok(LoadCommandVariant::VersionMin(minimum)) if details.min_os.is_none() => {
+                details.min_os = Some(version(minimum.version.get(endian).0));
+                details.sdk = Some(version(minimum.sdk.get(endian).0));
+            }
+            Ok(LoadCommandVariant::EncryptionInfo32(info)) => details.encrypted |= info.cryptid.get(endian) != 0,
+            Ok(LoadCommandVariant::EncryptionInfo64(info)) => details.encrypted |= info.cryptid.get(endian) != 0,
+            _ if command.cmd() == object::macho::LC_CODE_SIGNATURE => details.code_signature = true,
+            _ => {}
+        }
+    }
+    details
+}
+
+fn platform(value: u32) -> String {
+    let name = match value {
+        1 => "macos",
+        2 => "ios",
+        3 => "tvos",
+        4 => "watchos",
+        5 => "bridgeos",
+        6 => "maccatalyst",
+        7 => "ios_simulator",
+        8 => "tvos_simulator",
+        9 => "watchos_simulator",
+        10 => "driverkit",
+        11 => "visionos",
+        12 => "visionos_simulator",
+        _ => return format!("platform {value}"),
+    };
+    name.to_owned()
+}
+
+/// Mach-O versions pack major.minor.patch as xxxx.yy.zz.
+fn version(value: u32) -> String {
+    format!("{}.{}.{}", value >> 16, (value >> 8) & 0xff, value & 0xff)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn formats_utc_times() {
+        assert_eq!(super::utc(0), "1970-01-01 00:00:00");
+        assert_eq!(super::utc(1_700_000_000), "2023-11-14 22:13:20");
+        assert_eq!(super::utc(951_782_400), "2000-02-29 00:00:00");
+    }
+}

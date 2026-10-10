@@ -91,3 +91,8 @@ bind_x = b'\x11' + b'\x40_x\0' + b'\x51'
 open(f'{out}/bindloop.macho', 'wb').write(macho_with_binds(bind_x + b'\x71' + uleb(0) + b'\xc0' + uleb(2**62) + uleb(0) + b'\0'))
 open(f'{out}/bindwrap.macho', 'wb').write(macho_with_binds(bind_x + b'\x71' + uleb(0xffffffffffffff00) + b'\x90\0'))
 open(f'{out}/bindfar.macho', 'wb').write(macho_with_binds(bind_x + b'\x71' + uleb(0x5000) + b'\x90\0'))
+
+# Fixtures with data appended past the end of the image (an overlay), as droppers and installers carry.
+payload = b'PAYLOAD!' * 64
+open(f'{out}/overlay.exe', 'wb').write(open(f'{out}/../bin/hello-x64.exe', 'rb').read() + payload)
+open(f'{out}/overlay.elf', 'wb').write(open(f'{out}/../bin/hello-x64-dyn.elf', 'rb').read() + payload)
