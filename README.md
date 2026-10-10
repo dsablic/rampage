@@ -17,6 +17,10 @@ cross-references, the MCP server, and an AArch64 decoder generated from Arm's sp
   Its output matches `llvm-mc` on every instruction sampled from Chrome's arm64 code and on 99.85% of words
   across all encodings. On AArch64, function
   discovery resolves ADRP+ADD and ADRP+LDR pairs into data references.
+- Triage: MD5/SHA-1/SHA-256, entropy per section and as a profile across the file, PE imphash (pefile's
+  algorithm, without its ordinal-name tables), overlays, and format details: PE build time, mitigations, Rich
+  header and signing; ELF interpreter, needed libraries, NX/RELRO/PIE and build ID; Mach-O dylibs, platform,
+  UUID, signing and encryption. Hints point out likely packing and missing hardening.
 - Names: symbols and exports, then import stubs and thunks named after their import (`puts`, or `puts@plt` on
   ELF; a bare import name finds its stub), and import slots (GOT entries, Mach-O symbol pointers, the PE import
   address table) as `__imp_<name>`. Disassembly comments
@@ -27,7 +31,10 @@ cross-references, the MCP server, and an AArch64 decoder generated from Arm's sp
 ```
 cargo build --release
 
+rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
 rampage info    <file>                       # format, arch, entry, segments, sections
+rampage imports <file> [--contains TEXT]     # imported functions, libraries and import slots
+rampage exports <file> [--contains TEXT]
 rampage disasm  <file> [--at <addr|symbol>] [--count N]
 rampage strings <file> [--min-len N]         # ASCII and UTF-16LE
 rampage funcs   <file> [--name TEXT]         # recursive-descent function discovery
@@ -45,7 +52,8 @@ a `"0x…"` string, because JSON numbers lose precision above 2^53 in common con
 ## Using it from an AI agent
 
 `rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the tools
-`binary_info`, `list_functions`, `disassemble`, `list_strings` and `xrefs`. Analysis runs once per binary and is
+`triage`, `binary_info`, `list_functions`, `disassemble`, `list_strings`, `list_imports`, `list_exports` and
+`xrefs`. Analysis runs once per binary and is
 cached for the session. To add it to Claude Code:
 
 ```
