@@ -9,6 +9,7 @@ name = "rampage"
 path = "src/main.rs"
 
 [dependencies]
+rampage-api.workspace = true
 rampage-arch.workspace = true
 rampage-loaders.workspace = true
 rampage-analysis.workspace = true

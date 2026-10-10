@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use rampage_api::{FunctionsQuery, StringsQuery};
 use rampage_arch::Arch;
 
 use crate::commands::Options;
@@ -41,6 +42,9 @@ enum Command {
         file: PathBuf,
         #[arg(long, default_value_t = 4)]
         min_len: usize,
+        /// Only strings containing this text (case-insensitive)
+        #[arg(long)]
+        contains: Option<String>,
     },
     /// Discover functions by recursive descent from symbols, exports, the entry point and unwind metadata
     Funcs {
@@ -48,6 +52,9 @@ enum Command {
         /// Only list functions named by symbols, exports and the entry point, without analysis
         #[arg(long)]
         symbols_only: bool,
+        /// Only functions whose name contains this text (case-insensitive)
+        #[arg(long)]
+        name: Option<String>,
     },
     /// List code and data cross-references to or from an address, symbol or function
     #[command(group(clap::ArgGroup::new("direction").required(true)))]
@@ -86,12 +93,18 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Info { file } => commands::info(&mut out, &file, &options),
         Command::Disasm { file, at, count } => commands::disasm(&mut out, &file, at.as_deref(), count, &options),
-        Command::Strings { file, min_len } => commands::strings(&mut out, &file, min_len, &options),
-        Command::Funcs { file, symbols_only } => commands::funcs(&mut out, &file, symbols_only, &options),
+        Command::Strings { file, min_len, contains } => {
+            let query = StringsQuery { min_len: Some(min_len), contains, ..StringsQuery::default() };
+            commands::strings(&mut out, &file, &query, &options)
+        }
+        Command::Funcs { file, symbols_only, name } => {
+            let query = FunctionsQuery { name_contains: name, ..FunctionsQuery::default() };
+            commands::funcs(&mut out, &file, symbols_only, &query, &options)
+        }
         Command::Xrefs { file, to, from } => {
             let query = match (&to, &from) {
-                (Some(to), _) => commands::XrefQuery::To(to),
-                (_, Some(from)) => commands::XrefQuery::From(from),
+                (Some(to), _) => commands::XrefTarget::To(to),
+                (_, Some(from)) => commands::XrefTarget::From(from),
                 (None, None) => unreachable!("clap requires --to or --from"),
             };
             commands::xrefs(&mut out, &file, query, &options)

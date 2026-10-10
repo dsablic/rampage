@@ -1,11 +1,14 @@
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
-use rampage_analysis::discover::{Xref, XrefKind};
-use rampage_analysis::{functions, strings};
-use rampage_arch::{Arch, Flow, decoder_for};
-use rampage_loaders::{Binary, Perms};
+use anyhow::Result;
+use rampage_analysis::discover::XrefKind;
+use rampage_analysis::functions;
+use rampage_analysis::strings::Encoding;
+use rampage_api::{FunctionsQuery, Project, Session, StringsQuery, XrefQuery};
+use rampage_arch::Arch;
+use rampage_loaders::Perms;
 use serde::Serialize;
 
 pub struct Options {
@@ -13,8 +16,8 @@ pub struct Options {
     pub arch: Option<Arch>,
 }
 
-fn open(path: &Path, options: &Options) -> Result<Binary> {
-    Binary::open_with(path, options.arch).with_context(|| format!("{}", path.display()))
+fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
+    Ok(Session::default().open(path, options.arch)?)
 }
 
 /// Serializes before writing so that I/O errors such as a closed pipe surface as `io::Error`.
@@ -31,121 +34,80 @@ fn perms_text(perms: Perms) -> String {
 }
 
 pub fn info(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
-    let binary = open(path, options)?;
+    let project = open(path, options)?;
+    let summary = project.summary();
     if options.json {
-        return write_json(out, &binary);
+        return write_json(out, &summary);
     }
-    writeln!(out, "format    {:?}", binary.format)?;
-    writeln!(out, "arch      {}", binary.arch)?;
-    if binary.slices.len() > 1 {
-        let slices: Vec<_> = binary.slices.iter().map(Arch::to_string).collect();
+    writeln!(out, "format    {:?}", summary.format)?;
+    writeln!(out, "arch      {}", summary.arch)?;
+    if summary.slices.len() > 1 {
+        let slices: Vec<_> = summary.slices.iter().map(Arch::to_string).collect();
         writeln!(out, "slices    {}", slices.join(", "))?;
     }
-    match binary.entry {
+    match summary.entry {
         Some(entry) => writeln!(out, "entry     {entry:#x}")?,
         None => writeln!(out, "entry     none")?,
     }
-    writeln!(out, "symbols   {}", binary.symbols.len())?;
-    writeln!(out, "imports   {}", binary.imports.len())?;
-    writeln!(out, "exports   {}", binary.exports.len())?;
+    writeln!(out, "symbols   {}", summary.symbols)?;
+    writeln!(out, "imports   {}", summary.imports)?;
+    writeln!(out, "exports   {}", summary.exports)?;
+    for warning in summary.warnings {
+        writeln!(out, "warning   {warning}")?;
+    }
     writeln!(out, "\nsegments")?;
-    for segment in &binary.segments {
+    for segment in summary.segments {
         let end = segment.address.saturating_add(segment.size);
         let perms = perms_text(segment.perms);
         writeln!(out, "  {:#018x}-{:#018x} {perms} {}", segment.address, end, segment.name)?;
     }
     writeln!(out, "\nsections")?;
-    for section in &binary.sections {
+    for section in summary.sections {
         let end = section.address.saturating_add(section.size);
         writeln!(out, "  {:#018x}-{:#018x} {:<20} {:?}", section.address, end, section.name, section.kind)?;
     }
     Ok(())
 }
 
-fn resolve_address(binary: &Binary, text: &str) -> Result<u64> {
-    if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        return u64::from_str_radix(hex, 16).with_context(|| format!("invalid hex address {text:?}"));
-    }
-    if let Ok(address) = text.parse() {
-        return Ok(address);
-    }
-    if let Some(address) = functions::Names::new(binary).address_of(text) {
-        return Ok(address);
-    }
-    if let Some(address) = text.strip_prefix("sub_").and_then(|hex| u64::from_str_radix(hex, 16).ok()) {
-        return Ok(address);
-    }
-    bail!("no symbol or export named {text:?}")
-}
-
 pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize, options: &Options) -> Result<()> {
-    let binary = open(path, options)?;
-    let mut decoder = decoder_for(binary.arch)?;
-    let start = match at {
-        Some(text) => resolve_address(&binary, text)?,
-        None => binary.entry.context("no entry point; pass --at <address or symbol>")?,
-    };
-    let Some(code) = binary.read_to_segment_end(start) else {
-        bail!("address {start:#x} is not backed by file data");
-    };
-
-    #[derive(Serialize)]
-    struct Line {
-        address: u64,
-        bytes: String,
-        text: String,
-        flow: Flow,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        data_ref: Option<u64>,
-    }
-
-    let mut lines = Vec::with_capacity(count.min(4096));
-    let mut offset = 0;
-    while lines.len() < count && offset < code.len() {
-        let address = start + offset as u64;
-        let insn = decoder.decode(&code[offset..], address);
-        let bytes = &code[offset..offset + insn.len as usize];
-        let text = decoder.format(bytes, address);
-        offset += insn.len as usize;
-        lines.push(Line { address, bytes: hex(bytes), text, flow: insn.flow, data_ref: insn.data_ref });
-    }
-
+    let lines = open(path, options)?.disassemble(at, count)?;
     if options.json {
         return write_json(out, &lines);
     }
     for line in &lines {
-        if let Some(symbol) = binary.symbols.iter().find(|symbol| symbol.address == line.address) {
-            writeln!(out, "{}:", symbol.name)?;
+        if let Some(label) = &line.label {
+            writeln!(out, "{label}:")?;
         }
         writeln!(out, "  {:#018x}  {:<24} {}", line.address, line.bytes, line.text)?;
     }
     Ok(())
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-pub fn strings(out: &mut impl Write, path: &Path, min_len: usize, options: &Options) -> Result<()> {
-    let binary = open(path, options)?;
-    let found = strings::scan(&binary, min_len);
+pub fn strings(out: &mut impl Write, path: &Path, query: &StringsQuery, options: &Options) -> Result<()> {
+    let found = open(path, options)?.strings(query).items;
     if options.json {
         return write_json(out, &found);
     }
     for string in &found {
         let encoding = match string.encoding {
-            strings::Encoding::Ascii => "a",
-            strings::Encoding::Utf16Le => "u",
+            Encoding::Ascii => "a",
+            Encoding::Utf16Le => "u",
         };
         writeln!(out, "{:#018x} {encoding} {}", string.address, string.text)?;
     }
     Ok(())
 }
 
-pub fn funcs(out: &mut impl Write, path: &Path, symbols_only: bool, options: &Options) -> Result<()> {
-    let binary = open(path, options)?;
+pub fn funcs(
+    out: &mut impl Write,
+    path: &Path,
+    symbols_only: bool,
+    query: &FunctionsQuery,
+    options: &Options,
+) -> Result<()> {
+    let project = open(path, options)?;
     if symbols_only {
-        let found = functions::from_symbols(&binary);
+        let found = functions::from_symbols(&project.binary);
         if options.json {
             return write_json(out, &found);
         }
@@ -155,31 +117,7 @@ pub fn funcs(out: &mut impl Write, path: &Path, symbols_only: bool, options: &Op
         return Ok(());
     }
 
-    #[derive(Serialize)]
-    struct Row {
-        address: u64,
-        name: String,
-        size: u64,
-        blocks: usize,
-        instructions: usize,
-    }
-
-    let program = functions::analyze(&binary)?;
-    let names = functions::Names::new(&binary);
-    let rows: Vec<Row> = program
-        .functions
-        .iter()
-        .map(|function| {
-            let end = function.blocks.iter().map(|block| block.end).max().unwrap_or(function.address);
-            Row {
-                address: function.address,
-                name: names.function_name(function.address),
-                size: end.saturating_sub(function.address),
-                blocks: function.blocks.len(),
-                instructions: function.instruction_count,
-            }
-        })
-        .collect();
+    let rows = project.functions(query)?.items;
     if options.json {
         return write_json(out, &rows);
     }
@@ -190,50 +128,18 @@ pub fn funcs(out: &mut impl Write, path: &Path, symbols_only: bool, options: &Op
     Ok(())
 }
 
-pub enum XrefQuery<'a> {
+pub enum XrefTarget<'a> {
     To(&'a str),
     From(&'a str),
 }
 
-pub fn xrefs(out: &mut impl Write, path: &Path, query: XrefQuery, options: &Options) -> Result<()> {
-    let binary = open(path, options)?;
-    let program = functions::analyze(&binary)?;
-    let names = functions::Names::new(&binary);
-
-    let selected: Vec<Xref> = match query {
-        XrefQuery::To(text) => program.xrefs_to(resolve_address(&binary, text)?).to_vec(),
-        XrefQuery::From(text) => {
-            let address = resolve_address(&binary, text)?;
-            match program.function_at(address) {
-                Some(function) => program.xrefs.iter().filter(|xref| function.contains(xref.from)).copied().collect(),
-                None => program.xrefs.iter().filter(|xref| xref.from == address).copied().collect(),
-            }
-        }
+pub fn xrefs(out: &mut impl Write, path: &Path, target: XrefTarget, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let query = match target {
+        XrefTarget::To(text) => XrefQuery::To(project.resolve(text)?),
+        XrefTarget::From(text) => XrefQuery::From(project.resolve(text)?),
     };
-
-    #[derive(Serialize)]
-    struct Row {
-        from: u64,
-        to: u64,
-        kind: XrefKind,
-        from_function: Option<String>,
-        to_name: Option<String>,
-    }
-
-    let mut rows: Vec<Row> = selected
-        .iter()
-        .map(|xref| Row {
-            from: xref.from,
-            to: xref.to,
-            kind: xref.kind,
-            from_function: program
-                .functions_containing(xref.from)
-                .next()
-                .map(|function| names.function_name(function.address)),
-            to_name: names.get(xref.to).map(str::to_owned),
-        })
-        .collect();
-    rows.sort_by_key(|row| (row.from, row.to));
+    let rows = project.xrefs(&query)?;
     if options.json {
         return write_json(out, &rows);
     }
