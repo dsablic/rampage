@@ -23,8 +23,7 @@ fn engine(arch: Arch, big_endian: bool, thumb: bool) -> Option<Capstone> {
         Arch::Arm => {
             let mode = if thumb { arch::arm::ArchMode::Thumb } else { arch::arm::ArchMode::Arm };
             let v8 = [arch::arm::ArchExtraMode::V8];
-            // ARMv6 and later big-endian images (BE8) still store instructions little-endian.
-            Capstone::new().arm().mode(mode).extra_mode(v8.into_iter()).endian(Endian::Little).detail(true).build()
+            Capstone::new().arm().mode(mode).extra_mode(v8.into_iter()).endian(endian).detail(true).build()
         }
         Arch::Mips | Arch::Mips64 => {
             let mode = if arch == Arch::Mips { arch::mips::ArchMode::Mips32 } else { arch::mips::ArchMode::Mips64 };
@@ -113,6 +112,7 @@ fn arm(mnemonic: &str, operands: &str, conditional: bool) -> Option<Branch> {
         "bx" if operands == "lr" => Kind::Return,
         "bx" | "bxj" | "tbb" | "tbh" => INDIRECT_JUMP,
         "mov" | "movs" if writes_pc && operands == "pc, lr" => Kind::Return,
+        "ldr" if operands.starts_with("pc, [sp]") => Kind::Return,
         "mov" | "movs" | "add" | "sub" if writes_pc => INDIRECT_JUMP,
         "ldr" if writes_pc => INDIRECT_JUMP,
         "pop" | "ldm" | "ldmia" | "ldmib" | "ldmda" | "ldmdb" | "ldmfd" if operands.contains("pc}") => Kind::Return,
@@ -150,7 +150,7 @@ fn powerpc(mnemonic: &str, is_branch: bool) -> Option<Branch> {
         _ if mnemonic.ends_with("ctr") => return branch(INDIRECT_JUMP, !unconditional("bctr")),
         "bl" | "bla" => CALL,
         "b" | "ba" => JUMP,
-        _ if mnemonic.ends_with('l') => return branch(CALL, true),
+        _ if mnemonic.ends_with('l') || mnemonic.ends_with("la") => return branch(CALL, true),
         _ => return branch(JUMP, true),
     };
     branch(kind, false)
@@ -180,7 +180,7 @@ fn riscv(mnemonic: &str, operands: &str) -> Option<Branch> {
 fn sparc(mnemonic: &str, operands: &str, is_branch: bool) -> Option<Branch> {
     let base = mnemonic.split(',').next().unwrap_or(mnemonic);
     let kind = match base {
-        "ret" | "retl" => Kind::Return,
+        "ret" | "retl" | "rett" | "return" => Kind::Return,
         "call" if operands.starts_with('%') => INDIRECT_CALL,
         "call" => CALL,
         "jmpl" if operands.ends_with("%o7") => INDIRECT_CALL,
@@ -204,6 +204,8 @@ fn s390x(mnemonic: &str, operands: &str, is_branch: bool) -> Option<Branch> {
         "j" | "jg" => JUMP,
         "br" | "b" => INDIRECT_JUMP,
         "jnop" | "jgnop" | "nop" | "nopr" | "bc" | "bcr" => return None,
+        // Compare and branch to a register-based address (`cib`, `crb`); the relative forms end in `j` (`crj`).
+        _ if mnemonic.starts_with('c') && !mnemonic.contains('j') => return None,
         // A conditional branch to a register or memory: a conditional return, or a computed branch.
         _ if mnemonic.starts_with('b') && !mnemonic.starts_with("br") => return None,
         _ if is_branch => return branch(JUMP, true),

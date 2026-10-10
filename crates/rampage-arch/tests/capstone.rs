@@ -40,6 +40,7 @@ fn arm() {
             ("0ef0a0e1", Return),                  // mov pc, lr
             ("03f0a0e1", IndirectJump),            // mov pc, r3
             ("04f09fe5", IndirectJump),            // ldr pc, [pc, #4]
+            ("04f09de4", Return),                  // ldr pc, [sp], #4
             ("f000f0e7", Halt),                    // udf
         ],
     );
@@ -69,6 +70,7 @@ fn thumb_branches() {
             ("00b1", ConditionalJump(0x1004)), // cbz r0
             ("00e0", Jump(0x1004)),            // b
             ("9847", IndirectCall),            // blx r3
+            ("5df804fb", Return),              // ldr pc, [sp], #4
         ],
     );
 }
@@ -120,6 +122,7 @@ fn powerpc() {
             ("7fe00008", Halt),                    // trap
             ("429f0005", Next),                    // bcl 20, 31, .+4 (reads the PC)
             ("4c820420", Next),                    // bnectr
+            ("42400103", Call(0x100)),             // bdzla 0x100
         ],
     );
 }
@@ -171,21 +174,28 @@ fn sparc() {
 }
 
 #[test]
+fn sparc64_return() {
+    check(big_endian(Arch::Sparc64), &[("81cfe008", Flow::Return)]); // return %i7+8
+}
+
+#[test]
 fn s390x() {
     use Flow::*;
     check(
         big_endian(Arch::S390x),
         &[
-            ("c0e500000004", Call(0x1008)),        // brasl %r14
-            ("a7e50004", Call(0x1008)),            // bras %r14
-            ("0de1", IndirectCall),                // basr %r14, %r1
-            ("07fe", Return),                      // br %r14
-            ("078e", Next),                        // ber %r14
-            ("07f1", IndirectJump),                // br %r1
-            ("a7f40004", Jump(0x1008)),            // j
-            ("c0f400000004", Jump(0x1008)),        // jg
-            ("a7840004", ConditionalJump(0x1008)), // je
-            ("0700", Next),                        // bcr 0, %r0 (a nop)
+            ("c0e500000004", Call(0x1008)),            // brasl %r14
+            ("a7e50004", Call(0x1008)),                // bras %r14
+            ("0de1", IndirectCall),                    // basr %r14, %r1
+            ("07fe", Return),                          // br %r14
+            ("078e", Next),                            // ber %r14
+            ("07f1", IndirectJump),                    // br %r1
+            ("a7f40004", Jump(0x1008)),                // j
+            ("c0f400000004", Jump(0x1008)),            // jg
+            ("a7840004", ConditionalJump(0x1008)),     // je
+            ("0700", Next),                            // bcr 0, %r0 (a nop)
+            ("ec18e00064fe", Next),                    // cibe %r1, 100, 0(%r14)
+            ("ec1200048076", ConditionalJump(0x1008)), // crje %r1, %r2, 8
         ],
     );
 }
