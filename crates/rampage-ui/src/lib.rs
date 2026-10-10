@@ -237,6 +237,10 @@ impl App {
                 ui.separator();
             }
             let Some(workspace) = &self.workspace else { return };
+            if let Some(error) = &workspace.notice {
+                ui.label(RichText::new(error).color(theme::WARNING));
+                ui.separator();
+            }
             if workspace.functions.is_running() {
                 ui.spinner();
                 ui.label(RichText::new("Analyzing").color(theme::DIM));

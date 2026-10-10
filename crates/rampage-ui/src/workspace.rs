@@ -163,6 +163,8 @@ pub struct Workspace {
     /// The rename or comment dialog, when open.
     pub editing: Option<Editing>,
     pub edit_error: Option<String>,
+    /// A problem for the status bar: an undo that could not apply, or other clients' edits that cannot be read.
+    pub notice: Option<String>,
     pub band: crate::band::Cache,
     annotations_checked: Instant,
 }
@@ -206,6 +208,7 @@ impl Workspace {
             address_width,
             editing: None,
             edit_error: None,
+            notice: None,
             band: crate::band::Cache::default(),
             annotations_checked: Instant::now(),
         };
@@ -240,8 +243,14 @@ impl Workspace {
         if !self.blocking {
             if self.annotations_checked.elapsed() >= ANNOTATION_REFRESH {
                 self.annotations_checked = Instant::now();
-                if self.project.refresh_annotations().unwrap_or(false) {
-                    self.annotations_changed(None);
+                match self.project.refresh_annotations() {
+                    Ok(changed) => {
+                        self.notice = None;
+                        if changed {
+                            self.annotations_changed(None);
+                        }
+                    }
+                    Err(error) => self.notice = Some(error.to_string()),
                 }
             }
             ctx.request_repaint_after(ANNOTATION_REFRESH);
@@ -304,14 +313,18 @@ impl Workspace {
     }
 
     pub fn undo(&mut self) {
-        if let Ok(Some(edit)) = self.project.undo() {
-            self.annotations_changed(Some(edit.address));
+        match self.project.undo() {
+            Ok(Some(edit)) => self.annotations_changed(Some(edit.address)),
+            Ok(None) => {}
+            Err(error) => self.notice = Some(error.to_string()),
         }
     }
 
     pub fn redo(&mut self) {
-        if let Ok(Some(edit)) = self.project.redo() {
-            self.annotations_changed(Some(edit.address));
+        match self.project.redo() {
+            Ok(Some(edit)) => self.annotations_changed(Some(edit.address)),
+            Ok(None) => {}
+            Err(error) => self.notice = Some(error.to_string()),
         }
     }
 

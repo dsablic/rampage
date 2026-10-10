@@ -53,14 +53,11 @@ pub struct Annotations {
 #[derive(Default)]
 struct Log {
     path: PathBuf,
-    /// How many bytes of the file have been applied; other processes' edits lie past this.
+    /// How many bytes of the file have been applied: every complete line before this offset. Other processes'
+    /// edits, and a line still being written, lie past it.
     read: u64,
-    /// Complete lines read, for error messages.
-    lines: usize,
-    /// The file ends in a valid edit without a newline, which the next append must supply.
-    unterminated: bool,
-    /// Where an unreadable final fragment (an interrupted write) starts; the next append replaces it.
-    fragment: Option<u64>,
+    /// The file read, to notice it being replaced by another of any size.
+    identity: Option<(u64, u64)>,
 }
 
 impl Annotations {
@@ -96,7 +93,11 @@ impl Annotations {
                 if let Some(old) = self.names.remove(&edit.address)
                     && self.addresses.get(&old) == Some(&edit.address)
                 {
-                    self.addresses.remove(&old);
+                    // Edits from several clients can leave a name at two addresses; keep resolving the other.
+                    match self.names.iter().find(|(_, name)| **name == old) {
+                        Some((&other, _)) => self.addresses.insert(old, other),
+                        None => self.addresses.remove(&old),
+                    };
                 }
                 if let Some(value) = &edit.value {
                     self.names.insert(edit.address, value.clone());
@@ -110,23 +111,23 @@ impl Annotations {
         }
     }
 
-    /// Appends `edit` to the log. The appended line is read back, harmlessly, by the next `refresh`.
+    /// Appends `edit` to the log. The appended line is read back, harmlessly, by the next `refresh`. A file left
+    /// ending mid-line (by an interrupted write) gets a newline first, so the fragment becomes a line of its own,
+    /// which reading skips.
     fn record(&mut self, edit: &Edit) -> Result<(), String> {
         let Some(log) = &mut self.log else { return Ok(()) };
-        let mut line = if log.unterminated { "\n".to_owned() } else { String::new() };
+        let error = |error: std::io::Error| format!("{}: {error}", log.path.display());
+        let mut file = OpenOptions::new().read(true).create(true).append(true).open(&log.path).map_err(error)?;
+        let len = file.metadata().map_err(error)?.len();
+        let mut last = *b"\n";
+        if len > 0 {
+            file.seek(SeekFrom::Start(len - 1)).map_err(error)?;
+            file.read_exact(&mut last).map_err(error)?;
+        }
+        let mut line = if last[0] == b'\n' { String::new() } else { "\n".to_owned() };
         line.push_str(&serde_json::to_string(edit).map_err(|error| error.to_string())?);
         line.push('\n');
-        let error = |error: std::io::Error| format!("{}: {error}", log.path.display());
-        let mut file = OpenOptions::new().create(true).append(true).open(&log.path).map_err(error)?;
-        if let Some(fragment) = log.fragment {
-            file.set_len(fragment).map_err(error)?;
-        }
-        file.write_all(line.as_bytes()).map_err(error)?;
-        if let Some(fragment) = log.fragment.take() {
-            log.read = log.read.min(fragment);
-        }
-        log.unterminated = false;
-        Ok(())
+        file.write_all(line.as_bytes()).map_err(error)
     }
 
     fn commit(&mut self, edit: &Edit) -> Result<(), String> {
@@ -153,6 +154,7 @@ impl Annotations {
     pub fn undo(&mut self) -> Result<Option<Edit>, String> {
         self.refresh()?;
         let Some(edit) = self.done.pop() else { return Ok(None) };
+        self.check_unchanged(&edit, &edit.value)?;
         self.commit(&edit.inverse())?;
         self.undone.push(edit.clone());
         Ok(Some(edit))
@@ -162,9 +164,19 @@ impl Annotations {
     pub fn redo(&mut self) -> Result<Option<Edit>, String> {
         self.refresh()?;
         let Some(edit) = self.undone.pop() else { return Ok(None) };
+        self.check_unchanged(&edit, &edit.previous)?;
         self.commit(&edit)?;
         self.done.push(edit.clone());
         Ok(Some(edit))
+    }
+
+    /// Fails when another client changed `edit`'s field since `expected` was set there: undoing or redoing over
+    /// that change would silently discard it.
+    fn check_unchanged(&self, edit: &Edit, expected: &Option<String>) -> Result<(), String> {
+        if self.field_map(edit.field).get(&edit.address) == expected.as_ref() {
+            return Ok(());
+        }
+        Err(format!("{:#x} was edited by another client since; not changed", edit.address))
     }
 
     fn field_map(&self, field: Field) -> &BTreeMap<u64, String> {
@@ -195,8 +207,9 @@ impl Annotations {
     }
 }
 
-/// Reads the edits appended to `log` since it was last read. Returns them, and whether the file shrank (it was
-/// replaced), in which case they are its whole contents and earlier state must be dropped.
+/// Reads the complete lines appended to `log` since it was last read. Returns their edits, and whether the file
+/// was replaced (it shrank or is another file), in which case they are its whole contents and earlier state must be
+/// dropped. Lines that do not parse, such as a fragment an interrupted write left behind, are skipped.
 fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
     let path = log.path.clone();
     let error = |error: std::io::Error| format!("{}: {error}", path.display());
@@ -205,44 +218,38 @@ fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
         Err(problem) if problem.kind() == std::io::ErrorKind::NotFound => return Ok((false, Vec::new())),
         Err(problem) => return Err(error(problem)),
     };
-    let len = file.metadata().map_err(error)?.len();
-    let restart = len < log.read;
+    let metadata = file.metadata().map_err(error)?;
+    let identity = file_identity(&metadata);
+    let restart = metadata.len() < log.read || (log.identity.is_some() && log.identity != identity);
     if restart {
         *log = Log { path: path.clone(), ..Log::default() };
     }
-    if len == log.read {
+    log.identity = identity;
+    if metadata.len() == log.read {
         return Ok((restart, Vec::new()));
     }
-    let start = log.read;
-    file.seek(SeekFrom::Start(start)).map_err(error)?;
+    file.seek(SeekFrom::Start(log.read)).map_err(error)?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).map_err(error)?;
-
-    let mut edits = Vec::new();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        let end = bytes[offset..].iter().position(|&byte| byte == b'\n').map(|index| offset + index);
-        let line = String::from_utf8_lossy(&bytes[offset..end.unwrap_or(bytes.len())]);
-        let parsed = (!line.trim().is_empty()).then(|| serde_json::from_str::<Edit>(&line));
-        match (end, parsed) {
-            (Some(_), Some(Err(problem))) => {
-                return Err(format!("{}:{}: {problem}", path.display(), log.lines + 1));
-            }
-            (Some(_), parsed) => {
-                edits.extend(parsed.and_then(Result::ok));
-                log.lines += 1;
-            }
-            (None, Some(Ok(edit))) => {
-                edits.push(edit);
-                log.unterminated = true;
-            }
-            (None, Some(Err(_))) => log.fragment = Some(start + offset as u64),
-            (None, None) => {}
-        }
-        offset = end.map_or(bytes.len(), |end| end + 1);
-    }
-    log.read = start + bytes.len() as u64;
+    // Only complete lines: the rest may still be being written.
+    let complete = bytes.iter().rposition(|&byte| byte == b'\n').map_or(0, |end| end + 1);
+    let edits = bytes[..complete]
+        .split(|&byte| byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<Edit>(line).ok())
+        .collect();
+    log.read += complete as u64;
     Ok((restart, edits))
+}
+
+#[cfg(unix)]
+fn file_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_identity(_: &std::fs::Metadata) -> Option<(u64, u64)> {
+    None
 }
 
 #[cfg(test)]
@@ -305,5 +312,51 @@ mod tests {
         let replayed = Annotations::open(path.clone()).unwrap();
         assert_eq!((replayed.name(0x10), replayed.name(0x20)), (Some("first"), Some("second")));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_line_read_while_half_written_is_read_whole_later() {
+        let path = temporary_log("torn");
+        let mut reader = Annotations::open(path.clone()).unwrap();
+        let line = serde_json::to_string(&Edit {
+            field: Field::Name,
+            address: 0x30,
+            value: Some("late".into()),
+            previous: None,
+        })
+        .unwrap();
+        let (head, tail) = line.split_at(10);
+        let mut file = OpenOptions::new().create(true).append(true).open(&path).unwrap();
+        file.write_all(head.as_bytes()).unwrap();
+        assert!(!reader.refresh().unwrap());
+        file.write_all(format!("{tail}\n").as_bytes()).unwrap();
+        assert!(reader.refresh().unwrap());
+        assert_eq!(reader.name(0x30), Some("late"));
+        reader.set(Field::Name, 0x40, Some("after".into())).unwrap();
+        assert_eq!(Annotations::open(path.clone()).unwrap().name(0x40), Some("after"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn undo_refuses_to_discard_another_clients_edit() {
+        let path = temporary_log("conflict");
+        let mut ui = Annotations::open(path.clone()).unwrap();
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        ui.set(Field::Name, 0x10, Some("a".into())).unwrap();
+        agent.set(Field::Name, 0x10, Some("b".into())).unwrap();
+        assert!(ui.undo().is_err());
+        assert_eq!(ui.name(0x10), Some("b"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_name_left_at_two_addresses_still_resolves() {
+        let mut annotations = Annotations::in_memory();
+        let edit =
+            |address, value: &str| Edit { field: Field::Name, address, value: Some(value.into()), previous: None };
+        annotations.apply(&edit(0x10, "foo"));
+        annotations.apply(&edit(0x20, "foo"));
+        annotations.apply(&edit(0x20, "baz"));
+        assert_eq!(annotations.address_of("foo"), Some(0x10));
     }
 }

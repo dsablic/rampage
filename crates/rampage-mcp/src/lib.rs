@@ -148,6 +148,8 @@ impl RampageServer {
         let outcome = tokio::task::spawn_blocking(move || -> Result<T, String> {
             let arch = binary.arch.as_deref().map(str::parse::<Arch>).transpose()?;
             let project = session.open(&PathBuf::from(&binary.path), arch).map_err(|error| error_text(&error))?;
+            // Other clients (the UI, the CLI) may have saved names since the last call.
+            project.refresh_annotations().map_err(|error| error_text(&error))?;
             work(&project).map_err(|error| error_text(&error))
         })
         .await
