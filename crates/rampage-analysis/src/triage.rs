@@ -59,7 +59,10 @@ pub struct SectionTriage {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OverlayTriage {
+    /// Offset within the image (the slice, for a universal binary).
     pub offset: u64,
+    /// Offset within the whole file.
+    pub file_offset: u64,
     pub size: u64,
     pub entropy: f64,
 }
@@ -98,32 +101,6 @@ fn hashes(bytes: &[u8]) -> Hashes {
     Hashes { md5, sha1, sha256 }
 }
 
-/// The PE import hash: MD5 of `library.function` pairs, lowercased, library extensions removed, ordinals as
-/// `ord<n>`, joined with commas.
-pub fn imphash(binary: &Binary) -> Option<String> {
-    if binary.format != Format::Pe || binary.imports.is_empty() {
-        return None;
-    }
-    let entries: Vec<String> = binary
-        .imports
-        .iter()
-        .map(|import| {
-            let library = import.library.as_deref().unwrap_or("").to_lowercase();
-            let library = ["dll", "ocx", "sys"]
-                .iter()
-                .find_map(|extension| library.strip_suffix(&format!(".{extension}")))
-                .unwrap_or(&library)
-                .to_owned();
-            let function = match import.name.strip_prefix('#') {
-                Some(ordinal) => format!("ord{ordinal}"),
-                None => import.name.to_lowercase(),
-            };
-            format!("{library}.{function}")
-        })
-        .collect();
-    Some(hex(&Md5::digest(entries.join(",").as_bytes())))
-}
-
 /// Section names that well-known packers and protectors leave behind.
 const PACKER_SECTIONS: [(&str, &str); 14] = [
     ("UPX0", "UPX"),
@@ -149,20 +126,28 @@ pub fn triage(binary: &Binary) -> Triage {
     let ((image_hashes, file_hashes), (image_entropy, entropy_profile)) = rayon::join(
         || (hashes(image), sliced.then(|| hashes(file))),
         || {
-            let chunk = image.len().div_ceil(PROFILE_POINTS).max(1);
-            (entropy(image), image.chunks(chunk).map(entropy).collect())
+            // Exactly PROFILE_POINTS slices (fewer only for images smaller than that), split as evenly as possible.
+            let points = PROFILE_POINTS.min(image.len());
+            let slice = |i: usize| &image[i * image.len() / points..(i + 1) * image.len() / points];
+            (entropy(image), (0..points).map(|i| entropy(slice(i))).collect())
         },
     );
 
-    // Sections that are not mapped (ELF symbol and string tables) are metadata, not image content.
     let sections: Vec<SectionTriage> = binary
         .sections
         .iter()
-        .filter(|section| binary.segment_containing(section.address).is_some())
         .map(|section| {
-            let bytes = binary.read_to_segment_end(section.address).unwrap_or_default();
-            let bytes = &bytes[..bytes.len().min(section.size as usize)];
-            let perms = binary.segment_containing(section.address).map(|segment| segment.perms);
+            // Measure what the file stores for the section: nothing for zero-fill sections.
+            let bytes = section
+                .file_offset
+                .and_then(|offset| {
+                    let start = usize::try_from(offset).ok()?;
+                    image.get(start..start.checked_add(usize::try_from(section.file_size).ok()?)?)
+                })
+                .unwrap_or_default();
+            // ELF sections that are not loaded (symbol and string tables) have address 0.
+            let loaded = section.address != 0 || binary.format != Format::Elf;
+            let perms = binary.segment_containing(section.address).filter(|_| loaded).map(|segment| segment.perms);
             let perms = perms.map_or_else(
                 || "---".to_owned(),
                 |perms| {
@@ -185,8 +170,9 @@ pub fn triage(binary: &Binary) -> Triage {
         .collect();
     let overlay = binary.overlay.map(|overlay| OverlayTriage {
         offset: overlay.offset,
+        file_offset: overlay.file_offset,
         size: overlay.size,
-        entropy: entropy(&image[overlay.offset as usize..]),
+        entropy: entropy(&image[overlay.offset as usize..][..overlay.size as usize]),
     });
 
     let mut triage = Triage {
@@ -198,7 +184,10 @@ pub fn triage(binary: &Binary) -> Triage {
         entropy_profile,
         sections,
         overlay,
-        imphash: imphash(binary),
+        imphash: match &binary.details {
+            Details::Pe(pe) => pe.imphash.clone(),
+            _ => None,
+        },
         details: binary.details.clone(),
         hints: Vec::new(),
     };
@@ -216,7 +205,9 @@ fn hints(binary: &Binary, triage: &Triage) -> Vec<String> {
                 section.name, section.entropy
             ));
         }
-        if section.perms == "rwx" {
+        // Mach-O object files put every section in one rwx segment by convention.
+        let object_file = matches!(&binary.details, Details::MachO(macho) if macho.file_type == "object");
+        if section.perms == "rwx" && !object_file {
             hints.push(format!("section {} is writable and executable", section.name));
         }
         if let Some((_, packer)) = PACKER_SECTIONS.iter().find(|(name, _)| *name == section.name) {
@@ -231,19 +222,25 @@ fn hints(binary: &Binary, triage: &Triage) -> Vec<String> {
     if let Some(overlay) = &triage.overlay {
         hints.push(format!(
             "{} bytes of overlay data at file offset {:#x} (entropy {:.2})",
-            overlay.size, overlay.offset, overlay.entropy
+            overlay.size, overlay.file_offset, overlay.entropy
         ));
     }
     match &binary.details {
         Details::Pe(details) => {
             let has = |name| details.characteristics.contains(&name);
-            if binary.imports.len() < 10 {
+            // .NET assemblies import only mscoree, and EFI images import nothing by design.
+            let firmware = details.subsystem.starts_with("efi");
+            let unreadable = binary.warnings.iter().any(|warning| warning.contains("import table"));
+            if binary.imports.len() < 10 && !details.dotnet && !firmware && !unreadable {
                 hints.push(format!("only {} imports: packers resolve the rest at run time", binary.imports.len()));
             }
-            if !has("aslr") {
+            if details.dotnet {
+                hints.push(".NET assembly: the code is IL in the CLR metadata, not native instructions".to_owned());
+            }
+            if !has("aslr") && !firmware {
                 hints.push("no ASLR (DYNAMIC_BASE not set)".to_owned());
             }
-            if !has("dep") {
+            if !has("dep") && !firmware {
                 hints.push("no DEP (NX_COMPAT not set)".to_owned());
             }
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());

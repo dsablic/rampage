@@ -110,11 +110,16 @@ impl Binary {
 
         let sections = parsed
             .sections()
-            .map(|section| Section {
-                name: section.name().unwrap_or_default().to_owned(),
-                address: section.address(),
-                size: section.size(),
-                kind: section_kind_of(section.kind()),
+            .map(|section| {
+                let file_range = section.file_range();
+                Section {
+                    name: section.name().unwrap_or_default().to_owned(),
+                    address: section.address(),
+                    size: section.size(),
+                    kind: section_kind_of(section.kind()),
+                    file_offset: file_range.map(|(offset, _)| offset),
+                    file_size: file_range.map_or(0, |(_, size)| size),
+                }
             })
             .collect();
 
@@ -186,7 +191,8 @@ impl Binary {
         let image_base = parsed.relative_address_base();
         let import_slots = crate::slots::collect(&parsed, &data[image.clone()], &mut warnings);
         let details = crate::details::collect(&parsed);
-        let overlay = crate::details::overlay(&parsed, &data[image.clone()]);
+        let overlay = crate::details::overlay(&parsed, &data[image.clone()])
+            .map(|overlay| Overlay { file_offset: image.start as u64 + overlay.offset, ..overlay });
         drop(parsed);
 
         let mut binary = Self {

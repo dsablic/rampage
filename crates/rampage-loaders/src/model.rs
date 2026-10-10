@@ -49,6 +49,9 @@ pub struct Section {
     pub address: u64,
     pub size: u64,
     pub kind: SectionKind,
+    /// Where the section's contents lie in the image, when they are stored in the file (not zero-fill).
+    pub file_offset: Option<u64>,
+    pub file_size: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -81,6 +84,8 @@ pub struct ImportSlot {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub name: String,
+    /// The library the import is bound to, when the format records it per slot (PE, Mach-O).
+    pub library: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

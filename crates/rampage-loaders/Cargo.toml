@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 rampage-arch.workspace = true
+md-5.workspace = true
 memmap2.workspace = true
 object.workspace = true
 serde.workspace = true

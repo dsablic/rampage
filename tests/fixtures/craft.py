@@ -96,3 +96,69 @@ open(f'{out}/bindfar.macho', 'wb').write(macho_with_binds(bind_x + b'\x71' + ule
 payload = b'PAYLOAD!' * 64
 open(f'{out}/overlay.exe', 'wb').write(open(f'{out}/../bin/hello-x64.exe', 'rb').read() + payload)
 open(f'{out}/overlay.elf', 'wb').write(open(f'{out}/../bin/hello-x64-dyn.elf', 'rb').read() + payload)
+
+
+def pe_sections(pe):
+    """(name, virtual_size, virtual_address, raw_size, raw_offset, header_offset) for each section header."""
+    header = struct.unpack_from('<I', pe, 0x3c)[0]
+    count = struct.unpack_from('<H', pe, header + 6)[0]
+    optional_size = struct.unpack_from('<H', pe, header + 20)[0]
+    table = header + 24 + optional_size
+    sections = []
+    for index in range(count):
+        offset = table + 40 * index
+        name = pe[offset:offset + 8].rstrip(b'\0')
+        virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from('<IIII', pe, offset + 8)
+        sections.append((name, virtual_size, virtual_address, raw_size, raw_offset, offset))
+    return sections
+
+
+def pe_offset(pe, rva):
+    for _, virtual_size, virtual_address, raw_size, raw_offset, _ in pe_sections(pe):
+        if virtual_address <= rva < virtual_address + max(virtual_size, raw_size):
+            return raw_offset + rva - virtual_address
+    raise ValueError(hex(rva))
+
+
+def pe_directory(pe, index):
+    """File offset of data directory `index` in a PE32+ optional header."""
+    return struct.unpack_from('<I', pe, 0x3c)[0] + 24 + 112 + 8 * index
+
+
+# A signed installer: an overlay payload, then a certificate table that ends the file.
+pe = bytearray(open(f'{out}/overlay.exe', 'rb').read())
+certificate = struct.pack('<IHH', 16, 0x200, 2) + b'\x30\x82' + b'\x11' * 6
+struct.pack_into('<II', pe, pe_directory(pe, 4), len(pe), len(certificate))
+open(f'{out}/signed_overlay.exe', 'wb').write(bytes(pe) + certificate)
+
+# A certificate entry claiming far more bytes than the file holds must not hide the overlay.
+pe = bytearray(open(f'{out}/overlay.exe', 'rb').read())
+struct.pack_into('<II', pe, pe_directory(pe, 4), 0x400, 0x7fffffff)
+open(f'{out}/bigcert.exe', 'wb').write(pe)
+
+# Two libraries importing the same name: puts from the stdio DLL renamed to free, which the heap DLL also imports.
+pe = bytearray(open(f'{out}/../bin/hello-x64.exe', 'rb').read())
+assert pe.count(b'\0puts\0') == 1
+pe = pe.replace(b'\0puts\0', b'\0free\0')
+open(f'{out}/dup.exe', 'wb').write(pe)
+
+# A delay-load descriptor duplicating the first regular import, placed in .rdata slack. pefile's imphash reads
+# only the regular imports, so adding it must not change the hash.
+pe = bytearray(open(f'{out}/../bin/hello-x64.exe', 'rb').read())
+import_rva = struct.unpack_from('<I', pe, pe_directory(pe, 1))[0]
+original_first_thunk, _, _, name, first_thunk = struct.unpack_from('<IIIII', pe, pe_offset(pe, import_rva))
+name_, virtual_size, virtual_address, raw_size, raw_offset, header_offset = [
+    section for section in pe_sections(pe) if section[0] == b'.rdata'][0]
+rva = (virtual_address + virtual_size + 31) & ~15
+assert rva + 64 <= virtual_address + raw_size
+offset = raw_offset + rva - virtual_address
+pe[offset:offset + 64] = struct.pack('<8I', 1, name, 0, first_thunk, original_first_thunk, 0, 0, 0) + bytes(32)
+struct.pack_into('<II', pe, pe_directory(pe, 13), rva, 64)
+struct.pack_into('<I', pe, header_offset + 8, rva + 64 - virtual_address)
+open(f'{out}/delay.exe', 'wb').write(pe)
+
+# Section headers removed (as sstrip does): dynamic data must still come from the program headers.
+elf = bytearray(open(f'{out}/../bin/hello-x64-dyn.elf', 'rb').read())
+struct.pack_into('<Q', elf, 0x28, 0)
+struct.pack_into('<HHH', elf, 0x3a, 0, 0, 0)
+open(f'{out}/sstrip.elf', 'wb').write(elf)

@@ -33,6 +33,11 @@ pub struct PeDetails {
     pub signed: bool,
     /// Rich header entries: the Microsoft tools that built the image.
     pub rich: Vec<RichEntry>,
+    /// The import hash (pefile's algorithm over the regular import table), which groups samples built from the
+    /// same imports. pefile's ordinal-to-name tables for ws2_32 and oleaut32 are not applied.
+    pub imphash: Option<String>,
+    /// A .NET assembly (it has a CLR runtime header); its code is IL, not native.
+    pub dotnet: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -77,8 +82,11 @@ pub struct MachODetails {
 /// Bytes past the last byte the image's headers, segments and sections account for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Overlay {
+    /// Offset within the image (the slice, for a universal binary).
     pub offset: u64,
     pub size: u64,
+    /// Offset within the whole file.
+    pub file_offset: u64,
 }
 
 pub(crate) fn collect(parsed: &object::File) -> Details {
@@ -92,35 +100,110 @@ pub(crate) fn collect(parsed: &object::File) -> Details {
     }
 }
 
-/// The overlay of `image`: data following everything its structures describe. Zero padding does not count.
+/// The overlay of `image`: data following everything its structures describe. Zero padding does not count, and
+/// neither does a PE certificate table at the very end of the file, though any payload in front of one does.
+/// Structures that claim to extend past the end of the file are ignored.
 pub(crate) fn overlay(parsed: &object::File, image: &[u8]) -> Option<Overlay> {
     let len = image.len() as u64;
-    let mut end =
-        parsed.segments().map(|s| object::ObjectSegment::file_range(&s)).map(|(o, s)| o.saturating_add(s)).max()?;
+    let mut end = 0u64;
+    let mut cover = |offset: u64, size: u64| {
+        if let Some(range_end) = offset.checked_add(size).filter(|&range_end| range_end <= len) {
+            end = end.max(range_end);
+        }
+    };
+    for segment in parsed.segments() {
+        let (offset, size) = object::ObjectSegment::file_range(&segment);
+        cover(offset, size);
+    }
     for section in parsed.sections() {
         if let Some((offset, size)) = section.file_range() {
-            end = end.max(offset.saturating_add(size));
+            cover(offset, size);
         }
     }
+    let mut certificate = None;
     match parsed {
-        object::File::Elf32(file) => end = end.max(elf_section_headers_end(file)),
-        object::File::Elf64(file) => end = end.max(elf_section_headers_end(file)),
-        // The certificate table follows the image by design; it is reported as `signed`, not as an overlay.
-        object::File::Pe32(file) => end = end.max(pe_certificate_end(file)).max(pe_raw_data_end(file)),
-        object::File::Pe64(file) => end = end.max(pe_certificate_end(file)).max(pe_raw_data_end(file)),
+        object::File::Elf32(file) => {
+            let (offset, size) = elf_section_headers(file);
+            cover(offset, size);
+        }
+        object::File::Elf64(file) => {
+            let (offset, size) = elf_section_headers(file);
+            cover(offset, size);
+        }
+        object::File::Pe32(file) => {
+            cover(0, pe_raw_data_end(file));
+            certificate = pe_certificate(file);
+        }
+        object::File::Pe64(file) => {
+            cover(0, pe_raw_data_end(file));
+            certificate = pe_certificate(file);
+        }
+        object::File::MachO32(_) | object::File::MachO64(_) => {
+            for (offset, size) in macho_tables(parsed) {
+                cover(offset, size);
+            }
+        }
         _ => {}
     }
-    let tail = image.get(usize::try_from(end).ok()?..)?;
-    tail.iter().any(|&byte| byte != 0).then(|| Overlay { offset: end, size: len - end })
+    // A certificate table that ends the file belongs to the image; whatever lies before it does not.
+    let stop = match certificate {
+        Some((offset, size)) if offset >= end && offset.checked_add(size) == Some(len) => offset,
+        _ => len,
+    };
+    let tail = image.get(usize::try_from(end).ok()?..usize::try_from(stop).ok()?)?;
+    tail.iter().any(|&byte| byte != 0).then(|| Overlay { offset: end, size: stop - end, file_offset: end })
 }
 
-fn elf_section_headers_end<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> u64 {
+/// File ranges of a Mach-O's link-edit data and section relocations, which follow the segments in object files.
+fn macho_tables(parsed: &object::File) -> Vec<(u64, u64)> {
+    let mut ranges = Vec::new();
+    let Some((mut commands, endian)) = macho_load_commands(parsed) else { return ranges };
+    let symbol_size: u64 = if parsed.is_64() { 16 } else { 12 };
+    let mut add = |offset: u32, count: u32, size: u64| ranges.push((u64::from(offset), u64::from(count) * size));
+    while let Ok(Some(command)) = commands.next() {
+        match command.variant() {
+            Ok(LoadCommandVariant::Symtab(symtab)) => {
+                add(symtab.symoff.get(endian), symtab.nsyms.get(endian), symbol_size);
+                add(symtab.stroff.get(endian), symtab.strsize.get(endian), 1);
+            }
+            Ok(LoadCommandVariant::Dysymtab(dysymtab)) => {
+                add(dysymtab.indirectsymoff.get(endian), dysymtab.nindirectsyms.get(endian), 4);
+                add(dysymtab.extreloff.get(endian), dysymtab.nextrel.get(endian), 8);
+                add(dysymtab.locreloff.get(endian), dysymtab.nlocrel.get(endian), 8);
+            }
+            Ok(LoadCommandVariant::DyldInfo(info)) => {
+                add(info.rebase_off.get(endian), info.rebase_size.get(endian), 1);
+                add(info.bind_off.get(endian), info.bind_size.get(endian), 1);
+                add(info.weak_bind_off.get(endian), info.weak_bind_size.get(endian), 1);
+                add(info.lazy_bind_off.get(endian), info.lazy_bind_size.get(endian), 1);
+                add(info.export_off.get(endian), info.export_size.get(endian), 1);
+            }
+            Ok(LoadCommandVariant::LinkeditData(linkedit)) => {
+                add(linkedit.dataoff.get(endian), linkedit.datasize.get(endian), 1);
+            }
+            Ok(LoadCommandVariant::Segment64(segment, data)) => {
+                for section in object::read::macho::Segment::sections(segment, endian, data).unwrap_or_default() {
+                    add(section.reloff.get(endian), section.nreloc.get(endian), 8);
+                }
+            }
+            Ok(LoadCommandVariant::Segment32(segment, data)) => {
+                for section in object::read::macho::Segment::sections(segment, endian, data).unwrap_or_default() {
+                    add(section.reloff.get(endian), section.nreloc.get(endian), 8);
+                }
+            }
+            _ => {}
+        }
+    }
+    ranges
+}
+
+/// The section header table's file range.
+fn elf_section_headers<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> (u64, u64) {
     let header = file.elf_header();
     let endian = file.endian();
     let count: u64 = header.e_shnum(endian).into();
     let size: u64 = header.e_shentsize(endian).into();
-    let offset: u64 = header.e_shoff(endian).into();
-    offset.saturating_add(count.saturating_mul(size))
+    (header.e_shoff(endian).into(), count.saturating_mul(size))
 }
 
 /// The end of the sections' raw data including its file-alignment padding (`SizeOfRawData`).
@@ -134,11 +217,11 @@ fn pe_raw_data_end<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'
         .unwrap_or(0)
 }
 
-fn pe_certificate_end<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>) -> u64 {
-    // The security directory holds a file offset, not an RVA.
-    file.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_SECURITY).map_or(0, |directory| {
-        u64::from(directory.virtual_address.get(LE)).saturating_add(directory.size.get(LE).into())
-    })
+/// The certificate table's file range (the security directory holds a file offset, not an RVA).
+fn pe_certificate<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>) -> Option<(u64, u64)> {
+    let directory = file.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_SECURITY)?;
+    let size = u64::from(directory.size.get(LE));
+    (size != 0).then(|| (u64::from(directory.virtual_address.get(LE)), size))
 }
 
 fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>) -> PeDetails {
@@ -189,7 +272,12 @@ fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>)
                 .collect()
         })
         .unwrap_or_default();
+    let dotnet = file
+        .data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR)
+        .is_some_and(|directory| directory.virtual_address.get(LE) != 0);
     PeDetails {
+        imphash: imphash(file),
+        dotnet,
         timestamp,
         timestamp_utc: utc(timestamp.into()),
         subsystem: subsystem.to_owned(),
@@ -199,6 +287,35 @@ fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>)
         signed,
         rich,
     }
+}
+
+/// pefile's `get_imphash`: MD5 of `library.function` for each regular (not delay-load) import, lowercased, with
+/// the library's .dll/.ocx/.sys extension removed and ordinals written `ord<n>`, joined by commas.
+fn imphash<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>) -> Option<String> {
+    use md5::{Digest, Md5};
+    let table = file.import_table().ok()??;
+    let mut entries = Vec::new();
+    let mut descriptors = table.descriptors().ok()?;
+    while let Ok(Some(descriptor)) = descriptors.next() {
+        let library = String::from_utf8_lossy(table.name(descriptor.name.get(LE)).ok()?).to_lowercase();
+        let library = match library.rsplit_once('.') {
+            Some((stem, "dll" | "ocx" | "sys")) => stem.to_owned(),
+            _ => library,
+        };
+        let lookup = match descriptor.original_first_thunk.get(LE) {
+            0 => descriptor.first_thunk.get(LE),
+            lookup => lookup,
+        };
+        let mut thunks = table.thunks(lookup).ok()?;
+        while let Ok(Some(thunk)) = thunks.next::<Pe>() {
+            let function = match table.import::<Pe>(thunk).ok()? {
+                object::read::pe::Import::Name(_, name) => String::from_utf8_lossy(name).to_lowercase(),
+                object::read::pe::Import::Ordinal(ordinal) => format!("ord{ordinal}"),
+            };
+            entries.push(format!("{library}.{function}"));
+        }
+    }
+    (!entries.is_empty()).then(|| hex(&Md5::digest(entries.join(",").as_bytes())))
 }
 
 /// `YYYY-MM-DD HH:MM:SS` for seconds since 1970 (Howard Hinnant's civil-from-days).
@@ -220,6 +337,8 @@ fn utc(seconds: i64) -> String {
 const PT_GNU_STACK: u32 = 0x6474_e551;
 const PT_GNU_RELRO: u32 = 0x6474_e552;
 const DT_NEEDED: u64 = 1;
+const DT_STRTAB: u64 = 5;
+const DT_STRSZ: u64 = 10;
 const DT_SONAME: u64 = 14;
 const DT_BIND_NOW: u64 = 24;
 const DT_FLAGS: u64 = 30;
@@ -239,8 +358,7 @@ fn elf<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>)
     let nx = stack.is_some_and(|header| header.p_flags(endian).0 & object::elf::PF_X.0 == 0);
     let has_relro = headers.iter().any(|header| header.p_type(endian).0 == PT_GNU_RELRO);
 
-    let entries = dynamic_entries(file);
-    let strings = file.section_by_name(".dynstr").and_then(|section| section.data().ok()).unwrap_or_default();
+    let (entries, strings) = dynamic(file);
     let string = |offset: u64| {
         let start = usize::try_from(offset).ok()?;
         let tail = strings.get(start..)?;
@@ -277,10 +395,18 @@ fn elf<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>)
     }
 }
 
-/// The `(d_tag, d_val)` pairs of `.dynamic`.
-fn dynamic_entries<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> Vec<(u64, u64)> {
-    let Some(data) = file.section_by_name(".dynamic").and_then(|section| section.data().ok()) else {
-        return Vec::new();
+/// The `(d_tag, d_val)` pairs of the PT_DYNAMIC segment, and the dynamic string table DT_STRTAB names. Both are
+/// found through the program headers, which loaders use, so they survive stripped section headers.
+fn dynamic<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> (Vec<(u64, u64)>, &'data [u8]) {
+    let endian = file.endian();
+    let headers = file.elf_program_headers();
+    let data = file.data();
+    let bytes = |offset: u64, size: u64| data.read_bytes_at(offset, size).ok();
+    let Some(dynamic) = headers.iter().find(|header| header.p_type(endian) == object::elf::PT_DYNAMIC) else {
+        return (Vec::new(), &[]);
+    };
+    let Some(raw) = bytes(dynamic.p_offset(endian).into(), dynamic.p_filesz(endian).into()) else {
+        return (Vec::new(), &[]);
     };
     let wide = file.is_64();
     let little = file.is_little_endian();
@@ -293,10 +419,25 @@ fn dynamic_entries<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'da
         }
     };
     let size = if wide { 8 } else { 4 };
-    data.chunks_exact(2 * size)
+    let entries: Vec<(u64, u64)> = raw
+        .chunks_exact(2 * size)
         .map(|entry| (word(&entry[..size]), word(&entry[size..])))
         .take_while(|&(tag, _)| tag != 0)
-        .collect()
+        .collect();
+    let value = |tag| entries.iter().find(|(t, _)| *t == tag).map(|(_, value)| *value);
+    // DT_STRTAB holds an address: map it to a file offset through the PT_LOAD segment containing it.
+    let strings = value(DT_STRTAB).zip(value(DT_STRSZ)).and_then(|(address, len)| {
+        let load = headers.iter().find(|header| {
+            let start: u64 = header.p_vaddr(endian).into();
+            let file_size: u64 = header.p_filesz(endian).into();
+            header.p_type(endian) == object::elf::PT_LOAD && address >= start && address - start < file_size
+        })?;
+        let start: u64 = load.p_vaddr(endian).into();
+        let offset: u64 = load.p_offset(endian).into();
+        let offset = offset.checked_add(address - start)?;
+        bytes(offset, len)
+    });
+    (entries, strings.unwrap_or_default())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -365,6 +506,15 @@ fn macho(parsed: &object::File) -> MachODetails {
                 details.sdk = Some(version(build.sdk.get(endian).0));
             }
             Ok(LoadCommandVariant::VersionMin(minimum)) if details.min_os.is_none() => {
+                details.platform = Some(
+                    match command.cmd() {
+                        object::macho::LC_VERSION_MIN_IPHONEOS => "ios",
+                        object::macho::LC_VERSION_MIN_TVOS => "tvos",
+                        object::macho::LC_VERSION_MIN_WATCHOS => "watchos",
+                        _ => "macos",
+                    }
+                    .to_owned(),
+                );
                 details.min_os = Some(version(minimum.version.get(endian).0));
                 details.sdk = Some(version(minimum.sdk.get(endian).0));
             }

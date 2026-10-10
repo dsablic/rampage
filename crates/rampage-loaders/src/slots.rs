@@ -36,7 +36,7 @@ fn elf(parsed: &object::File) -> Vec<ImportSlot> {
         .filter_map(|(address, relocation)| {
             let RelocationTarget::Symbol(index) = relocation.target() else { return None };
             let name = symbols.symbol_by_index(index).ok()?.name().ok()?;
-            (!name.is_empty()).then(|| ImportSlot { address, name: name.to_owned() })
+            (!name.is_empty()).then(|| ImportSlot { address, name: name.to_owned(), library: None })
         })
         .collect()
 }
@@ -70,11 +70,25 @@ fn macho(parsed: &object::File, image: &[u8]) -> Result<Vec<ImportSlot>, String>
     // No valid stream binds more pointers than the segments hold; a longer one is a crafted loop.
     let limit = segments.iter().map(|segment| segment.size / pointer_size).fold(0u64, u64::saturating_add);
     let Some((mut commands, endian)) = macho_load_commands(parsed) else { return Ok(Vec::new()) };
+    // Bind ordinals count the linked dylibs from 1, in load-command order.
+    let mut dylibs = Vec::new();
+    if let Some((mut scan, _)) = macho_load_commands(parsed) {
+        while let Ok(Some(command)) = scan.next() {
+            if let Ok(LoadCommandVariant::Dylib(dylib)) = command.variant() {
+                dylibs.push(
+                    command.string(endian, dylib.dylib.name).ok().map(|n| String::from_utf8_lossy(n).into_owned()),
+                );
+            }
+        }
+    }
+    let library = |dylib: macho::BindDylib| -> Option<String> {
+        dylib.index().and_then(|ordinal| dylibs.get(ordinal as usize - 1).cloned().flatten())
+    };
     let mut slots = Vec::new();
     while let Some(command) = commands.next().map_err(|error| error.to_string())? {
         match command.variant().map_err(|error| error.to_string())? {
             LoadCommandVariant::LinkeditData(linkedit) if command.cmd() == macho::LC_DYLD_CHAINED_FIXUPS => {
-                chained_fixups(linkedit, endian, image, &segments, text_address, &mut slots)
+                chained_fixups(linkedit, endian, image, &segments, text_address, &library, &mut slots)
                     .map_err(|error| error.to_string())?;
             }
             LoadCommandVariant::DyldInfo(info) => {
@@ -92,7 +106,8 @@ fn macho(parsed: &object::File, image: &[u8]) -> Result<Vec<ImportSlot>, String>
                         let Some(address) = segment.and_then(|segment| segment.address_of(bind.segment_offset)) else {
                             continue;
                         };
-                        slots.push(ImportSlot { address, name: String::from_utf8_lossy(bind.symbol).into_owned() });
+                        let name = String::from_utf8_lossy(bind.symbol).into_owned();
+                        slots.push(ImportSlot { address, name, library: library(bind.dylib) });
                     }
                 }
             }
@@ -108,12 +123,13 @@ fn chained_fixups(
     image: &[u8],
     segments: &[MachoSegment],
     text_address: u64,
+    library: &dyn Fn(macho::BindDylib) -> Option<String>,
     slots: &mut Vec<ImportSlot>,
 ) -> object::Result<()> {
     let fixups = linkedit.chained_fixups(endian, image)?;
-    let names = fixups
+    let imports = fixups
         .imports(endian)?
-        .map(|import| import.map(|import| String::from_utf8_lossy(import.name).into_owned()))
+        .map(|import| import.map(|import| (String::from_utf8_lossy(import.name).into_owned(), library(import.dylib))))
         .collect::<object::Result<Vec<_>>>()?;
     for segment in fixups.segments(endian)? {
         let segment = segment?;
@@ -121,10 +137,10 @@ fn chained_fixups(
         for fixup in segment.fixups(endian, text_address, target.data) {
             let (offset, fixup) = fixup?;
             if let object::read::macho::Fixup::Bind(bind) = fixup
-                && let Some(name) = names.get(bind.ordinal as usize)
+                && let Some((name, library)) = imports.get(bind.ordinal as usize)
                 && let Some(address) = target.address_of(offset)
             {
-                slots.push(ImportSlot { address, name: name.clone() });
+                slots.push(ImportSlot { address, name: name.clone(), library: library.clone() });
             }
         }
     }
@@ -143,6 +159,8 @@ fn pe_iat<Pe: ImageNtHeaders>(file: &PeFile<Pe>) -> object::Result<Vec<ImportSlo
             0 => first_thunk,
             lookup => lookup,
         };
+        let library =
+            table.name(descriptor.name.get(object::LittleEndian)).ok().map(|n| String::from_utf8_lossy(n).into_owned());
         let mut thunks = table.thunks(lookup)?;
         let mut index = 0u64;
         while let Some(thunk) = thunks.next::<Pe>()? {
@@ -154,7 +172,7 @@ fn pe_iat<Pe: ImageNtHeaders>(file: &PeFile<Pe>) -> object::Result<Vec<ImportSlo
                 .checked_add(u64::from(first_thunk))
                 .and_then(|address| address.checked_add(index * slot_size));
             if let Some(address) = address {
-                slots.push(ImportSlot { address, name });
+                slots.push(ImportSlot { address, name, library: library.clone() });
             }
             index += 1;
         }

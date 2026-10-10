@@ -306,3 +306,47 @@ fn appended_data_is_an_overlay_and_padding_is_not() {
         assert_eq!(&binary.image_bytes()[overlay.offset as usize..][..8], b"PAYLOAD!");
     }
 }
+
+#[test]
+fn overlays_respect_certificates_and_ignore_impossible_ranges() {
+    for name in ["signed_overlay.exe", "bigcert.exe"] {
+        let overlay = Binary::open(malformed(name)).unwrap().overlay.unwrap_or_else(|| panic!("{name}: no overlay"));
+        assert_eq!((overlay.offset, overlay.size), (0x35c00, 512), "{name}");
+    }
+    // Object files keep symbols and relocations past their sections; none of it is overlay.
+    for name in ["hello-x64.o", "hello-x64-elf.o"] {
+        assert_eq!(Binary::open(fixture(name)).unwrap().overlay, None, "{name}");
+    }
+}
+
+#[test]
+fn imphash_reads_regular_imports_only() {
+    let imphash = |binary: Binary| match binary.details {
+        rampage_loaders::Details::Pe(pe) => pe.imphash,
+        other => panic!("{other:?}"),
+    };
+    let original = imphash(Binary::open(fixture("hello-x64.exe")).unwrap());
+    assert_eq!(original.as_deref(), Some("ce66a1eb6671f220f5a569f65867a95b"));
+    let delayed = Binary::open(malformed("delay.exe")).unwrap();
+    assert!(delayed.imports.len() > Binary::open(fixture("hello-x64.exe")).unwrap().imports.len());
+    assert_eq!(imphash(delayed), original);
+}
+
+#[test]
+fn elf_dynamic_data_survives_missing_section_headers() {
+    let binary = Binary::open(malformed("sstrip.elf")).unwrap();
+    let rampage_loaders::Details::Elf(details) = &binary.details else { panic!("{:?}", binary.details) };
+    assert_eq!(details.needed, ["libc.so.6"]);
+    assert_eq!(details.relro, "full");
+}
+
+#[test]
+fn import_slots_know_their_library() {
+    let binary = Binary::open(malformed("dup.exe")).unwrap();
+    let frees: Vec<_> = binary.import_slots.iter().filter(|slot| slot.name == "free").collect();
+    assert_eq!(frees.len(), 2);
+    assert_ne!(frees[0].library, frees[1].library);
+    let macho = Binary::open(fixture("hello-arm64.macho")).unwrap();
+    let puts = macho.import_slots.iter().find(|slot| slot.name == "_puts").unwrap();
+    assert_eq!(puts.library.as_deref(), Some("/usr/lib/libSystem.B.dylib"));
+}

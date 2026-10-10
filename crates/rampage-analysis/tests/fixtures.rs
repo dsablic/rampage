@@ -186,3 +186,16 @@ fn triage_of_a_universal_binary_hashes_the_slice_and_the_file() {
     assert_ne!(file.sha256, triage.image_hashes.sha256);
     assert!(triage.file_size.unwrap() > triage.image_size);
 }
+
+#[test]
+fn triage_measures_sections_from_their_own_bytes() {
+    let triage = rampage_analysis::triage::triage(&open("libhelper-x64.so"));
+    assert_eq!(triage.entropy_profile.len(), 64);
+    // Non-allocated ELF sections are not mapped, and are measured from their own contents.
+    let comment = triage.sections.iter().find(|section| section.name == ".comment").unwrap();
+    assert_eq!(comment.perms, "---");
+    assert!(comment.entropy > 3.0, "{comment:?}");
+    // Mach-O object files keep every section in one rwx segment; that is not worth a hint.
+    let object = rampage_analysis::triage::triage(&open("hello-x64.o"));
+    assert!(!object.hints.iter().any(|hint| hint.contains("writable and executable")), "{:?}", object.hints);
+}
