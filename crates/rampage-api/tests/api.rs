@@ -120,3 +120,26 @@ fn bare_import_names_resolve_to_elf_plt_stubs() {
     let rows = project.xrefs(&XrefQuery::To(stub)).unwrap();
     assert!(rows.iter().any(|row| row.to_name.as_deref() == Some("puts@plt")), "{rows:?}");
 }
+
+#[test]
+fn function_listing_groups_instructions_by_block() {
+    let project = Session::default().open(&fixture("hello-arm64.macho"), None).unwrap();
+    let main = project.resolve("_main").unwrap();
+    let listing = project.function_listing(main + 8).unwrap();
+    assert_eq!(listing.address, main);
+    assert_eq!(listing.name, "_main");
+    let lines: Vec<_> = listing.blocks.iter().flatten().collect();
+    assert_eq!(lines.first().unwrap().address, main);
+    assert_eq!(lines.last().unwrap().text, "ret");
+    assert!(project.function_listing(0).is_err());
+}
+
+#[test]
+fn imports_with_the_same_name_keep_their_own_slots() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/malformed/dup.exe");
+    let project = Session::default().open(&path, None).unwrap();
+    let query = rampage_api::ListQuery { contains: Some("free".into()), ..Default::default() };
+    let slots: Vec<_> = project.imports(&query).items.iter().filter(|i| i.name == "free").map(|i| i.slot).collect();
+    assert_eq!(slots.len(), 2);
+    assert_ne!(slots[0], slots[1]);
+}

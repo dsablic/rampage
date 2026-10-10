@@ -160,7 +160,16 @@ pub struct DisassemblyLine {
     pub comment: Option<String>,
 }
 
+/// A function's instructions grouped by basic block, in address order.
 #[derive(Debug, Serialize)]
+pub struct FunctionListing {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub name: String,
+    pub blocks: Vec<Vec<DisassemblyLine>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct XrefRow {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub from: u64,
@@ -221,6 +230,11 @@ impl Project {
         analysis.as_ref().map_err(|error| ApiError::Unsupported(UnsupportedArch(error.0)))
     }
 
+    /// The symbol, export, stub or import-slot name at `address`.
+    pub fn name_at(&self, address: u64) -> Option<&str> {
+        self.names.get(address)
+    }
+
     /// Parses `0x` hex, decimal, a symbol or export name, or a `sub_<hex>` name.
     pub fn resolve(&self, text: &str) -> Result<u64, ApiError> {
         let text = text.trim();
@@ -272,7 +286,6 @@ impl Project {
     }
 
     pub fn disassemble(&self, at: Option<&str>, count: usize) -> Result<Vec<DisassemblyLine>, ApiError> {
-        let mut decoder = decoder_for(self.binary.arch)?;
         let start = match at {
             Some(text) => self.resolve(text)?,
             None => self
@@ -280,17 +293,24 @@ impl Project {
                 .entry
                 .ok_or_else(|| ApiError::Invalid("no entry point; pass an address or symbol".to_owned()))?,
         };
+        self.decode_lines(start, u64::MAX, count)
+    }
+
+    /// Decodes up to `count` instructions from `start`, stopping before `end`.
+    fn decode_lines(&self, start: u64, end: u64, count: usize) -> Result<Vec<DisassemblyLine>, ApiError> {
+        let mut decoder = decoder_for(self.binary.arch)?;
         let code = self
             .binary
             .read_to_segment_end(start)
             .ok_or_else(|| ApiError::Invalid(format!("address {start:#x} is not backed by file data")))?;
+        let limit = usize::try_from(end.saturating_sub(start)).unwrap_or(usize::MAX).min(code.len());
 
         let mut lines = Vec::with_capacity(count.min(4096));
         let mut offset = 0;
-        while lines.len() < count && offset < code.len() {
+        while lines.len() < count && offset < limit {
             let address = start + offset as u64;
             let insn = decoder.decode(&code[offset..], address);
-            let bytes = &code[offset..offset + usize::from(insn.len)];
+            let bytes = &code[offset..(offset + usize::from(insn.len)).min(code.len())];
             lines.push(DisassemblyLine {
                 address,
                 bytes: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
@@ -301,9 +321,23 @@ impl Project {
                 label: self.names.get(address).map(str::to_owned),
                 comment: self.describe_reference(&insn),
             });
-            offset += usize::from(insn.len);
+            offset += usize::from(insn.len.max(1));
         }
         Ok(lines)
+    }
+
+    /// The function containing `address`, disassembled block by block in address order.
+    pub fn function_listing(&self, address: u64) -> Result<FunctionListing, ApiError> {
+        let start = self
+            .function_containing(address)?
+            .ok_or_else(|| ApiError::NotFound(format!("no function contains {address:#x}")))?;
+        let analysis = self.analysis()?;
+        let function = analysis.program.function_at(start).expect("block index names a known function");
+        let mut blocks = Vec::with_capacity(function.blocks.len());
+        for block in &function.blocks {
+            blocks.push(self.decode_lines(block.start, block.end, usize::MAX)?);
+        }
+        Ok(FunctionListing { address: start, name: self.names.function_name(start), blocks })
     }
 
     /// Names what an instruction refers to: its branch target or data reference by name, or the string stored
@@ -330,8 +364,13 @@ impl Project {
     }
 
     pub fn imports(&self, query: &ListQuery) -> Page<ImportRow> {
-        let slots: HashMap<&str, u64> =
-            self.binary.import_slots.iter().map(|slot| (slot.name.as_str(), slot.address)).collect();
+        // Slots carry their library on PE and Mach-O, where two libraries may export the same name.
+        let slots: HashMap<(Option<&str>, &str), u64> = self
+            .binary
+            .import_slots
+            .iter()
+            .map(|slot| ((slot.library.as_deref(), slot.name.as_str()), slot.address))
+            .collect();
         let rows = self
             .binary
             .imports
@@ -345,7 +384,10 @@ impl Project {
             .map(|import| ImportRow {
                 library: import.library.clone(),
                 name: import.name.clone(),
-                slot: slots.get(import.name.as_str()).copied(),
+                slot: slots
+                    .get(&(import.library.as_deref(), import.name.as_str()))
+                    .or_else(|| slots.get(&(None, import.name.as_str())))
+                    .copied(),
             })
             .collect();
         page(rows, query.offset, query.limit)
