@@ -1,7 +1,8 @@
 //! Function start addresses recorded by the toolchain in format metadata.
 
+use object::Endianness;
 use object::LittleEndian as LE;
-use object::read::macho::{LoadCommandVariant, MachHeader};
+use object::read::macho::{LoadCommandIterator, LoadCommandVariant};
 use object::{Object, macho, pe};
 
 use crate::Binary;
@@ -25,9 +26,7 @@ pub(crate) fn macho(parsed: &object::File, image: &[u8], text_address: u64) -> V
 }
 
 fn macho_function_starts_data<'a>(parsed: &object::File, image: &'a [u8]) -> Option<&'a [u8]> {
-    let object::File::MachO64(file) = parsed else { return None };
-    let endian = file.endian();
-    let mut commands = file.macho_header().load_commands(endian, image, 0).ok()?;
+    let (mut commands, endian) = macho_load_commands(parsed)?;
     while let Ok(Some(command)) = commands.next() {
         if command.cmd() != macho::LC_FUNCTION_STARTS {
             continue;
@@ -38,6 +37,16 @@ fn macho_function_starts_data<'a>(parsed: &object::File, image: &'a [u8]) -> Opt
         return image.get(start..start.checked_add(len)?);
     }
     None
+}
+
+pub(crate) fn macho_load_commands<'data>(
+    parsed: &object::File<'data>,
+) -> Option<(LoadCommandIterator<'data, Endianness>, Endianness)> {
+    match parsed {
+        object::File::MachO32(file) => Some((file.macho_load_commands().ok()?, file.endian())),
+        object::File::MachO64(file) => Some((file.macho_load_commands().ok()?, file.endian())),
+        _ => None,
+    }
 }
 
 fn read_uleb128(bytes: &[u8]) -> Option<(u64, &[u8])> {

@@ -132,3 +132,54 @@ fn pe_function_starts_come_from_pdata() {
     assert!(binary.function_starts.len() > 10);
     assert!(binary.function_starts.iter().all(|&start| binary.segment_containing(start).unwrap().perms.execute));
 }
+
+fn malformed(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/malformed").join(name)
+}
+
+#[test]
+fn segment_at_top_of_address_space_is_clipped_not_wrapped() {
+    let binary = Binary::open(malformed("wrap.elf")).unwrap();
+    for segment in &binary.segments {
+        assert!(segment.address.checked_add(segment.size).is_some(), "{segment:?}");
+    }
+    let segment = &binary.segments[0];
+    assert!(binary.read_to_segment_end(segment.address).is_some());
+}
+
+#[test]
+fn i386_macho_lc_main_entry_is_an_address() {
+    let binary = Binary::open(malformed("i386.macho")).unwrap();
+    assert_eq!(binary.arch, Arch::X86);
+    assert_eq!(binary.entry, Some(0x1f50));
+}
+
+#[test]
+fn universal_binary_skips_unsupported_first_slice() {
+    let binary = Binary::open(malformed("ppc_i386.fat")).unwrap();
+    assert_eq!(binary.arch, Arch::X86);
+    assert_eq!(binary.slices, [Arch::X86]);
+}
+
+#[test]
+fn truncated_segment_still_reads_bytes_present_in_the_file() {
+    let binary = Binary::open(malformed("trunc.elf")).unwrap();
+    let bytes = binary.read_to_segment_end(0x400078).expect("bytes up to end of file");
+    assert!(bytes.starts_with(b"\x90\x90\x90\x90\x90\x90\x90\x90SECRETSTRING"));
+    assert!(binary.read(0x400078, 0x1000).is_none(), "exact reads past end of file still fail");
+}
+
+#[test]
+fn corrupt_import_table_is_a_warning_not_a_failure() {
+    let binary = Binary::open(malformed("badimport.exe")).unwrap();
+    assert!(binary.imports.is_empty());
+    assert!(!binary.segments.is_empty());
+    assert!(binary.warnings.iter().any(|warning| warning.contains("import")), "{:?}", binary.warnings);
+}
+
+#[test]
+fn well_formed_fixtures_have_no_warnings() {
+    for name in ["hello-x64.elf", "hello-x64.exe", "hello-x64.macho", "hello-arm64.macho"] {
+        assert_eq!(Binary::open(fixture(name)).unwrap().warnings, Vec::<String>::new(), "{name}");
+    }
+}

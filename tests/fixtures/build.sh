@@ -11,3 +11,4 @@ clang -arch arm64 -O1 -o bin/hello-arm64.macho "$src"
 lipo -create bin/hello-x64.macho bin/hello-arm64.macho -output bin/hello-universal.macho
 clang -arch x86_64 -O1 -dynamiclib -o bin/hello-x64.dylib "$src"
 strip -o bin/hello-x64-stripped.macho bin/hello-x64.macho
+python3 craft.py malformed

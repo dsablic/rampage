@@ -13,9 +13,9 @@ use crate::starts;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
-    #[error("cannot read {path}: {source}")]
+    #[error("cannot read {path}")]
     Io { path: PathBuf, source: std::io::Error },
-    #[error("cannot parse binary: {0}")]
+    #[error("cannot parse binary")]
     Parse(#[from] object::Error),
     #[error("malformed binary: {0}")]
     Malformed(String),
@@ -37,6 +37,8 @@ pub struct Binary {
     pub function_starts: Vec<u64>,
     /// Architectures present in the file: several for a universal Mach-O, otherwise just `arch`.
     pub slices: Vec<Arch>,
+    /// Problems with optional metadata that did not prevent loading.
+    pub warnings: Vec<String>,
     #[serde(skip)]
     data: Mmap,
     #[serde(skip)]
@@ -83,12 +85,13 @@ impl Binary {
             .enumerate()
             .map(|(index, segment)| {
                 let (file_offset, file_size) = segment.file_range();
+                let size = segment.size().min(u64::MAX - segment.address());
                 Segment {
                     name: segment.name().ok().flatten().map_or_else(|| format!("seg{index}"), str::to_owned),
                     address: segment.address(),
-                    size: segment.size(),
+                    size,
                     file_offset,
-                    file_size: file_size.min(segment.size()),
+                    file_size: file_size.min(size),
                     perms: perms_of(segment.flags()),
                 }
             })
@@ -121,25 +124,42 @@ impl Binary {
         symbols.sort_by(|a, b| (a.address, &a.name).cmp(&(b.address, &b.name)));
         symbols.dedup();
 
+        let mut warnings = Vec::new();
         let imports = parsed
-            .imports()?
-            .map(|import| {
-                let import = import?;
-                let library = String::from_utf8_lossy(import.library()).into_owned();
-                Ok(Import {
-                    library: Some(library).filter(|library| !library.is_empty()),
-                    name: name_of(import.name()),
-                })
+            .imports()
+            .and_then(|imports| {
+                imports
+                    .map(|import| {
+                        let import = import?;
+                        let library = String::from_utf8_lossy(import.library()).into_owned();
+                        Ok(Import {
+                            library: Some(library).filter(|library| !library.is_empty()),
+                            name: name_of(import.name()),
+                        })
+                    })
+                    .collect::<Result<_, object::Error>>()
             })
-            .collect::<Result<_, object::Error>>()?;
+            .unwrap_or_else(|error| {
+                warnings.push(format!("import table unreadable: {error}"));
+                Vec::new()
+            });
 
-        let mut exports = Vec::new();
-        for export in parsed.exports()? {
-            let export = export?;
-            if let object::ExportTarget::Address { address } = export.target() {
-                exports.push(Export { name: name_of(export.name()), address });
-            }
-        }
+        let exports = parsed
+            .exports()
+            .and_then(|exports| {
+                let mut found = Vec::new();
+                for export in exports {
+                    let export = export?;
+                    if let object::ExportTarget::Address { address } = export.target() {
+                        found.push(Export { name: name_of(export.name()), address });
+                    }
+                }
+                Ok(found)
+            })
+            .unwrap_or_else(|error| {
+                warnings.push(format!("export table unreadable: {error}"));
+                Vec::new()
+            });
 
         // A zero entry (relative to the image base, which PE adds) is how every format spells "none".
         let entry = match macho_main_entry_offset(&parsed) {
@@ -166,6 +186,7 @@ impl Binary {
             exports,
             function_starts: Vec::new(),
             slices,
+            warnings,
             data,
             image,
         };
@@ -201,10 +222,14 @@ impl Binary {
     }
 
     /// Returns the file-backed bytes from `address` to the end of its segment's file data.
+    /// Truncated files are cut short at the end of the file instead of failing.
     pub fn read_to_segment_end(&self, address: u64) -> Option<&[u8]> {
         let segment = self.segment_containing(address)?;
-        let available = segment.file_size.checked_sub(address - segment.address)?;
-        self.read(address, available)
+        let offset = address - segment.address;
+        let in_segment = segment.file_size.checked_sub(offset)?;
+        let file_position = segment.file_offset.checked_add(offset)?;
+        let in_file = (self.image.len() as u64).checked_sub(file_position)?;
+        self.read(address, in_segment.min(in_file)).filter(|bytes| !bytes.is_empty())
     }
 }
 
@@ -232,7 +257,10 @@ fn select_slice(slices: Vec<Slice>, wanted: Option<Arch>) -> Result<(Vec<Arch>, 
     let present: Vec<Arch> = slices.iter().filter_map(|slice| slice.arch).collect();
     let chosen = match wanted {
         Some(wanted) => slices.iter().find(|slice| slice.arch == Some(wanted)),
-        None => slices.iter().find(|slice| slice.arch == Some(Arch::X86_64)).or_else(|| slices.first()),
+        None => slices
+            .iter()
+            .find(|slice| slice.arch == Some(Arch::X86_64))
+            .or_else(|| slices.iter().find(|slice| slice.arch.is_some())),
     };
     let Some(chosen) = chosen else {
         let present = present.iter().map(Arch::to_string).collect::<Vec<_>>().join(", ");
@@ -253,11 +281,10 @@ fn arch_of(architecture: object::Architecture) -> Option<Arch> {
 
 /// `LC_MAIN` stores the entry point as a file offset, which `object` passes through unchanged.
 fn macho_main_entry_offset(parsed: &object::File) -> Option<u64> {
-    let object::File::MachO64(file) = parsed else { return None };
-    let mut commands = file.macho_load_commands().ok()?;
+    let (mut commands, endian) = starts::macho_load_commands(parsed)?;
     while let Ok(Some(command)) = commands.next() {
         if let Ok(Some(main)) = command.entry_point() {
-            return Some(main.entryoff.get(file.endian()));
+            return Some(main.entryoff.get(endian));
         }
     }
     None
