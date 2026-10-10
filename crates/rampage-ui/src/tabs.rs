@@ -42,6 +42,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Exports => format!("Exports{}", count(workspace.exports.len())),
             Tab::Disassembly => match &workspace.listing {
                 Some(Ok(listing)) if !listing.name.is_empty() => format!("Disassembly - {}", listing.name),
+                None if workspace.analysis_ready() => format!("Hex - {:#x}", workspace.cursor),
                 _ => "Disassembly".to_owned(),
             },
             Tab::Xrefs => "Xrefs".to_owned(),

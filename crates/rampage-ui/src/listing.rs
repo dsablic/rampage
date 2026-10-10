@@ -151,8 +151,11 @@ fn truncate(text: &str, width: usize) -> String {
 
 pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
     let Some(listing) = &workspace.listing else {
-        let message = if workspace.functions.is_running() { "Analyzing..." } else { "Nothing to show" };
-        ui.centered_and_justified(|ui| ui.label(RichText::new(message).color(theme::DIM)));
+        if workspace.analysis_ready() {
+            hex(ui, workspace);
+        } else {
+            ui.centered_and_justified(|ui| ui.label(RichText::new("Analyzing...").color(theme::DIM)));
+        }
         return;
     };
     let listing = match listing {
@@ -192,6 +195,58 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
         Action::Select(address) => workspace.select(address),
         Action::Follow(address) => workspace.goto(address),
     }
+}
+
+/// Bytes per hex-view row, and rows shown around the cursor.
+const HEX_ROW: u64 = 16;
+const HEX_ROWS: u64 = 4096;
+
+/// A hex dump of the data around the cursor, within its segment.
+fn hex(ui: &mut Ui, workspace: &mut Workspace) {
+    let binary = &workspace.project.binary;
+    let cursor_row = workspace.cursor & !(HEX_ROW - 1);
+    let segment_start = binary.segment_containing(workspace.cursor).map_or(cursor_row, |segment| segment.address);
+    let start = cursor_row.saturating_sub(HEX_ROW * HEX_ROWS / 2).max(segment_start & !(HEX_ROW - 1));
+    let Some(bytes) = binary.read_to_segment_end(start) else {
+        ui.colored_label(theme::WARNING, format!("{:#x} is not backed by file data", workspace.cursor));
+        return;
+    };
+    let bytes = &bytes[..bytes.len().min((HEX_ROW * HEX_ROWS) as usize)];
+    let rows = bytes.len().div_ceil(HEX_ROW as usize);
+    let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y;
+    let mut area = ScrollArea::both().auto_shrink([false, false]).id_salt("hex");
+    let cursor_index = ((cursor_row - start) / HEX_ROW) as usize;
+    if workspace.scroll_to_cursor {
+        area = area.vertical_scroll_offset(cursor_index.saturating_sub(4) as f32 * row_height);
+        workspace.scroll_to_cursor = false;
+    }
+    let width = workspace.address_width;
+    let cursor = workspace.cursor;
+    area.show_rows(ui, row_height, rows, |ui, range| {
+        for index in range {
+            let address = start + index as u64 * HEX_ROW;
+            let chunk = &bytes[index * HEX_ROW as usize..((index + 1) * HEX_ROW as usize).min(bytes.len())];
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.label(RichText::new(format!("{address:0width$x}  ")).color(theme::ADDRESS).monospace());
+                for (offset, &byte) in chunk.iter().enumerate() {
+                    let at_cursor = address + offset as u64 == cursor;
+                    let color = if at_cursor {
+                        theme::LABEL
+                    } else if byte == 0 {
+                        theme::FAINT
+                    } else {
+                        theme::TEXT
+                    };
+                    let gap = if offset == 7 { "  " } else { " " };
+                    ui.label(RichText::new(format!("{byte:02x}{gap}")).color(color).monospace());
+                }
+                let ascii: String =
+                    chunk.iter().map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' }).collect();
+                ui.label(RichText::new(format!(" {ascii}")).color(theme::COMMENT).monospace());
+            });
+        }
+    });
 }
 
 #[cfg(test)]

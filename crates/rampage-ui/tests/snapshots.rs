@@ -51,6 +51,8 @@ fn strings_panel() {
     let app = harness.state_mut();
     app.open(&ctx, fixture("hello-x64.exe"), None);
     app.focus_tab(rampage_ui::Tab::Strings);
+    // Following a string shows its bytes and who references it.
+    app.workspace_mut().unwrap().goto(0x1_4002_9000);
     harness.run();
     harness.snapshot("pe-strings");
 }

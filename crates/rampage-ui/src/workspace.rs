@@ -255,12 +255,20 @@ impl Workspace {
             .and_then(|listing| listing.as_ref().ok())
             .is_some_and(|listing| listing.blocks.iter().flatten().any(|line| line.address == self.cursor));
         if !in_current {
-            // Outside any function (data, or code analysis did not reach), show a linear disassembly instead.
-            let listing = self.project.function_listing(self.cursor).or_else(|_| {
-                let lines = self.project.disassemble(Some(&format!("{:#x}", self.cursor)), LINEAR_LINES)?;
-                Ok(FunctionListing { address: self.cursor, name: String::new(), blocks: vec![lines] })
-            });
-            self.listing = Some(listing.map_err(text));
+            // Outside any function, code analysis did not reach gets a linear disassembly; data gets a hex view.
+            self.listing = match self.project.function_listing(self.cursor) {
+                Ok(listing) => Some(Ok(listing)),
+                Err(_) if self.project.binary.is_code(self.cursor) => {
+                    let lines = self.project.disassemble(Some(&format!("{:#x}", self.cursor)), LINEAR_LINES);
+                    let listing = lines.map(|lines| FunctionListing {
+                        address: self.cursor,
+                        name: String::new(),
+                        blocks: vec![lines],
+                    });
+                    Some(listing.map_err(text))
+                }
+                Err(_) => None,
+            };
         }
         let target = match &self.listing {
             Some(Ok(listing)) => listing.address,
