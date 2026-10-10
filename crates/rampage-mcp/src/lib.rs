@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rampage_api::{ApiError, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery};
+use rampage_api::{
+    ApiError, DEFAULT_INSTRUCTIONS, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery,
+};
 use rampage_arch::Arch;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -13,24 +15,25 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_PAGE: usize = 100;
 const MAX_PAGE: usize = 1000;
-const DEFAULT_INSTRUCTIONS: usize = 40;
 const MAX_INSTRUCTIONS: usize = 2000;
 
 const INSTRUCTIONS: &str = "\
-rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64 and AArch64. Every tool takes the binary's file \
+rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, \
+RISC-V, SPARC, s390x and m68k. Every tool takes the binary's file \
 path; the first call that needs analysis runs it once and caches the result, so later calls are fast. Addresses \
 are hex strings like \"0x401000\". Wherever a tool takes an address you may also pass a symbol, export or import \
 name (an import name finds its stub) or a sub_<hex> name. Start with triage for hashes, entropy, hardening and \
 packing hints, or binary_info for the layout; then list_functions (filter with name_contains, page with \
 offset/limit), disassemble a function, and follow references with xrefs. list_imports and list_strings are good \
 starting points for finding behavior. Record findings with rename and set_comment: they persist beside the binary \
-and are shared with the person using the rampage UI.";
+and every client of the same binary, including the rampage UI, picks them up.";
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BinaryArgs {
     /// Path to the binary file.
     pub path: String,
-    /// Slice to load from a universal Mach-O: x86, x86_64 or aarch64. Defaults to x86_64 when present.
+    /// Slice to load from a universal Mach-O (x86, x86_64, aarch64, arm, powerpc, ...). Defaults to x86_64, then
+    /// aarch64, then x86, when present.
     pub arch: Option<String>,
 }
 
@@ -64,8 +67,11 @@ pub struct RenameArgs {
     pub binary: BinaryArgs,
     /// The address or current name to rename.
     pub at: String,
-    /// The new name; omit or pass null to remove the user's name.
+    /// The new name. Required unless `clear` is set.
     pub name: Option<String>,
+    /// Remove the user's name instead of setting one.
+    #[serde(default)]
+    pub clear: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -74,15 +80,20 @@ pub struct CommentArgs {
     pub binary: BinaryArgs,
     /// The address or name to comment.
     pub at: String,
-    /// The comment; omit or pass null to remove it.
+    /// The comment. Required unless `clear` is set.
     pub text: Option<String>,
+    /// Remove the comment instead of setting one.
+    #[serde(default)]
+    pub clear: bool,
 }
 
-#[derive(Debug, Serialize)]
-struct EditResult {
-    #[serde(serialize_with = "rampage_arch::hex::address")]
-    address: u64,
-    changed: bool,
+/// The value an edit sets: `value`, or nothing with `clear`; exactly one must be given.
+fn edit_value(value: Option<String>, clear: bool, what: &str) -> Result<Option<String>, ApiError> {
+    match (value, clear) {
+        (Some(value), false) => Ok(Some(value)),
+        (None, true) => Ok(None),
+        _ => Err(ApiError::Invalid(format!("pass either `{what}` or `clear: true`"))),
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -103,6 +114,10 @@ pub struct XrefsArgs {
     pub to: Option<String>,
     /// List references made by the function starting at this address or name, or by the instruction at it.
     pub from: Option<String>,
+    /// Rows to skip.
+    pub offset: Option<usize>,
+    /// Most rows to return.
+    pub limit: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -190,11 +205,10 @@ impl RampageServer {
                           disassembly, xrefs) for every client and are saved beside the binary in \
                           <file>.rampage, so record what you learn as you go. Names must be unique identifiers.")]
     async fn rename(&self, Parameters(args): Parameters<RenameArgs>) -> Result<CallToolResult, ErrorData> {
-        let (at, name) = (args.at, args.name);
+        let (at, name, clear) = (args.at, args.name, args.clear);
         self.run(args.binary, move |project| {
-            let address = project.resolve(&at)?;
-            let changed = project.rename(address, name.as_deref())?;
-            Ok(EditResult { address, changed })
+            let name = edit_value(name, clear, "name")?;
+            project.rename(project.resolve(&at)?, name.as_deref())
         })
         .await
     }
@@ -202,11 +216,10 @@ impl RampageServer {
     #[tool(description = "Comment an instruction or data address. Comments appear in disassembly (`note`) and are \
                           saved beside the binary.")]
     async fn set_comment(&self, Parameters(args): Parameters<CommentArgs>) -> Result<CallToolResult, ErrorData> {
-        let (at, text) = (args.at, args.text);
+        let (at, text, clear) = (args.at, args.text, args.clear);
         self.run(args.binary, move |project| {
-            let address = project.resolve(&at)?;
-            let changed = project.comment(address, text.as_deref())?;
-            Ok(EditResult { address, changed })
+            let text = edit_value(text, clear, "text")?;
+            project.comment(project.resolve(&at)?, text.as_deref())
         })
         .await
     }
@@ -214,6 +227,11 @@ impl RampageServer {
     #[tool(description = "Undo the last rename or comment made in this session. Returns the edit undone, or null.")]
     async fn undo(&self, Parameters(args): Parameters<BinaryArgs>) -> Result<CallToolResult, ErrorData> {
         self.run(args, |project| project.undo()).await
+    }
+
+    #[tool(description = "Redo the last edit undone in this session. Returns the edit redone, or null.")]
+    async fn redo(&self, Parameters(args): Parameters<BinaryArgs>) -> Result<CallToolResult, ErrorData> {
+        self.run(args, |project| project.redo()).await
     }
 
     #[tool(description = "All user names and comments of a binary, by address.")]
@@ -247,16 +265,17 @@ impl RampageServer {
     }
 
     #[tool(description = "Cross-references (call, jump, data). Pass `to` to find who calls or reads an address, or \
-                          `from` to list what a function references. Exactly one of `to` and `from` is required.")]
+                          `from` to list what a function references. Exactly one of `to` and `from` is required. \
+                          Paginated like list_functions.")]
     async fn xrefs(&self, Parameters(args): Parameters<XrefsArgs>) -> Result<CallToolResult, ErrorData> {
-        let (to, from) = (args.to, args.from);
+        let (to, from, offset, limit) = (args.to, args.from, args.offset, clamp_page(args.limit));
         self.run(args.binary, move |project| {
             let query = match (to, from) {
                 (Some(to), None) => XrefQuery::To(project.resolve(&to)?),
                 (None, Some(from)) => XrefQuery::From(project.resolve(&from)?),
                 _ => return Err(ApiError::Invalid("pass exactly one of `to` and `from`".to_owned())),
             };
-            project.xrefs(&query)
+            project.xrefs(query, offset, limit)
         })
         .await
     }

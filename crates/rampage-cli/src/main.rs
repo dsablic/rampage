@@ -34,12 +34,13 @@ enum Command {
         #[arg(long)]
         at: Option<String>,
         /// Number of instructions
-        #[arg(long, default_value_t = 32)]
+        #[arg(long, default_value_t = rampage_api::DEFAULT_INSTRUCTIONS)]
         count: usize,
     },
     /// List printable ASCII and UTF-16LE strings
     Strings {
         file: PathBuf,
+        /// Minimum length in characters
         #[arg(long, default_value_t = 4)]
         min_len: usize,
         /// Only strings containing this text (case-insensitive)
@@ -77,7 +78,8 @@ enum Command {
         file: PathBuf,
         /// Address or current name
         at: String,
-        /// The new name (omit with --clear)
+        /// The new name
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
         name: Option<String>,
         /// Remove the user's name instead
         #[arg(long)]
@@ -88,7 +90,8 @@ enum Command {
         file: PathBuf,
         /// Address or name
         at: String,
-        /// The comment (omit with --clear)
+        /// The comment
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
         text: Option<String>,
         /// Remove the comment instead
         #[arg(long)]
@@ -102,8 +105,10 @@ enum Command {
     #[command(group(clap::ArgGroup::new("direction").required(true)))]
     Xrefs {
         file: PathBuf,
+        /// List references to this address or name
         #[arg(long, group = "direction")]
         to: Option<String>,
+        /// List references made by this function, or by the instruction at this address
         #[arg(long, group = "direction")]
         from: Option<String>,
     },
@@ -146,8 +151,8 @@ fn main() -> ExitCode {
         Command::Exports { file, contains } => {
             commands::exports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
         }
-        Command::Rename { file, at, name, clear } => commands::rename(&file, &at, name.as_deref(), clear, &options),
-        Command::Comment { file, at, text, clear } => commands::comment(&file, &at, text.as_deref(), clear, &options),
+        Command::Rename { file, at, name, .. } => commands::rename(&mut out, &file, &at, name.as_deref(), &options),
+        Command::Comment { file, at, text, .. } => commands::comment(&mut out, &file, &at, text.as_deref(), &options),
         Command::Annotations { file } => commands::annotations(&mut out, &file, &options),
         Command::Mcp => unreachable!("handled before opening stdout"),
     }

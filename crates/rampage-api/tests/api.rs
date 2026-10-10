@@ -56,7 +56,7 @@ fn function_containing_maps_instructions_to_their_function() {
 #[test]
 fn xrefs_name_their_endpoints() {
     let project = Session::default().open(&fixture("hello-x64.elf"), None).unwrap();
-    let rows = project.xrefs(&XrefQuery::To(project.resolve("puts").unwrap())).unwrap();
+    let rows = project.xrefs(XrefQuery::To(project.resolve("puts").unwrap()), None, None).unwrap().items;
     assert!(
         rows.iter().any(|row| row.from_function.as_deref() == Some("main") && row.to_name.as_deref() == Some("puts"))
     );
@@ -117,7 +117,7 @@ fn names_do_not_depend_on_whether_analysis_has_run() {
 fn bare_import_names_resolve_to_elf_plt_stubs() {
     let project = Session::default().open(&fixture("hello-x64-dyn.elf"), None).unwrap();
     let stub = project.resolve("puts").unwrap();
-    let rows = project.xrefs(&XrefQuery::To(stub)).unwrap();
+    let rows = project.xrefs(XrefQuery::To(stub), None, None).unwrap().items;
     assert!(rows.iter().any(|row| row.to_name.as_deref() == Some("puts@plt")), "{rows:?}");
 }
 
@@ -159,8 +159,8 @@ fn renames_and_comments_show_everywhere_and_persist() {
     let path = scratch_copy("hello-arm64.macho", "annotate");
     let project = Session::default().open(&path, None).unwrap();
     let main = project.resolve("_main").unwrap();
-    assert!(project.rename(main, Some("entry_logic")).unwrap());
-    assert!(project.comment(main + 0xc, Some("greeting pointer")).unwrap());
+    assert!(project.rename(main, Some("entry_logic")).unwrap().changed);
+    assert!(project.comment(main + 0xc, Some("greeting pointer")).unwrap().changed);
 
     assert_eq!(project.resolve("entry_logic").unwrap(), main);
     let functions = project.functions(&FunctionsQuery::default()).unwrap();
@@ -168,7 +168,7 @@ fn renames_and_comments_show_everywhere_and_persist() {
     let lines = project.disassemble(Some("entry_logic"), 4).unwrap();
     assert_eq!(lines[0].label.as_deref(), Some("entry_logic"));
     assert_eq!(lines[3].note.as_deref(), Some("greeting pointer"));
-    let calls = project.xrefs(&XrefQuery::From(main)).unwrap();
+    let calls = project.xrefs(XrefQuery::From(main), None, None).unwrap().items;
     assert!(calls.iter().all(|row| row.from_function.as_deref() == Some("entry_logic")));
 
     // Names stay unique identifiers.
@@ -183,5 +183,17 @@ fn renames_and_comments_show_everywhere_and_persist() {
     let reopened = Session::default().open(&path, None).unwrap();
     assert_eq!(reopened.function_name(main), "entry_logic");
     assert_eq!(reopened.comment_at(main + 0xc).as_deref(), Some("greeting pointer"));
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_slice_opens_once_however_it_is_asked_for() {
+    let path = scratch_copy("hello-universal.macho", "session");
+    let session = Session::default();
+    let default = session.open(&path, None).unwrap();
+    let explicit = session.open(&path, Some(default.binary.arch)).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&default, &explicit));
+    let other = default.binary.slices.iter().copied().find(|&arch| arch != default.binary.arch).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&default, &session.open(&path, Some(other)).unwrap()));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

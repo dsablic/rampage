@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rampage_arch::Arch;
 use rampage_arch::{Flow, UnsupportedArch};
@@ -119,7 +119,11 @@ pub fn thunk_names(binary: &Binary) -> Vec<(u64, String)> {
 /// Names for addresses: function symbols first, then exports, the entry point and other symbols, then import
 /// stubs and thunks (named after their import, with `@plt` on ELF) and import slots (`__imp_` and the import's
 /// name).
-pub struct Names(BTreeMap<u64, String>);
+pub struct Names {
+    names: BTreeMap<u64, String>,
+    /// Each name's lowest address.
+    addresses: HashMap<String, u64>,
+}
 
 impl Names {
     pub fn new(binary: &Binary) -> Self {
@@ -134,11 +138,15 @@ impl Names {
         for slot in &binary.import_slots {
             names.entry(slot.address).or_insert_with(|| format!("__imp_{}", slot.name));
         }
-        Self(names)
+        let mut addresses = HashMap::with_capacity(names.len());
+        for (&address, name) in &names {
+            addresses.entry(name.clone()).or_insert(address);
+        }
+        Self { names, addresses }
     }
 
     pub fn get(&self, address: u64) -> Option<&str> {
-        self.0.get(&address).map(String::as_str)
+        self.names.get(&address).map(String::as_str)
     }
 
     pub fn function_name(&self, address: u64) -> String {
@@ -147,6 +155,6 @@ impl Names {
 
     /// Resolves a name back to its address.
     pub fn address_of(&self, name: &str) -> Option<u64> {
-        self.0.iter().find(|(_, candidate)| candidate.as_str() == name).map(|(&address, _)| address)
+        self.addresses.get(name).copied()
     }
 }

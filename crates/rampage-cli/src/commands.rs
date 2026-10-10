@@ -3,10 +3,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use rampage_analysis::discover::XrefKind;
 use rampage_analysis::functions;
 use rampage_analysis::strings::Encoding;
-use rampage_api::{FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery};
+use rampage_api::annotations::Field;
+use rampage_api::{EditResult, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery};
 use rampage_arch::Arch;
 use rampage_loaders::Details;
 use serde::Serialize;
@@ -109,12 +109,17 @@ pub fn funcs(
 ) -> Result<()> {
     let project = open(path, options)?;
     if symbols_only {
-        let found = functions::from_symbols(&project.binary);
+        let needle = query.name_contains.as_deref().map(str::to_lowercase);
+        let found: Vec<_> = functions::from_symbols(&project.binary)
+            .into_iter()
+            .filter(|function| needle.as_deref().is_none_or(|needle| function.name.to_lowercase().contains(needle)))
+            .collect();
         if options.json {
             return write_json(out, &found);
         }
+        writeln!(out, "{:<18} {:>8}  name", "address", "size")?;
         for function in &found {
-            writeln!(out, "{:#018x} {:>8} {}", function.address, function.size, function.name)?;
+            writeln!(out, "{:#018x} {:>8}  {}", function.address, function.size, function.name)?;
         }
         return Ok(());
     }
@@ -141,16 +146,12 @@ pub fn xrefs(out: &mut impl Write, path: &Path, target: XrefTarget, options: &Op
         XrefTarget::To(text) => XrefQuery::To(project.resolve(text)?),
         XrefTarget::From(text) => XrefQuery::From(project.resolve(text)?),
     };
-    let rows = project.xrefs(&query)?;
+    let rows = project.xrefs(query, None, None)?.items;
     if options.json {
         return write_json(out, &rows);
     }
     for row in &rows {
-        let kind = match row.kind {
-            XrefKind::Call => "call",
-            XrefKind::Jump => "jump",
-            XrefKind::Data => "data",
-        };
+        let kind = row.kind.as_str();
         let from_function = row.from_function.as_deref().unwrap_or("?");
         let to_name = row.to_name.as_deref().map(|name| format!(" {name}")).unwrap_or_default();
         writeln!(out, "{:#018x} {kind} {:#018x}{to_name}  (in {from_function})", row.from, row.to)?;
@@ -262,26 +263,31 @@ pub fn exports(out: &mut impl Write, path: &Path, query: &ListQuery, options: &O
     Ok(())
 }
 
-/// The value to set: `value`, or nothing with `clear`. Exactly one must be given.
-fn edit_value<'a>(value: Option<&'a str>, clear: bool, what: &str) -> Result<Option<&'a str>> {
-    match (value, clear) {
-        (Some(value), false) => Ok(Some(value)),
-        (None, true) => Ok(None),
-        _ => anyhow::bail!("pass a {what} or --clear, not both"),
+pub fn rename(out: &mut impl Write, path: &Path, at: &str, name: Option<&str>, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let result = project.rename(project.resolve(at)?, name)?;
+    write_edit(out, &result, options)
+}
+
+pub fn comment(out: &mut impl Write, path: &Path, at: &str, text: Option<&str>, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let result = project.comment(project.resolve(at)?, text)?;
+    write_edit(out, &result, options)
+}
+
+fn write_edit(out: &mut impl Write, result: &EditResult, options: &Options) -> Result<()> {
+    if options.json {
+        return write_json(out, result);
     }
-}
-
-pub fn rename(path: &Path, at: &str, name: Option<&str>, clear: bool, options: &Options) -> Result<()> {
-    let project = open(path, options)?;
-    let address = project.resolve(at)?;
-    project.rename(address, edit_value(name, clear, "name")?)?;
-    Ok(())
-}
-
-pub fn comment(path: &Path, at: &str, text: Option<&str>, clear: bool, options: &Options) -> Result<()> {
-    let project = open(path, options)?;
-    let address = project.resolve(at)?;
-    project.comment(address, edit_value(text, clear, "comment")?)?;
+    let field = match result.field {
+        Field::Name => "name",
+        Field::Comment => "comment",
+    };
+    let state = if result.changed { "" } else { " (unchanged)" };
+    match &result.value {
+        Some(value) => writeln!(out, "{:#018x} {field} {value}{state}", result.address)?,
+        None => writeln!(out, "{:#018x} {field} removed{state}", result.address)?,
+    }
     Ok(())
 }
 

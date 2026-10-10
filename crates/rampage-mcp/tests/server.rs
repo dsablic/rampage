@@ -56,6 +56,7 @@ async fn lists_all_tools_with_instructions() {
         "list_functions",
         "list_imports",
         "list_strings",
+        "redo",
         "rename",
         "set_comment",
         "triage",
@@ -87,7 +88,7 @@ async fn explores_a_binary_end_to_end() {
     assert_eq!(lines[0]["label"], "main");
 
     let xrefs = json_of(&call(&client, "xrefs", json!({ "path": path, "to": "puts" })).await);
-    assert!(xrefs.as_array().unwrap().iter().any(|row| row["from_function"] == "main"));
+    assert!(xrefs["items"].as_array().unwrap().iter().any(|row| row["from_function"] == "main"));
 
     let strings = json_of(&call(&client, "list_strings", json!({ "path": path, "contains": "greeting" })).await);
     assert_eq!(strings["total"], 1);
@@ -162,6 +163,13 @@ async fn agents_rename_and_comment() {
     assert_eq!(list["comments"][0]["text"], "entry");
     let undone = json_of(&call(&client, "undo", json!({ "path": path })).await);
     assert_eq!(undone["field"], "comment");
+    let redone = json_of(&call(&client, "redo", json!({ "path": path })).await);
+    assert_eq!(redone["value"], "entry");
+    let cleared =
+        json_of(&call(&client, "set_comment", json!({ "path": path, "at": "say_hello", "clear": true })).await);
+    assert_eq!((&cleared["value"], &cleared["changed"]), (&json!(null), &json!(true)));
+    let neither = call(&client, "rename", json!({ "path": path, "at": "say_hello" })).await;
+    assert_eq!(neither.is_error, Some(true));
     let bad = call(&client, "rename", json!({ "path": path, "at": "say_hello", "name": "two words" })).await;
     assert_eq!(bad.is_error, Some(true));
     client.cancel().await.unwrap();
