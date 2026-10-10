@@ -219,3 +219,21 @@ fn code_from_stops_at_the_end_of_the_code_section() {
     let header = binary.symbol_by_name("__mh_execute_header").unwrap().address;
     assert!(binary.code_from(header).is_none());
 }
+
+#[test]
+fn import_slots_name_the_pointers_each_format_binds() {
+    for (name, puts) in [
+        ("hello-x64.macho", "_puts"),
+        ("hello-arm64.macho", "_puts"),
+        ("hello-x64-dyn.elf", "puts"),
+        ("hello-arm64.elf", "puts"),
+        ("hello-x64.exe", "puts"),
+    ] {
+        let binary = Binary::open(fixture(name)).unwrap();
+        let slot = binary.import_slots.iter().find(|slot| slot.name == puts);
+        let slot = slot.unwrap_or_else(|| panic!("{name}: no {puts} slot in {:?}", binary.import_slots));
+        assert!(binary.segment_containing(slot.address).is_some_and(|segment| segment.perms.read), "{name}");
+        assert!(binary.import_slots.windows(2).all(|pair| pair[0].address < pair[1].address), "{name}: unsorted");
+        assert!(binary.warnings.is_empty(), "{name}: {:?}", binary.warnings);
+    }
+}

@@ -74,6 +74,15 @@ pub struct Import {
     pub name: String,
 }
 
+/// A location the dynamic loader fills with an import's address (a GOT entry, a Mach-O symbol pointer, or a PE
+/// import address table entry).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportSlot {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Export {
     pub name: String,

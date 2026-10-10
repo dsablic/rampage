@@ -8,7 +8,7 @@ use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol, SegmentFlags};
 use rampage_arch::Arch;
 use serde::Serialize;
 
-use crate::model::{Export, Format, Import, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
+use crate::model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
 use crate::starts;
 
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +33,8 @@ pub struct Binary {
     pub sections: Vec<Section>,
     pub symbols: Vec<Symbol>,
     pub imports: Vec<Import>,
+    /// Where the dynamic loader stores each import's address, sorted by address.
+    pub import_slots: Vec<ImportSlot>,
     pub exports: Vec<Export>,
     /// Function start addresses from format metadata (Mach-O `LC_FUNCTION_STARTS`, PE `.pdata`), sorted.
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
@@ -177,6 +179,7 @@ impl Binary {
             .unwrap_or_default();
         let exception_directory = starts::pe_exception_directory(&parsed);
         let image_base = parsed.relative_address_base();
+        let import_slots = crate::slots::collect(&parsed, &data[image.clone()], &mut warnings);
         drop(parsed);
 
         let mut binary = Self {
@@ -187,6 +190,7 @@ impl Binary {
             sections,
             symbols,
             imports,
+            import_slots,
             exports,
             function_starts: Vec::new(),
             slices,
