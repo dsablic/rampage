@@ -31,3 +31,61 @@ fn lists_add_main_and_entry_as_functions() {
         assert!(found.iter().any(|function| Some(function.address) == binary.entry), "{name}: entry missing");
     }
 }
+
+fn symbol_address(binary: &Binary, name: &str) -> u64 {
+    binary.symbol_by_name(name).unwrap_or_else(|| panic!("no symbol {name}")).address
+}
+
+#[test]
+fn analysis_finds_calls_from_main_in_static_elf() {
+    let binary = open("hello-x64.elf");
+    let program = functions::analyze(&binary).unwrap();
+    let main = program.function_at(symbol_address(&binary, "main")).expect("main analyzed");
+    assert!(main.instruction_count >= 3);
+    let puts = symbol_address(&binary, "puts");
+    let calls_to_puts = program.xrefs_to(puts);
+    assert!(calls_to_puts.iter().any(|xref| main.contains(xref.from)), "{calls_to_puts:?}");
+}
+
+#[test]
+fn analysis_of_entry_alone_reaches_main_through_code_pointer() {
+    let binary = open("hello-x64.elf");
+    let entry = binary.entry.unwrap();
+    let program =
+        rampage_analysis::discover::discover(&binary, || rampage_arch::decoder_for(binary.arch).unwrap(), &[entry]);
+    assert!(program.function_at(symbol_address(&binary, "main")).is_some());
+}
+
+#[test]
+fn analysis_of_stripped_macho_finds_add() {
+    let add = symbol_address(&open("hello-x64.macho"), "_add");
+    let stripped = open("hello-x64-stripped.macho");
+    let program = functions::analyze(&stripped).unwrap();
+    assert!(program.function_at(add).is_some());
+    assert_eq!(functions::Names::new(&stripped).function_name(add), format!("sub_{add:x}"));
+}
+
+#[test]
+fn analysis_is_identical_across_thread_counts() {
+    let binary = open("hello-x64.elf");
+    let analyze_with = |threads| {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+        pool.install(|| functions::analyze(&binary).unwrap())
+    };
+    let single = analyze_with(1);
+    assert!(single.functions.len() >= functions::from_symbols(&binary).len());
+    assert_eq!(single, analyze_with(8));
+}
+
+#[test]
+fn analysis_of_arm64_is_unsupported() {
+    assert!(functions::analyze(&open("hello-arm64.macho")).is_err());
+}
+
+#[test]
+fn names_prefer_symbols_and_fall_back_to_sub() {
+    let binary = open("hello-x64.elf");
+    let names = functions::Names::new(&binary);
+    assert_eq!(names.function_name(symbol_address(&binary, "main")), "main");
+    assert_eq!(names.function_name(0x1234), "sub_1234");
+}

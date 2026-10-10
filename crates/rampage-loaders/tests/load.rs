@@ -183,3 +183,21 @@ fn well_formed_fixtures_have_no_warnings() {
         assert_eq!(Binary::open(fixture(name)).unwrap().warnings, Vec::<String>::new(), "{name}");
     }
 }
+
+#[test]
+fn code_means_code_sections_not_executable_segments() {
+    let binary = Binary::open(fixture("hello-x64.macho")).unwrap();
+    let header = binary.symbol_by_name("__mh_execute_header").unwrap().address;
+    assert!(binary.segment_containing(header).unwrap().perms.execute, "header shares the executable __TEXT segment");
+    assert!(!binary.is_code(header));
+    assert!(binary.is_code(binary.symbol_by_name("_main").unwrap().address));
+    let cstring = binary.sections.iter().find(|section| section.name == "__cstring").unwrap();
+    assert!(!binary.is_code(cstring.address));
+}
+
+#[test]
+fn code_falls_back_to_segment_permissions_without_sections() {
+    let binary = Binary::open(malformed("trunc.elf")).unwrap();
+    assert!(binary.sections.iter().all(|section| section.size == 0 || section.address == 0));
+    assert!(binary.is_code(0x400078));
+}

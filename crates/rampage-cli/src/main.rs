@@ -42,8 +42,22 @@ enum Command {
         #[arg(long, default_value_t = 4)]
         min_len: usize,
     },
-    /// List functions known from symbols, exports and the entry point
-    Funcs { file: PathBuf },
+    /// Discover functions by recursive descent from symbols, exports, the entry point and unwind metadata
+    Funcs {
+        file: PathBuf,
+        /// Only list functions named by symbols, exports and the entry point, without analysis
+        #[arg(long)]
+        symbols_only: bool,
+    },
+    /// List code and data cross-references to or from an address, symbol or function
+    #[command(group(clap::ArgGroup::new("direction").required(true)))]
+    Xrefs {
+        file: PathBuf,
+        #[arg(long, group = "direction")]
+        to: Option<String>,
+        #[arg(long, group = "direction")]
+        from: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -73,7 +87,15 @@ fn main() -> ExitCode {
         Command::Info { file } => commands::info(&mut out, &file, &options),
         Command::Disasm { file, at, count } => commands::disasm(&mut out, &file, at.as_deref(), count, &options),
         Command::Strings { file, min_len } => commands::strings(&mut out, &file, min_len, &options),
-        Command::Funcs { file } => commands::funcs(&mut out, &file, &options),
+        Command::Funcs { file, symbols_only } => commands::funcs(&mut out, &file, symbols_only, &options),
+        Command::Xrefs { file, to, from } => {
+            let query = match (&to, &from) {
+                (Some(to), _) => commands::XrefQuery::To(to),
+                (_, Some(from)) => commands::XrefQuery::From(from),
+                (None, None) => unreachable!("clap requires --to or --from"),
+            };
+            commands::xrefs(&mut out, &file, query, &options)
+        }
     }
     .and_then(|()| out.flush().map_err(Into::into));
 

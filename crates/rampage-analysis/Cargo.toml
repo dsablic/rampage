@@ -9,3 +9,7 @@ rampage-arch.workspace = true
 rayon.workspace = true
 rampage-loaders.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+rampage-arch.workspace = true
+rayon.workspace = true

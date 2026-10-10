@@ -193,7 +193,7 @@ impl Binary {
         if let Some(directory) = exception_directory {
             function_starts.extend(starts::pe(&binary, image_base, directory));
         }
-        function_starts.retain(|&start| binary.segment_containing(start).is_some_and(|segment| segment.perms.execute));
+        function_starts.retain(|&start| binary.is_code(start));
         function_starts.sort_unstable();
         function_starts.dedup();
         binary.function_starts = function_starts;
@@ -202,6 +202,16 @@ impl Binary {
 
     pub fn segment_containing(&self, address: u64) -> Option<&Segment> {
         self.segments.iter().find(|segment| segment.contains(address))
+    }
+
+    /// Whether `address` holds code: inside a code section, or inside an executable segment when the file has
+    /// no code sections. Executable segments alone are too coarse; Mach-O `__TEXT` also holds headers and strings.
+    pub fn is_code(&self, address: u64) -> bool {
+        let mut code_sections = self.sections.iter().filter(|section| section.kind == SectionKind::Code).peekable();
+        if code_sections.peek().is_none() {
+            return self.segment_containing(address).is_some_and(|segment| segment.perms.execute);
+        }
+        code_sections.any(|section| address >= section.address && address - section.address < section.size)
     }
 
     pub fn symbol_by_name(&self, name: &str) -> Option<&Symbol> {

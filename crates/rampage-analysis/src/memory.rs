@@ -18,7 +18,7 @@ impl Memory for Binary {
     }
 
     fn is_executable(&self, address: u64) -> bool {
-        self.segment_containing(address).is_some_and(|segment| segment.perms.execute)
+        self.is_code(address)
     }
 }
 

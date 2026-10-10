@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use rampage_analysis::discover::{Xref, XrefKind};
 use rampage_analysis::{functions, strings};
 use rampage_arch::{Arch, Flow, decoder_for};
 use rampage_loaders::{Binary, Perms};
@@ -68,9 +69,13 @@ fn resolve_address(binary: &Binary, text: &str) -> Result<u64> {
     if let Ok(address) = text.parse() {
         return Ok(address);
     }
-    let symbol = binary.symbol_by_name(text).map(|symbol| symbol.address);
-    let export = || binary.exports.iter().find(|export| export.name == text).map(|export| export.address);
-    symbol.or_else(export).with_context(|| format!("no symbol or export named {text:?}"))
+    if let Some(address) = functions::Names::new(binary).address_of(text) {
+        return Ok(address);
+    }
+    if let Some(address) = text.strip_prefix("sub_").and_then(|hex| u64::from_str_radix(hex, 16).ok()) {
+        return Ok(address);
+    }
+    bail!("no symbol or export named {text:?}")
 }
 
 pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize, options: &Options) -> Result<()> {
@@ -137,14 +142,110 @@ pub fn strings(out: &mut impl Write, path: &Path, min_len: usize, options: &Opti
     Ok(())
 }
 
-pub fn funcs(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+pub fn funcs(out: &mut impl Write, path: &Path, symbols_only: bool, options: &Options) -> Result<()> {
     let binary = open(path, options)?;
-    let found = functions::from_symbols(&binary);
-    if options.json {
-        return write_json(out, &found);
+    if symbols_only {
+        let found = functions::from_symbols(&binary);
+        if options.json {
+            return write_json(out, &found);
+        }
+        for function in &found {
+            writeln!(out, "{:#018x} {:>8} {}", function.address, function.size, function.name)?;
+        }
+        return Ok(());
     }
-    for function in &found {
-        writeln!(out, "{:#018x} {:>8} {}", function.address, function.size, function.name)?;
+
+    #[derive(Serialize)]
+    struct Row {
+        address: u64,
+        name: String,
+        size: u64,
+        blocks: usize,
+        instructions: usize,
+    }
+
+    let program = functions::analyze(&binary)?;
+    let names = functions::Names::new(&binary);
+    let rows: Vec<Row> = program
+        .functions
+        .iter()
+        .map(|function| {
+            let end = function.blocks.iter().map(|block| block.end).max().unwrap_or(function.address);
+            Row {
+                address: function.address,
+                name: names.function_name(function.address),
+                size: end.saturating_sub(function.address),
+                blocks: function.blocks.len(),
+                instructions: function.instruction_count,
+            }
+        })
+        .collect();
+    if options.json {
+        return write_json(out, &rows);
+    }
+    writeln!(out, "{:<18} {:>8} {:>6} {:>6}  name", "address", "size", "blocks", "insns")?;
+    for row in &rows {
+        writeln!(out, "{:#018x} {:>8} {:>6} {:>6}  {}", row.address, row.size, row.blocks, row.instructions, row.name)?;
+    }
+    Ok(())
+}
+
+pub enum XrefQuery<'a> {
+    To(&'a str),
+    From(&'a str),
+}
+
+pub fn xrefs(out: &mut impl Write, path: &Path, query: XrefQuery, options: &Options) -> Result<()> {
+    let binary = open(path, options)?;
+    let program = functions::analyze(&binary)?;
+    let names = functions::Names::new(&binary);
+
+    let selected: Vec<Xref> = match query {
+        XrefQuery::To(text) => program.xrefs_to(resolve_address(&binary, text)?).to_vec(),
+        XrefQuery::From(text) => {
+            let address = resolve_address(&binary, text)?;
+            match program.function_at(address) {
+                Some(function) => program.xrefs.iter().filter(|xref| function.contains(xref.from)).copied().collect(),
+                None => program.xrefs.iter().filter(|xref| xref.from == address).copied().collect(),
+            }
+        }
+    };
+
+    #[derive(Serialize)]
+    struct Row {
+        from: u64,
+        to: u64,
+        kind: XrefKind,
+        from_function: Option<String>,
+        to_name: Option<String>,
+    }
+
+    let mut rows: Vec<Row> = selected
+        .iter()
+        .map(|xref| Row {
+            from: xref.from,
+            to: xref.to,
+            kind: xref.kind,
+            from_function: program
+                .functions_containing(xref.from)
+                .next()
+                .map(|function| names.function_name(function.address)),
+            to_name: names.get(xref.to).map(str::to_owned),
+        })
+        .collect();
+    rows.sort_by_key(|row| (row.from, row.to));
+    if options.json {
+        return write_json(out, &rows);
+    }
+    for row in &rows {
+        let kind = match row.kind {
+            XrefKind::Call => "call",
+            XrefKind::Jump => "jump",
+            XrefKind::Data => "data",
+        };
+        let from_function = row.from_function.as_deref().unwrap_or("?");
+        let to_name = row.to_name.as_deref().map(|name| format!(" {name}")).unwrap_or_default();
+        writeln!(out, "{:#018x} {kind} {:#018x}{to_name}  (in {from_function})", row.from, row.to)?;
     }
     Ok(())
 }

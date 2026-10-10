@@ -22,9 +22,11 @@ fn json(args: &[&str], file: &str) -> Value {
 #[test]
 fn every_command_succeeds_on_every_x64_fixture() {
     for (file, _) in X64_FIXTURES {
-        for command in ["info", "disasm", "strings", "funcs"] {
-            rampage(&[command], file).success();
-            rampage(&["--json", command], file).success();
+        for command in ["info", "disasm", "strings", "funcs", "funcs --symbols-only"] {
+            let command: Vec<&str> = command.split(' ').collect();
+            let json_command: Vec<&str> = std::iter::once("--json").chain(command.iter().copied()).collect();
+            rampage(&command, file).success();
+            rampage(&json_command, file).success();
         }
     }
 }
@@ -149,4 +151,52 @@ fn malformed_inputs_do_not_crash() {
         assert!(output.status.code().is_some(), "disasm {name} was killed by a signal");
         assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"), "disasm {name} panicked");
     }
+}
+
+fn function_named<'a>(funcs: &'a Value, name: &str) -> Option<&'a Value> {
+    funcs.as_array().unwrap().iter().find(|function| function["name"] == name)
+}
+
+#[test]
+fn funcs_discovers_stripped_functions() {
+    let add =
+        function_named(&json(&["--json", "funcs"], "hello-x64.macho"), "_add").unwrap()["address"].as_u64().unwrap();
+    let stripped = json(&["--json", "funcs"], "hello-x64-stripped.macho");
+    let found = function_named(&stripped, &format!("sub_{add:x}")).expect("add found without symbols");
+    assert!(found["instructions"].as_u64().unwrap() >= 2);
+    assert!(found["blocks"].as_u64().unwrap() >= 1);
+}
+
+#[test]
+fn xrefs_to_puts_come_from_main() {
+    let xrefs = json(&["--json", "xrefs", "--to", "puts"], "hello-x64.elf");
+    let xrefs = xrefs.as_array().unwrap();
+    assert!(xrefs.iter().any(|xref| xref["kind"] == "call" && xref["from_function"] == "main"), "{xrefs:?}");
+}
+
+#[test]
+fn xrefs_from_main_include_the_call_to_puts() {
+    let xrefs = json(&["--json", "xrefs", "--from", "main"], "hello-x64.elf");
+    let xrefs = xrefs.as_array().unwrap();
+    assert!(xrefs.iter().any(|xref| xref["kind"] == "call" && xref["to_name"] == "puts"), "{xrefs:?}");
+    assert!(xrefs.iter().all(|xref| xref["from_function"] == "main"));
+}
+
+#[test]
+fn xrefs_requires_a_direction() {
+    rampage(&["xrefs"], "hello-x64.elf").failure();
+}
+
+#[test]
+fn sub_names_resolve_as_addresses() {
+    let lines = json(&["--json", "disasm", "--count", "1", "--at", "sub_1001910"], "hello-x64.elf");
+    assert_eq!(lines[0]["address"].as_u64(), Some(0x1001910));
+}
+
+#[test]
+fn funcs_ignores_headers_and_strings_in_executable_segments() {
+    let funcs = json(&["--json", "funcs"], "hello-x64-stripped.macho");
+    let names: Vec<_> = funcs.as_array().unwrap().iter().map(|function| function["name"].as_str().unwrap()).collect();
+    assert!(!names.contains(&"__mh_execute_header"), "{names:?}");
+    assert!(funcs.as_array().unwrap().iter().all(|function| function["instructions"].as_u64().unwrap() < 100));
 }
