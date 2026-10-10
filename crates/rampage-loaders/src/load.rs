@@ -42,6 +42,8 @@ pub struct Binary {
     /// Problems with optional metadata that did not prevent loading.
     pub warnings: Vec<String>,
     #[serde(skip)]
+    code_ranges: Vec<Range<u64>>,
+    #[serde(skip)]
     data: Mmap,
     #[serde(skip)]
     image: Range<usize>,
@@ -189,11 +191,15 @@ impl Binary {
             function_starts: Vec::new(),
             slices,
             warnings,
+            code_ranges: Vec::new(),
             data,
             image,
         };
+        binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
         if let Some(directory) = exception_directory {
-            function_starts.extend(starts::pe(&binary, image_base, directory));
+            let (starts, warning) = starts::pe(&binary, image_base, directory);
+            function_starts.extend(starts);
+            binary.warnings.extend(warning);
         }
         function_starts.retain(|&start| binary.is_code(start));
         function_starts.sort_unstable();
@@ -209,11 +215,20 @@ impl Binary {
     /// Whether `address` holds code: inside a code section, or inside an executable segment when the file has
     /// no code sections. Executable segments alone are too coarse; Mach-O `__TEXT` also holds headers and strings.
     pub fn is_code(&self, address: u64) -> bool {
-        let mut code_sections = self.sections.iter().filter(|section| section.kind == SectionKind::Code).peekable();
-        if code_sections.peek().is_none() {
-            return self.segment_containing(address).is_some_and(|segment| segment.perms.execute);
-        }
-        code_sections.any(|section| address >= section.address && address - section.address < section.size)
+        self.code_range_containing(address).is_some()
+    }
+
+    /// File-backed bytes from `address` to the end of its code range, or `None` when `address` is not code.
+    pub fn code_from(&self, address: u64) -> Option<&[u8]> {
+        let range = self.code_range_containing(address)?;
+        let bytes = self.read_to_segment_end(address)?;
+        let len = (range.end - address).min(bytes.len() as u64) as usize;
+        Some(&bytes[..len])
+    }
+
+    fn code_range_containing(&self, address: u64) -> Option<&Range<u64>> {
+        let index = self.code_ranges.partition_point(|range| range.end <= address);
+        self.code_ranges.get(index).filter(|range| range.contains(&address))
     }
 
     pub fn symbol_by_name(&self, name: &str) -> Option<&Symbol> {
@@ -243,6 +258,31 @@ impl Binary {
         let in_file = (self.image.len() as u64).checked_sub(file_position)?;
         self.read(address, in_segment.min(in_file)).filter(|bytes| !bytes.is_empty())
     }
+}
+
+/// Sorted, merged address ranges holding code.
+fn code_ranges(sections: &[Section], segments: &[Segment]) -> Vec<Range<u64>> {
+    let mut ranges: Vec<Range<u64>> = sections
+        .iter()
+        .filter(|section| section.kind == SectionKind::Code && section.size > 0)
+        .map(|section| section.address..section.address.saturating_add(section.size))
+        .collect();
+    if ranges.is_empty() {
+        ranges = segments
+            .iter()
+            .filter(|segment| segment.perms.execute && segment.size > 0)
+            .map(|segment| segment.address..segment.address + segment.size)
+            .collect();
+    }
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut merged: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
 }
 
 struct Slice {

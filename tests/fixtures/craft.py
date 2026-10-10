@@ -46,3 +46,9 @@ pe = bytearray(open(f'{out}/../bin/hello-x64.exe', 'rb').read())
 optional_header = struct.unpack_from('<I', pe, 0x3c)[0] + 24
 struct.pack_into('<I', pe, optional_header + 112 + 8, 0x7ffffff0)
 open(f'{out}/badimport.exe', 'wb').write(pe)
+
+# The PE fixture with its exception directory (.pdata) size far larger than the section.
+pe = bytearray(open(f'{out}/../bin/hello-x64.exe', 'rb').read())
+optional_header = struct.unpack_from('<I', pe, 0x3c)[0] + 24
+struct.pack_into('<I', pe, optional_header + 112 + 3 * 8 + 4, 0x7ffffff0)
+open(f'{out}/bigpdata.exe', 'wb').write(pe)

@@ -201,3 +201,21 @@ fn code_falls_back_to_segment_permissions_without_sections() {
     assert!(binary.sections.iter().all(|section| section.size == 0 || section.address == 0));
     assert!(binary.is_code(0x400078));
 }
+
+#[test]
+fn oversized_pdata_is_clamped_with_a_warning() {
+    let binary = Binary::open(malformed("bigpdata.exe")).unwrap();
+    let intact = Binary::open(fixture("hello-x64.exe")).unwrap();
+    assert_eq!(binary.function_starts, intact.function_starts);
+    assert!(binary.warnings.iter().any(|warning| warning.contains(".pdata")), "{:?}", binary.warnings);
+}
+
+#[test]
+fn code_from_stops_at_the_end_of_the_code_section() {
+    let binary = Binary::open(fixture("hello-x64.macho")).unwrap();
+    let main = binary.symbol_by_name("_main").unwrap().address;
+    let text = binary.sections.iter().find(|section| section.name == "__text").unwrap();
+    assert_eq!(binary.code_from(main).unwrap().len() as u64, text.address + text.size - main);
+    let header = binary.symbol_by_name("__mh_execute_header").unwrap().address;
+    assert!(binary.code_from(header).is_none());
+}

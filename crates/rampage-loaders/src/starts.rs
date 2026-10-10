@@ -64,8 +64,12 @@ fn read_uleb128(bytes: &[u8]) -> Option<(u64, &[u8])> {
     None
 }
 
-/// The exception directory (`.pdata`) location as an absolute address and size.
+/// The x64 exception directory (`.pdata`) location as an absolute address and size. Other machines use different
+/// `RUNTIME_FUNCTION` layouts (ARM64 entries are 8 bytes), so they are not read here.
 pub(crate) fn pe_exception_directory(parsed: &object::File) -> Option<(u64, u64)> {
+    if parsed.architecture() != object::Architecture::X86_64 {
+        return None;
+    }
     let directory = match parsed {
         object::File::Pe64(file) => file.data_directory(pe::IMAGE_DIRECTORY_ENTRY_EXCEPTION),
         object::File::Pe32(file) => file.data_directory(pe::IMAGE_DIRECTORY_ENTRY_EXCEPTION),
@@ -79,9 +83,13 @@ const RUNTIME_FUNCTION_SIZE: u64 = 12;
 const UNW_FLAG_CHAININFO: u8 = 0x4;
 
 /// Reads x64 `RUNTIME_FUNCTION` entries, skipping chained entries, which describe fragments of another function.
-pub(crate) fn pe(binary: &Binary, image_base: u64, (address, size): (u64, u64)) -> Vec<u64> {
-    let Some(table) = binary.read(address, size - size % RUNTIME_FUNCTION_SIZE) else { return Vec::new() };
-    table
+/// A directory larger than its file data is read as far as the data goes, with a warning.
+pub(crate) fn pe(binary: &Binary, image_base: u64, (address, size): (u64, u64)) -> (Vec<u64>, Option<String>) {
+    let available = binary.read_to_segment_end(address).unwrap_or_default();
+    let warning = (size > available.len() as u64)
+        .then(|| format!(".pdata directory claims {size:#x} bytes but only {:#x} are present", available.len()));
+    let table = &available[..size.min(available.len() as u64) as usize];
+    let starts = table
         .as_chunks::<12>()
         .0
         .iter()
@@ -97,7 +105,8 @@ pub(crate) fn pe(binary: &Binary, image_base: u64, (address, size): (u64, u64)) 
             }
             image_base.checked_add(u64::from(begin))
         })
-        .collect()
+        .collect();
+    (starts, warning)
 }
 
 #[cfg(test)]
