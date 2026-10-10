@@ -2,8 +2,8 @@ use rampage_loaders::Binary;
 
 /// The view of a program's address space that analysis needs.
 pub trait Memory: Sync {
-    /// File-backed bytes from `address` to the end of its region, or `None` when unmapped.
-    fn bytes_from(&self, address: u64) -> Option<&[u8]>;
+    /// File-backed bytes from `address` to the end of its code region, or `None` when `address` is not code.
+    fn code_from(&self, address: u64) -> Option<&[u8]>;
     fn is_mapped(&self, address: u64) -> bool;
     fn is_executable(&self, address: u64) -> bool;
     /// Whether address-sized immediates may be pointers. Position-independent images based at zero reach code and
@@ -15,8 +15,8 @@ pub trait Memory: Sync {
 const MIN_IMAGE_BASE_FOR_IMMEDIATES: u64 = 0x10000;
 
 impl Memory for Binary {
-    fn bytes_from(&self, address: u64) -> Option<&[u8]> {
-        self.read_to_segment_end(address)
+    fn code_from(&self, address: u64) -> Option<&[u8]> {
+        Binary::code_from(self, address)
     }
 
     fn is_mapped(&self, address: u64) -> bool {
@@ -41,13 +41,13 @@ pub struct FlatMemory {
 }
 
 impl Memory for FlatMemory {
-    fn bytes_from(&self, address: u64) -> Option<&[u8]> {
+    fn code_from(&self, address: u64) -> Option<&[u8]> {
         let offset = usize::try_from(address.checked_sub(self.base)?).ok()?;
         self.bytes.get(offset..).filter(|rest| !rest.is_empty())
     }
 
     fn is_mapped(&self, address: u64) -> bool {
-        self.bytes_from(address).is_some()
+        self.code_from(address).is_some()
     }
 
     fn is_executable(&self, address: u64) -> bool {

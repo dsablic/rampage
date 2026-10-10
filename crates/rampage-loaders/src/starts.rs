@@ -79,7 +79,7 @@ pub(crate) fn pe_exception_directory(parsed: &object::File) -> Option<(u64, u64)
     Some((address, directory.size.get(LE).into()))
 }
 
-const RUNTIME_FUNCTION_SIZE: u64 = 12;
+const RUNTIME_FUNCTION_SIZE: usize = 12;
 const UNW_FLAG_CHAININFO: u8 = 0x4;
 
 /// Reads x64 `RUNTIME_FUNCTION` entries, skipping chained entries, which describe fragments of another function.
@@ -90,7 +90,7 @@ pub(crate) fn pe(binary: &Binary, image_base: u64, (address, size): (u64, u64)) 
         .then(|| format!(".pdata directory claims {size:#x} bytes but only {:#x} are present", available.len()));
     let table = &available[..size.min(available.len() as u64) as usize];
     let starts = table
-        .as_chunks::<12>()
+        .as_chunks::<RUNTIME_FUNCTION_SIZE>()
         .0
         .iter()
         .filter_map(|entry| {

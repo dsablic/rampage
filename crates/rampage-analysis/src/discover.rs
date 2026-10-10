@@ -1,6 +1,6 @@
 //! Recursive-descent function discovery.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rampage_arch::{Disassembler, Flow};
 use rayon::prelude::*;
@@ -73,39 +73,60 @@ impl Program {
     }
 }
 
-/// Discovers functions reachable from `seeds`. Each round explores the newly found functions in parallel and
-/// collects their call targets and code pointers as the next round's seeds. The merge is ordered by address,
-/// so the result does not depend on thread count or scheduling.
+/// Discovers functions reachable from `seeds` in two phases.
+///
+/// Phase 1 finds the complete set of function starts: rounds explore newly found functions in parallel and add
+/// their call targets, code pointers, and any jump target reached from two or more different functions (a shared
+/// tail, which would otherwise be copied into every caller). Phase 2 then builds every function's blocks against
+/// that final set, so whether a jump is a tail call does not depend on the round its target was found in.
+/// Merges are ordered by address, so the result does not depend on thread count or scheduling.
 pub fn discover<M, F>(memory: &M, new_decoder: F, seeds: &[u64]) -> Program
 where
     M: Memory,
     F: Fn() -> Box<dyn Disassembler> + Sync,
 {
+    let explore_all = |starts: &[u64], known: &BTreeSet<u64>| -> Vec<Explored> {
+        starts
+            .par_iter()
+            .map_init(&new_decoder, |decoder, &start| explore(memory, decoder.as_mut(), known, start))
+            .collect()
+    };
+
     let mut known: BTreeSet<u64> = seeds.iter().copied().filter(|&seed| memory.is_executable(seed)).collect();
     let mut pending: Vec<u64> = known.iter().copied().collect();
-    let mut functions = Vec::new();
-    let mut xrefs = Vec::new();
-
+    let mut first_jumper: HashMap<u64, u64> = HashMap::new();
+    let mut empty = BTreeSet::new();
     while !pending.is_empty() {
-        let explored: Vec<Explored> = pending
-            .par_iter()
-            .map_init(&new_decoder, |decoder, &start| explore(memory, decoder.as_mut(), &known, start))
-            .collect();
         let mut next = BTreeSet::new();
-        for result in explored {
+        for result in explore_all(&pending, &known) {
+            let start = result.function.address;
+            if result.function.blocks.is_empty() {
+                empty.insert(start);
+            }
             for &target in &result.new_seeds {
-                if memory.is_executable(target) && !known.contains(&target) {
+                if !known.contains(&target) && memory.is_executable(target) {
                     next.insert(target);
                 }
             }
-            xrefs.extend(result.xrefs);
-            functions.push(result.function);
+            for &target in &result.jump_targets {
+                let first = *first_jumper.entry(target).or_insert(start);
+                if first != start && !known.contains(&target) {
+                    next.insert(target);
+                }
+            }
         }
         known.extend(next.iter().copied());
         pending = next.into_iter().collect();
     }
+    known.retain(|start| !empty.contains(start));
 
-    functions.sort_unstable_by_key(|function| function.address);
+    let starts: Vec<u64> = known.iter().copied().collect();
+    let mut functions = Vec::with_capacity(starts.len());
+    let mut xrefs = Vec::new();
+    for result in explore_all(&starts, &known) {
+        xrefs.extend(result.xrefs);
+        functions.push(result.function);
+    }
     xrefs.sort_unstable();
     xrefs.dedup();
     Program { functions, xrefs }
@@ -115,6 +136,8 @@ struct Explored {
     function: DiscoveredFunction,
     xrefs: Vec<Xref>,
     new_seeds: Vec<u64>,
+    /// Targets of unconditional jumps that leave for code outside this function's known starts.
+    jump_targets: Vec<u64>,
 }
 
 fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSet<u64>, start: u64) -> Explored {
@@ -124,6 +147,7 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
     let mut instructions: BTreeSet<u64> = BTreeSet::new();
     let mut xrefs = Vec::new();
     let mut new_seeds = Vec::new();
+    let mut jump_targets = Vec::new();
     let mut worklist = vec![start];
 
     while let Some(block_start) = worklist.pop() {
@@ -140,13 +164,13 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
                 split_block(&mut blocks, address);
                 break;
             }
-            let Some(bytes) = memory.bytes_from(address) else { break };
+            let Some(bytes) = memory.code_from(address) else { break };
             let insn = decoder.decode(bytes, address);
             if insn.flow == Flow::Invalid {
                 break;
             }
             instructions.insert(address);
-            let next = address + u64::from(insn.len);
+            let Some(next) = address.checked_add(u64::from(insn.len)) else { break };
             let immediate = insn.immediate.filter(|_| trust_immediates);
             for target in insn.data_ref.into_iter().chain(immediate).filter(|&target| memory.is_mapped(target)) {
                 xrefs.push(Xref { to: target, from: address, kind: XrefKind::Data });
@@ -163,10 +187,11 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
                 }
                 Flow::ConditionalJump(target) => {
                     xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
-                    if !is_other_function(target) {
-                        worklist.push(target);
+                    for successor in [target, next] {
+                        if !is_other_function(successor) {
+                            worklist.push(successor);
+                        }
                     }
-                    worklist.push(next);
                     address = next;
                     break;
                 }
@@ -174,6 +199,7 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
                     xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
                     if !is_other_function(target) {
                         worklist.push(target);
+                        jump_targets.push(target);
                     }
                     address = next;
                     break;
@@ -189,18 +215,20 @@ fn explore(memory: &impl Memory, decoder: &mut dyn Disassembler, known: &BTreeSe
         }
     }
 
+    jump_targets.retain(|target| *target != start);
+    jump_targets.sort_unstable();
+    jump_targets.dedup();
     let blocks = blocks.into_iter().map(|(start, end)| Block { start, end }).collect();
     let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len() };
-    Explored { function, xrefs, new_seeds }
+    Explored { function, xrefs, new_seeds, jump_targets }
 }
 
-/// Splits the block containing `address` so that a new block starts there.
+/// Splits the block containing `address` so that a new block starts there. Misaligned decoding can leave smaller
+/// overlapping blocks just before `address`, so this looks back for the block that actually spans it.
 fn split_block(blocks: &mut BTreeMap<u64, u64>, address: u64) {
-    let Some((&start, &end)) = blocks.range(..address).next_back() else { return };
-    if address < end {
-        blocks.insert(start, address);
-        blocks.insert(address, end);
-    }
+    let Some((&start, &end)) = blocks.range(..address).rev().find(|&(_, &end)| address < end) else { return };
+    blocks.insert(start, address);
+    blocks.insert(address, end);
 }
 
 #[cfg(test)]
@@ -307,6 +335,60 @@ mod tests {
         let program = run_at(0, &moves_code_address(0), &[0]);
         assert!(program.function_at(0x1000).is_none());
         assert!(program.xrefs_to(0x1000).is_empty());
+    }
+
+    #[test]
+    fn jump_into_an_instruction_inside_an_overlapping_region_still_starts_a_block() {
+        // 0: je 10; 2: mov eax, 0xc390 (hides 3: nop, 4: ret); 7: nop; 8: jmp 3; 10: jmp 7
+        let program = run(&[0x74, 0x08, 0xb8, 0x90, 0xc3, 0, 0, 0x90, 0xeb, 0xf9, 0xeb, 0xfb], &[0]);
+        assert!(blocks(&program, 0).iter().any(|&(start, _)| start == 7), "{:?}", blocks(&program, 0));
+    }
+
+    #[test]
+    fn conditional_fallthrough_into_another_function_ends_the_function() {
+        // 0: jne 0; 2: ret (a separate function)
+        let program = run(&[0x75, 0xfe, 0xc3], &[0, 2]);
+        assert_eq!(blocks(&program, 0), [(0, 2)]);
+    }
+
+    #[test]
+    fn tail_call_to_a_function_found_later_is_still_a_tail_call() {
+        // A at 0: jmp 0x20. B at 0x10: call 0x20; ret. X at 0x20: ret, found only through B's call.
+        let mut bytes = vec![0xcc; 0x21];
+        bytes[..2].copy_from_slice(&[0xeb, 0x1e]);
+        bytes[0x10] = 0xe8;
+        bytes[0x11..0x15].copy_from_slice(&(0x20i32 - 0x15).to_le_bytes());
+        bytes[0x15] = 0xc3;
+        bytes[0x20] = 0xc3;
+        let program = run(&bytes, &[0, 0x10]);
+        assert_eq!(blocks(&program, 0), [(0, 2)]);
+        assert!(program.function_at(0x20).is_some());
+    }
+
+    #[test]
+    fn body_jumped_to_from_several_functions_becomes_one_function() {
+        let callers = 50u64;
+        let body = callers * 8;
+        let mut bytes = vec![0xcc; body as usize];
+        for caller in 0..callers {
+            let at = (caller * 8) as usize;
+            bytes[at] = 0xe9;
+            bytes[at + 1..at + 5].copy_from_slice(&((body as i64 - (at as i64 + 5)) as i32).to_le_bytes());
+        }
+        bytes.extend(std::iter::repeat_n(0x90, 100));
+        bytes.push(0xc3);
+        let seeds: Vec<u64> = (0..callers).map(|caller| caller * 8).collect();
+        let program = run(&bytes, &seeds);
+        assert_eq!(program.function_at(body).unwrap().instruction_count, 101);
+        let total: usize = program.functions.iter().map(|function| function.instruction_count).sum();
+        assert_eq!(total, 101 + callers as usize);
+    }
+
+    #[test]
+    fn seed_on_invalid_bytes_is_dropped() {
+        let program = run(&[0x06, 0xc3], &[0, 1]);
+        assert!(program.function_at(0).is_none());
+        assert!(program.function_at(1).is_some());
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use rampage_analysis::discover::{Program, XrefKind};
+use rampage_analysis::discover::{Program, Xref, XrefKind};
 use rampage_analysis::functions::{self, Names};
 use rampage_analysis::strings::{self, FoundString};
 use rampage_arch::{Arch, Flow, UnsupportedArch, decoder_for};
@@ -51,6 +51,8 @@ pub struct Project {
 
 struct Analysis {
     program: Program,
+    /// The program's cross-references sorted by source address.
+    xrefs_by_source: Vec<Xref>,
     /// Every block as (start, end, function), sorted by start, for address-to-function lookups.
     blocks: Vec<(u64, u64, u64)>,
 }
@@ -109,6 +111,7 @@ pub struct FunctionRow {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub name: String,
+    /// Bytes covered by the function's blocks.
     pub size: u64,
     pub blocks: usize,
     pub instructions: usize,
@@ -186,7 +189,9 @@ impl Project {
                 .flat_map(|function| function.blocks.iter().map(|block| (block.start, block.end, function.address)))
                 .collect();
             blocks.sort_unstable();
-            Ok(Analysis { program, blocks })
+            let mut xrefs_by_source = program.xrefs.clone();
+            xrefs_by_source.sort_unstable_by_key(|xref| (xref.from, xref.to));
+            Ok(Analysis { program, xrefs_by_source, blocks })
         });
         analysis.as_ref().map_err(|error| ApiError::Unsupported(UnsupportedArch(error.0)))
     }
@@ -216,15 +221,12 @@ impl Project {
             .program
             .functions
             .iter()
-            .map(|function| {
-                let end = function.blocks.iter().map(|block| block.end).max().unwrap_or(function.address);
-                FunctionRow {
-                    address: function.address,
-                    name: self.names.function_name(function.address),
-                    size: end.saturating_sub(function.address),
-                    blocks: function.blocks.len(),
-                    instructions: function.instruction_count,
-                }
+            .map(|function| FunctionRow {
+                address: function.address,
+                name: self.names.function_name(function.address),
+                size: function.blocks.iter().map(|block| block.end - block.start).sum(),
+                blocks: function.blocks.len(),
+                instructions: function.instruction_count,
             })
             .filter(|row| query.name_contains.as_deref().is_none_or(|needle| contains_ignoring_case(&row.name, needle)))
             .collect();
@@ -288,14 +290,24 @@ impl Project {
     }
 
     pub fn xrefs(&self, query: &XrefQuery) -> Result<Vec<XrefRow>, ApiError> {
-        let program = &self.analysis()?.program;
-        let selected: Vec<_> = match *query {
-            XrefQuery::To(address) => program.xrefs_to(address).to_vec(),
-            XrefQuery::From(address) => match program.function_at(address) {
-                Some(function) => program.xrefs.iter().filter(|xref| function.contains(xref.from)).copied().collect(),
-                None => program.xrefs.iter().filter(|xref| xref.from == address).copied().collect(),
+        let analysis = self.analysis()?;
+        let from_range = |start: u64, end: u64| {
+            let by_source = &analysis.xrefs_by_source;
+            let first = by_source.partition_point(|xref| xref.from < start);
+            let last = by_source.partition_point(|xref| xref.from < end);
+            &by_source[first..last]
+        };
+        let mut selected: Vec<Xref> = match *query {
+            XrefQuery::To(address) => analysis.program.xrefs_to(address).to_vec(),
+            XrefQuery::From(address) => match analysis.program.function_at(address) {
+                Some(function) => {
+                    function.blocks.iter().flat_map(|block| from_range(block.start, block.end)).copied().collect()
+                }
+                None => from_range(address, address.saturating_add(1)).to_vec(),
             },
         };
+        selected.sort_unstable();
+        selected.dedup();
         let mut rows = selected
             .iter()
             .map(|xref| {
