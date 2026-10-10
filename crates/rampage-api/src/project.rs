@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use rampage_analysis::discover::{Program, Xref, XrefKind};
 use rampage_analysis::functions::{self, Names};
 use rampage_analysis::strings::{self, FoundString};
+use rampage_analysis::triage::{self, Triage};
 use rampage_arch::{Arch, Flow, UnsupportedArch, decoder_for};
-use rampage_loaders::{Binary, Format, LoadError, Section, Segment};
+use rampage_loaders::{Binary, Export, Format, LoadError, Section, Segment};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -47,6 +48,7 @@ pub struct Project {
     pub binary: Binary,
     names: Names,
     analysis: OnceLock<Result<Analysis, UnsupportedArch>>,
+    triage: OnceLock<Triage>,
 }
 
 struct Analysis {
@@ -63,6 +65,25 @@ pub struct FunctionsQuery {
     pub name_contains: Option<String>,
     pub offset: Option<usize>,
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+pub struct ListQuery {
+    /// Only entries whose name or library contains this text (case-insensitive).
+    pub contains: Option<String>,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportRow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+    pub name: String,
+    /// Where the loader stores the import's address, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
+    pub slot: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
@@ -164,7 +185,7 @@ fn contains_ignoring_case(haystack: &str, needle: &str) -> bool {
 impl Project {
     pub fn new(binary: Binary) -> Self {
         let names = Names::new(&binary);
-        Self { binary, names, analysis: OnceLock::new() }
+        Self { binary, names, analysis: OnceLock::new(), triage: OnceLock::new() }
     }
 
     pub fn summary(&self) -> Summary<'_> {
@@ -301,6 +322,46 @@ impl Project {
             return Some(name.to_owned());
         }
         string_at(&self.binary, data).map(|text| format!("{text:?}"))
+    }
+
+    /// Hashes, entropy, format details and hints, computed once per project.
+    pub fn triage(&self) -> &Triage {
+        self.triage.get_or_init(|| triage::triage(&self.binary))
+    }
+
+    pub fn imports(&self, query: &ListQuery) -> Page<ImportRow> {
+        let slots: HashMap<&str, u64> =
+            self.binary.import_slots.iter().map(|slot| (slot.name.as_str(), slot.address)).collect();
+        let rows = self
+            .binary
+            .imports
+            .iter()
+            .filter(|import| {
+                query.contains.as_deref().is_none_or(|needle| {
+                    contains_ignoring_case(&import.name, needle)
+                        || import.library.as_deref().is_some_and(|library| contains_ignoring_case(library, needle))
+                })
+            })
+            .map(|import| ImportRow {
+                library: import.library.clone(),
+                name: import.name.clone(),
+                slot: slots.get(import.name.as_str()).copied(),
+            })
+            .collect();
+        page(rows, query.offset, query.limit)
+    }
+
+    pub fn exports(&self, query: &ListQuery) -> Page<Export> {
+        let rows = self
+            .binary
+            .exports
+            .iter()
+            .filter(|export| {
+                query.contains.as_deref().is_none_or(|needle| contains_ignoring_case(&export.name, needle))
+            })
+            .cloned()
+            .collect();
+        page(rows, query.offset, query.limit)
     }
 
     pub fn strings(&self, query: &StringsQuery) -> Page<FoundString> {

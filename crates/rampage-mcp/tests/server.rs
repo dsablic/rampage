@@ -48,7 +48,17 @@ async fn lists_all_tools_with_instructions() {
     let mut names: Vec<String> =
         client.list_all_tools().await.unwrap().into_iter().map(|tool| tool.name.into_owned()).collect();
     names.sort();
-    assert_eq!(names, ["binary_info", "disassemble", "list_functions", "list_strings", "xrefs"]);
+    let expected = [
+        "binary_info",
+        "disassemble",
+        "list_exports",
+        "list_functions",
+        "list_imports",
+        "list_strings",
+        "triage",
+        "xrefs",
+    ];
+    assert_eq!(names, expected);
     let info = client.peer_info().unwrap();
     assert_eq!(info.server_info.as_ref().unwrap().name, "rampage");
     assert!(info.instructions.as_deref().unwrap().contains("list_functions"));
@@ -112,5 +122,20 @@ async fn failures_are_tool_errors_the_caller_can_read() {
     let bad_arch = call(&client, "binary_info", json!({ "path": path, "arch": "mips" })).await;
     assert!(text(&bad_arch).contains("unknown architecture"));
 
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn triage_and_imports_describe_a_binary() {
+    let client = connect().await;
+    let path = fixture("hello-x64-dyn.elf");
+    let triage = json_of(&call(&client, "triage", json!({ "path": path })).await);
+    assert_eq!(triage["image_hashes"]["sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(triage["details"]["format"], "elf");
+    assert_eq!(triage["details"]["interpreter"], "/lib64/ld-linux-x86-64.so.2");
+    let imports = json_of(&call(&client, "list_imports", json!({ "path": path, "contains": "puts" })).await);
+    assert_eq!(imports["total"], 1);
+    assert_eq!(imports["items"][0]["library"], "libc.so.6");
+    assert!(imports["items"][0]["slot"].as_str().unwrap().starts_with("0x"));
     client.cancel().await.unwrap();
 }

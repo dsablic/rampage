@@ -248,3 +248,16 @@ fn mcp_subcommand_speaks_json_rpc_over_stdio() {
     let names: Vec<_> = tools["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].clone()).collect();
     assert!(names.contains(&Value::from("list_functions")), "{names:?}");
 }
+
+#[test]
+fn triage_imports_and_exports_commands() {
+    rampage(&["triage"], "hello-x64.exe")
+        .success()
+        .stdout(predicates::str::contains("sha256"))
+        .stdout(predicates::str::contains("imphash"))
+        .stdout(predicates::str::contains(".text"));
+    let triage = json(&["--json", "triage"], "hello-arm64.macho");
+    assert_eq!(triage["details"]["format"], "macho");
+    rampage(&["imports"], "hello-x64-dyn.elf").success().stdout(predicates::str::contains("puts"));
+    rampage(&["exports"], "hello-x64.exe").success().stdout(predicates::str::contains("add"));
+}

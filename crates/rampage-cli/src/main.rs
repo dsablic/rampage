@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use rampage_api::{FunctionsQuery, StringsQuery};
+use rampage_api::{FunctionsQuery, ListQuery, StringsQuery};
 use rampage_arch::Arch;
 
 use crate::commands::Options;
@@ -55,6 +55,22 @@ enum Command {
         /// Only functions whose name contains this text (case-insensitive)
         #[arg(long)]
         name: Option<String>,
+    },
+    /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
+    Triage { file: PathBuf },
+    /// List imported functions with their libraries and import slots
+    Imports {
+        file: PathBuf,
+        /// Only imports whose name or library contains this text (case-insensitive)
+        #[arg(long)]
+        contains: Option<String>,
+    },
+    /// List exported symbols
+    Exports {
+        file: PathBuf,
+        /// Only exports whose name contains this text (case-insensitive)
+        #[arg(long)]
+        contains: Option<String>,
     },
     /// Serve the Model Context Protocol over stdin/stdout for AI agents
     Mcp,
@@ -113,6 +129,13 @@ fn main() -> ExitCode {
                 (None, None) => unreachable!("clap requires --to or --from"),
             };
             commands::xrefs(&mut out, &file, query, &options)
+        }
+        Command::Triage { file } => commands::triage(&mut out, &file, &options),
+        Command::Imports { file, contains } => {
+            commands::imports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
+        }
+        Command::Exports { file, contains } => {
+            commands::exports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
         }
         Command::Mcp => unreachable!("handled before opening stdout"),
     }

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rampage_api::{ApiError, FunctionsQuery, Project, Session, StringsQuery, XrefQuery};
+use rampage_api::{ApiError, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery};
 use rampage_arch::Arch;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -17,11 +17,13 @@ const DEFAULT_INSTRUCTIONS: usize = 40;
 const MAX_INSTRUCTIONS: usize = 2000;
 
 const INSTRUCTIONS: &str = "\
-rampage analyzes PE, ELF and Mach-O binaries (x86/x86-64 disassembly; arm64 loads but does not disassemble yet). \
-Every tool takes the binary's file path; the first call that needs analysis runs it once and caches the result, \
-so later calls are fast. Addresses are hex strings like \"0x401000\". Wherever a tool takes an address you may \
-also pass a symbol name, an export name or a sub_<hex> name. Start with binary_info, then list_functions \
-(filter with name_contains, page with offset/limit), disassemble a function, and follow references with xrefs.";
+rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64 and AArch64. Every tool takes the binary's file \
+path; the first call that needs analysis runs it once and caches the result, so later calls are fast. Addresses \
+are hex strings like \"0x401000\". Wherever a tool takes an address you may also pass a symbol, export or import \
+name (an import name finds its stub) or a sub_<hex> name. Start with triage for hashes, entropy, hardening and \
+packing hints, or binary_info for the layout; then list_functions (filter with name_contains, page with \
+offset/limit), disassemble a function, and follow references with xrefs. list_imports and list_strings are good \
+starting points for finding behavior.";
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BinaryArgs {
@@ -45,6 +47,14 @@ pub struct StringsArgs {
     pub binary: BinaryArgs,
     #[serde(flatten)]
     pub query: StringsQuery,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListArgs {
+    #[serde(flatten)]
+    pub binary: BinaryArgs,
+    #[serde(flatten)]
+    pub query: ListQuery,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -122,6 +132,30 @@ impl RampageServer {
     #[tool(description = "Format, architecture, entry point, segments, sections and symbol counts of a binary.")]
     async fn binary_info(&self, Parameters(args): Parameters<BinaryArgs>) -> Result<CallToolResult, ErrorData> {
         self.run(args, |project| Ok(serde_json::to_value(project.summary()).expect("summary serializes"))).await
+    }
+
+    #[tool(description = "First look at a binary: MD5/SHA-1/SHA-256, entropy (overall, per section, and a profile \
+                          across the file), format details (PE build time, mitigations and Rich header; ELF \
+                          interpreter, libraries, NX/RELRO/PIE; Mach-O dylibs, platform, signing), PE imphash, \
+                          overlay, and hints of packing or weak hardening.")]
+    async fn triage(&self, Parameters(args): Parameters<BinaryArgs>) -> Result<CallToolResult, ErrorData> {
+        self.run(args, |project| Ok(serde_json::to_value(project.triage()).expect("triage serializes"))).await
+    }
+
+    #[tool(description = "Imported functions with their libraries and the slot the loader fills with each \
+                          address. Filter with `contains` (name or library); paginated like list_functions.")]
+    async fn list_imports(&self, Parameters(args): Parameters<ListArgs>) -> Result<CallToolResult, ErrorData> {
+        let mut query = args.query;
+        query.limit = clamp_page(query.limit);
+        self.run(args.binary, move |project| Ok(project.imports(&query))).await
+    }
+
+    #[tool(description = "Exported symbols with their addresses. Filter with `contains`; paginated like \
+                          list_functions.")]
+    async fn list_exports(&self, Parameters(args): Parameters<ListArgs>) -> Result<CallToolResult, ErrorData> {
+        let mut query = args.query;
+        query.limit = clamp_page(query.limit);
+        self.run(args.binary, move |project| Ok(project.exports(&query))).await
     }
 
     #[tool(description = "Functions found by recursive-descent analysis, sorted by address, with size, block and \

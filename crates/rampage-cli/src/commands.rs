@@ -6,8 +6,9 @@ use anyhow::Result;
 use rampage_analysis::discover::XrefKind;
 use rampage_analysis::functions;
 use rampage_analysis::strings::Encoding;
-use rampage_api::{FunctionsQuery, Project, Session, StringsQuery, XrefQuery};
+use rampage_api::{FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery};
 use rampage_arch::Arch;
+use rampage_loaders::Details;
 use rampage_loaders::Perms;
 use serde::Serialize;
 
@@ -157,6 +158,110 @@ pub fn xrefs(out: &mut impl Write, path: &Path, target: XrefTarget, options: &Op
         let from_function = row.from_function.as_deref().unwrap_or("?");
         let to_name = row.to_name.as_deref().map(|name| format!(" {name}")).unwrap_or_default();
         writeln!(out, "{:#018x} {kind} {:#018x}{to_name}  (in {from_function})", row.from, row.to)?;
+    }
+    Ok(())
+}
+
+/// One character per entropy point, from blank (0 bits per byte) to `@` (8).
+fn profile_text(profile: &[f64]) -> String {
+    const SHADES: &[u8] = b" .:-=+*#%@";
+    profile.iter().map(|&bits| SHADES[((bits / 8.0) * (SHADES.len() - 1) as f64).round() as usize] as char).collect()
+}
+
+pub fn triage(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let triage = project.triage();
+    if options.json {
+        return write_json(out, triage);
+    }
+    writeln!(out, "size      {} bytes", triage.image_size)?;
+    writeln!(out, "md5       {}", triage.image_hashes.md5)?;
+    writeln!(out, "sha1      {}", triage.image_hashes.sha1)?;
+    writeln!(out, "sha256    {}", triage.image_hashes.sha256)?;
+    if let (Some(size), Some(hashes)) = (triage.file_size, &triage.file_hashes) {
+        writeln!(out, "file      {size} bytes (universal binary), sha256 {}", hashes.sha256)?;
+    }
+    if let Some(imphash) = &triage.imphash {
+        writeln!(out, "imphash   {imphash}")?;
+    }
+    writeln!(out, "entropy   {:.2}  [{}]", triage.entropy, profile_text(&triage.entropy_profile))?;
+    match &triage.details {
+        Details::Pe(pe) => {
+            writeln!(out, "built     {} UTC (timestamp {:#x})", pe.timestamp_utc, pe.timestamp)?;
+            writeln!(out, "subsystem {}, linker {}", pe.subsystem, pe.linker_version)?;
+            writeln!(out, "flags     {}", pe.characteristics.join(", "))?;
+            writeln!(out, "signed    {}", if pe.signed { "yes" } else { "no" })?;
+            if !pe.rich.is_empty() {
+                writeln!(out, "rich      {} tool entries", pe.rich.len())?;
+            }
+        }
+        Details::Elf(elf) => {
+            writeln!(out, "kind      {}{}", elf.kind, if elf.pie { " (PIE)" } else { "" })?;
+            if let Some(interpreter) = &elf.interpreter {
+                writeln!(out, "interp    {interpreter}")?;
+            }
+            if !elf.needed.is_empty() {
+                writeln!(out, "needed    {}", elf.needed.join(", "))?;
+            }
+            writeln!(out, "hardening nx {}, relro {}", if elf.nx { "yes" } else { "no" }, elf.relro)?;
+            if let Some(build_id) = &elf.build_id {
+                writeln!(out, "build id  {build_id}")?;
+            }
+        }
+        Details::MachO(macho) => {
+            writeln!(out, "type      {}  flags {}", macho.file_type, macho.flags.join(", "))?;
+            if let (Some(platform), Some(min_os)) = (&macho.platform, &macho.min_os) {
+                writeln!(out, "platform  {platform} {min_os} (sdk {})", macho.sdk.as_deref().unwrap_or("?"))?;
+            }
+            for dylib in &macho.dylibs {
+                writeln!(out, "dylib     {dylib}")?;
+            }
+            writeln!(out, "signed    {}", if macho.code_signature { "yes" } else { "no" })?;
+            if let Some(uuid) = &macho.uuid {
+                writeln!(out, "uuid      {uuid}")?;
+            }
+        }
+        Details::None => {}
+    }
+    writeln!(out, "\nsections")?;
+    for section in &triage.sections {
+        writeln!(
+            out,
+            "  {:#018x} {:>10} {} {:5.2}  {}",
+            section.address, section.size, section.perms, section.entropy, section.name
+        )?;
+    }
+    if let Some(overlay) = &triage.overlay {
+        writeln!(out, "\noverlay   {} bytes at {:#x}, entropy {:.2}", overlay.size, overlay.offset, overlay.entropy)?;
+    }
+    if !triage.hints.is_empty() {
+        writeln!(out, "\nhints")?;
+        for hint in &triage.hints {
+            writeln!(out, "  - {hint}")?;
+        }
+    }
+    Ok(())
+}
+
+pub fn imports(out: &mut impl Write, path: &Path, query: &ListQuery, options: &Options) -> Result<()> {
+    let rows = open(path, options)?.imports(query).items;
+    if options.json {
+        return write_json(out, &rows);
+    }
+    for row in &rows {
+        let slot = row.slot.map(|slot| format!("{slot:#018x}")).unwrap_or_else(|| " ".repeat(18));
+        writeln!(out, "{slot}  {:<40} {}", row.library.as_deref().unwrap_or("-"), row.name)?;
+    }
+    Ok(())
+}
+
+pub fn exports(out: &mut impl Write, path: &Path, query: &ListQuery, options: &Options) -> Result<()> {
+    let rows = open(path, options)?.exports(query).items;
+    if options.json {
+        return write_json(out, &rows);
+    }
+    for row in &rows {
+        writeln!(out, "{:#018x}  {}", row.address, row.name)?;
     }
     Ok(())
 }
