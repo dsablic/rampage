@@ -54,15 +54,19 @@ order, and `thumb` on an executable ARM region selects Thumb. Unknown fields and
 
 ## Limits
 
-The snapshot contains bytes and explicit seeds, not register state, modules, relocations, types or execution
-history. Authenticated pointers and unknown indirect targets are not guessed. A capture is not a decompiler
+Snapshots may include module UUIDs/paths, original/runtime header bases and selected-thread register values.
+These are provenance, not inputs to static register inference. A module slide is the runtime base minus its
+original image base; it must be applied explicitly when correlating addresses. Relocations, types and execution
+history are not captured. Authenticated pointers and unknown indirect targets are not guessed.
+A capture is not a decompiler
 or a complete debugger integration. `audit` reports evidence and limitations, not proof of encryption.
 
-`rampage summarize capture.json --at 0x1000 --json` includes a partial instruction IR alongside the graph and references.
+`rampage summarize capture.json --at 0x1000 --json` includes partial IR alongside the graph and references.
 `complete` applies to each lifted instruction, not the function. Unimplemented instruction semantics produce
-barriers. The IR currently covers immediate ADD/SUB without flag writes, MOVZ, 64-bit register moves,
-unsigned-offset 64-bit loads/stores, NOP, direct unconditional branches, CBZ/CBNZ/TBZ/TBNZ, BR and RET on AArch64.
-Calls and unsupported conditions remain barriers.
+barriers. ARM64 integer coverage includes immediate/shifted ADD/SUB and NZCV, logical operations, wide moves,
+variable shifts, multiply/divide, ADR/ADRP, common scalar/pair memory operations and branch conditions.
+Plain BL/BLR calls retain pre-call arguments, X8 result-buffer and SP dependencies and conservatively clobber
+caller-saved registers/memory; unknown, FP/SIMD and authenticated operations remain barriers.
 
 The `ssa` field in AArch64 summaries gives each register and memory definition a unique ID. Block-entry phi
 nodes name incoming definitions by predecessor block, including an external input edge when the entry has
@@ -73,4 +77,18 @@ Loads/stores retain their access widths; conditional controls retain polarity an
 
 SSA is omitted with a limitation message for functions exceeding 512 blocks, 20,000 instructions or 4,096
 edges, or budgets of 20,000 generated definitions and 80,000 input value nodes. Budgets are checked before
-SSA allocation. It is a data-flow representation over the partial IR, not source-level variable recovery or a decompiler.
+SSA allocation. It represents data flow over partial IR, not source-level variable recovery or a decompiler.
+
+`rampage pseudocode capture.json --at 0x1000` prints an explicitly partial SSA-style view, retaining labels,
+phi nodes, memory widths and unknowns. It does not claim structured C source. Function summaries also include
+bounded constant and entry-SP-relative stack-slot evidence; conflicting predecessor values stay unknown.
+
+Optional `modules` entries have `name`, `path`, `uuid`, `image_base` and `runtime_base`. Optional `registers`
+entries have hexadecimal `thread_id`/`value` and a register `name`. Both lists are limited to 4,096 entries;
+module UUIDs and per-thread register names must be unique. The LLDB adapter exports those fields from the
+stopped target without evaluating expressions or executing target code.
+
+`rampage correlate capture.json --original module.dylib --module <uuid> --at 0x1010` checks the recorded UUID
+against the explicitly supplied Mach-O image and translates the runtime address using the recorded header
+slide. It never opens paths stored inside a snapshot. UUID correlation does not assert that runtime bytes
+equal the original file and does not reconstruct relocations or authenticated pointers.

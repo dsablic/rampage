@@ -1,5 +1,34 @@
 # To do
 
+## Deep ARM64 track
+
+1. [ ] Integer instruction semantics: arithmetic/logical shifts, wide moves, multiply/divide, NZCV, common
+   scalar/pair memory operations and AAPCS64 call effects. Verify encodings with LLVM and execution on fixtures.
+2. [ ] Stack/signature analysis: preserve callee-saved registers, identify SP-relative slots and conservatively
+   report argument/return evidence; unknown instructions and conflicting paths must remain unknown.
+3. [ ] SSA simplification and pseudocode: bounded constant/affine reasoning and explicit semantic gaps, then
+   structured conditions/loops and types. Do not claim complete source recovery from partial IR.
+4. [ ] Jump tables/indirect flow: recover only bounded, validated tables and targets, with evidence and no guesses
+   for mutable/authenticated pointers. Extend the controlled corpus before enabling new recovery rules.
+5. [ ] Runtime capture: successful permitted live capture, module identities/slides, original-file correlation
+   and register provenance. Existing exporter mocks alone do not satisfy this gate.
+6. [ ] Accuracy benchmark: checked fixture results for instructions, CFGs, xrefs and semantics, plus versioned
+   IDA/Ghidra comparison imports when those tools are available. Record missing tools rather than claiming parity.
+
+Current ARM64 increment: integer logical/shift/multiply/divide/wide-move semantics, NZCV and B.cond,
+ADR/ADRP, common 32/64-bit scalar and 64-bit pair memory effects, conservative integer AAPCS64 calls,
+monotone constant/entry-SP-relative stack evidence, and bounded SSA-style pseudocode. Native ARM64 evaluator
+comparisons and controlled fixtures cover these cases; full semantic/ABI/structured-source coverage is open.
+Ghidra/IDA are not on the command path, and live LLDB capture remains unverified. Ghidra's architecture is a
+reference; no Ghidra implementation code or specifications have been incorporated.
+Explicit bounded absolute64/signed-relative32 jump-table inspection is available without guessing dispatch
+bounds or injecting CFG edges. Snapshots record bounded module/register provenance; explicit UUID-matched
+Mach-O correlation maps runtime header slides without opening metadata-supplied paths. Function-start
+comparisons accept bounded, versioned exports for hash-matched regular images; snapshots are excluded until
+mapping-aware comparison identities exist.
+Bounded immediate-dominator and natural-loop analysis now accompanies SSA; structured-source rendering,
+minimal SSA, full signatures/type recovery and automatic dispatch reconstruction remain acceptance gates.
+
 ## General-purpose reverse-engineering roadmap
 
 Acceptance gate for each milestone: behavioral regressions, malformed-input tests, `cargo fmt --check`,

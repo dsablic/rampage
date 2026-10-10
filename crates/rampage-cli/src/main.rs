@@ -71,6 +71,38 @@ enum Command {
         #[arg(long)]
         at: String,
     },
+    /// Partial ARM64 SSA pseudocode with explicit unknowns (not recovered C source)
+    Pseudocode {
+        file: PathBuf,
+        #[arg(long)]
+        at: String,
+    },
+    /// Compare function starts with a versioned, image-hash-matched reference export
+    Compare {
+        file: PathBuf,
+        #[arg(long)]
+        reference: PathBuf,
+    },
+    /// Inspect an explicit ARM64 absolute64 or signed-relative32 jump table
+    JumpTable {
+        file: PathBuf,
+        #[arg(long)]
+        at: String,
+        #[arg(long)]
+        count: usize,
+        #[arg(long)]
+        relative_base: Option<String>,
+    },
+    /// Correlate a runtime snapshot address with an explicit UUID-matched original Mach-O
+    Correlate {
+        file: PathBuf,
+        #[arg(long)]
+        original: PathBuf,
+        #[arg(long)]
+        module: String,
+        #[arg(long)]
+        at: String,
+    },
     /// List imported functions with their libraries and import slots
     Imports {
         file: PathBuf,
@@ -161,6 +193,14 @@ fn main() -> ExitCode {
         Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
         Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),
         Command::Summarize { file, at } => commands::summarize(&mut out, &file, &at, &options),
+        Command::Pseudocode { file, at } => commands::pseudocode(&mut out, &file, &at, &options),
+        Command::Compare { file, reference } => commands::compare(&mut out, &file, &reference, &options),
+        Command::JumpTable { file, at, count, relative_base } => {
+            commands::jump_table(&mut out, &file, &at, count, relative_base.as_deref(), &options)
+        }
+        Command::Correlate { file, original, module, at } => {
+            commands::correlate(&mut out, &file, &original, &module, &at, &options)
+        }
         Command::Imports { file, contains } => {
             commands::imports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
         }

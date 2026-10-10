@@ -87,6 +87,15 @@ pub struct At {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+pub struct JumpTableArgs {
+    pub at: String,
+    /// Exact analyst-specified entry count (1–4096).
+    pub count: usize,
+    /// Base for signed 32-bit relative entries; absent selects absolute 64-bit pointers.
+    pub relative_base: Option<String>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 pub struct DisassembleArgs {
     /// Start address or name; defaults to the entry point.
     pub at: Option<String>,
@@ -145,6 +154,18 @@ fn page_limit(limit: Option<usize>) -> Option<usize> {
 /// Every tool, in the order the model sees them.
 pub fn tools() -> Vec<Tool> {
     vec![
+        tool(
+            "inspect_jump_table",
+            "Validate explicitly selected immutable ARM64 jump-table entries; \
+             does not guess index ranges or CFG edges.",
+            |project, args: JumpTableArgs| {
+                project.inspect_jump_table(
+                    project.resolve(&args.at)?,
+                    args.count,
+                    args.relative_base.as_deref().map(|base| project.resolve(base)).transpose()?,
+                )
+            },
+        ),
         tool(
             "function_summary",
             "Structural function summary: decoded CFG, named references and explicit limitations. Not a decompiler.",

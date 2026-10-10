@@ -68,6 +68,10 @@ pub struct Binary {
     snapshot_source: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub snapshot_modules: Vec<crate::snapshot::SnapshotModule>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub snapshot_registers: Vec<crate::snapshot::SnapshotRegister>,
     #[serde(skip)]
     image: Range<usize>,
 }
@@ -131,6 +135,8 @@ impl Binary {
             image: 0..len,
             snapshot_source: Some(source),
             provenance: Some(provenance),
+            snapshot_modules: Vec::new(),
+            snapshot_registers: Vec::new(),
         })
     }
 
@@ -330,6 +336,8 @@ impl Binary {
             data: Bytes::Mapped(data),
             snapshot_source: None,
             provenance: None,
+            snapshot_modules: Vec::new(),
+            snapshot_registers: Vec::new(),
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);

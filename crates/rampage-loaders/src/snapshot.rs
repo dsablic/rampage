@@ -19,6 +19,28 @@ pub struct Snapshot {
     #[serde(default)]
     pub seeds: Vec<String>,
     pub entry: Option<String>,
+    #[serde(default)]
+    pub modules: Vec<SnapshotModule>,
+    #[serde(default)]
+    pub registers: Vec<SnapshotRegister>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotModule {
+    pub name: String,
+    pub path: String,
+    pub uuid: String,
+    pub image_base: String,
+    pub runtime_base: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotRegister {
+    pub thread_id: String,
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -33,6 +55,9 @@ pub struct SnapshotRegion {
 }
 
 pub fn address(text: &str) -> Result<u64, LoadError> {
+    if text.len() > 18 {
+        return Err(LoadError::Malformed("hexadecimal address exceeds 64-bit width".to_owned()));
+    }
     let value = text
         .strip_prefix("0x")
         .filter(|hex| !hex.is_empty() && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -49,6 +74,34 @@ pub(crate) fn load(source: Vec<u8>, wanted: Option<Arch>) -> Result<Binary, Load
     let arch: Arch = snapshot.arch.parse().map_err(LoadError::Unsupported)?;
     if wanted.is_some_and(|wanted| wanted != arch) {
         return Err(LoadError::Unsupported(format!("snapshot architecture is {arch}")));
+    }
+    if snapshot.modules.len() > 4096 || snapshot.registers.len() > 4096 {
+        return Err(LoadError::Malformed("snapshot module/register limit exceeded".to_owned()));
+    }
+    let mut uuids = std::collections::BTreeSet::new();
+    for module in &snapshot.modules {
+        if module.name.len() > 4096
+            || module.path.len() > 4096
+            || module.uuid.is_empty()
+            || module.uuid.len() > 128
+            || !uuids.insert(&module.uuid)
+        {
+            return Err(LoadError::Malformed("invalid or duplicate snapshot module identity".to_owned()));
+        }
+        address(&module.image_base)?;
+        address(&module.runtime_base)?;
+    }
+    let mut register_names = std::collections::BTreeSet::new();
+    for register in &snapshot.registers {
+        let thread = address(&register.thread_id)?;
+        address(&register.value)?;
+        if register.name.is_empty()
+            || register.name.len() > 32
+            || !register.name.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            || !register_names.insert((thread, &register.name))
+        {
+            return Err(LoadError::Malformed("invalid or duplicate snapshot register".to_owned()));
+        }
     }
     let mut regions = snapshot
         .regions
@@ -126,7 +179,7 @@ pub(crate) fn load(source: Vec<u8>, wanted: Option<Arch>) -> Result<Binary, Load
             return Err(LoadError::Malformed(format!("snapshot seed {seed:#x} is not captured executable memory")));
         }
     }
-    Binary::from_snapshot(
+    let mut binary = Binary::from_snapshot(
         arch,
         snapshot.big_endian,
         snapshot.data_big_endian,
@@ -138,7 +191,10 @@ pub(crate) fn load(source: Vec<u8>, wanted: Option<Arch>) -> Result<Binary, Load
         thumb,
         seeds,
         entry,
-    )
+    )?;
+    binary.snapshot_modules = snapshot.modules;
+    binary.snapshot_registers = snapshot.registers;
+    Ok(binary)
 }
 
 #[cfg(test)]
@@ -181,5 +237,20 @@ mod tests {
             assert!(load(source[..end].to_vec(), None).is_err());
         }
         assert!(load(source, Some(Arch::X86_64)).is_err());
+    }
+
+    #[test]
+    fn malformed_metadata_and_duplicate_registers_are_rejected() {
+        let mut input = fixture();
+        input["modules"] = serde_json::json!([{ "name": "fixture", "path": "file", "uuid": "uuid",
+            "image_base": "0x0", "runtime_base": "-1" }]);
+        assert!(load(serde_json::to_vec(&input).unwrap(), None).is_err());
+        assert!(address(&format!("0x{}1", "0".repeat(1000))).is_err());
+        let mut input = fixture();
+        input["registers"] = serde_json::json!([
+            { "thread_id": "0x1", "name": "sp", "value": "0x1000" },
+            { "thread_id": "0x01", "name": "sp", "value": "0x2000" }
+        ]);
+        assert!(load(serde_json::to_vec(&input).unwrap(), None).is_err());
     }
 }

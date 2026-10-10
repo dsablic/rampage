@@ -345,3 +345,32 @@ fn conditions_preserve_polarity_and_tested_bit() {
             Expression::Condition { nonzero: polarity, bit: tested, .. } if polarity == nonzero && tested == bit));
     }
 }
+
+#[test]
+fn aapcs64_calls_preserve_callee_saved_registers_but_clobber_caller_saved_values() {
+    let instructions = vec![
+        assign(0x1000, 0, Value::Constant { value: 7 }, 64),
+        assign(0x1004, 19, Value::Constant { value: 11 }, 64),
+        LiftedInstruction {
+            address: 0x1008,
+            bits: 64,
+            flow: Flow::Call(0x3000),
+            complete: true,
+            effects: vec![Effect::Call { target: Value::Constant { value: 0x3000 }, return_address: 0x100c }],
+        },
+        assign(0x100c, 1, Value::Register { number: 0 }, 64),
+        assign(0x1010, 2, Value::Register { number: 19 }, 64),
+    ];
+    let ssa = ssa::build(&[block(0x1000, instructions)], &[], 0).unwrap();
+    let caller = ssa.blocks[0].statements[3].definitions[0];
+    let callee = ssa.blocks[0].statements[4].definitions[0];
+    assert_eq!(evaluate(&ssa, &ssa.definitions[caller].expression, &[None], 0), None);
+    assert_eq!(evaluate(&ssa, &ssa.definitions[callee].expression, &[None], 0), Some(11));
+    assert!(!ssa.blocks[0].statements[2].barrier);
+    assert!(matches!(ssa.blocks[0].statements[2].observations[0], Expression::Call { return_address: 0x100c, .. }));
+    let Expression::Call { result_buffer, stack_pointer, .. } = ssa.blocks[0].statements[2].observations[0] else {
+        panic!("missing call");
+    };
+    assert_eq!(ssa.definitions[result_buffer].variable, Variable::Register { number: 8 });
+    assert_eq!(ssa.definitions[stack_pointer].variable, Variable::StackPointer);
+}

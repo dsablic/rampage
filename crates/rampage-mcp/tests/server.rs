@@ -54,6 +54,7 @@ async fn lists_all_tools_with_instructions() {
         "disassemble",
         "function_graph",
         "function_summary",
+        "inspect_jump_table",
         "language_metadata",
         "list_annotations",
         "list_exports",

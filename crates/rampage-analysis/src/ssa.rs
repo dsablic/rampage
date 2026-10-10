@@ -1,11 +1,12 @@
 use std::collections::VecDeque;
 
 use rampage_arch::Flow;
-use rampage_arch::ir::{Effect, LiftedInstruction, Value};
+use rampage_arch::ir::{Effect, FlagOperation, LiftedInstruction, Operation, Value};
 use serde::Serialize;
 
-const VARIABLES: usize = 33;
+const VARIABLES: usize = 34;
 const MEMORY: usize = 32;
+const FLAGS: usize = 33;
 const MAX_BLOCKS: usize = 512;
 const MAX_INSTRUCTIONS: usize = 20_000;
 const MAX_DEFINITIONS: usize = 20_000;
@@ -59,11 +60,36 @@ pub enum Variable {
     Register { number: u8 },
     StackPointer,
     Memory,
+    Flags,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expression {
+    Binary {
+        operation: Operation,
+        left: Box<Expression>,
+        right: Box<Expression>,
+        bits: u8,
+    },
+    Flags {
+        operation: FlagOperation,
+        left: Box<Expression>,
+        right: Box<Expression>,
+        bits: u8,
+    },
+    FlagsCondition {
+        flags: usize,
+        condition: u8,
+    },
+    Call {
+        target: Box<Expression>,
+        arguments: Vec<usize>,
+        memory: usize,
+        return_address: u64,
+        result_buffer: usize,
+        stack_pointer: usize,
+    },
     Input,
     Unknown {
         reason: String,
@@ -118,6 +144,7 @@ fn variable(index: usize) -> Variable {
     match index {
         31 => Variable::StackPointer,
         MEMORY => Variable::Memory,
+        FLAGS => Variable::Flags,
         _ => Variable::Register { number: index as u8 },
     }
 }
@@ -135,6 +162,13 @@ fn expression(value: &Value, state: &[usize; VARIABLES], depth: usize) -> Result
         return Err("IR expression nesting exceeds 64 levels".to_owned());
     }
     Ok(match value {
+        Value::Low32 { value } => Expression::Low32 { value: Box::new(expression(value, state, depth + 1)?) },
+        Value::Binary { operation, left, right, bits } => Expression::Binary {
+            operation: *operation,
+            left: Box::new(expression(left, state, depth + 1)?),
+            right: Box::new(expression(right, state, depth + 1)?),
+            bits: *bits,
+        },
         Value::Register { number } if *number < 31 => Expression::Reference { definition: state[*number as usize] },
         Value::Register { .. } => return Err("IR register number must be below 31".to_owned()),
         Value::StackPointer => Expression::Reference { definition: state[31] },
@@ -161,14 +195,24 @@ fn define(definitions: &mut Vec<Definition>, state: &mut [usize; VARIABLES], ind
     id
 }
 
-fn references(value: &Expression, out: &mut Vec<usize>) {
+pub(crate) fn references(value: &Expression, out: &mut Vec<usize>) {
     match value {
         Expression::Reference { definition } => out.push(*definition),
-        Expression::Add { left, right } | Expression::Subtract { left, right } => {
+        Expression::Add { left, right }
+        | Expression::Subtract { left, right }
+        | Expression::Binary { left, right, .. }
+        | Expression::Flags { left, right, .. } => {
             references(left, out);
             references(right, out);
         }
         Expression::Low32 { value } | Expression::Condition { value, .. } => references(value, out),
+        Expression::FlagsCondition { flags, .. } => out.push(*flags),
+        Expression::Call { target, arguments, memory, result_buffer, stack_pointer, .. } => {
+            references(target, out);
+            out.extend(arguments);
+            out.push(*memory);
+            out.extend([*result_buffer, *stack_pointer]);
+        }
         Expression::Phi { inputs } => out.extend(inputs.iter().map(|input| input.definition)),
         Expression::Load { memory, address, .. } => {
             out.push(*memory);
@@ -194,9 +238,13 @@ fn validate_values(values: &[&Value], nodes: &mut usize) -> Result<(), String> {
             if depth > 64 {
                 return Err("IR expression nesting exceeds 64 levels".to_owned());
             }
-            if let Value::Add { left, right } | Value::Subtract { left, right } = value {
-                stack.push((right, depth + 1));
-                stack.push((left, depth + 1));
+            match value {
+                Value::Add { left, right } | Value::Subtract { left, right } | Value::Binary { left, right, .. } => {
+                    stack.push((right, depth + 1));
+                    stack.push((left, depth + 1));
+                }
+                Value::Low32 { value } => stack.push((value, depth + 1)),
+                _ => {}
             }
         }
     }
@@ -208,7 +256,9 @@ fn budget(input: &[InputBlock]) -> Result<(), String> {
     let mut nodes = 0;
     for insn in input.iter().flat_map(|block| &block.instructions) {
         let barrier = !insn.complete
-            || matches!(insn.flow, Flow::Call(_) | Flow::IndirectCall | Flow::Invalid)
+            || matches!(insn.flow, Flow::Invalid)
+            || matches!(insn.flow, Flow::Call(_) | Flow::IndirectCall)
+                && !insn.effects.iter().any(|effect| matches!(effect, Effect::Call { .. }))
             || insn.effects.iter().any(|effect| matches!(effect, Effect::Barrier { .. }));
         if barrier {
             definitions += VARIABLES;
@@ -246,6 +296,23 @@ fn budget(input: &[InputBlock]) -> Result<(), String> {
                     }
                 }
                 Effect::Barrier { .. } => {}
+                Effect::SetFlags { left, right, .. } => {
+                    if !barrier {
+                        definitions += 1;
+                    }
+                    validate_values(&[left, right], &mut nodes)?;
+                }
+                Effect::FlagsConditional { condition } => {
+                    if *condition > 15 {
+                        return Err("invalid flag condition".to_owned());
+                    }
+                }
+                Effect::Call { target, .. } => {
+                    if !barrier {
+                        definitions += 22;
+                    }
+                    validate_values(&[target], &mut nodes)?;
+                }
             }
             if definitions > MAX_DEFINITIONS {
                 return Err("SSA definition limit exceeded (20,000)".to_owned());
@@ -329,7 +396,9 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
                 definitions: Vec::new(),
                 observations: Vec::new(),
                 barrier: !insn.complete
-                    || matches!(insn.flow, Flow::Call(_) | Flow::IndirectCall | Flow::Invalid)
+                    || matches!(insn.flow, Flow::Invalid)
+                    || matches!(insn.flow, Flow::Call(_) | Flow::IndirectCall)
+                        && !insn.effects.iter().any(|effect| matches!(effect, Effect::Call { .. }))
                     || insn.effects.iter().any(|effect| matches!(effect, Effect::Barrier { .. })),
             };
             if statement.barrier {
@@ -396,6 +465,32 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
                             }
                         }
                         Effect::Barrier { .. } => unreachable!(),
+                        Effect::SetFlags { operation, left, right } => {
+                            let value = Expression::Flags {
+                                operation: *operation,
+                                bits: insn.bits,
+                                left: Box::new(expression(left, state, 0)?),
+                                right: Box::new(expression(right, state, 0)?),
+                            };
+                            statement.definitions.push(define(&mut definitions, state, FLAGS, value));
+                        }
+                        Effect::FlagsConditional { condition } => statement
+                            .observations
+                            .push(Expression::FlagsCondition { flags: state[FLAGS], condition: *condition }),
+                        Effect::Call { target, return_address } => {
+                            statement.observations.push(Expression::Call {
+                                target: Box::new(expression(target, state, 0)?),
+                                arguments: state[..8].to_vec(),
+                                memory: state[MEMORY],
+                                return_address: *return_address,
+                                result_buffer: state[8],
+                                stack_pointer: state[31],
+                            });
+                            for index in (0..19).chain([30, MEMORY, FLAGS]) {
+                                let value = Expression::Unknown { reason: "AAPCS64 call clobber".to_owned() };
+                                statement.definitions.push(define(&mut definitions, state, index, value));
+                            }
+                        }
                     }
                 }
             }
@@ -474,11 +569,24 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
 fn rewrite(value: &mut Expression, remap: &[usize]) {
     match value {
         Expression::Reference { definition } => *definition = remap[*definition],
-        Expression::Add { left, right } | Expression::Subtract { left, right } => {
+        Expression::Add { left, right }
+        | Expression::Subtract { left, right }
+        | Expression::Binary { left, right, .. }
+        | Expression::Flags { left, right, .. } => {
             rewrite(left, remap);
             rewrite(right, remap);
         }
         Expression::Low32 { value } | Expression::Condition { value, .. } => rewrite(value, remap),
+        Expression::FlagsCondition { flags, .. } => *flags = remap[*flags],
+        Expression::Call { target, arguments, memory, result_buffer, stack_pointer, .. } => {
+            rewrite(target, remap);
+            for argument in arguments {
+                *argument = remap[*argument];
+            }
+            *memory = remap[*memory];
+            *result_buffer = remap[*result_buffer];
+            *stack_pointer = remap[*stack_pointer];
+        }
         Expression::Phi { inputs } => {
             for input in inputs {
                 input.definition = remap[input.definition];

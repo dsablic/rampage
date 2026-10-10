@@ -1,0 +1,12 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "aarch64",
+  "provenance": "controlled explicit absolute and relative jump tables",
+  "regions": [
+    {"name": "text", "address": "0x1000", "permissions": "r-x", "bytes": "c0035fd6c0035fd6"},
+    {"name": "absolute", "address": "0x3000", "permissions": "r--", "bytes": "00100000000000000410000000000000"},
+    {"name": "relative", "address": "0x4000", "permissions": "r--", "bytes": "00e0ffff04e0ffff"}
+  ],
+  "seeds": ["0x1000"],
+  "entry": "0x1000"
+}

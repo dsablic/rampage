@@ -1,0 +1,92 @@
+#[cfg(target_arch = "aarch64")]
+mod aarch64 {
+    use rampage_arch::ir::{self, Effect, FlagOperation, Operation, Value};
+    use rampage_arch::{Arch, Target, decoder};
+
+    fn value(expr: &Value, registers: &[u64; 31]) -> u64 {
+        match expr {
+            Value::Constant { value } => *value,
+            Value::Register { number } => registers[*number as usize],
+            Value::StackPointer => unreachable!("fixture does not use SP"),
+            Value::Low32 { value: expr } => value(expr, registers) & 0xffff_ffff,
+            Value::Add { left, right } => value(left, registers).wrapping_add(value(right, registers)),
+            Value::Subtract { left, right } => value(left, registers).wrapping_sub(value(right, registers)),
+            Value::Binary { operation, left, right, bits } => {
+                ir::binary(*operation, value(left, registers), value(right, registers), *bits).unwrap()
+            }
+        }
+    }
+
+    #[test]
+    fn lifted_shifted_arithmetic_and_multiply_match_native_instructions() {
+        let mut seed = 7u64;
+        for _ in 0..256 {
+            let mut registers = [0; 31];
+            for register in &mut registers[1..4] {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                *register = seed;
+            }
+            let (left, right, accumulator) = (registers[1], registers[2], registers[3]);
+            let (add, multiply, logical): (u64, u64, u64);
+            unsafe {
+                std::arch::asm!("add {add}, {left}, {right}, lsl #3", "madd {multiply}, {left}, {right}, {accumulator}",
+                    "and {logical}, {left}, {right}, ror #3", left = in(reg) left, right = in(reg) right,
+                    accumulator = in(reg) accumulator, add = out(reg) add, multiply = out(reg) multiply,
+                    logical = out(reg) logical, options(nomem, nostack));
+            }
+            for (word, expected) in [(0x8b02_0c20u32, add), (0x9b02_0c20, multiply), (0x8ac2_0c20, logical)] {
+                let bytes = word.to_le_bytes();
+                let insn = decoder(&Target::new(Arch::Aarch64)).unwrap().decode(&bytes, 0x1000);
+                let lifted = ir::lift(Arch::Aarch64, &bytes, &insn);
+                assert!(lifted.complete);
+                let Effect::Assign { value: expr, .. } = &lifted.effects[0] else { panic!("missing assignment") };
+                assert_eq!(value(expr, &registers), expected, "{word:08x}");
+            }
+        }
+    }
+
+    #[test]
+    fn arithmetic_and_nzcv_agree_with_native_aarch64_execution() {
+        let cases = [0, 1, 7, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff, i64::MAX as u64, i64::MIN as u64, u64::MAX];
+        for left in cases {
+            for right in cases {
+                let (sum, sum_flags, difference, difference_flags): (u64, u64, u64, u64);
+                unsafe {
+                    std::arch::asm!("adds {sum}, {left}, {right}", "mrs {sum_flags}, nzcv",
+                        "subs {difference}, {left}, {right}", "mrs {difference_flags}, nzcv",
+                        left = in(reg) left, right = in(reg) right, sum = out(reg) sum,
+                        sum_flags = out(reg) sum_flags, difference = out(reg) difference,
+                        difference_flags = out(reg) difference_flags, options(nomem, nostack));
+                }
+                assert_eq!(sum, left.wrapping_add(right));
+                assert_eq!(difference, left.wrapping_sub(right));
+                assert_eq!(ir::flags(FlagOperation::Add, left, right, 64), Some(sum_flags >> 28));
+                assert_eq!(ir::flags(FlagOperation::Subtract, left, right, 64), Some(difference_flags >> 28));
+                let (product, quotient, signed_quotient, shifted): (u64, u64, u64, u64);
+                unsafe {
+                    std::arch::asm!("mul {product}, {left}, {right}", "udiv {quotient}, {left}, {right}",
+                        "sdiv {signed_quotient}, {left}, {right}", "asr {shifted}, {left}, {right}",
+                        left = in(reg) left, right = in(reg) right, product = out(reg) product,
+                        quotient = out(reg) quotient, signed_quotient = out(reg) signed_quotient,
+                        shifted = out(reg) shifted, options(nomem, nostack));
+                }
+                assert_eq!(ir::binary(Operation::Multiply, left, right, 64), Some(product));
+                assert_eq!(ir::binary(Operation::UnsignedDivide, left, right, 64), Some(quotient));
+                assert_eq!(ir::binary(Operation::SignedDivide, left, right, 64), Some(signed_quotient));
+                assert_eq!(ir::binary(Operation::ArithmeticShiftRight, left, right, 64), Some(shifted));
+                let (sum32, flags32, signed32, rotate32): (u64, u64, u64, u64);
+                unsafe {
+                    std::arch::asm!("adds {sum:w}, {left:w}, {right:w}", "mrs {flags}, nzcv",
+                        "sdiv {signed:w}, {left:w}, {right:w}", "ror {rotate:w}, {left:w}, {right:w}",
+                        left = in(reg) left, right = in(reg) right, sum = out(reg) sum32,
+                        flags = out(reg) flags32, signed = out(reg) signed32, rotate = out(reg) rotate32,
+                        options(nomem, nostack));
+                }
+                assert_eq!(sum32, left.wrapping_add(right) & 0xffff_ffff);
+                assert_eq!(ir::flags(FlagOperation::Add, left, right, 32), Some(flags32 >> 28));
+                assert_eq!(ir::binary(Operation::SignedDivide, left, right, 32), Some(signed32));
+                assert_eq!(ir::binary(Operation::RotateRight, left, right, 32), Some(rotate32));
+            }
+        }
+    }
+}

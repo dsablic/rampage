@@ -26,3 +26,11 @@ fn unreadable_regions_are_not_trusted_as_pointer_sources() {
     binary.segments[1].perms.write = true;
     assert_eq!(binary.read_pointer(0x3000, 8), None);
 }
+
+#[test]
+fn module_and_register_metadata_are_validated_and_preserved() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64-stack.snapshot.json");
+    let binary = Binary::open(path).unwrap();
+    assert_eq!(binary.snapshot_modules[0].runtime_base, "0x1000");
+    assert_eq!(binary.snapshot_registers[0].value, "0x8000");
+}

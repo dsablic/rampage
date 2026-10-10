@@ -174,6 +174,8 @@ impl Project {
             function_starts: binary.function_starts.len(),
             warnings: &binary.warnings,
             provenance: binary.provenance.as_deref(),
+            snapshot_modules: &binary.snapshot_modules,
+            snapshot_registers: &binary.snapshot_registers,
         }
     }
 

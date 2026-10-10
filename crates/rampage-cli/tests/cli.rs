@@ -36,6 +36,30 @@ fn snapshot_disassembly_and_functions_use_captured_virtual_addresses() {
     let summary: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(summary["graph"]["edges"].as_array().unwrap().len(), 1);
     assert!(summary["ssa"]["definitions"].is_array());
+    let output = Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["--json", "pseudocode", "--at", "0x1000"])
+        .arg(&path)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pseudocode: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pseudocode["structured"], false);
+    assert!(pseudocode["text"].as_str().unwrap().contains("Partial ARM64 SSA"));
+    let table = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-jumptable.snapshot.json");
+    let output = Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["--json", "jump-table", "--at", "0x3000", "--count", "2"])
+        .arg(table)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let table: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(table["entries"][1]["target"], "0x1004");
 }
 
 fn fixture(name: &str) -> PathBuf {

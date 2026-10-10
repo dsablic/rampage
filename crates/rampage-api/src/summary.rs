@@ -12,6 +12,12 @@ pub struct FunctionSummary {
     pub lifted_instructions: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssa: Option<Ssa>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dataflow: Option<rampage_analysis::dataflow::DataFlow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pseudocode: Option<rampage_analysis::pseudocode::Pseudocode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control: Option<rampage_analysis::control::ControlFlow>,
 }
 
 impl Project {
@@ -70,6 +76,32 @@ impl Project {
         } else {
             None
         };
-        Ok(FunctionSummary { graph, references, ir, lifted_instructions, ssa, limitations })
+        let dataflow = ssa.as_ref().map(rampage_analysis::dataflow::analyze);
+        let edges: Vec<_> = graph.edges.iter().map(|edge| (edge.from, edge.to)).collect();
+        let control = match ssa.as_ref().map(|ssa| rampage_analysis::control::analyze(ssa, &edges)).transpose() {
+            Ok(control) => control,
+            Err(error) => {
+                limitations.push(format!("Control analysis omitted: {error}"));
+                None
+            }
+        };
+        let pseudocode = match ssa.as_ref().map(|ssa| rampage_analysis::pseudocode::render(ssa, &edges)).transpose() {
+            Ok(pseudocode) => pseudocode,
+            Err(error) => {
+                limitations.push(format!("Pseudocode omitted: {error}"));
+                None
+            }
+        };
+        Ok(FunctionSummary {
+            graph,
+            references,
+            ir,
+            lifted_instructions,
+            ssa,
+            dataflow,
+            pseudocode,
+            control,
+            limitations,
+        })
     }
 }

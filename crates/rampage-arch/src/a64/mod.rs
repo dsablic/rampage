@@ -19,6 +19,16 @@ use crate::{Disassembler, Flow, Insn};
 
 pub use operands::LabelStyle;
 
+pub(crate) fn logical_immediate(word: u32, width: u8) -> Option<u64> {
+    helpers::decode_bit_masks(
+        u64::from((word >> 22) & 1),
+        u64::from((word >> 10) & 63),
+        u64::from((word >> 16) & 63),
+        true,
+        u32::from(width),
+    )
+}
+
 /// A decoded instruction word: the encoding it matched and the syntax chosen to display it.
 #[derive(Clone, Copy)]
 pub struct Decoded {

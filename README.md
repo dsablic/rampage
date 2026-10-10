@@ -41,6 +41,10 @@ rampage audit   <file>                       # bounded decode coverage and unrel
 rampage metadata <file>                      # demangled symbols, named RTTI/vtables, ObjC selectors
 rampage inventory <directory>                # binaries in bundles/extracted packages; no execution
 rampage summarize <file> --at <addr|symbol>   # CFG/reference summary, not decompiled source
+rampage pseudocode <file> --at <addr|symbol>  # partial ARM64 SSA pseudocode with explicit unknowns
+rampage compare <file> --reference <json>     # image-matched, versioned function-start comparisons
+rampage jump-table <file> --at <addr> --count N # explicit immutable ARM64 table validation
+rampage correlate <snapshot> --original <file> --module <uuid> --at <addr> # runtime/image correlation
 rampage info    <file>                       # format, arch, entry, segments, sections
 rampage imports <file> [--contains TEXT]     # imported functions, libraries and import slots
 rampage exports <file> [--contains TEXT]
@@ -127,6 +131,7 @@ This does not resolve authenticated pointers or replace a debugger/decompiler. `
 the decoded graph, paginated references and partial typed AArch64 IR to tools, explicitly as a structural
 summary rather than recovered source. Bounded register/memory SSA exposes predecessor-indexed phi nodes and
 32-bit result truncation. Unsupported instruction semantics are explicit barriers, not inferred no-ops.
+The [ARM64 development track](docs/arm64-development.md) records native semantics validation and remaining gates.
 
 ## License
 

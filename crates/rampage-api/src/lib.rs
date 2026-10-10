@@ -1,7 +1,10 @@
 //! The single command and query surface shared by the CLI, the MCP server and the UI.
 
 pub mod annotations;
+mod benchmark;
+mod correlation;
 mod graph;
+mod jumptable;
 mod listing;
 mod project;
 mod rows;
@@ -15,7 +18,10 @@ use std::path::PathBuf;
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::LoadError;
 
+pub use benchmark::{Comparison, ReferenceAnalysis};
+pub use correlation::RuntimeCorrelation;
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
+pub use jumptable::{JumpTable, JumpTableEntry};
 pub use listing::{DisassemblyLine, FunctionListing};
 pub use project::Project;
 pub use rampage_analysis::triage::Triage;

@@ -108,6 +108,55 @@ def export_snapshot(
             "seeds": [hex(seed) for seed in seeds],
             "entry": None,
         }
+        modules: list[dict[str, str]] = []
+        for index in range(target.GetNumModules()):
+            module = target.GetModuleAtIndex(index)
+            header = module.GetObjectFileHeaderAddress()
+            runtime_base = header.GetLoadAddress(target)
+            image_base = header.GetFileAddress()
+            uuid = module.GetUUIDString()
+            if (
+                uuid
+                and runtime_base != lldb.LLDB_INVALID_ADDRESS
+                and image_base != lldb.LLDB_INVALID_ADDRESS
+            ):
+                modules.append(
+                    {
+                        "name": module.GetFileSpec().GetFilename(),
+                        "path": str(module.GetFileSpec()),
+                        "uuid": uuid,
+                        "image_base": hex(image_base),
+                        "runtime_base": hex(runtime_base),
+                    }
+                )
+            if len(modules) > 4096:
+                raise ValueError("capture exceeds module limit")
+        registers: list[dict[str, str]] = []
+        thread = process.GetSelectedThread()
+        if thread.IsValid():
+            frame = thread.GetFrameAtIndex(0)
+            if frame.IsValid():
+                names = (
+                    [f"x{index}" for index in range(31)] + ["sp", "pc", "cpsr"]
+                    if arch == "aarch64"
+                    else []
+                )
+                for name in names:
+                    register = frame.FindRegister(name)
+                    if register.IsValid():
+                        error = lldb.SBError()
+                        value = register.GetValueAsUnsigned(error)
+                        if not error.Success():
+                            raise ValueError(f"cannot read register {name}: {error}")
+                        registers.append(
+                            {
+                                "thread_id": hex(thread.GetThreadID()),
+                                "name": name,
+                                "value": hex(value),
+                            }
+                        )
+        snapshot["modules"] = modules
+        snapshot["registers"] = registers
         with arguments.output.open("x", encoding="utf-8") as output:
             json.dump(snapshot, output)
         result.AppendMessage(

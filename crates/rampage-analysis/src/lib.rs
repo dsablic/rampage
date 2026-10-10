@@ -1,8 +1,11 @@
+pub mod control;
+pub mod dataflow;
 pub mod diagnostics;
 pub mod discover;
 pub mod functions;
 pub mod language;
 pub mod memory;
+pub mod pseudocode;
 pub mod ssa;
 pub mod strings;
 pub mod triage;

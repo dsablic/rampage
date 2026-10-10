@@ -85,6 +85,99 @@ pub fn summarize(out: &mut impl Write, path: &Path, at: &str, options: &Options)
     Ok(())
 }
 
+pub fn pseudocode(out: &mut impl Write, path: &Path, at: &str, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let summary = project.function_summary(project.resolve(at)?)?;
+    let pseudocode = summary
+        .pseudocode
+        .ok_or_else(|| anyhow::anyhow!("pseudocode unavailable: {}", summary.limitations.join("; ")))?;
+    if options.json {
+        return write_json(out, &pseudocode);
+    }
+    write!(out, "{}", pseudocode.text)?;
+    for limitation in pseudocode.limitations {
+        writeln!(out, "// {limitation}")?;
+    }
+    Ok(())
+}
+
+pub fn compare(out: &mut impl Write, path: &Path, reference: &Path, options: &Options) -> Result<()> {
+    if !std::fs::symlink_metadata(reference)?.is_file() {
+        anyhow::bail!("reference must be a regular JSON file");
+    }
+    let file = std::fs::File::open(reference)?;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(file, 32 * 1024 * 1024 + 1), &mut bytes)?;
+    if bytes.len() > 32 * 1024 * 1024 {
+        anyhow::bail!("comparison reference exceeds 32 MiB");
+    }
+    let reference: rampage_api::ReferenceAnalysis = serde_json::from_slice(&bytes)?;
+    let result = open(path, options)?.compare_functions(&reference)?;
+    if options.json {
+        return write_json(out, &result);
+    }
+    writeln!(
+        out,
+        "{} {}: {} matches, {} missing, {} extra",
+        result.reference_tool,
+        result.reference_version,
+        result.matched,
+        result.missing.len(),
+        result.extra.len()
+    )?;
+    for limitation in result.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
+pub fn jump_table(
+    out: &mut impl Write,
+    path: &Path,
+    at: &str,
+    count: usize,
+    relative_base: Option<&str>,
+    options: &Options,
+) -> Result<()> {
+    let project = open(path, options)?;
+    let table = project.inspect_jump_table(
+        project.resolve(at)?,
+        count,
+        relative_base.map(|base| project.resolve(base)).transpose()?,
+    )?;
+    if options.json {
+        return write_json(out, &table);
+    }
+    for entry in table.entries {
+        writeln!(out, "{:#x} -> {:#x}", entry.slot, entry.target)?;
+    }
+    for limitation in table.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
+pub fn correlate(
+    out: &mut impl Write,
+    path: &Path,
+    original: &Path,
+    module: &str,
+    at: &str,
+    options: &Options,
+) -> Result<()> {
+    let project = open(path, options)?;
+    let original = rampage_loaders::Binary::open_with(original, Some(project.binary.arch))?;
+    let result = project.correlate_runtime(module, &original, project.resolve(at)?)?;
+    if options.json {
+        return write_json(out, &result);
+    }
+    writeln!(out, "{:#x} -> {:#x} (module {})", result.runtime_address, result.image_address, result.module_uuid)?;
+    for limitation in result.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
 fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
     Ok(Session::default().open(path, options.arch)?)
 }

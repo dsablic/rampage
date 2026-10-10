@@ -49,6 +49,9 @@ class Process:
     def GetProcessID(self) -> int:
         return 123
 
+    def GetSelectedThread(self) -> Any:
+        return SimpleNamespace(IsValid=lambda: False)
+
     def ReadMemory(self, address: int, size: int, error: ReadError) -> bytes:
         self.reads.append((address, size))
         return b"\xc0\x03\x5f\xd6"[:size]
@@ -59,6 +62,7 @@ def debugger(process: Process) -> Any:
         GetProcess=lambda: process,
         GetTriple=lambda: "arm64-apple-macosx",
         GetByteOrder=lambda: 0,
+        GetNumModules=lambda: 0,
     )
     return SimpleNamespace(GetSelectedTarget=lambda: target)
 
@@ -109,6 +113,89 @@ def test_export_rejects_running_process_without_reading_memory(
     assert result.error is not None
     assert process.reads == []
     assert not (tmp_path / "capture.json").exists()
+
+
+def test_export_records_module_slides_and_register_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "lldb",
+        SimpleNamespace(
+            SBError=ReadError,
+            eStateStopped=1,
+            eByteOrderBig=1,
+            LLDB_INVALID_ADDRESS=2**64 - 1,
+        ),
+    )
+    process = Process()
+    frame = SimpleNamespace(
+        IsValid=lambda: True,
+        FindRegister=lambda name: SimpleNamespace(
+            IsValid=lambda: name == "sp",
+            GetValueAsUnsigned=lambda error: 0x8000,
+        ),
+    )
+    thread = SimpleNamespace(
+        IsValid=lambda: True,
+        GetFrameAtIndex=lambda index: frame,
+        GetThreadID=lambda: 1,
+    )
+    filespec = SimpleNamespace(GetFilename=lambda: "fixture")
+    module = SimpleNamespace(
+        GetObjectFileHeaderAddress=lambda: SimpleNamespace(
+            GetLoadAddress=lambda target: 0x1000,
+            GetFileAddress=lambda: 0,
+        ),
+        GetUUIDString=lambda: "fixture-uuid",
+        GetFileSpec=lambda: filespec,
+    )
+    target = SimpleNamespace(
+        GetProcess=lambda: SimpleNamespace(
+            GetState=process.GetState,
+            ReadMemory=process.ReadMemory,
+            GetProcessID=process.GetProcessID,
+            GetSelectedThread=lambda: thread,
+        ),
+        GetTriple=lambda: "arm64-apple-macosx",
+        GetByteOrder=lambda: 0,
+        GetNumModules=lambda: 1,
+        GetModuleAtIndex=lambda index: module,
+    )
+    output = tmp_path / "metadata.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} --region 0x1000:4:r-x",
+        result,
+        {},
+    )
+    assert result.error is None
+    snapshot = json.loads(output.read_text())
+    assert snapshot["modules"][0]["runtime_base"] == "0x1000"
+    assert snapshot["modules"][0]["image_base"] == "0x0"
+    assert snapshot["registers"] == [
+        {"thread_id": "0x1", "name": "sp", "value": "0x8000"}
+    ]
+
+    def failed_register(error: Any) -> int:
+        error.Success = lambda: False
+        return 0
+
+    frame.FindRegister = lambda name: SimpleNamespace(
+        IsValid=lambda: name == "sp",
+        GetValueAsUnsigned=failed_register,
+    )
+    result = Result()
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{tmp_path / 'failed-register.json'} --region 0x1000:4:r-x",
+        result,
+        {},
+    )
+    assert result.error is not None
+    assert not (tmp_path / "failed-register.json").exists()
 
 
 @pytest.mark.parametrize(

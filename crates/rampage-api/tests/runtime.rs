@@ -22,7 +22,7 @@ fn runtime_snapshot_resolves_indirect_flow_in_listing_analysis_graph_and_tools()
     assert_eq!(summary.graph.edges.len(), 1);
     assert!(summary.limitations[0].contains("not decompiled"));
     assert_eq!(summary.ir.len(), 4);
-    assert!(summary.ir.iter().any(|instruction| !instruction.complete));
+    assert!(summary.ir.iter().all(|instruction| instruction.complete));
 }
 
 #[test]
@@ -111,6 +111,10 @@ fn summary_ssa_carries_diamond_definitions_into_the_join() {
     let constants: Vec<_> = inputs.iter().map(|input| &ssa.definitions[input.definition].expression).collect();
     assert!(constants.contains(&&Expression::Constant { value: 7 }));
     assert!(constants.contains(&&Expression::Constant { value: 11 }));
+    let text = summary.pseudocode.unwrap().text;
+    assert!(text.contains("phi("));
+    assert!(text.contains("if (") && text.contains("goto bb"));
+    assert!(!text.contains("semantic barrier"));
 }
 
 #[test]
@@ -137,7 +141,7 @@ fn oversized_ssa_does_not_hide_the_structural_summary() {
 #[test]
 fn barrier_amplification_omits_ssa_before_allocating_large_definition_tables() {
     let path = std::env::temp_dir().join(format!("rampage-ssa-definitions-{}.json", std::process::id()));
-    let mut bytes = "0800018b".repeat(19_999);
+    let mut bytes = "0040201e".repeat(19_999);
     bytes.push_str("c0035fd6");
     let snapshot = serde_json::json!({
         "format": "rampage-snapshot-v1", "arch": "aarch64", "provenance": "SSA barrier resource fixture",
@@ -151,4 +155,19 @@ fn barrier_amplification_omits_ssa_before_allocating_large_definition_tables() {
     assert!(summary.ssa.is_none());
     assert!(summary.limitations.iter().any(|text| text.contains("definition limit")));
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn arm64_stack_pairs_report_entry_relative_slots() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64-stack.snapshot.json");
+    let summary = Project::new(Binary::open(path).unwrap()).function_summary(0x1000).unwrap();
+    assert!(summary.ir.iter().all(|instruction| instruction.complete));
+    let dataflow = summary.dataflow.unwrap();
+    assert_eq!(dataflow.stack_slots.len(), 2);
+    for (slot, offset) in dataflow.stack_slots.iter().zip([-16, -8]) {
+        assert_eq!(slot.offset, offset);
+        assert_eq!(slot.bits, 64);
+        assert_eq!(slot.writes, [0x1000]);
+        assert_eq!(slot.reads, [0x100c]);
+    }
 }
