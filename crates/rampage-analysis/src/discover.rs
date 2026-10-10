@@ -38,6 +38,16 @@ pub enum XrefKind {
     Data,
 }
 
+impl XrefKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            XrefKind::Call => "call",
+            XrefKind::Jump => "jump",
+            XrefKind::Data => "data",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Xref {
     #[serde(serialize_with = "rampage_arch::hex::address")]
@@ -61,11 +71,6 @@ impl Program {
         Some(&self.functions[index])
     }
 
-    /// Every function whose blocks include `address` (shared tails can belong to several).
-    pub fn functions_containing(&self, address: u64) -> impl Iterator<Item = &DiscoveredFunction> {
-        self.functions.iter().filter(move |function| function.contains(address))
-    }
-
     pub fn xrefs_to(&self, address: u64) -> &[Xref] {
         let start = self.xrefs.partition_point(|xref| xref.to < address);
         let end = self.xrefs.partition_point(|xref| xref.to <= address);
@@ -76,7 +81,7 @@ impl Program {
 /// Discovers functions reachable from `seeds` in two phases.
 ///
 /// Phase 1 finds the complete set of function starts: rounds explore newly found functions in parallel and add
-/// their call targets, code pointers, and any jump target reached from two or more different functions (a shared
+/// their call targets, code pointers, and any unconditional jump target reached from two or more functions (a shared
 /// tail, which would otherwise be copied into every caller). Phase 2 then builds every function's blocks against
 /// that final set, so whether a jump is a tail call does not depend on the round its target was found in.
 /// Merges are ordered by address, so the result does not depend on thread count or scheduling.
@@ -85,10 +90,10 @@ where
     M: Memory,
     F: Fn() -> Box<dyn Disassembler> + Sync,
 {
-    let explore_all = |starts: &[u64], known: &BTreeSet<u64>, joins: Option<&[u64]>| -> Vec<Explored> {
+    let explore_all = |starts: &[u64], known: &BTreeSet<u64>, branch_targets: Option<&[u64]>| -> Vec<Explored> {
         starts
             .par_iter()
-            .map_init(&new_decoder, |decoder, &start| explore(memory, decoder.as_mut(), known, joins, start))
+            .map_init(&new_decoder, |decoder, &start| explore(memory, decoder.as_mut(), known, branch_targets, start))
             .collect()
     };
 
@@ -141,24 +146,38 @@ struct Explored {
     function: DiscoveredFunction,
     xrefs: Vec<Xref>,
     new_seeds: Vec<u64>,
-    /// Targets of unconditional jumps that leave for code outside this function's known starts.
+    /// Targets of unconditional jumps to code outside this function's known starts; one reached from two
+    /// functions is a shared tail and becomes a function of its own. Code shared through conditional branches
+    /// stays in each function that reaches it (as IDA's function chunks do): promoting it cascades, splitting the
+    /// owner's own blocks into fragments.
     jump_targets: Vec<u64>,
     /// Targets of every branch taken while exploring.
     branch_targets: Vec<u64>,
 }
 
-/// Explores the function at `start`. `joins`, when given, lists every branch target in the program: a conditional
-/// branch's fall-through keeps the decoder state (AArch64 ADRP pages) of the path into it unless it is one.
+/// Explores the function at `start`. `all_branch_targets`, when given, lists every branch target in the program:
+/// a conditional branch's fall-through keeps the decoder state (AArch64 ADRP pages) of the path into it unless a
+/// branch also lands there.
 fn explore(
     memory: &impl Memory,
     decoder: &mut dyn Disassembler,
     known: &BTreeSet<u64>,
-    joins: Option<&[u64]>,
+    all_branch_targets: Option<&[u64]>,
     start: u64,
 ) -> Explored {
     let is_other_function = |address: u64| address != start && known.contains(&address);
     let trust_immediates = memory.immediates_may_be_addresses();
     let delay_slots = decoder.delay_slots();
+    // Data references and code pointers an instruction contributes.
+    let record_refs = |insn: &rampage_arch::Insn, xrefs: &mut Vec<Xref>, new_seeds: &mut Vec<u64>| {
+        let immediate = insn.immediate.filter(|_| trust_immediates);
+        for target in insn.data_ref.into_iter().chain(immediate).filter(|&target| memory.is_mapped(target)) {
+            xrefs.push(Xref { to: target, from: insn.address, kind: XrefKind::Data });
+            if memory.is_executable(target) {
+                new_seeds.push(target);
+            }
+        }
+    };
     let mut blocks: BTreeMap<u64, u64> = BTreeMap::new();
     let mut instructions: BTreeSet<u64> = BTreeSet::new();
     let mut xrefs = Vec::new();
@@ -169,7 +188,8 @@ fn explore(
     // A conditional branch's fall-through is explored next; it keeps the decoder state only when no branch joins
     // it there.
     let mut fall_through = None;
-    let carries_state = |address: u64| joins.is_some_and(|joins| joins.binary_search(&address).is_err());
+    let carries_state =
+        |address: u64| all_branch_targets.is_some_and(|targets| targets.binary_search(&address).is_err());
 
     loop {
         let block_start = match fall_through.take() {
@@ -215,19 +235,11 @@ fn explore(
                         break;
                     }
                     instructions.insert(next);
-                    for target in slot.data_ref.into_iter().filter(|&target| memory.is_mapped(target)) {
-                        xrefs.push(Xref { to: target, from: next, kind: XrefKind::Data });
-                    }
+                    record_refs(&slot, &mut xrefs, &mut new_seeds);
                     next = next.saturating_add(u64::from(slot.len));
                 }
             }
-            let immediate = insn.immediate.filter(|_| trust_immediates);
-            for target in insn.data_ref.into_iter().chain(immediate).filter(|&target| memory.is_mapped(target)) {
-                xrefs.push(Xref { to: target, from: address, kind: XrefKind::Data });
-                if memory.is_executable(target) {
-                    new_seeds.push(target);
-                }
-            }
+            record_refs(&insn, &mut xrefs, &mut new_seeds);
             match insn.flow {
                 Flow::Next | Flow::IndirectCall => address = next,
                 Flow::Call(target) => {
