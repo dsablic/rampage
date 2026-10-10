@@ -173,6 +173,7 @@ impl Project {
             exports: binary.exports.len(),
             function_starts: binary.function_starts.len(),
             warnings: &binary.warnings,
+            provenance: binary.provenance.as_deref(),
         }
     }
 
@@ -296,5 +297,47 @@ impl Project {
         let selected =
             scanned.iter().filter(|string| string.text.chars().count() >= min_len && matcher.matches(&string.text));
         Page::of(selected, query.offset, query.limit).map(FoundString::clone)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rampage_analysis::discover::{Block, DiscoveredFunction};
+    use rampage_arch::Arch;
+
+    #[test]
+    fn listing_and_graph_reuse_the_analyzed_arm_mode() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+        let mut binary = Binary::open(path).unwrap();
+        let address = binary.entry.unwrap();
+        binary.arch = Arch::Arm;
+        binary.thumb.clear();
+        let project = Project::new(binary);
+        let function = DiscoveredFunction {
+            address,
+            blocks: vec![Block { start: address, end: address + 2 }],
+            instruction_count: 1,
+        };
+        project
+            .analysis
+            .set(Ok(Analysis {
+                program: Program {
+                    functions: vec![function],
+                    xrefs: vec![],
+                    code_modes: vec![(address, true)],
+                    resolved_flows: vec![],
+                },
+                xrefs_by_source: vec![],
+                blocks: vec![BlockSpan { start: address, end: address + 2, function: address, reach: address + 2 }],
+            }))
+            .ok()
+            .unwrap();
+        let listing = project.function_listing(address).unwrap();
+        assert_eq!(listing.blocks[0][0].bytes.len(), 4);
+        assert_eq!(project.disassemble(Some(&format!("{address:#x}")), 1).unwrap()[0].bytes.len(), 4);
+        let graph = project.function_graph(address).unwrap();
+        assert_eq!(graph.blocks.len(), 1);
+        assert!(graph.edges.is_empty());
     }
 }

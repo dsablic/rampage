@@ -59,6 +59,18 @@ enum Command {
     },
     /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
     Triage { file: PathBuf },
+    /// Decode coverage and evidence that static disassembly may be unreliable
+    Audit { file: PathBuf },
+    /// Demangled symbols, named vtables/RTTI and Objective-C selector strings
+    Metadata { file: PathBuf },
+    /// Inventory binaries in a bundle or already-extracted package without executing it
+    Inventory { directory: PathBuf },
+    /// Structural CFG and reference summary of a function (not decompiled source)
+    Summarize {
+        file: PathBuf,
+        #[arg(long)]
+        at: String,
+    },
     /// List imported functions with their libraries and import slots
     Imports {
         file: PathBuf,
@@ -145,6 +157,10 @@ fn main() -> ExitCode {
             commands::xrefs(&mut out, &file, query, &options)
         }
         Command::Triage { file } => commands::triage(&mut out, &file, &options),
+        Command::Audit { file } => commands::audit(&mut out, &file, &options),
+        Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
+        Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),
+        Command::Summarize { file, at } => commands::summarize(&mut out, &file, &at, &options),
         Command::Imports { file, contains } => {
             commands::imports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
         }

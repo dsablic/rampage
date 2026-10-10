@@ -97,6 +97,8 @@ pub struct Summary<'a> {
     pub exports: usize,
     pub function_starts: usize,
     pub warnings: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]

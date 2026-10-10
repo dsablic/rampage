@@ -56,6 +56,8 @@ impl Project {
     /// The control-flow graph of the function containing `address`.
     pub fn function_graph(&self, address: u64) -> Result<FunctionGraph, ApiError> {
         let listing = self.function_listing(address)?;
+        let function = self.analysis()?.program.function_at(listing.address).expect("listing names a function");
+        let ends: HashMap<_, _> = function.blocks.iter().map(|block| (block.start, block.end)).collect();
         let delay_slots = usize::from(self.binary.arch.delay_slots());
         let blocks: Vec<GraphBlock> = listing
             .blocks
@@ -73,7 +75,7 @@ impl Project {
             let branches = |line: &&DisassemblyLine| !matches!(line.flow, Flow::Next | Flow::Invalid);
             let before_slot = block.lines.len().checked_sub(1 + delay_slots).and_then(|index| block.lines.get(index));
             let flow = before_slot.filter(|_| delay_slots > 0).filter(branches).map_or(last.flow, |line| line.flow);
-            let end = last.address + (last.bytes.len() / 2) as u64;
+            let end = ends[&block.start];
             let mut add = |to: Option<usize>, kind| {
                 if let Some(to) = to {
                     edges.push(Edge { from, to, kind });

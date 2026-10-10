@@ -20,6 +20,7 @@ pub struct Addresses {
     /// Registers holding a page rather than a full address.
     page: u32,
     value: [u64; 31],
+    pub memory_changed: bool,
 }
 
 impl Addresses {
@@ -187,10 +188,15 @@ fn index_of(encoding: &'static Encoding) -> usize {
     (encoding as *const Encoding as usize - ENCODINGS.as_ptr() as usize) / size_of::<Encoding>()
 }
 
-pub fn analyze(decoded: &Decoded, address: u64, addresses: &mut Addresses) -> (Flow, Option<u64>) {
+pub fn analyze(
+    decoded: &Decoded,
+    address: u64,
+    addresses: &mut Addresses,
+    read: &dyn Fn(u64, u8) -> Option<u64>,
+) -> (Flow, Option<u64>) {
     let info = &INFO[index_of(decoded.encoding)];
     let direct = |make: fn(u64) -> Flow| relative_target(decoded, address).map_or(Flow::Invalid, make);
-    let flow = match info.flow {
+    let mut flow = match info.flow {
         FlowClass::Next => Flow::Next,
         FlowClass::Jump => direct(Flow::Jump),
         FlowClass::ConditionalBranch if decoded.field("cond").is_some_and(|cond| cond >= 14) => direct(Flow::Jump),
@@ -201,6 +207,24 @@ pub fn analyze(decoded: &Decoded, address: u64, addresses: &mut Addresses) -> (F
         FlowClass::Return => Flow::Return,
         FlowClass::Halt => Flow::Halt,
     };
+    let name = decoded.encoding.name;
+    let prefix = name.split('_').next().unwrap_or(name).to_ascii_uppercase();
+    if [
+        "ST", "CAS", "SWP", "RCW", "CPY", "SET", "LDADD", "LDCLR", "LDEOR", "LDSET", "LDSMAX", "LDSMIN", "LDUMAX",
+        "LDUMIN",
+    ]
+    .iter()
+    .any(|name| prefix.starts_with(name))
+    {
+        addresses.memory_changed = true;
+    }
+    if matches!(name, "BR_64_branch_reg" | "BLR_64_branch_reg")
+        && let Some(target) = decoded.field("Rn").and_then(|rn| addresses.get(rn))
+        && target != 0
+        && target % 4 == 0
+    {
+        flow = if info.flow == FlowClass::IndirectCall { Flow::Call(target) } else { Flow::Jump(target) };
+    }
 
     let word = u64::from(decoded.word);
     let register = |w: Written| ((word >> w.start) & ones(w.width.into())) + u64::from(w.plus);
@@ -210,7 +234,10 @@ pub fn analyze(decoded: &Decoded, address: u64, addresses: &mut Addresses) -> (F
     let data_ref = match info.effect {
         Effect::None => None,
         Effect::LoadLiteral => relative_target(decoded, address),
-        Effect::Adr => address_target(decoded, address),
+        Effect::Adr => {
+            produced = address_target(decoded, address).map(|target| (target, false));
+            address_target(decoded, address)
+        }
         Effect::Adrp => {
             produced = address_target(decoded, address).map(|page| (page, true));
             None
@@ -221,7 +248,7 @@ pub fn analyze(decoded: &Decoded, address: u64, addresses: &mut Addresses) -> (F
             let offset = decoded.field("imm12").unwrap_or(0) << shift;
             let page = decoded.field("Rn").and_then(|rn| addresses.page(rn));
             let target = page.map(|page| page.wrapping_add(offset));
-            produced = target.map(|target| (target, false));
+            produced = base().map(|base| (base.wrapping_add(offset), false));
             target
         }
         Effect::ScaledOffset(scale) => {
@@ -230,6 +257,26 @@ pub fn analyze(decoded: &Decoded, address: u64, addresses: &mut Addresses) -> (F
             base().map(|base| base.wrapping_add(offset))
         }
     };
+    let mut destination = decoded.field("Rd");
+    if matches!(name, "LDR_64_ldst_pos" | "LDR_64_loadlit") {
+        destination = decoded.field("Rt");
+        produced =
+            data_ref.filter(|_| !addresses.memory_changed).and_then(|slot| read(slot, 8)).map(|target| (target, false));
+    } else if name == "ORR_64_log_shift"
+        && decoded.field("Rn") == Some(31)
+        && decoded.field("shift") == Some(0)
+        && decoded.field("imm6") == Some(0)
+    {
+        produced = decoded.field("Rm").and_then(|rm| addresses.get(rm)).map(|target| (target, false));
+    } else if matches!(name, "MOVZ_64_movewide" | "MOVK_64_movewide") {
+        let shift = decoded.field("hw").unwrap_or(0) * 16;
+        let value = decoded.field("imm16").unwrap_or(0) << shift;
+        produced = if name.starts_with("MOVZ") {
+            Some((value, false))
+        } else {
+            destination.and_then(|rd| addresses.get(rd)).map(|old| ((old & !(0xffff << shift)) | value, false))
+        };
+    }
 
     // Whatever this instruction writes no longer holds a known address.
     for &written in &info.written {
@@ -240,8 +287,9 @@ pub fn analyze(decoded: &Decoded, address: u64, addresses: &mut Addresses) -> (F
     }
     if info.clobbers_caller_saved {
         addresses.clobber_caller_saved();
+        addresses.memory_changed = true;
     }
-    if let (Some((value, page)), Some(rd)) = (produced, decoded.field("Rd")) {
+    if let (Some((value, page)), Some(rd)) = (produced, destination) {
         addresses.set(rd, value, page);
     }
     (flow, data_ref)

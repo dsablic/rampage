@@ -150,6 +150,32 @@ impl Names {
         for (&address, name) in &names {
             addresses.entry(name.clone()).or_insert(address);
         }
+        let mut display_counts = HashMap::new();
+        let displays: BTreeMap<_, _> = names
+            .iter()
+            .filter_map(|(&address, name)| {
+                crate::language::demangle(name).map(|display| {
+                    *display_counts.entry(display.clone()).or_insert(0usize) += 1;
+                    (address, display)
+                })
+            })
+            .collect();
+        for (&address, name) in &names {
+            addresses.entry(name.clone()).or_insert(address);
+            if let Some(display) = displays.get(&address).filter(|display| {
+                display_counts[*display] == 1 && addresses.get(*display).is_none_or(|at| *at == address)
+            }) {
+                addresses.entry(display.clone()).or_insert(address);
+            }
+        }
+        for (address, name) in &mut names {
+            if let Some(display) = displays
+                .get(address)
+                .filter(|display| display_counts[*display] == 1 && addresses.get(*display) == Some(address))
+            {
+                *name = display.clone();
+            }
+        }
         Self { names, addresses }
     }
 

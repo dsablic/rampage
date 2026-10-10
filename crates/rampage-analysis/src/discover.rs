@@ -63,6 +63,17 @@ pub struct Program {
     pub functions: Vec<DiscoveredFunction>,
     /// Sorted by target, then source.
     pub xrefs: Vec<Xref>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub code_modes: Vec<(u64, bool)>,
+    #[serde(skip)]
+    pub resolved_flows: Vec<ResolvedFlow>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedFlow {
+    pub function: u64,
+    pub address: u64,
+    pub flow: Flow,
 }
 
 impl Program {
@@ -90,59 +101,163 @@ where
     M: Memory,
     F: Fn() -> Box<dyn Disassembler> + Sync,
 {
-    let explore_all = |starts: &[u64], known: &BTreeSet<u64>, branch_targets: Option<&[u64]>| -> Vec<Explored> {
+    let explore_all = |starts: &[u64],
+                       known: &BTreeSet<u64>,
+                       branch_targets: Option<&[u64]>,
+                       modes: &[(u64, bool)]|
+     -> Vec<Explored> {
         starts
             .par_iter()
-            .map_init(&new_decoder, |decoder, &start| explore(memory, decoder.as_mut(), known, branch_targets, start))
+            .map_init(&new_decoder, |decoder, &start| {
+                decoder.set_code_modes(modes);
+                explore(memory, decoder.as_mut(), known, branch_targets, start)
+            })
             .collect()
     };
 
-    let mut known: BTreeSet<u64> = seeds.iter().copied().filter(|&seed| memory.is_executable(seed)).collect();
-    let mut pending: Vec<u64> = known.iter().copied().collect();
-    let mut first_jumper: HashMap<u64, u64> = HashMap::new();
-    let mut empty = BTreeSet::new();
-    let mut branch_targets = Vec::new();
-    while !pending.is_empty() {
-        let mut next = BTreeSet::new();
-        for result in explore_all(&pending, &known, None) {
-            branch_targets.extend_from_slice(&result.branch_targets);
-            let start = result.function.address;
-            if result.function.blocks.is_empty() {
-                empty.insert(start);
-            }
-            for &target in &result.new_seeds {
-                if !known.contains(&target) && memory.is_executable(target) {
-                    next.insert(target);
+    let initial_seeds: BTreeSet<u64> = seeds.iter().copied().filter(|&seed| memory.is_executable(seed)).collect();
+    let mut code_modes = BTreeMap::new();
+    let mut seen_modes = BTreeSet::new();
+    let mut ambiguous_modes = BTreeSet::new();
+    let mut previous_contributions = Vec::new();
+    let mut previous_instruction_modes = BTreeMap::new();
+    let mut previous_instruction_owners = BTreeMap::new();
+    seen_modes.insert(Vec::<(u64, bool)>::new());
+    let (mut known, mut branch_targets) = loop {
+        let mut known = initial_seeds.clone();
+        let mut pending: Vec<_> = known.iter().copied().collect();
+        let mut first_jumper: HashMap<u64, u64> = HashMap::new();
+        let mut empty = BTreeSet::new();
+        let mut branch_targets = Vec::new();
+        let mut contributions = Vec::new();
+        let mut instruction_modes = BTreeMap::new();
+        let mut instruction_owners = BTreeMap::new();
+        let modes: Vec<_> = code_modes.iter().map(|(&at, &thumb)| (at, thumb)).collect();
+        while !pending.is_empty() {
+            let mut next = BTreeSet::new();
+            for result in explore_all(&pending, &known, None, &modes) {
+                contributions.extend(result.mode_hints);
+                instruction_owners
+                    .extend(result.instruction_modes.iter().map(|&(at, _)| (at, result.function.address)));
+                instruction_modes.extend(result.instruction_modes);
+                branch_targets.extend_from_slice(&result.branch_targets);
+                let start = result.function.address;
+                if result.function.blocks.is_empty() {
+                    empty.insert(start);
+                }
+                for &target in &result.new_seeds {
+                    if !known.contains(&target) && memory.is_executable(target) {
+                        next.insert(target);
+                    }
+                }
+                for &target in &result.jump_targets {
+                    let first = *first_jumper.entry(target).or_insert(start);
+                    if first != start && !known.contains(&target) {
+                        next.insert(target);
+                    }
                 }
             }
-            for &target in &result.jump_targets {
-                let first = *first_jumper.entry(target).or_insert(start);
-                if first != start && !known.contains(&target) {
-                    next.insert(target);
-                }
+            known.extend(next.iter().copied());
+            pending = next.into_iter().collect();
+        }
+        let mut merged = BTreeMap::new();
+        for &(source, at, thumb) in &contributions {
+            if !ambiguous_modes.contains(&source) {
+                merged.entry(at).or_insert(thumb);
             }
         }
-        known.extend(next.iter().copied());
-        pending = next.into_iter().collect();
-    }
-    known.retain(|start| !empty.contains(start));
+        if merged == code_modes {
+            known.retain(|start| !empty.contains(start));
+            break (known, branch_targets);
+        }
+        let state: Vec<_> = merged.iter().map(|(&at, &thumb)| (at, thumb)).collect();
+        if !seen_modes.insert(state) {
+            for &at in merged.keys().chain(code_modes.keys()) {
+                if merged.get(&at) != code_modes.get(&at) {
+                    for &(source, target, _) in contributions.iter().chain(&previous_contributions) {
+                        let changed = match (instruction_modes.get(&source), previous_instruction_modes.get(&source)) {
+                            (Some(current), Some(previous)) => current != previous,
+                            (Some(_), None) | (None, Some(_)) => {
+                                let owner = instruction_owners
+                                    .get(&source)
+                                    .or_else(|| previous_instruction_owners.get(&source));
+                                let target_owner = instruction_owners
+                                    .get(&target)
+                                    .or_else(|| previous_instruction_owners.get(&target));
+                                owner.is_some() && owner == target_owner
+                            }
+                            _ => false,
+                        };
+                        if target == at && changed {
+                            ambiguous_modes.insert(source);
+                        }
+                    }
+                }
+            }
+            merged.clear();
+            for &(source, at, thumb) in &contributions {
+                if !ambiguous_modes.contains(&source) {
+                    merged.entry(at).or_insert(thumb);
+                }
+            }
+            seen_modes.clear();
+            seen_modes.insert(merged.iter().map(|(&at, &thumb)| (at, thumb)).collect());
+        }
+        previous_contributions = contributions;
+        previous_instruction_modes = instruction_modes;
+        previous_instruction_owners = instruction_owners;
+        code_modes = merged;
+    };
 
     // Phase 1 saw every branch; a fall-through that is also a branch target joins paths and starts afresh.
     branch_targets.sort_unstable();
     branch_targets.dedup();
-    let starts: Vec<u64> = known.iter().copied().collect();
-    let mut functions = Vec::with_capacity(starts.len());
-    let mut xrefs = Vec::new();
-    for result in explore_all(&starts, &known, Some(&branch_targets)) {
-        xrefs.extend(result.xrefs);
-        functions.push(result.function);
-    }
+    let (functions, mut xrefs, mut resolved_flows) = loop {
+        let starts: Vec<u64> = known.iter().copied().collect();
+        let mut functions = Vec::with_capacity(starts.len());
+        let mut xrefs = Vec::new();
+        let mut resolved_flows = Vec::new();
+        let mut added = BTreeSet::new();
+        let mut targets = branch_targets.clone();
+        let mut jump_owners = HashMap::new();
+        let modes: Vec<_> = code_modes.iter().map(|(&at, &thumb)| (at, thumb)).collect();
+        for result in explore_all(&starts, &known, Some(&branch_targets), &modes) {
+            for target in &result.jump_targets {
+                if let Some(owner) = jump_owners.insert(*target, result.function.address)
+                    && owner != result.function.address
+                    && !known.contains(target)
+                {
+                    added.insert(*target);
+                }
+            }
+            code_modes.extend(result.instruction_modes);
+            for &(_, at, thumb) in &result.mode_hints {
+                code_modes.entry(at).or_insert(thumb);
+            }
+            added.extend(result.new_seeds.into_iter().filter(|at| !known.contains(at) && memory.is_executable(*at)));
+            targets.extend(result.branch_targets);
+            resolved_flows.extend(result.resolved_flows);
+            xrefs.extend(result.xrefs);
+            functions.push(result.function);
+        }
+        targets.sort_unstable();
+        targets.dedup();
+        if added.is_empty() && targets == branch_targets {
+            break (functions, xrefs, resolved_flows);
+        }
+        known.extend(added);
+        branch_targets = targets;
+    };
     xrefs.sort_unstable();
     xrefs.dedup();
-    Program { functions, xrefs }
+    resolved_flows.sort_by_key(|flow| (flow.function, flow.address));
+    Program { functions, xrefs, code_modes: code_modes.into_iter().collect(), resolved_flows }
 }
 
 struct Explored {
+    resolved_flows: Vec<ResolvedFlow>,
+    mode_hints: Vec<(u64, u64, bool)>,
+    instruction_modes: Vec<(u64, bool)>,
     function: DiscoveredFunction,
     xrefs: Vec<Xref>,
     new_seeds: Vec<u64>,
@@ -165,6 +280,7 @@ fn explore(
     all_branch_targets: Option<&[u64]>,
     start: u64,
 ) -> Explored {
+    decoder.begin_run();
     let is_other_function = |address: u64| address != start && known.contains(&address);
     let trust_immediates = memory.immediates_may_be_addresses();
     let delay_slots = decoder.delay_slots();
@@ -185,6 +301,9 @@ fn explore(
     let mut new_seeds = Vec::new();
     let mut jump_targets = Vec::new();
     let mut branch_targets = Vec::new();
+    let mut instruction_modes = Vec::new();
+    let mut mode_hints = Vec::new();
+    let mut resolved_flows = Vec::new();
     let mut worklist = vec![start];
     // A conditional branch's fall-through is explored next; it keeps the decoder state only when no branch joins
     // it there.
@@ -215,23 +334,33 @@ fn explore(
         }
         let mut address = block_start;
         loop {
-            if address != block_start && (instructions.contains(&address) || is_other_function(address)) {
+            if is_other_function(address) || address != block_start && instructions.contains(&address) {
+                if let Some(thumb) = decoder.code_mode_at(address) {
+                    mode_hints.push((block_start, address, thumb));
+                }
                 split_block(&mut blocks, address);
                 break;
             }
             let Some(bytes) = memory.code_from(address) else { break };
-            let insn = decoder.decode(bytes, address);
+            let insn = decoder.decode_with_memory(bytes, address, &|at, size| memory.read_pointer(at, size));
+            if let Some(flow) = decoder.resolved_flow() {
+                resolved_flows.push(ResolvedFlow { function: start, address, flow });
+            }
+            mode_hints.extend(decoder.code_modes().into_iter().map(|(at, thumb)| (address, at, thumb)));
             if insn.flow == Flow::Invalid {
                 break;
             }
             instructions.insert(address);
+            if let Some(thumb) = decoder.instruction_mode() {
+                instruction_modes.push((address, thumb));
+            }
             let Some(mut next) = address.checked_add(u64::from(insn.len)) else { break };
             // MIPS and SPARC execute the instruction after a branch before the branch takes effect: it belongs to
             // the branch's block, and execution falls through past it.
             if delay_slots > 0 && !matches!(insn.flow, Flow::Next | Flow::Invalid | Flow::Halt) {
                 for _ in 0..delay_slots {
                     let Some(bytes) = memory.code_from(next) else { break };
-                    let slot = decoder.decode(bytes, next);
+                    let slot = decoder.decode_with_memory(bytes, next, &|at, size| memory.read_pointer(at, size));
                     if slot.flow == Flow::Invalid {
                         break;
                     }
@@ -286,7 +415,7 @@ fn explore(
     jump_targets.dedup();
     let blocks = blocks.into_iter().map(|(start, end)| Block { start, end }).collect();
     let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len() };
-    Explored { function, xrefs, new_seeds, jump_targets, branch_targets }
+    Explored { function, xrefs, new_seeds, jump_targets, branch_targets, mode_hints, instruction_modes, resolved_flows }
 }
 
 /// Splits the block containing `address` so that a new block starts there. Misaligned decoding can leave smaller
@@ -486,5 +615,166 @@ mod tests {
         let program = run(&[0x90, 0x90], &[0, 1, 0x1000]);
         assert_eq!(blocks(&program, 0), [(0, 1)]);
         assert!(program.function_at(0x1000).is_none());
+    }
+
+    #[test]
+    fn arm_interworking_modes_survive_parallel_discovery_rounds() {
+        for (thumb_source, call, ret_source, ret_target) in [
+            (true, vec![0x00, 0xf0, 0x06, 0xe8], vec![0x70, 0x47], vec![0x1e, 0xff, 0x2f, 0xe1]),
+            (false, vec![0x02, 0x00, 0x00, 0xfa], vec![0x1e, 0xff, 0x2f, 0xe1], vec![0x70, 0x47]),
+        ] {
+            let mut bytes = call;
+            bytes.extend(ret_source);
+            bytes.resize(16, 0);
+            bytes.extend(ret_target);
+            let memory = FlatMemory { base: 0x1000, bytes };
+            let target = rampage_arch::Target {
+                thumb: if thumb_source { std::iter::once(0x1000..0x1020).collect() } else { Default::default() },
+                ..rampage_arch::Target::new(Arch::Arm)
+            };
+            let mut expected = None;
+            for threads in [1, 4] {
+                for seeds in [&[0x1000][..], &[0x1010, 0x1000][..]] {
+                    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                    let program = pool.install(|| discover(&memory, || rampage_arch::decoder(&target).unwrap(), seeds));
+                    assert_eq!(program.function_at(0x1010).unwrap().instruction_count, 1);
+                    assert!(program.xrefs.contains(&Xref { to: 0x1010, from: 0x1000, kind: XrefKind::Call }));
+                    assert!(program.code_modes.contains(&(0x1010, !thumb_source)));
+                    if let Some(expected) = &expected {
+                        assert_eq!(&program, expected);
+                    } else {
+                        expected = Some(program);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn interworking_conditional_fallthrough_discovers_its_calls() {
+        let mut bytes = vec![0x02, 0x00, 0x00, 0xfa, 0x1e, 0xff, 0x2f, 0xe1];
+        bytes.resize(0x10, 0);
+        // Thumb: beq 0x101a; bl 0x1030; bx lr; nop; bx lr
+        bytes.extend([0x03, 0xd0, 0x00, 0xf0, 0x0d, 0xf8, 0x70, 0x47, 0x00, 0xbf, 0x70, 0x47]);
+        bytes.resize(0x30, 0);
+        bytes.extend([0x70, 0x47]);
+        let memory = FlatMemory { base: 0x1000, bytes };
+        let program = discover(&memory, || decoder_for(Arch::Arm).unwrap(), &[0x1000]);
+        assert!(program.function_at(0x1030).is_some());
+        assert!(program.code_modes.contains(&(0x1030, true)));
+    }
+
+    #[test]
+    fn correcting_an_entry_mode_discards_hints_from_its_old_decode() {
+        let mut bytes = vec![0x02, 0x00, 0x00, 0xfa, 0x1e, 0xff, 0x2f, 0xe1];
+        bytes.resize(0x10, 0);
+        bytes.extend([0x00, 0x00, 0x00, 0xea, 0x00, 0x00, 0xff, 0xe7, 0x70, 0x47]);
+        let memory = FlatMemory { base: 0x1000, bytes };
+        let expected = discover(&memory, || decoder_for(Arch::Arm).unwrap(), &[0x1000]);
+        for threads in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+            let program = pool.install(|| discover(&memory, || decoder_for(Arch::Arm).unwrap(), &[0x1000, 0x1010]));
+            assert_eq!(program, expected);
+        }
+    }
+
+    #[test]
+    fn correcting_an_entry_mode_discards_functions_from_its_old_decode() {
+        let mut bytes = vec![0x02, 0x00, 0x00, 0xfa, 0x1e, 0xff, 0x2f, 0xe1];
+        bytes.resize(0x10, 0);
+        bytes.extend([0x02, 0x00, 0x00, 0xeb, 0x00, 0x00, 0xff, 0xe7, 0x70, 0x47]);
+        bytes.resize(0x20, 0);
+        bytes.extend([0x1e, 0xff, 0x2f, 0xe1]);
+        let memory = FlatMemory { base: 0x1000, bytes };
+        let expected = discover(&memory, || decoder_for(Arch::Arm).unwrap(), &[0x1000]);
+        assert!(expected.function_at(0x1020).is_none());
+        for threads in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+            let program = pool.install(|| discover(&memory, || decoder_for(Arch::Arm).unwrap(), &[0x1000, 0x1010]));
+            assert_eq!(program, expected);
+        }
+    }
+
+    #[test]
+    fn contradictory_interworking_modes_terminate_without_an_unbounded_loop() {
+        let memory = FlatMemory { base: 0x1000, bytes: 0xfaff_fffeu32.to_le_bytes().to_vec() };
+        let decoders = std::sync::atomic::AtomicUsize::new(0);
+        let program = discover(
+            &memory,
+            || {
+                let count = decoders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                assert!(count < 32, "mode discovery did not converge");
+                decoder_for(Arch::Arm).unwrap()
+            },
+            &[0x1000],
+        );
+        assert!(program.function_at(0x1000).is_some());
+        assert!(program.code_modes.contains(&(0x1000, false)));
+    }
+
+    #[test]
+    fn a_known_seed_inherits_the_mode_of_its_incoming_straight_line_run() {
+        let mut bytes = vec![0x02, 0x00, 0x00, 0xfa, 0x1e, 0xff, 0x2f, 0xe1];
+        bytes.resize(0x10, 0);
+        bytes.extend([0x00, 0xbf, 0x00, 0xbf, 0x00, 0xbf, 0x70, 0x47]);
+        let memory = FlatMemory { base: 0x1000, bytes };
+        let program = discover(&memory, || decoder_for(Arch::Arm).unwrap(), &[0x1000, 0x1014]);
+        assert_eq!(program.function_at(0x1014).unwrap().instruction_count, 2, "{program:?}");
+        assert!(program.code_modes.contains(&(0x1014, true)));
+    }
+
+    #[test]
+    fn an_oscillating_branch_does_not_suppress_valid_downstream_modes() {
+        let mut bytes = vec![
+            0xfe, 0xff, 0xff, 0xfa, // blx 0x1000
+            0x01, 0x00, 0x00, 0xfa, // blx 0x1010
+            0x1e, 0xff, 0x2f, 0xe1,
+        ];
+        bytes.resize(0x10, 0);
+        bytes.extend([0x00, 0xf0, 0x00, 0xe8, 0x1e, 0xff, 0x2f, 0xe1]);
+        let memory = FlatMemory { base: 0x1000, bytes };
+        let program = discover(&memory, || decoder_for(Arch::Arm).unwrap(), &[0x1000]);
+        assert!(program.code_modes.contains(&(0x1010, true)), "{program:?}");
+        assert!(program.code_modes.contains(&(0x1014, false)));
+        assert!(program.xrefs.contains(&Xref { to: 0x1014, from: 0x1010, kind: XrefKind::Call }));
+    }
+
+    #[test]
+    fn sequential_sources_of_oscillating_mode_hints_terminate() {
+        let memory = FlatMemory {
+            base: 0x1000,
+            bytes: [0xe1a0_0000u32, 0xfaff_fffdu32].into_iter().flat_map(u32::to_le_bytes).collect(),
+        };
+        let decoders = std::sync::atomic::AtomicUsize::new(0);
+        let program = discover(
+            &memory,
+            || {
+                assert!(decoders.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 32);
+                decoder_for(Arch::Arm).unwrap()
+            },
+            &[0x1000],
+        );
+        assert_eq!(program.function_at(0x1000).unwrap().instruction_count, 2);
+    }
+
+    #[test]
+    fn interior_interworking_cycles_terminate() {
+        let memory = FlatMemory {
+            base: 0x1000,
+            bytes: [0xe1a0_0000u32, 0xe1a0_0000, 0xe59f_f000, 0, 0x1005]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect(),
+        };
+        let decoders = std::sync::atomic::AtomicUsize::new(0);
+        let program = discover(
+            &memory,
+            || {
+                assert!(decoders.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 32);
+                decoder_for(Arch::Arm).unwrap()
+            },
+            &[0x1000],
+        );
+        assert!(program.function_at(0x1000).is_some());
     }
 }

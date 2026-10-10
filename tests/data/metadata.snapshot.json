@@ -1,0 +1,13 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "aarch64",
+  "provenance": "controlled named-vtable and selector fixture",
+  "regions": [
+    {"name": "text", "address": "0x1000", "permissions": "r-x", "bytes": "c0035fd6"},
+    {"name": "vtable", "address": "0x3000", "permissions": "r--",
+     "bytes": "0000000000000000004000000000000000100000000000000010000000000000"},
+    {"name": "selectors", "address": "0x4000", "permissions": "r--", "bytes": "646f5468696e673a00"}
+  ],
+  "seeds": ["0x1000"],
+  "entry": "0x1000"
+}

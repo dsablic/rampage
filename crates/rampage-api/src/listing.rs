@@ -59,17 +59,34 @@ impl Project {
             .function_containing(address)?
             .ok_or_else(|| ApiError::NotFound(format!("no function contains {address:#x}")))?;
         let function = self.analysis()?.program.function_at(start).expect("block index names a known function");
-        let blocks = function
+        let mut blocks: Vec<Vec<DisassemblyLine>> = function
             .blocks
             .iter()
             .map(|block| self.decode_lines(block.start, block.end, usize::MAX))
             .collect::<Result<_, _>>()?;
+        let flows = &self.analysis()?.program.resolved_flows;
+        for line in blocks.iter_mut().flatten() {
+            if let Ok(index) = flows.binary_search_by_key(&(start, line.address), |flow| (flow.function, flow.address))
+            {
+                line.flow = flows[index].flow;
+                let target = match line.flow {
+                    Flow::Call(at) | Flow::Jump(at) => Some(at),
+                    _ => None,
+                };
+                if let Some(name) = target.and_then(|at| self.name_at(at)) {
+                    line.comment = Some(name);
+                }
+            }
+        }
         Ok(FunctionListing { address: start, name: self.function_name(start), blocks })
     }
 
     /// Decodes up to `count` instructions from `start`, stopping before `end`.
     fn decode_lines(&self, start: u64, end: u64, count: usize) -> Result<Vec<DisassemblyLine>, ApiError> {
         let mut decoder = self.binary.decoder()?;
+        if self.binary.arch == rampage_arch::Arch::Arm {
+            decoder.set_code_modes(&self.analysis()?.program.code_modes);
+        }
         let code = self
             .binary
             .read_to_segment_end(start)
@@ -80,7 +97,8 @@ impl Project {
         let mut offset = 0;
         while lines.len() < count && offset < limit {
             let address = start + offset as u64;
-            let insn = decoder.decode(&code[offset..], address);
+            let insn =
+                decoder.decode_with_memory(&code[offset..], address, &|at, size| self.binary.read_pointer(at, size));
             let bytes = &code[offset..(offset + usize::from(insn.len)).min(code.len())];
             lines.push(DisassemblyLine {
                 address,

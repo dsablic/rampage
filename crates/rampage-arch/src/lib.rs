@@ -1,7 +1,9 @@
 pub mod a64;
 pub mod aarch32;
 mod cs;
+mod flow;
 pub mod hex;
+pub mod ir;
 mod mrs;
 mod track;
 mod x86;
@@ -133,7 +135,14 @@ impl Got {
 impl Target {
     /// A little-endian target with no Thumb code.
     pub fn new(arch: Arch) -> Self {
-        Self { arch, big_endian: false, data_big_endian: false, thumb: std::sync::Arc::new([]), global_pointer: None, got: None }
+        Self {
+            arch,
+            big_endian: false,
+            data_big_endian: false,
+            thumb: std::sync::Arc::new([]),
+            global_pointer: None,
+            got: None,
+        }
     }
 
     /// Whether `address` lies in Thumb code.
@@ -203,8 +212,32 @@ pub trait Disassembler {
     /// Decoders may carry state from one instruction to the next within a straight-line run (AArch64 builds
     /// addresses from ADRP plus ADD or a load); call [`Disassembler::reset`] wherever control flow joins.
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn;
+    /// Decodes with access to trusted, immutable pointer-sized memory values.
+    fn decode_with_memory(&mut self, bytes: &[u8], address: u64, _read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
+        self.decode(bytes, address)
+    }
     /// Forgets state carried between instructions, such as AArch64 ADRP pages.
     fn reset(&mut self) {}
+    /// Starts an independent exploration, including restoring its initial memory assumptions.
+    /// Block-level resets keep memory invalidation from stores/calls already observed within that exploration.
+    fn begin_run(&mut self) {
+        self.reset();
+    }
+    /// Applies instruction-set modes learned from branches, before exploring another block.
+    fn set_code_modes(&mut self, _modes: &[(u64, bool)]) {}
+    /// ARM instruction-set modes learned at code addresses (`true` means Thumb).
+    fn code_modes(&self) -> Vec<(u64, bool)> {
+        Vec::new()
+    }
+    fn instruction_mode(&self) -> Option<bool> {
+        None
+    }
+    fn code_mode_at(&self, _address: u64) -> Option<bool> {
+        None
+    }
+    fn resolved_flow(&self) -> Option<Flow> {
+        None
+    }
     /// Instructions executed after a branch before it takes effect (MIPS and SPARC delay slots).
     fn delay_slots(&self) -> u8 {
         0

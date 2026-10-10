@@ -1,0 +1,13 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "aarch64",
+  "provenance": "controlled final-pass shared-tail fixture",
+  "regions": [
+    {"name": "caller", "address": "0x1000", "permissions": "r-x",
+     "bytes": "080084d2600000b400013fd6fd0f0014fc0f0014"},
+    {"name": "late-callee", "address": "0x2000", "permissions": "r-x", "bytes": "000c0014"},
+    {"name": "tail", "address": "0x5000", "permissions": "r-x", "bytes": "c0035fd6"}
+  ],
+  "seeds": ["0x1000"],
+  "entry": "0x1000"
+}

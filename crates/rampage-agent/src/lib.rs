@@ -2,7 +2,7 @@
 //! analysis tools on the project, through the Anthropic Messages API.
 
 use rampage_api::Project;
-use rampage_api::tools::{self, Tool};
+use rampage_api::tools::{self, Effect, Tool};
 use serde_json::{Value, json};
 
 /// The model used unless `RAMPAGE_MODEL` names another.
@@ -58,7 +58,7 @@ pub enum Event {
     /// Text the model wrote.
     Text(String),
     /// A tool the model called, with its input and whether it failed.
-    Tool { name: String, input: Value, failed: bool },
+    Tool { name: String, input: Value, failed: bool, effect: Effect },
 }
 
 /// A conversation about one binary.
@@ -133,7 +133,9 @@ impl Agent {
                         let name = block["name"].as_str().unwrap_or("");
                         let input = block["input"].clone();
                         let (output, failed) = tools::call(&self.tools, project, name, input.clone());
-                        on_event(Event::Tool { name: name.to_owned(), input, failed });
+                        let effect =
+                            self.tools.iter().find(|tool| tool.name == name).map_or(Effect::None, |tool| tool.effect);
+                        on_event(Event::Tool { name: name.to_owned(), input, failed, effect });
                         results.push(json!({
                             "type": "tool_result",
                             "tool_use_id": block["id"],
@@ -242,6 +244,7 @@ mod tests {
 
         assert_eq!(events.first(), Some(&Event::Text("Looking at main.".to_owned())));
         assert!(matches!(&events[1], Event::Tool { name, failed: false, .. } if name == "disassemble"));
+        assert!(matches!(&events[2], Event::Tool { effect: Effect::Annotations, .. }));
         assert_eq!(events.last(), Some(&Event::Text("main prints a greeting.".to_owned())));
         // The comment reached the project, and the tool results went back to the model.
         let main = project.resolve("main").unwrap();
@@ -324,5 +327,43 @@ mod tests {
         assert!(failed && text.contains("no_such_name"));
         let (_, failed) = tools::call(&tools, &project, "nonexistent", json!({}));
         assert!(failed);
+    }
+
+    #[test]
+    fn undo_redo_and_navigation_report_the_registry_effect() {
+        let project = project("hello-x64.elf");
+        let script = Script {
+            responses: Mutex::new(vec![
+                json!({ "content": [
+                    { "type": "tool_use", "id": "1", "name": "rename", "input": {"at": "main", "name": "greet"} },
+                    { "type": "tool_use", "id": "2", "name": "undo", "input": {} },
+                    { "type": "tool_use", "id": "3", "name": "redo", "input": {} },
+                    { "type": "tool_use", "id": "4", "name": "show_address", "input": {"at": "greet"} },
+                    { "type": "tool_use", "id": "5", "name": "show_address", "input": {"at": "missing"} },
+                ] }),
+                json!({ "content": [{ "type": "text", "text": "done" }] }),
+            ]),
+            requests: Mutex::new(Vec::new()),
+        };
+        let mut events = Vec::new();
+        Agent::new(&project).ask(&script, &project, "rename", &mut |event| events.push(event)).unwrap();
+        let effects: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Tool { effect, failed, .. } => Some((*effect, *failed)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            effects,
+            [
+                (Effect::Annotations, false),
+                (Effect::Annotations, false),
+                (Effect::Annotations, false),
+                (Effect::ShowAddress, false),
+                (Effect::ShowAddress, true),
+            ]
+        );
+        assert_eq!(project.resolve("greet").unwrap(), project.resolve("main").unwrap());
     }
 }

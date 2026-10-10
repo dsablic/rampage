@@ -156,6 +156,10 @@ impl Tracker {
         use Operand::{Immediate as I, Memory as M, Register as R};
         let constant = |value: u64| Value { value, address: false };
         let offset = |base: Value, delta: i64| Value { value: base.value.wrapping_add(delta as u64), ..base };
+        let or = |register, value| {
+            let base = self.get(register)?;
+            Some(Value { value: base.value | value as u64, ..base })
+        };
         // A load from the GOT: the address stored there.
         if let Some(got) = &self.got
             && let Some(slot) = found.data_ref
@@ -175,10 +179,7 @@ impl Tracker {
             (Arch::Mips | Arch::Mips64, "addiu" | "daddiu" | "addi" | "daddi", &[R(rt), R(rs), I(value)]) => {
                 Some((rt, offset(self.get(rs)?, value)))
             }
-            (Arch::Mips | Arch::Mips64, "ori", &[R(rt), R(rs), I(value)]) => {
-                let base = self.get(rs)?;
-                Some((rt, Value { value: base.value | value as u64, ..base }))
-            }
+            (Arch::Mips | Arch::Mips64, "ori", &[R(rt), R(rs), I(value)]) => Some((rt, or(rs, value)?)),
             (Arch::Mips | Arch::Mips64, "move", &[R(rd), R(rs)]) => Some((rd, self.get(rs)?)),
 
             (Arch::Riscv32 | Arch::Riscv64, "auipc", &[R(rd), I(value)]) => {
@@ -224,17 +225,11 @@ impl Tracker {
             (Arch::PowerPc | Arch::PowerPc64, "addi", &[R(rd), R(ra), I(value)]) => {
                 Some((rd, offset(self.get(ra)?, (value as i16) as i64)))
             }
-            (Arch::PowerPc | Arch::PowerPc64, "ori", &[R(rd), R(ra), I(value)]) => {
-                let base = self.get(ra)?;
-                Some((rd, Value { value: base.value | value as u64, ..base }))
-            }
+            (Arch::PowerPc | Arch::PowerPc64, "ori", &[R(rd), R(ra), I(value)]) => Some((rd, or(ra, value)?)),
             (Arch::PowerPc | Arch::PowerPc64, "mr", &[R(rd), R(rs)]) => Some((rd, self.get(rs)?)),
 
             (Arch::Sparc | Arch::Sparc64, "sethi", &[I(value), R(rd)]) => Some((rd, constant((value as u64) << 10))),
-            (Arch::Sparc | Arch::Sparc64, "or", &[R(rs), I(value), R(rd)]) => {
-                let base = self.get(rs)?;
-                Some((rd, Value { value: base.value | value as u64, ..base }))
-            }
+            (Arch::Sparc | Arch::Sparc64, "or", &[R(rs), I(value), R(rd)]) => Some((rd, or(rs, value)?)),
             (Arch::Sparc | Arch::Sparc64, "add", &[R(rs), I(value), R(rd)]) => Some((rd, offset(self.get(rs)?, value))),
 
             (Arch::S390x, "larl", &[R(rd), I(value)]) => Some((rd, Value { value: value as u64, address: true })),

@@ -39,6 +39,11 @@ fn arm() {
             ("1080bde8", Return),                  // pop {r4, pc}
             ("0ef0a0e1", Return),                  // mov pc, lr
             ("03f0a0e1", IndirectJump),            // mov pc, r3
+            ("04f05ee2", Return),                  // subs pc, lr, #4
+            ("04f05e02", Next),                    // subseq pc, lr, #4
+            ("00f1a0e1", IndirectJump),            // lsl pc, r0, #2
+            ("0ef1b0e1", IndirectJump),            // lsls pc, lr, #2
+            ("028090e8", IndirectJump),            // ldm r0, {r1, pc}
             ("04f09fe5", IndirectJump),            // ldr pc, [pc, #4]
             ("04f09de4", Return),                  // ldr pc, [sp], #4
             ("f000f0e7", Halt),                    // udf
@@ -71,6 +76,11 @@ fn thumb_branches() {
             ("00e0", Jump(0x1004)),            // b
             ("9847", IndirectCall),            // blx r3
             ("5df804fb", Return),              // ldr pc, [sp], #4
+            ("f746", Return),                  // mov pc, lr
+            ("8746", IndirectJump),            // mov pc, r0
+            ("9f44", IndirectJump),            // add pc, r3
+            ("def3048f", Return),              // subs pc, lr, #4
+            ("90e80280", IndirectJump),        // ldm r0, {r1, pc}
         ],
     );
 }
@@ -288,4 +298,285 @@ fn powerpc_sparc_and_s390x_address_pairs() {
     assert_eq!((results[1].2, results[2].1), (Some(0x1234_5478), Some(0x1234_5480)));
     // larl %r2, 0x1010
     assert_eq!(run(big_endian(Arch::S390x), "c02000000008", &[6])[0].1, Some(0x1010));
+}
+
+#[test]
+fn thumb_high_registers_track_the_complete_operand() {
+    // movw r1, #0x100; mov r8, r1; add r8, pc; ldr.w r0, [r8, #4]
+    let results = run(thumb(), "40f200118846f844d8f80400", &[4, 2, 2, 4]);
+    assert_eq!(results[2].1, Some(0x110a));
+    assert_eq!(results[3].1, Some(0x110e));
+}
+
+#[test]
+fn arm_unknown_writes_forget_all_destinations() {
+    // movw r0, #0x100; movw r1, #0x200; <write>; add r2, pc, r0; add r2, pc, r1
+    for (hex, cleared) in [
+        ("920381e0", [true, true]),  // umull r0, r1, r2, r3
+        ("100f11ee", [true, false]), // mrc p15, #0, r0, c1, c0, #0
+        ("100b51ec", [true, true]),  // vmov r0, r1, d0
+        ("910f82e1", [true, false]), // strex r0, r1, [r2]
+        ("d800cfe1", [true, true]),  // ldrd r0, r1, [pc, #8]
+    ] {
+        let code = format!("000100e3001200e3{hex}00208fe001208fe0");
+        let results = run(Target::new(Arch::Arm), &code, &[4, 4, 4, 4, 4]);
+        for (index, cleared) in cleared.into_iter().enumerate() {
+            assert_eq!(results[3 + index].1.is_none(), cleared, "{hex} r{index}");
+        }
+    }
+    // Stores and MCR read Rt, rather than writing it.
+    for hex in ["000082e5", "100f01ee"] {
+        let code = format!("000100e3{hex}00208fe0");
+        assert!(run(Target::new(Arch::Arm), &code, &[4, 4, 4])[2].1.is_some(), "{hex}");
+    }
+}
+
+#[test]
+fn thumb_double_loads_forget_the_explicit_second_register() {
+    // movw r0, #0x100; movw r4, #0x200; ldrd r0, r4, [r2, #12]; add r0, pc; add r4, pc
+    let results = run(thumb(), "40f2001040f20024d2e9030478447c44", &[4, 4, 4, 2, 2]);
+    assert_eq!((results[3].1, results[4].1), (None, None));
+}
+
+#[test]
+fn thumb_list_instructions_forget_the_writeback_base() {
+    for list in ["02c8", "02c0", "01c8"] {
+        // movw r0, #0x100; ldm/stm r0!, {...}; add r0, pc
+        let results = run(thumb(), &format!("40f20010{list}7844"), &[4, 2, 2]);
+        assert_eq!(results[2].1, None, "{list}");
+    }
+}
+
+#[test]
+fn thumb_memory_offsets_scale_by_the_access_size() {
+    for (hex, size, offset) in [
+        ("d068", 2, 12),
+        ("d060", 2, 12),
+        ("d088", 2, 6),
+        ("d080", 2, 6),
+        ("d078", 2, 3),
+        ("d070", 2, 3),
+        ("d2e90304", 4, 12),
+        ("c2e90301", 4, 12),
+        ("52e8030f", 4, 12),
+    ] {
+        // movw r2, #0x100; access through r2
+        let results = run(thumb(), &format!("40f20012{hex}"), &[4, size]);
+        assert_eq!(results[1].1, Some(0x100 + offset), "{hex}");
+    }
+    for hex in ["0398", "0390"] {
+        // movw r2, #0x100; mov sp, r2; access through sp
+        let results = run(thumb(), &format!("40f200129546{hex}"), &[4, 2, 2]);
+        assert_eq!(results[2].1, Some(0x10c), "{hex}");
+    }
+}
+
+#[test]
+fn arm_register_add_tracks_only_unconditional_unshifted_offsets() {
+    for (hex, expected) in [
+        ("01008fe0", Some(0x110c)), // add r0, pc, r1
+        ("01018fe0", None),         // add r0, pc, r1, lsl #2
+        ("61008fe0", None),         // add r0, pc, r1, rrx
+        ("01008f00", None),         // addeq r0, pc, r1
+    ] {
+        let results = run(Target::new(Arch::Arm), &format!("001100e3{hex}00208fe0"), &[4, 4, 4]);
+        assert_eq!(results[1].1, expected, "{hex}");
+        assert_eq!(results[2].1.is_some(), expected.is_some(), "{hex}");
+    }
+}
+
+#[test]
+fn literal_pools_use_data_byte_order_independently_of_code() {
+    for (code_big, data_big) in [(false, false), (true, true), (false, true), (true, false)] {
+        let target = Target { big_endian: code_big, data_big_endian: data_big, ..Target::new(Arch::Arm) };
+        let load = if code_big { "e59f0000e080000f" } else { "00009fe50f0080e0" };
+        let pool = if data_big { "00000100" } else { "00010000" };
+        let results = run(target, &format!("{load}{pool}"), &[4, 4]);
+        assert_eq!(results[0].2, Some(0x100));
+        assert_eq!(results[1].1, Some(0x110c));
+    }
+}
+
+#[test]
+fn literal_loads_to_pc_resolve_jumps_and_instruction_sets() {
+    for (target, load, pointer) in [
+        (Target::new(Arch::Arm), "00f09fe5", 0x2000u32),
+        (Target::new(Arch::Arm), "00f09fe5", 0x2001u32),
+        (thumb(), "dff804f0", 0x2000u32),
+        (thumb(), "dff804f0", 0x2001u32),
+    ] {
+        let mut decoder = decoder(&target).unwrap();
+        let mut code = bytes(load);
+        code.extend_from_slice(&[0; 4]);
+        code.extend_from_slice(&pointer.to_le_bytes());
+        let insn = decoder.decode(&code, AT);
+        assert_eq!(insn.flow, Flow::Jump(0x2000));
+        decoder.reset();
+        let ret = if pointer & 1 != 0 { bytes("7047") } else { bytes("1eff2fe1") };
+        assert_eq!(decoder.decode(&ret, 0x2000).flow, Flow::Return);
+    }
+}
+
+#[test]
+fn powerpc64_toc_pairs_report_only_the_completed_address() {
+    let target = Target { global_pointer: Some(0x1000_0000), ..big_endian(Arch::PowerPc64) };
+    // addis r3, r2, 1; addi r3, r3, 16
+    let results = run(target, "3c62000138630010", &[4, 4]);
+    assert_eq!(results[0], (Flow::Next, None, None));
+    assert_eq!(results[1], (Flow::Next, Some(0x1001_0010), None));
+}
+
+#[test]
+fn instruction_addresses_wrap_without_panicking() {
+    for (target, code) in [
+        (Target::new(Arch::Arm), "0000a0e1"),
+        (Target { thumb: std::iter::once(0..u64::MAX).collect(), ..thumb() }, "00bf"),
+        (big_endian(Arch::PowerPc), "60000000"),
+    ] {
+        let mut decoder = decoder(&target).unwrap();
+        let code = bytes(code);
+        assert_eq!(decoder.decode(&code, u64::MAX - 1).flow, Flow::Next);
+        assert!(!decoder.format(&code, u64::MAX - 1).is_empty());
+    }
+}
+
+#[test]
+fn conditional_thumb_adds_forget_the_written_address() {
+    // movw r0, #0x100; it eq; addeq r0, pc; add r0, pc
+    let results = run(thumb(), "40f2001008bf78447844", &[4, 2, 2, 2]);
+    assert_eq!((results[2].1, results[3].1), (None, None));
+}
+
+#[test]
+fn unreadable_literal_jump_targets_stay_indirect() {
+    for target in [Target::new(Arch::Arm), thumb()] {
+        let code = if target.is_thumb(AT) { "dff804f0" } else { "00f09fe5" };
+        for trailing in 0..8 {
+            let mut bytes = bytes(code);
+            bytes.resize(bytes.len() + trailing, 0);
+            let mut decoder = decoder(&target).unwrap();
+            let insn = decoder.decode(&bytes, AT);
+            assert_eq!(insn.flow, Flow::IndirectJump, "{code}, {trailing} trailing bytes");
+            assert_eq!(insn.immediate, None);
+        }
+    }
+}
+
+#[test]
+fn arm_register_moves_do_not_preserve_shifted_values() {
+    // movw r1, #0x100; mov/shift r0, r1; add r0, pc
+    for (instruction, preserved) in [("0100a0e1", true), ("6100a0e1", false), ("0101a0e1", false)] {
+        let results = run(Target::new(Arch::Arm), &format!("001100e3{instruction}0f0080e0"), &[4, 4, 4]);
+        assert_eq!(results[2].1.is_some(), preserved, "{instruction}");
+    }
+}
+
+#[test]
+fn every_thumb_halfword_decodes_safely_at_the_address_boundary() {
+    for big_endian in [false, true] {
+        let target = Target {
+            big_endian,
+            data_big_endian: big_endian,
+            thumb: std::iter::once(0..u64::MAX).collect(),
+            ..Target::new(Arch::Arm)
+        };
+        let mut decoder = decoder(&target).unwrap();
+        for halfword in 0..=u16::MAX {
+            let code = if big_endian { halfword.to_be_bytes() } else { halfword.to_le_bytes() };
+            decoder.reset();
+            decoder.set_code_modes(&[]);
+            let insn = decoder.decode(&code, u64::MAX - 1);
+            assert!(matches!(insn.len, 2 | 4));
+            let _ = decoder.format(&code, u64::MAX - 1);
+        }
+    }
+}
+
+#[test]
+fn thumb_high_register_writes_and_comparisons_leave_low_registers_known() {
+    // movw r0, #256; movw r8, #512; add r8, pc / cmp r0, r8; add r0, pc
+    for instruction in ["f844", "4045"] {
+        let results = run(thumb(), &format!("40f2001040f20028{instruction}7844"), &[4, 4, 2, 2]);
+        assert_eq!(results[3].1, Some(0x110e), "{instruction}");
+    }
+}
+
+#[test]
+fn vector_and_system_register_writes_preserve_their_core_sources() {
+    // movw r0, #256; vmov/vmsr from r0; add r2, pc, r0
+    for instruction in ["100a00ee", "100b41ec", "100ae1ee"] {
+        let results = run(Target::new(Arch::Arm), &format!("000100e3{instruction}00208fe0"), &[4, 4, 4]);
+        assert_eq!(results[2].1, Some(0x1110), "{instruction}");
+    }
+}
+
+#[test]
+fn blx_to_the_next_address_still_switches_instruction_sets() {
+    let mut decoder = decoder(&Target::new(Arch::Arm)).unwrap();
+    assert_eq!(decoder.decode(&bytes("fffffffa"), AT).flow, Flow::Call(AT + 4));
+    assert_eq!(decoder.decode(&bytes("7047"), AT + 4).flow, Flow::Return);
+}
+
+#[test]
+fn sequential_thumb_decoding_formats_in_its_original_mode() {
+    let mut decoder = decoder(&Target::new(Arch::Arm)).unwrap();
+    decoder.set_code_modes(&[(0x2000, true)]);
+    decoder.decode(&bytes("00bf"), 0x2000);
+    assert_eq!(decoder.decode(&bytes("7047"), 0x2002).flow, Flow::Return);
+    assert_eq!(decoder.format(&bytes("7047"), 0x2002), "bx lr");
+}
+
+#[test]
+fn sequential_decoding_respects_loader_mode_boundaries() {
+    let target = Target { thumb: std::iter::once(0x1000..0x1004).collect(), ..Target::new(Arch::Arm) };
+    for instruction in ["7047", "00bf", "01d0"] {
+        let mut decoder = decoder(&target).unwrap();
+        decoder.decode(&bytes("00bf"), 0x1000);
+        decoder.decode(&bytes(instruction), 0x1002);
+        assert_eq!(decoder.decode(&bytes("1eff2fe1"), 0x1004).flow, Flow::Return);
+    }
+}
+
+#[test]
+fn thumb_sp_add_reads_the_high_destination_and_forgets_its_unknown_sum() {
+    // movw r0,#256; movw r8,#512; add r8,sp,r8; add r0,pc; add r8,pc
+    let results = run(thumb(), "40f2001040f20028e8447844f844", &[4, 4, 2, 2, 2]);
+    assert_eq!(results[3].1, Some(0x110e));
+    assert_eq!(results[4].1, None);
+}
+
+#[test]
+fn vector_duplicate_preserves_its_core_register_source() {
+    let results = run(Target::new(Arch::Arm), "000100e3100bc0ee00208fe0", &[4, 4, 4]);
+    assert_eq!(results[2].1, Some(0x1110));
+}
+
+#[test]
+fn implicit_sp_writes_do_not_reuse_the_old_stack_address() {
+    // movw r2,#256; mov sp,r2; add/sub sp,#4 or push/pop; ldr r0,[sp]
+    for instruction in ["01b0", "81b0", "01b4", "01bc"] {
+        let results = run(thumb(), &format!("40f200129546{instruction}0098"), &[4, 2, 2, 2]);
+        assert_eq!(results[3].1, None, "{instruction}");
+    }
+}
+
+#[test]
+fn invalid_thumb_instructions_keep_the_mode_for_formatting_and_the_next_address() {
+    let mut decoder = decoder(&Target::new(Arch::Arm)).unwrap();
+    decoder.set_code_modes(&[(0x2000, true)]);
+    decoder.decode(&bytes("00bf"), 0x2000);
+    let code = bytes("00b87047");
+    let invalid = decoder.decode(&code, 0x2002);
+    assert_eq!((invalid.flow, invalid.len), (Flow::Invalid, 2));
+    assert_eq!(decoder.format(&code, 0x2002), "(bad)");
+    assert_eq!(decoder.decode(&code[2..], 0x2004).flow, Flow::Return);
+}
+
+#[test]
+fn invalid_thumb_instructions_advance_the_remaining_it_slots() {
+    let mut decoder = decoder(&thumb()).unwrap();
+    decoder.decode(&bytes("04bf"), AT);
+    assert_eq!(decoder.decode(&bytes("00b8"), AT + 2).flow, Flow::Invalid);
+    assert_eq!(decoder.decode(&bytes("7047"), AT + 4).flow, Flow::Next);
+    assert_eq!(decoder.format(&bytes("7047"), AT + 4), "bxeq lr");
 }

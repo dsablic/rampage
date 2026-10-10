@@ -16,7 +16,7 @@ Triage and a first desktop UI are in. See [the design](docs/plans/2026-10-10-ram
   through [Capstone](https://www.capstone-engine.org) for now, in either byte order, with MIPS and SPARC delay slots
   kept in their branch's block. Native decoders replace Capstone where a machine-readable specification exists.
 - 32-bit ARM is generated from the same specification as AArch64; on words sampled across every encoding its output
-  matches `llvm-mc` on 97.7% (A32), 100% (16-bit Thumb) and 97.2% (32-bit Thumb).
+  matches `llvm-mc` on 97.95% (A32), 100% (16-bit Thumb) and 97.49% (32-bit Thumb).
 - AArch64 includes SVE and SME, decoded from tables generated out of Arm's open-source
   [machine-readable architecture specification](https://developer.arm.com/Architectures/A-Profile%20Architecture).
   Its output matches `llvm-mc` on every instruction sampled from Chrome's arm64 code and on 99.85% of words
@@ -37,6 +37,10 @@ Triage and a first desktop UI are in. See [the design](docs/plans/2026-10-10-ram
 cargo build --release
 
 rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
+rampage audit   <file>                       # bounded decode coverage and unreliable-code evidence
+rampage metadata <file>                      # demangled symbols, named RTTI/vtables, ObjC selectors
+rampage inventory <directory>                # binaries in bundles/extracted packages; no execution
+rampage summarize <file> --at <addr|symbol>   # CFG/reference summary, not decompiled source
 rampage info    <file>                       # format, arch, entry, segments, sections
 rampage imports <file> [--contains TEXT]     # imported functions, libraries and import slots
 rampage exports <file> [--contains TEXT]
@@ -114,6 +118,14 @@ arm64 slice in about 1.4 s. Repeated MCP queries are answered from the cached an
 `cargo run --release -p armgen -- <AARCHMRS directory> A64 crates/rampage-arch/src/a64/spec.rs`.
 
 Test fixtures live in `tests/fixtures`; `tests/fixtures/build.sh` rebuilds them (needs zig and Apple clang).
+
+Runtime images use a validated sparse JSON snapshot with virtual addresses, explicit seeds and provenance.
+The same CLI, UI and MCP tools open snapshots and bundle directories. See
+[runtime snapshots](docs/runtime-snapshots.md) for the read-only LLDB exporter and format limits.
+On AArch64, known ADR/ADRP/ADD/MOV/LDR values can resolve BR/BLR targets through readable, non-writable pointers.
+This does not resolve authenticated pointers or replace a debugger/decompiler. `function_summary` exposes
+the decoded graph, paginated references and partial typed AArch64 IR to tools, explicitly as a structural
+summary rather than recovered source. Unsupported instruction semantics are explicit IR barriers.
 
 ## License
 

@@ -6,6 +6,7 @@ mod listing;
 mod project;
 mod rows;
 mod session;
+mod summary;
 pub mod tools;
 mod xrefs;
 
@@ -23,6 +24,7 @@ pub use rows::{
     Summary,
 };
 pub use session::Session;
+pub use summary::FunctionSummary;
 pub use xrefs::{XrefQuery, XrefRow};
 
 /// How many instructions a disassembly shows unless asked for another count.

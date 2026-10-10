@@ -1,0 +1,13 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "aarch64",
+  "provenance": "controlled conditional-register-flow fixture",
+  "regions": [
+    {"name": "call", "address": "0x1000", "permissions": "r-x", "bytes": "080482d2600000b400013fd6c0035fd6c0035fd6"},
+    {"name": "callee", "address": "0x1020", "permissions": "r-x", "bytes": "c0035fd6"},
+    {"name": "jump", "address": "0x2000", "permissions": "r-x", "bytes": "080484d2400000b400011fd6c0035fd6"},
+    {"name": "tail", "address": "0x2020", "permissions": "r-x", "bytes": "c0035fd6"}
+  ],
+  "seeds": ["0x1000", "0x2000"],
+  "entry": "0x1000"
+}

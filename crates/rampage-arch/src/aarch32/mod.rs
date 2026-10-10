@@ -18,7 +18,7 @@ mod t16_spec;
 mod t32_spec;
 mod wide;
 
-use crate::mrs::{self, Encoding, State, Syntax, Tables};
+use crate::mrs::{self, Encoding, State, Syntax, Tables, mnemonic};
 
 pub use crate::mrs::LabelStyle;
 pub use flow::Aarch32Disassembler;
@@ -170,8 +170,18 @@ pub fn format(decoded: &Decoded, address: u64, labels: LabelStyle) -> Option<Str
         let decoded = Decoded { syntax, ..*decoded };
         operands::render(&operands::Context { decoded: &decoded, address, labels }, operand)
     })?;
-    let mut text =
-        text.replace(" ,", ",").replace(" ]", "]").replace("  ", " ").replace("}^", "} ^").replace("#0.0", "#0");
+    Some(normalize(text, decoded))
+}
+
+fn normalize(mut text: String, decoded: &Decoded) -> String {
+    for (from, to) in [(" ,", ","), (" ]", "]"), ("  ", " "), ("}^", "} ^"), ("#0.0", "#0")] {
+        text = text.replace(from, to);
+    }
+    if decoded.mnemonic() == "CLRBHB" {
+        let end = text.find(' ').unwrap_or(text.len());
+        let suffix = text[6..end].to_owned();
+        text = format!("hint{suffix} #22");
+    }
     let key = (decoded.encoding.name, decoded.mnemonic());
     if decoded.set == Set::T32 && wide::WIDE.binary_search(&key).is_ok() {
         // The qualifier follows the mnemonic and any condition (`addeq.w`).
@@ -180,7 +190,7 @@ pub fn format(decoded: &Decoded, address: u64, labels: LabelStyle) -> Option<Str
             text.insert_str(end, ".w");
         }
     }
-    Some(text)
+    text
 }
 
 /// Whether an alias names PC as a register: loads (`[PC, #8]`) and A32's ADR as ADD or SUB (`PC, #8`); T32's
@@ -190,14 +200,6 @@ fn spells_pc(syntax: &Syntax, set: Set) -> bool {
         mrs::Token::Text(text) => text.contains("[PC") || (set == Set::A32 && text.contains("PC, #")),
         _ => false,
     })
-}
-
-/// The instruction's mnemonic, uppercase as the specification writes it.
-fn mnemonic(syntax: &Syntax) -> &'static str {
-    match syntax.tokens.first() {
-        Some(mrs::Token::Text(text)) => text.split([' ', '.', '{']).next().unwrap_or(""),
-        _ => "",
-    }
 }
 
 #[cfg(test)]

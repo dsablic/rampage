@@ -6,6 +6,37 @@ use serde_json::Value;
 const X64_FIXTURES: [(&str, &str); 3] =
     [("hello-x64.elf", "add"), ("hello-x64.exe", "add"), ("hello-x64.macho", "_add")];
 
+#[test]
+fn snapshot_disassembly_and_functions_use_captured_virtual_addresses() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64.snapshot.json");
+    let output = Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["--json", "disasm", "--count", "3"])
+        .arg(&path)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let lines: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(lines[2]["flow"]["target"], "0x1010");
+    Command::cargo_bin("rampage").unwrap().arg("funcs").arg(&path).assert().success();
+    for command in ["audit", "metadata"] {
+        Command::cargo_bin("rampage").unwrap().arg(command).arg(&path).assert().success();
+    }
+    let output = Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["--json", "summarize", "--at", "0x1000"])
+        .arg(&path)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let summary: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(summary["graph"]["edges"].as_array().unwrap().len(), 1);
+}
+
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
 }

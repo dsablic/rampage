@@ -24,7 +24,9 @@ name. Start with triage for hashes, entropy, hardening and packing hints, or bin
 list_functions (filter with name_contains, page with offset/limit), disassemble or function_graph a function, and \
 follow references with xrefs. list_imports and list_strings are good starting points for finding behavior. Record \
 findings with rename and set_comment: they persist beside the binary and every client of the same binary, \
-including the rampage UI, picks them up.";
+including the rampage UI, picks them up. Memory snapshots and bundle directories use the same tools. \
+analysis_diagnostics reports decode confidence limits; language_metadata exposes demangled names and bounded \
+metadata; function_summary returns a structural CFG/reference summary, not decompiled source.";
 
 /// A tool's schema with the arguments every tool takes besides its own: which binary, and which slice of a
 /// universal one.

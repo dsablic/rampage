@@ -7,6 +7,7 @@ use object::read::macho::{FatArch, FatArch32, FatArch64, MachOFatFile};
 use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol, SegmentFlags, SymbolFlags};
 use rampage_arch::Arch;
 use serde::Serialize;
+use std::ops::Deref;
 
 use crate::details::{Details, Overlay};
 use crate::model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
@@ -62,12 +63,77 @@ pub struct Binary {
     #[serde(skip)]
     got: Option<rampage_arch::Got>,
     #[serde(skip)]
-    data: Mmap,
+    data: Bytes,
+    #[serde(skip)]
+    snapshot_source: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
     #[serde(skip)]
     image: Range<usize>,
 }
 
+#[derive(Debug)]
+enum Bytes {
+    Mapped(Mmap),
+    Owned(Vec<u8>),
+}
+
+impl Deref for Bytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Mapped(data) => data,
+            Self::Owned(data) => data,
+        }
+    }
+}
+
 impl Binary {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_snapshot(
+        arch: Arch,
+        big_endian: bool,
+        data_big_endian: bool,
+        provenance: String,
+        data: Vec<u8>,
+        source: Vec<u8>,
+        segments: Vec<Segment>,
+        sections: Vec<Section>,
+        thumb: Vec<Range<u64>>,
+        function_starts: Vec<u64>,
+        entry: Option<u64>,
+    ) -> Result<Self, LoadError> {
+        let code_ranges = code_ranges(&sections, &segments);
+        let len = data.len();
+        Ok(Self {
+            format: Format::Snapshot,
+            arch,
+            entry,
+            segments,
+            sections,
+            thumb,
+            function_starts,
+            symbols: Vec::new(),
+            imports: Vec::new(),
+            import_slots: Vec::new(),
+            exports: Vec::new(),
+            slices: vec![arch],
+            warnings: Vec::new(),
+            details: Details::None,
+            big_endian: data_big_endian,
+            overlay: None,
+            code_big_endian: big_endian,
+            code_ranges,
+            global_pointer: None,
+            got: None,
+            data: Bytes::Owned(data),
+            image: 0..len,
+            snapshot_source: Some(source),
+            provenance: Some(provenance),
+        })
+    }
+
     /// Opens a binary. For a universal Mach-O this picks the x86_64, aarch64 or x86 slice, in that order of
     /// preference, else the first supported one.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, LoadError> {
@@ -76,12 +142,19 @@ impl Binary {
 
     /// Opens a binary, requiring the given architecture when one is requested.
     pub fn open_with(path: impl AsRef<Path>, wanted: Option<Arch>) -> Result<Self, LoadError> {
-        let path = path.as_ref();
+        let resolved = crate::container::resolve_executable(path.as_ref())?;
+        let path = resolved.as_path();
         let io_error = |source| LoadError::Io { path: path.to_owned(), source };
         let file = File::open(path).map_err(io_error)?;
         // SAFETY: the mapping is read-only; a concurrent external truncation of the input is out of scope,
         // the same assumption every mmap-based binary tool makes.
         let data = unsafe { Mmap::map(&file) }.map_err(io_error)?;
+        if data.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') {
+            if data.len() > 2 * crate::snapshot::MAX_SNAPSHOT_BYTES + 1024 * 1024 {
+                return Err(LoadError::Malformed("snapshot JSON exceeds size limit".to_owned()));
+            }
+            return crate::snapshot::load(data.to_vec(), wanted);
+        }
 
         let (slices, image) = match object::FileKind::parse(&*data)? {
             object::FileKind::MachOFat32 => select_slice(fat_slices::<FatArch32>(&data)?, wanted)?,
@@ -254,7 +327,9 @@ impl Binary {
             code_ranges: Vec::new(),
             global_pointer: None,
             got: None,
-            data,
+            data: Bytes::Mapped(data),
+            snapshot_source: None,
+            provenance: None,
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
@@ -330,7 +405,7 @@ impl Binary {
 
     /// The whole file, including other slices of a universal binary.
     pub fn file_bytes(&self) -> &[u8] {
-        &self.data
+        self.snapshot_source.as_deref().unwrap_or(&self.data)
     }
 
     pub fn segment_containing(&self, address: u64) -> Option<&Segment> {
@@ -377,6 +452,17 @@ impl Binary {
         let start = usize::try_from(segment.file_offset.checked_add(offset)?).ok()?;
         let end = start.checked_add(usize::try_from(len).ok()?)?;
         self.image_bytes().get(start..end)
+    }
+
+    /// Reads a pointer only from readable, non-writable memory; captures do not imply future load invariance.
+    pub fn read_pointer(&self, address: u64, size: u8) -> Option<u64> {
+        let permissions = self.segment_containing(address)?.perms;
+        if !matches!(size, 4 | 8) || !permissions.read || permissions.write {
+            return None;
+        }
+        let bytes = self.read(address, u64::from(size))?;
+        let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
+        Some(if self.big_endian { bytes.iter().fold(0, fold) } else { bytes.iter().rev().fold(0, fold) })
     }
 
     /// Returns the file-backed bytes from `address` to the end of its segment's file data.

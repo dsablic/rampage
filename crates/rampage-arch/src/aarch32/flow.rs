@@ -1,8 +1,11 @@
 //! Control flow and address tracking for decoded A32 and T32 instructions, and the AArch32 `Disassembler`.
 
+use crate::flow::Kind;
+use crate::mrs::read_u32;
 use crate::{Disassembler, Flow, Got, Insn, Target};
+use std::collections::BTreeMap;
 
-use super::operands::label_target;
+use super::operands::{canonical_rotation, label_target};
 use super::spec_types::a32_expand_imm;
 use super::{Decoded, ItState, LabelStyle, Set, decode_a32, decode_t32, format};
 
@@ -10,18 +13,49 @@ const PC: u64 = 15;
 const LR: u64 = 14;
 const SP: u64 = 13;
 
-/// What an instruction does to control flow, before conditions apply.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Kind {
-    Next,
-    Jump(Option<u64>),
-    Call(Option<u64>),
-    Return,
-    Halt,
+fn register(decoded: &Decoded, name: &str) -> Option<u64> {
+    let operand = decoded.syntax.operands.iter().find(|operand| {
+        operand.name.strip_prefix('<').and_then(|name| name.strip_suffix('>')) == Some(name)
+            && !operand.fields.is_empty()
+    });
+    let value = operand
+        .map(|operand| decoded.encoding.operand_bits(decoded.word, operand).0)
+        .or_else(|| decoded.field(name))?;
+    if name == "Rdm" && decoded.encoding.name == "ADD_SP_r_T1" {
+        Some(decoded.field("DM").unwrap_or(0) << 3 | value)
+    } else {
+        Some(value)
+    }
 }
 
-fn field(decoded: &Decoded, name: &str) -> Option<u64> {
-    decoded.field(name)
+fn destination(decoded: &Decoded) -> Option<u64> {
+    ["Rd", "Rdn", "Rdm"].into_iter().find_map(|name| {
+        decoded
+            .syntax
+            .operands
+            .iter()
+            .find(|operand| operand.name.strip_prefix('<').and_then(|name| name.strip_suffix('>')) == Some(name))
+            .and_then(|_| register(decoded, name))
+    })
+}
+
+fn loads_register_list(mnemonic: &str) -> bool {
+    matches!(mnemonic, "POP" | "LDM" | "LDMIA" | "LDMFD" | "LDMDB" | "LDMIB" | "LDMDA")
+}
+
+fn wide_immediate(decoded: &Decoded) -> u64 {
+    let f = |name| decoded.field(name).unwrap_or(0);
+    let low = if decoded.set == Set::A32 { f("imm12") } else { f("i") << 11 | f("imm3") << 8 | f("imm8") };
+    f("imm4") << 12 | low
+}
+
+fn unshifted(decoded: &Decoded) -> bool {
+    decoded.field("type").is_none_or(|kind| kind == 0)
+        && decoded.field("stype").is_none_or(|kind| kind == 0)
+        && decoded.field("imm5").is_none_or(|amount| amount == 0)
+        && decoded.field("imm3").is_none_or(|amount| amount == 0)
+        && decoded.field("imm2").is_none_or(|amount| amount == 0)
+        && decoded.field("Rs").is_none_or(|_| decoded.set == Set::T16)
 }
 
 /// Whether the instruction executes only under a condition: its own `cond` field or its IT block's.
@@ -30,7 +64,7 @@ fn conditional(decoded: &Decoded) -> bool {
         return true;
     }
     let own = decoded.syntax.operands.iter().any(|operand| operand.name == "<c>" && !operand.fields.is_empty());
-    match (own, field(decoded, "cond")) {
+    match (own, decoded.field("cond")) {
         (true, Some(cond)) => cond < 14,
         _ => decoded.it.condition().is_some_and(|condition| condition < 14),
     }
@@ -38,12 +72,12 @@ fn conditional(decoded: &Decoded) -> bool {
 
 /// The registers an LDM, POP or similar loads, including LR and PC from T32's M and P bits.
 fn loaded_registers(decoded: &Decoded) -> u64 {
-    let mut list = field(decoded, "register_list").unwrap_or(0);
+    let mut list = decoded.field("register_list").unwrap_or(0);
     if decoded.set != Set::A32 {
-        if field(decoded, "P") == Some(1) {
+        if decoded.field("P") == Some(1) {
             list |= 1 << PC;
         }
-        if field(decoded, "M") == Some(1) {
+        if decoded.field("M") == Some(1) {
             list |= 1 << LR;
         }
     }
@@ -55,67 +89,79 @@ fn loaded_registers(decoded: &Decoded) -> u64 {
 
 fn kind(decoded: &Decoded, address: u64) -> Kind {
     let mnemonic = decoded.mnemonic();
-    let name = decoded.encoding.name;
     let target = || label_target(decoded, address);
-    let rd = field(decoded, "Rd").or_else(|| field(decoded, "Rdm")).or_else(|| field(decoded, "Rdn"));
+    let rd = destination(decoded);
     match mnemonic {
         "B" => Kind::Jump(target()),
         "BL" | "BLX" if decoded.syntax.operands.iter().any(|operand| operand.name == "<label>") => Kind::Call(target()),
         "BLX" => Kind::Call(None),
-        "BX" | "BXJ" if field(decoded, "Rm") == Some(LR) => Kind::Return,
+        "BX" | "BXJ" if register(decoded, "Rm") == Some(LR) => Kind::Return,
         "BX" | "BXJ" => Kind::Jump(None),
         "CBZ" | "CBNZ" => Kind::Jump(target()),
         "TBB" | "TBH" => Kind::Jump(None),
-        "POP" | "LDM" | "LDMIA" | "LDMFD" | "LDMDB" | "LDMIB" | "LDMDA"
-            if loaded_registers(decoded) & (1 << PC) != 0 =>
-        {
-            Kind::Return
+        _ if loads_register_list(mnemonic) && loaded_registers(decoded) & (1 << PC) != 0 => {
+            if mnemonic == "POP" || register(decoded, "Rn") == Some(SP) { Kind::Return } else { Kind::Jump(None) }
         }
         // POP of a single register is a post-indexed load from SP.
-        "POP" if field(decoded, "Rt") == Some(PC) => Kind::Return,
+        "POP" if register(decoded, "Rt") == Some(PC) => Kind::Return,
         // Pops of PC (`ldr pc, [sp], #4`) return; other loads of PC jump through a table or veneer.
-        "LDR" if field(decoded, "Rt") == Some(PC) => {
-            if field(decoded, "Rn") == Some(SP) && field(decoded, "P") == Some(0) {
+        "LDR" if register(decoded, "Rt") == Some(PC) => {
+            if register(decoded, "Rn") == Some(SP) && decoded.field("P") == Some(0) {
                 Kind::Return
             } else {
                 Kind::Jump(None)
             }
         }
         "MOV" | "MOVS" if rd == Some(PC) => {
-            if field(decoded, "Rm") == Some(LR) {
+            if register(decoded, "Rm") == Some(LR) && unshifted(decoded) {
                 Kind::Return
             } else {
                 Kind::Jump(None)
             }
         }
-        "ADD" | "SUB" | "ORR" | "AND" | "EOR" | "RSB" | "ADC" | "SBC" | "BIC" | "MVN" if rd == Some(PC) => {
+        "SUBS"
+            if (rd == Some(PC) && register(decoded, "Rn") == Some(LR))
+                || decoded.encoding.name.starts_with("SUBS_PC_") =>
+        {
+            Kind::Return
+        }
+        _ if rd == Some(PC)
+            && matches!(
+                mnemonic.trim_end_matches('S'),
+                "ADD"
+                    | "SUB"
+                    | "ORR"
+                    | "AND"
+                    | "EOR"
+                    | "RSB"
+                    | "ADC"
+                    | "SBC"
+                    | "BIC"
+                    | "MVN"
+                    | "LSL"
+                    | "LSR"
+                    | "ASR"
+                    | "ROR"
+                    | "RRX"
+            ) =>
+        {
             Kind::Jump(None)
         }
         "UDF" | "HLT" | "BKPT" => Kind::Halt,
         "ERET" | "RFE" | "RFEIA" | "RFEDA" | "RFEDB" | "RFEIB" => Kind::Return,
-        _ if name.starts_with("SUBS_PC_LR") => Kind::Return,
         _ => Kind::Next,
     }
 }
 
 /// The instruction's flow, with conditions applied: a conditional return or indirect jump falls through.
 pub fn flow(decoded: &Decoded, address: u64) -> Flow {
-    let conditional = conditional(decoded);
-    let next = address + u64::from(decoded.size());
-    match kind(decoded, address) {
-        Kind::Next => Flow::Next,
-        Kind::Halt => Flow::Halt,
-        Kind::Return if conditional => Flow::Next,
-        Kind::Return => Flow::Return,
-        // A call to the next instruction only reads the program counter.
-        Kind::Call(Some(target)) if target == next => Flow::Next,
-        Kind::Call(Some(target)) => Flow::Call(target),
-        Kind::Call(None) => Flow::IndirectCall,
-        Kind::Jump(Some(target)) if conditional => Flow::ConditionalJump(target),
-        Kind::Jump(Some(target)) => Flow::Jump(target),
-        Kind::Jump(None) if conditional => Flow::Next,
-        Kind::Jump(None) => Flow::IndirectJump,
+    let kind = kind(decoded, address);
+    if decoded.mnemonic() == "BLX"
+        && let Kind::Call(Some(target)) = kind
+    {
+        return Flow::Call(target);
     }
+    kind.flow(conditional(decoded), address.wrapping_add(u64::from(decoded.size())))
 }
 
 /// Register values known within a straight-line run: addresses built from literal pools, MOVW/MOVT pairs and
@@ -156,13 +202,41 @@ pub struct Aarch32Disassembler {
     /// The IT state for the instruction at the given address, while an IT block lasts.
     it: Option<(u64, ItState)>,
     /// The address last decoded and the IT state it was decoded in, for formatting it afterwards.
-    decoded_in: Option<(u64, ItState)>,
+    decoded_in: Option<(u64, ItState, bool)>,
     registers: Registers,
+    modes: BTreeMap<u64, bool>,
+    switches: BTreeMap<u64, bool>,
+    sequential_mode: Option<(u64, bool)>,
 }
 
 impl Aarch32Disassembler {
     pub fn new(target: &Target) -> Self {
-        Self { target: target.clone(), it: None, decoded_in: None, registers: Registers::default() }
+        Self {
+            target: target.clone(),
+            it: None,
+            decoded_in: None,
+            registers: Registers::default(),
+            modes: BTreeMap::new(),
+            switches: BTreeMap::new(),
+            sequential_mode: None,
+        }
+    }
+
+    fn is_thumb(&self, address: u64) -> bool {
+        self.modes
+            .get(&address)
+            .copied()
+            .or_else(|| {
+                self.sequential_mode
+                    .filter(|&(at, _)| {
+                        at == address
+                            && self.decoded_in.is_some_and(|(previous, _, _)| {
+                                self.target.is_thumb(previous) == self.target.is_thumb(address)
+                            })
+                    })
+                    .map(|(_, thumb)| thumb)
+            })
+            .unwrap_or_else(|| self.target.is_thumb(address))
     }
 
     fn it_at(&self, address: u64) -> ItState {
@@ -178,33 +252,36 @@ impl Aarch32Disassembler {
     }
 
     fn decode_at(&self, bytes: &[u8], address: u64, it: ItState) -> Option<Decoded> {
-        if self.target.is_thumb(address) {
+        self.decode_in_mode(bytes, if self.is_thumb(address) { Set::T32 } else { Set::A32 }, it)
+    }
+
+    fn decode_in_mode(&self, bytes: &[u8], set: Set, it: ItState) -> Option<Decoded> {
+        if set != Set::A32 {
             let first = self.halfword(bytes, 0)?;
             decode_t32(first, self.halfword(bytes, 2), it)
         } else {
-            let word: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
-            decode_a32(if self.target.big_endian { u32::from_be_bytes(word) } else { u32::from_le_bytes(word) })
+            decode_a32(read_u32(bytes, 0, self.target.big_endian)?)
         }
     }
 
     /// The minimum instruction size, which is how far undecodable bytes are skipped.
     fn unit(&self, address: u64) -> u8 {
-        if self.target.is_thumb(address) { 2 } else { 4 }
+        if self.is_thumb(address) { 2 } else { 4 }
     }
 
     fn track(&mut self, decoded: &Decoded, address: u64, bytes: &[u8]) -> Found {
         let mut found = Found::default();
         let thumb = decoded.set != Set::A32;
-        let pc = address + if thumb { 4 } else { 8 };
+        let pc = address.wrapping_add(if thumb { 4 } else { 8 });
         let name = decoded.encoding.name;
         let mnemonic = decoded.mnemonic();
-        let f = |name: &str| field(decoded, name);
-        let rd = f("Rd").or_else(|| f("Rdn")).or_else(|| f("Rdm"));
+        let f = |name: &str| decoded.field(name);
+        let r = |name: &str| register(decoded, name);
+        let rd = destination(decoded);
         let conditional = conditional(decoded);
         let literal = |at: u64| -> Option<u64> {
             let offset = usize::try_from(at.checked_sub(address)?).ok()?;
-            let word: [u8; 4] = bytes.get(offset..offset + 4)?.try_into().ok()?;
-            Some(u64::from(if self.target.big_endian { u32::from_be_bytes(word) } else { u32::from_le_bytes(word) }))
+            read_u32(bytes, offset, self.target.data_big_endian).map(u64::from)
         };
         let read = |registers: &Registers, register: u64| -> Option<Value> {
             if register == PC { Some(Value { value: pc, address: true }) } else { registers.get(register) }
@@ -221,7 +298,7 @@ impl Aarch32Disassembler {
                 if name.starts_with("LDR_l") {
                     let value = literal(slot);
                     found.immediate = value;
-                    written = f("Rt").map(|rt| (rt, value.map(|value| Value { value, address: false })));
+                    written = r("Rt").map(|rt| (rt, value.map(|value| Value { value, address: false })));
                 }
             }
         } else if name.starts_with("ADR") {
@@ -234,22 +311,10 @@ impl Aarch32Disassembler {
                 written = rd.map(|rd| (rd, Some(Value { value: target, address: true })));
             }
         } else if matches!(mnemonic, "MOVW") || name.starts_with("MOV_i_A2") || name.starts_with("MOV_i_T3") {
-            let value = f("imm4").unwrap_or(0) << 12
-                | f("i").unwrap_or(0) << 11
-                | f("imm3").unwrap_or(0) << 8
-                | f("imm8").unwrap_or(0);
-            let value =
-                if decoded.set == Set::A32 { f("imm4").unwrap_or(0) << 12 | f("imm12").unwrap_or(0) } else { value };
+            let value = wide_immediate(decoded);
             written = rd.map(|rd| (rd, Some(Value { value, address: false })));
         } else if mnemonic == "MOVT" {
-            let high = if decoded.set == Set::A32 {
-                f("imm4").unwrap_or(0) << 12 | f("imm12").unwrap_or(0)
-            } else {
-                f("imm4").unwrap_or(0) << 12
-                    | f("i").unwrap_or(0) << 11
-                    | f("imm3").unwrap_or(0) << 8
-                    | f("imm8").unwrap_or(0)
-            };
+            let high = wide_immediate(decoded);
             if let Some(rd) = rd {
                 let low = self.registers.get(rd).map(|value| value.value & 0xffff);
                 let value = low.map(|low| Value { value: high << 16 | low, address: false });
@@ -267,9 +332,9 @@ impl Aarch32Disassembler {
             written = rd.map(|rd| (rd, value));
         } else if mnemonic == "ADD" && (name.starts_with("ADD_r") || name.starts_with("ADD_SP_r")) {
             // `add r0, pc, r0` and Thumb's `add r0, pc`: a PC-relative offset made an address.
-            let (rn, rm) = (f("Rn").or(rd).unwrap_or(0), f("Rm").unwrap_or(0));
+            let (rn, rm) = (r("Rn").or(rd).unwrap_or(0), r("Rm").unwrap_or(0));
             let value = match (rn, rm) {
-                (PC, other) | (other, PC) if other != PC => self
+                (PC, other) | (other, PC) if other != PC && unshifted(decoded) && !conditional => self
                     .registers
                     .get(other)
                     .map(|offset| Value { value: pc.wrapping_add(offset.value), address: true }),
@@ -279,15 +344,31 @@ impl Aarch32Disassembler {
                 found.data_ref = Some(value.value & 0xffff_ffff);
             }
             written = rd.map(|rd| (rd, value));
-        } else if mnemonic == "MOV" && name.starts_with("MOV_r") && f("imm5").is_none_or(|amount| amount == 0) {
-            written = rd.map(|rd| (rd, f("Rm").and_then(|rm| self.registers.get(rm))));
+        } else if mnemonic == "MOV" && name.starts_with("MOV_r") && unshifted(decoded) {
+            written = rd.map(|rd| (rd, r("Rm").and_then(|rm| self.registers.get(rm))));
         } else if mnemonic.starts_with("LDR") || mnemonic.starts_with("STR") {
             // Loads and stores through a known base, with an immediate offset.
-            if let Some(base) = f("Rn").and_then(|rn| read(&self.registers, rn)) {
-                let imm = f("imm12").or_else(|| f("imm8")).or_else(|| Some(f("imm4H")? << 4 | f("imm4L")?));
+            let rn = r("Rn").or_else(|| {
+                decoded
+                    .syntax
+                    .tokens
+                    .iter()
+                    .any(|token| matches!(token, crate::mrs::Token::Text(text) if text.contains("[SP")))
+                    .then_some(SP)
+            });
+            if let Some(base) = rn.and_then(|rn| read(&self.registers, rn)) {
+                let imm = f("imm12")
+                    .or_else(|| f("imm8"))
+                    .or_else(|| f("imm5"))
+                    .or_else(|| Some(f("imm4H")? << 4 | f("imm4L")?));
                 let indexed = f("P") != Some(0);
                 if let (Some(imm), true, None) = (imm, indexed, f("Rm")) {
-                    let scale = if decoded.set == Set::T16 && mnemonic == "LDR" { 4 } else { 1 };
+                    let scale = match decoded.set {
+                        Set::T16 if matches!(mnemonic, "LDR" | "STR") => 4,
+                        Set::T16 if matches!(mnemonic, "LDRH" | "STRH") => 2,
+                        Set::T32 if f("imm8").is_some() && matches!(mnemonic, "LDRD" | "STRD" | "LDREX" | "STREX") => 4,
+                        _ => 1,
+                    };
                     let offset = imm * scale;
                     let at = if f("U") == Some(0) {
                         base.value.wrapping_sub(offset)
@@ -298,17 +379,46 @@ impl Aarch32Disassembler {
                     if mnemonic == "LDR" {
                         let entry =
                             self.target.got.as_ref().and_then(|got: &Got| got.entry(at, 4)).filter(|&entry| entry != 0);
-                        written = f("Rt").map(|rt| (rt, entry.map(|value| Value { value, address: true })));
+                        written = r("Rt").map(|rt| (rt, entry.map(|value| Value { value, address: true })));
                     }
                 }
             }
             if mnemonic.starts_with("LDR") && written.is_none() {
-                written = f("Rt").map(|rt| (rt, None));
+                written = r("Rt").map(|rt| (rt, None));
             }
         } else if let Some(rd) = rd {
             written = Some((rd, None));
         }
 
+        let core_transfer = decoded
+            .syntax
+            .operands
+            .iter()
+            .find(|operand| {
+                operand.name.starts_with("<R") || operand.name.starts_with("<S") || operand.name.starts_with("<D")
+            })
+            .is_some_and(|operand| matches!(operand.name, "<Rt>" | "<Rt2>"));
+        for operand in decoded.syntax.operands {
+            let Some(name) = operand.name.strip_prefix('<').and_then(|name| name.strip_suffix('>')) else {
+                continue;
+            };
+            if !matches!(name, "Rd" | "Rdn" | "Rdm" | "RdLo" | "RdHi" | "Rt" | "Rt2") {
+                continue;
+            }
+            if matches!(name, "Rt" | "Rt2")
+                && (mnemonic.starts_with("ST")
+                    || mnemonic.starts_with("VST")
+                    || mnemonic.starts_with("MCR")
+                    || mnemonic == "PUSH"
+                    || matches!(mnemonic, "VMSR" | "VDUP")
+                    || mnemonic == "VMOV" && !core_transfer)
+            {
+                continue;
+            }
+            if let Some(register) = register(decoded, name) {
+                self.registers.set(register, None);
+            }
+        }
         // A formed address is reported once complete: not halfway (PC itself, MOVW before MOVT).
         if let Some((register, value)) = written {
             let value = value.filter(|_| !conditional);
@@ -323,26 +433,34 @@ impl Aarch32Disassembler {
             self.registers.set(register, value);
         }
         // Writeback, list loads and calls change other registers.
-        if (f("W") == Some(1) || f("P") == Some(0))
-            && let Some(rn) = f("Rn")
+        let list_writeback = decoded.set == Set::T16
+            && (mnemonic == "STM"
+                || loads_register_list(mnemonic)
+                    && r("Rn").is_some_and(|rn| loaded_registers(decoded) & (1 << rn) == 0));
+        if (f("W") == Some(1) || f("P") == Some(0) || list_writeback)
+            && let Some(rn) = r("Rn")
         {
             self.registers.set(rn, None);
         }
         let loaded = loaded_registers(decoded);
-        if matches!(mnemonic, "POP" | "LDM" | "LDMIA" | "LDMFD" | "LDMDB" | "LDMIB" | "LDMDA") {
+        if loads_register_list(mnemonic) {
             for register in 0..15 {
                 if loaded & (1 << register) != 0 {
                     self.registers.set(register, None);
                 }
             }
         }
-        if mnemonic == "LDRD"
-            && let Some(rt) = f("Rt")
+        if matches!(mnemonic, "LDRD" | "LDREXD")
+            && decoded.set == Set::A32
+            && let Some(rt) = r("Rt")
         {
             self.registers.set(rt + 1, None);
         }
         if matches!(mnemonic, "BL" | "BLX" | "SVC") {
             self.registers = Registers::default();
+        }
+        if matches!(mnemonic, "PUSH" | "POP") || decoded.syntax.operands.iter().any(|operand| operand.name == "SP") {
+            self.registers.set(SP, None);
         }
         found
     }
@@ -353,48 +471,79 @@ impl Aarch32Disassembler {
 fn is_non_canonical(decoded: &Decoded) -> bool {
     let Some(imm12) = decoded.field("imm12") else { return false };
     let rotation = 2 * (imm12 >> 8) as u32;
-    let value = a32_expand_imm(imm12) as u32;
-    rotation != 0 && (0..rotation).step_by(2).any(|smaller| value.rotate_left(smaller) <= 0xff)
+    canonical_rotation(a32_expand_imm(imm12) as u32) != rotation
 }
 
 impl Disassembler for Aarch32Disassembler {
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
+        self.switches.clear();
         let invalid = Insn { address, len: self.unit(address), flow: Flow::Invalid, data_ref: None, immediate: None };
         let it = self.it_at(address);
-        self.decoded_in = Some((address, it));
-        let Some(decoded) = self.decode_at(bytes, address, it) else {
-            self.it = None;
+        let thumb = self.is_thumb(address);
+        let decoded = self.decode_at(bytes, address, it);
+        self.decoded_in = Some((address, it, thumb));
+        let Some(decoded) = decoded else {
+            let next = address.wrapping_add(u64::from(invalid.len));
+            let advanced = it.advance();
+            self.it = advanced.in_block().then_some((next, advanced));
+            self.sequential_mode = Some((next, thumb));
+            self.registers = Registers::default();
             return invalid;
         };
-        let next = address + u64::from(decoded.size());
+        let next = address.wrapping_add(u64::from(decoded.size()));
         // An IT instruction starts a block; inside one, each instruction advances it.
         self.it = if decoded.mnemonic() == "IT" {
-            let state = ItState::new(
-                field(&decoded, "firstcond").unwrap_or(0) as u8,
-                field(&decoded, "mask").unwrap_or(0) as u8,
-            );
+            let state =
+                ItState::new(decoded.field("firstcond").unwrap_or(0) as u8, decoded.field("mask").unwrap_or(0) as u8);
             Some((next, state))
         } else {
             let advanced = decoded.it.advance();
             advanced.in_block().then_some((next, advanced))
         };
         let found = self.track(&decoded, address, bytes);
-        Insn {
-            address,
-            len: decoded.size(),
-            flow: flow(&decoded, address),
-            data_ref: found.data_ref,
-            immediate: found.immediate,
+        let mut flow = flow(&decoded, address);
+        if decoded.mnemonic() == "LDR"
+            && register(&decoded, "Rt") == Some(PC)
+            && let Some(pointer) = found.immediate
+        {
+            flow = Kind::Jump(Some(pointer & !1)).flow(conditional(&decoded), next);
+            self.modes.entry(pointer & !1).or_insert(pointer & 1 != 0);
+            self.switches.insert(pointer & !1, pointer & 1 != 0);
         }
+        let thumb = decoded.set != Set::A32;
+        if let Flow::Call(target) | Flow::Jump(target) | Flow::ConditionalJump(target) = flow {
+            let mode = if decoded.mnemonic() == "BLX" { !thumb } else { thumb };
+            if !(decoded.mnemonic() == "LDR" && found.immediate.is_some()) {
+                self.modes.entry(target).or_insert(mode);
+            }
+            if !(decoded.mnemonic() == "LDR" && found.immediate.is_some()) {
+                self.switches.insert(target, mode);
+            }
+        }
+        if matches!(flow, Flow::ConditionalJump(_)) {
+            let mode = if self.target.is_thumb(address) == self.target.is_thumb(next) {
+                thumb
+            } else {
+                self.target.is_thumb(next)
+            };
+            self.modes.entry(next).or_insert(mode);
+            self.switches.insert(next, mode);
+        }
+        self.sequential_mode =
+            matches!(flow, Flow::Next | Flow::Call(_) | Flow::IndirectCall | Flow::ConditionalJump(_))
+                .then_some((next, thumb));
+        Insn { address, len: decoded.size(), flow, data_ref: found.data_ref, immediate: found.immediate }
     }
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {
         // Formatting follows decoding of the same instruction, whose IT state `decode` has already moved on.
-        let it = match self.decoded_in {
-            Some((at, it)) if at == address => it,
-            _ => self.it_at(address),
+        let decoded = match self.decoded_in {
+            Some((at, it, thumb)) if at == address => {
+                self.decode_in_mode(bytes, if thumb { Set::T32 } else { Set::A32 }, it)
+            }
+            _ => self.decode_at(bytes, address, self.it_at(address)),
         };
-        self.decode_at(bytes, address, it)
+        decoded
             .and_then(|decoded| format(&decoded, address, LabelStyle::Absolute))
             .unwrap_or_else(|| "(bad)".to_owned())
     }
@@ -403,5 +552,31 @@ impl Disassembler for Aarch32Disassembler {
         self.it = None;
         self.decoded_in = None;
         self.registers = Registers::default();
+        self.sequential_mode = None;
+    }
+
+    fn set_code_modes(&mut self, modes: &[(u64, bool)]) {
+        self.modes = modes.iter().copied().collect();
+        self.switches.clear();
+    }
+
+    fn code_modes(&self) -> Vec<(u64, bool)> {
+        self.switches.iter().map(|(&address, &thumb)| (address, thumb)).collect()
+    }
+
+    fn instruction_mode(&self) -> Option<bool> {
+        self.decoded_in.map(|(_, _, thumb)| thumb)
+    }
+
+    fn code_mode_at(&self, address: u64) -> Option<bool> {
+        if let Some((next, thumb)) = self.sequential_mode
+            && next == address
+        {
+            let previous = self.decoded_in.map(|(at, _, _)| at)?;
+            if self.target.is_thumb(previous) == self.target.is_thumb(address) {
+                return Some(thumb);
+            }
+        }
+        Some(self.is_thumb(address))
     }
 }

@@ -21,6 +21,20 @@ fn empty_window() {
 }
 
 #[test]
+fn runtime_snapshot_opens_in_the_existing_ui() {
+    let mut harness = harness(App::blocking());
+    harness.run();
+    let ctx = harness.ctx.clone();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64.snapshot.json");
+    harness.state_mut().open(&ctx, path, None);
+    harness.state_mut().workspace_mut().unwrap().goto_text("0x1000");
+    harness.run();
+    harness.state_mut().focus_tab(rampage_ui::Tab::Graph);
+    harness.run();
+    assert!(harness.state_mut().workspace_mut().is_some());
+}
+
+#[test]
 fn main_window_with_a_binary() {
     let mut harness = harness(App::blocking());
     harness.run();

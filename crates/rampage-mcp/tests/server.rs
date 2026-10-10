@@ -49,9 +49,12 @@ async fn lists_all_tools_with_instructions() {
         client.list_all_tools().await.unwrap().into_iter().map(|tool| tool.name.into_owned()).collect();
     names.sort();
     let expected = [
+        "analysis_diagnostics",
         "binary_info",
         "disassemble",
         "function_graph",
+        "function_summary",
+        "language_metadata",
         "list_annotations",
         "list_exports",
         "list_functions",

@@ -1,8 +1,10 @@
+pub mod container;
 mod details;
 mod load;
 mod macho;
 mod model;
 mod slots;
+pub mod snapshot;
 mod starts;
 
 pub use details::{Details, ElfDetails, MachODetails, Overlay, PeDetails, RichEntry};

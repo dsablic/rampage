@@ -16,6 +16,75 @@ pub struct Options {
     pub arch: Option<Arch>,
 }
 
+pub fn audit(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let audit = rampage_analysis::diagnostics::diagnostics(&project.binary);
+    if options.json {
+        return write_json(out, &audit);
+    }
+    for region in audit.regions {
+        writeln!(
+            out,
+            "{:#x} {}: {} invalid of {} sampled instructions; entropy {:.2}",
+            region.address, region.name, region.invalid, region.instructions, region.entropy
+        )?;
+        writeln!(out, "  {}", region.assessment)?;
+    }
+    for limitation in audit.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
+pub fn metadata(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let metadata = rampage_analysis::language::metadata(&project.binary);
+    if options.json {
+        return write_json(out, &metadata);
+    }
+    for symbol in metadata.symbols {
+        writeln!(out, "{:#x} {} {}", symbol.address, symbol.category, symbol.display)?;
+    }
+    for selector in metadata.selectors {
+        writeln!(out, "{:#x} selector {}", selector.address, selector.name)?;
+    }
+    Ok(())
+}
+
+pub fn inventory(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let inventory = rampage_loaders::container::inventory(path)?;
+    if options.json {
+        return write_json(out, &inventory);
+    }
+    for binary in inventory.binaries {
+        writeln!(out, "{} [{}]", binary.path.display(), binary.slices.join(", "))?;
+    }
+    for warning in inventory.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    Ok(())
+}
+
+pub fn summarize(out: &mut impl Write, path: &Path, at: &str, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let summary = project.function_summary(project.resolve(at)?)?;
+    if options.json {
+        return write_json(out, &summary);
+    }
+    writeln!(
+        out,
+        "{}: {} blocks, {} edges, {} references",
+        summary.graph.name,
+        summary.graph.blocks.len(),
+        summary.graph.edges.len(),
+        summary.references.total
+    )?;
+    for limitation in summary.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
 fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
     Ok(Session::default().open(path, options.arch)?)
 }

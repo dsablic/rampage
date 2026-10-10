@@ -19,18 +19,31 @@ pub struct Tool {
     pub input_schema: Value,
     /// Acts on a person's view of the binary (`show_address`), so only clients with one offer it.
     pub interactive: bool,
+    pub effect: Effect,
     handler: Handler,
 }
 
 impl Tool {
     fn interactive(self) -> Self {
-        Self { interactive: true, ..self }
+        Self { interactive: true, effect: Effect::ShowAddress, ..self }
+    }
+
+    fn annotates(self) -> Self {
+        Self { effect: Effect::Annotations, ..self }
     }
 
     /// The tool as the Anthropic Messages API describes one.
     pub fn definition(&self) -> Value {
         serde_json::json!({ "name": self.name, "description": self.description, "input_schema": self.input_schema })
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Effect {
+    #[default]
+    None,
+    Annotations,
+    ShowAddress,
 }
 
 fn schema<A: JsonSchema>() -> Value {
@@ -53,7 +66,14 @@ where
         let result = run(project, arguments).map_err(|error| error.to_string())?;
         serde_json::to_value(result).map_err(|error| error.to_string())
     };
-    Tool { name, description, input_schema: schema::<A>(), interactive: false, handler: Box::new(handler) }
+    Tool {
+        name,
+        description,
+        input_schema: schema::<A>(),
+        interactive: false,
+        effect: Effect::None,
+        handler: Box::new(handler),
+    }
 }
 
 /// No arguments.
@@ -126,12 +146,33 @@ fn page_limit(limit: Option<usize>) -> Option<usize> {
 pub fn tools() -> Vec<Tool> {
     vec![
         tool(
-            "binary_info",
-            "Format, architecture, entry point, segments and sections of the binary.",
-            |project, _: Nothing| {
-                serde_json::to_value(project.summary()).map_err(|error| ApiError::Invalid(error.to_string()))
-            },
+            "function_summary",
+            "Structural function summary: decoded CFG, named references and explicit limitations. Not a decompiler.",
+            |project, arguments: At| project.function_summary(project.resolve(&arguments.at)?),
         ),
+        tool(
+            "language_metadata",
+            "Demangled symbols, named Itanium vtables/RTTI and Objective-C selector strings, with limits.",
+            |project, _: Nothing| Ok(rampage_analysis::language::metadata(&project.binary)),
+        ),
+        tool(
+            "analysis_diagnostics",
+            "Decode coverage and evidence of unreliable static code, with explicit limitations. \
+             Does not assert encryption.",
+            |project, _: Nothing| Ok(rampage_analysis::diagnostics::diagnostics(&project.binary)),
+        ),
+        Tool {
+            name: "binary_info",
+            description: "Format, architecture, entry point, segments and sections of the binary.",
+            input_schema: schema::<Nothing>(),
+            interactive: false,
+            effect: Effect::None,
+            handler: Box::new(|project, input| {
+                let _: Nothing =
+                    serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
+                serde_json::to_value(project.summary()).map_err(|error| error.to_string())
+            }),
+        },
         tool(
             "triage",
             "Hashes, entropy, format details (build time, libraries, hardening), overlay and hints of packing.",
@@ -205,7 +246,8 @@ pub fn tools() -> Vec<Tool> {
                 let name = edit_value(arguments.name, arguments.clear, "name")?;
                 project.rename(project.resolve(&arguments.at)?, name.as_deref())
             },
-        ),
+        )
+        .annotates(),
         tool(
             "set_comment",
             "Comment an instruction or address; comments show in the disassembly and are saved beside the binary.",
@@ -213,7 +255,8 @@ pub fn tools() -> Vec<Tool> {
                 let text = edit_value(arguments.text, arguments.clear, "text")?;
                 project.comment(project.resolve(&arguments.at)?, text.as_deref())
             },
-        ),
+        )
+        .annotates(),
         tool("list_annotations", "Every user name and comment, by address.", |project, _: Nothing| {
             Ok(project.annotation_list())
         }),
@@ -229,10 +272,12 @@ pub fn tools() -> Vec<Tool> {
             "undo",
             "Undo the last rename or comment made in this session. Returns the edit, or null.",
             |project, _: Nothing| project.undo(),
-        ),
+        )
+        .annotates(),
         tool("redo", "Redo the last edit undone in this session. Returns the edit, or null.", |project, _: Nothing| {
             project.redo()
-        }),
+        })
+        .annotates(),
     ]
 }
 
@@ -252,5 +297,24 @@ pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (Str
             (text, false)
         }
         Err(error) => (error, true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_info_keeps_its_schema_validation_and_json_result() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+        let project = Project::new(rampage_loaders::Binary::open(path).unwrap());
+        let tools = tools();
+        let (text, failed) = call(&tools, &project, "binary_info", serde_json::json!({}));
+        assert!(!failed);
+        let result: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(result, serde_json::to_value(project.summary()).unwrap());
+        let (text, failed) = call(&tools, &project, "binary_info", serde_json::json!(42));
+        assert!(failed);
+        assert!(text.starts_with("invalid arguments:"));
     }
 }

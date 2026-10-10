@@ -21,4 +21,5 @@ rampage-arch.workspace = true
 rampage-loaders.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 egui_kittest = { version = "0.36.2", features = ["wgpu", "snapshot", "eframe"] }

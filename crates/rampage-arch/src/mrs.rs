@@ -89,11 +89,29 @@ impl Encoding {
 
 /// A syntax's mnemonic without a flag-setting `S` suffix (`ADDS` and `ADD` share `ADD`).
 fn root_mnemonic(syntax: &Syntax) -> &'static str {
-    let mnemonic = match syntax.tokens.first() {
+    let mnemonic = mnemonic(syntax);
+    mnemonic.strip_suffix('S').unwrap_or(mnemonic)
+}
+
+pub fn mnemonic(syntax: &Syntax) -> &'static str {
+    match syntax.tokens.first() {
         Some(Token::Text(text)) => text.split([' ', '.', '{']).next().unwrap_or(""),
         _ => "",
-    };
-    mnemonic.strip_suffix('S').unwrap_or(mnemonic)
+    }
+}
+
+pub fn ones(width: u32) -> u64 {
+    if width >= 64 { u64::MAX } else { (1 << width) - 1 }
+}
+
+pub fn sign_extend(value: u64, width: u32) -> i64 {
+    let shift = 64 - width.clamp(1, 64);
+    ((value << shift) as i64) >> shift
+}
+
+pub fn read_u32(bytes: &[u8], offset: usize, big_endian: bool) -> Option<u32> {
+    let word = bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
+    Some(if big_endian { u32::from_be_bytes(word) } else { u32::from_le_bytes(word) })
 }
 
 /// Whether `choices` are plain spellings, rather than placeholders or syntax.
@@ -109,7 +127,7 @@ pub struct Field {
 
 impl Field {
     fn mask(&self) -> u32 {
-        if self.width >= 32 { u32::MAX } else { (1 << self.width) - 1 }
+        ones(u32::from(self.width)) as u32
     }
 
     pub fn extract(&self, word: u32) -> u64 {
@@ -365,4 +383,36 @@ pub fn render_with_fallback(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_bit_helpers_preserve_signed_values_and_masks() {
+        for width in 1..=64 {
+            let sign = 1u64 << (width - 1);
+            assert_eq!(sign_extend(sign - 1, width), (sign - 1) as i64);
+            assert_eq!(sign_extend(ones(width), width), -1);
+            assert_eq!(sign_extend(sign, width), (sign as i64).wrapping_neg());
+        }
+        assert_eq!(ones(0), 0);
+        assert_eq!(ones(65), u64::MAX);
+        assert_eq!(sign_extend(1, 0), -1);
+        assert_eq!(sign_extend(u64::MAX, 65), -1);
+        for width in 1..=32 {
+            let field = Field { name: "bits", start: 0, width };
+            assert_eq!(field.extract(u32::MAX), ones(u32::from(width)));
+        }
+    }
+
+    #[test]
+    fn word_reads_respect_byte_order_offsets_and_truncation() {
+        let bytes = [0, 0x12, 0x34, 0x56, 0x78, 0];
+        assert_eq!(read_u32(&bytes, 1, true), Some(0x1234_5678));
+        assert_eq!(read_u32(&bytes, 1, false), Some(0x7856_3412));
+        assert_eq!(read_u32(&bytes, 3, false), None);
+        assert_eq!(read_u32(&bytes, usize::MAX, false), None);
+    }
 }

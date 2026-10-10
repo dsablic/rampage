@@ -98,6 +98,7 @@ pub fn layout(graph: FunctionGraph, address_width: usize) -> Layout {
     let mut y = MARGIN;
     let mut width = 0.0f32;
     let mut centers = vec![0.0f32; count];
+    let mut row_widths = Vec::with_capacity(rows.len());
     for row in &mut rows {
         // Order by the average center of each block's placed predecessors.
         let key = |block: usize| {
@@ -119,12 +120,11 @@ pub fn layout(graph: FunctionGraph, address_width: usize) -> Layout {
             x += sizes[block].x + BOX_GAP;
         }
         width = width.max(row_width);
+        row_widths.push(row_width);
         y += height + LAYER_GAP;
     }
     // Center each layer on the widest one.
-    for row in &rows {
-        let row_width =
-            row.iter().map(|&block| boxes[block].width()).sum::<f32>() + BOX_GAP * row.len().saturating_sub(1) as f32;
+    for (row, row_width) in rows.iter().zip(row_widths) {
         let shift = (width - row_width) / 2.0;
         for &block in row {
             boxes[block] = boxes[block].translate(vec2(shift, 0.0));
@@ -287,5 +287,49 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
         workspace.goto(address);
     } else if let Some(address) = clicked {
         workspace.select(address);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rampage_api::{DisassemblyLine, Edge, GraphBlock};
+
+    #[test]
+    fn layers_are_centered_even_when_block_widths_differ() {
+        let blocks = (0..4)
+            .map(|index| GraphBlock {
+                start: index,
+                lines: vec![DisassemblyLine {
+                    address: index,
+                    bytes: "90".to_owned(),
+                    text: "x".repeat(5 + index as usize * 9),
+                    flow: Flow::Next,
+                    data_ref: None,
+                    immediate: None,
+                    label: None,
+                    comment: None,
+                    note: None,
+                }],
+            })
+            .collect();
+        let graph = FunctionGraph {
+            address: 0,
+            name: "diamond".to_owned(),
+            blocks,
+            edges: vec![
+                Edge { from: 0, to: 1, kind: EdgeKind::Taken },
+                Edge { from: 0, to: 2, kind: EdgeKind::NotTaken },
+                Edge { from: 1, to: 3, kind: EdgeKind::Unconditional },
+                Edge { from: 2, to: 3, kind: EdgeKind::Unconditional },
+            ],
+        };
+        let layout = layout(graph, 8);
+        let middle = (layout.boxes[1].left().min(layout.boxes[2].left())
+            + layout.boxes[1].right().max(layout.boxes[2].right()))
+            / 2.0;
+        assert!((layout.boxes[0].center().x - middle).abs() < 0.01);
+        assert!((layout.boxes[3].center().x - middle).abs() < 0.01);
+        assert!(!layout.boxes[1].intersects(layout.boxes[2]));
     }
 }

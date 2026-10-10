@@ -3,12 +3,6 @@
 
 pub use crate::mrs::*;
 
-/// `SInt`: the two's-complement value of the low `width` bits.
-pub fn sign_extend(value: u64, width: u32) -> i64 {
-    let shift = 64 - width;
-    ((value << shift) as i64) >> shift
-}
-
 /// `A32ExpandImm`: an 8-bit value rotated right by twice the 4-bit rotation.
 pub fn a32_expand_imm(imm12: u64) -> u64 {
     u64::from((imm12 as u32 & 0xff).rotate_right(2 * (imm12 as u32 >> 8)))

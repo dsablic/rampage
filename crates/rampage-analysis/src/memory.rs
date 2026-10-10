@@ -13,12 +13,18 @@ pub trait Memory: Sync {
     fn code_address(&self, address: u64) -> u64 {
         address
     }
+    fn read_pointer(&self, _address: u64, _size: u8) -> Option<u64> {
+        None
+    }
 }
 
 /// Images whose code starts below this are treated as based at zero.
 const MIN_IMAGE_BASE_FOR_IMMEDIATES: u64 = 0x10000;
 
 impl Memory for Binary {
+    fn read_pointer(&self, address: u64, size: u8) -> Option<u64> {
+        Binary::read_pointer(self, address, size)
+    }
     fn code_from(&self, address: u64) -> Option<&[u8]> {
         Binary::code_from(self, address)
     }

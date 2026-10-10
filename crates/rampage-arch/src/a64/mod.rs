@@ -60,14 +60,28 @@ pub fn format_word(word: u32, address: u64, labels: LabelStyle) -> Option<String
 #[derive(Default)]
 pub struct A64Disassembler {
     addresses: flow::Addresses,
+    resolved: Option<Flow>,
 }
 
 impl Disassembler for A64Disassembler {
     fn reset(&mut self) {
+        let memory_changed = self.addresses.memory_changed;
         self.addresses = flow::Addresses::default();
+        self.addresses.memory_changed = memory_changed;
+        self.resolved = None;
+    }
+
+    fn begin_run(&mut self) {
+        self.addresses = flow::Addresses::default();
+        self.resolved = None;
     }
 
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
+        self.decode_with_memory(bytes, address, &|_, _| None)
+    }
+
+    fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
+        self.resolved = None;
         let Some(word) = bytes.first_chunk::<4>().map(|chunk| u32::from_le_bytes(*chunk)) else {
             return Insn {
                 address,
@@ -79,7 +93,10 @@ impl Disassembler for A64Disassembler {
         };
         match decode_word(word) {
             Some(decoded) => {
-                let (flow, data_ref) = flow::analyze(&decoded, address, &mut self.addresses);
+                let (flow, data_ref) = flow::analyze(&decoded, address, &mut self.addresses, read);
+                if matches!(decoded.encoding.name, "BR_64_branch_reg" | "BLR_64_branch_reg") {
+                    self.resolved = Some(flow);
+                }
                 Insn { address, len: 4, flow, data_ref, immediate: None }
             }
             None => Insn { address, len: 4, flow: Flow::Invalid, data_ref: None, immediate: None },
@@ -91,6 +108,10 @@ impl Disassembler for A64Disassembler {
             .first_chunk::<4>()
             .and_then(|chunk| format_word(u32::from_le_bytes(*chunk), address, LabelStyle::Absolute))
             .unwrap_or_else(|| "(bad)".to_owned())
+    }
+
+    fn resolved_flow(&self) -> Option<Flow> {
+        self.resolved
     }
 }
 

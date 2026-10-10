@@ -24,6 +24,9 @@ struct State {
 
 impl Session {
     pub fn open(&self, path: &Path, arch: Option<Arch>) -> Result<Arc<Project>, ApiError> {
+        let executable = rampage_loaders::container::resolve_executable(path)
+            .map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
+        let path = executable.as_path();
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_owned());
         {
             let state = self.state.lock().expect("session lock");

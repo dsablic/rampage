@@ -6,6 +6,7 @@ pub enum Format {
     Elf,
     Pe,
     MachO,
+    Snapshot,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]

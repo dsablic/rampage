@@ -103,7 +103,10 @@ fn hashes(bytes: &[u8]) -> Hashes {
 }
 
 /// Section names that well-known packers and protectors leave behind.
-const PACKER_SECTIONS: [(&str, &str); 14] = [
+const PACKER_SECTIONS: [(&str, &str); 17] = [
+    ("__povertext", "a PACE-style protection wrapper"),
+    ("__poverdata", "a PACE-style protection wrapper"),
+    ("__pbootstrap", "a PACE-style protection wrapper"),
     ("UPX0", "UPX"),
     ("UPX1", "UPX"),
     ("UPX2", "UPX"),

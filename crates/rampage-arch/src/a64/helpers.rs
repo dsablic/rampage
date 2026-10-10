@@ -3,15 +3,7 @@
 
 use super::spec::SYSTEM_OPERATIONS;
 use super::spec_types::SysKind;
-
-pub fn ones(width: u32) -> u64 {
-    if width >= 64 { u64::MAX } else { (1 << width) - 1 }
-}
-
-pub fn sign_extend(value: u64, width: u32) -> i64 {
-    let shift = 64 - width.clamp(1, 64);
-    ((value << shift) as i64) >> shift
-}
+pub use crate::mrs::{ones, sign_extend};
 
 /// The target of a PC-relative offset `raw` of `width` bits counting `1 << scale` bytes, and the offset itself.
 /// ADRP (scale 12) counts pages from the instruction's 4 KiB page.

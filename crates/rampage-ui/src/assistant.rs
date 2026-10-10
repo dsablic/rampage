@@ -11,6 +11,38 @@ use rampage_api::Project;
 
 use crate::theme;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rampage_api::tools::Effect;
+
+    #[test]
+    fn tool_effects_drive_refresh_and_navigation_without_name_matching() {
+        for (effect, failed, annotations, show) in [
+            (Effect::Annotations, false, true, None),
+            (Effect::ShowAddress, false, false, Some("0x1000")),
+            (Effect::Annotations, true, false, None),
+            (Effect::ShowAddress, true, false, None),
+            (Effect::None, false, false, None),
+        ] {
+            let (sender, receiver) = channel();
+            sender
+                .send(Message::Event(Event::Tool {
+                    name: "arbitrary_tool_name".to_owned(),
+                    input: serde_json::json!({"at": "0x1000"}),
+                    failed,
+                    effect,
+                }))
+                .unwrap();
+            let mut assistant = Assistant { running: Some(receiver), ..Default::default() };
+            let effects = assistant.poll();
+            assert_eq!(effects.annotations_changed, annotations);
+            assert_eq!(effects.show.as_deref(), show);
+            assert_eq!(assistant.transcript.len(), 1);
+        }
+    }
+}
+
 pub enum Entry {
     Question(String),
     Answer(String),
@@ -83,16 +115,16 @@ impl Assistant {
         loop {
             match receiver.try_recv() {
                 Ok(Message::Event(Event::Text(text))) => self.transcript.push(Entry::Answer(text)),
-                Ok(Message::Event(Event::Tool { name, input, failed })) => {
+                Ok(Message::Event(Event::Tool { name, input, failed, effect })) => {
                     let argument = ["at", "to", "from", "name_contains", "contains"]
                         .iter()
                         .find_map(|key| input[key].as_str())
                         .unwrap_or("");
                     if !failed {
-                        match name.as_str() {
-                            "rename" | "set_comment" => effects.annotations_changed = true,
-                            "show_address" => effects.show = Some(argument.to_owned()),
-                            _ => {}
+                        match effect {
+                            rampage_api::tools::Effect::Annotations => effects.annotations_changed = true,
+                            rampage_api::tools::Effect::ShowAddress => effects.show = Some(argument.to_owned()),
+                            rampage_api::tools::Effect::None => {}
                         }
                     }
                     self.transcript.push(Entry::Tool { summary: format!("{name} {argument}"), failed });

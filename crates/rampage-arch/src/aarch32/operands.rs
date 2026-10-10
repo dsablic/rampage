@@ -4,7 +4,7 @@
 use crate::mrs::{LabelStyle, Operand, Token, Value, is_literal};
 
 use super::spec_types::{a32_expand_imm, sign_extend, t32_expand_imm};
-use super::{Decoded, Set, decode_word, mnemonic};
+use super::{Decoded, Set, decode_word};
 
 pub struct Context<'a> {
     pub decoded: &'a Decoded,
@@ -35,7 +35,7 @@ impl Context<'_> {
     }
 
     fn mnemonic(&self) -> &'static str {
-        mnemonic(self.decoded.syntax)
+        self.decoded.mnemonic()
     }
 
     fn is_thumb(&self) -> bool {
@@ -422,7 +422,7 @@ fn a32_modified_immediate(imm12: u64) -> Value {
 
 /// The right rotation an assembler encodes `value` with (LLVM's `getSOImmValRotate`): none for a byte, else the
 /// one that puts the lowest set bits at the bottom, trying again above bit 5 for values that wrap around.
-fn canonical_rotation(value: u32) -> u32 {
+pub(super) fn canonical_rotation(value: u32) -> u32 {
     if value & !0xff == 0 {
         return 0;
     }
@@ -627,6 +627,20 @@ fn is_simd(context: &Context) -> bool {
 /// A vector instruction's data type or element size (`.s16`, `.u32`, `.i8`, `.f32`, `.64`): mapped from the
 /// fields onto the operand's legal spellings by element size and, where a field gives it, signedness.
 fn simd_type(context: &Context, operand: &Operand) -> Value {
+    let encoding = context.decoded.encoding.name;
+    if encoding.starts_with("VCVT_is_") || encoding.starts_with("VCVT_xs_") {
+        let fixed = encoding.starts_with("VCVT_xs_");
+        let unsigned =
+            if fixed { context.field("U") == Some(1) } else { context.field("op").is_some_and(|op| op & 1 != 0) };
+        let to_integer = if fixed {
+            context.field("op").is_some_and(|op| op & 1 != 0)
+        } else {
+            context.field("op").is_some_and(|op| op & 2 != 0)
+        };
+        let size = if !fixed && context.field("size") == Some(1) { 16 } else { 32 };
+        let letter = if (operand.name == "<dt1>") == to_integer { if unsigned { 'u' } else { 's' } } else { 'f' };
+        return Value::Text(format!("{letter}{size}"));
+    }
     if let Some(text) = element_type(context) {
         return Value::Text(text);
     }
@@ -784,6 +798,12 @@ fn float_immediate(imm8: u64) -> String {
 
 /// VCVT's fixed-point fraction bits: the element size minus `imm4:i`.
 fn fixed_point_bits(context: &Context) -> Value {
+    if context.decoded.encoding.name.starts_with("VCVT_xs_") {
+        return match context.field("imm6").and_then(|imm| 64u64.checked_sub(imm)) {
+            Some(bits @ 1..=32) => Value::Text(bits.to_string()),
+            _ => Value::Invalid,
+        };
+    }
     let size: u64 = if context.field("sx") == Some(1) { 32 } else { 16 };
     let imm = context.field("imm4").unwrap_or(0) << 1 | context.field("i").unwrap_or(0);
     match size.checked_sub(imm) {

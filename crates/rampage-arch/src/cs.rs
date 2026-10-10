@@ -238,26 +238,18 @@ fn classify(arch: Arch, insn: &Insn, detail: &capstone::InsnDetail) -> Flow {
             _ => None,
         });
 
-        let next = address + insn.len() as u64;
+        let next = address.wrapping_add(insn.len() as u64);
         match branch {
             None => Flow::Next,
-            Some(Branch { kind, conditional }) => match kind {
-                Kind::Halt => Flow::Halt,
-                Kind::Return if conditional => Flow::Next,
-                Kind::Return => Flow::Return,
-                // A call to the next instruction reads the program counter (PowerPC `bcl 20, 31, .+4`).
-                Kind::Call { direct: true } if target == Some(next) => Flow::Next,
-                Kind::Call { direct: true } => target.map_or(Flow::IndirectCall, Flow::Call),
-                Kind::Call { direct: false } => Flow::IndirectCall,
-                Kind::Jump { direct: true } => match target {
-                    Some(target) if conditional => Flow::ConditionalJump(target),
-                    Some(target) => Flow::Jump(target),
-                    None if conditional => Flow::Next,
-                    None => Flow::IndirectJump,
-                },
-                Kind::Jump { direct: false } if conditional => Flow::Next,
-                Kind::Jump { direct: false } => Flow::IndirectJump,
-            },
+            Some(Branch { kind, conditional }) => {
+                let kind = match kind {
+                    Kind::Halt => crate::flow::Kind::Halt,
+                    Kind::Return => crate::flow::Kind::Return,
+                    Kind::Call { direct } => crate::flow::Kind::Call(target.filter(|_| direct)),
+                    Kind::Jump { direct } => crate::flow::Kind::Jump(target.filter(|_| direct)),
+                };
+                kind.flow(conditional, next)
+            }
         }
     }
 }
