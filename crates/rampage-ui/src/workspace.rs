@@ -79,6 +79,13 @@ fn text(error: ApiError) -> String {
     error.to_string()
 }
 
+/// An edit being typed: the field, the address, and the text so far.
+pub struct Editing {
+    pub field: rampage_api::annotations::Field,
+    pub address: u64,
+    pub text: String,
+}
+
 pub struct Workspace {
     pub path: PathBuf,
     pub project: Arc<Project>,
@@ -107,6 +114,9 @@ pub struct Workspace {
     pub goto_error: Option<String>,
     /// Hex digits needed for the highest mapped address, so listings drop leading zeros.
     pub address_width: usize,
+    /// The rename or comment dialog, when open.
+    pub editing: Option<Editing>,
+    pub edit_error: Option<String>,
 }
 
 impl Workspace {
@@ -124,6 +134,8 @@ impl Workspace {
         let highest = project.binary.segments.iter().map(|segment| segment.address + segment.size).max().unwrap_or(0);
         let address_width = (64 - highest.leading_zeros() as usize).div_ceil(4).max(4);
         let mut workspace = Self {
+            editing: None,
+            edit_error: None,
             address_width,
             path,
             project,
@@ -189,6 +201,63 @@ impl Workspace {
         }
         self.cursor = address;
         self.scroll_to_cursor = true;
+        self.refresh_cursor_views();
+    }
+
+    /// Opens the rename dialog for the cursor (or the function containing it, from a label line).
+    pub fn begin_rename(&mut self) {
+        let text = self.project.name_at(self.cursor).unwrap_or_default();
+        self.editing = Some(Editing { field: rampage_api::annotations::Field::Name, address: self.cursor, text });
+        self.edit_error = None;
+    }
+
+    pub fn begin_comment(&mut self) {
+        let text = self.project.comment_at(self.cursor).unwrap_or_default();
+        self.editing = Some(Editing { field: rampage_api::annotations::Field::Comment, address: self.cursor, text });
+        self.edit_error = None;
+    }
+
+    /// Applies the open dialog; it stays open with an error if the edit is rejected.
+    pub fn finish_edit(&mut self) {
+        let Some(editing) = &self.editing else { return };
+        let text = editing.text.trim();
+        let value = (!text.is_empty()).then_some(text);
+        let result = match editing.field {
+            rampage_api::annotations::Field::Name => self.project.rename(editing.address, value),
+            rampage_api::annotations::Field::Comment => self.project.comment(editing.address, value),
+        };
+        match result {
+            Ok(_) => {
+                let address = editing.address;
+                self.editing = None;
+                self.annotations_changed(address);
+            }
+            Err(error) => self.edit_error = Some(error.to_string()),
+        }
+    }
+
+    pub fn undo(&mut self) {
+        if let Ok(Some(edit)) = self.project.undo() {
+            self.annotations_changed(edit.address);
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Ok(Some(edit)) = self.project.redo() {
+            self.annotations_changed(edit.address);
+        }
+    }
+
+    /// Refreshes everything that shows names or comments after an edit at `address`.
+    fn annotations_changed(&mut self, address: u64) {
+        if let Job::Done(Ok(functions)) = &mut self.functions
+            && let Ok(index) = functions.binary_search_by_key(&address, |function| function.address)
+        {
+            functions[index].name = self.project.function_name(address);
+            // Filters match on names, so they must be recomputed.
+            self.function_rows = Default::default();
+        }
+        self.listing = None;
         self.refresh_cursor_views();
     }
 

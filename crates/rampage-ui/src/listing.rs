@@ -128,6 +128,9 @@ fn line_ui(ui: &mut Ui, workspace: &Workspace, line: &DisassemblyLine, action: &
                 ui.label(RichText::new(token).color(color).monospace());
             }
         }
+        if let Some(note) = &line.note {
+            ui.label(RichText::new(format!("    ; {note}")).color(theme::NOTE).monospace());
+        }
         if let Some(comment) = &line.comment {
             ui.label(RichText::new(format!("    ; {comment}")).color(theme::COMMENT).monospace());
         }

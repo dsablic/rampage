@@ -16,6 +16,8 @@ pub const REGISTER: Color32 = Color32::from_rgb(0xc6, 0xa0, 0xf6);
 pub const NUMBER: Color32 = Color32::from_rgb(0xe5, 0xc0, 0x7b);
 pub const LINK: Color32 = Color32::from_rgb(0x6c, 0xd0, 0xc4);
 pub const COMMENT: Color32 = Color32::from_rgb(0x8f, 0xb5, 0x73);
+/// The user's own comments.
+pub const NOTE: Color32 = Color32::from_rgb(0xf0, 0xa8, 0xd0);
 pub const LABEL: Color32 = Color32::from_rgb(0xf2, 0xd3, 0x7a);
 pub const WARNING: Color32 = Color32::from_rgb(0xf0, 0x80, 0x70);
 /// Navigation band: code covered by functions, other code, and data.

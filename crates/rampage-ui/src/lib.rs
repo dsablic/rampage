@@ -98,19 +98,27 @@ impl App {
                 .show_leaf_close_all_buttons(false)
                 .show_inside(ui, &mut tabs::Viewer { workspace });
         });
+        if let Some(workspace) = &mut self.workspace {
+            Self::edit_dialog(&ui.ctx().clone(), workspace);
+        }
         self.shortcuts(ui.ctx());
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let Some(workspace) = &mut self.workspace else { return };
-        if ctx.egui_wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() || workspace.editing.is_some() {
             return;
         }
-        let (back, forward, goto) = ctx.input(|input| {
+        let (back, forward, goto, rename, comment, undo, redo) = ctx.input(|input| {
+            let command = input.modifiers.command;
             (
                 input.key_pressed(Key::Escape),
                 input.modifiers.alt && input.key_pressed(Key::ArrowRight),
                 input.key_pressed(Key::G),
+                input.key_pressed(Key::N),
+                input.key_pressed(Key::Semicolon),
+                command && !input.modifiers.shift && input.key_pressed(Key::Z),
+                command && input.modifiers.shift && input.key_pressed(Key::Z),
             )
         });
         if back {
@@ -121,6 +129,49 @@ impl App {
         }
         if goto {
             ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("goto")));
+        }
+        if rename {
+            workspace.begin_rename();
+        }
+        if comment {
+            workspace.begin_comment();
+        }
+        if undo {
+            workspace.undo();
+        }
+        if redo {
+            workspace.redo();
+        }
+    }
+
+    /// The rename or comment dialog.
+    fn edit_dialog(ctx: &egui::Context, workspace: &mut Workspace) {
+        let Some(editing) = &mut workspace.editing else { return };
+        let title = match editing.field {
+            rampage_api::annotations::Field::Name => format!("Rename {:#x}", editing.address),
+            rampage_api::annotations::Field::Comment => format!("Comment {:#x}", editing.address),
+        };
+        let mut done = false;
+        let mut cancel = false;
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 120.0))
+            .show(ctx, |ui| {
+                let field = ui
+                    .add(TextEdit::singleline(&mut editing.text).desired_width(360.0).font(egui::TextStyle::Monospace));
+                field.request_focus();
+                ui.label(RichText::new("Enter to save, Escape to cancel, empty to remove").color(theme::DIM).small());
+                if let Some(error) = &workspace.edit_error {
+                    ui.label(RichText::new(error).color(theme::WARNING));
+                }
+                done = ui.input(|input| input.key_pressed(Key::Enter));
+                cancel = ui.input(|input| input.key_pressed(Key::Escape));
+            });
+        if cancel {
+            workspace.editing = None;
+        } else if done {
+            workspace.finish_edit();
         }
     }
 

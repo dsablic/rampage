@@ -87,3 +87,34 @@ fn large_binary_frames_stay_fast() {
         println!("{tab:?} next frame: {:?}", started.elapsed());
     }
 }
+
+#[test]
+fn rename_dialog_and_user_comments() {
+    let directory = std::env::temp_dir().join(format!("rampage-ui-annotate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("hello-arm64.macho");
+    std::fs::copy(fixture("hello-arm64.macho"), &path).unwrap();
+
+    let mut harness = harness(App::blocking());
+    harness.run();
+    let ctx = harness.ctx.clone();
+    let app = harness.state_mut();
+    app.open(&ctx, path, None);
+    let workspace = app.workspace_mut().unwrap();
+    workspace.goto_text("_main");
+    workspace.select(0x1_0000_0474);
+    workspace.begin_comment();
+    workspace.editing.as_mut().unwrap().text = "builds the greeting pointer".into();
+    workspace.finish_edit();
+    workspace.select(0x1_0000_0468);
+    workspace.begin_rename();
+    workspace.editing.as_mut().unwrap().text = "say_hello".into();
+    workspace.finish_edit();
+    workspace.begin_rename();
+    workspace.editing.as_mut().unwrap().text = "two words".into();
+    workspace.finish_edit();
+    harness.run();
+    harness.snapshot("annotations");
+    std::fs::remove_dir_all(&directory).unwrap();
+}
