@@ -7,6 +7,8 @@ zig cc -target x86_64-linux-musl -O1 -g0 -o bin/hello-x64.elf "$src"
 zig cc -target x86_64-linux-gnu -O1 -g0 -o bin/hello-x64-dyn.elf "$src"
 zig cc -target aarch64-linux-gnu -O1 -g0 -o bin/hello-arm64.elf "$src"
 llvm-strip --strip-debug bin/hello-x64-dyn.elf bin/hello-arm64.elf
+zig cc -target x86_64-linux-gnu -O1 -g0 -fPIC -shared -o bin/libhelper-x64.so src/helper.c
+llvm-strip --strip-debug bin/libhelper-x64.so
 zig cc -target x86_64-windows-gnu -O1 -g0 -o bin/hello-x64.exe "$src"
 rm -f bin/*.pdb
 clang -arch x86_64 -O1 -o bin/hello-x64.macho "$src"
