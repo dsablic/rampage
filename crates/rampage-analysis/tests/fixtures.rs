@@ -157,3 +157,32 @@ fn pe_import_thunks_are_named_without_analysis() {
     let thunk = names.address_of("puts").expect("thunk named puts");
     assert_eq!(binary.read(thunk, 2), Some(&[0xff, 0x25][..]));
 }
+
+#[test]
+fn triage_hashes_measures_and_flags_overlays() {
+    let binary = open("hello-x64.exe");
+    let triage = rampage_analysis::triage::triage(&binary);
+    assert_eq!(triage.image_hashes.sha256.len(), 64);
+    assert_eq!(triage.image_hashes.md5.len(), 32);
+    assert!(triage.file_hashes.is_none());
+    assert_eq!(triage.entropy_profile.len(), 64);
+    assert!((0.0..=8.0).contains(&triage.entropy));
+    assert_eq!(triage.imphash.as_deref().map(str::len), Some(32));
+    assert!(triage.sections.iter().any(|section| section.name == ".text" && section.perms == "r-x"));
+
+    let overlay = Binary::open(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/malformed/overlay.exe"),
+    )
+    .unwrap();
+    let triage = rampage_analysis::triage::triage(&overlay);
+    assert_eq!(triage.overlay.as_ref().map(|overlay| overlay.size), Some(512));
+    assert!(triage.hints.iter().any(|hint| hint.contains("overlay")), "{:?}", triage.hints);
+}
+
+#[test]
+fn triage_of_a_universal_binary_hashes_the_slice_and_the_file() {
+    let triage = rampage_analysis::triage::triage(&open("hello-universal.macho"));
+    let file = triage.file_hashes.expect("file hashes for a slice");
+    assert_ne!(file.sha256, triage.image_hashes.sha256);
+    assert!(triage.file_size.unwrap() > triage.image_size);
+}
