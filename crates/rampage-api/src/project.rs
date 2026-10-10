@@ -91,12 +91,13 @@ impl Project {
     }
 
     /// The address a name refers to: a user name, a symbol, export or stub name, or an import name, which finds
-    /// its ELF `<import>@plt` stub.
+    /// its ELF `<import>@plt` stub, or else its import slot.
     fn address_named(&self, annotations: &Annotations, name: &str) -> Option<u64> {
         annotations
             .address_of(name)
             .or_else(|| self.names.address_of(name))
             .or_else(|| self.names.address_of(&format!("{name}@plt")))
+            .or_else(|| self.names.address_of(&format!("__imp_{name}")))
     }
 
     /// Names `address` (`None` removes the user's name). Names must be identifiers not used elsewhere, so they

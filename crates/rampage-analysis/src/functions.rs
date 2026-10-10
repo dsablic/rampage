@@ -50,6 +50,12 @@ pub fn analyze(binary: &Binary) -> Result<Program, UnsupportedArch> {
 /// Sections that hold one small jump-through-a-slot stub per import.
 const STUB_SECTIONS: [&str; 6] = ["__stubs", "__auth_stubs", ".plt", ".plt.sec", ".plt.got", ".iplt"];
 
+/// Padding before a stub: a nop (s390x spells it `bcr 0, %r0`), or fill of one repeated byte (lld's 0xd4 traps on
+/// ARM, int3, zeros).
+fn is_padding(code: &[u8], text: &str) -> bool {
+    text.starts_with("nop") || text.starts_with("bcr 0,") || code.iter().all(|&byte| Some(&byte) == code.first())
+}
+
 /// Names the stubs in stub sections (Mach-O `__stubs`, ELF `.plt`) after the import whose slot each one jumps
 /// through. A stub runs from just after the previous one's final jump (skipping NOP padding) to its own.
 pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
@@ -66,7 +72,9 @@ pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
             let Some(bytes) = binary.code_from(address) else { break };
             let insn = decoder.decode(bytes, address);
             let next = address + u64::from(insn.len.max(1));
-            if stub_start == address && decoder.format(bytes, address).starts_with("nop") {
+            if stub_start == address
+                && is_padding(&bytes[..usize::from(insn.len).min(bytes.len())], &decoder.format(bytes, address))
+            {
                 stub_start = next;
             } else if let Some(name) = insn.data_ref.and_then(slot_name).filter(|_| !named) {
                 // ELF stubs take objdump's `@plt` suffix: in a shared library the import may be one of its own

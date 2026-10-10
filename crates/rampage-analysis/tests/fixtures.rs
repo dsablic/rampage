@@ -108,6 +108,9 @@ fn stubs_are_named_after_the_imports_they_jump_through() {
         ("hello-arm64.macho", "_puts", "_puts"),
         ("hello-x64-dyn.elf", "puts", "puts@plt"),
         ("hello-arm64.elf", "puts", "puts@plt"),
+        ("hello-arm.elf", "puts", "puts@plt"),
+        ("hello-riscv64.elf", "puts", "puts@plt"),
+        ("hello-s390x.elf", "puts", "puts@plt"),
     ] {
         let binary = open(name);
         let program = functions::analyze(&binary).unwrap();
@@ -245,4 +248,44 @@ fn delay_slots_stay_in_their_branch_block() {
     let end = main.blocks.last().unwrap().end;
     let jump = end - 8;
     assert_eq!(decoder.format(binary.code_from(jump).unwrap(), jump), "jr $ra");
+}
+
+#[test]
+fn mips_calls_through_the_got_reach_named_slots_and_strings() {
+    for name in ["hello-mips.elf", "hello-mipsel.elf"] {
+        let binary = open(name);
+        let program = functions::analyze(&binary).unwrap();
+        let names = functions::Names::new(&binary);
+        let main = program.function_at(symbol_address(&binary, "main")).unwrap();
+        let slot = names.address_of("__imp_puts").unwrap_or_else(|| panic!("{name}: puts slot unnamed"));
+        assert!(program.xrefs_to(slot).iter().any(|xref| main.contains(xref.from)), "{name}: no load of the slot");
+        let greeting = strings::scan(&binary, 4).into_iter().find(|string| string.text == "rampage fixture greeting");
+        let greeting = greeting.unwrap_or_else(|| panic!("{name}: greeting missing")).address;
+        assert!(
+            program.xrefs_to(greeting).iter().any(|xref| main.contains(xref.from)),
+            "{name}: greeting unreferenced"
+        );
+    }
+}
+
+#[test]
+fn risc_architectures_reference_the_greeting_from_main() {
+    for name in [
+        "hello-arm.elf",
+        "hello-thumb.elf",
+        "hello-ppc.elf",
+        "hello-ppc64le.elf",
+        "hello-riscv64.elf",
+        "hello-s390x.elf",
+    ] {
+        let binary = open(name);
+        let program = functions::analyze(&binary).unwrap();
+        let main = program.function_at(symbol_address(&binary, "main")).unwrap();
+        let greeting = strings::scan(&binary, 4).into_iter().find(|string| string.text == "rampage fixture greeting");
+        let greeting = greeting.unwrap_or_else(|| panic!("{name}: greeting missing")).address;
+        assert!(
+            program.xrefs_to(greeting).iter().any(|xref| main.contains(xref.from)),
+            "{name}: greeting unreferenced"
+        );
+    }
 }

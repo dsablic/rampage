@@ -30,18 +30,52 @@ pub(crate) fn collect(parsed: &object::File, image: &[u8], warnings: &mut Vec<St
 }
 
 fn elf(parsed: &object::File) -> Vec<ImportSlot> {
-    let (Some(relocations), Some(symbols)) = (parsed.dynamic_relocations(), parsed.dynamic_symbol_table()) else {
+    let Some(symbols) = parsed.dynamic_symbol_table() else { return Vec::new() };
+    // Imports are undefined symbols; COPY relocations name data objects the executable defines itself.
+    let slot = |address: u64, index: object::SymbolIndex| {
+        let symbol = symbols.symbol_by_index(index).ok()?;
+        if !symbol.is_undefined() && symbol.kind() != object::SymbolKind::Text {
+            return None;
+        }
+        let name = symbol.name().ok()?;
+        (!name.is_empty()).then(|| ImportSlot { address, name: name.to_owned(), library: None })
+    };
+    let mut slots: Vec<ImportSlot> = parsed
+        .dynamic_relocations()
+        .into_iter()
+        .flatten()
+        .filter_map(|(address, relocation)| match relocation.target() {
+            RelocationTarget::Symbol(index) => slot(address, index),
+            _ => None,
+        })
+        .collect();
+    slots.extend(mips_global_got(parsed).into_iter().filter_map(|(address, index)| slot(address, index)));
+    slots
+}
+
+/// MIPS GOT entries for dynamic symbols, which take no relocations: after `DT_MIPS_LOCAL_GOTNO` local entries,
+/// the GOT holds one entry per dynamic symbol from `DT_MIPS_GOTSYM` on. Returns each entry's address and symbol.
+fn mips_global_got(parsed: &object::File) -> Vec<(u64, object::SymbolIndex)> {
+    use crate::details::{DT_MIPS_GOTSYM, DT_MIPS_LOCAL_GOTNO, DT_PLTGOT, dynamic};
+    let entries = match parsed {
+        object::File::Elf32(file) if parsed.architecture() == object::Architecture::Mips => dynamic(file).0,
+        object::File::Elf64(file) if parsed.architecture() == object::Architecture::Mips64 => dynamic(file).0,
+        _ => return Vec::new(),
+    };
+    let value = |tag| entries.iter().find(|&&(entry_tag, _)| entry_tag == tag).map(|&(_, value)| value);
+    let (Some(got), Some(local), Some(first)) = (value(DT_PLTGOT), value(DT_MIPS_LOCAL_GOTNO), value(DT_MIPS_GOTSYM))
+    else {
         return Vec::new();
     };
-    relocations
-        .filter_map(|(address, relocation)| {
-            let RelocationTarget::Symbol(index) = relocation.target() else { return None };
-            let symbol = symbols.symbol_by_index(index).ok()?;
-            if !symbol.is_undefined() && symbol.kind() != object::SymbolKind::Text {
-                return None;
-            }
-            let name = symbol.name().ok()?;
-            (!name.is_empty()).then(|| ImportSlot { address, name: name.to_owned(), library: None })
+    // The iterator skips the null symbol at index 0, so count by the highest index.
+    let count =
+        parsed.dynamic_symbol_table().and_then(|symbols| symbols.symbols().map(|symbol| symbol.index().0).max());
+    let count = count.map_or(0, |last| last as u64 + 1);
+    let size: u64 = if parsed.is_64() { 8 } else { 4 };
+    (first..count)
+        .filter_map(|index| {
+            let entry = local.checked_add(index - first)?.checked_mul(size)?;
+            Some((got.checked_add(entry)?, object::SymbolIndex(usize::try_from(index).ok()?)))
         })
         .collect()
 }

@@ -352,6 +352,9 @@ fn utc(seconds: i64) -> String {
 const PT_GNU_STACK: u32 = 0x6474_e551;
 const PT_GNU_RELRO: u32 = 0x6474_e552;
 const DT_NEEDED: u64 = 1;
+pub(crate) const DT_PLTGOT: u64 = 3;
+pub(crate) const DT_MIPS_LOCAL_GOTNO: u64 = 0x7000_000a;
+pub(crate) const DT_MIPS_GOTSYM: u64 = 0x7000_0013;
 const DT_STRTAB: u64 = 5;
 const DT_STRSZ: u64 = 10;
 const DT_SONAME: u64 = 14;
@@ -412,7 +415,9 @@ fn elf<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>)
 
 /// The `(d_tag, d_val)` pairs of the PT_DYNAMIC segment, and the dynamic string table DT_STRTAB names. Both are
 /// found through the program headers, which loaders use, so they survive stripped section headers.
-fn dynamic<'data, Elf: FileHeader, R: ReadRef<'data>>(file: &ElfFile<'data, Elf, R>) -> (Vec<(u64, u64)>, &'data [u8]) {
+pub(crate) fn dynamic<'data, Elf: FileHeader, R: ReadRef<'data>>(
+    file: &ElfFile<'data, Elf, R>,
+) -> (Vec<(u64, u64)>, &'data [u8]) {
     let endian = file.endian();
     let headers = file.elf_program_headers();
     let data = file.data();
