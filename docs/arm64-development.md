@@ -26,7 +26,11 @@ and select operations against fixed boundary results. It requires clang and an S
 
 Ghidra and IDA executable comparisons require installations and recorded versions. Neither is currently on
 the command search path in this environment, so no accuracy-parity result is claimed. A successful stopped-process
-LLDB capture is also still a separate integration gate.
+The controlled stopped-process capture passes on Apple LLDB `2103.0.34.103` with ASLR enabled.
+The exporter captured executable bytes, 82 module records and 34 selected-thread registers; the captured
+function lifted completely and its UUID/header slide mapped back to the original image address.
+The opt-in regression runs with `RAMPAGE_LLDB_LIVE=1 python3 -m pytest tools/test_lldb_live.py` after building
+the CLI. Other debugger/platform combinations and session persistence remain separate gates.
 
 `rampage compare program --reference export.json --json` compares function starts against a reference export:
 
@@ -53,6 +57,9 @@ Function summaries include partial IR, SSA, constant/stack evidence and SSA-styl
 labels, phi nodes, unknowns and explicit barriers; `structured: false` means no structured-source recovery is
 claimed. Input registers are argument evidence, not inferred function signatures. Calls use a conservative
 integer AAPCS64 model, preserve callee-saved registers and invalidate caller-saved values and memory.
+RET preserves its explicit target, memory version and X0/X1 candidate definitions. Constant candidates are
+reported per return site, but do not establish a return type or even that the function returns a value.
+Speculative return candidates alone do not count as argument-use evidence.
 Function summaries expose immediate dominators and natural-loop membership/backedges/exits. This is structural
 evidence for later control-flow reconstruction, not a claim that irreducible cycles have structured source loops.
 Selected reducible shapes also expose `structured_control` regions referencing SSA blocks: sequences, branches

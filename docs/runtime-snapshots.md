@@ -86,7 +86,9 @@ bounded constant and entry-SP-relative stack-slot evidence; conflicting predeces
 Optional `modules` entries have `name`, `path`, `uuid`, `image_base` and `runtime_base`. Optional `registers`
 entries have hexadecimal `thread_id`/`value` and a register `name`. Both lists are limited to 4,096 entries;
 module UUIDs and per-thread register names must be unique. The LLDB adapter exports those fields from the
-stopped target without evaluating expressions or executing target code.
+stopped target without evaluating expressions or executing target code. The opt-in controlled ARM64 integration
+test verifies live export and original-image correlation with ASLR enabled; the earlier launch stall was avoided
+by leaving ASLR enabled rather than requesting its disablement.
 
 `rampage correlate capture.json --original module.dylib --module <uuid> --at 0x1010` checks the recorded UUID
 against the explicitly supplied Mach-O image and translates the runtime address using the recorded header

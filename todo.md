@@ -10,7 +10,7 @@
    structured conditions/loops and types. Do not claim complete source recovery from partial IR.
 4. [ ] Jump tables/indirect flow: recover only bounded, validated tables and targets, with evidence and no guesses
    for mutable/authenticated pointers. Extend the controlled corpus before enabling new recovery rules.
-5. [ ] Runtime capture: successful permitted live capture, module identities/slides, original-file correlation
+5. [x] Runtime capture: successful permitted live capture, module identities/slides, original-file correlation
    and register provenance. Existing exporter mocks alone do not satisfy this gate.
 6. [ ] Accuracy benchmark: checked fixture results for instructions, CFGs, xrefs and semantics, plus versioned
    IDA/Ghidra comparison imports when those tools are available. Record missing tools rather than claiming parity.
@@ -19,8 +19,8 @@ Current ARM64 increment: integer logical/shift/multiply/divide/wide-move semanti
 ADR/ADRP, common 32/64-bit scalar and 64-bit pair memory effects, conservative integer AAPCS64 calls,
 monotone constant/entry-SP-relative stack evidence, and bounded SSA-style pseudocode. Native ARM64 evaluator
 comparisons and controlled fixtures cover these cases; full semantic/ABI/structured-source coverage is open.
-Ghidra/IDA are not on the command path, and live LLDB capture remains unverified. Ghidra's architecture is a
-reference; no Ghidra implementation code or specifications have been incorporated.
+Ghidra/IDA are not on the command path. Controlled live LLDB capture passes with ASLR enabled.
+Ghidra's architecture is a reference; no Ghidra implementation code or specifications have been incorporated.
 Explicit bounded absolute64/signed-relative32 jump-table inspection is available without guessing dispatch
 bounds or injecting CFG edges. Snapshots record bounded module/register provenance; explicit UUID-matched
 Mach-O correlation maps runtime header slides without opening metadata-supplied paths. Function-start
@@ -32,6 +32,7 @@ Selected sequence/branch/single-body-loop control regions are represented over S
 header execution and unsupported graph shapes remain explicit. This does not yet constitute typed source recovery.
 Conditional selects and common bitfield shift/extract aliases now retain semantics in IR/SSA. Optimized native
 C fixtures exercise arithmetic and select paths end-to-end, alongside boundary-level execution comparisons.
+Per-RET integer-return candidates retain X0/X1 definitions and constants without claiming a recovered signature.
 
 ## General-purpose reverse-engineering roadmap
 
@@ -58,8 +59,8 @@ read-only triage inputs, never bypass or patch fixtures. Runtime tests use progr
 - [x] Sparse snapshot loader with virtual addresses, region/seed validation, provenance and resource bounds.
 - [x] Snapshot loading through CLI/API/MCP/UI and controlled integration fixtures.
 - [x] Read-only LLDB snapshot export command with preflight validation and no-overwrite behavior.
-  Mocked export tests and real command loading pass; live process launch stalled in this environment, so live
-  capture remains an explicit unverified integration gate.
+  Mocked export tests and the opt-in controlled live ARM64 capture pass with ASLR left enabled. Module UUID/header
+  mapping and selected-thread register provenance are verified against the explicitly supplied original image.
 - [x] AArch64 conservative ADR/ADRP/ADD/MOV/LDR/BR/BLR tracking with stores/calls invalidating memory inference.
   Writable capture regions are excluded from pointer evidence until reaching-store analysis exists; joins do
   not treat a frozen file as proof that later loads keep their captured value.
@@ -75,7 +76,7 @@ read-only triage inputs, never bypass or patch fixtures. Runtime tests use progr
   zero-extended 32-bit results and full semantic barriers; exposed through structural function summaries.
   Memory access widths and conditional polarity/tested bits are retained. Generated-definition and input-node
   budgets reject amplification before SSA allocation.
-  Minimal phi placement, dominance queries, alias analysis and decompilation remain open.
+  Minimal phi placement, alias analysis and decompilation remain open; bounded dominance queries are available.
 
 Full instruction semantics, production decompilation, arbitrary debugger control and multi-module runtime
 resolution are separate substantial deliverables; keep their acceptance cases explicit rather than calling
