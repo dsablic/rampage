@@ -81,8 +81,11 @@ fn disassembly_labels_known_names() {
 }
 
 #[test]
-fn analysis_of_unsupported_architecture_is_an_error() {
+fn arm64_binaries_are_analyzed() {
     let project = Session::default().open(&fixture("hello-arm64.macho"), None).unwrap();
-    assert!(matches!(project.functions(&FunctionsQuery::default()), Err(ApiError::Unsupported(_))));
-    assert!(project.summary().symbols > 0);
+    let functions = project.functions(&FunctionsQuery::default()).unwrap();
+    assert!(functions.items.iter().any(|function| function.name == "_main"), "{:?}", functions.items);
+    let lines = project.disassemble(Some("_main"), 2).unwrap();
+    assert_eq!(lines[0].text, "stp x29, x30, [sp, #-16]!");
+    assert_eq!(lines[1].text, "mov x29, sp");
 }

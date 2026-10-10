@@ -1,3 +1,4 @@
+pub mod a64;
 pub mod hex;
 mod x86;
 
@@ -89,8 +90,13 @@ pub struct Insn {
 }
 
 pub trait Disassembler {
-    /// Decodes one instruction. Undecodable bytes yield a one-byte `Flow::Invalid` instruction.
+    /// Decodes one instruction. Undecodable bytes yield a `Flow::Invalid` instruction.
+    ///
+    /// Decoders may carry state from one instruction to the next within a straight-line run (AArch64 builds
+    /// addresses from ADRP plus ADD or a load); call [`Disassembler::reset`] wherever control flow joins.
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn;
+    /// Forgets state carried between instructions, such as AArch64 ADRP pages.
+    fn reset(&mut self) {}
     /// Renders one instruction as assembly text.
     fn format(&mut self, bytes: &[u8], address: u64) -> String;
 }
@@ -103,6 +109,6 @@ pub fn decoder_for(arch: Arch) -> Result<Box<dyn Disassembler>, UnsupportedArch>
     match arch {
         Arch::X86 => Ok(Box::new(x86::X86Disassembler::new(32))),
         Arch::X86_64 => Ok(Box::new(x86::X86Disassembler::new(64))),
-        Arch::Aarch64 => Err(UnsupportedArch(arch)),
+        Arch::Aarch64 => Ok(Box::new(a64::A64Disassembler::default())),
     }
 }

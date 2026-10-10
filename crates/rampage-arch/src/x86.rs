@@ -227,9 +227,4 @@ mod tests {
         let insn = &decode_all(&[0xc7, 0xf8, 0x10, 0, 0, 0], 0x1000)[0];
         assert_eq!(insn.flow, Flow::ConditionalJump(0x1016));
     }
-
-    #[test]
-    fn aarch64_is_not_supported_yet() {
-        assert!(decoder_for(Arch::Aarch64).is_err());
-    }
 }

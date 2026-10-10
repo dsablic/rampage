@@ -78,8 +78,11 @@ fn disasm_at_symbol_starts_at_that_symbol() {
 }
 
 #[test]
-fn disasm_on_arm64_reports_unsupported_architecture() {
-    rampage(&["disasm"], "hello-arm64.macho").failure().stderr(predicates::str::contains("unsupported architecture"));
+fn disasm_on_arm64_prints_a64() {
+    rampage(&["disasm", "--at", "_main", "--count", "4"], "hello-arm64.macho")
+        .success()
+        .stdout(predicates::str::contains("stp x29, x30, [sp, #-16]!"))
+        .stdout(predicates::str::contains("adrp x0, 0x100000000"));
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use rampage_analysis::discover::XrefKind;
 use rampage_analysis::{functions, strings};
 use rampage_loaders::Binary;
 
@@ -78,8 +79,19 @@ fn analysis_is_identical_across_thread_counts() {
 }
 
 #[test]
-fn analysis_of_arm64_is_unsupported() {
-    assert!(functions::analyze(&open("hello-arm64.macho")).is_err());
+fn analysis_of_arm64_follows_calls_and_adrp_string_references() {
+    let binary = open("hello-arm64.macho");
+    let program = functions::analyze(&binary).unwrap();
+    let main = program.function_at(symbol_address(&binary, "_main")).expect("main analyzed");
+    assert!(main.instruction_count >= 6, "{main:?}");
+    // main calls the puts stub, which discovery adds as a function.
+    let call = program.xrefs.iter().find(|xref| xref.kind == XrefKind::Call && main.contains(xref.from));
+    let stub = call.expect("call from main").to;
+    assert!(program.function_at(stub).is_some());
+    // ADRP + ADD form the greeting's address.
+    let greeting = strings::scan(&binary, 4).into_iter().find(|s| s.text == "rampage fixture greeting").unwrap();
+    let references = program.xrefs_to(greeting.address);
+    assert!(references.iter().any(|xref| xref.kind == XrefKind::Data && main.contains(xref.from)), "{references:?}");
 }
 
 #[test]
