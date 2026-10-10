@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+capstone.workspace = true
 iced-x86.workspace = true
 serde.workspace = true
 thiserror.workspace = true
