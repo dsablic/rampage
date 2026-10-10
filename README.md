@@ -4,9 +4,9 @@ A high-performance, open source reverse engineering toolkit written in Rust. The
 IDA Pro alternative where AI agents are first-class clients: a scriptable CLI and an MCP server come first,
 and a GUI arrives later as one more client of the same API.
 
-Status: early. Milestones 1-4 are done: the one-shot CLI, recursive-descent function discovery with
-cross-references, the MCP server, and an AArch64 decoder generated from Arm's specification. See
-[the design](docs/plans/2026-10-10-rampage-design.md) for the roadmap.
+Status: early. Milestones 1-5 are done: the one-shot CLI, recursive-descent function discovery with
+cross-references, the MCP server, an AArch64 decoder generated from Arm's specification, and saved annotations.
+Triage and a first desktop UI are in. See [the design](docs/plans/2026-10-10-rampage-design.md) for the roadmap.
 
 ## Supported today
 
@@ -39,6 +39,9 @@ rampage disasm  <file> [--at <addr|symbol>] [--count N]
 rampage strings <file> [--min-len N]         # ASCII and UTF-16LE
 rampage funcs   <file> [--name TEXT]         # recursive-descent function discovery
 rampage xrefs   <file> --to|--from <addr|name>
+rampage rename  <file> <addr|name> <new name> [--clear]
+rampage comment <file> <addr|name> <text> [--clear]
+rampage annotations <file>                   # the user's names and comments
 rampage mcp                                  # MCP server on stdin/stdout
 
 # global flags
@@ -49,11 +52,28 @@ rampage mcp                                  # MCP server on stdin/stdout
 Addresses accept `0x` hex, decimal, symbol and export names, or `sub_<hex>`. In JSON output every address is
 a `"0x…"` string, because JSON numbers lose precision above 2^53 in common consumers.
 
+Names and comments are saved beside the binary in `<file>.rampage` (`<file>.<arch>.rampage` for a slice of a
+universal binary): an append-only JSON Lines log of edits, each recording the value it replaced, so undo is just
+another edit and the file is a full history.
+
+## Desktop UI
+
+```
+cargo run --release -p rampage-ui -- <file> [--arch aarch64]
+```
+
+An egui app over the same API: docked functions, strings, imports and exports lists, a disassembly listing with
+clickable references (or a hex view for data), cross-references, triage, and a navigation band across the image.
+Keys: G go to, Esc back, N rename, `;` comment, Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo. Drop a file on the window
+to open it. Analysis runs in the background; on Chrome's framework (190,000 functions, 930,000 strings) frames
+take a few milliseconds. `cargo test -p rampage-ui` renders the UI offscreen into `crates/rampage-ui/tests/snapshots`.
+
 ## Using it from an AI agent
 
 `rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the tools
-`triage`, `binary_info`, `list_functions`, `disassemble`, `list_strings`, `list_imports`, `list_exports` and
-`xrefs`. Analysis runs once per binary and is
+`triage`, `binary_info`, `list_functions`, `disassemble`, `list_strings`, `list_imports`, `list_exports`, `xrefs`,
+`rename`, `set_comment`, `undo` and `list_annotations`. Agents' names and comments land in the same log the UI and
+CLI use. Analysis runs once per binary and is
 cached for the session. To add it to Claude Code:
 
 ```
@@ -76,6 +96,7 @@ arm64 slice in about 1.4 s. Repeated MCP queries are answered from the cached an
 | `rampage-api` | Session and query layer shared by every client |
 | `rampage-mcp` | MCP server |
 | `rampage-cli` | The `rampage` binary |
+| `rampage-ui` | The desktop UI |
 
 `tools/a64gen` regenerates `crates/rampage-arch/src/a64/spec.rs` from an AARCHMRS release:
 `cargo run --release -p a64gen -- <AARCHMRS directory> crates/rampage-arch/src/a64/spec.rs`.
