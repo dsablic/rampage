@@ -168,7 +168,8 @@ pub fn format(decoded: &Decoded, address: u64, labels: LabelStyle) -> Option<Str
         let decoded = Decoded { syntax, ..*decoded };
         operands::render(&operands::Context { decoded: &decoded, address, labels }, operand)
     })?;
-    let mut text = text.replace(" ,", ",").replace(" ]", "]").replace("  ", " ").replace("}^", "} ^");
+    let mut text =
+        text.replace(" ,", ",").replace(" ]", "]").replace("  ", " ").replace("}^", "} ^").replace("#0.0", "#0");
     let key = (decoded.encoding.name, decoded.mnemonic());
     if decoded.set == Set::T32 && wide::WIDE.binary_search(&key).is_ok() {
         // The qualifier follows the mnemonic and any condition (`addeq.w`).
