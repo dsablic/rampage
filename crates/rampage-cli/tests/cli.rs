@@ -261,3 +261,28 @@ fn triage_imports_and_exports_commands() {
     rampage(&["imports"], "hello-x64-dyn.elf").success().stdout(predicates::str::contains("puts"));
     rampage(&["exports"], "hello-x64.exe").success().stdout(predicates::str::contains("add"));
 }
+
+#[test]
+fn rename_and_comment_persist_beside_the_binary() {
+    let directory = std::env::temp_dir().join(format!("rampage-cli-annotate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("hello-x64.elf");
+    std::fs::copy(fixture("hello-x64.elf"), &path).unwrap();
+    let run = |args: &[&str]| assert_cmd::Command::cargo_bin("rampage").unwrap().args(args).arg(&path).assert();
+    let path_text = path.to_str().unwrap();
+    assert_cmd::Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["rename", path_text, "main", "start_here"])
+        .assert()
+        .success();
+    assert_cmd::Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["comment", path_text, "start_here", "prints the greeting"])
+        .assert()
+        .success();
+    run(&["funcs", "--name", "start_here"]).success().stdout(predicates::str::contains("start_here"));
+    run(&["annotations"]).success().stdout(predicates::str::contains("prints the greeting"));
+    assert!(directory.join("hello-x64.elf.rampage").exists());
+    std::fs::remove_dir_all(&directory).unwrap();
+}

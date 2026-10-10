@@ -72,6 +72,30 @@ enum Command {
         #[arg(long)]
         contains: Option<String>,
     },
+    /// Name an address; the name is saved beside the binary in <file>.rampage
+    Rename {
+        file: PathBuf,
+        /// Address or current name
+        at: String,
+        /// The new name (omit with --clear)
+        name: Option<String>,
+        /// Remove the user's name instead
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Comment an address; saved beside the binary in <file>.rampage
+    Comment {
+        file: PathBuf,
+        /// Address or name
+        at: String,
+        /// The comment (omit with --clear)
+        text: Option<String>,
+        /// Remove the comment instead
+        #[arg(long)]
+        clear: bool,
+    },
+    /// List the user's names and comments
+    Annotations { file: PathBuf },
     /// Serve the Model Context Protocol over stdin/stdout for AI agents
     Mcp,
     /// List code and data cross-references to or from an address, symbol or function
@@ -137,6 +161,9 @@ fn main() -> ExitCode {
         Command::Exports { file, contains } => {
             commands::exports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
         }
+        Command::Rename { file, at, name, clear } => commands::rename(&file, &at, name.as_deref(), clear, &options),
+        Command::Comment { file, at, text, clear } => commands::comment(&file, &at, text.as_deref(), clear, &options),
+        Command::Annotations { file } => commands::annotations(&mut out, &file, &options),
         Command::Mcp => unreachable!("handled before opening stdout"),
     }
     .and_then(|()| out.flush().map_err(Into::into));

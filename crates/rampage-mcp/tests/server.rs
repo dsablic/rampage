@@ -51,11 +51,15 @@ async fn lists_all_tools_with_instructions() {
     let expected = [
         "binary_info",
         "disassemble",
+        "list_annotations",
         "list_exports",
         "list_functions",
         "list_imports",
         "list_strings",
+        "rename",
+        "set_comment",
         "triage",
+        "undo",
         "xrefs",
     ];
     assert_eq!(names, expected);
@@ -138,4 +142,28 @@ async fn triage_and_imports_describe_a_binary() {
     assert_eq!(imports["items"][0]["library"], "libc.so.6");
     assert!(imports["items"][0]["slot"].as_str().unwrap().starts_with("0x"));
     client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn agents_rename_and_comment() {
+    let directory = std::env::temp_dir().join(format!("rampage-mcp-annotate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("hello-arm64.macho");
+    std::fs::copy(fixture("hello-arm64.macho"), &path).unwrap();
+    let path = path.to_str().unwrap();
+    let client = connect().await;
+    let renamed = json_of(&call(&client, "rename", json!({ "path": path, "at": "_main", "name": "say_hello" })).await);
+    assert_eq!(renamed["changed"], true);
+    json_of(&call(&client, "set_comment", json!({ "path": path, "at": "say_hello", "text": "entry" })).await);
+    let functions = json_of(&call(&client, "list_functions", json!({ "path": path, "name_contains": "say_" })).await);
+    assert_eq!(functions["items"][0]["name"], "say_hello");
+    let list = json_of(&call(&client, "list_annotations", json!({ "path": path })).await);
+    assert_eq!(list["comments"][0]["text"], "entry");
+    let undone = json_of(&call(&client, "undo", json!({ "path": path })).await);
+    assert_eq!(undone["field"], "comment");
+    let bad = call(&client, "rename", json!({ "path": path, "at": "say_hello", "name": "two words" })).await;
+    assert_eq!(bad.is_error, Some(true));
+    client.cancel().await.unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
 }

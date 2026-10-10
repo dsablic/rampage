@@ -23,7 +23,8 @@ are hex strings like \"0x401000\". Wherever a tool takes an address you may also
 name (an import name finds its stub) or a sub_<hex> name. Start with triage for hashes, entropy, hardening and \
 packing hints, or binary_info for the layout; then list_functions (filter with name_contains, page with \
 offset/limit), disassemble a function, and follow references with xrefs. list_imports and list_strings are good \
-starting points for finding behavior.";
+starting points for finding behavior. Record findings with rename and set_comment: they persist beside the binary \
+and are shared with the person using the rampage UI.";
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BinaryArgs {
@@ -55,6 +56,33 @@ pub struct ListArgs {
     pub binary: BinaryArgs,
     #[serde(flatten)]
     pub query: ListQuery,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RenameArgs {
+    #[serde(flatten)]
+    pub binary: BinaryArgs,
+    /// The address or current name to rename.
+    pub at: String,
+    /// The new name; omit or pass null to remove the user's name.
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CommentArgs {
+    #[serde(flatten)]
+    pub binary: BinaryArgs,
+    /// The address or name to comment.
+    pub at: String,
+    /// The comment; omit or pass null to remove it.
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct EditResult {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    address: u64,
+    changed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -156,6 +184,41 @@ impl RampageServer {
         let mut query = args.query;
         query.limit = clamp_page(query.limit);
         self.run(args.binary, move |project| Ok(project.exports(&query))).await
+    }
+
+    #[tool(description = "Name a function, label or data address. Names show up everywhere (listings, \
+                          disassembly, xrefs) for every client and are saved beside the binary in \
+                          <file>.rampage, so record what you learn as you go. Names must be unique identifiers.")]
+    async fn rename(&self, Parameters(args): Parameters<RenameArgs>) -> Result<CallToolResult, ErrorData> {
+        let (at, name) = (args.at, args.name);
+        self.run(args.binary, move |project| {
+            let address = project.resolve(&at)?;
+            let changed = project.rename(address, name.as_deref())?;
+            Ok(EditResult { address, changed })
+        })
+        .await
+    }
+
+    #[tool(description = "Comment an instruction or data address. Comments appear in disassembly (`note`) and are \
+                          saved beside the binary.")]
+    async fn set_comment(&self, Parameters(args): Parameters<CommentArgs>) -> Result<CallToolResult, ErrorData> {
+        let (at, text) = (args.at, args.text);
+        self.run(args.binary, move |project| {
+            let address = project.resolve(&at)?;
+            let changed = project.comment(address, text.as_deref())?;
+            Ok(EditResult { address, changed })
+        })
+        .await
+    }
+
+    #[tool(description = "Undo the last rename or comment made in this session. Returns the edit undone, or null.")]
+    async fn undo(&self, Parameters(args): Parameters<BinaryArgs>) -> Result<CallToolResult, ErrorData> {
+        self.run(args, |project| project.undo()).await
+    }
+
+    #[tool(description = "All user names and comments of a binary, by address.")]
+    async fn list_annotations(&self, Parameters(args): Parameters<BinaryArgs>) -> Result<CallToolResult, ErrorData> {
+        self.run(args, |project| Ok(project.annotation_list())).await
     }
 
     #[tool(description = "Functions found by recursive-descent analysis, sorted by address, with size, block and \

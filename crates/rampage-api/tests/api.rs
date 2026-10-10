@@ -143,3 +143,45 @@ fn imports_with_the_same_name_keep_their_own_slots() {
     assert_eq!(slots.len(), 2);
     assert_ne!(slots[0], slots[1]);
 }
+
+/// A copy of a fixture in a fresh temporary directory, so edits write their log there.
+fn scratch_copy(name: &str, test: &str) -> PathBuf {
+    let directory = std::env::temp_dir().join(format!("rampage-api-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(name);
+    std::fs::copy(fixture(name), &path).unwrap();
+    path
+}
+
+#[test]
+fn renames_and_comments_show_everywhere_and_persist() {
+    let path = scratch_copy("hello-arm64.macho", "annotate");
+    let project = Session::default().open(&path, None).unwrap();
+    let main = project.resolve("_main").unwrap();
+    assert!(project.rename(main, Some("entry_logic")).unwrap());
+    assert!(project.comment(main + 0xc, Some("greeting pointer")).unwrap());
+
+    assert_eq!(project.resolve("entry_logic").unwrap(), main);
+    let functions = project.functions(&FunctionsQuery::default()).unwrap();
+    assert!(functions.items.iter().any(|function| function.name == "entry_logic"));
+    let lines = project.disassemble(Some("entry_logic"), 4).unwrap();
+    assert_eq!(lines[0].label.as_deref(), Some("entry_logic"));
+    assert_eq!(lines[3].note.as_deref(), Some("greeting pointer"));
+    let calls = project.xrefs(&XrefQuery::From(main)).unwrap();
+    assert!(calls.iter().all(|row| row.from_function.as_deref() == Some("entry_logic")));
+
+    // Names stay unique identifiers.
+    assert!(project.rename(main, Some("has space")).is_err());
+    assert!(project.rename(main, Some("_puts")).is_err());
+    assert!(project.rename(main, Some("sub_1234")).is_err());
+
+    // Undo and redo, then a fresh session replays the log.
+    project.undo().unwrap();
+    assert_eq!(project.comment_at(main + 0xc), None);
+    project.redo().unwrap();
+    let reopened = Session::default().open(&path, None).unwrap();
+    assert_eq!(reopened.function_name(main), "entry_logic");
+    assert_eq!(reopened.comment_at(main + 0xc).as_deref(), Some("greeting pointer"));
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}

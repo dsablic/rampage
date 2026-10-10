@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+
+use crate::annotations::{Annotations, Edit, Field};
 
 use rampage_analysis::discover::{Program, Xref, XrefKind};
 use rampage_analysis::functions::{self, Names};
@@ -38,7 +40,13 @@ impl Session {
         }
         let binary =
             Binary::open_with(path, arch).map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
-        let project = Arc::new(Project::new(binary));
+        // Annotations are kept beside the binary, per slice of a universal binary.
+        let log = match binary.slices.len() {
+            0 | 1 => format!("{}.rampage", path.display()),
+            _ => format!("{}.{}.rampage", path.display(), binary.arch),
+        };
+        let annotations = Annotations::open(PathBuf::from(log)).map_err(ApiError::Invalid)?;
+        let project = Arc::new(Project::with_annotations(binary, annotations));
         self.projects.lock().expect("session lock").entry(key).or_insert_with(|| Arc::clone(&project));
         Ok(project)
     }
@@ -47,6 +55,7 @@ impl Session {
 pub struct Project {
     pub binary: Binary,
     names: Names,
+    annotations: RwLock<Annotations>,
     analysis: OnceLock<Result<Analysis, UnsupportedArch>>,
     triage: OnceLock<Triage>,
 }
@@ -158,6 +167,23 @@ pub struct DisassemblyLine {
     /// For an immediate it is a guess: the number may only happen to equal an address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    /// The user's comment on this instruction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Annotation {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub text: String,
+}
+
+/// The user's names and comments.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnnotationList {
+    pub names: Vec<Annotation>,
+    pub comments: Vec<Annotation>,
 }
 
 /// A function's instructions grouped by basic block, in address order.
@@ -192,9 +218,90 @@ fn contains_ignoring_case(haystack: &str, needle: &str) -> bool {
 }
 
 impl Project {
+    /// A project whose annotations live in memory only.
     pub fn new(binary: Binary) -> Self {
+        Self::with_annotations(binary, Annotations::in_memory())
+    }
+
+    pub fn with_annotations(binary: Binary, annotations: Annotations) -> Self {
         let names = Names::new(&binary);
-        Self { binary, names, analysis: OnceLock::new(), triage: OnceLock::new() }
+        Self {
+            binary,
+            names,
+            annotations: RwLock::new(annotations),
+            analysis: OnceLock::new(),
+            triage: OnceLock::new(),
+        }
+    }
+
+    fn annotations(&self) -> std::sync::RwLockReadGuard<'_, Annotations> {
+        self.annotations.read().expect("annotations lock")
+    }
+
+    /// The name at `address`: the user's, or else a symbol, export, stub or import-slot name.
+    pub fn name_at(&self, address: u64) -> Option<String> {
+        self.annotations().name(address).map(str::to_owned).or_else(|| self.names.get(address).map(str::to_owned))
+    }
+
+    /// The function's name: the user's, a symbol's, or `sub_<hex>`.
+    pub fn function_name(&self, address: u64) -> String {
+        self.annotations().name(address).map_or_else(|| self.names.function_name(address), str::to_owned)
+    }
+
+    /// The user's comment at `address`.
+    pub fn comment_at(&self, address: u64) -> Option<String> {
+        self.annotations().comment(address).map(str::to_owned)
+    }
+
+    /// Names `address` (`None` removes the user's name). Names must be identifiers not used elsewhere, so they
+    /// keep resolving to one address.
+    pub fn rename(&self, address: u64, name: Option<&str>) -> Result<bool, ApiError> {
+        if let Some(name) = name {
+            let valid = !name.is_empty()
+                && !name.starts_with(|c: char| c.is_ascii_digit())
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || "_.$@?:".contains(c));
+            if !valid {
+                return Err(ApiError::Invalid(format!("{name:?} is not a valid name: use letters, digits and _.$@?:")));
+            }
+            if name.starts_with("sub_") || name.starts_with("0x") {
+                return Err(ApiError::Invalid(format!("{name:?} looks like an address; choose another name")));
+            }
+            if let Ok(existing) = self.resolve(name)
+                && existing != address
+            {
+                return Err(ApiError::Invalid(format!("{name:?} already names {existing:#x}")));
+            }
+        }
+        self.edit(Field::Name, address, name.map(str::to_owned))
+    }
+
+    /// Comments the instruction or data at `address` (`None` removes the comment).
+    pub fn comment(&self, address: u64, text: Option<&str>) -> Result<bool, ApiError> {
+        let text = text.map(str::trim).filter(|text| !text.is_empty()).map(str::to_owned);
+        self.edit(Field::Comment, address, text)
+    }
+
+    fn edit(&self, field: Field, address: u64, value: Option<String>) -> Result<bool, ApiError> {
+        self.annotations.write().expect("annotations lock").set(field, address, value).map_err(ApiError::Invalid)
+    }
+
+    /// Reverts the last edit made through this project.
+    pub fn undo(&self) -> Result<Option<Edit>, ApiError> {
+        self.annotations.write().expect("annotations lock").undo().map_err(ApiError::Invalid)
+    }
+
+    /// Reapplies the last undone edit.
+    pub fn redo(&self) -> Result<Option<Edit>, ApiError> {
+        self.annotations.write().expect("annotations lock").redo().map_err(ApiError::Invalid)
+    }
+
+    /// Every user name and comment, by address.
+    pub fn annotation_list(&self) -> AnnotationList {
+        let annotations = self.annotations();
+        let rows = |map: &std::collections::BTreeMap<u64, String>| {
+            map.iter().map(|(&address, text)| Annotation { address, text: text.clone() }).collect()
+        };
+        AnnotationList { names: rows(annotations.names()), comments: rows(annotations.comments()) }
     }
 
     pub fn summary(&self) -> Summary<'_> {
@@ -230,11 +337,6 @@ impl Project {
         analysis.as_ref().map_err(|error| ApiError::Unsupported(UnsupportedArch(error.0)))
     }
 
-    /// The symbol, export, stub or import-slot name at `address`.
-    pub fn name_at(&self, address: u64) -> Option<&str> {
-        self.names.get(address)
-    }
-
     /// Parses `0x` hex, decimal, a symbol or export name, or a `sub_<hex>` name.
     pub fn resolve(&self, text: &str) -> Result<u64, ApiError> {
         let text = text.trim();
@@ -243,6 +345,9 @@ impl Project {
                 .map_err(|_| ApiError::Invalid(format!("invalid hex address {text:?}")));
         }
         if let Ok(address) = text.parse() {
+            return Ok(address);
+        }
+        if let Some(address) = self.annotations().address_of(text) {
             return Ok(address);
         }
         // ELF import stubs are named `<import>@plt`; a bare import name finds its stub.
@@ -263,7 +368,7 @@ impl Project {
             .iter()
             .map(|function| FunctionRow {
                 address: function.address,
-                name: self.names.function_name(function.address),
+                name: self.function_name(function.address),
                 size: function.blocks.iter().map(|block| block.end - block.start).sum(),
                 blocks: function.blocks.len(),
                 instructions: function.instruction_count,
@@ -318,7 +423,8 @@ impl Project {
                 flow: insn.flow,
                 data_ref: insn.data_ref,
                 immediate: insn.immediate,
-                label: self.names.get(address).map(str::to_owned),
+                label: self.name_at(address),
+                note: self.comment_at(address),
                 comment: self.describe_reference(&insn),
             });
             offset += usize::from(insn.len.max(1));
@@ -337,7 +443,7 @@ impl Project {
         for block in &function.blocks {
             blocks.push(self.decode_lines(block.start, block.end, usize::MAX)?);
         }
-        Ok(FunctionListing { address: start, name: self.names.function_name(start), blocks })
+        Ok(FunctionListing { address: start, name: self.function_name(start), blocks })
     }
 
     /// Names what an instruction refers to: its branch target or data reference by name, or the string stored
@@ -347,13 +453,13 @@ impl Project {
             Flow::Call(target) | Flow::Jump(target) | Flow::ConditionalJump(target) => Some(target),
             _ => None,
         };
-        if let Some(name) = target.and_then(|target| self.names.get(target)) {
-            return Some(name.to_owned());
+        if let Some(name) = target.and_then(|target| self.name_at(target)) {
+            return Some(name);
         }
         // A pointer-sized immediate (x86 `mov`/`push`) counts only when it names something or points at a string.
         let data = insn.data_ref.or(insn.immediate)?;
-        if let Some(name) = self.names.get(data) {
-            return Some(name.to_owned());
+        if let Some(name) = self.name_at(data) {
+            return Some(name);
         }
         string_at(&self.binary, data).map(|text| format!("{text:?}"))
     }
@@ -442,10 +548,8 @@ impl Project {
                     from: xref.from,
                     to: xref.to,
                     kind: xref.kind,
-                    from_function: self
-                        .function_containing(xref.from)?
-                        .map(|function| self.names.function_name(function)),
-                    to_name: self.names.get(xref.to).map(str::to_owned),
+                    from_function: self.function_containing(xref.from)?.map(|function| self.function_name(function)),
+                    to_name: self.name_at(xref.to),
                 })
             })
             .collect::<Result<Vec<_>, ApiError>>()?;

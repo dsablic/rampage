@@ -79,11 +79,13 @@ pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize,
         if let Some(label) = &line.label {
             writeln!(out, "{label}:")?;
         }
-        match &line.comment {
-            Some(comment) => {
-                writeln!(out, "  {:#018x}  {:<24} {:<40} ; {comment}", line.address, line.bytes, line.text)?
-            }
-            None => writeln!(out, "  {:#018x}  {:<24} {}", line.address, line.bytes, line.text)?,
+        // The user's comment first, then what the instruction refers to.
+        let comments: Vec<&str> = [line.note.as_deref(), line.comment.as_deref()].into_iter().flatten().collect();
+        if comments.is_empty() {
+            writeln!(out, "  {:#018x}  {:<24} {}", line.address, line.bytes, line.text)?;
+        } else {
+            let comments = comments.join(" | ");
+            writeln!(out, "  {:#018x}  {:<24} {:<40} ; {comments}", line.address, line.bytes, line.text)?;
         }
     }
     Ok(())
@@ -262,6 +264,43 @@ pub fn exports(out: &mut impl Write, path: &Path, query: &ListQuery, options: &O
     }
     for row in &rows {
         writeln!(out, "{:#018x}  {}", row.address, row.name)?;
+    }
+    Ok(())
+}
+
+/// The value to set: `value`, or nothing with `clear`. Exactly one must be given.
+fn edit_value<'a>(value: Option<&'a str>, clear: bool, what: &str) -> Result<Option<&'a str>> {
+    match (value, clear) {
+        (Some(value), false) => Ok(Some(value)),
+        (None, true) => Ok(None),
+        _ => anyhow::bail!("pass a {what} or --clear, not both"),
+    }
+}
+
+pub fn rename(path: &Path, at: &str, name: Option<&str>, clear: bool, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let address = project.resolve(at)?;
+    project.rename(address, edit_value(name, clear, "name")?)?;
+    Ok(())
+}
+
+pub fn comment(path: &Path, at: &str, text: Option<&str>, clear: bool, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let address = project.resolve(at)?;
+    project.comment(address, edit_value(text, clear, "comment")?)?;
+    Ok(())
+}
+
+pub fn annotations(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let list = open(path, options)?.annotation_list();
+    if options.json {
+        return write_json(out, &list);
+    }
+    for name in &list.names {
+        writeln!(out, "{:#018x} name    {}", name.address, name.text)?;
+    }
+    for comment in &list.comments {
+        writeln!(out, "{:#018x} comment {}", comment.address, comment.text)?;
     }
     Ok(())
 }
