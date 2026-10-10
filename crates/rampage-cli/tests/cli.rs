@@ -111,3 +111,42 @@ fn library_without_entry_needs_explicit_disasm_address() {
     let funcs = json(&["--json", "funcs"], "hello-x64.dylib");
     assert!(funcs.as_array().unwrap().iter().all(|function| function["name"] != "entry"));
 }
+
+#[test]
+fn json_output_into_a_closed_pipe_exits_cleanly() {
+    use std::io::Read;
+    use std::process::{Command as Process, Stdio};
+
+    let mut child = Process::new(assert_cmd::cargo::cargo_bin("rampage"))
+        .args(["--json", "strings"])
+        .arg(fixture("hello-x64.exe"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let status = child.wait().unwrap();
+    let mut stderr = String::new();
+    child.stderr.take().unwrap().read_to_string(&mut stderr).unwrap();
+    assert!(status.success(), "{status}: {stderr}");
+}
+
+#[test]
+fn malformed_inputs_do_not_crash() {
+    let malformed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/malformed");
+    for name in ["wrap.elf", "trunc.elf", "i386.macho", "ppc_i386.fat", "badimport.exe"] {
+        for command in ["info", "strings", "funcs"] {
+            let output =
+                Command::cargo_bin("rampage").unwrap().arg(command).arg(malformed.join(name)).output().unwrap();
+            assert!(output.status.success(), "{command} {name}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        let output = Command::cargo_bin("rampage")
+            .unwrap()
+            .args(["disasm", "--count", "500"])
+            .arg(malformed.join(name))
+            .output()
+            .unwrap();
+        assert!(output.status.code().is_some(), "disasm {name} was killed by a signal");
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"), "disasm {name} panicked");
+    }
+}

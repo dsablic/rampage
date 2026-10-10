@@ -16,9 +16,11 @@ fn open(path: &Path, options: &Options) -> Result<Binary> {
     Binary::open_with(path, options.arch).with_context(|| format!("{}", path.display()))
 }
 
+/// Serializes before writing so that I/O errors such as a closed pipe surface as `io::Error`.
 fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result<()> {
-    serde_json::to_writer_pretty(&mut *out, value)?;
-    writeln!(out)?;
+    let mut json = serde_json::to_vec_pretty(value)?;
+    json.push(b'\n');
+    out.write_all(&json)?;
     Ok(())
 }
 
