@@ -20,7 +20,6 @@ assert_cmd = "2.2.2"
 capstone = { version = "0.14.0", default-features = false, features = [
     "full",
     "std",
-    "arch_arm",
     "arch_m68k",
     "arch_mips",
     "arch_powerpc",
