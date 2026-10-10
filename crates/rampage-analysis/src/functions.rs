@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use rampage_arch::{UnsupportedArch, decoder_for};
+use rampage_arch::{Flow, UnsupportedArch, decoder_for};
 use rampage_loaders::{Binary, SymbolKind};
 use serde::Serialize;
 
@@ -47,7 +47,47 @@ pub fn analyze(binary: &Binary) -> Result<Program, UnsupportedArch> {
     Ok(discover(binary, || decoder_for(arch).expect("architecture checked above"), &seeds))
 }
 
-/// Names for addresses: function symbols first, then exports, the entry point and other symbols.
+/// Sections that hold one small jump-through-a-slot stub per import.
+const STUB_SECTIONS: [&str; 6] = ["__stubs", "__auth_stubs", ".plt", ".plt.sec", ".plt.got", ".iplt"];
+
+/// Names the stubs in stub sections (Mach-O `__stubs`, ELF `.plt`) after the import whose slot each one jumps
+/// through. A stub runs from just after the previous one's final jump (skipping NOP padding) to its own.
+pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
+    let Ok(mut decoder) = decoder_for(binary.arch) else { return Vec::new() };
+    let slot_name = |address: u64| {
+        let index = binary.import_slots.binary_search_by_key(&address, |slot| slot.address).ok()?;
+        Some(binary.import_slots[index].name.as_str())
+    };
+    let mut names = Vec::new();
+    for section in binary.sections.iter().filter(|section| STUB_SECTIONS.contains(&section.name.as_str())) {
+        let end = section.address.saturating_add(section.size);
+        let mut address = section.address;
+        let mut stub_start = address;
+        let mut named = false;
+        decoder.reset();
+        while address < end {
+            let Some(bytes) = binary.code_from(address) else { break };
+            let insn = decoder.decode(bytes, address);
+            let next = address + u64::from(insn.len.max(1));
+            if stub_start == address && decoder.format(bytes, address).starts_with("nop") {
+                stub_start = next;
+            } else if let Some(name) = insn.data_ref.and_then(slot_name).filter(|_| !named) {
+                names.push((stub_start, name.to_owned()));
+                named = true;
+            }
+            if matches!(insn.flow, Flow::IndirectJump | Flow::Jump(_) | Flow::Return | Flow::Halt | Flow::Invalid) {
+                stub_start = next;
+                named = false;
+                decoder.reset();
+            }
+            address = next;
+        }
+    }
+    names
+}
+
+/// Names for addresses: function symbols first, then exports, the entry point and other symbols, then import
+/// stubs (named after their import) and import slots (`__imp_` and the import's name).
 pub struct Names(BTreeMap<u64, String>);
 
 impl Names {
@@ -56,6 +96,12 @@ impl Names {
             from_symbols(binary).into_iter().map(|function| (function.address, function.name)).collect();
         for symbol in &binary.symbols {
             names.entry(symbol.address).or_insert_with(|| symbol.name.clone());
+        }
+        for (address, name) in stub_names(binary) {
+            names.entry(address).or_insert(name);
+        }
+        for slot in &binary.import_slots {
+            names.entry(slot.address).or_insert_with(|| format!("__imp_{}", slot.name));
         }
         Self(names)
     }

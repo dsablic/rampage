@@ -101,3 +101,41 @@ fn names_prefer_symbols_and_fall_back_to_sub() {
     assert_eq!(names.function_name(symbol_address(&binary, "main")), "main");
     assert_eq!(names.function_name(0x1234), "sub_1234");
 }
+
+#[test]
+fn stubs_are_named_after_the_imports_they_jump_through() {
+    for (name, puts) in [
+        ("hello-x64.macho", "_puts"),
+        ("hello-arm64.macho", "_puts"),
+        ("hello-x64-dyn.elf", "puts"),
+        ("hello-arm64.elf", "puts"),
+    ] {
+        let binary = open(name);
+        let program = functions::analyze(&binary).unwrap();
+        let names = functions::Names::new(&binary);
+        let stub = names.address_of(puts).unwrap_or_else(|| panic!("{name}: no stub named {puts}"));
+        // The stub is the function main calls.
+        let main = binary.symbol_by_name(if name.ends_with("macho") { "_main" } else { "main" }).unwrap().address;
+        let main = program.function_at(main).unwrap();
+        assert!(
+            program.xrefs_to(stub).iter().any(|xref| xref.kind == XrefKind::Call && main.contains(xref.from)),
+            "{name}"
+        );
+        // Its slot is named too.
+        let slot = names.address_of(&format!("__imp_{puts}")).unwrap_or_else(|| panic!("{name}: slot unnamed"));
+        assert!(program.xrefs_to(slot).iter().any(|xref| program.function_at(stub).unwrap().contains(xref.from)));
+    }
+}
+
+#[test]
+fn arm64_plt_padding_does_not_shift_stub_names() {
+    let binary = open("hello-arm64.elf");
+    let stubs = functions::stub_names(&binary);
+    // Each entry starts with ADRP x16, 16 bytes apart, after a 32-byte header that ends in NOP padding.
+    let addresses: Vec<u64> = stubs.iter().map(|(address, _)| *address).collect();
+    assert_eq!(stubs.len(), 3, "{stubs:?}");
+    assert!(addresses.windows(2).all(|pair| pair[1] - pair[0] == 16), "{stubs:?}");
+    for (address, _) in &stubs {
+        assert_eq!(binary.read(*address, 4).map(|bytes| bytes[3] & 0x9f), Some(0x90), "not an ADRP at {address:#x}");
+    }
+}
