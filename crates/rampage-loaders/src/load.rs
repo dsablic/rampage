@@ -9,6 +9,7 @@ use rampage_arch::Arch;
 use serde::Serialize;
 
 use crate::model::{Export, Format, Import, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
+use crate::starts;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -32,6 +33,8 @@ pub struct Binary {
     pub symbols: Vec<Symbol>,
     pub imports: Vec<Import>,
     pub exports: Vec<Export>,
+    /// Function start addresses from format metadata (Mach-O `LC_FUNCTION_STARTS`, PE `.pdata`), sorted.
+    pub function_starts: Vec<u64>,
     /// Architectures present in the file: several for a universal Mach-O, otherwise just `arch`.
     pub slices: Vec<Arch>,
     #[serde(skip)]
@@ -144,8 +147,36 @@ impl Binary {
             Some(offset) => file_offset_to_address(&segments, offset),
             None => Some(parsed.entry()).filter(|&entry| entry != parsed.relative_address_base()),
         };
+        let text_address = segments.iter().find(|segment| segment.name == "__TEXT").map(|segment| segment.address);
+        let mut function_starts = text_address
+            .map(|text_address| starts::macho(&parsed, &data[image.clone()], text_address))
+            .unwrap_or_default();
+        let exception_directory = starts::pe_exception_directory(&parsed);
+        let image_base = parsed.relative_address_base();
         drop(parsed);
-        Ok(Self { format, arch, entry, segments, sections, symbols, imports, exports, slices, data, image })
+
+        let mut binary = Self {
+            format,
+            arch,
+            entry,
+            segments,
+            sections,
+            symbols,
+            imports,
+            exports,
+            function_starts: Vec::new(),
+            slices,
+            data,
+            image,
+        };
+        if let Some(directory) = exception_directory {
+            function_starts.extend(starts::pe(&binary, image_base, directory));
+        }
+        function_starts.retain(|&start| binary.segment_containing(start).is_some_and(|segment| segment.perms.execute));
+        function_starts.sort_unstable();
+        function_starts.dedup();
+        binary.function_starts = function_starts;
+        Ok(binary)
     }
 
     pub fn segment_containing(&self, address: u64) -> Option<&Segment> {

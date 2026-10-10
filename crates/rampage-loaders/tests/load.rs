@@ -111,3 +111,24 @@ fn library_without_entry_point_has_no_entry() {
     assert_eq!(binary.entry, None);
     assert!(binary.symbol_by_name("_add").is_some());
 }
+
+#[test]
+fn stripped_macho_function_starts_cover_add_and_main() {
+    let full = Binary::open(fixture("hello-x64.macho")).unwrap();
+    let stripped = Binary::open(fixture("hello-x64-stripped.macho")).unwrap();
+    assert!(stripped.symbol_by_name("_add").is_none());
+    for name in ["_add", "_main"] {
+        let address = full.symbol_by_name(name).unwrap().address;
+        assert!(stripped.function_starts.contains(&address), "{name} {address:#x}: {:x?}", stripped.function_starts);
+    }
+    assert!(stripped.function_starts.is_sorted());
+}
+
+#[test]
+fn pe_function_starts_come_from_pdata() {
+    let binary = Binary::open(fixture("hello-x64.exe")).unwrap();
+    let add = binary.exports.iter().find(|export| export.name == "add").unwrap().address;
+    assert!(binary.function_starts.contains(&add), "{add:#x}");
+    assert!(binary.function_starts.len() > 10);
+    assert!(binary.function_starts.iter().all(|&start| binary.segment_containing(start).unwrap().perms.execute));
+}
