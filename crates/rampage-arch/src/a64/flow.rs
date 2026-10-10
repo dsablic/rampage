@@ -116,7 +116,7 @@ fn info_for(encoding: &Encoding) -> Info {
         "BR" | "BRAA" | "BRAAZ" | "BRAB" | "BRABZ" => FlowClass::IndirectJump,
         "BLR" | "BLRAA" | "BLRAAZ" | "BLRAB" | "BLRABZ" => FlowClass::IndirectCall,
         "RET" | "RETAA" | "RETAB" | "RETAASPPC" | "RETABSPPC" | "RETAASPPCR" | "RETABSPPCR" | "ERET" | "ERETAA"
-        | "ERETAB" | "DRPS" => FlowClass::Return,
+        | "ERETAB" | "DRPS" | "TEXIT" => FlowClass::Return,
         "BRK" | "HLT" | "UDF" => FlowClass::Halt,
         _ => FlowClass::Next,
     };
