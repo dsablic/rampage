@@ -14,7 +14,8 @@ cross-references, the MCP server, and an AArch64 decoder generated from Arm's sp
 - Disassembly: x86 and x86-64 (via [iced-x86](https://github.com/icedland/iced)), and AArch64 including SVE and
   SME, decoded from tables generated out of Arm's open-source
   [machine-readable architecture specification](https://developer.arm.com/Architectures/A-Profile%20Architecture).
-  Its output matches `llvm-mc` on 99.97% of the instructions in Chrome's arm64 code. On AArch64, function
+  Its output matches `llvm-mc` on every instruction sampled from Chrome's arm64 code and on 99.85% of words
+  across all encodings. On AArch64, function
   discovery resolves ADRP+ADD and ADRP+LDR pairs into data references.
 - Names: symbols and exports, then import stubs and thunks named after their import (`puts`), and import slots
   (GOT entries, Mach-O symbol pointers, the PE import address table) as `__imp_<name>`. Disassembly comments

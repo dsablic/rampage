@@ -32,11 +32,12 @@ decode and execute pseudocode and the operand descriptions.
 
 LLVM's disassembler (`llvm-mc -mattr=+all`) served as the oracle on 485,000 words: the 400,000 most common and
 a random sample of rarer instruction words from Chrome and dyld, plus 20 random words per encoding. Output
-matches on 99.97% of real instructions by frequency and 99.6% of distinct words; the remainder is mostly SME
-ZA-array forms. Accepted differences: Arm's preferred aliases (UXTL rather than `USHLL #0`) and Arm's
-register-range syntax. `crates/rampage-arch/tests/data/a64_golden.tsv` freezes 6,571 verified words as a
-regression test; other tests check the decision tree against a linear scan and fuzz the formatter in debug
-builds for overflow.
+matches on all 399,952 sampled real instruction words that LLVM decodes (45 million instructions in Chrome and
+dyld), and on 99.85% of all distinct words including the per-encoding samples; the remainder is mostly SME
+ZA-array forms. Accepted differences: Arm's preferred aliases (UXTL rather than `USHLL #0`, BFC rather than
+`BFI ..., wzr`) and Arm's register-range syntax. `crates/rampage-arch/tests/data/a64_golden.tsv` freezes 6,607
+verified words as a regression test; other tests check the decision tree against a linear scan and format every
+encoding with random operands in debug builds to catch arithmetic overflow.
 
 ## Results
 
