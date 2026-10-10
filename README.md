@@ -17,8 +17,9 @@ cross-references, the MCP server, and an AArch64 decoder generated from Arm's sp
   Its output matches `llvm-mc` on every instruction sampled from Chrome's arm64 code and on 99.85% of words
   across all encodings. On AArch64, function
   discovery resolves ADRP+ADD and ADRP+LDR pairs into data references.
-- Names: symbols and exports, then import stubs and thunks named after their import (`puts`), and import slots
-  (GOT entries, Mach-O symbol pointers, the PE import address table) as `__imp_<name>`. Disassembly comments
+- Names: symbols and exports, then import stubs and thunks named after their import (`puts`, or `puts@plt` on
+  ELF; a bare import name finds its stub), and import slots (GOT entries, Mach-O symbol pointers, the PE import
+  address table) as `__imp_<name>`. Disassembly comments
   each branch or data reference with the name or string it points to.
 
 ## Usage
