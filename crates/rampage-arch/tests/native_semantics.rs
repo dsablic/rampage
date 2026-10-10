@@ -46,6 +46,42 @@ mod aarch64 {
     }
 
     #[test]
+    fn conditional_select_and_bitfield_aliases_match_native_execution() {
+        let mut seed = 11u64;
+        for _ in 0..128 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let left = seed;
+            let right = seed.rotate_left(17);
+            let (selected, bitfield, signed_byte): (u64, u64, u64);
+            let nzcv: u64;
+            unsafe {
+                std::arch::asm!("cmp {left}, {right}", "mrs {flags}, nzcv", "csel {selected}, {left}, {right}, eq",
+                    "ubfx {bitfield}, {left}, #5, #9", "sxtb {signed_byte}, {left:w}",
+                    left = in(reg) left, right = in(reg) right, flags = out(reg) nzcv,
+                    selected = out(reg) selected, bitfield = out(reg) bitfield, signed_byte = out(reg) signed_byte,
+                    options(nomem, nostack));
+            }
+            let mut registers = [0; 31];
+            registers[1] = left;
+            registers[2] = right;
+            for (word, expected) in [(0xd345_3420u32, bitfield), (0x9340_1c20, signed_byte), (0x9a82_0020, selected)] {
+                let bytes = word.to_le_bytes();
+                let insn = decoder(&Target::new(Arch::Aarch64)).unwrap().decode(&bytes, 0x1000);
+                let lifted = ir::lift(Arch::Aarch64, &bytes, &insn);
+                let actual = match &lifted.effects[0] {
+                    Effect::Assign { value: expr, .. } => value(expr, &registers),
+                    Effect::Select { condition, when_true, when_false, .. } => value(
+                        if ir::condition(nzcv >> 28, *condition).unwrap() { when_true } else { when_false },
+                        &registers,
+                    ),
+                    _ => panic!("unsupported fixture"),
+                };
+                assert_eq!(actual, expected, "{word:08x}");
+            }
+        }
+    }
+
+    #[test]
     fn arithmetic_and_nzcv_agree_with_native_aarch64_execution() {
         let cases = [0, 1, 7, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff, i64::MAX as u64, i64::MIN as u64, u64::MAX];
         for left in cases {

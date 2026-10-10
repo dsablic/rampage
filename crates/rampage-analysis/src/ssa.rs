@@ -66,6 +66,12 @@ pub enum Variable {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expression {
+    Select {
+        flags: usize,
+        condition: u8,
+        when_true: Box<Expression>,
+        when_false: Box<Expression>,
+    },
     Binary {
         operation: Operation,
         left: Box<Expression>,
@@ -197,6 +203,11 @@ fn define(definitions: &mut Vec<Definition>, state: &mut [usize; VARIABLES], ind
 
 pub(crate) fn references(value: &Expression, out: &mut Vec<usize>) {
     match value {
+        Expression::Select { flags, when_true, when_false, .. } => {
+            out.push(*flags);
+            references(when_true, out);
+            references(when_false, out);
+        }
         Expression::Reference { definition } => out.push(*definition),
         Expression::Add { left, right }
         | Expression::Subtract { left, right }
@@ -265,6 +276,15 @@ fn budget(input: &[InputBlock]) -> Result<(), String> {
         }
         for effect in &insn.effects {
             match effect {
+                Effect::Select { destination, condition, when_true, when_false } => {
+                    if *condition > 15 {
+                        return Err("invalid select condition".to_owned());
+                    }
+                    if !barrier && !matches!(destination, Value::Constant { value: 0 }) {
+                        definitions += 1;
+                    }
+                    validate_values(&[destination, when_true, when_false], &mut nodes)?;
+                }
                 Effect::Assign { destination, value } => {
                     if !barrier {
                         definitions += 1;
@@ -413,6 +433,23 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
             } else {
                 for effect in &insn.effects {
                     match effect {
+                        Effect::Select { destination: target, condition, when_true, when_false } => {
+                            let value = narrow(
+                                Expression::Select {
+                                    flags: state[FLAGS],
+                                    condition: *condition,
+                                    when_true: Box::new(expression(when_true, state, 0)?),
+                                    when_false: Box::new(expression(when_false, state, 0)?),
+                                },
+                                insn.bits,
+                            );
+                            if matches!(target, Value::Constant { value: 0 }) {
+                                statement.observations.push(value);
+                            } else {
+                                let index = destination(target).ok_or("IR select destination is not writable")?;
+                                statement.definitions.push(define(&mut definitions, state, index, value));
+                            }
+                        }
                         Effect::Assign { destination: target, value } => {
                             let value = narrow(expression(value, state, 0)?, insn.bits);
                             let index = destination(target).ok_or("IR assignment destination is not writable")?;
@@ -568,6 +605,11 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
 
 fn rewrite(value: &mut Expression, remap: &[usize]) {
     match value {
+        Expression::Select { flags, when_true, when_false, .. } => {
+            *flags = remap[*flags];
+            rewrite(when_true, remap);
+            rewrite(when_false, remap);
+        }
         Expression::Reference { definition } => *definition = remap[*definition],
         Expression::Add { left, right }
         | Expression::Subtract { left, right }

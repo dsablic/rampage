@@ -20,6 +20,9 @@ milestone; the Arm-derived decoder tables keep their existing license.
 Instruction encodings are checked with LLVM. Integer operation/NZCV evaluators are compared with native
 AArch64 execution on controlled boundary cases. Synthetic snapshots exercise CFGs, register joins, calls,
 stack slots and unknown outcomes. Passing these cases is not full ISA or decompiler coverage.
+An opt-in macOS ARM64 test compiles and executes an optimized C fixture, then executes its lifted arithmetic
+and select operations against fixed boundary results. It requires clang and an SDK and is run explicitly:
+`cargo test -p rampage-api --test compiled_arm64 -- --ignored`.
 
 Ghidra and IDA executable comparisons require installations and recorded versions. Neither is currently on
 the command search path in this environment, so no accuracy-parity result is claimed. A successful stopped-process
@@ -52,10 +55,16 @@ claimed. Input registers are argument evidence, not inferred function signatures
 integer AAPCS64 model, preserve callee-saved registers and invalidate caller-saved values and memory.
 Function summaries expose immediate dominators and natural-loop membership/backedges/exits. This is structural
 evidence for later control-flow reconstruction, not a claim that irreducible cycles have structured source loops.
+Selected reducible shapes also expose `structured_control` regions referencing SSA blocks: sequences, branches
+with shared joins, and simple single-body loops. Loop-header effects/phis execute before the test on each
+iteration. Complex graphs, unknown dispatch and ambiguous/external successors retain the labeled fallback.
 
-The next gates are more scalar/FP/SIMD semantics, alias-aware memory analysis, structured loops/conditions,
-typed arguments/returns, jump-table evidence and runtime-module correlation. PAC, exceptions, TLS, varargs,
+The next gates are more scalar/FP/SIMD semantics, alias-aware memory analysis, broader control-flow structuring,
+typed arguments/returns, automatic dispatch recovery and live runtime integration. PAC, exceptions, TLS, varargs,
 platform-specific ABI differences and protection wrappers must not be treated as solved by integer SSA.
+Integer conditional selects (CSEL/CSINC/CSINV/CSNEG and their aliases) retain NZCV conditions in SSA.
+Common non-wrapping bitfield aliases, including shifts and signed/unsigned extracts, are supported;
+unsupported wrapping field shapes remain barriers. Native optimized integer/select fixtures cover both paths.
 
 ## Explicit jump-table inspection
 

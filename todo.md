@@ -28,6 +28,10 @@ comparisons accept bounded, versioned exports for hash-matched regular images; s
 mapping-aware comparison identities exist.
 Bounded immediate-dominator and natural-loop analysis now accompanies SSA; structured-source rendering,
 minimal SSA, full signatures/type recovery and automatic dispatch reconstruction remain acceptance gates.
+Selected sequence/branch/single-body-loop control regions are represented over SSA block references; phis,
+header execution and unsupported graph shapes remain explicit. This does not yet constitute typed source recovery.
+Conditional selects and common bitfield shift/extract aliases now retain semantics in IR/SSA. Optimized native
+C fixtures exercise arithmetic and select paths end-to-end, alongside boundary-level execution comparisons.
 
 ## General-purpose reverse-engineering roadmap
 

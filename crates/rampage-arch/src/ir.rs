@@ -139,6 +139,7 @@ pub fn condition(nzcv: u64, condition: u8) -> Option<bool> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Effect {
+    Select { destination: Value, condition: u8, when_true: Value, when_false: Value },
     SetFlags { operation: FlagOperation, left: Value, right: Value },
     FlagsConditional { condition: u8 },
     Call { target: Value, return_address: u64 },
@@ -305,6 +306,67 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
             )
         } else {
             Value::Constant { value: immediate }
+        };
+        lifted.effects.push(assign(register(rd, false), value));
+        lifted.complete = true;
+    } else if name.ends_with("_condsel") {
+        lifted.bits = width;
+        let when_true = register(rn, false);
+        let rm = register(((word >> 16) & 31) as u8, false);
+        let when_false = if name.starts_with("CSINC") {
+            Value::Add { left: Box::new(rm), right: Box::new(Value::Constant { value: 1 }) }
+        } else if name.starts_with("CSINV") {
+            operation(Operation::Xor, rm, Value::Constant { value: u64::MAX }, width)
+        } else if name.starts_with("CSNEG") {
+            Value::Subtract { left: Box::new(Value::Constant { value: 0 }), right: Box::new(rm) }
+        } else {
+            rm
+        };
+        lifted.effects.push(Effect::Select {
+            destination: register(rd, false),
+            condition: ((word >> 12) & 15) as u8,
+            when_true,
+            when_false,
+        });
+        lifted.complete = true;
+    } else if name.starts_with("UBFM_") || name.starts_with("SBFM_") {
+        lifted.bits = width;
+        let immr = ((word >> 16) & 63) as u8;
+        let imms = ((word >> 10) & 63) as u8;
+        let unsigned = name.starts_with("UBFM");
+        let source = register(rn, false);
+        let value = if imms == width - 1 {
+            operation(
+                if unsigned { Operation::ShiftRight } else { Operation::ArithmeticShiftRight },
+                source,
+                Value::Constant { value: u64::from(immr) },
+                width,
+            )
+        } else if unsigned && imms + 1 == immr {
+            operation(Operation::ShiftLeft, source, Value::Constant { value: u64::from(width - immr) }, width)
+        } else if immr <= imms {
+            let size = imms - immr + 1;
+            let field = operation(
+                Operation::And,
+                operation(Operation::ShiftRight, source, Value::Constant { value: u64::from(immr) }, width),
+                Value::Constant { value: crate::mrs::ones(u32::from(size)) },
+                width,
+            );
+            if unsigned {
+                field
+            } else {
+                operation(
+                    Operation::ArithmeticShiftRight,
+                    operation(Operation::ShiftLeft, field, Value::Constant { value: u64::from(width - size) }, width),
+                    Value::Constant { value: u64::from(width - size) },
+                    width,
+                )
+            }
+        } else {
+            lifted
+                .effects
+                .push(Effect::Barrier { reason: "wrapping bitfield semantics are not implemented".to_owned() });
+            return lifted;
         };
         lifted.effects.push(assign(register(rd, false), value));
         lifted.complete = true;

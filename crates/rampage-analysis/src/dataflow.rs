@@ -50,6 +50,18 @@ fn merge(left: Known, right: Known) -> Known {
 fn evaluate(expr: &Expression, values: &[Known]) -> Known {
     use Known::*;
     match expr {
+        Expression::Select { flags: _, condition, when_true, when_false: _ } if *condition >= 14 => {
+            evaluate(when_true, values)
+        }
+        Expression::Select { flags, condition, when_true, when_false } => match values[*flags] {
+            Pending => Pending,
+            Constant(flags) => match ir::condition(flags, *condition) {
+                Some(true) => evaluate(when_true, values),
+                Some(false) => evaluate(when_false, values),
+                _ => Unknown,
+            },
+            _ => merge(evaluate(when_true, values), evaluate(when_false, values)),
+        },
         Expression::Reference { definition } => values[*definition],
         Expression::Constant { value } => Constant(*value),
         Expression::Phi { inputs } => {

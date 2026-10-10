@@ -15,7 +15,7 @@ pub struct Pseudocode {
     pub limitations: Vec<String>,
 }
 
-fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String> {
+pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String> {
     if ssa.blocks.is_empty()
         || ssa.entry >= ssa.blocks.len()
         || ssa.blocks.len() > 512
@@ -40,6 +40,13 @@ fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String> {
             }
             let valid = |id: usize| id < ssa.definitions.len();
             match expr {
+                Expression::Select { flags, when_true, when_false, .. } => {
+                    if !valid(*flags) {
+                        return Err("invalid select flags".to_owned());
+                    }
+                    stack.push((when_true, depth + 1));
+                    stack.push((when_false, depth + 1));
+                }
                 Expression::Reference { definition } if !valid(*definition) => {
                     return Err("invalid definition reference".to_owned());
                 }
@@ -149,6 +156,12 @@ fn name(id: usize, ssa: &Ssa) -> String {
 fn expression(expr: &Expression, ssa: &Ssa, remaining: &mut usize) -> Result<String, String> {
     *remaining = remaining.checked_sub(1).ok_or("pseudocode expression budget exceeded")?;
     Ok(match expr {
+        Expression::Select { flags, condition, when_true, when_false } => format!(
+            "(condition({}, {condition}) ? {} : {})",
+            name(*flags, ssa),
+            expression(when_true, ssa, remaining)?,
+            expression(when_false, ssa, remaining)?
+        ),
         Expression::Input => "input".to_owned(),
         Expression::Unknown { .. } => "unknown".to_owned(),
         Expression::Constant { value } => format!("0x{value:x}"),

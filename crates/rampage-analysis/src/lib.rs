@@ -8,4 +8,5 @@ pub mod memory;
 pub mod pseudocode;
 pub mod ssa;
 pub mod strings;
+pub mod structure;
 pub mod triage;

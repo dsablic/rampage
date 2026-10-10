@@ -115,6 +115,7 @@ fn summary_ssa_carries_diamond_definitions_into_the_join() {
     assert!(text.contains("phi("));
     assert!(text.contains("if (") && text.contains("goto bb"));
     assert!(!text.contains("semantic barrier"));
+    assert!(summary.structured_control.is_some());
 }
 
 #[test]

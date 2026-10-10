@@ -103,3 +103,42 @@ fn shifted_zero_destinations_discard_and_overlapping_store_writeback_is_a_barrie
         assert!(matches!(lift(word).effects[0], Effect::Barrier { .. }));
     }
 }
+
+#[test]
+fn conditional_selects_preserve_condition_and_false_arm_transform() {
+    let mut registers = [0; 31];
+    registers[1] = 7;
+    registers[2] = 11;
+    for (word, condition, expected_false) in
+        [(0x9a82_0020, 0, 11), (0x1a82_1420, 1, 12), (0xda82_b020, 11, !11u64), (0x5a82_c420, 12, 0xffff_fff5)]
+    {
+        let lifted = lift(word);
+        assert!(lifted.complete);
+        let Effect::Select { condition: actual, when_true, when_false, .. } = &lifted.effects[0] else {
+            panic!("not select")
+        };
+        assert_eq!(*actual, condition);
+        assert_eq!(value(when_true, &registers, 0), 7);
+        let mask = if lifted.bits == 32 { 0xffff_ffff } else { u64::MAX };
+        assert_eq!(value(when_false, &registers, 0) & mask, expected_false);
+    }
+}
+
+#[test]
+fn common_bitfield_aliases_have_correct_width_and_sign_semantics() {
+    let mut registers = [0; 31];
+    registers[1] = 0xffff_ffff_8000_00f3;
+    for (word, expected) in [
+        (0xd37d_f020, registers[1] << 3),
+        (0x5307_7c20, 0x0100_0001),
+        (0x934b_fc20, 0xffff_ffff_fff0_0000),
+        (0xd345_3420, 7),
+        (0x9340_1c20, 0xffff_ffff_ffff_fff3),
+    ] {
+        let lifted = lift(word);
+        assert!(lifted.complete, "{word:08x}");
+        let Effect::Assign { value: expr, .. } = &lifted.effects[0] else { panic!("missing assignment") };
+        let mask = if lifted.bits == 32 { 0xffff_ffff } else { u64::MAX };
+        assert_eq!(value(expr, &registers, 0) & mask, expected, "{word:08x}");
+    }
+}
