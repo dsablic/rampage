@@ -1,0 +1,12 @@
+[package]
+name = "rampage-loaders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rampage-arch.workspace = true
+memmap2.workspace = true
+object.workspace = true
+serde.workspace = true
+thiserror.workspace = true
