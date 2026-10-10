@@ -6,6 +6,7 @@
 use capstone::arch::{self, ArchOperand, BuildsCapstone, BuildsCapstoneEndian, BuildsCapstoneExtraMode};
 use capstone::{Capstone, Endian, Insn, InsnGroupType};
 
+use crate::track::{self, Tracker};
 use crate::{Arch, Disassembler, Flow, Insn as Decoded, Target, UnsupportedArch};
 
 pub struct CapstoneDisassembler {
@@ -15,6 +16,9 @@ pub struct CapstoneDisassembler {
     thumb: Option<Capstone>,
     /// Thumb only: the address of the next instruction an IT block covers, and how many it still covers.
     it_block: Option<(u64, usize)>,
+    /// Register values, for each engine (their register numbering is the same, but a run never mixes them).
+    tracker: Tracker,
+    thumb_tracker: Tracker,
 }
 
 fn engine(arch: Arch, big_endian: bool, thumb: bool) -> Option<Capstone> {
@@ -52,7 +56,9 @@ impl CapstoneDisassembler {
     pub fn new(target: &Target) -> Result<Self, UnsupportedArch> {
         let primary = engine(target.arch, target.big_endian, false).ok_or(UnsupportedArch(target.arch))?;
         let thumb = if target.arch == Arch::Arm { engine(Arch::Arm, target.big_endian, true) } else { None };
-        Ok(Self { target: target.clone(), primary, thumb, it_block: None })
+        let tracker = Tracker::new(target.arch, &primary, target.global_pointer, target.got.clone());
+        let thumb_tracker = Tracker::new(target.arch, &primary, target.global_pointer, target.got.clone());
+        Ok(Self { target: target.clone(), primary, thumb, it_block: None, tracker, thumb_tracker })
     }
 
     fn engine_at(&self, address: u64) -> (&Capstone, bool) {
@@ -156,10 +162,11 @@ fn powerpc(mnemonic: &str, is_branch: bool) -> Option<Branch> {
     branch(kind, false)
 }
 
-/// RISC-V: `jal` and `jalr` call when they link through `ra` or `t0` and jump when they discard the link (`j`,
-/// `jr`).
+/// RISC-V: `jal` and `jalr` call when they link through `ra` or `t0`, the ABI's link registers (the one-operand
+/// forms link `ra`), and jump otherwise: `j`, `jr`, and PLT stubs' `jalr t1`, which passes a value in `t1`.
 fn riscv(mnemonic: &str, operands: &str) -> Option<Branch> {
-    let links = !operands.starts_with("zero");
+    let implicit_link = !operands.contains(',') && mnemonic.trim_start_matches("c.").starts_with("jal");
+    let links = implicit_link || matches!(operands.split(',').next(), Some("ra" | "t0"));
     let kind = match mnemonic {
         "ret" => Kind::Return,
         "jr" | "c.jr" if operands == "ra" => Kind::Return,
@@ -250,15 +257,22 @@ fn arm_base(mnemonic: &str, conditional: bool) -> &str {
 }
 
 /// The instruction's control flow and, for an ARM PC-relative load, the address it reads. `it_block` tracks the
-/// Thumb IT block the instruction may lie in.
-fn classify(
+/// An instruction's control flow; whether it executes only under a condition (ARM); and its mnemonic without
+/// ARM's condition and width suffixes.
+struct Classified<'a> {
+    flow: Flow,
+    conditional: bool,
+    mnemonic: &'a str,
+}
+
+/// Classifies `insn`'s control flow. `it_block` tracks the Thumb IT block it may lie in.
+fn classify<'a>(
     arch: Arch,
     it_block: &mut Option<(u64, usize)>,
-    engine: &Capstone,
     engine_is_thumb: bool,
-    insn: &Insn,
-) -> (Flow, Option<u64>) {
-    let Ok(detail) = engine.insn_detail(insn) else { return (Flow::Invalid, None) };
+    insn: &'a Insn,
+    detail: &capstone::InsnDetail,
+) -> Classified<'a> {
     {
         let address = insn.address();
         let mnemonic = insn.mnemonic().unwrap_or("");
@@ -270,6 +284,8 @@ fn classify(
         let arch_detail = detail.arch_detail();
         let operands = arch_detail.operands();
 
+        let mut mnemonic_base = mnemonic;
+        let mut predicated = false;
         let branch = match (arch, &arch_detail) {
             (Arch::Arm, capstone::arch::ArchDetail::ArmDetail(arm_detail)) => {
                 let in_it_block = it_block.is_some_and(|(next, left)| next == address && left > 0);
@@ -281,7 +297,9 @@ fn classify(
                 };
                 let has_condition =
                     !matches!(arm_detail.cc(), arch::arm::ArmCC::ARM_CC_AL | arch::arm::ArmCC::ARM_CC_INVALID);
-                arm(arm_base(mnemonic, has_condition), operands_text, has_condition || in_it_block)
+                mnemonic_base = arm_base(mnemonic, has_condition);
+                predicated = has_condition || in_it_block;
+                arm(mnemonic_base, operands_text, predicated)
             }
             (Arch::Mips | Arch::Mips64, _) => mips(mnemonic, operands_text, is_branch),
             (Arch::PowerPc | Arch::PowerPc64, _) => powerpc(mnemonic, is_branch),
@@ -334,26 +352,7 @@ fn classify(
                 Kind::Jump { direct: false } => Flow::IndirectJump,
             },
         };
-        (flow, literal(engine, engine_is_thumb, insn, &operands))
-    }
-}
-
-/// The address an ARM PC-relative load reads: PC is the instruction plus 8 (A32) or plus 4, word-aligned (Thumb).
-/// Loads with an index register have no fixed address.
-fn literal(engine: &Capstone, thumb: bool, insn: &Insn, operands: &[ArchOperand]) -> Option<u64> {
-    {
-        operands.iter().find_map(|operand| match operand {
-            ArchOperand::ArmOperand(operand) => match &operand.op_type {
-                arch::arm::ArmOperandType::Mem(memory)
-                    if engine.reg_name(memory.base()).as_deref() == Some("pc") && memory.index().0 == 0 =>
-                {
-                    let pc = if thumb { (insn.address() + 4) & !3 } else { insn.address() + 8 };
-                    Some(pc.wrapping_add(i64::from(memory.disp()) as u64))
-                }
-                _ => None,
-            },
-            _ => None,
-        })
+        Classified { flow, conditional: predicated, mnemonic: mnemonic_base }
     }
 }
 
@@ -367,8 +366,29 @@ impl Disassembler for CapstoneDisassembler {
             Decoded { address, len: self.minimum_length(thumb), flow: Flow::Invalid, data_ref: None, immediate: None };
         let Ok(instructions) = engine.disasm_count(bytes, address, 1) else { return invalid };
         let Some(insn) = instructions.iter().next() else { return invalid };
-        let (flow, data_ref) = classify(self.target.arch, &mut self.it_block, engine, thumb, insn);
-        Decoded { address, len: insn.len() as u8, flow, data_ref, immediate: None }
+        let Ok(detail) = engine.insn_detail(insn) else { return invalid };
+        let arch = self.target.arch;
+        let Classified { flow, conditional, mnemonic } = classify(arch, &mut self.it_block, thumb, insn, &detail);
+
+        let operands = track::operands(&detail);
+        let writes = track::written_registers(arch, mnemonic, &detail, &operands);
+        // ARM reads PC as the instruction plus 8 (A32) or plus 4, word-aligned for addressing (Thumb).
+        let pc = match (arch, thumb) {
+            (Arch::Arm, true) => (address + 4) & !3,
+            (Arch::Arm, false) => address + 8,
+            _ => address,
+        };
+        let big_endian = self.target.big_endian;
+        let literal = |at: u64| track::word(bytes.get(usize::try_from(at.checked_sub(address)?).ok()?..)?, big_endian);
+        let is_call = matches!(flow, Flow::Call(_) | Flow::IndirectCall);
+        let tracker = if thumb { &mut self.thumb_tracker } else { &mut self.tracker };
+        let found = tracker.step(mnemonic, &operands, &writes, address, pc, conditional, is_call, literal);
+        let flow = match (flow, found.branch_target) {
+            (Flow::IndirectCall, Some(target)) => Flow::Call(target),
+            (Flow::IndirectJump, Some(target)) => Flow::Jump(target),
+            (flow, _) => flow,
+        };
+        Decoded { address, len: insn.len() as u8, flow, data_ref: found.data_ref, immediate: found.immediate }
     }
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {
@@ -385,12 +405,11 @@ impl Disassembler for CapstoneDisassembler {
 
     fn reset(&mut self) {
         self.it_block = None;
+        self.tracker.reset();
+        self.thumb_tracker.reset();
     }
 
     fn delay_slots(&self) -> u8 {
-        match self.target.arch {
-            Arch::Mips | Arch::Mips64 | Arch::Sparc | Arch::Sparc64 => 1,
-            _ => 0,
-        }
+        self.target.arch.delay_slots()
     }
 }

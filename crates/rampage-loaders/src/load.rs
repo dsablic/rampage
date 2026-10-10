@@ -268,7 +268,44 @@ impl Binary {
 
     /// What a decoder needs to read this image's code.
     pub fn target(&self) -> rampage_arch::Target {
-        rampage_arch::Target { arch: self.arch, big_endian: self.code_big_endian, thumb: self.thumb.clone().into() }
+        rampage_arch::Target {
+            arch: self.arch,
+            big_endian: self.code_big_endian,
+            thumb: self.thumb.clone().into(),
+            global_pointer: self.global_pointer(),
+            got: self.got(),
+        }
+    }
+
+    /// The ABI's global-pointer value: the linker's symbol for it, or else its conventional place relative to the
+    /// GOT (MIPS `_gp` is `.got + 0x7ff0`; the PowerPC64 TOC base is `.got + 0x8000`).
+    fn global_pointer(&self) -> Option<u64> {
+        let symbol = |name: &str| self.symbol_by_name(name).map(|symbol| symbol.address);
+        let got = |offset: u64| {
+            let got = self.sections.iter().find(|section| section.name == ".got")?;
+            got.address.checked_add(offset)
+        };
+        match self.arch {
+            Arch::Mips | Arch::Mips64 => symbol("_gp").or_else(|| got(0x7ff0)),
+            Arch::PowerPc64 => symbol(".TOC.").or_else(|| got(0x8000)),
+            Arch::Riscv32 | Arch::Riscv64 => symbol("__global_pointer$"),
+            _ => None,
+        }
+    }
+
+    /// The `.got` section's entries, in the image's byte order.
+    fn got(&self) -> Option<rampage_arch::Got> {
+        let section = self.sections.iter().find(|section| section.name == ".got")?;
+        let bytes = self.read(section.address, section.size)?;
+        let size = usize::from(self.arch.pointer_size());
+        let entries = bytes
+            .chunks_exact(size)
+            .map(|entry| {
+                let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
+                if self.big_endian { entry.iter().fold(0, fold) } else { entry.iter().rev().fold(0, fold) }
+            })
+            .collect();
+        Some(rampage_arch::Got { address: section.address, entries })
     }
 
     /// A decoder for this image's code.

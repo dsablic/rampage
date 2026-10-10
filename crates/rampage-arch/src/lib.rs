@@ -1,6 +1,7 @@
 pub mod a64;
 mod cs;
 pub mod hex;
+mod track;
 mod x86;
 
 use serde::Serialize;
@@ -62,6 +63,14 @@ impl Arch {
         }
     }
 
+    /// Instructions executed after a branch before it takes effect (MIPS and SPARC delay slots).
+    pub fn delay_slots(self) -> u8 {
+        match self {
+            Arch::Mips | Arch::Mips64 | Arch::Sparc | Arch::Sparc64 => 1,
+            _ => 0,
+        }
+    }
+
     fn names(self) -> &'static [&'static str] {
         NAMES.iter().find(|(arch, _)| *arch == self).map_or(&[], |(_, names)| names)
     }
@@ -93,12 +102,34 @@ pub struct Target {
     pub big_endian: bool,
     /// ARM only: the sorted address ranges that hold Thumb (T32) code.
     pub thumb: std::sync::Arc<[std::ops::Range<u64>]>,
+    /// The value the ABI keeps in its global-pointer register (MIPS `$gp`, PowerPC64 `r2`, RISC-V `gp`), through
+    /// which position-independent code reaches its GOT and data.
+    pub global_pointer: Option<u64>,
+    /// The global offset table's contents, which position-independent code loads addresses from.
+    pub got: Option<Got>,
+}
+
+/// Pointer-sized entries starting at `address`, as stored in the file (before dynamic relocation).
+#[derive(Debug, Clone)]
+pub struct Got {
+    pub address: u64,
+    pub entries: std::sync::Arc<[u64]>,
+}
+
+impl Got {
+    pub fn entry(&self, address: u64, pointer_size: u8) -> Option<u64> {
+        let offset = address.checked_sub(self.address)?;
+        if offset % u64::from(pointer_size) != 0 {
+            return None;
+        }
+        self.entries.get(usize::try_from(offset / u64::from(pointer_size)).ok()?).copied()
+    }
 }
 
 impl Target {
     /// A little-endian target with no Thumb code.
     pub fn new(arch: Arch) -> Self {
-        Self { arch, big_endian: false, thumb: std::sync::Arc::new([]) }
+        Self { arch, big_endian: false, thumb: std::sync::Arc::new([]), global_pointer: None, got: None }
     }
 
     /// Whether `address` lies in Thumb code.

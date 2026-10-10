@@ -139,6 +139,7 @@ fn riscv() {
             ("67000500", IndirectJump),            // jr a0
             ("e7000500", IndirectCall),            // jalr a0
             ("e7024500", IndirectCall),            // jalr t0, 4(a0)
+            ("67030e00", IndirectJump),            // jalr t1, t3, 0 (a PLT stub passing t1)
             ("67800000", Return),                  // ret
             ("6304b500", ConditionalJump(0x1008)), // beq a0, a1, 8
             ("73001000", Halt),                    // ebreak
@@ -218,4 +219,73 @@ fn m68k() {
             ("4afc", Halt),                        // illegal
         ],
     );
+}
+
+/// Decodes `hex` as consecutive instructions from 0x1000 with one decoder, like a straight-line run, and returns
+/// each instruction's (flow, data reference, immediate).
+fn run(target: Target, hex: &str, lengths: &[usize]) -> Vec<(Flow, Option<u64>, Option<u64>)> {
+    let mut decoder = decoder(&target).unwrap();
+    let code = bytes(hex);
+    let mut offset = 0;
+    let mut results = Vec::new();
+    for &len in lengths {
+        let insn = decoder.decode(&code[offset..], AT + offset as u64);
+        assert_eq!(usize::from(insn.len), len, "{:?} at +{offset:#x}", target.arch);
+        results.push((insn.flow, insn.data_ref, insn.immediate));
+        offset += len;
+    }
+    results
+}
+
+#[test]
+fn arm_plt_entries_resolve_their_got_slot() {
+    // add ip, pc, #0, #12; add ip, ip, #0x11000; ldr pc, [ip, #0xbe8]!
+    let results = run(Target::new(Arch::Arm), "00c08fe211ca8ce2e8fbbce5", &[4, 4, 4]);
+    assert_eq!(results[2], (Flow::IndirectJump, Some(0x1008 + 0x11000 + 0xbe8), None));
+}
+
+#[test]
+fn arm_literal_pool_offsets_become_addresses() {
+    // Thumb: ldr r0, [pc, #4]; add r0, pc; nop; nop; .word 0x100
+    let results = run(thumb(), "0148784400bf00bf00010000", &[2, 2]);
+    assert_eq!(results[0], (Flow::Next, Some(0x1008), Some(0x100)));
+    assert_eq!(results[1], (Flow::Next, Some(0x1006 + 0x100), None));
+    // A32: movw r0, #0x1234; movt r0, #0x5678
+    let results = run(Target::new(Arch::Arm), "340201e3780645e3", &[4, 4]);
+    assert_eq!(results[1].2, Some(0x5678_1234));
+}
+
+#[test]
+fn mips_address_pairs_and_the_global_pointer() {
+    // lui $2, 0x41; addiu $2, $2, 0x10; lw $3, 8($2)
+    let results = run(big_endian(Arch::Mips), "3c020041244200108c430008", &[4, 4, 4]);
+    assert_eq!((results[1].2, results[2].1), (Some(0x41_0010), Some(0x41_0018)));
+    // lui $2, 0x41; addu $2, $3, $4; lw $3, 8($2): the add makes $2 unknown.
+    let results = run(big_endian(Arch::Mips), "3c020041006410218c430008", &[4, 4, 4]);
+    assert_eq!(results[2].1, None);
+    // lw $25, -32752($gp) reads a GOT slot.
+    let target = Target { global_pointer: Some(0x41_8ff0), ..big_endian(Arch::Mips) };
+    assert_eq!(run(target, "8f998010", &[4])[0].1, Some(0x41_1000));
+}
+
+#[test]
+fn riscv_auipc_pairs_and_far_calls() {
+    // auipc a0, 1; addi a0, a0, 16; ld a1, 8(a0)
+    let results = run(Target::new(Arch::Riscv64), "171500001305050183358500", &[4, 4, 4]);
+    assert_eq!((results[1].1, results[2].1), (Some(0x2010), Some(0x2018)));
+    // auipc ra, 0; jalr ra, 16(ra)
+    let results = run(Target::new(Arch::Riscv64), "97000000e7800001", &[4, 4]);
+    assert_eq!(results[1].0, Flow::Call(0x1010));
+}
+
+#[test]
+fn powerpc_sparc_and_s390x_address_pairs() {
+    // lis r3, 0x1001; addi r3, r3, 0x10; lwz r4, 8(r3)
+    let results = run(big_endian(Arch::PowerPc), "3c6010013863001080830008", &[4, 4, 4]);
+    assert_eq!((results[1].2, results[2].1), (Some(0x1001_0010), Some(0x1001_0018)));
+    // sethi %hi(0x12345678), %o0; or %o0, 0x78, %o0; ld [%o0+8], %o1
+    let results = run(big_endian(Arch::Sparc), "11048d1590122078d2022008", &[4, 4, 4]);
+    assert_eq!((results[1].2, results[2].1), (Some(0x1234_5478), Some(0x1234_5480)));
+    // larl %r2, 0x1010
+    assert_eq!(run(big_endian(Arch::S390x), "c02000000008", &[6])[0].1, Some(0x1010));
 }
