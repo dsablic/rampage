@@ -1,0 +1,498 @@
+use std::collections::VecDeque;
+
+use rampage_arch::Flow;
+use rampage_arch::ir::{Effect, LiftedInstruction, Value};
+use serde::Serialize;
+
+const VARIABLES: usize = 33;
+const MEMORY: usize = 32;
+const MAX_BLOCKS: usize = 512;
+const MAX_INSTRUCTIONS: usize = 20_000;
+const MAX_DEFINITIONS: usize = 20_000;
+const MAX_VALUE_NODES: usize = 80_000;
+
+#[derive(Debug, Clone)]
+pub struct InputBlock {
+    pub address: u64,
+    pub instructions: Vec<LiftedInstruction>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Ssa {
+    pub entry: usize,
+    pub blocks: Vec<Block>,
+    pub definitions: Vec<Definition>,
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Block {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub reachable: bool,
+    pub predecessors: Vec<usize>,
+    pub phis: Vec<usize>,
+    pub statements: Vec<Statement>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Statement {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub flow: Flow,
+    pub bits: u8,
+    pub definitions: Vec<usize>,
+    pub observations: Vec<Expression>,
+    pub barrier: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Definition {
+    pub id: usize,
+    pub variable: Variable,
+    pub expression: Expression,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Variable {
+    Register { number: u8 },
+    StackPointer,
+    Memory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Expression {
+    Input,
+    Unknown {
+        reason: String,
+    },
+    Reference {
+        definition: usize,
+    },
+    Constant {
+        #[serde(serialize_with = "rampage_arch::hex::address")]
+        value: u64,
+    },
+    Add {
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+    Subtract {
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+    Low32 {
+        value: Box<Expression>,
+    },
+    Condition {
+        value: Box<Expression>,
+        nonzero: bool,
+        bit: Option<u8>,
+    },
+    Phi {
+        inputs: Vec<PhiInput>,
+    },
+    Load {
+        memory: usize,
+        address: Box<Expression>,
+        bits: u8,
+    },
+    Store {
+        memory: usize,
+        address: Box<Expression>,
+        value: Box<Expression>,
+        bits: u8,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PhiInput {
+    /// None denotes the external entry edge, including when entry has a loop backedge.
+    pub predecessor: Option<usize>,
+    pub definition: usize,
+}
+
+fn variable(index: usize) -> Variable {
+    match index {
+        31 => Variable::StackPointer,
+        MEMORY => Variable::Memory,
+        _ => Variable::Register { number: index as u8 },
+    }
+}
+
+fn destination(value: &Value) -> Option<usize> {
+    match value {
+        Value::Register { number } if *number < 31 => Some(usize::from(*number)),
+        Value::StackPointer => Some(31),
+        _ => None,
+    }
+}
+
+fn expression(value: &Value, state: &[usize; VARIABLES], depth: usize) -> Result<Expression, String> {
+    if depth > 64 {
+        return Err("IR expression nesting exceeds 64 levels".to_owned());
+    }
+    Ok(match value {
+        Value::Register { number } if *number < 31 => Expression::Reference { definition: state[*number as usize] },
+        Value::Register { .. } => return Err("IR register number must be below 31".to_owned()),
+        Value::StackPointer => Expression::Reference { definition: state[31] },
+        Value::Constant { value } => Expression::Constant { value: *value },
+        Value::Add { left, right } => Expression::Add {
+            left: Box::new(expression(left, state, depth + 1)?),
+            right: Box::new(expression(right, state, depth + 1)?),
+        },
+        Value::Subtract { left, right } => Expression::Subtract {
+            left: Box::new(expression(left, state, depth + 1)?),
+            right: Box::new(expression(right, state, depth + 1)?),
+        },
+    })
+}
+
+fn narrow(value: Expression, bits: u8) -> Expression {
+    if bits == 32 { Expression::Low32 { value: Box::new(value) } } else { value }
+}
+
+fn define(definitions: &mut Vec<Definition>, state: &mut [usize; VARIABLES], index: usize, value: Expression) -> usize {
+    let id = definitions.len();
+    definitions.push(Definition { id, variable: variable(index), expression: value });
+    state[index] = id;
+    id
+}
+
+fn references(value: &Expression, out: &mut Vec<usize>) {
+    match value {
+        Expression::Reference { definition } => out.push(*definition),
+        Expression::Add { left, right } | Expression::Subtract { left, right } => {
+            references(left, out);
+            references(right, out);
+        }
+        Expression::Low32 { value } | Expression::Condition { value, .. } => references(value, out),
+        Expression::Phi { inputs } => out.extend(inputs.iter().map(|input| input.definition)),
+        Expression::Load { memory, address, .. } => {
+            out.push(*memory);
+            references(address, out);
+        }
+        Expression::Store { memory, address, value, .. } => {
+            out.push(*memory);
+            references(address, out);
+            references(value, out);
+        }
+        _ => {}
+    }
+}
+
+fn validate_values(values: &[&Value], nodes: &mut usize) -> Result<(), String> {
+    for value in values {
+        let mut stack = vec![(*value, 0usize)];
+        while let Some((value, depth)) = stack.pop() {
+            *nodes += 1;
+            if *nodes > MAX_VALUE_NODES {
+                return Err("SSA value-node limit exceeded (80,000)".to_owned());
+            }
+            if depth > 64 {
+                return Err("IR expression nesting exceeds 64 levels".to_owned());
+            }
+            if let Value::Add { left, right } | Value::Subtract { left, right } = value {
+                stack.push((right, depth + 1));
+                stack.push((left, depth + 1));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn budget(input: &[InputBlock]) -> Result<(), String> {
+    let mut definitions = VARIABLES * (1 + input.len());
+    let mut nodes = 0;
+    for insn in input.iter().flat_map(|block| &block.instructions) {
+        let barrier = !insn.complete
+            || matches!(insn.flow, Flow::Call(_) | Flow::IndirectCall | Flow::Invalid)
+            || insn.effects.iter().any(|effect| matches!(effect, Effect::Barrier { .. }));
+        if barrier {
+            definitions += VARIABLES;
+        }
+        for effect in &insn.effects {
+            match effect {
+                Effect::Assign { destination, value } => {
+                    if !barrier {
+                        definitions += 1;
+                    }
+                    validate_values(&[destination, value], &mut nodes)?;
+                }
+                Effect::Load { destination, address } => {
+                    if !barrier {
+                        definitions += 1;
+                    }
+                    validate_values(&[destination, address], &mut nodes)?;
+                }
+                Effect::Store { address, value } => {
+                    if !barrier {
+                        definitions += 1;
+                    }
+                    validate_values(&[address, value], &mut nodes)?;
+                }
+                Effect::Discard { value } | Effect::ConditionalControl { value, .. } => {
+                    validate_values(&[value], &mut nodes)?;
+                }
+                Effect::LoadDiscard { address } => validate_values(&[address], &mut nodes)?,
+                Effect::Control { inputs } => {
+                    if inputs.len() > MAX_VALUE_NODES.saturating_sub(nodes) {
+                        return Err("SSA value-node limit exceeded (80,000)".to_owned());
+                    }
+                    for value in inputs {
+                        validate_values(&[value], &mut nodes)?;
+                    }
+                }
+                Effect::Barrier { .. } => {}
+            }
+            if definitions > MAX_DEFINITIONS {
+                return Err("SSA definition limit exceeded (20,000)".to_owned());
+            }
+        }
+        if definitions > MAX_DEFINITIONS {
+            return Err("SSA definition limit exceeded (20,000)".to_owned());
+        }
+    }
+    Ok(())
+}
+
+/// Block-parameter SSA: every block starts with phi parameters, with predecessor values wired after translation.
+pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Result<Ssa, String> {
+    if input.is_empty() || input.len() > MAX_BLOCKS || entry >= input.len() || edges.len() > 4096 {
+        return Err("SSA requires 1–512 blocks, a valid entry and at most 4096 edges".to_owned());
+    }
+    let instructions: usize = input.iter().map(|block| block.instructions.len()).sum();
+    if instructions > MAX_INSTRUCTIONS {
+        return Err("SSA instruction limit exceeded (20,000)".to_owned());
+    }
+    let effects: usize = input.iter().flat_map(|block| &block.instructions).map(|insn| insn.effects.len()).sum();
+    if effects > MAX_INSTRUCTIONS * 4 {
+        return Err("SSA effect limit exceeded (80,000)".to_owned());
+    }
+    budget(input)?;
+    let mut predecessors = vec![Vec::new(); input.len()];
+    let mut successors = vec![Vec::new(); input.len()];
+    for &(from, to) in edges {
+        if from >= input.len() || to >= input.len() {
+            return Err("SSA edge refers to a nonexistent block".to_owned());
+        }
+        predecessors[to].push(from);
+        successors[from].push(to);
+    }
+    for list in predecessors.iter_mut().chain(successors.iter_mut()) {
+        list.sort_unstable();
+        list.dedup();
+    }
+    let mut reachable = vec![false; input.len()];
+    let mut queue = VecDeque::from([entry]);
+    while let Some(block) = queue.pop_front() {
+        if !std::mem::replace(&mut reachable[block], true) {
+            queue.extend(&successors[block]);
+        }
+    }
+    let mut definitions = Vec::new();
+    let mut initial = [0; VARIABLES];
+    for index in 0..VARIABLES {
+        define(&mut definitions, &mut initial, index, Expression::Input);
+    }
+    let mut parameters = vec![[0; VARIABLES]; input.len()];
+    for (_, state) in parameters.iter_mut().enumerate().filter(|(block, _)| reachable[*block]) {
+        for index in 0..VARIABLES {
+            define(&mut definitions, state, index, Expression::Phi { inputs: Vec::new() });
+        }
+    }
+    let mut blocks = Vec::with_capacity(input.len());
+    let mut outgoing = parameters.clone();
+    for (index, source) in input.iter().enumerate() {
+        let mut block = Block {
+            address: source.address,
+            reachable: reachable[index],
+            predecessors: predecessors[index].iter().copied().filter(|&from| reachable[from]).collect(),
+            phis: Vec::new(),
+            statements: Vec::new(),
+        };
+        if !reachable[index] {
+            blocks.push(block);
+            continue;
+        }
+        let state = &mut outgoing[index];
+        for insn in &source.instructions {
+            if !matches!(insn.bits, 32 | 64) {
+                return Err("SSA supports 32/64-bit instruction widths only".to_owned());
+            }
+            let mut statement = Statement {
+                address: insn.address,
+                flow: insn.flow,
+                bits: insn.bits,
+                definitions: Vec::new(),
+                observations: Vec::new(),
+                barrier: !insn.complete
+                    || matches!(insn.flow, Flow::Call(_) | Flow::IndirectCall | Flow::Invalid)
+                    || insn.effects.iter().any(|effect| matches!(effect, Effect::Barrier { .. })),
+            };
+            if statement.barrier {
+                for index in 0..VARIABLES {
+                    statement.definitions.push(define(
+                        &mut definitions,
+                        state,
+                        index,
+                        Expression::Unknown { reason: "unsupported instruction semantics".to_owned() },
+                    ));
+                }
+            } else {
+                for effect in &insn.effects {
+                    match effect {
+                        Effect::Assign { destination: target, value } => {
+                            let value = narrow(expression(value, state, 0)?, insn.bits);
+                            let index = destination(target).ok_or("IR assignment destination is not writable")?;
+                            statement.definitions.push(define(&mut definitions, state, index, value));
+                        }
+                        Effect::Load { destination: target, address } => {
+                            let value = Expression::Load {
+                                memory: state[MEMORY],
+                                address: Box::new(expression(address, state, 0)?),
+                                bits: insn.bits,
+                            };
+                            let index = destination(target).ok_or("IR load destination is not writable")?;
+                            statement.definitions.push(define(
+                                &mut definitions,
+                                state,
+                                index,
+                                narrow(value, insn.bits),
+                            ));
+                        }
+                        Effect::Store { address, value } => {
+                            let value = Expression::Store {
+                                memory: state[MEMORY],
+                                address: Box::new(expression(address, state, 0)?),
+                                value: Box::new(narrow(expression(value, state, 0)?, insn.bits)),
+                                bits: insn.bits,
+                            };
+                            statement.definitions.push(define(&mut definitions, state, MEMORY, value));
+                        }
+                        Effect::Discard { value } => {
+                            statement.observations.push(narrow(expression(value, state, 0)?, insn.bits));
+                        }
+                        Effect::LoadDiscard { address } => statement.observations.push(Expression::Load {
+                            memory: state[MEMORY],
+                            address: Box::new(expression(address, state, 0)?),
+                            bits: insn.bits,
+                        }),
+                        Effect::ConditionalControl { value, nonzero, bit } => {
+                            if bit.is_some_and(|bit| bit >= insn.bits) {
+                                return Err("conditional-control bit exceeds register width".to_owned());
+                            }
+                            statement.observations.push(Expression::Condition {
+                                value: Box::new(narrow(expression(value, state, 0)?, insn.bits)),
+                                nonzero: *nonzero,
+                                bit: *bit,
+                            });
+                        }
+                        Effect::Control { inputs } => {
+                            for value in inputs {
+                                statement.observations.push(narrow(expression(value, state, 0)?, insn.bits));
+                            }
+                        }
+                        Effect::Barrier { .. } => unreachable!(),
+                    }
+                }
+            }
+            block.statements.push(statement);
+        }
+        blocks.push(block);
+    }
+    for (block, state) in parameters.iter().enumerate().filter(|(block, _)| reachable[*block]) {
+        for index in 0..VARIABLES {
+            let mut inputs: Vec<_> = predecessors[block]
+                .iter()
+                .copied()
+                .filter(|&from| reachable[from])
+                .map(|from| PhiInput { predecessor: Some(from), definition: outgoing[from][index] })
+                .collect();
+            if block == entry {
+                inputs.insert(0, PhiInput { predecessor: None, definition: initial[index] });
+            }
+            definitions[state[index]].expression = Expression::Phi { inputs };
+        }
+    }
+    // Keep phi nodes on demand: unused register parameters need not fill the serialized graph.
+    let mut live = vec![false; definitions.len()];
+    let mut work = Vec::new();
+    for statement in blocks.iter().flat_map(|block| &block.statements) {
+        work.extend(&statement.definitions);
+        for observation in &statement.observations {
+            references(observation, &mut work);
+        }
+    }
+    while let Some(id) = work.pop() {
+        if !std::mem::replace(&mut live[id], true) {
+            references(&definitions[id].expression, &mut work);
+        }
+    }
+    let mut remap = vec![0; definitions.len()];
+    let mut count = 0;
+    for (id, &needed) in live.iter().enumerate() {
+        if needed {
+            remap[id] = count;
+            count += 1;
+        }
+    }
+    for (index, block) in blocks.iter_mut().enumerate().filter(|(_, block)| block.reachable) {
+        block.phis = parameters[index].iter().copied().filter(|&id| live[id]).map(|id| remap[id]).collect();
+        for statement in &mut block.statements {
+            for id in &mut statement.definitions {
+                *id = remap[*id];
+            }
+            for observation in &mut statement.observations {
+                rewrite(observation, &remap);
+            }
+        }
+    }
+    let definitions = definitions
+        .into_iter()
+        .filter(|definition| live[definition.id])
+        .map(|mut definition| {
+            definition.id = remap[definition.id];
+            rewrite(&mut definition.expression, &remap);
+            definition
+        })
+        .collect();
+    Ok(Ssa {
+        entry,
+        blocks,
+        definitions,
+        limitations: vec![
+            "Register and memory SSA only; block parameters may include redundant phi nodes.".to_owned(),
+            "Unsupported semantics invalidate all registers and memory; no alias analysis or decompilation.".to_owned(),
+            "32-bit results are low-32-bit values zero-extended into architectural registers.".to_owned(),
+        ],
+    })
+}
+
+fn rewrite(value: &mut Expression, remap: &[usize]) {
+    match value {
+        Expression::Reference { definition } => *definition = remap[*definition],
+        Expression::Add { left, right } | Expression::Subtract { left, right } => {
+            rewrite(left, remap);
+            rewrite(right, remap);
+        }
+        Expression::Low32 { value } | Expression::Condition { value, .. } => rewrite(value, remap),
+        Expression::Phi { inputs } => {
+            for input in inputs {
+                input.definition = remap[input.definition];
+            }
+        }
+        Expression::Load { memory, address, .. } => {
+            *memory = remap[*memory];
+            rewrite(address, remap);
+        }
+        Expression::Store { memory, address, value, .. } => {
+            *memory = remap[*memory];
+            rewrite(address, remap);
+            rewrite(value, remap);
+        }
+        _ => {}
+    }
+}

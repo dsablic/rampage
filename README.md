@@ -125,7 +125,8 @@ The same CLI, UI and MCP tools open snapshots and bundle directories. See
 On AArch64, known ADR/ADRP/ADD/MOV/LDR values can resolve BR/BLR targets through readable, non-writable pointers.
 This does not resolve authenticated pointers or replace a debugger/decompiler. `function_summary` exposes
 the decoded graph, paginated references and partial typed AArch64 IR to tools, explicitly as a structural
-summary rather than recovered source. Unsupported instruction semantics are explicit IR barriers.
+summary rather than recovered source. Bounded register/memory SSA exposes predecessor-indexed phi nodes and
+32-bit result truncation. Unsupported instruction semantics are explicit barriers, not inferred no-ops.
 
 ## License
 

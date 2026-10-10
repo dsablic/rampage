@@ -90,3 +90,65 @@ fn writable_pointer_at_a_join_never_gets_one_false_proven_target() {
     let references = project.xrefs(rampage_api::XrefQuery::From(0x1000), None, None).unwrap();
     assert!(!references.items.iter().any(|reference| reference.from == 0x1018 && reference.to == 0x4000));
 }
+
+#[test]
+fn summary_ssa_carries_diamond_definitions_into_the_join() {
+    use rampage_analysis::ssa::{Expression, Variable};
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-ssa-diamond.snapshot.json");
+    let project = Project::new(Binary::open(path).unwrap());
+    let summary = project.function_summary(0x1000).unwrap();
+    assert_eq!(summary.lifted_instructions, summary.ir.len());
+    let ssa = summary.ssa.unwrap();
+    let join = ssa.blocks.iter().find(|block| block.address == 0x1010).unwrap();
+    let phi = join
+        .phis
+        .iter()
+        .map(|&id| &ssa.definitions[id])
+        .find(|definition| definition.variable == Variable::Register { number: 1 })
+        .unwrap();
+    let Expression::Phi { inputs } = &phi.expression else { panic!("missing phi") };
+    assert_eq!(inputs.len(), 2);
+    let constants: Vec<_> = inputs.iter().map(|input| &ssa.definitions[input.definition].expression).collect();
+    assert!(constants.contains(&&Expression::Constant { value: 7 }));
+    assert!(constants.contains(&&Expression::Constant { value: 11 }));
+}
+
+#[test]
+fn oversized_ssa_does_not_hide_the_structural_summary() {
+    let path = std::env::temp_dir().join(format!("rampage-ssa-budget-{}.json", std::process::id()));
+    let mut bytes = "1f2003d5".repeat(20_001);
+    bytes.push_str("c0035fd6");
+    let snapshot = serde_json::json!({
+        "format": "rampage-snapshot-v1", "arch": "aarch64", "provenance": "SSA resource fixture",
+        "regions": [{ "name": "text", "address": "0x1000", "permissions": "r-x", "bytes": bytes }],
+        "seeds": ["0x1000"], "entry": "0x1000"
+    });
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    serde_json::to_writer(&mut file, &snapshot).unwrap();
+    drop(file);
+    let project = Project::new(Binary::open(&path).unwrap());
+    let summary = project.function_summary(0x1000).unwrap();
+    assert_eq!(summary.ir.len(), 20_002);
+    assert!(summary.ssa.is_none());
+    assert!(summary.limitations.iter().any(|text| text.contains("SSA omitted") && text.contains("instruction limit")));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn barrier_amplification_omits_ssa_before_allocating_large_definition_tables() {
+    let path = std::env::temp_dir().join(format!("rampage-ssa-definitions-{}.json", std::process::id()));
+    let mut bytes = "0800018b".repeat(19_999);
+    bytes.push_str("c0035fd6");
+    let snapshot = serde_json::json!({
+        "format": "rampage-snapshot-v1", "arch": "aarch64", "provenance": "SSA barrier resource fixture",
+        "regions": [{ "name": "text", "address": "0x1000", "permissions": "r-x", "bytes": bytes }],
+        "seeds": ["0x1000"], "entry": "0x1000"
+    });
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    serde_json::to_writer(&mut file, &snapshot).unwrap();
+    drop(file);
+    let summary = Project::new(Binary::open(&path).unwrap()).function_summary(0x1000).unwrap();
+    assert!(summary.ssa.is_none());
+    assert!(summary.limitations.iter().any(|text| text.contains("definition limit")));
+    std::fs::remove_file(path).unwrap();
+}

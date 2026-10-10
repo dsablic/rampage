@@ -58,7 +58,19 @@ The snapshot contains bytes and explicit seeds, not register state, modules, rel
 history. Authenticated pointers and unknown indirect targets are not guessed. A capture is not a decompiler
 or a complete debugger integration. `audit` reports evidence and limitations, not proof of encryption.
 
-`summarize --at 0x1000 --json` includes a partial instruction IR alongside the graph and paginated references.
+`rampage summarize capture.json --at 0x1000 --json` includes a partial instruction IR alongside the graph and references.
 `complete` applies to each lifted instruction, not the function. Unimplemented instruction semantics produce
 barriers. The IR currently covers immediate ADD/SUB without flag writes, MOVZ, 64-bit register moves,
-unsigned-offset 64-bit loads/stores and NOP on AArch64. It does not implement SSA or decompilation.
+unsigned-offset 64-bit loads/stores, NOP, direct unconditional branches, CBZ/CBNZ/TBZ/TBNZ, BR and RET on AArch64.
+Calls and unsupported conditions remain barriers.
+
+The `ssa` field in AArch64 summaries gives each register and memory definition a unique ID. Block-entry phi
+nodes name incoming definitions by predecessor block, including an external input edge when the entry has
+a backedge. Stores create memory versions; loads reference them but are not folded into constants. Unknown
+instructions invalidate register and memory knowledge. A 32-bit result is represented as `low32`, zero-extended
+into its architectural register. Unreachable blocks contribute no phi inputs.
+Loads/stores retain their access widths; conditional controls retain polarity and the tested bit where applicable.
+
+SSA is omitted with a limitation message for functions exceeding 512 blocks, 20,000 instructions or 4,096
+edges, or budgets of 20,000 generated definitions and 80,000 input value nodes. Budgets are checked before
+SSA allocation. It is a data-flow representation over the partial IR, not source-level variable recovery or a decompiler.

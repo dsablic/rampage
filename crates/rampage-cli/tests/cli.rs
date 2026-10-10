@@ -35,6 +35,7 @@ fn snapshot_disassembly_and_functions_use_captured_virtual_addresses() {
         .clone();
     let summary: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(summary["graph"]["edges"].as_array().unwrap().len(), 1);
+    assert!(summary["ssa"]["definitions"].is_array());
 }
 
 fn fixture(name: &str) -> PathBuf {

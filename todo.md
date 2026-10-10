@@ -37,7 +37,12 @@ read-only triage inputs, never bypass or patch fixtures. Runtime tests use progr
 - [x] Plist-authoritative bundle opening and bounded inventory of already-extracted packages/directories.
 - [x] Structural function summaries with paginated references, CFG and explicit non-decompiler limitations.
 - [x] Partial typed AArch64 IR for immediate ADD/SUB, MOVZ/register moves, 64-bit loads/stores and NOP.
-  Unsupported instructions remain explicit barriers; no SSA or source-level reconstruction is claimed.
+  Unsupported instructions remain explicit barriers; no source-level reconstruction is claimed.
+- [x] Bounded register/memory SSA with block-entry phi nodes, entry/backedge inputs, unreachable-block handling,
+  zero-extended 32-bit results and full semantic barriers; exposed through structural function summaries.
+  Memory access widths and conditional polarity/tested bits are retained. Generated-definition and input-node
+  budgets reject amplification before SSA allocation.
+  Minimal phi placement, dominance queries, alias analysis and decompilation remain open.
 
 Full instruction semantics, production decompilation, arbitrary debugger control and multi-module runtime
 resolution are separate substantial deliverables; keep their acceptance cases explicit rather than calling

@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::{ApiError, FunctionGraph, Page, Project, XrefQuery, XrefRow};
+use rampage_analysis::ssa::{self, InputBlock, Ssa};
 
 #[derive(Debug, Serialize)]
 pub struct FunctionSummary {
@@ -9,6 +10,8 @@ pub struct FunctionSummary {
     pub limitations: Vec<String>,
     pub ir: Vec<rampage_arch::ir::LiftedInstruction>,
     pub lifted_instructions: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssa: Option<Ssa>,
 }
 
 impl Project {
@@ -35,16 +38,38 @@ impl Project {
             ir.push(rampage_arch::ir::lift(self.binary.arch, &bytes, &insn));
         }
         let lifted_instructions = ir.iter().filter(|instruction| instruction.complete).count();
-        Ok(FunctionSummary {
-            graph,
-            references,
-            ir,
-            lifted_instructions,
-            limitations: vec![
-                "This is a structural summary of decoded blocks and references, not decompiled source.".to_owned(),
-                "Unknown indirect transfers and runtime-generated code are not reconstructed.".to_owned(),
-                "No source-level types, variable recovery, SSA or complete instruction semantics.".to_owned(),
-            ],
-        })
+        let mut limitations = vec![
+            "This is a structural summary of decoded blocks and references, not decompiled source.".to_owned(),
+            "Unknown indirect transfers and runtime-generated code are not reconstructed.".to_owned(),
+            "No source-level types, variable recovery or complete instruction semantics.".to_owned(),
+        ];
+        let ssa = if self.binary.arch == rampage_arch::Arch::Aarch64 {
+            let mut offset = 0;
+            let blocks: Vec<_> = graph
+                .blocks
+                .iter()
+                .map(|block| {
+                    let end = offset + block.lines.len();
+                    let instructions = ir[offset..end].to_vec();
+                    offset = end;
+                    InputBlock { address: block.start, instructions }
+                })
+                .collect();
+            let edges: Vec<_> = graph.edges.iter().map(|edge| (edge.from, edge.to)).collect();
+            let result = graph
+                .entry()
+                .ok_or_else(|| "graph has no entry block".to_owned())
+                .and_then(|entry| ssa::build(&blocks, &edges, entry));
+            match result {
+                Ok(ssa) => Some(ssa),
+                Err(error) => {
+                    limitations.push(format!("SSA omitted: {error}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        Ok(FunctionSummary { graph, references, ir, lifted_instructions, ssa, limitations })
     }
 }

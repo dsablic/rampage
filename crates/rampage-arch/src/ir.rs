@@ -36,6 +36,8 @@ pub enum Value {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Effect {
+    Control { inputs: Vec<Value> },
+    ConditionalControl { value: Value, nonzero: bool, bit: Option<u8> },
     Discard { value: Value },
     LoadDiscard { address: Value },
     Assign { destination: Value, value: Value },
@@ -105,6 +107,22 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
         });
         lifted.complete = true;
     } else if word == 0xd503_201f {
+        lifted.complete = true;
+    } else if word & 0xfc00_0000 == 0x1400_0000 {
+        lifted.effects.push(Effect::Control { inputs: Vec::new() });
+        lifted.complete = true;
+    } else if word & 0x7e00_0000 == 0x3400_0000 || word & 0x7e00_0000 == 0x3600_0000 {
+        let bits = if sf { 64 } else { 32 };
+        lifted.bits = bits;
+        let bit = (word & 0x7e00_0000 == 0x3600_0000).then_some((((word >> 19) & 31) | ((word >> 31) << 5)) as u8);
+        lifted.effects.push(Effect::ConditionalControl {
+            value: register(rd, false),
+            nonzero: word & (1 << 24) != 0,
+            bit,
+        });
+        lifted.complete = true;
+    } else if word & 0xffff_fc1f == 0xd61f_0000 || word & 0xffff_fc1f == 0xd65f_0000 {
+        lifted.effects.push(Effect::Control { inputs: vec![register(rn, false)] });
         lifted.complete = true;
     }
     if !lifted.complete {
@@ -178,5 +196,35 @@ mod tests {
             assert!(!instruction(word).complete, "{word:08x}");
         }
         assert!(matches!(&instruction(0xf940_03ff).effects[0], Effect::LoadDiscard { .. }));
+    }
+
+    #[test]
+    fn control_inputs_are_explicit_but_calls_and_flag_conditions_stay_barriers() {
+        for (word, bits) in [(0x3400_0060, 32), (0xb400_0060, 64), (0x3600_0060, 32), (0xb600_0060, 64)] {
+            let lifted = instruction(word);
+            assert!(lifted.complete);
+            assert_eq!(lifted.bits, bits);
+            assert!(matches!(
+                &lifted.effects[0],
+                Effect::ConditionalControl { value: Value::Register { number: 0 }, .. }
+            ));
+        }
+        for word in [0x1400_0002, 0xd61f_0100, 0xd65f_03c0] {
+            assert!(instruction(word).complete, "{word:08x}");
+        }
+        for word in [0x9400_0002, 0xd63f_0100, 0x5400_0040] {
+            assert!(!instruction(word).complete, "{word:08x}");
+        }
+    }
+
+    #[test]
+    fn opposite_branch_polarities_and_distinct_bits_have_distinct_ir() {
+        assert_ne!(instruction(0x3400_0060), instruction(0x3500_0060));
+        assert_ne!(instruction(0x3600_0060), instruction(0x3700_0060));
+        assert_ne!(instruction(0x3600_0060), instruction(0x3608_0060));
+        assert!(matches!(
+            instruction(0x3608_0060).effects[0],
+            Effect::ConditionalControl { nonzero: false, bit: Some(1), .. }
+        ));
     }
 }

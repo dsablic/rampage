@@ -100,6 +100,25 @@ async fn explores_a_binary_end_to_end() {
 }
 
 #[tokio::test]
+async fn function_summary_exposes_ssa_through_the_shared_registry() {
+    let client = connect().await;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/data/runtime-ssa-diamond.snapshot.json")
+        .to_string_lossy()
+        .into_owned();
+    let summary = json_of(&call(&client, "function_summary", json!({ "path": path, "at": "0x1000" })).await);
+    assert!(
+        summary["ssa"]["definitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|definition| definition["expression"]["kind"] == "phi"
+                && definition["expression"]["inputs"].as_array().unwrap().len() == 2)
+    );
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn pages_are_capped() {
     let client = connect().await;
     let page = json_of(&call(&client, "list_functions", json!({ "path": fixture("hello-x64.elf"), "limit": 2 })).await);
