@@ -27,6 +27,8 @@ fn main_window_with_a_binary() {
     let ctx = harness.ctx.clone();
     harness.state_mut().open(&ctx, fixture("hello-x64-dyn.elf"), None);
     harness.run();
+    harness.run();
+    harness.run();
     harness.snapshot("main-elf");
 }
 

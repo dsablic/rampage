@@ -1,11 +1,10 @@
 //! The dockable panels.
 
-use egui::{RichText, Sense, TextEdit, Ui, WidgetText};
+use egui::{Color32, RichText, Sense, TextEdit, Ui, WidgetText};
 use egui_extras::{Column, TableBuilder};
-use rampage_analysis::discover::XrefKind;
 use rampage_loaders::Details;
 
-use crate::workspace::Workspace;
+use crate::workspace::{Filter, Workspace, matches};
 use crate::{listing, theme};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -41,7 +40,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Imports => format!("Imports{}", count(workspace.imports.len())),
             Tab::Exports => format!("Exports{}", count(workspace.exports.len())),
             Tab::Disassembly => match &workspace.listing {
-                Some(Ok(listing)) if !listing.name.is_empty() => format!("Disassembly - {}", listing.name),
+                Some(Ok(listing)) if !listing.function.name.is_empty() => {
+                    format!("Disassembly - {}", listing.function.name)
+                }
                 None if workspace.analysis_ready() => format!("Hex - {:#x}", workspace.cursor),
                 _ => "Disassembly".to_owned(),
             },
@@ -68,44 +69,81 @@ impl egui_dock::TabViewer for Viewer<'_> {
     }
 }
 
-fn filter_box(ui: &mut Ui, text: &mut String, hint: &str) {
-    ui.add(TextEdit::singleline(text).hint_text(hint).desired_width(f32::INFINITY));
+fn filter_box(ui: &mut Ui, filter: &mut Filter, hint: &str) {
+    ui.add(TextEdit::singleline(&mut filter.text).hint_text(hint).desired_width(f32::INFINITY));
     ui.add_space(2.0);
-}
-
-/// Case-insensitive (ASCII) substring test that allocates nothing, for filtering hundreds of thousands of rows.
-fn matches(haystack: &str, needle: &str) -> bool {
-    let (haystack, needle) = (haystack.as_bytes(), needle.as_bytes());
-    needle.is_empty() || haystack.windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle))
-}
-
-/// Indices of the rows matching a filter, recomputed only when the filter or the row count changes.
-#[derive(Default)]
-pub struct Filtered {
-    needle: String,
-    rows: usize,
-    indices: Vec<usize>,
-    valid: bool,
-}
-
-impl Filtered {
-    pub fn get(&mut self, needle: &str, rows: usize, keep: impl Fn(usize) -> bool) -> &[usize] {
-        if !self.valid || self.needle != needle || self.rows != rows {
-            self.indices = (0..rows).filter(|&index| keep(index)).collect();
-            self.needle = needle.to_owned();
-            self.rows = rows;
-            self.valid = true;
-        }
-        &self.indices
-    }
-}
-
-fn row_height(ui: &Ui) -> f32 {
-    ui.text_style_height(&egui::TextStyle::Monospace) + 4.0
 }
 
 fn status(ui: &mut Ui, message: &str) {
     ui.centered_and_justified(|ui| ui.label(RichText::new(message).color(theme::DIM)));
+}
+
+fn mono(text: impl Into<String>, color: Color32) -> RichText {
+    RichText::new(text).color(color).monospace()
+}
+
+fn address(address: u64) -> RichText {
+    mono(format!("{address:x}"), theme::ADDRESS)
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+/// One table row: its cells, whether it is the current item, and where clicking it goes.
+struct Row {
+    cells: Vec<RichText>,
+    selected: bool,
+    target: Option<u64>,
+}
+
+/// A striped, clickable table of `count` rows built on demand by `row_at`, so only visible rows are formatted.
+/// Column `wide` takes the remaining width. Returns the target of the clicked row.
+fn table(
+    ui: &mut Ui,
+    header: &[&str],
+    columns: usize,
+    wide: usize,
+    count: usize,
+    mut row_at: impl FnMut(usize) -> Row,
+) -> Option<u64> {
+    let height = ui.text_style_height(&egui::TextStyle::Monospace) + 4.0;
+    let mut builder = TableBuilder::new(ui).striped(true).sense(Sense::click());
+    for index in 0..columns {
+        builder = builder.column(if index == wide { Column::remainder().clip(true) } else { Column::auto() });
+    }
+    let mut chosen = None;
+    let body = |body: egui_extras::TableBody| {
+        body.rows(height, count, |mut row| {
+            let Row { cells, selected, target } = row_at(row.index());
+            row.set_selected(selected);
+            for (index, cell) in cells.into_iter().enumerate() {
+                // The wide column cuts long text short; the others size to fit theirs.
+                let label = egui::Label::new(cell);
+                let label = if index == wide { label.truncate() } else { label.extend() };
+                row.col(|ui| {
+                    ui.add(label);
+                });
+            }
+            if row.response().clicked() {
+                chosen = target;
+            }
+        });
+    };
+    if header.is_empty() {
+        builder.body(body);
+    } else {
+        builder
+            .header(height, |mut row| {
+                for title in header {
+                    row.col(|ui| {
+                        ui.label(RichText::new(*title).color(theme::DIM));
+                    });
+                }
+            })
+            .body(body);
+    }
+    chosen
 }
 
 fn functions(ui: &mut Ui, workspace: &mut Workspace) {
@@ -114,49 +152,20 @@ fn functions(ui: &mut Ui, workspace: &mut Workspace) {
         status(ui, workspace.functions.error().unwrap_or("Analyzing..."));
         return;
     };
-    let filter = &workspace.function_filter;
-    let shown = workspace.function_rows.get(filter, all.len(), |i| matches(&all[i].name, filter));
-    let mut chosen = None;
-    let current = match &workspace.listing {
-        Some(Ok(listing)) => Some(listing.address),
-        _ => None,
-    };
-    let height = row_height(ui);
-    TableBuilder::new(ui)
-        .striped(true)
-        .sense(Sense::click())
-        .column(Column::remainder().clip(true))
-        .column(Column::auto())
-        .column(Column::auto())
-        .header(height, |mut header| {
-            header.col(|ui| {
-                ui.label(RichText::new("Name").color(theme::DIM));
-            });
-            header.col(|ui| {
-                ui.label(RichText::new("Address").color(theme::DIM));
-            });
-            header.col(|ui| {
-                ui.label(RichText::new("Size").color(theme::DIM));
-            });
-        })
-        .body(|body| {
-            body.rows(height, shown.len(), |mut row| {
-                let function = &all[shown[row.index()]];
-                row.set_selected(Some(function.address) == current);
-                row.col(|ui| {
-                    ui.label(RichText::new(&function.name).monospace());
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(format!("{:x}", function.address)).color(theme::ADDRESS).monospace());
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(function.size.to_string()).color(theme::DIM).monospace());
-                });
-                if row.response().clicked() {
-                    chosen = Some(function.address);
-                }
-            });
-        });
+    let current = workspace.listing_address();
+    let shown = workspace.function_filter.shown(all.len(), |index, needle| matches(&all[index].name, needle));
+    let chosen = table(ui, &["Name", "Address", "Size"], 3, 0, shown.len(), |index| {
+        let function = &all[shown[index]];
+        Row {
+            cells: vec![
+                RichText::new(&function.name).monospace(),
+                address(function.address),
+                mono(function.size.to_string(), theme::DIM),
+            ],
+            selected: Some(function.address) == current,
+            target: Some(function.address),
+        }
+    });
     if let Some(address) = chosen {
         workspace.goto(address);
     }
@@ -169,30 +178,16 @@ fn strings(ui: &mut Ui, workspace: &mut Workspace) {
         status(ui, workspace.strings.error().unwrap_or("Scanning strings..."));
         return;
     };
-    let filter = &workspace.string_filter;
-    let shown = workspace.string_rows.get(filter, all.len(), |i| matches(&all[i].text, filter));
-    let mut chosen = None;
-    let height = row_height(ui);
-    TableBuilder::new(ui)
-        .striped(true)
-        .sense(Sense::click())
-        .column(Column::auto())
-        .column(Column::remainder().clip(true))
-        .body(|body| {
-            body.rows(height, shown.len(), |mut row| {
-                let string = &all[shown[row.index()]];
-                row.col(|ui| {
-                    ui.label(RichText::new(format!("{:x}", string.address)).color(theme::ADDRESS).monospace());
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(&string.text).color(theme::COMMENT).monospace());
-                });
-                if row.response().clicked() {
-                    chosen = Some(string.address);
-                }
-            });
-        });
-    // Strings are data: show who references them rather than disassembling them.
+    let shown = workspace.string_filter.shown(all.len(), |index, needle| matches(&all[index].text, needle));
+    let chosen = table(ui, &[], 2, 1, shown.len(), |index| {
+        let string = &all[shown[index]];
+        Row {
+            cells: vec![address(string.address), mono(&string.text, theme::COMMENT)],
+            selected: false,
+            target: Some(string.address),
+        }
+    });
+    // Strings are data: going there shows their bytes and who references them.
     if let Some(address) = chosen {
         workspace.goto(address);
     }
@@ -200,121 +195,121 @@ fn strings(ui: &mut Ui, workspace: &mut Workspace) {
 
 fn imports(ui: &mut Ui, workspace: &mut Workspace) {
     filter_box(ui, &mut workspace.import_filter, "Filter imports");
-    let filter = workspace.import_filter.clone();
-    let shown: Vec<usize> = (0..workspace.imports.len())
-        .filter(|&i| {
-            let import = &workspace.imports[i];
-            matches(&import.name, &filter) || import.library.as_deref().is_some_and(|library| matches(library, &filter))
-        })
-        .collect();
-    let mut chosen = None;
-    let height = row_height(ui);
-    TableBuilder::new(ui)
-        .striped(true)
-        .sense(Sense::click())
-        .column(Column::remainder().clip(true))
-        .column(Column::auto().clip(true))
-        .body(|body| {
-            body.rows(height, shown.len(), |mut row| {
-                let import = &workspace.imports[shown[row.index()]];
-                row.col(|ui| {
-                    ui.label(RichText::new(&import.name).monospace());
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(import.library.as_deref().unwrap_or("")).color(theme::DIM));
-                });
-                if row.response().clicked() {
-                    chosen = import.slot;
-                }
-            });
-        });
+    let all = &workspace.imports;
+    let shown = workspace.import_filter.shown(all.len(), |index, needle| {
+        let import = &all[index];
+        matches(&import.name, needle) || import.library.as_deref().is_some_and(|library| matches(library, needle))
+    });
+    let chosen = table(ui, &[], 2, 0, shown.len(), |index| {
+        let import = &all[shown[index]];
+        Row {
+            cells: vec![
+                RichText::new(&import.name).monospace(),
+                RichText::new(import.library.as_deref().unwrap_or("")).color(theme::DIM),
+            ],
+            selected: false,
+            target: import.slot,
+        }
+    });
     if let Some(slot) = chosen {
         workspace.goto(slot);
     }
 }
 
 fn exports(ui: &mut Ui, workspace: &mut Workspace) {
-    let mut chosen = None;
-    let exports = &workspace.exports;
-    let height = row_height(ui);
-    TableBuilder::new(ui)
-        .striped(true)
-        .sense(Sense::click())
-        .column(Column::remainder().clip(true))
-        .column(Column::auto())
-        .body(|body| {
-            body.rows(height, exports.len(), |mut row| {
-                let export = &exports[row.index()];
-                row.col(|ui| {
-                    ui.label(RichText::new(&export.name).monospace());
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(format!("{:x}", export.address)).color(theme::ADDRESS).monospace());
-                });
-                if row.response().clicked() {
-                    chosen = Some(export.address);
-                }
-            });
-        });
+    filter_box(ui, &mut workspace.export_filter, "Filter exports");
+    let all = &workspace.exports;
+    let shown = workspace.export_filter.shown(all.len(), |index, needle| matches(&all[index].name, needle));
+    let chosen = table(ui, &[], 2, 0, shown.len(), |index| {
+        let export = &all[shown[index]];
+        Row {
+            cells: vec![RichText::new(&export.name).monospace(), address(export.address)],
+            selected: false,
+            target: Some(export.address),
+        }
+    });
     if let Some(address) = chosen {
         workspace.goto(address);
     }
 }
 
 fn xrefs(ui: &mut Ui, workspace: &mut Workspace) {
-    let target = match &workspace.listing {
-        Some(Ok(listing)) if !listing.name.is_empty() => listing.name.clone(),
-        _ => format!("{:#x}", workspace.cursor),
+    let Some(panel) = &workspace.xrefs else {
+        status(ui, "Analyzing...");
+        return;
     };
-    ui.label(RichText::new(format!("References to {target}")).color(theme::DIM));
-    let rows = match &workspace.xrefs {
-        Some(Ok(rows)) => rows.clone(),
-        Some(Err(error)) => {
+    ui.label(RichText::new(format!("References to {}", panel.target)).color(theme::DIM));
+    let rows = match &panel.rows {
+        Ok(rows) if rows.is_empty() => return status(ui, "No references"),
+        Ok(rows) => rows,
+        Err(error) => {
             ui.colored_label(theme::WARNING, error);
             return;
         }
-        None => {
-            status(ui, "Analyzing...");
-            return;
-        }
     };
-    if rows.is_empty() {
-        status(ui, "No references");
-        return;
-    }
-    let mut chosen = None;
-    let height = row_height(ui);
-    TableBuilder::new(ui)
-        .striped(true)
-        .sense(Sense::click())
-        .column(Column::auto())
-        .column(Column::auto())
-        .column(Column::remainder().clip(true))
-        .body(|body| {
-            body.rows(height, rows.len(), |mut row| {
-                let xref = &rows[row.index()];
-                let kind = match xref.kind {
-                    XrefKind::Call => "call",
-                    XrefKind::Jump => "jump",
-                    XrefKind::Data => "data",
-                };
-                row.col(|ui| {
-                    ui.label(RichText::new(kind).color(theme::BRANCH).monospace());
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(format!("{:x}", xref.from)).color(theme::ADDRESS).monospace());
-                });
-                row.col(|ui| {
-                    ui.label(RichText::new(xref.from_function.as_deref().unwrap_or("?")).monospace());
-                });
-                if row.response().clicked() {
-                    chosen = Some(xref.from);
-                }
-            });
-        });
+    let chosen = table(ui, &[], 3, 2, rows.len(), |index| {
+        let xref = &rows[index];
+        Row {
+            cells: vec![
+                mono(xref.kind.as_str(), theme::BRANCH),
+                address(xref.from),
+                RichText::new(xref.from_function.as_deref().unwrap_or("?")).monospace(),
+            ],
+            selected: false,
+            target: Some(xref.from),
+        }
+    });
     if let Some(address) = chosen {
         workspace.goto(address);
     }
+}
+
+/// The triage panel's facts about the format, as (label, value) pairs.
+fn facts(details: &Details) -> Vec<(&'static str, String)> {
+    let mut facts = Vec::new();
+    let mut fact = |label, value: String| {
+        if !value.is_empty() {
+            facts.push((label, value));
+        }
+    };
+    match details {
+        Details::Pe(pe) => {
+            fact("Built", format!("{} UTC", pe.timestamp_utc));
+            fact("Subsystem", pe.subsystem.to_owned());
+            fact("Linker", pe.linker_version.clone());
+            fact("Mitigations", pe.characteristics.join(", "));
+            fact("Signed", yes_no(pe.signed).to_owned());
+            if pe.dotnet {
+                fact(".NET", "yes: the code is IL".to_owned());
+            }
+            if !pe.rich.is_empty() {
+                fact("Rich header", format!("{} tool entries", pe.rich.len()));
+            }
+        }
+        Details::Elf(elf) => {
+            fact("Kind", format!("{}{}", elf.kind, if elf.pie { " (PIE)" } else { "" }));
+            fact("Interpreter", elf.interpreter.clone().unwrap_or_default());
+            fact("Needed", elf.needed.join(", "));
+            fact("Hardening", format!("NX {}, RELRO {}", yes_no(elf.nx), elf.relro));
+            fact("Build ID", elf.build_id.clone().unwrap_or_default());
+            fact("Stripped", yes_no(elf.stripped).to_owned());
+        }
+        Details::MachO(macho) => {
+            fact("Type", macho.file_type.to_owned());
+            if let (Some(platform), Some(min_os)) = (&macho.platform, &macho.min_os) {
+                fact("Platform", format!("{platform} {min_os}"));
+            }
+            fact("Libraries", macho.dylibs.join(", "));
+            fact("Flags", macho.flags.join(", "));
+            fact("UUID", macho.uuid.clone().unwrap_or_default());
+            fact("Signed", yes_no(macho.code_signature).to_owned());
+            if macho.encrypted {
+                fact("Encrypted", "yes".to_owned());
+            }
+        }
+        Details::None => {}
+    }
+    facts
 }
 
 fn triage(ui: &mut Ui, workspace: &mut Workspace) {
@@ -322,44 +317,26 @@ fn triage(ui: &mut Ui, workspace: &mut Workspace) {
         status(ui, workspace.triage.error().unwrap_or("Hashing..."));
         return;
     };
+    let overlay = workspace.project.binary.overlay;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        let field = |ui: &mut Ui, name: &str, value: &str| {
-            ui.label(RichText::new(name).color(theme::DIM));
-            ui.label(RichText::new(value).monospace());
-            ui.end_row();
-        };
-        egui::Grid::new("triage-hashes").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
-            field(ui, "Size", &format!("{} bytes", triage.image_size));
-            field(ui, "SHA-256", &triage.image_hashes.sha256);
-            field(ui, "SHA-1", &triage.image_hashes.sha1);
-            field(ui, "MD5", &triage.image_hashes.md5);
+        egui::Grid::new("triage-facts").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
+            let mut field = |name: &str, value: &str| {
+                ui.label(RichText::new(name).color(theme::DIM));
+                ui.add(egui::Label::new(RichText::new(value).monospace()).wrap());
+                ui.end_row();
+            };
+            field("Size", &format!("{} bytes", triage.image_size));
+            field("SHA-256", &triage.image_hashes.sha256);
+            field("SHA-1", &triage.image_hashes.sha1);
+            field("MD5", &triage.image_hashes.md5);
             if let Some(imphash) = &triage.imphash {
-                field(ui, "Imphash", imphash);
+                field("Imphash", imphash);
             }
-            match &triage.details {
-                Details::Pe(pe) => {
-                    field(ui, "Built", &format!("{} UTC", pe.timestamp_utc));
-                    field(ui, "Subsystem", pe.subsystem);
-                    field(ui, "Mitigations", &pe.characteristics.join(", "));
-                    field(ui, "Signed", if pe.signed { "yes" } else { "no" });
-                }
-                Details::Elf(elf) => {
-                    field(ui, "Kind", &format!("{}{}", elf.kind, if elf.pie { " (PIE)" } else { "" }));
-                    if let Some(interpreter) = &elf.interpreter {
-                        field(ui, "Interpreter", interpreter);
-                    }
-                    field(ui, "Needed", &elf.needed.join(", "));
-                    field(ui, "Hardening", &format!("NX {}, RELRO {}", if elf.nx { "yes" } else { "no" }, elf.relro));
-                }
-                Details::MachO(macho) => {
-                    field(ui, "Type", macho.file_type);
-                    if let (Some(platform), Some(min_os)) = (&macho.platform, &macho.min_os) {
-                        field(ui, "Platform", &format!("{platform} {min_os}"));
-                    }
-                    field(ui, "Flags", &macho.flags.join(", "));
-                    field(ui, "Signed", if macho.code_signature { "yes" } else { "no" });
-                }
-                Details::None => {}
+            for (label, value) in facts(&triage.details) {
+                field(label, &value);
+            }
+            if let Some(overlay) = overlay {
+                field("Overlay", &format!("{} bytes at file offset {:#x}", overlay.size, overlay.file_offset));
             }
         });
         ui.add_space(10.0);
@@ -377,10 +354,10 @@ fn triage(ui: &mut Ui, workspace: &mut Workspace) {
         egui::Grid::new("triage-sections").num_columns(4).striped(true).spacing([16.0, 2.0]).show(ui, |ui| {
             for section in &triage.sections {
                 ui.label(RichText::new(&section.name).monospace());
-                ui.label(RichText::new(format!("{:x}", section.address)).color(theme::ADDRESS).monospace());
-                ui.label(RichText::new(&section.perms).color(theme::DIM).monospace());
+                ui.label(address(section.address));
+                ui.label(mono(&section.perms, theme::DIM));
                 let color = if section.entropy > 7.2 { theme::WARNING } else { theme::TEXT };
-                ui.label(RichText::new(format!("{:.2}", section.entropy)).color(color).monospace());
+                ui.label(mono(format!("{:.2}", section.entropy), color));
                 ui.end_row();
             }
         });

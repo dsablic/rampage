@@ -8,8 +8,9 @@ mod workspace;
 
 use std::path::PathBuf;
 
-use egui::{Key, RichText, TextEdit, Ui};
+use egui::{Key, Modifiers, RichText, TextEdit, Ui};
 use egui_dock::{DockArea, DockState, NodeIndex, Style};
+use rampage_api::annotations::Field;
 use rampage_arch::Arch;
 
 pub use tabs::Tab;
@@ -22,6 +23,9 @@ pub struct App {
     /// Run background work inline, for deterministic tests and snapshots.
     blocking: bool,
     themed: bool,
+    /// Whether a text field had keyboard focus last frame. Escape takes focus away before shortcuts run, so this
+    /// keeps Escape in a text field from also going back.
+    typing: bool,
 }
 
 fn default_layout() -> DockState<Tab> {
@@ -35,7 +39,7 @@ fn default_layout() -> DockState<Tab> {
 
 impl Default for App {
     fn default() -> Self {
-        Self { workspace: None, error: None, dock: default_layout(), blocking: false, themed: false }
+        Self { workspace: None, error: None, dock: default_layout(), blocking: false, themed: false, typing: false }
     }
 }
 
@@ -61,6 +65,9 @@ impl App {
 
     /// Brings `tab` to the front of its panel.
     pub fn focus_tab(&mut self, tab: Tab) {
+        if let Some(workspace) = &mut self.workspace {
+            workspace.show_listing = false;
+        }
         // A location from find_tab is always valid, so activating it cannot fail.
         if let Some(location) = self.dock.find_tab(&tab) {
             let _ = self.dock.set_active_tab(location);
@@ -77,7 +84,7 @@ impl App {
             self.open(&ui.ctx().clone(), path, None);
         }
         if let Some(workspace) = &mut self.workspace {
-            workspace.poll();
+            workspace.poll(ui.ctx());
         }
 
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
@@ -102,23 +109,29 @@ impl App {
             Self::edit_dialog(&ui.ctx().clone(), workspace);
         }
         self.shortcuts(ui.ctx());
+        if self.workspace.as_ref().is_some_and(|workspace| workspace.show_listing) {
+            self.focus_tab(Tab::Disassembly);
+        }
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        let typing = std::mem::replace(&mut self.typing, ctx.egui_wants_keyboard_input());
         let Some(workspace) = &mut self.workspace else { return };
-        if ctx.egui_wants_keyboard_input() || workspace.editing.is_some() {
+        if typing || self.typing || workspace.editing.is_some() {
             return;
         }
-        let (back, forward, goto, rename, comment, undo, redo) = ctx.input(|input| {
-            let command = input.modifiers.command;
+        // Consuming the keys keeps them from reaching anything else. Matching ignores extra Shift, so Cmd+Shift+Z
+        // is checked before Cmd+Z; it also requires Cmd to match, so Cmd+G and Cmd+N do not trigger G and N.
+        let (redo, undo, back, forward, goto, rename, comment) = ctx.input_mut(|input| {
+            let alt = Modifiers::ALT;
             (
-                input.key_pressed(Key::Escape),
-                input.modifiers.alt && input.key_pressed(Key::ArrowRight),
-                input.key_pressed(Key::G),
-                input.key_pressed(Key::N),
-                input.key_pressed(Key::Semicolon),
-                command && !input.modifiers.shift && input.key_pressed(Key::Z),
-                command && input.modifiers.shift && input.key_pressed(Key::Z),
+                input.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z),
+                input.consume_key(Modifiers::COMMAND, Key::Z),
+                input.consume_key(Modifiers::NONE, Key::Escape) || input.consume_key(alt, Key::ArrowLeft),
+                input.consume_key(alt, Key::ArrowRight),
+                input.consume_key(Modifiers::NONE, Key::G),
+                input.consume_key(Modifiers::NONE, Key::N),
+                input.consume_key(Modifiers::NONE, Key::Semicolon),
             )
         });
         if back {
@@ -148,8 +161,8 @@ impl App {
     fn edit_dialog(ctx: &egui::Context, workspace: &mut Workspace) {
         let Some(editing) = &mut workspace.editing else { return };
         let title = match editing.field {
-            rampage_api::annotations::Field::Name => format!("Rename {:#x}", editing.address),
-            rampage_api::annotations::Field::Comment => format!("Comment {:#x}", editing.address),
+            Field::Name => format!("Rename {:#x}", editing.address),
+            Field::Comment => format!("Comment {:#x}", editing.address),
         };
         let mut done = false;
         let mut cancel = false;
@@ -165,8 +178,8 @@ impl App {
                 if let Some(error) = &workspace.edit_error {
                     ui.label(RichText::new(error).color(theme::WARNING));
                 }
-                done = ui.input(|input| input.key_pressed(Key::Enter));
-                cancel = ui.input(|input| input.key_pressed(Key::Escape));
+                done = ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter));
+                cancel = ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
             });
         if cancel {
             workspace.editing = None;
@@ -184,10 +197,18 @@ impl App {
             ui.label(RichText::new(name).strong());
             ui.label(RichText::new(workspace.project.binary.arch.to_string()).color(theme::DIM));
             ui.separator();
-            if ui.add_enabled(workspace.can_go_back(), egui::Button::new("◀")).on_hover_text("Back (Esc)").clicked() {
+            if ui
+                .add_enabled(workspace.can_go_back(), egui::Button::new("◀"))
+                .on_hover_text("Back (Esc, Alt+Left)")
+                .clicked()
+            {
                 workspace.go_back();
             }
-            if ui.add_enabled(workspace.can_go_forward(), egui::Button::new("▶")).on_hover_text("Forward").clicked() {
+            if ui
+                .add_enabled(workspace.can_go_forward(), egui::Button::new("▶"))
+                .on_hover_text("Forward (Alt+Right)")
+                .clicked()
+            {
                 workspace.go_forward();
             }
             let goto = ui.add(
@@ -211,12 +232,11 @@ impl App {
 
     fn status_bar(&mut self, ui: &mut Ui) {
         ui.horizontal_centered(|ui| {
-            let Some(workspace) = &self.workspace else {
-                if let Some(error) = &self.error {
-                    ui.label(RichText::new(error).color(theme::WARNING));
-                }
-                return;
-            };
+            if let Some(error) = &self.error {
+                ui.label(RichText::new(error).color(theme::WARNING));
+                ui.separator();
+            }
+            let Some(workspace) = &self.workspace else { return };
             if workspace.functions.is_running() {
                 ui.spinner();
                 ui.label(RichText::new("Analyzing").color(theme::DIM));

@@ -15,30 +15,50 @@ enum Action {
     Follow(u64),
 }
 
-enum Row<'a> {
+/// A function's disassembly and the rows that display it.
+pub struct Listing {
+    pub function: FunctionListing,
+    rows: Vec<Row>,
+}
+
+enum Row {
     /// The function's name, or a block's label.
     Label(String),
-    Line(&'a DisassemblyLine),
+    /// The line at this index of this block.
+    Line(usize, usize),
     /// Space between basic blocks.
     Gap,
 }
 
-fn rows(listing: &FunctionListing) -> Vec<Row<'_>> {
-    let mut rows = Vec::new();
-    for (index, block) in listing.blocks.iter().enumerate() {
-        if index > 0 {
-            rows.push(Row::Gap);
-        }
-        for line in block {
-            if let Some(label) = &line.label {
-                rows.push(Row::Label(format!("{label}:")));
-            } else if index == 0 && line.address == listing.address && !listing.name.is_empty() {
-                rows.push(Row::Label(format!("{}:", listing.name)));
+impl Listing {
+    pub fn new(function: FunctionListing) -> Self {
+        let mut rows = Vec::new();
+        for (block_index, block) in function.blocks.iter().enumerate() {
+            if block_index > 0 {
+                rows.push(Row::Gap);
             }
-            rows.push(Row::Line(line));
+            for (line_index, line) in block.iter().enumerate() {
+                if let Some(label) = &line.label {
+                    rows.push(Row::Label(format!("{label}:")));
+                } else if line.address == function.address && !function.name.is_empty() {
+                    rows.push(Row::Label(format!("{}:", function.name)));
+                }
+                rows.push(Row::Line(block_index, line_index));
+            }
+        }
+        Self { function, rows }
+    }
+
+    pub fn contains(&self, address: u64) -> bool {
+        self.function.blocks.iter().flatten().any(|line| line.address == address)
+    }
+
+    fn line(&self, row: &Row) -> Option<&DisassemblyLine> {
+        match *row {
+            Row::Line(block, line) => Some(&self.function.blocks[block][line]),
+            _ => None,
         }
     }
-    rows
 }
 
 /// Splits instruction text into tokens: words, numbers and the punctuation between them.
@@ -168,11 +188,11 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
             return;
         }
     };
-    let rows = rows(listing);
+    let rows = &listing.rows;
     let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y;
     let mut area = ScrollArea::both().auto_shrink([false, false]).id_salt("listing");
     if workspace.scroll_to_cursor {
-        let index = rows.iter().position(|row| matches!(row, Row::Line(line) if line.address == workspace.cursor));
+        let index = rows.iter().position(|row| listing.line(row).is_some_and(|line| line.address == workspace.cursor));
         if let Some(index) = index {
             // Put the cursor a few lines from the top.
             area = area.vertical_scroll_offset((index.saturating_sub(4)) as f32 * row_height);
@@ -186,7 +206,7 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
                 Row::Label(text) => {
                     ui.label(RichText::new(text).color(theme::LABEL).monospace());
                 }
-                Row::Line(line) => line_ui(ui, workspace, line, &mut action),
+                Row::Line(..) => line_ui(ui, workspace, listing.line(row).expect("a line row"), &mut action),
                 Row::Gap => {
                     ui.label(RichText::new(" ").monospace());
                 }
@@ -204,12 +224,13 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
 const HEX_ROW: u64 = 16;
 const HEX_ROWS: u64 = 4096;
 
-/// A hex dump of the data around the cursor, within its segment.
+/// A hex dump of the data around the cursor, within its segment. Rows count from the segment's start, which need
+/// not be aligned.
 fn hex(ui: &mut Ui, workspace: &mut Workspace) {
     let binary = &workspace.project.binary;
-    let cursor_row = workspace.cursor & !(HEX_ROW - 1);
-    let segment_start = binary.segment_containing(workspace.cursor).map_or(cursor_row, |segment| segment.address);
-    let start = cursor_row.saturating_sub(HEX_ROW * HEX_ROWS / 2).max(segment_start & !(HEX_ROW - 1));
+    let base = binary.segment_containing(workspace.cursor).map_or(workspace.cursor, |segment| segment.address);
+    let cursor_row = base + (workspace.cursor - base) / HEX_ROW * HEX_ROW;
+    let start = cursor_row.saturating_sub(HEX_ROW * HEX_ROWS / 2).max(base);
     let Some(bytes) = binary.read_to_segment_end(start) else {
         ui.colored_label(theme::WARNING, format!("{:#x} is not backed by file data", workspace.cursor));
         return;

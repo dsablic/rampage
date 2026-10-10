@@ -7,30 +7,31 @@ use crate::theme;
 use crate::workspace::Workspace;
 
 /// Mapped segments with their place along the band.
+#[derive(Default)]
 struct Layout {
     /// (address, size, offset along the band) for each segment.
     segments: Vec<(u64, u64, u64)>,
     total: u64,
 }
 
-fn layout(workspace: &Workspace) -> Layout {
-    let mut segments = Vec::new();
-    let mut total = 0u64;
-    let binary = &workspace.project.binary;
-    let mut mapped: Vec<_> = binary
-        .segments
-        .iter()
-        .filter(|segment| segment.size > 0 && (segment.perms.read || segment.perms.execute))
-        .collect();
-    mapped.sort_by_key(|segment| segment.address);
-    for segment in mapped {
-        segments.push((segment.address, segment.size, total));
-        total = total.saturating_add(segment.size);
-    }
-    Layout { segments, total }
-}
-
 impl Layout {
+    fn new(workspace: &Workspace) -> Self {
+        let mut mapped: Vec<_> = workspace
+            .project
+            .binary
+            .segments
+            .iter()
+            .filter(|segment| segment.size > 0 && (segment.perms.read || segment.perms.execute))
+            .collect();
+        mapped.sort_by_key(|segment| segment.address);
+        let mut layout = Layout::default();
+        for segment in mapped {
+            layout.segments.push((segment.address, segment.size, layout.total));
+            layout.total = layout.total.saturating_add(segment.size);
+        }
+        layout
+    }
+
     fn address_at(&self, fraction: f64) -> Option<u64> {
         let offset = (fraction.clamp(0.0, 1.0) * self.total as f64) as u64;
         let &(address, size, start) = self.segments.iter().rev().find(|&&(_, _, start)| start <= offset)?;
@@ -38,11 +39,19 @@ impl Layout {
     }
 
     fn fraction_of(&self, address: u64) -> Option<f64> {
-        let &(base, size, start) =
+        let &(base, _, start) =
             self.segments.iter().find(|&&(base, size, _)| address >= base && address - base < size)?;
-        let _ = size;
         Some((start + (address - base)) as f64 / self.total.max(1) as f64)
     }
+}
+
+/// The band's layout and one color per pixel column, recomputed when the width changes or analysis finishes.
+#[derive(Default)]
+pub struct Cache {
+    layout: Option<Layout>,
+    /// The column count and whether analysis was done when `colors` was computed.
+    key: Option<(usize, bool)>,
+    colors: Vec<Color32>,
 }
 
 fn color_at(workspace: &Workspace, address: u64) -> Color32 {
@@ -60,24 +69,30 @@ fn color_at(workspace: &Workspace, address: u64) -> Color32 {
 }
 
 pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
-    let layout = layout(workspace);
     let rect = ui.available_rect_before_wrap().shrink2(vec2(4.0, 3.0));
     let response = ui.allocate_rect(rect, Sense::click());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 2.0, theme::BACKGROUND);
+    let mut cache = std::mem::take(&mut workspace.band);
+    let layout = cache.layout.get_or_insert_with(|| Layout::new(workspace));
     if layout.total == 0 {
+        workspace.band = cache;
         return;
     }
     let columns = rect.width().floor().max(1.0) as usize;
-    for column in 0..columns {
-        let fraction = (column as f64 + 0.5) / columns as f64;
-        let Some(address) = layout.address_at(fraction) else { continue };
+    let key = (columns, workspace.analysis_ready());
+    if cache.key != Some(key) {
+        cache.colors = (0..columns)
+            .map(|column| {
+                let address = layout.address_at((column as f64 + 0.5) / columns as f64);
+                address.map_or(theme::BACKGROUND, |address| color_at(workspace, address))
+            })
+            .collect();
+        cache.key = Some(key);
+    }
+    for (column, &color) in cache.colors.iter().enumerate() {
         let x = rect.left() + column as f32;
-        painter.rect_filled(
-            Rect::from_min_max(pos2(x, rect.top()), pos2(x + 1.0, rect.bottom())),
-            0.0,
-            color_at(workspace, address),
-        );
+        painter.rect_filled(Rect::from_min_max(pos2(x, rect.top()), pos2(x + 1.0, rect.bottom())), 0.0, color);
     }
     if let Some(fraction) = layout.fraction_of(workspace.cursor) {
         let x = rect.left() + (fraction as f32) * rect.width();
@@ -87,15 +102,15 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
             theme::LABEL,
         );
     }
+    let pointed =
+        response.hover_pos().and_then(|position| layout.address_at(((position.x - rect.left()) / rect.width()) as f64));
     if response.clicked()
-        && let Some(position) = response.interact_pointer_pos()
-        && let Some(address) = layout.address_at(((position.x - rect.left()) / rect.width()) as f64)
+        && let Some(address) = pointed
     {
         workspace.goto(address);
     }
-    if let Some(position) = response.hover_pos()
-        && let Some(address) = layout.address_at(((position.x - rect.left()) / rect.width()) as f64)
-    {
+    if let Some(address) = pointed {
         response.on_hover_text(format!("{address:#x}"));
     }
+    workspace.band = cache;
 }

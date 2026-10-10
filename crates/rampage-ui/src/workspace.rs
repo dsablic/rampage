@@ -3,12 +3,18 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::time::{Duration, Instant};
 
+use rampage_analysis::strings::FoundString;
+use rampage_api::annotations::Field;
 use rampage_api::{
     ApiError, FunctionListing, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Project, Session, StringsQuery,
     Triage, XrefQuery, XrefRow,
 };
 use rampage_arch::Arch;
+use rampage_loaders::Export;
+
+use crate::listing::Listing;
 
 /// A result computed on a background thread, or inline when the workspace runs synchronously (in tests).
 pub enum Job<T> {
@@ -75,15 +81,55 @@ impl<T: Send + 'static> Job<T> {
 /// Instructions shown when the cursor is outside every function.
 const LINEAR_LINES: usize = 400;
 
+/// How often to pick up names and comments other clients (an AI agent over MCP, the CLI) saved.
+const ANNOTATION_REFRESH: Duration = Duration::from_secs(1);
+
 fn text(error: ApiError) -> String {
     error.to_string()
 }
 
+/// Case-insensitive (ASCII) substring test that allocates nothing, for filtering hundreds of thousands of rows.
+pub fn matches(haystack: &str, needle: &str) -> bool {
+    let (haystack, needle) = (haystack.as_bytes(), needle.as_bytes());
+    needle.is_empty() || haystack.windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+/// A list's filter text and the indices of the rows it keeps, recomputed only when the text or the row count
+/// changes, or after `invalidate`.
+#[derive(Default)]
+pub struct Filter {
+    pub text: String,
+    applied: Option<(String, usize)>,
+    indices: Vec<usize>,
+}
+
+impl Filter {
+    pub fn shown(&mut self, rows: usize, keep: impl Fn(usize, &str) -> bool) -> &[usize] {
+        let current = (self.text.as_str(), rows);
+        if self.applied.as_ref().is_none_or(|(text, count)| (text.as_str(), *count) != current) {
+            self.indices = (0..rows).filter(|&index| keep(index, &self.text)).collect();
+            self.applied = Some((self.text.clone(), rows));
+        }
+        &self.indices
+    }
+
+    /// Forces the next `shown` to filter again, after the rows' text changed.
+    pub fn invalidate(&mut self) {
+        self.applied = None;
+    }
+}
+
 /// An edit being typed: the field, the address, and the text so far.
 pub struct Editing {
-    pub field: rampage_api::annotations::Field,
+    pub field: Field,
     pub address: u64,
     pub text: String,
+}
+
+/// The cross-reference panel: what it shows references to, and the references.
+pub struct Xrefs {
+    pub target: String,
+    pub rows: Result<Vec<XrefRow>, String>,
 }
 
 pub struct Workspace {
@@ -91,25 +137,25 @@ pub struct Workspace {
     pub project: Arc<Project>,
     blocking: bool,
     pub functions: Job<Vec<FunctionRow>>,
-    pub strings: Job<Vec<rampage_analysis::strings::FoundString>>,
+    pub strings: Job<Vec<FoundString>>,
     pub triage: Job<Triage>,
     pub imports: Vec<ImportRow>,
-    pub exports: Vec<rampage_loaders::Export>,
+    pub exports: Vec<Export>,
     /// The address the listing and the cross-reference panel follow.
     pub cursor: u64,
     back: Vec<u64>,
     forward: Vec<u64>,
     /// The function shown in the listing, for the cursor's address.
-    pub listing: Option<Result<FunctionListing, String>>,
-    /// References to the cursor's function or address.
-    pub xrefs: Option<Result<Vec<XrefRow>, String>>,
+    pub listing: Option<Result<Listing, String>>,
+    pub xrefs: Option<Xrefs>,
     /// Set when the listing should scroll the cursor into view.
     pub scroll_to_cursor: bool,
-    pub function_filter: String,
-    pub function_rows: crate::tabs::Filtered,
-    pub string_rows: crate::tabs::Filtered,
-    pub string_filter: String,
-    pub import_filter: String,
+    /// Set when navigation should bring the listing to the front.
+    pub show_listing: bool,
+    pub function_filter: Filter,
+    pub string_filter: Filter,
+    pub import_filter: Filter,
+    pub export_filter: Filter,
     pub goto_text: String,
     pub goto_error: Option<String>,
     /// Hex digits needed for the highest mapped address, so listings drop leading zeros.
@@ -117,6 +163,8 @@ pub struct Workspace {
     /// The rename or comment dialog, when open.
     pub editing: Option<Editing>,
     pub edit_error: Option<String>,
+    pub band: crate::band::Cache,
+    annotations_checked: Instant,
 }
 
 impl Workspace {
@@ -134,9 +182,6 @@ impl Workspace {
         let highest = project.binary.segments.iter().map(|segment| segment.address + segment.size).max().unwrap_or(0);
         let address_width = (64 - highest.leading_zeros() as usize).div_ceil(4).max(4);
         let mut workspace = Self {
-            editing: None,
-            edit_error: None,
-            address_width,
             path,
             project,
             blocking,
@@ -151,13 +196,18 @@ impl Workspace {
             listing: None,
             xrefs: None,
             scroll_to_cursor: true,
-            function_filter: String::new(),
-            function_rows: Default::default(),
-            string_rows: Default::default(),
-            string_filter: String::new(),
-            import_filter: String::new(),
+            show_listing: false,
+            function_filter: Filter::default(),
+            string_filter: Filter::default(),
+            import_filter: Filter::default(),
+            export_filter: Filter::default(),
             goto_text: String::new(),
             goto_error: None,
+            address_width,
+            editing: None,
+            edit_error: None,
+            band: crate::band::Cache::default(),
+            annotations_checked: Instant::now(),
         };
         let project = Arc::clone(&workspace.project);
         workspace.functions.start(blocking, ctx, move || {
@@ -179,18 +229,35 @@ impl Workspace {
         }
     }
 
-    /// Collects finished background work; returns true when something changed.
-    pub fn poll(&mut self) -> bool {
+    /// Collects finished background work and edits other clients saved.
+    pub fn poll(&mut self, ctx: &egui::Context) {
         let analyzed = self.functions.poll();
-        let changed = analyzed | self.strings.poll() | self.triage.poll();
+        self.strings.poll();
+        self.triage.poll();
         if analyzed {
             self.refresh_cursor_views();
         }
-        changed
+        if !self.blocking {
+            if self.annotations_checked.elapsed() >= ANNOTATION_REFRESH {
+                self.annotations_checked = Instant::now();
+                if self.project.refresh_annotations().unwrap_or(false) {
+                    self.annotations_changed(None);
+                }
+            }
+            ctx.request_repaint_after(ANNOTATION_REFRESH);
+        }
     }
 
     pub fn analysis_ready(&self) -> bool {
         self.functions.ready().is_some()
+    }
+
+    /// The listing's function, when one is shown.
+    pub fn listing_address(&self) -> Option<u64> {
+        match &self.listing {
+            Some(Ok(listing)) => Some(listing.function.address),
+            _ => None,
+        }
     }
 
     /// Moves the cursor to `address`, remembering where it was.
@@ -201,19 +268,20 @@ impl Workspace {
         }
         self.cursor = address;
         self.scroll_to_cursor = true;
+        self.show_listing = true;
         self.refresh_cursor_views();
     }
 
-    /// Opens the rename dialog for the cursor (or the function containing it, from a label line).
+    /// Opens the rename dialog for the cursor.
     pub fn begin_rename(&mut self) {
         let text = self.project.name_at(self.cursor).unwrap_or_default();
-        self.editing = Some(Editing { field: rampage_api::annotations::Field::Name, address: self.cursor, text });
+        self.editing = Some(Editing { field: Field::Name, address: self.cursor, text });
         self.edit_error = None;
     }
 
     pub fn begin_comment(&mut self) {
         let text = self.project.comment_at(self.cursor).unwrap_or_default();
-        self.editing = Some(Editing { field: rampage_api::annotations::Field::Comment, address: self.cursor, text });
+        self.editing = Some(Editing { field: Field::Comment, address: self.cursor, text });
         self.edit_error = None;
     }
 
@@ -223,14 +291,13 @@ impl Workspace {
         let text = editing.text.trim();
         let value = (!text.is_empty()).then_some(text);
         let result = match editing.field {
-            rampage_api::annotations::Field::Name => self.project.rename(editing.address, value),
-            rampage_api::annotations::Field::Comment => self.project.comment(editing.address, value),
+            Field::Name => self.project.rename(editing.address, value),
+            Field::Comment => self.project.comment(editing.address, value),
         };
         match result {
-            Ok(_) => {
-                let address = editing.address;
+            Ok(edit) => {
                 self.editing = None;
-                self.annotations_changed(address);
+                self.annotations_changed(Some(edit.address));
             }
             Err(error) => self.edit_error = Some(error.to_string()),
         }
@@ -238,24 +305,23 @@ impl Workspace {
 
     pub fn undo(&mut self) {
         if let Ok(Some(edit)) = self.project.undo() {
-            self.annotations_changed(edit.address);
+            self.annotations_changed(Some(edit.address));
         }
     }
 
     pub fn redo(&mut self) {
         if let Ok(Some(edit)) = self.project.redo() {
-            self.annotations_changed(edit.address);
+            self.annotations_changed(Some(edit.address));
         }
     }
 
-    /// Refreshes everything that shows names or comments after an edit at `address`.
-    fn annotations_changed(&mut self, address: u64) {
-        if let Job::Done(Ok(functions)) = &mut self.functions
-            && let Ok(index) = functions.binary_search_by_key(&address, |function| function.address)
-        {
-            functions[index].name = self.project.function_name(address);
-            // Filters match on names, so they must be recomputed.
-            self.function_rows = Default::default();
+    /// Refreshes everything that shows names or comments after an edit at `address`, or anywhere.
+    fn annotations_changed(&mut self, address: Option<u64>) {
+        if let Job::Done(Ok(functions)) = &mut self.functions {
+            for function in functions.iter_mut().filter(|function| address.is_none_or(|at| at == function.address)) {
+                function.name = self.project.function_name(function.address);
+            }
+            self.function_filter.invalidate();
         }
         self.listing = None;
         self.refresh_cursor_views();
@@ -273,7 +339,7 @@ impl Workspace {
                 self.goto_error = None;
                 self.goto(address);
             }
-            Err(error) => self.goto_error = Some(text_of(&error)),
+            Err(error) => self.goto_error = Some(error.to_string()),
         }
     }
 
@@ -288,65 +354,50 @@ impl Workspace {
     pub fn go_back(&mut self) {
         if let Some(address) = self.back.pop() {
             self.forward.push(self.cursor);
-            self.cursor = address;
-            self.scroll_to_cursor = true;
-            self.refresh_cursor_views();
+            self.revisit(address);
         }
     }
 
     pub fn go_forward(&mut self) {
         if let Some(address) = self.forward.pop() {
             self.back.push(self.cursor);
-            self.cursor = address;
-            self.scroll_to_cursor = true;
-            self.refresh_cursor_views();
+            self.revisit(address);
         }
     }
 
-    /// The name of the function at `address`, or a `sub_` name.
-    pub fn function_name(&self, address: u64) -> String {
-        self.functions
-            .ready()
-            .and_then(|functions| {
-                let index = functions.binary_search_by_key(&address, |function| function.address).ok()?;
-                Some(functions[index].name.clone())
-            })
-            .unwrap_or_else(|| format!("sub_{address:x}"))
+    fn revisit(&mut self, address: u64) {
+        self.cursor = address;
+        self.scroll_to_cursor = true;
+        self.show_listing = true;
+        self.refresh_cursor_views();
     }
 
     fn refresh_cursor_views(&mut self) {
         if !self.analysis_ready() {
             return;
         }
-        let in_current = self
-            .listing
-            .as_ref()
-            .and_then(|listing| listing.as_ref().ok())
-            .is_some_and(|listing| listing.blocks.iter().flatten().any(|line| line.address == self.cursor));
+        let in_current = matches!(&self.listing, Some(Ok(listing)) if listing.contains(self.cursor));
         if !in_current {
             // Outside any function, code analysis did not reach gets a linear disassembly; data gets a hex view.
             self.listing = match self.project.function_listing(self.cursor) {
-                Ok(listing) => Some(Ok(listing)),
+                Ok(listing) => Some(Ok(Listing::new(listing))),
                 Err(_) if self.project.binary.is_code(self.cursor) => {
                     let lines = self.project.disassemble(Some(&format!("{:#x}", self.cursor)), LINEAR_LINES);
-                    let listing = lines.map(|lines| FunctionListing {
-                        address: self.cursor,
-                        name: String::new(),
-                        blocks: vec![lines],
+                    let listing = lines.map(|lines| {
+                        Listing::new(FunctionListing { address: self.cursor, name: String::new(), blocks: vec![lines] })
                     });
                     Some(listing.map_err(text))
                 }
                 Err(_) => None,
             };
         }
-        let target = match &self.listing {
-            Some(Ok(listing)) => listing.address,
-            _ => self.cursor,
+        let (address, target) = match &self.listing {
+            Some(Ok(listing)) if !listing.function.name.is_empty() => {
+                (listing.function.address, listing.function.name.clone())
+            }
+            _ => (self.cursor, format!("{:#x}", self.cursor)),
         };
-        self.xrefs = Some(self.project.xrefs(&XrefQuery::To(target)).map_err(text));
+        let rows = self.project.xrefs(XrefQuery::To(address), None, None).map(|page| page.items).map_err(text);
+        self.xrefs = Some(Xrefs { target, rows });
     }
-}
-
-fn text_of(error: &ApiError) -> String {
-    error.to_string()
 }
