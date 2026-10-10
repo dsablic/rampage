@@ -5,5 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+rampage-arch.workspace = true
+rayon.workspace = true
 rampage-loaders.workspace = true
 serde.workspace = true
