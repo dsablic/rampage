@@ -25,25 +25,35 @@ pub fn scan(binary: &Binary, min_len: usize) -> Vec<FoundString> {
     found
 }
 
+/// ASCII and UTF-16LE runs are found by independent passes, so a run of one encoding never hides the other.
 pub fn scan_bytes(bytes: &[u8], base_address: u64, min_len: usize) -> Vec<FoundString> {
     let min_len = min_len.max(1);
     let mut found = Vec::new();
+    let at = |offset: usize| base_address + offset as u64;
+
     let mut offset = 0;
     while offset < bytes.len() {
-        let ascii_len = bytes[offset..].iter().take_while(|&&byte| is_printable(byte)).count();
-        let utf16_len = utf16le_run(&bytes[offset..]);
-        if utf16_len >= min_len {
-            let text = bytes[offset..offset + utf16_len * 2].iter().step_by(2).map(|&byte| byte as char).collect();
-            found.push(FoundString { address: base_address + offset as u64, encoding: Encoding::Utf16Le, text });
-            offset += utf16_len * 2;
-        } else if ascii_len >= min_len {
-            let text = bytes[offset..offset + ascii_len].iter().map(|&byte| byte as char).collect();
-            found.push(FoundString { address: base_address + offset as u64, encoding: Encoding::Ascii, text });
-            offset += ascii_len;
+        let len = bytes[offset..].iter().take_while(|&&byte| is_printable(byte)).count();
+        if len >= min_len {
+            let text = bytes[offset..offset + len].iter().map(|&byte| byte as char).collect();
+            found.push(FoundString { address: at(offset), encoding: Encoding::Ascii, text });
+        }
+        offset += len.max(1);
+    }
+
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let len = utf16le_run(&bytes[offset..]);
+        if len >= min_len {
+            let text = bytes[offset..offset + len * 2].iter().step_by(2).map(|&byte| byte as char).collect();
+            found.push(FoundString { address: at(offset), encoding: Encoding::Utf16Le, text });
+            offset += len * 2;
         } else {
-            offset += ascii_len.max(1);
+            offset += 1;
         }
     }
+
+    found.sort_by_key(|string| string.address);
     found
 }
 
@@ -73,6 +83,17 @@ mod tests {
     fn finds_utf16le_runs_at_any_alignment() {
         let found = scan_bytes(b"\xffW\x00i\x00d\x00e\x00\x00\x00", 0, 4);
         assert_eq!(texts(&found), [(1, Encoding::Utf16Le, "Wide")]);
+    }
+
+    #[test]
+    fn utf16le_after_a_printable_byte_is_found() {
+        assert_eq!(texts(&scan_bytes(b"xW\0i\0d\0e\0\0\0", 0, 4)), [(1, Encoding::Utf16Le, "Wide")]);
+    }
+
+    #[test]
+    fn utf16le_directly_after_an_ascii_string_is_found() {
+        let found = scan_bytes(b"\0helloW\0i\0d\0e\0\0\0", 0, 4);
+        assert_eq!(texts(&found), [(1, Encoding::Ascii, "helloW"), (6, Encoding::Utf16Le, "Wide")]);
     }
 
     #[test]
