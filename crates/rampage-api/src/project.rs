@@ -51,6 +51,8 @@ pub struct Project {
 
 struct Analysis {
     program: Program,
+    /// The project's names plus names only analysis can find (import thunks).
+    names: Names,
     /// The program's cross-references sorted by source address.
     xrefs_by_source: Vec<Xref>,
     /// Every block as (start, end, function), sorted by start, for address-to-function lookups.
@@ -133,6 +135,10 @@ pub struct DisassemblyLine {
     /// Symbol or function name at this address, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// What the instruction refers to: the name of its branch target or data reference, or the string there.
+    /// For an immediate it is a guess: the number may only happen to equal an address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,9 +197,19 @@ impl Project {
             blocks.sort_unstable();
             let mut xrefs_by_source = program.xrefs.clone();
             xrefs_by_source.sort_unstable_by_key(|xref| (xref.from, xref.to));
-            Ok(Analysis { program, xrefs_by_source, blocks })
+            let mut names = Names::new(&self.binary);
+            names.extend(functions::thunk_names(&self.binary, &program));
+            Ok(Analysis { program, names, xrefs_by_source, blocks })
         });
         analysis.as_ref().map_err(|error| ApiError::Unsupported(UnsupportedArch(error.0)))
+    }
+
+    /// Names known so far: the binary's own, plus analysis-found ones once analysis has run.
+    fn names(&self) -> &Names {
+        match self.analysis.get() {
+            Some(Ok(analysis)) => &analysis.names,
+            _ => &self.names,
+        }
     }
 
     /// Parses `0x` hex, decimal, a symbol or export name, or a `sub_<hex>` name.
@@ -207,6 +223,13 @@ impl Project {
             return Ok(address);
         }
         if let Some(address) = self.names.address_of(text) {
+            return Ok(address);
+        }
+        // Import thunks are only named once analysis has found them.
+        if !text.starts_with("sub_")
+            && let Ok(analysis) = self.analysis()
+            && let Some(address) = analysis.names.address_of(text)
+        {
             return Ok(address);
         }
         if let Some(address) = text.strip_prefix("sub_").and_then(|hex| u64::from_str_radix(hex, 16).ok()) {
@@ -223,7 +246,7 @@ impl Project {
             .iter()
             .map(|function| FunctionRow {
                 address: function.address,
-                name: self.names.function_name(function.address),
+                name: self.names().function_name(function.address),
                 size: function.blocks.iter().map(|block| block.end - block.start).sum(),
                 blocks: function.blocks.len(),
                 instructions: function.instruction_count,
@@ -272,11 +295,30 @@ impl Project {
                 flow: insn.flow,
                 data_ref: insn.data_ref,
                 immediate: insn.immediate,
-                label: self.names.get(address).map(str::to_owned),
+                label: self.names().get(address).map(str::to_owned),
+                comment: self.describe_reference(&insn),
             });
             offset += usize::from(insn.len);
         }
         Ok(lines)
+    }
+
+    /// Names what an instruction refers to: its branch target or data reference by name, or the string stored
+    /// at the data reference.
+    fn describe_reference(&self, insn: &rampage_arch::Insn) -> Option<String> {
+        let target = match insn.flow {
+            Flow::Call(target) | Flow::Jump(target) | Flow::ConditionalJump(target) => Some(target),
+            _ => None,
+        };
+        if let Some(name) = target.and_then(|target| self.names().get(target)) {
+            return Some(name.to_owned());
+        }
+        // A pointer-sized immediate (x86 `mov`/`push`) counts only when it names something or points at a string.
+        let data = insn.data_ref.or(insn.immediate)?;
+        if let Some(name) = self.names().get(data) {
+            return Some(name.to_owned());
+        }
+        string_at(&self.binary, data).map(|text| format!("{text:?}"))
     }
 
     pub fn strings(&self, query: &StringsQuery) -> Page<FoundString> {
@@ -317,12 +359,29 @@ impl Project {
                     kind: xref.kind,
                     from_function: self
                         .function_containing(xref.from)?
-                        .map(|function| self.names.function_name(function)),
-                    to_name: self.names.get(xref.to).map(str::to_owned),
+                        .map(|function| self.names().function_name(function)),
+                    to_name: self.names().get(xref.to).map(str::to_owned),
                 })
             })
             .collect::<Result<Vec<_>, ApiError>>()?;
         rows.sort_by_key(|row| (row.from, row.to));
         Ok(rows)
     }
+}
+
+/// The NUL-terminated printable ASCII string at `address`, if there is one of at least four characters. Long
+/// strings are cut at 80 characters.
+fn string_at(binary: &Binary, address: u64) -> Option<String> {
+    const LIMIT: usize = 80;
+    let bytes = binary.read_to_segment_end(address)?;
+    let text: Vec<u8> = bytes.iter().copied().take_while(|&byte| byte != 0).take(LIMIT + 1).collect();
+    let printable = |byte: u8| byte.is_ascii_graphic() || byte == b' ' || byte == b'\t' || byte == b'\n';
+    if text.len() < 4 || !text.iter().all(|&byte| printable(byte)) {
+        return None;
+    }
+    let mut text = String::from_utf8_lossy(&text[..text.len().min(LIMIT)]).into_owned();
+    if bytes.len() > LIMIT && bytes[..=LIMIT].iter().all(|&byte| byte != 0) {
+        text.push_str("...");
+    }
+    Some(text)
 }

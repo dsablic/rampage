@@ -86,6 +86,26 @@ pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
     names
 }
 
+/// Names import thunks found by analysis outside stub sections: functions that consist of a single jump through
+/// an import slot (MinGW and incrementally linked PE images have these in `.text`).
+pub fn thunk_names(binary: &Binary, program: &Program) -> Vec<(u64, String)> {
+    let Ok(mut decoder) = decoder_for(binary.arch) else { return Vec::new() };
+    program
+        .functions
+        .iter()
+        .filter(|function| function.instruction_count == 1)
+        .filter_map(|function| {
+            let insn = decoder.decode(binary.code_from(function.address)?, function.address);
+            if insn.flow != Flow::IndirectJump {
+                return None;
+            }
+            let slot = insn.data_ref?;
+            let index = binary.import_slots.binary_search_by_key(&slot, |slot| slot.address).ok()?;
+            Some((function.address, binary.import_slots[index].name.clone()))
+        })
+        .collect()
+}
+
 /// Names for addresses: function symbols first, then exports, the entry point and other symbols, then import
 /// stubs (named after their import) and import slots (`__imp_` and the import's name).
 pub struct Names(BTreeMap<u64, String>);
@@ -104,6 +124,13 @@ impl Names {
             names.entry(slot.address).or_insert_with(|| format!("__imp_{}", slot.name));
         }
         Self(names)
+    }
+
+    /// Adds names for addresses that have none yet.
+    pub fn extend(&mut self, names: impl IntoIterator<Item = (u64, String)>) {
+        for (address, name) in names {
+            self.0.entry(address).or_insert(name);
+        }
     }
 
     pub fn get(&self, address: u64) -> Option<&str> {

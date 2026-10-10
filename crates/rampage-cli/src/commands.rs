@@ -78,7 +78,12 @@ pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize,
         if let Some(label) = &line.label {
             writeln!(out, "{label}:")?;
         }
-        writeln!(out, "  {:#018x}  {:<24} {}", line.address, line.bytes, line.text)?;
+        match &line.comment {
+            Some(comment) => {
+                writeln!(out, "  {:#018x}  {:<24} {:<40} ; {comment}", line.address, line.bytes, line.text)?
+            }
+            None => writeln!(out, "  {:#018x}  {:<24} {}", line.address, line.bytes, line.text)?,
+        }
     }
     Ok(())
 }

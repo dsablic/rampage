@@ -89,3 +89,26 @@ fn arm64_binaries_are_analyzed() {
     assert_eq!(lines[0].text, "stp x29, x30, [sp, #-16]!");
     assert_eq!(lines[1].text, "mov x29, sp");
 }
+
+#[test]
+fn disassembly_comments_name_targets_and_strings() {
+    let project = Session::default().open(&fixture("hello-arm64.macho"), None).unwrap();
+    let lines = project.disassemble(Some("_main"), 5).unwrap();
+    let comments: Vec<_> = lines.iter().filter_map(|line| line.comment.as_deref()).collect();
+    assert_eq!(comments, ["\"rampage fixture greeting\"", "_puts"]);
+
+    // x86-64 ELF passes the string as a 32-bit immediate.
+    let project = Session::default().open(&fixture("hello-x64.elf"), None).unwrap();
+    let lines = project.disassemble(Some("main"), 4).unwrap();
+    assert!(lines.iter().any(|line| line.comment.as_deref() == Some("\"rampage fixture greeting\"")), "{lines:?}");
+}
+
+#[test]
+fn pe_import_thunks_are_named_after_analysis() {
+    let project = Session::default().open(&fixture("hello-x64.exe"), None).unwrap();
+    let thunk = project.resolve("puts").unwrap();
+    let rows = project.xrefs(&XrefQuery::To(thunk)).unwrap();
+    assert!(rows.iter().any(|row| row.to_name.as_deref() == Some("puts")), "{rows:?}");
+    let functions = project.functions(&FunctionsQuery { name_contains: Some("puts".into()), ..Default::default() });
+    assert!(functions.unwrap().items.iter().any(|function| function.name == "puts"));
+}
