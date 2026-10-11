@@ -65,6 +65,7 @@ async fn lists_all_tools_with_instructions() {
         "list_functions",
         "list_imports",
         "list_strings",
+        "observe_indirect_branch",
         "observe_pointer",
         "redo",
         "rename",
@@ -175,6 +176,20 @@ async fn pointer_observations_preserve_writable_slot_values_without_annotations(
     assert_eq!(observation["candidate_target"], "0x1002");
     let annotations = json_of(&call(&client, "list_annotations", json!({"path": path})).await);
     assert!(annotations["names"].as_array().unwrap().is_empty());
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn branch_observation_decodes_explicit_window_without_resolving_captured_flow() {
+    let client = connect().await;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64.snapshot.json");
+    let result = json_of(
+        &call(&client, "observe_indirect_branch", json!({"path": path, "start": "0x1000", "at": "0x1008"})).await,
+    );
+    assert_eq!(result["flow"]["kind"], "indirect_jump");
+    assert_eq!(result["load_address"], "0x1004");
+    assert_eq!(result["pointer"]["slot"], "0x3000");
+    assert_eq!(result["capture_identity"], result["pointer"]["capture_identity"]);
     client.cancel().await.unwrap();
 }
 

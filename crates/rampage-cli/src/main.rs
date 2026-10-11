@@ -138,6 +138,14 @@ enum Command {
         #[arg(long)]
         at: String,
     },
+    /// Link one captured ARM64 indirect branch to a slot load in an explicit bounded window
+    ObserveIndirectBranch {
+        file: PathBuf,
+        #[arg(long)]
+        start: String,
+        #[arg(long)]
+        at: String,
+    },
     /// List imported functions with their libraries and import slots
     Imports {
         file: PathBuf,
@@ -251,6 +259,9 @@ fn main() -> ExitCode {
             commands::compare_runtime(&mut out, &file, &original, &module, &range, &options)
         }
         Command::ObservePointer { file, at } => commands::observe_pointer(&mut out, &file, &at, &options),
+        Command::ObserveIndirectBranch { file, start, at } => {
+            commands::observe_indirect_branch(&mut out, &file, &start, &at, &options)
+        }
         Command::Imports { file, contains } => {
             commands::imports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
         }

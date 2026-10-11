@@ -290,6 +290,34 @@ pub fn observe_pointer(out: &mut impl Write, path: &Path, at: &str, options: &Op
     Ok(())
 }
 
+pub fn observe_indirect_branch(
+    out: &mut impl Write,
+    path: &Path,
+    start: &str,
+    at: &str,
+    options: &Options,
+) -> Result<()> {
+    let project = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
+    let observation = project
+        .observe_indirect_branch(rampage_loaders::snapshot::address(start)?, rampage_loaders::snapshot::address(at)?)?;
+    if options.json {
+        return write_json(out, &observation);
+    }
+    writeln!(out, "{:#x}: {} ({:?})", observation.branch_address, observation.branch_text, observation.slot_status)?;
+    if let Some(pointer) = observation.pointer {
+        writeln!(
+            out,
+            "linked slot: {:#x}; captured value: {:?} (not a proven edge)",
+            pointer.slot,
+            pointer.raw_value.map(|value| format!("{value:#x}"))
+        )?;
+    }
+    for limitation in observation.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
 /// Serializes before writing so that I/O errors such as a closed pipe surface as `io::Error`.
 fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result<()> {
     let mut json = serde_json::to_vec_pretty(value)?;

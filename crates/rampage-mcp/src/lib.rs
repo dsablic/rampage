@@ -19,7 +19,8 @@ const INSTRUCTIONS: &str = "\
 rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, \
 RISC-V, SPARC, s390x and m68k. Every tool takes the binary's file path; the first call that needs analysis runs it \
 once and caches the result, so later calls are fast. Addresses are hex strings like \"0x401000\". Wherever a tool \
-takes an address (except comparison ranges) you may also pass a symbol, export or import name \
+takes an address (except comparison ranges and branch observation windows) you may also pass a symbol, \
+export or import name \
 (an import name finds its stub) or a sub_<hex> \
 name. Start with triage for hashes, entropy, hardening and packing hints, or binary_info for the layout; then \
 list_functions (filter with name_contains, page with offset/limit), then decompile a function to C to understand \
@@ -31,7 +32,9 @@ including the rampage UI, picks them up. Memory snapshots and bundle directories
 analysis_diagnostics reports decode confidence limits; language_metadata exposes demangled names and bounded \
 metadata; function_summary returns a structural CFG/reference summary, not decompiled source. \
 compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal runtime ranges, returning paginated \
-byte evidence without sidecars or annotation transfer. Verify identities when combining pages.";
+byte evidence without sidecars or annotation transfer. Verify identities when combining pages. \
+observe_indirect_branch takes explicit hexadecimal start/at addresses for a bounded ARM64 branch window; \
+slot links are conditional decoding evidence, not proof of execution or a call edge.";
 
 /// A tool's schema with the arguments every tool takes besides its own: which binary, and which slice of a
 /// universal one.

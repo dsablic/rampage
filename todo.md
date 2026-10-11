@@ -233,6 +233,8 @@ Work in this order, with synthetic regressions and fresh-context review for each
    - [x] Explicit API/CLI/MCP pointer-slot observations with raw values, permissions and mapping identity;
      no edge insertion, no authentication/high-bit stripping and checked ARM mode tags.
    - [ ] Link observations to decoded branch sites, module-qualified targets and before/after capture evidence.
+   - [x] Bounded explicit ARM64 branch-window links to decoded slot loads, retaining indirect flow and
+     raw observations; unsupported/control-flow/authenticated/incomplete cases remain explicit.
 7. [ ] Authorized runtime acceptance: user supplies an already-loaded/stopped instance in a legitimate host;
    capture selected code and referenced data, correlate the original UUID, rerun diagnostics/decompilation and
    report before/after warning/coverage metrics. This is blocked on an authorized host capture, not static parsing.

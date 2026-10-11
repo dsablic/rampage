@@ -136,6 +136,14 @@ struct RuntimeComparisonArgs {
     limit: Option<usize>,
 }
 
+#[derive(serde::Deserialize, JsonSchema)]
+struct BranchObservationArgs {
+    /// Explicit hexadecimal start of a straight-line ARM64 window, at most 64 instructions.
+    start: String,
+    /// Explicit hexadecimal address of the indirect branch ending the window.
+    at: String,
+}
+
 #[derive(Serialize)]
 struct RuntimeComparisonPage {
     #[serde(flatten)]
@@ -290,6 +298,18 @@ pub fn tools() -> Vec<Tool> {
             "Compare explicit captured ranges with a UUID-matched original Mach-O. Paginated spans, full-range totals; \
              no annotation transfer or claim of recovered flow. Opens only the explicit original path.",
             compare_runtime_page,
+        )
+        .without_annotations(),
+        tool(
+            "observe_indirect_branch",
+            "Link an explicitly selected ARM64 indirect branch window to a captured pointer slot. \
+             Bounded conditional decoding evidence, not executed or proven flow; no discovery or annotations.",
+            |project, args: BranchObservationArgs| {
+                let address = |text: &str| {
+                    rampage_loaders::snapshot::address(text).map_err(|error| ApiError::Invalid(error.to_string()))
+                };
+                project.observe_indirect_branch(address(&args.start)?, address(&args.at)?)
+            },
         )
         .without_annotations(),
         Tool {

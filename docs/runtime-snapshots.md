@@ -183,3 +183,24 @@ or added as call/discovery edges. Code candidates require readable executable ba
 instruction span; that does not verify instruction semantics or a function boundary. ARM mode bits must match
 the captured Thumb context before tag clearing. Other tags and pointer authentication are not stripped.
 Missing, unreadable or truncated slot words remain unavailable. CLI observations ignore annotation sidecars.
+
+## Link an indirect branch to a captured slot
+
+```sh
+rampage observe-indirect-branch capture.json --start 0x1000 --at 0x1008 --json
+```
+
+The API/MCP `observe_indirect_branch` accepts explicit hexadecimal `start` and `at` addresses for a
+little-endian ARM64 snapshot. The aligned window ends at an indirect branch and contains at most 64
+instructions. It tracks ADR/ADRP, ADD-immediate, 64-bit literal/unsigned-offset LDR, MOV-register and NOP;
+address arithmetic follows ARM64 wrapping semantics. Other instructions or control-flow boundaries stop
+linking rather than retaining possibly stale register evidence. Unknown incoming registers remain unknown.
+
+JSON output retains the branch's indirect `flow`, bytes/text, `slot_status`, optional `evidence_stopped_at`,
+load instruction address and nested pointer observation. A decoded load/branch relationship can be linked
+even when its slot bytes are unavailable; that observation still has no raw value or candidate target.
+Authenticated branches remain explicitly unresolved. Missing instruction backing stops the window, and an
+incomplete/non-indirect ending instruction is rejected. No discovery, target execution or annotation edits
+are performed; MCP/CLI do not load sidecars. This is conditional evidence for the selected straight-line
+window, not proof the path executed or the branch consumed the currently captured slot value. Module ownership
+is not inferred from header proximity.

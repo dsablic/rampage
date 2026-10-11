@@ -2,6 +2,7 @@
 
 pub mod annotations;
 mod benchmark;
+mod branch_observation;
 mod correlation;
 mod debug_import;
 mod decompile;
@@ -24,6 +25,7 @@ use rampage_arch::UnsupportedArch;
 use rampage_loaders::LoadError;
 
 pub use benchmark::{Comparison, ReferenceAnalysis};
+pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use correlation::RuntimeCorrelation;
 pub use debug_import::DebugImport;
 pub use decompile::Decompilation;
