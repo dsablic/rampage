@@ -24,13 +24,61 @@ const MAX_INSTRUCTIONS: u32 = 100_000;
 /// A 32-byte masked content hash of a function body.
 pub type FunctionHash = [u8; 32];
 
-/// The x86 bitness for an architecture, or `None` when signature hashing is not supported for it.
-fn bitness(arch: Arch) -> Option<u32> {
+/// The x86 bitness for an architecture, or `None` when it is not an x86 target.
+fn x86_bitness(arch: Arch) -> Option<u32> {
     match arch {
         Arch::X86 => Some(32),
         Arch::X86_64 => Some(64),
         _ => None,
     }
+}
+
+/// Whether signature hashing is supported for an architecture.
+fn supported(arch: Arch) -> bool {
+    x86_bitness(arch).is_some() || arch == Arch::Aarch64
+}
+
+/// Masks the position-dependent immediate bits of a little-endian AArch64 instruction word, leaving opcode and
+/// registers. Covers the PC-relative forms: B/BL, B.cond, CBZ/CBNZ, TBZ/TBNZ, ADR/ADRP and literal loads.
+fn mask_aarch64(word: u32) -> u32 {
+    // Unconditional branch/branch-with-link: 26-bit relative offset.
+    if word & 0x7c00_0000 == 0x1400_0000 {
+        return word & !0x03ff_ffff;
+    }
+    // ADR/ADRP: page/byte relative, split into immlo (bits 30:29) and immhi (bits 23:5).
+    if word & 0x1f00_0000 == 0x1000_0000 {
+        return word & !0x60ff_ffe0;
+    }
+    // B.cond, CBZ/CBNZ and literal loads: a 19-bit offset in bits 23:5.
+    let imm19 = 0x7ffffu32 << 5;
+    if word & 0xff00_0010 == 0x5400_0000 // B.cond
+        || word & 0x7e00_0000 == 0x3400_0000 // CBZ/CBNZ
+        || word & 0x3b00_0000 == 0x1800_0000
+    // LDR/LDRSW literal, PRFM literal
+    {
+        return word & !imm19;
+    }
+    // TBZ/TBNZ: a 14-bit offset in bits 18:5.
+    if word & 0x7e00_0000 == 0x3600_0000 {
+        return word & !(0x3fffu32 << 5);
+    }
+    word
+}
+
+/// Hashes fixed-width AArch64 instructions, masking each word's position-dependent immediate.
+fn aarch64_hash(bytes: &[u8]) -> Option<FunctionHash> {
+    let mut hasher = Sha256::new();
+    let mut count = 0u32;
+    let (words, _) = bytes.as_chunks::<4>();
+    for word in words {
+        let masked = mask_aarch64(u32::from_le_bytes(*word));
+        hasher.update(masked.to_le_bytes());
+        count += 1;
+        if count >= MAX_INSTRUCTIONS {
+            break;
+        }
+    }
+    (count > 0).then(|| hasher.finalize().into())
 }
 
 /// Whether the instruction transfers control to a relative target, whose encoded offset is position-dependent.
@@ -48,7 +96,10 @@ fn zero_range(bytes: &mut [u8], offset: usize, size: usize) {
 /// The masked content hash of the function whose bytes start at `address`, or `None` for an unsupported
 /// architecture or input with no decodable instructions.
 pub fn function_hash(arch: Arch, bytes: &[u8], address: u64) -> Option<FunctionHash> {
-    let bitness = bitness(arch)?;
+    if arch == Arch::Aarch64 {
+        return aarch64_hash(bytes);
+    }
+    let bitness = x86_bitness(arch)?;
     let mut decoder = Decoder::with_ip(bitness, bytes, address, DecoderOptions::NONE);
     let mut hasher = Sha256::new();
     let mut instruction = Instruction::default();
@@ -115,7 +166,7 @@ impl SignatureDb {
     /// are byte-identical after masking but have different names are treated as ambiguous and left unmatchable.
     pub fn from_binary(binary: &Binary) -> SignatureDb {
         let mut builder = Builder::default();
-        if bitness(binary.arch).is_some() {
+        if supported(binary.arch) {
             for symbol in &binary.symbols {
                 if symbol.kind != SymbolKind::Function || symbol.size == 0 || symbol.name.is_empty() {
                     continue;
@@ -233,7 +284,29 @@ mod tests {
 
     #[test]
     fn unsupported_architecture_has_no_hash() {
-        assert!(function_hash(Arch::Aarch64, &sample(), 0x1000).is_none());
+        assert!(function_hash(Arch::Mips, &sample(), 0x1000).is_none());
+    }
+
+    #[test]
+    fn aarch64_masking_ignores_pc_relative_targets_but_keeps_opcodes() {
+        // bl #0x40; adrp x0, page; add x0, x0, #off; ret.
+        let base: Vec<u8> = [0x9400_0010u32, 0x9000_0000, 0x9100_0000, 0xd65f_03c0]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        // Relink: different bl target and a different adrp page immediate.
+        let relinked: Vec<u8> = [0x9400_1234u32, 0x9000_00e0, 0x9100_0000, 0xd65f_03c0]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        assert_eq!(function_hash(Arch::Aarch64, &base, 0x1000), function_hash(Arch::Aarch64, &relinked, 0x8000));
+
+        // A different add immediate (not PC-relative) must change the hash.
+        let changed: Vec<u8> = [0x9400_0010u32, 0x9000_0000, 0x9140_0400, 0xd65f_03c0]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        assert_ne!(function_hash(Arch::Aarch64, &base, 0x1000), function_hash(Arch::Aarch64, &changed, 0x1000));
     }
 
     fn fixture(name: &str) -> std::path::PathBuf {

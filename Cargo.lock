@@ -3332,6 +3332,7 @@ dependencies = [
  "rampage-arch",
  "rampage-decompiler",
  "rampage-loaders",
+ "rampage-signatures",
  "schemars",
  "serde",
  "serde_json",
