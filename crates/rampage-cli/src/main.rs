@@ -71,11 +71,14 @@ enum Command {
         #[arg(long)]
         at: String,
     },
-    /// Decompile a function to C with the embedded Ghidra decompiler (needs a local Ghidra install)
+    /// Decompile a function to C with bundled Ghidra specifications
     Decompile {
         file: PathBuf,
         #[arg(long)]
         at: String,
+        /// Override the format-selected Ghidra compiler ID (gcc, windows, apcs, macosx, ...)
+        #[arg(long)]
+        compiler: Option<String>,
     },
     /// Partial ARM64 SSA pseudocode with explicit unknowns (not recovered C source)
     Pseudocode {
@@ -201,7 +204,9 @@ fn main() -> ExitCode {
         Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
         Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),
         Command::Summarize { file, at } => commands::summarize(&mut out, &file, &at, &options),
-        Command::Decompile { file, at } => commands::decompile(&mut out, &file, &at, &options),
+        Command::Decompile { file, at, compiler } => {
+            commands::decompile(&mut out, &file, &at, compiler.as_deref(), &options)
+        }
         Command::Pseudocode { file, at, structured } => {
             commands::pseudocode(&mut out, &file, &at, structured, &options)
         }

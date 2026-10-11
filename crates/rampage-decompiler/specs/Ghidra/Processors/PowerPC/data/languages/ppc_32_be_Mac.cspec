@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <compiler_spec>
+  <!-- Modified for rampage: 32-bit Darwin PowerPC uses ILP32. -->
+  <data_organization>
+    <pointer_size value="4"/>
+    <integer_size value="4"/>
+    <long_size value="4"/>
+  </data_organization>
   <global>
     <range space="ram"/>
   </global>

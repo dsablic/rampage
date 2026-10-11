@@ -133,6 +133,17 @@ class MemArchitecture : public SleighArchitecture {
     }
     void resolveArchitecture(void) override {
         archid = getTarget();
+        size_t separator = archid.rfind(':');
+        string languageId = archid.substr(0, separator);
+        string compilerId = archid.substr(separator + 1);
+        bool found = false;
+        for (const LanguageDescription &language : getDescriptions()) {
+            if (language.getId() != languageId) continue;
+            for (int4 i = 0; i < language.numCompilers(); ++i) {
+                if (language.getCompiler(i).getId() == compilerId) found = true;
+            }
+        }
+        if (!found) throw LowlevelError("Unknown processor/compiler specification: " + archid);
         SleighArchitecture::resolveArchitecture();
     }
     void postSpecFile(void) override {
@@ -243,6 +254,13 @@ const char *rampage_decomp_parse_c(void *h, const char *text) {
 const char *rampage_decomp_error(void *h) {
     Handle *handle = static_cast<Handle *>(h);
     return handle->error.empty() ? nullptr : handle->error.c_str();
+}
+
+void rampage_decomp_data_organization(void *h, int32_t *pointerSize, int32_t *intSize, int32_t *longSize) {
+    Handle *handle = static_cast<Handle *>(h);
+    *pointerSize = handle->arch->types->getSizeOfPointer();
+    *intSize = handle->arch->types->getSizeOfInt();
+    *longSize = handle->arch->types->getSizeOfLong();
 }
 
 const char *rampage_decomp_set_modes(void *h, size_t count, const uint64_t *addresses, const uint8_t *thumb) {

@@ -2,6 +2,9 @@
 
 <compiler_spec>
   <data_organization>
+        <!-- Modified for rampage: MIPS o32 has 32-bit int and long. -->
+        <integer_size value="4"/>
+        <long_size value="4"/>
         <pointer_size value="4"/>
         <float_size value="4" />
         <double_size value="8" />

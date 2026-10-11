@@ -33,7 +33,11 @@ guarantee identical output: memory mappings, ABI, mode context, symbols/types an
 2. [x] Mode correctness: ARM/Thumb transitions independent of request order; merge loader and discovery context,
    preserve equal-valued barriers and accept padding/end boundaries. Each image owns its translator; caches
    invalidate safely. Reviewed regressions cover corrupt specs, interleaved images and a million mode points.
-3. [ ] ABI correctness: select platform/compiler specs, width-correct C declarations and explicit ABI overrides.
+3. [x] Compiler ABI selection: PE Windows and Darwin PowerPC defaults, explicit API/CLI overrides, strict
+   compiler-ID/data-model validation and target-sized runtime declarations. Reviewed coverage includes
+   ILP32/LP64/LLP64, Windows x86 cdecl, clangwindows aliases and all 13 bundled processor targets.
+   - [ ] Remaining ABI-specific work: Darwin ARM64 variadic/stack rules, ARM BE8 instruction/data byte order,
+     and OS/library-specific typedefs such as off_t/time_t rather than guessed automatic declarations.
 4. [ ] Symbol/type synchronization: import identity separate from display spelling, report prototype failures,
    refresh decompiler names after edits/undo/redo/external annotation changes.
 5. [ ] Portable specification packaging and supervised resource/cancellation boundaries for hostile inputs,

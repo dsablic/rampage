@@ -85,8 +85,14 @@ pub fn summarize(out: &mut impl Write, path: &Path, at: &str, options: &Options)
     Ok(())
 }
 
-pub fn decompile(out: &mut impl Write, path: &Path, at: &str, options: &Options) -> Result<()> {
+pub fn decompile(out: &mut impl Write, path: &Path, at: &str, compiler: Option<&str>, options: &Options) -> Result<()> {
     let project = open(path, options)?;
+    if let Some(compiler) = compiler {
+        project.set_decompiler_options(Some(rampage_api::DecompilerOptions {
+            compiler: Some(compiler.to_owned()),
+            ..Default::default()
+        }));
+    }
     let decompilation = project.decompile(project.resolve(at)?)?;
     if options.json {
         return write_json(out, &decompilation);

@@ -2,8 +2,12 @@
 //! holds one Ghidra architecture over the program's executable segments and decompiles functions on demand.
 //!
 //! Ghidra's processor specifications (the compiled `.sla` files) are found at a "sleigh home": a directory that
-//! contains a `Ghidra/Processors` tree. `sleigh_home` locates a local Ghidra install; set `GHIDRA_INSTALL_DIR`
-//! to override it.
+//! contains a `Ghidra/Processors` tree. `sleigh_home` prefers the bundled specifications; set
+//! `GHIDRA_INSTALL_DIR` to override that tree.
+
+mod abi;
+
+pub use abi::{DataOrganization, DecompilerOptions, Platform, language_id, language_id_with_options};
 
 use std::ffi::{CStr, CString, c_char};
 use std::path::PathBuf;
@@ -13,14 +17,13 @@ use std::sync::Mutex;
 use rampage_arch::Arch;
 
 /// Ghidra's decompiler library keeps process-global state and is not built for concurrent use, so every call
-/// into it is serialized. Decompilation is CPU-bound but fast, so this is not a throughput concern in practice.
+/// into it is serialized.
 static FFI_LOCK: Mutex<()> = Mutex::new(());
 
 /// Prototypes for common C library functions, so their calls show typed arguments (a `char *` argument renders
 /// the string it points at). Ghidra's C parser only accepts its sized core types (`int4`, `uint8`, `char`, ...),
 /// and a prototype binds only to a function symbol that already exists, so these are applied by name after the
-/// known symbols are registered. Size-typed parameters use `uint8`, correct for the 64-bit targets this matters
-/// most for.
+/// known symbols are registered. Placeholders are resolved using the selected compiler's data organization.
 const C_PROTOTYPES: &[(&str, &str)] = &[
     // stdio
     ("puts", "int4 puts(char *s)"),
@@ -29,10 +32,10 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("fprintf", "int4 fprintf(void *stream, char *fmt, ...)"),
     ("dprintf", "int4 dprintf(int4 fd, char *fmt, ...)"),
     ("sprintf", "int4 sprintf(char *str, char *fmt, ...)"),
-    ("snprintf", "int4 snprintf(char *str, uint8 n, char *fmt, ...)"),
+    ("snprintf", "int4 snprintf(char *str, {size_t} n, char *fmt, ...)"),
     ("vprintf", "int4 vprintf(char *fmt, void *ap)"),
     ("vfprintf", "int4 vfprintf(void *stream, char *fmt, void *ap)"),
-    ("vsnprintf", "int4 vsnprintf(char *str, uint8 n, char *fmt, void *ap)"),
+    ("vsnprintf", "int4 vsnprintf(char *str, {size_t} n, char *fmt, void *ap)"),
     ("scanf", "int4 scanf(char *fmt, ...)"),
     ("fscanf", "int4 fscanf(void *stream, char *fmt, ...)"),
     ("sscanf", "int4 sscanf(char *str, char *fmt, ...)"),
@@ -49,55 +52,55 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("freopen", "void * freopen(char *path, char *mode, void *stream)"),
     ("fclose", "int4 fclose(void *stream)"),
     ("fflush", "int4 fflush(void *stream)"),
-    ("fseek", "int4 fseek(void *stream, int8 off, int4 whence)"),
-    ("ftell", "int8 ftell(void *stream)"),
+    ("fseek", "int4 fseek(void *stream, {long} off, int4 whence)"),
+    ("ftell", "{long} ftell(void *stream)"),
     ("rewind", "void rewind(void *stream)"),
-    ("fread", "uint8 fread(void *ptr, uint8 size, uint8 n, void *stream)"),
-    ("fwrite", "uint8 fwrite(void *ptr, uint8 size, uint8 n, void *stream)"),
-    ("setvbuf", "int4 setvbuf(void *stream, char *buf, int4 mode, uint8 size)"),
+    ("fread", "{size_t} fread(void *ptr, {size_t} size, {size_t} n, void *stream)"),
+    ("fwrite", "{size_t} fwrite(void *ptr, {size_t} size, {size_t} n, void *stream)"),
+    ("setvbuf", "int4 setvbuf(void *stream, char *buf, int4 mode, {size_t} size)"),
     ("remove", "int4 remove(char *path)"),
     ("rename", "int4 rename(char *from, char *to)"),
     ("tmpfile", "void * tmpfile(void)"),
     // string
-    ("strlen", "uint8 strlen(char *s)"),
-    ("strnlen", "uint8 strnlen(char *s, uint8 n)"),
+    ("strlen", "{size_t} strlen(char *s)"),
+    ("strnlen", "{size_t} strnlen(char *s, {size_t} n)"),
     ("strcpy", "char * strcpy(char *dst, char *src)"),
-    ("strncpy", "char * strncpy(char *dst, char *src, uint8 n)"),
+    ("strncpy", "char * strncpy(char *dst, char *src, {size_t} n)"),
     ("strcat", "char * strcat(char *dst, char *src)"),
-    ("strncat", "char * strncat(char *dst, char *src, uint8 n)"),
+    ("strncat", "char * strncat(char *dst, char *src, {size_t} n)"),
     ("strcmp", "int4 strcmp(char *a, char *b)"),
-    ("strncmp", "int4 strncmp(char *a, char *b, uint8 n)"),
+    ("strncmp", "int4 strncmp(char *a, char *b, {size_t} n)"),
     ("strcasecmp", "int4 strcasecmp(char *a, char *b)"),
-    ("strncasecmp", "int4 strncasecmp(char *a, char *b, uint8 n)"),
+    ("strncasecmp", "int4 strncasecmp(char *a, char *b, {size_t} n)"),
     ("strchr", "char * strchr(char *s, int4 c)"),
     ("strrchr", "char * strrchr(char *s, int4 c)"),
     ("strstr", "char * strstr(char *haystack, char *needle)"),
     ("strtok", "char * strtok(char *str, char *delim)"),
-    ("strspn", "uint8 strspn(char *s, char *accept)"),
-    ("strcspn", "uint8 strcspn(char *s, char *reject)"),
+    ("strspn", "{size_t} strspn(char *s, char *accept)"),
+    ("strcspn", "{size_t} strcspn(char *s, char *reject)"),
     ("strpbrk", "char * strpbrk(char *s, char *accept)"),
     ("strdup", "char * strdup(char *s)"),
-    ("strndup", "char * strndup(char *s, uint8 n)"),
+    ("strndup", "char * strndup(char *s, {size_t} n)"),
     ("strerror", "char * strerror(int4 errnum)"),
-    ("strtol", "int8 strtol(char *s, char **end, int4 base)"),
-    ("strtoul", "uint8 strtoul(char *s, char **end, int4 base)"),
+    ("strtol", "{long} strtol(char *s, char **end, int4 base)"),
+    ("strtoul", "{ulong} strtoul(char *s, char **end, int4 base)"),
     ("strtod", "float8 strtod(char *s, char **end)"),
     // memory
-    ("memcpy", "void * memcpy(void *dst, void *src, uint8 n)"),
-    ("memmove", "void * memmove(void *dst, void *src, uint8 n)"),
-    ("memset", "void * memset(void *s, int4 c, uint8 n)"),
-    ("memcmp", "int4 memcmp(void *a, void *b, uint8 n)"),
-    ("memchr", "void * memchr(void *s, int4 c, uint8 n)"),
-    ("bzero", "void bzero(void *s, uint8 n)"),
-    ("bcopy", "void bcopy(void *src, void *dst, uint8 n)"),
+    ("memcpy", "void * memcpy(void *dst, void *src, {size_t} n)"),
+    ("memmove", "void * memmove(void *dst, void *src, {size_t} n)"),
+    ("memset", "void * memset(void *s, int4 c, {size_t} n)"),
+    ("memcmp", "int4 memcmp(void *a, void *b, {size_t} n)"),
+    ("memchr", "void * memchr(void *s, int4 c, {size_t} n)"),
+    ("bzero", "void bzero(void *s, {size_t} n)"),
+    ("bcopy", "void bcopy(void *src, void *dst, {size_t} n)"),
     // stdlib
-    ("malloc", "void * malloc(uint8 n)"),
-    ("calloc", "void * calloc(uint8 count, uint8 size)"),
-    ("realloc", "void * realloc(void *p, uint8 n)"),
-    ("reallocarray", "void * reallocarray(void *p, uint8 count, uint8 size)"),
+    ("malloc", "void * malloc({size_t} n)"),
+    ("calloc", "void * calloc({size_t} count, {size_t} size)"),
+    ("realloc", "void * realloc(void *p, {size_t} n)"),
+    ("reallocarray", "void * reallocarray(void *p, {size_t} count, {size_t} size)"),
     ("free", "void free(void *p)"),
-    ("aligned_alloc", "void * aligned_alloc(uint8 align, uint8 n)"),
-    ("posix_memalign", "int4 posix_memalign(void **p, uint8 align, uint8 n)"),
+    ("aligned_alloc", "void * aligned_alloc({size_t} align, {size_t} n)"),
+    ("posix_memalign", "int4 posix_memalign(void **p, {size_t} align, {size_t} n)"),
     ("exit", "void exit(int4 status)"),
     ("_exit", "void _exit(int4 status)"),
     ("abort", "void abort(void)"),
@@ -106,12 +109,12 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("setenv", "int4 setenv(char *name, char *value, int4 overwrite)"),
     ("system", "int4 system(char *command)"),
     ("atoi", "int4 atoi(char *s)"),
-    ("atol", "int8 atol(char *s)"),
+    ("atol", "{long} atol(char *s)"),
     ("atof", "float8 atof(char *s)"),
     ("abs", "int4 abs(int4 x)"),
-    ("labs", "int8 labs(int8 x)"),
-    ("qsort", "void qsort(void *base, uint8 n, uint8 size, void *cmp)"),
-    ("bsearch", "void * bsearch(void *key, void *base, uint8 n, uint8 size, void *cmp)"),
+    ("labs", "{long} labs({long} x)"),
+    ("qsort", "void qsort(void *base, {size_t} n, {size_t} size, void *cmp)"),
+    ("bsearch", "void * bsearch(void *key, void *base, {size_t} n, {size_t} size, void *cmp)"),
     ("rand", "int4 rand(void)"),
     ("srand", "void srand(uint4 seed)"),
     // ctype
@@ -124,11 +127,10 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("toupper", "int4 toupper(int4 c)"),
     ("tolower", "int4 tolower(int4 c)"),
     // unistd / POSIX I/O
-    ("read", "int8 read(int4 fd, void *buf, uint8 n)"),
-    ("write", "int8 write(int4 fd, void *buf, uint8 n)"),
+    ("read", "{ssize_t} read(int4 fd, void *buf, {size_t} n)"),
+    ("write", "{ssize_t} write(int4 fd, void *buf, {size_t} n)"),
     ("close", "int4 close(int4 fd)"),
     ("open", "int4 open(char *path, int4 flags, ...)"),
-    ("lseek", "int8 lseek(int4 fd, int8 off, int4 whence)"),
     ("unlink", "int4 unlink(char *path)"),
     ("access", "int4 access(char *path, int4 mode)"),
     ("dup", "int4 dup(int4 fd)"),
@@ -141,7 +143,7 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("getpid", "int4 getpid(void)"),
     ("sleep", "uint4 sleep(uint4 seconds)"),
     ("usleep", "int4 usleep(uint4 usec)"),
-    ("getcwd", "char * getcwd(char *buf, uint8 size)"),
+    ("getcwd", "char * getcwd(char *buf, {size_t} size)"),
     ("chdir", "int4 chdir(char *path)"),
     // math
     ("pow", "float8 pow(float8 x, float8 y)"),
@@ -151,12 +153,8 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("ceil", "float8 ceil(float8 x)"),
     ("sin", "float8 sin(float8 x)"),
     ("cos", "float8 cos(float8 x)"),
-    // time
-    ("time", "int8 time(void *t)"),
-    ("clock", "int8 clock(void)"),
     // pthread (basics)
     ("pthread_create", "int4 pthread_create(void *thread, void *attr, void *start, void *arg)"),
-    ("pthread_join", "int4 pthread_join(void *thread, void **retval)"),
     ("pthread_mutex_lock", "int4 pthread_mutex_lock(void *mutex)"),
     ("pthread_mutex_unlock", "int4 pthread_mutex_unlock(void *mutex)"),
     // assert / error helpers
@@ -166,18 +164,30 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
 /// The C prototype for a well-known library function, spelled with `name` as the function's name so it binds to
 /// a symbol registered under that exact name. `None` when the name is not one rampage carries a prototype for, or
 /// is not a plain C identifier (so it cannot be parsed). The library function is matched after stripping a leading
-/// underscore and any `@plt`/`@got` suffix, so stub spellings like `puts@plt` and `_malloc` resolve.
+/// underscore. Non-identifier stub spellings require address-based binding rather than this helper.
+/// This legacy helper assumes LP64. Use `Decompiler::c_prototype` for the selected target's widths.
 pub fn c_prototype(name: &str) -> Option<String> {
+    render_prototype(name, DataOrganization { pointer: 8, int: 4, long: 8 }, false)
+}
+
+fn render_prototype(name: &str, sizes: DataOrganization, cdecl: bool) -> Option<String> {
     if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         return None;
     }
     let find = |key: &str| C_PROTOTYPES.iter().find(|(known, _)| *known == key);
     // Prefer an exact match (so names that really start with an underscore, like `_exit`, resolve), then fall
-    // back to the stripped spelling (so a Mach-O `_puts` stub or a `puts@plt` thunk matches `puts`).
-    let bare = name.trim_start_matches('_').split('@').next().unwrap_or(name);
+    // back to the stripped spelling (so a Mach-O `_puts` stub matches `puts`).
+    let bare = name.trim_start_matches('_');
     let (known, decl) = find(name).or_else(|| find(bare))?;
     // The stored declaration spells the canonical name; substitute the actual symbol name so it binds to it.
-    Some(format!("extern {};", decl.replacen(known, name, 1)))
+    let decl = decl
+        .replacen(known, name, 1)
+        .replace("{size_t}", &format!("uint{}", sizes.pointer))
+        .replace("{ssize_t}", &format!("int{}", sizes.pointer))
+        .replace("{long}", &format!("int{}", sizes.long))
+        .replace("{ulong}", &format!("uint{}", sizes.long));
+    let convention = if cdecl { "__cdecl " } else { "" };
+    Some(format!("extern {convention}{decl};"))
 }
 
 #[repr(C)]
@@ -201,6 +211,7 @@ unsafe extern "C" {
     fn rampage_decomp_add_symbol(handle: *mut Opaque, addr: u64, name: *const c_char);
     fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
+    fn rampage_decomp_data_organization(handle: *mut Opaque, pointer: *mut i32, int: *mut i32, long: *mut i32);
     fn rampage_decomp_set_modes(
         handle: *mut Opaque,
         count: usize,
@@ -279,29 +290,6 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Ghidra's 5-part language id (processor:endian:size:variant:compiler) for an architecture, or `None` when
-/// Ghidra has no specification for it (s390x).
-pub fn language_id(arch: Arch, big_endian: bool) -> Option<String> {
-    let endian = if big_endian { "BE" } else { "LE" };
-    let id = match arch {
-        Arch::X86 => "x86:LE:32:default:gcc".to_owned(),
-        Arch::X86_64 => "x86:LE:64:default:gcc".to_owned(),
-        Arch::Aarch64 => format!("AARCH64:{endian}:64:v8A:default"),
-        Arch::Arm => format!("ARM:{endian}:32:v8:default"),
-        Arch::Mips => format!("MIPS:{endian}:32:default:default"),
-        Arch::Mips64 => format!("MIPS:{endian}:64:default:default"),
-        Arch::PowerPc => format!("PowerPC:{endian}:32:default:default"),
-        Arch::PowerPc64 => format!("PowerPC:{endian}:64:default:default"),
-        Arch::Riscv32 => "RISCV:LE:32:default:gcc".to_owned(),
-        Arch::Riscv64 => "RISCV:LE:64:default:gcc".to_owned(),
-        Arch::Sparc => "sparc:BE:32:default:default".to_owned(),
-        Arch::Sparc64 => "sparc:BE:64:default:default".to_owned(),
-        Arch::M68k => "68000:BE:32:default:default".to_owned(),
-        Arch::S390x => return None,
-    };
-    Some(id)
-}
-
 /// Locates a directory holding a `Ghidra/Processors` specification tree, in order of preference:
 /// `GHIDRA_INSTALL_DIR` if set, then the specifications vendored with this crate, then a Homebrew Ghidra install.
 /// The vendored specifications mean a source build needs no external Ghidra install.
@@ -326,6 +314,8 @@ pub fn sleigh_home() -> Option<PathBuf> {
 pub struct Decompiler {
     handle: *mut Opaque,
     arch: Arch,
+    data_organization: DataOrganization,
+    language_id: String,
 }
 
 // SAFETY: the handle is only ever used while holding FFI_LOCK, so it is touched by one thread at a time.
@@ -351,11 +341,22 @@ impl Decompiler {
 
     /// Opens explicitly permissioned mappings, retaining zero-fill without allocating its entire virtual size.
     pub fn open_regions(arch: Arch, big_endian: bool, regions: &[MemoryRegion]) -> Result<Decompiler, Error> {
+        Self::open_with_options(arch, big_endian, regions, &DecompilerOptions::default())
+    }
+
+    /// Opens mappings with an explicit platform/compiler specification. Unknown IDs and inconsistent C data
+    /// models are rejected instead of silently selecting another compiler or applying incorrect prototypes.
+    pub fn open_with_options(
+        arch: Arch,
+        big_endian: bool,
+        regions: &[MemoryRegion],
+        options: &DecompilerOptions,
+    ) -> Result<Decompiler, Error> {
         validate_regions(arch, regions)?;
-        let langid = language_id(arch, big_endian).ok_or(Error::UnsupportedArch(arch))?;
+        let language_id = language_id_with_options(arch, big_endian, options)?;
         let home = sleigh_home().ok_or(Error::NoSleighHome)?;
         let home = CString::new(home.as_os_str().to_string_lossy().as_bytes()).map_err(|_| Error::NoSleighHome)?;
-        let langid = CString::new(langid).map_err(|_| Error::UnsupportedArch(arch))?;
+        let langid = CString::new(language_id.as_str()).map_err(|_| Error::UnsupportedArch(arch))?;
 
         let bases: Vec<u64> = regions.iter().map(|region| region.base).collect();
         let ptrs: Vec<*const u8> = regions.iter().map(|region| region.bytes.as_ptr()).collect();
@@ -392,7 +393,48 @@ impl Decompiler {
             unsafe { rampage_decomp_close(handle) };
             return Err(Error::Ghidra(message));
         }
-        Ok(Decompiler { handle, arch })
+        let (mut pointer, mut int, mut long) = (0, 0, 0);
+        // SAFETY: the initialized handle and output field pointers are valid throughout the locked call.
+        unsafe {
+            rampage_decomp_data_organization(handle, &mut pointer, &mut int, &mut long);
+        }
+        let compiler = language_id.rsplit(':').next().expect("compiler field");
+        let checked = abi::checked_data_organization([pointer, int, long]).and_then(|organization| {
+            abi::validate_data_organization(arch, compiler, organization).map(|()| organization)
+        });
+        let data_organization = match checked {
+            Ok(organization) => organization,
+            Err(error) => {
+                // SAFETY: initialization succeeded, but the selected C data model is incompatible with the target.
+                unsafe {
+                    rampage_decomp_close(handle);
+                }
+                return Err(error);
+            }
+        };
+        Ok(Decompiler { handle, arch, data_organization, language_id })
+    }
+
+    pub fn data_organization(&self) -> DataOrganization {
+        self.data_organization
+    }
+
+    pub fn language_id(&self) -> &str {
+        &self.language_id
+    }
+
+    /// Renders a common runtime prototype with this handle's compiler-specific widths and calling convention.
+    /// OS/library-dependent typedefs (`off_t`, `time_t`, `clock_t`, `pthread_t`) are intentionally not guessed.
+    pub fn c_prototype(&self, name: &str) -> Option<String> {
+        let compiler = self.language_id.rsplit(':').next()?;
+        if !abi::has_c_runtime(compiler) {
+            return None;
+        }
+        let cdecl = self.arch == Arch::X86 && abi::is_windows(compiler);
+        if abi::is_windows(compiler) && matches!(name.trim_start_matches('_'), "read" | "write" | "getcwd") {
+            return None;
+        }
+        render_prototype(name, self.data_organization, cdecl)
     }
 
     /// Registers a known function address with a name, so calls to it render by name. Call before decompiling
@@ -547,12 +589,35 @@ mod tests {
         // A buffer large enough to give every prototype its own symbol address.
         let code = vec![0xc3u8; C_PROTOTYPES.len() * 8 + 16];
         let segments = [Segment { base: 0x1000, bytes: &code, writable: false }];
-        let mut decompiler = Decompiler::open(Arch::X86_64, false, &segments).expect("open");
-        for (index, (name, _)) in C_PROTOTYPES.iter().enumerate() {
-            let address = 0x1000 + (index as u64) * 8;
-            decompiler.add_symbol(address, name);
-            let prototype = c_prototype(name).expect("table entries have prototypes");
-            decompiler.parse_c(&prototype).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let regions: Vec<_> = segments
+            .iter()
+            .map(|segment| MemoryRegion {
+                base: segment.base,
+                bytes: segment.bytes,
+                size: segment.bytes.len() as u64,
+                readable: true,
+                writable: false,
+                executable: true,
+            })
+            .collect();
+        for (arch, platform) in [
+            (Arch::X86, Platform::Default),
+            (Arch::X86, Platform::Windows),
+            (Arch::X86_64, Platform::Default),
+            (Arch::X86_64, Platform::Windows),
+            (Arch::Aarch64, Platform::Windows),
+        ] {
+            let options = DecompilerOptions { platform, compiler: None };
+            let mut decompiler = Decompiler::open_with_options(arch, false, &regions, &options).expect("open");
+            for (index, (name, _)) in C_PROTOTYPES.iter().enumerate() {
+                let address = 0x1000 + (index as u64) * 8;
+                decompiler.add_symbol(address, name);
+                if let Some(prototype) = decompiler.c_prototype(name) {
+                    decompiler
+                        .parse_c(&prototype)
+                        .unwrap_or_else(|error| panic!("{arch}/{platform:?}/{name}: {error}"));
+                }
+            }
         }
     }
 }

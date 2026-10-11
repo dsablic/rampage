@@ -40,6 +40,32 @@ Mode points are validated before mutation and passed to the C ABI in batches of 
 whole-program point-count cutoff. The million-point scale gate runs with
 `cargo test -p rampage-decompiler --test context -- --include-ignored`.
 
+## Compiler specifications and prototypes
+
+The project layer selects Windows specifications for PE, macOS PowerPC specifications for big-endian PowerPC
+Mach-O, and the existing default specifications otherwise. `DecompilerOptions` exposes platform/compiler
+overrides; `Project::set_decompiler_options(None)` restores format-based selection. The CLI accepts
+`decompile --compiler windows` (or another compiler ID advertised by the selected processor language).
+Unknown IDs are errors, not silent fallback to the first compiler in a language definition. Results report the
+exact selected `language_id`.
+
+Bundled C data organizations explicitly use ILP32 for MIPS32 and PowerPC32 (including Darwin) and LP64 for
+SPARC64 and Darwin PowerPC64; these six compiler specifications carry local corrections marked in their XML.
+Selected C specifications with incompatible pointer/`int`/`long` widths are rejected, including external installs
+that still contain the original missing/incorrect widths.
+
+Pointer, `int` and `long` widths come from the selected compiler specification. `Decompiler::c_prototype`
+uses those widths for `size_t`, `ssize_t`, `long` and `unsigned long`, and applies `__cdecl` to x86 Windows CRT
+functions rather than the specification's default `__stdcall`. The `clangwindows` alias gets identical runtime
+handling. Automatic declarations omit library-dependent
+`off_t`, `time_t`, `clock_t` and `pthread_t`; a compiler spec alone does not establish those typedefs. The legacy
+free `c_prototype` helper remains LP64-only and is not used by the project integration.
+
+These defaults do not establish full ABI parity. In particular, the bundled ARM64 default is AAPCS64, not a
+Darwin-specific C ABI specification; Apple ARM64 variadic/stack rules and ARM BE8 require further integration
+work. Compiler overrides such as Go or Swift disable automatic C runtime declarations rather than assigning
+C signatures to functions using another calling convention.
+
 ## Processor specifications
 
 The compiled SLEIGH specifications (`.sla`) and their processor/compiler specs for every supported architecture

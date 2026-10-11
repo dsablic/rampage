@@ -28,7 +28,7 @@ pub struct Project {
     strings: OnceLock<Vec<FoundString>>,
     /// The embedded decompiler, built once over the executable segments on first use. Behind a mutex because
     /// Ghidra's decompiler is not thread-safe and a project is shared across threads.
-    pub(crate) decompiler: std::sync::Mutex<Option<rampage_decompiler::Decompiler>>,
+    pub(crate) decompiler: std::sync::Mutex<crate::decompile::DecompilerState>,
 }
 
 pub(crate) struct Analysis {
@@ -62,7 +62,7 @@ impl Project {
             analysis: OnceLock::new(),
             triage: OnceLock::new(),
             strings: OnceLock::new(),
-            decompiler: std::sync::Mutex::new(None),
+            decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
         }
     }
 

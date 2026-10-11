@@ -1,0 +1,10 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "x86_64",
+  "provenance": "Windows x64 two-argument sum in ECX and EDX",
+  "regions": [
+    {"name": "text", "address": "0x1000", "permissions": "r-x", "bytes": "89c801d0c3"}
+  ],
+  "seeds": ["0x1000"],
+  "entry": "0x1000"
+}
