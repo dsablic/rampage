@@ -14,9 +14,10 @@ tools/benchmark.sh target/debug/rampage "$(brew --prefix ghidra)/libexec" \
   tests/fixtures/bin/hello-x64.elf x86_64  tests/fixtures/bin/hello-arm64.elf aarch64
 ```
 
-`recall` is the fraction of Ghidra's functions that rampage also found. rampage often reports more functions
-than Ghidra (the `rampage` column), because it does not fold thunks into their targets; those are not counted
-against recall.
+`recall` is matched/reference starts; `precision` is matched/rampage starts. Extra starts are now counted against
+precision, including thunks excluded from the reference. Empty denominators are reported as `null`/`N/A`, not
+zero. The reference records the installed Ghidra version. These policies must match before comparisons across
+versions or corpora are interpreted.
 
 ### Results (Ghidra 12.1.4, fixtures in `tests/fixtures/bin`)
 
