@@ -108,6 +108,21 @@ struct DebugImportArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct SignatureBuildArgs {
+    /// File path to write the signature database (JSON). Required: the database is too large to return inline.
+    output: String,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct IdentifyArgs {
+    /// File path of a signature database built with build_signatures.
+    database: String,
+    /// Persist matched names for still-unnamed functions as user names (never overwriting existing names).
+    #[serde(default)]
+    apply: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 struct DiagnosticsArgs {
     /// Explicitly run whole-program discovery; otherwise reuse cached discovery or sample bytes only.
     #[serde(default)]
@@ -280,6 +295,31 @@ pub fn tools() -> Vec<Tool> {
             "import_debug_signatures",
             "Preview bounded embedded-DWARF signatures; apply=true persists them without replacing user signatures.",
             |project, arguments: DebugImportArgs| project.import_debug_signatures(arguments.apply),
+        )
+        .annotates(),
+        tool(
+            "build_signatures",
+            "Build a library-function signature database (FLIRT/Function-ID style) from this binary's named \
+             functions and write it to the output path. Use it on a binary with symbols, then identify_functions \
+             on a stripped one.",
+            |project, arguments: SignatureBuildArgs| {
+                let database = project.build_signatures();
+                std::fs::write(&arguments.output, database.to_json())
+                    .map_err(|error| ApiError::Invalid(format!("cannot write {}: {error}", arguments.output)))?;
+                Ok(serde_json::json!({ "signatures": database.len(), "output": arguments.output }))
+            },
+        ),
+        tool(
+            "identify_functions",
+            "Name functions by matching a signature database built with build_signatures, so statically linked \
+             library code in a stripped binary gets recognized. apply=true saves names for unnamed functions.",
+            |project, arguments: IdentifyArgs| {
+                let text = std::fs::read_to_string(&arguments.database)
+                    .map_err(|error| ApiError::Invalid(format!("cannot read {}: {error}", arguments.database)))?;
+                let database = rampage_signatures::SignatureDb::from_json(&text)
+                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
+                project.apply_signatures(&database, arguments.apply)
+            },
         )
         .annotates(),
         tool(
