@@ -10,9 +10,17 @@ libc prototypes (so string arguments show), and decodes Thumb in Thumb mode.
 - [x] Embed the library, build from vendored sources, in-memory image, language-id mapping.
 - [x] Decompile to C on demand over all executable segments; read-only data mapped for string folding.
 - [x] Feed rampage's function names; apply libc prototypes; Thumb mode for 32-bit ARM.
-- [ ] Bind full library signatures (vtable/type archives), not just the curated libc set.
+- [x] Vendor the SLEIGH specs so no external Ghidra install is required (prefer bundled, override with
+  `GHIDRA_INSTALL_DIR`).
+- [x] Expand the library prototype set to the common C runtime (~130 stdio/string/memory/stdlib/ctype/POSIX/
+  math/pthread functions), applied per present symbol, with a test that every prototype parses.
+- [x] Function-discovery accuracy benchmark against Ghidra (`tools/benchmark.sh`, `docs/benchmarks.md`).
+- [ ] C++ class recovery: typed vtables/RTTI and `this` pointers in the decompiler. The embedded library reads
+  types from C declarations or XML, not Ghidra `.gdt` archives, so this needs a header/type pipeline, not a
+  `.gdt` import. Larger, separate effort.
 - [ ] Richer `main`/entry signature recovery; apply user-set types to the decompiler.
-- [ ] Vendor the SLEIGH `.sla` specs (or build them) so no external Ghidra install is required.
+- [ ] Bundle for relocated/installed binaries (embed specs or install them), so a `cargo install` binary that is
+  moved away from its build tree still finds specs without `GHIDRA_INSTALL_DIR`.
 
 **This supersedes the hand-written "Deep ARM64 track" below as the route to decompiled output.** That native
 IR/SSA/pseudocode work stays as complementary, evidence-bounded diagnostics (and feeds the function list the
