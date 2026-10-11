@@ -1,46 +1,117 @@
 # To do
 
-## Deep ARM64 track
+## Current status
 
-1. [ ] Integer instruction semantics: arithmetic/logical shifts, wide moves, multiply/divide, NZCV, common
-   scalar/pair memory operations and AAPCS64 call effects. Verify encodings with LLVM and execution on fixtures.
-2. [ ] Stack/signature analysis: preserve callee-saved registers, identify SP-relative slots and conservatively
-   report argument/return evidence; unknown instructions and conflicting paths must remain unknown.
-3. [ ] SSA simplification and pseudocode: bounded constant/affine reasoning and explicit semantic gaps, then
-   structured conditions/loops and types. Do not claim complete source recovery from partial IR.
-4. [ ] Jump tables/indirect flow: recover only bounded, validated tables and targets, with evidence and no guesses
-   for mutable/authenticated pointers. Extend the controlled corpus before enabling new recovery rules.
-5. [x] Runtime capture: successful permitted live capture, module identities/slides, original-file correlation
-   and register provenance. Existing exporter mocks alone do not satisfy this gate.
-6. [ ] Accuracy benchmark: checked fixture results for instructions, CFGs, xrefs and semantics, plus versioned
-   IDA/Ghidra comparison imports when those tools are available. Record missing tools rather than claiming parity.
+Deep ARM64 support is **in progress**, not IDA/Ghidra parity or complete typed-source recovery.
+Checked items below describe bounded, tested capabilities; sections marked partial still have acceptance work remaining.
 
-Current ARM64 increment: integer logical/shift/multiply/divide/wide-move semantics, NZCV and B.cond,
-ADR/ADRP, common 32/64-bit scalar and 64-bit pair memory effects, conservative integer AAPCS64 calls,
-monotone constant/entry-SP-relative stack evidence, and bounded SSA-style pseudocode. Native ARM64 evaluator
-comparisons and controlled fixtures cover these cases; full semantic/ABI/structured-source coverage is open.
-Ghidra/IDA are not on the command path. Controlled live LLDB capture passes with ASLR enabled.
-Ghidra's architecture is a reference; no Ghidra implementation code or specifications have been incorporated.
-Explicit bounded absolute64/signed-relative32 jump-table inspection is available without guessing dispatch
-bounds or injecting CFG edges. Snapshots record bounded module/register provenance; explicit UUID-matched
-Mach-O correlation maps runtime header slides without opening metadata-supplied paths. Function-start
-comparisons accept bounded, versioned exports for hash-matched regular images; snapshots are excluded until
-mapping-aware comparison identities exist.
-Bounded immediate-dominator and natural-loop analysis now accompanies SSA; structured-source rendering,
-minimal SSA, full signatures/type recovery and automatic dispatch reconstruction remain acceptance gates.
-Selected sequence/branch/single-body-loop control regions are represented over SSA block references; phis,
-header execution and unsupported graph shapes remain explicit. This does not yet constitute typed source recovery.
-Conditional selects and common bitfield shift/extract aliases now retain semantics in IR/SSA. Optimized native
-C fixtures exercise arithmetic and select paths end-to-end, alongside boundary-level execution comparisons.
-Per-RET integer-return candidates retain X0/X1 definitions and constants without claiming a recovered signature.
-SSA removes redundant phi aliases without expression expansion; changing loop values retain predecessor inputs.
-Native checks cover all condition codes and all NZCV combinations.
-Extended-register ADD/SUB, including SP address calculations and signed/unsigned extensions, is now lifted.
-Scalar byte/halfword/word/doubleword loads/stores retain separate result/access widths and full-width writeback.
-Bounded exact-width constant-store forwarding resolves spills only when every memory path agrees; calls,
-unknown aliases, overlaps and memory cycles remain unknown. Mutable snapshot pointer inference remains disabled.
-Opt-in structured pseudocode renders accepted regions with explicit predecessor/parallel-phi semantics;
-word-sized and signed word-pair memory operations now retain their width/stride and SP writeback.
+### Committed milestones
+
+- `ce8d78c`: integer/NZCV semantics, AAPCS64 calls, constant/stack evidence, dominance/natural loops,
+  labeled pseudocode, explicit jump-table inspection, snapshot metadata and comparison foundations.
+- `e5adb73`: conservative control regions, conditional selects and common bitfield aliases.
+- `94d0936`: checked X0/X1 return candidates, without inferring a signature or inventing argument uses.
+- `35508ff`: successful controlled live LLDB capture with ASLR enabled and UUID/header-slide correlation.
+- `07110f5`: phi-alias simplification without expression expansion; bounded long-chain allocation regression.
+- `d969847`: extended-register ADD/SUB, including SP/ZR and signed/unsigned extension rules.
+- `1c9c737`: scalar memory widths/extensions, proven constant-store forwarding and complete phi-path validation.
+- `a2c9ec0`: word-sized STP/LDP and signed LDPSW pairs with full-width SP writeback.
+- `1556f22`: opt-in structured SSA pseudocode, parallel phi bindings and CFG-versus-region execution tests.
+
+### Active increment — reviewed, not yet committed
+
+- [x] Local operand-use evidence: integer widths, address/code operands, signed/unsigned operation roles.
+  This is not source-type inference; shift counts do not inherit pointer roles. Traversal is bounded.
+- [x] Explicit indirect-branch target observations in IR/SSA and constant-target evidence from dataflow.
+- [x] Image validation requires an entire aligned instruction in backed, readable executable code.
+  Evidence does not insert CFG edges or function seeds; mutable snapshot-pointer inference stays disabled.
+- [x] Independent reviews completed; reported bugs fixed and retained as regressions.
+- [x] Latest release workspace suite and warnings-denied Clippy passed.
+- [ ] Complete the latest full debug workspace run: it timed out before completion, with no reported test failure.
+  Earlier full debug suites passed; focused current-increment tests pass. Diagnose the timeout before signing off.
+- [ ] Final formatting/diff checks, line-length cleanup and commit of this increment.
+
+### Validation and external blockers
+
+- [x] LLVM-checked encodings and native ARM64 boundary comparisons, including all 16 conditions × 16 NZCV states.
+- [x] Opt-in optimized C fixtures: native execution plus evaluated lifted arithmetic/selects and recovered byte spills.
+- [x] Controlled live export on Apple LLDB `2103.0.34.103`: executable bytes, module identities and registers;
+  explicit original Mach-O correlation verified with ASLR enabled. Capture artifacts were removed.
+- [x] Previous committed milestones passed full debug/release suites and fresh-context review.
+- [ ] Actual IDA/Ghidra comparisons: neither executable was found on PATH; no comparative accuracy claim is made.
+- [ ] Resolve the local `rust-objcopy` missing-`libLLVM.dylib` stripping warning; release tests still execute.
+
+## Deep ARM64 track and remaining work
+
+### 1. Instruction semantics — partial
+
+- [x] Immediate, shifted and extended ADD/SUB; logical operations; wide moves; multiply/divide; variable shifts.
+- [x] NZCV, B.cond, CBZ/CBNZ/TBZ/TBNZ, CSEL/CSINC/CSINV/CSNEG, ADR/ADRP and plain BL/BLR/BR/RET.
+- [x] Common non-wrapping bitfield aliases; 8/16/32/64-bit scalar memory with separate result/access widths.
+- [x] Literal/register/unsigned/unscaled/pre/post addressing; 32/64-bit pairs and signed LDPSW.
+- [ ] Remaining common integer families: carry arithmetic, conditional compares, wrapping bitfields,
+  long/high multiply, extracts and other scalar operations. Add native boundary regressions per family.
+- [ ] Valid no-writeback pair loads with base/destination overlap; preserve original addresses before assignments.
+- [ ] FP/SIMD, atomic/exclusive and selected system semantics, with effects and memory ordering explicit.
+- [ ] PAC/authenticated flow, exceptions and platform-specific behavior; unsupported forms must remain barriers.
+
+### 2. Stack, memory and signatures — partial
+
+- [x] Integer AAPCS64 caller clobbers/callee preservation; X8 result-buffer and SP call dependencies.
+- [x] Entry-SP-relative slots, conflicting-path unknowns, per-RET X0/X1 candidates and input-use argument evidence.
+- [x] Exact-width constant-store forwarding with source IDs and all-path agreement; conservative alias boundaries.
+- [ ] Recover nonconstant spills/reloads, partial-width overlaps and safe cyclic-memory fixpoints.
+- [ ] Stack-frame boundaries, outgoing stack arguments, saved-register roles and escaped-stack alias handling.
+- [ ] Interprocedural signatures: argument count/types, void versus value, aggregate returns, varargs and FP/SIMD ABI.
+- [ ] Propagate type constraints and reconstruct pointer/struct/class layouts; local operand roles alone are not types.
+
+### 3. SSA and pseudocode — partial
+
+- [x] Bounded register/memory SSA, predecessor-indexed phis, constants/affine stack reasoning and semantic gaps.
+- [x] Redundant phi aliases, dominators, natural-loop evidence and conservative sequence/branch/single-body regions.
+- [x] Labeled and `--structured` SSA pseudocode with explicit predecessor tokens and simultaneous phi bindings.
+- [x] Execution comparisons cover both diamond arms, repeated loops and both loop-condition polarities.
+- [ ] Minimal phi placement, dead-definition elimination and broader expression simplification without amplification.
+- [ ] Nested/multi-block loops, broader branch joins, switch regions and explicit irreducible-flow fallback.
+- [ ] Typed variables, source-level expressions/returns and readable decompiler output distinct from SSA diagnostics.
+
+### 4. Jump tables and indirect flow — partial
+
+- [x] Conservative ADR/ADRP/ADD/MOV/LDR/BR/BLR discovery; calls/stores invalidate captured-memory assumptions.
+- [x] Explicit bounded absolute64/signed-relative32 table inspection, without guessed dispatch bounds.
+- [x] Reviewed active increment: image-validated SSA target evidence, including a spilled constant target.
+- [ ] Automatic dispatch recognition, proven index bounds and validated table entries tied to the branch site.
+- [ ] Feed proven targets into discovery/CFG/xrefs with deterministic closure and retained source evidence.
+- [ ] Mutable pointers only after alias/reaching-store proof; authenticated or unmapped targets remain unresolved.
+- [ ] Fixtures for relative tables, duplicate targets, joins, loops, truncation, overflow and hostile index bounds.
+
+### 5. Controlled runtime capture — initial gate complete
+
+- [x] Successful permitted stopped-process capture, module UUIDs/bases, register provenance and original correlation.
+- [ ] Reproducible session persistence and mapping-aware snapshot identity, including addresses/permissions/endianness.
+- [ ] Multiple modules/threads and stripped/relocated images; module-qualified navigation and cross-module references.
+- [ ] Broader debugger/platform integration, capture failure handling and provenance validation on larger fixtures.
+
+### 6. Accuracy benchmark — partial; external comparisons blocked
+
+- [x] Synthetic snapshots, native instruction oracles, compiled fixtures and malformed-input/resource regressions.
+- [x] Versioned, hash-/architecture-matched function-start reference imports; snapshot comparisons reject
+  ambiguous identity.
+- [ ] A reproducible compiler/optimization corpus with recorded tool versions and instruction/CFG/xref/semantic metrics.
+- [ ] CI gates for accuracy regressions, unsupported coverage, false positives and analysis time/memory bounds.
+- [ ] IDA/Ghidra exports and comparisons once installations are available; reference output is not ground truth.
+- [ ] Expand comparisons beyond function starts to CFGs, dispatch targets, stack/signature evidence and semantics.
+
+### Next execution order
+
+1. Finish validation and commit the reviewed type-use/indirect-target increment.
+2. Extend common integer semantics and nonconstant spill recovery, keeping alias boundaries conservative.
+3. Recover bounded dispatch tables and integrate proven targets into CFG/discovery with regression fixtures.
+4. Broaden structuring and type/signature propagation; keep SSA diagnostics separate from recovered source.
+5. Build the versioned accuracy corpus/CI gates and complete persistence/cross-module runtime work.
+
+Ghidra's architecture is a reference, not a wholesale decompiler port. No Ghidra implementation or specifications
+have been incorporated; any future copied/ported components require their applicable license and attribution.
 
 ## General-purpose reverse-engineering roadmap
 
@@ -48,8 +119,8 @@ Acceptance gate for each milestone: behavioral regressions, malformed-input test
 `cargo clippy --all-targets -- -D warnings`, workspace tests, and independent review. Commercial samples are
 read-only triage inputs, never bypass or patch fixtures. Runtime tests use programs we build ourselves.
 
-- [ ] Runtime images: validated sparse snapshot format, CLI/API/UI loading, explicit code seeds, provenance,
-  ASLR-safe address handling, deterministic analysis, and an LLDB export adapter for authorized processes.
+- [x] Initial runtime images: validated sparse snapshot format, CLI/API/UI loading, explicit code seeds, provenance,
+  virtual-address handling and controlled LLDB export/correlation. Persistence and cross-module work remain above.
 - [ ] Indirect flow: conservative known-register and readable-pointer resolution, starting with AArch64
   ADR/ADRP/ADD/MOV/LDR/BR/BLR. Unknown, authenticated, mutable and unmapped targets must remain unresolved.
 - [ ] Analysis confidence: explain suspected encoded code and decode coverage without presenting random bytes
@@ -70,15 +141,15 @@ read-only triage inputs, never bypass or patch fixtures. Runtime tests use progr
   Mocked export tests and the opt-in controlled live ARM64 capture pass with ASLR left enabled. Module UUID/header
   mapping and selected-thread register provenance are verified against the explicitly supplied original image.
 - [x] AArch64 conservative ADR/ADRP/ADD/MOV/LDR/BR/BLR tracking with stores/calls invalidating memory inference.
-  Writable capture regions are excluded from pointer evidence until reaching-store analysis exists; joins do
-  not treat a frozen file as proof that later loads keep their captured value.
+  Writable capture regions remain excluded from pointer evidence. Exact-store forwarding exists in summaries,
+  but is not a general alias proof or a reason to enable mutable-pointer discovery.
 - [x] Final discovery closure and retained per-function resolved flows, keeping CFGs/listings consistent.
 - [x] `audit`/`analysis_diagnostics`: bounded coverage and unreliable-code evidence, not proof of encryption.
 - [x] Bounded C++/Rust demangling; original lookup aliases and collision-safe display names.
 - [x] Sized, named Itanium vtable targets/RTTI labels and Objective-C selector string inventory.
 - [x] Plist-authoritative bundle opening and bounded inventory of already-extracted packages/directories.
 - [x] Structural function summaries with paginated references, CFG and explicit non-decompiler limitations.
-- [x] Partial typed AArch64 IR for immediate ADD/SUB, MOVZ/register moves, 64-bit loads/stores and NOP.
+- [x] Partial typed AArch64 IR for the integer/NZCV/scalar-memory families listed in track 1 above.
   Unsupported instructions remain explicit barriers; no source-level reconstruction is claimed.
 - [x] Bounded register/memory SSA with block-entry phi nodes, entry/backedge inputs, unreachable-block handling,
   zero-extended 32-bit results and full semantic barriers; exposed through structural function summaries.
@@ -92,12 +163,12 @@ an initial foundation complete.
 
 ### Next acceptance-driven milestones
 
-1. **Runtime integration:** verify a successful LLDB capture on a permitted stopped fixture; module identities,
-   ASLR slides and captured register state; snapshot-to-original mapping and reproducible session persistence.
-2. **Data-flow:** reaching-store/alias analysis before enabling mutable snapshot pointer inference; per-edge
-   register state, joins/loops, bounded fixpoints, source-attributed resolution evidence and unknown outcomes.
-3. **IR and SSA:** extend instruction semantics/calling conventions, then dominance/phi construction; compare
-   lifted execution to controlled native fixtures at boundaries, overflow, zero registers and flag writes.
+1. **Runtime integration:** extend the verified controlled capture to persistence, mapping-aware identities,
+   multiple modules/threads and module-qualified navigation.
+2. **Data-flow:** extend exact constant-store forwarding to nonconstant values, partial overlaps and safe loops;
+   establish alias proofs before enabling mutable snapshot pointer inference.
+3. **IR and SSA:** extend semantics/calling conventions, minimal phi placement and expression simplification;
+   compare lifted execution with native fixtures at overflow, width, zero-register and flag boundaries.
 4. **Language recovery:** stripped Itanium/MSVC vtables, class layouts, Objective-C method/class references,
    relative/authenticated pointers, DWARF/PDB integration and fixture-based malformed metadata validation.
 5. **Decompilation:** expressions, conditions, loops, returns and typed variables over SSA; output must explicitly
@@ -105,9 +176,10 @@ an initial foundation complete.
 6. **Containers/workspaces:** safe archive indexing/extraction budgets, module-qualified names/addresses,
    dependencies, cross-module references and UI/MCP navigation; never execute installer scripts.
 
-Foundation validation: full debug/release workspace suites, warnings-denied Clippy, unchanged existing UI
-snapshots, new snapshot UI/CLI/API regressions, malformed input bounds, six LLDB exporter tests, Ruff/ty,
-and fresh-context reviews with each reported reproduction retained as a regression.
+Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,
+CLI/API/MCP regressions, malformed-input bounds, native/compiled fixtures, seven exporter tests, the opt-in live
+capture test, two debugger-cleanup regressions, Ruff/ty and fresh-context reviews. The active increment's latest
+full-debug timeout is tracked separately above; it is not represented as a passing suite.
 
 Checklist from the second code-review round. Most of it is in `crates/rampage-arch/src/aarch32/flow.rs`.
 After each group: `cargo fmt`, `cargo clippy --all-targets`, `cargo test`, and the AArch32 golden tests
