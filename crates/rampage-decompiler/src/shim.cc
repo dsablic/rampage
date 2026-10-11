@@ -6,6 +6,7 @@
 #include "loadimage.hh"
 #include "funcdata.hh"
 #include "printc.hh"
+#include "grammar.hh"
 
 #include <cstring>
 #include <sstream>
@@ -143,6 +144,25 @@ void rampage_decomp_add_symbol(void *h, uint64_t addr, const char *name) {
         }
     } catch (LowlevelError &) {
         // A bad address is not fatal; the symbol is simply not added.
+    }
+}
+
+// Parses C declarations (typedefs, prototypes) into the program's type database, so matching functions get
+// signatures and their arguments are typed. Returns an error string on a parse failure, else null.
+const char *rampage_decomp_parse_c(void *h, const char *text) {
+    Handle *handle = static_cast<Handle *>(h);
+    if (handle->arch == nullptr || text == nullptr) return nullptr;
+    try {
+        std::istringstream in(text);
+        parse_C(handle->arch, in);
+        handle->error.clear();
+        return nullptr;
+    } catch (ParseError &err) {
+        handle->error = err.explain;
+        return handle->error.c_str();
+    } catch (LowlevelError &err) {
+        handle->error = err.explain;
+        return handle->error.c_str();
     }
 }
 

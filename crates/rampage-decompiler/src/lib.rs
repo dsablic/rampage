@@ -16,6 +16,58 @@ use rampage_arch::Arch;
 /// into it is serialized. Decompilation is CPU-bound but fast, so this is not a throughput concern in practice.
 static FFI_LOCK: Mutex<()> = Mutex::new(());
 
+/// Prototypes for common C library functions, so their calls show typed arguments (a `char *` argument renders
+/// the string it points at). Ghidra's C parser only accepts its sized core types (`int4`, `uint8`, `char`, ...),
+/// and a prototype binds only to a function symbol that already exists, so these are applied by name after the
+/// known symbols are registered. Size-typed parameters use `uint8`, correct for the 64-bit targets this matters
+/// most for.
+const C_PROTOTYPES: &[(&str, &str)] = &[
+    ("puts", "int4 puts(char *s)"),
+    ("printf", "int4 printf(char *fmt, ...)"),
+    ("fprintf", "int4 fprintf(void *stream, char *fmt, ...)"),
+    ("sprintf", "int4 sprintf(char *str, char *fmt, ...)"),
+    ("snprintf", "int4 snprintf(char *str, uint8 n, char *fmt, ...)"),
+    ("scanf", "int4 scanf(char *fmt, ...)"),
+    ("putchar", "int4 putchar(int4 c)"),
+    ("perror", "int4 perror(char *s)"),
+    ("strlen", "uint8 strlen(char *s)"),
+    ("strcpy", "char * strcpy(char *dst, char *src)"),
+    ("strncpy", "char * strncpy(char *dst, char *src, uint8 n)"),
+    ("strcmp", "int4 strcmp(char *a, char *b)"),
+    ("strncmp", "int4 strncmp(char *a, char *b, uint8 n)"),
+    ("strcat", "char * strcat(char *dst, char *src)"),
+    ("strchr", "char * strchr(char *s, int4 c)"),
+    ("strstr", "char * strstr(char *haystack, char *needle)"),
+    ("strdup", "char * strdup(char *s)"),
+    ("memcpy", "void * memcpy(void *dst, void *src, uint8 n)"),
+    ("memmove", "void * memmove(void *dst, void *src, uint8 n)"),
+    ("memset", "void * memset(void *s, int4 c, uint8 n)"),
+    ("memcmp", "int4 memcmp(void *a, void *b, uint8 n)"),
+    ("malloc", "void * malloc(uint8 n)"),
+    ("calloc", "void * calloc(uint8 count, uint8 size)"),
+    ("realloc", "void * realloc(void *p, uint8 n)"),
+    ("free", "void free(void *p)"),
+    ("exit", "void exit(int4 status)"),
+    ("atoi", "int4 atoi(char *s)"),
+    ("fopen", "void * fopen(char *path, char *mode)"),
+    ("fclose", "int4 fclose(void *stream)"),
+    ("fread", "uint8 fread(void *ptr, uint8 size, uint8 n, void *stream)"),
+    ("fwrite", "uint8 fwrite(void *ptr, uint8 size, uint8 n, void *stream)"),
+    ("read", "int8 read(int4 fd, void *buf, uint8 n)"),
+    ("write", "int8 write(int4 fd, void *buf, uint8 n)"),
+    ("close", "int4 close(int4 fd)"),
+    ("open", "int4 open(char *path, int4 flags, ...)"),
+];
+
+/// The C prototype for a well-known library function, as a declaration ready to parse, or `None` when the name
+/// is not one rampage carries a prototype for. The name is matched after stripping a leading underscore and a
+/// `@plt`/`@got` suffix, so stub spellings like `puts@plt` and `_malloc` resolve.
+pub fn c_prototype(name: &str) -> Option<String> {
+    let bare = name.trim_start_matches('_');
+    let bare = bare.split('@').next().unwrap_or(bare);
+    C_PROTOTYPES.iter().find(|(known, _)| *known == bare).map(|(_, decl)| format!("extern {decl};"))
+}
+
 #[repr(C)]
 struct Opaque {
     _private: [u8; 0],
@@ -32,6 +84,7 @@ unsafe extern "C" {
         writable: *const u8,
     ) -> *mut Opaque;
     fn rampage_decomp_add_symbol(handle: *mut Opaque, addr: u64, name: *const c_char);
+    fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
     fn rampage_decomp_function(handle: *mut Opaque, addr: u64, name: *const c_char) -> *mut c_char;
     fn rampage_decomp_free_string(text: *mut c_char);
@@ -166,6 +219,20 @@ impl Decompiler {
         unsafe { rampage_decomp_add_symbol(self.handle, address, name.as_ptr()) };
     }
 
+    /// Parses C declarations (typedefs and prototypes) into the type database, so matching functions get typed
+    /// signatures. Returns an error only when the text does not parse.
+    pub fn parse_c(&mut self, declarations: &str) -> Result<(), Error> {
+        let text = CString::new(declarations).map_err(|_| Error::Ghidra("declarations contain a NUL".to_owned()))?;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: handle is valid for the life of self; text is a valid C string for the call.
+        let error = unsafe { rampage_decomp_parse_c(self.handle, text.as_ptr()) };
+        if error.is_null() {
+            Ok(())
+        } else {
+            Err(Error::Ghidra(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned()))
+        }
+    }
+
     /// Decompiles the function at `address` to C. `name`, when non-empty, is used as the function's name.
     pub fn decompile(&mut self, address: u64, name: &str) -> Result<String, Error> {
         let name = CString::new(name).unwrap_or_default();
@@ -226,5 +293,23 @@ mod tests {
     #[test]
     fn s390x_is_unsupported() {
         assert!(language_id(Arch::S390x, true).is_none());
+    }
+
+    #[test]
+    fn known_prototypes_apply_to_registered_symbols() {
+        if sleigh_home().is_none() {
+            return;
+        }
+        let segments = [Segment { base: 0x1000, bytes: X64_TEXT, writable: false }];
+        let mut decompiler = Decompiler::open(Arch::X86_64, false, &segments).expect("open");
+        // A prototype binds only to an existing symbol, so register the name first.
+        decompiler.add_symbol(0x1000, "puts");
+        let prototype = c_prototype("puts@plt").expect("known prototype");
+        decompiler.parse_c(&prototype).expect("prototype applies");
+    }
+
+    #[test]
+    fn unknown_names_have_no_prototype() {
+        assert!(c_prototype("my_custom_function").is_none());
     }
 }

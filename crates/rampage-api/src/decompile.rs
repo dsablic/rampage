@@ -54,9 +54,18 @@ impl Project {
 
         // Known function names (analysis starts and named import stubs, with any user renames) so calls render
         // by name rather than by address.
+        let mut names: Vec<String> = Vec::new();
         if let Ok(analysis) = self.analysis() {
             for function in &analysis.program.functions {
-                decompiler.add_symbol(function.address, &self.function_name(function.address));
+                let name = self.function_name(function.address);
+                decompiler.add_symbol(function.address, &name);
+                names.push(name);
+            }
+        }
+        // Apply library prototypes to the symbols just registered, so their calls show typed, readable arguments.
+        for name in names {
+            if let Some(prototype) = rampage_decompiler::c_prototype(&name) {
+                let _ = decompiler.parse_c(&prototype);
             }
         }
         Ok(decompiler)

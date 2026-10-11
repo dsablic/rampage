@@ -230,5 +230,8 @@ fn decompiles_a_function_to_c_when_ghidra_is_present() {
     assert!(decompilation.code.contains("return"), "{}", decompilation.code);
     // A known call target renders by name, not by address.
     let main = project.resolve("main").unwrap();
-    assert!(project.decompile(main).unwrap().code.contains("puts"));
+    let main_c = project.decompile(main).unwrap().code;
+    assert!(main_c.contains("puts"), "{main_c}");
+    // The applied libc prototype renders the string argument.
+    assert!(main_c.contains("rampage fixture greeting"), "{main_c}");
 }
