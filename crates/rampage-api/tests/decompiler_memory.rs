@@ -10,6 +10,7 @@ fn binary() -> Binary {
 fn code(binary: Binary) -> String {
     let project = Project::new(binary);
     project.rename(0x2000, Some("puts")).unwrap();
+    project.set_signature(0x2000, Some("int4 print(char *s);")).unwrap();
     project.decompile(0x1000).unwrap().code
 }
 

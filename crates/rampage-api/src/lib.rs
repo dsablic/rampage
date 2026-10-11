@@ -27,6 +27,7 @@ pub use jumptable::{JumpTable, JumpTableEntry};
 pub use listing::{DisassemblyLine, FunctionListing};
 pub use project::Project;
 pub use rampage_analysis::triage::Triage;
+pub use rampage_decompiler::worker::WorkerConfig as DecompilerWorkerConfig;
 pub use rampage_decompiler::{DecompilerOptions, Platform as DecompilerPlatform};
 pub use rows::{
     Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page, StringsQuery,

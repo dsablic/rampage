@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 pub enum Field {
     Name,
     Comment,
+    Signature,
+    Types,
 }
 
 /// One change: `field` at `address` went from `previous` to `value` (`None` removes it).
@@ -43,6 +45,8 @@ pub struct Annotations {
     /// Each name's address, for resolving names.
     addresses: HashMap<String, u64>,
     comments: BTreeMap<u64, String>,
+    signatures: BTreeMap<u64, String>,
+    types: BTreeMap<u64, String>,
     /// Edits applied in this session, for undo; and undone ones, for redo.
     done: Vec<Edit>,
     undone: Vec<Edit>,
@@ -72,6 +76,17 @@ impl Annotations {
         Self::default()
     }
 
+    pub(crate) fn snapshot(&self) -> Self {
+        Self {
+            names: self.names.clone(),
+            addresses: self.addresses.clone(),
+            comments: self.comments.clone(),
+            signatures: self.signatures.clone(),
+            types: self.types.clone(),
+            ..Self::default()
+        }
+    }
+
     /// Applies edits other processes have appended to the log since it was last read. Returns whether any were.
     pub fn refresh(&mut self) -> Result<bool, String> {
         let Some(log) = &mut self.log else { return Ok(false) };
@@ -80,6 +95,8 @@ impl Annotations {
             self.names.clear();
             self.addresses.clear();
             self.comments.clear();
+            self.signatures.clear();
+            self.types.clear();
         }
         for edit in &edits {
             self.apply(edit);
@@ -108,6 +125,17 @@ impl Annotations {
                 Some(value) => drop(self.comments.insert(edit.address, value.clone())),
                 None => drop(self.comments.remove(&edit.address)),
             },
+            Field::Signature | Field::Types => {
+                let values = if edit.field == Field::Signature { &mut self.signatures } else { &mut self.types };
+                match &edit.value {
+                    Some(value) => {
+                        values.insert(edit.address, value.clone());
+                    }
+                    None => {
+                        values.remove(&edit.address);
+                    }
+                }
+            }
         }
     }
 
@@ -138,12 +166,41 @@ impl Annotations {
 
     /// Sets or clears `field` at `address`, recording the edit. Returns false when nothing changed.
     pub fn set(&mut self, field: Field, address: u64, value: Option<String>) -> Result<bool, String> {
+        self.set_validated(field, address, value, |_| Ok(()))
+    }
+
+    fn log_lock(&self) -> Result<Option<File>, String> {
+        let Some(log) = &self.log else { return Ok(None) };
+        let mut path = log.path.as_os_str().to_owned();
+        path.push(".lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(PathBuf::from(path))
+            .map_err(|error| error.to_string())?;
+        file.lock().map_err(|error| error.to_string())?;
+        Ok(Some(file))
+    }
+
+    pub(crate) fn set_validated(
+        &mut self,
+        field: Field,
+        address: u64,
+        value: Option<String>,
+        validate: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        let _lock = self.log_lock()?;
         self.refresh()?;
         let previous = self.field_map(field).get(&address).cloned();
         if previous == value {
             return Ok(false);
         }
         let edit = Edit { field, address, value, previous };
+        let mut candidate = self.snapshot();
+        candidate.apply(&edit);
+        validate(&candidate)?;
         self.commit(&edit)?;
         self.done.push(edit);
         self.undone.clear();
@@ -152,20 +209,48 @@ impl Annotations {
 
     /// Reverts the last edit made through this instance. Returns the edit undone.
     pub fn undo(&mut self) -> Result<Option<Edit>, String> {
+        self.undo_validated(|_| Ok(()))
+    }
+
+    pub(crate) fn undo_validated(
+        &mut self,
+        validate: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<Option<Edit>, String> {
+        let _lock = self.log_lock()?;
         self.refresh()?;
-        let Some(edit) = self.done.pop() else { return Ok(None) };
+        let Some(edit) = self.done.last().cloned() else { return Ok(None) };
         self.check_unchanged(&edit, &edit.value)?;
+        let mut candidate = self.snapshot();
+        candidate.apply(&edit.inverse());
+        if matches!(edit.field, Field::Signature | Field::Types) {
+            validate(&candidate)?;
+        }
         self.commit(&edit.inverse())?;
+        self.done.pop();
         self.undone.push(edit.clone());
         Ok(Some(edit))
     }
 
     /// Reapplies the last undone edit. Returns it.
     pub fn redo(&mut self) -> Result<Option<Edit>, String> {
+        self.redo_validated(|_| Ok(()))
+    }
+
+    pub(crate) fn redo_validated(
+        &mut self,
+        validate: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<Option<Edit>, String> {
+        let _lock = self.log_lock()?;
         self.refresh()?;
-        let Some(edit) = self.undone.pop() else { return Ok(None) };
+        let Some(edit) = self.undone.last().cloned() else { return Ok(None) };
         self.check_unchanged(&edit, &edit.previous)?;
+        let mut candidate = self.snapshot();
+        candidate.apply(&edit);
+        if matches!(edit.field, Field::Signature | Field::Types) {
+            validate(&candidate)?;
+        }
         self.commit(&edit)?;
+        self.undone.pop();
         self.done.push(edit.clone());
         Ok(Some(edit))
     }
@@ -183,6 +268,8 @@ impl Annotations {
         match field {
             Field::Name => &self.names,
             Field::Comment => &self.comments,
+            Field::Signature => &self.signatures,
+            Field::Types => &self.types,
         }
     }
 
@@ -204,6 +291,14 @@ impl Annotations {
 
     pub fn comments(&self) -> &BTreeMap<u64, String> {
         &self.comments
+    }
+
+    pub fn signatures(&self) -> &BTreeMap<u64, String> {
+        &self.signatures
+    }
+
+    pub fn types(&self) -> &BTreeMap<u64, String> {
+        &self.types
     }
 }
 
@@ -262,6 +357,13 @@ mod tests {
         path
     }
 
+    fn cleanup(path: PathBuf) {
+        std::fs::remove_file(&path).unwrap();
+        let mut lock = path.as_os_str().to_owned();
+        lock.push(".lock");
+        let _ = std::fs::remove_file(PathBuf::from(lock));
+    }
+
     #[test]
     fn edits_undo_redo_and_replay_from_the_log() {
         let path = temporary_log("annotations");
@@ -281,7 +383,7 @@ mod tests {
         assert_eq!(replayed.name(0x1000), Some("parse_header"));
         assert_eq!(replayed.comment(0x1004), None);
         assert_eq!(replayed.address_of("parse_header"), Some(0x1000));
-        std::fs::remove_file(path).unwrap();
+        cleanup(path);
     }
 
     #[test]
@@ -297,7 +399,7 @@ mod tests {
         assert_eq!(agent.comment(0x2000), Some("xor loop"));
         ui.refresh().unwrap();
         assert_eq!(ui.name(0x2000), Some("decrypt_config"));
-        std::fs::remove_file(path).unwrap();
+        cleanup(path);
     }
 
     #[test]
@@ -311,7 +413,7 @@ mod tests {
         reopened.set(Field::Name, 0x20, Some("second".into())).unwrap();
         let replayed = Annotations::open(path.clone()).unwrap();
         assert_eq!((replayed.name(0x10), replayed.name(0x20)), (Some("first"), Some("second")));
-        std::fs::remove_file(path).unwrap();
+        cleanup(path);
     }
 
     #[test]
@@ -334,7 +436,7 @@ mod tests {
         assert_eq!(reader.name(0x30), Some("late"));
         reader.set(Field::Name, 0x40, Some("after".into())).unwrap();
         assert_eq!(Annotations::open(path.clone()).unwrap().name(0x40), Some("after"));
-        std::fs::remove_file(path).unwrap();
+        cleanup(path);
     }
 
     #[test]
@@ -346,7 +448,7 @@ mod tests {
         agent.set(Field::Name, 0x10, Some("b".into())).unwrap();
         assert!(ui.undo().is_err());
         assert_eq!(ui.name(0x10), Some("b"));
-        std::fs::remove_file(path).unwrap();
+        cleanup(path);
     }
 
     #[test]

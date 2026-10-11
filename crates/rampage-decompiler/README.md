@@ -10,10 +10,12 @@ A `Decompiler` is opened once over a program's executable segments and decompile
 library set (the Makefile's `LIBDECOMP` sources) without the BFD loader, the Ghidra-process bridge and the
 SLEIGH compiler. `src/shim.cc` is rampage's own C ABI over that library.
 
-Four vendored files have small integration changes: `loadimage.hh` adds instruction-lookahead, instruction-range
+Vendored integration changes: `loadimage.hh` adds instruction-lookahead, instruction-range
 validation and partial-string-read hooks; `sleigh.cc` validates decoded lengths; `stringmanage.cc` consumes only
 available string bytes; `sleigh.hh` and `sleigh.cc` expose translation-cache invalidation without re-registering
-context variables. Default loader hooks preserve upstream behavior. All other vendored sources are unchanged.
+context variables; `funcdata.hh` synchronizes display names; `grammar.cc` and `type.cc` bound array layouts;
+`prettyprint.hh` and `printlanguage.hh` allow an address-aware token emitter. Default loader hooks preserve
+upstream behavior. Other vendored sources are unchanged.
 
 Ghidra is Copyright the National Security Agency, licensed under the Apache License 2.0; `vendor/ghidra/LICENSE`
 is that license. rampage's own code is under the workspace's MIT/Apache-2.0 terms, but this crate links the
@@ -69,8 +71,37 @@ C signatures to functions using another calling convention.
 ## Processor specifications
 
 The compiled SLEIGH specifications (`.sla`) and their processor/compiler specs for every supported architecture
-are vendored under `specs/` (about 4.5 MB, from the same Ghidra 12.1.4 release), so a source build decompiles with
-no external Ghidra install. `sleigh_home` resolves them in order: `GHIDRA_INSTALL_DIR` if set, then the vendored
-`specs/` (the path is baked at build time), then a Homebrew install (`brew --prefix ghidra`). A relocated binary
-built elsewhere falls back to an install or the environment override. s390x has no Ghidra specification and is
-unsupported.
+are vendored under `specs/` (about 4.5 MB, from the same Ghidra 12.1.4 release) and embedded in the executable.
+`sleigh_home` uses `GHIDRA_INSTALL_DIR` when set; otherwise it materializes the embedded files in
+`~/.cache/rampage/specs-<content-id>`, verifying bytes and repairing changed files under a cross-process lock.
+Relocated executables need neither a build tree nor an external Ghidra installation. A writable HOME cache is
+required without an override. s390x has no Ghidra specification and is unsupported.
+
+## Symbols and user types
+
+Runtime prototypes bind by target address, separately from displayed names. Import slots have independent
+external function bindings; their contents are not fabricated into resolved pointers. Duplicate low-level slot
+registration fails explicitly. Project name changes, undo/redo and refreshed external edits rebuild the cached
+engine; anonymous functions named after a runtime function do not gain that runtime signature.
+
+`set_signature` persists one address-bound declaration; `set_types` persists typedef/struct/union/enum declarations.
+Both are available through API/MCP and participate in shared-log locking, validation and undo/redo. Type removal
+is rejected while a signature depends on it. Declarations use sized types, contain no comments/preprocessor
+directives, and have decimal array bounds in 1..65536 without leading zeros. Array layouts are at most one MiB;
+array parameters require explicit pointers. Automatic debug-type imports and C++ class recovery are not provided.
+
+## Structured output and limits
+
+Results include semantic tokens (function, variable, operator, type), basic-block starts, recovered call targets
+and switch destinations with available program-address links.
+The UI pseudocode panel loads in the background and coalesces navigation while a request runs. Tokens do not
+yet supply character spans, complete variable/block models or jump-table case values/provenance.
+
+Text output is bounded to four MiB and tokens to 262,144; the engine also retains its instruction-flow bound.
+`rampage decompile --isolated` uses a supervised sibling `rampage-worker`; `RAMPAGE_WORKER` explicitly selects
+the executable for sessions (including UI/MCP). `Project::set_decompiler_worker` enables it programmatically.
+The protocol bounds input/output, drains pipes concurrently, cancels/times out and reaps failed children without
+native fallback. Defaults are 30 seconds and one GiB memory. Linux uses hard AS/DATA limits; macOS samples RSS
+and can overshoot between samples. Supervision is supported on 64-bit Linux/macOS and is not an OS sandbox.
+In-process mode remains for compatibility and must be limited to trusted inputs; full native C ABI exception
+containment and broader platform worker support remain separate work.

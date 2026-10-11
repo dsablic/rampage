@@ -38,15 +38,26 @@ guarantee identical output: memory mappings, ABI, mode context, symbols/types an
    ILP32/LP64/LLP64, Windows x86 cdecl, clangwindows aliases and all 13 bundled processor targets.
    - [ ] Remaining ABI-specific work: Darwin ARM64 variadic/stack rules, ARM BE8 instruction/data byte order,
      and OS/library-specific typedefs such as off_t/time_t rather than guessed automatic declarations.
-4. [ ] Symbol/type synchronization: import identity separate from display spelling, report prototype failures,
-   refresh decompiler names after edits/undo/redo/external annotation changes.
+4. [x] Symbol/type synchronization: address-bound prototypes, independent import slots, metadata identity
+   separate from display spelling, reported failures, cached engine refresh on name/type edits and undo/redo.
 5. [ ] Portable specification packaging and supervised resource/cancellation boundaries for hostile inputs,
    including allocation-failure containment at the C ABI.
+   - [x] Embed specifications, versioned verified cache and relocated executable regression without Ghidra.
+   - [x] Bound text/token output; contain standard exceptions during decompilation.
+   - [x] Opt-in supervised worker with wall-clock cancellation, bounded concurrent pipe I/O and memory enforcement
+     (Linux hard limits; macOS sampled RSS), API/CLI/session integration without native fallback.
+   - [ ] Make isolation the packaged default; complete C ABI exception containment and other supervisor platforms.
 6. [ ] Persistent user types/signatures/calling conventions and typed globals, then debug-type imports and
    class recovery.
+   - [x] Validated persistent signatures and type declarations, API/MCP tools and shared-log dependency checks.
+   - [ ] Typed globals, debug-type imports and automatic class recovery.
 7. [ ] Address-linked structured results and clickable pseudocode, plus engine-derived flow where useful.
+   - [x] Semantic address-linked tokens and background UI pseudocode/navigation panel.
+   - [ ] Character spans, variable/block/signature schemas and recovered calls/jump tables.
 8. [ ] Versioned differential benchmarks: precision/recall, thunks, signatures/calls/strings/switches, warnings,
    coverage and time/memory across stripped/symbolized compiler/optimization/ABI corpora.
+   - [x] Discovery precision/recall and installed Ghidra version instead of a hard-coded version.
+   - [ ] Matched-setting differential decompilation corpus and coverage/runtime/memory metrics.
 
 **This supersedes the hand-written "Deep ARM64 track" below as the route to decompiled output.** That native
 IR/SSA/pseudocode work stays as complementary, evidence-bounded diagnostics (and feeds the function list the

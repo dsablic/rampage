@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: install an address-aware emitter through the existing pretty printer.
 /// \file printlanguage.hh
 /// \brief Classes for printing tokens in a high-level language
 
@@ -481,6 +482,7 @@ public:
   void setHeaderComment(uint4 val) { head_comment_type = val; }		///< Set the type of comments suitable for a function header
   bool emitsMarkup(void) const { return emit->emitsMarkup(); }		///< Does the low-level emitter, emit markup
   void setMarkup(bool val) { emit->setMarkup(val); }			///< Turn on/off mark-up in emitted output
+  void setEmitter(Emit *replacement) { static_cast<EmitPrettyPrint *>(emit)->setEmitter(replacement); }
   void setPackedOutput(bool val);					///< Turn on/off packed output
   void setFlat(bool val);						///< Set whether nesting code structure should be emitted
 

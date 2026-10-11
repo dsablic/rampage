@@ -175,7 +175,7 @@ pub fn tools() -> Vec<Tool> {
             "decompile",
             "Decompile the function at an address or name to C, using the embedded Ghidra decompiler. This is \
              real decompilation (types, control flow, expressions), the best starting point for understanding a \
-             function. Needs a local Ghidra install for processor specs; if unavailable, use function_summary.",
+              function. Processor specs are bundled; if unavailable, use function_summary.",
             |project, arguments: At| project.decompile(project.resolve(&arguments.at)?),
         ),
         tool(
@@ -273,6 +273,24 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: RenameArgs| {
                 let name = edit_value(arguments.name, arguments.clear, "name")?;
                 project.rename(project.resolve(&arguments.at)?, name.as_deref())
+            },
+        )
+        .annotates(),
+        tool(
+            "set_signature",
+            "Persist one C function signature at an address; use sized types and an optional calling convention.",
+            |project, arguments: CommentArgs| {
+                let text = edit_value(arguments.text, arguments.clear, "text")?;
+                project.set_signature(project.resolve(&arguments.at)?, text.as_deref())
+            },
+        )
+        .annotates(),
+        tool(
+            "set_types",
+            "Persist C typedef/struct/union/enum declarations; sized types, no comments or preprocessor directives.",
+            |project, arguments: CommentArgs| {
+                let text = edit_value(arguments.text, arguments.clear, "text")?;
+                project.set_types(project.resolve(&arguments.at)?, text.as_deref())
             },
         )
         .annotates(),

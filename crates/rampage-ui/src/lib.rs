@@ -31,7 +31,7 @@ pub struct App {
 }
 
 fn default_layout() -> DockState<Tab> {
-    let mut dock = DockState::new(vec![Tab::Disassembly, Tab::Graph, Tab::Triage]);
+    let mut dock = DockState::new(vec![Tab::Disassembly, Tab::Graph, Tab::Pseudocode, Tab::Triage]);
     let surface = dock.main_surface_mut();
     let [center, _] =
         surface.split_left(NodeIndex::root(), 0.20, vec![Tab::Functions, Tab::Strings, Tab::Imports, Tab::Exports]);
@@ -183,6 +183,8 @@ impl App {
         let title = match editing.field {
             Field::Name => format!("Rename {:#x}", editing.address),
             Field::Comment => format!("Comment {:#x}", editing.address),
+            Field::Signature => format!("Signature {:#x}", editing.address),
+            Field::Types => format!("Types {:#x}", editing.address),
         };
         let mut done = false;
         let mut cancel = false;

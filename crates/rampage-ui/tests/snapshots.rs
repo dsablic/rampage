@@ -35,6 +35,21 @@ fn runtime_snapshot_opens_in_the_existing_ui() {
 }
 
 #[test]
+fn pseudocode_panel_loads_decompilation_and_address_links() {
+    let mut harness = harness(App::blocking());
+    harness.run();
+    let ctx = harness.ctx.clone();
+    harness.state_mut().open(&ctx, fixture("hello-x64-dyn.elf"), None);
+    harness.state_mut().workspace_mut().unwrap().goto_text("main");
+    harness.state_mut().focus_tab(rampage_ui::Tab::Pseudocode);
+    harness.run();
+    let result = harness.state_mut().workspace_mut().unwrap().pseudocode.ready().unwrap();
+    assert!(result.code.contains("puts@plt(\"rampage fixture greeting\")"), "{}", result.code);
+    assert!(result.tokens.iter().any(|token| token.address.is_some()));
+    harness.snapshot("pseudocode");
+}
+
+#[test]
 fn main_window_with_a_binary() {
     let mut harness = harness(App::blocking());
     harness.run();

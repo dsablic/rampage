@@ -65,6 +65,8 @@ async fn lists_all_tools_with_instructions() {
         "redo",
         "rename",
         "set_comment",
+        "set_signature",
+        "set_types",
         "triage",
         "undo",
         "xrefs",

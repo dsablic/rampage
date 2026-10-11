@@ -53,6 +53,12 @@ impl Session {
         let key = (canonical, binary.arch);
         let project =
             state.projects.entry(key).or_insert_with(|| Arc::new(Project::with_annotations(binary, annotations)));
+        if let Some(executable) = std::env::var_os("RAMPAGE_WORKER") {
+            project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
+                executable: Some(PathBuf::from(executable)),
+                ..Default::default()
+            }));
+        }
         Ok(Arc::clone(project))
     }
 }

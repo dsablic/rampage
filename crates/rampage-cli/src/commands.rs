@@ -85,8 +85,18 @@ pub fn summarize(out: &mut impl Write, path: &Path, at: &str, options: &Options)
     Ok(())
 }
 
-pub fn decompile(out: &mut impl Write, path: &Path, at: &str, compiler: Option<&str>, options: &Options) -> Result<()> {
+pub fn decompile(
+    out: &mut impl Write,
+    path: &Path,
+    at: &str,
+    compiler: Option<&str>,
+    isolated: bool,
+    options: &Options,
+) -> Result<()> {
     let project = open(path, options)?;
+    if isolated {
+        project.set_decompiler_worker(Some(rampage_api::DecompilerWorkerConfig::default()));
+    }
     if let Some(compiler) = compiler {
         project.set_decompiler_options(Some(rampage_api::DecompilerOptions {
             compiler: Some(compiler.to_owned()),
@@ -459,6 +469,8 @@ fn write_edit(out: &mut impl Write, result: &EditResult, options: &Options) -> R
     let field = match result.field {
         Field::Name => "name",
         Field::Comment => "comment",
+        Field::Signature => "signature",
+        Field::Types => "types",
     };
     let state = if result.changed { "" } else { " (unchanged)" };
     match &result.value {
@@ -478,6 +490,12 @@ pub fn annotations(out: &mut impl Write, path: &Path, options: &Options) -> Resu
     }
     for comment in &list.comments {
         writeln!(out, "{:#018x} comment {}", comment.address, comment.text)?;
+    }
+    for annotation in &list.signatures {
+        writeln!(out, "{:#018x} signature {}", annotation.address, annotation.text)?;
+    }
+    for annotation in &list.types {
+        writeln!(out, "{:#018x} types {}", annotation.address, annotation.text)?;
     }
     Ok(())
 }

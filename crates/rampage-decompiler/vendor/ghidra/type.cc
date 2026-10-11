@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: bound array layout multiplication before constructing a TypeArray.
 #include "type.hh"
 #include "funcdata.hh"
 
@@ -4339,6 +4340,8 @@ TypePointer *TypeFactory::getTypePointer(int4 s,Datatype *pt,uint4 ws,const stri
 TypeArray *TypeFactory::getTypeArray(int4 as,Datatype *ao)
 
 {
+  if (as <= 0 || ao->getAlignSize() <= 0 || as > 1048576 / ao->getAlignSize())
+    throw LowlevelError("Array layout exceeds the one MiB type-size limit");
   if (ao->hasStripped())
     ao = ao->getStripped();
   TypeArray tmp(as,ao);

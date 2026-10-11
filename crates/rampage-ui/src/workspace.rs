@@ -139,6 +139,9 @@ pub struct Workspace {
     pub functions: Job<Vec<FunctionRow>>,
     pub strings: Job<Vec<FoundString>>,
     pub triage: Job<Triage>,
+    pub pseudocode: Job<rampage_api::Decompilation>,
+    pseudocode_address: Option<u64>,
+    pseudocode_cancellation: Arc<std::sync::atomic::AtomicBool>,
     pub imports: Vec<ImportRow>,
     pub exports: Vec<Export>,
     /// The address the listing and the cross-reference panel follow.
@@ -196,6 +199,9 @@ impl Workspace {
             functions: Job::Idle,
             strings: Job::Idle,
             triage: Job::Idle,
+            pseudocode: Job::Idle,
+            pseudocode_address: None,
+            pseudocode_cancellation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             imports,
             exports,
             cursor,
@@ -244,9 +250,17 @@ impl Workspace {
 
     /// Collects finished background work and edits other clients saved.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        if self.pseudocode.is_running() {
+            let address = self.project.function_containing(self.cursor).ok().flatten().unwrap_or(self.cursor);
+            if self.pseudocode_address != Some(address) {
+                self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.pseudocode_address = None;
+            }
+        }
         let analyzed = self.functions.poll();
         self.strings.poll();
         self.triage.poll();
+        self.pseudocode.poll();
         if analyzed {
             self.refresh_cursor_views();
         }
@@ -276,6 +290,30 @@ impl Workspace {
 
     pub fn analysis_ready(&self) -> bool {
         self.functions.ready().is_some()
+    }
+
+    pub fn want_pseudocode(&mut self, ctx: &egui::Context) {
+        if !self.analysis_ready() {
+            return;
+        }
+        if self.pseudocode.is_running() {
+            let address = self.project.function_containing(self.cursor).ok().flatten().unwrap_or(self.cursor);
+            if self.pseudocode_address != Some(address) {
+                self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.pseudocode_address = None;
+            }
+            return;
+        }
+        let address = self.project.function_containing(self.cursor).ok().flatten().unwrap_or(self.cursor);
+        if self.pseudocode_address == Some(address) {
+            return;
+        }
+        self.pseudocode_address = Some(address);
+        self.pseudocode_cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancellation = Arc::clone(&self.pseudocode_cancellation);
+        let project = Arc::clone(&self.project);
+        self.pseudocode
+            .start(self.blocking, ctx, move || project.decompile_cancellable(address, &cancellation).map_err(text));
     }
 
     /// Lays out the graph of the listing's function, once per function.
@@ -339,6 +377,8 @@ impl Workspace {
         let result = match editing.field {
             Field::Name => self.project.rename(editing.address, value),
             Field::Comment => self.project.comment(editing.address, value),
+            Field::Signature => self.project.set_signature(editing.address, value),
+            Field::Types => self.project.set_types(editing.address, value),
         };
         match result {
             Ok(edit) => {
@@ -367,6 +407,11 @@ impl Workspace {
 
     /// Refreshes everything that shows names or comments after an edit at `address`, or anywhere.
     fn annotations_changed(&mut self, address: Option<u64>) {
+        self.pseudocode_address = None;
+        self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
+        if !self.pseudocode.is_running() {
+            self.pseudocode = Job::Idle;
+        }
         if let Job::Done(Ok(functions)) = &mut self.functions {
             for function in functions.iter_mut().filter(|function| address.is_none_or(|at| at == function.address)) {
                 function.name = self.project.function_name(function.address);
@@ -450,5 +495,36 @@ impl Workspace {
         };
         let rows = self.project.xrefs(XrefQuery::To(address), None, None).map(|page| page.items).map_err(text);
         self.xrefs = Some(Xrefs { target, rows });
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polling_cancels_obsolete_hidden_pseudocode_and_clears_its_cache_key() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::open(path, None, &ctx, true).unwrap();
+        let add = workspace.project.resolve("add").unwrap();
+        let main = workspace.project.resolve("main").unwrap();
+        let (_sender, receiver) = channel();
+        workspace.pseudocode = Job::Running(receiver);
+        workspace.pseudocode_address = Some(add);
+        workspace.cursor = main;
+        workspace.poll(&ctx);
+        assert!(workspace.pseudocode_cancellation.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(workspace.pseudocode_address, None);
+        workspace.cursor = add;
+        workspace.pseudocode = Job::Done(Err("cancelled".to_owned()));
+        workspace.want_pseudocode(&ctx);
+        assert!(workspace.pseudocode.ready().unwrap().code.contains("add("));
     }
 }

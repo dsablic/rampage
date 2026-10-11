@@ -6,12 +6,13 @@
 //! `GHIDRA_INSTALL_DIR` to override that tree.
 
 mod abi;
+mod specs;
+pub mod worker;
 
 pub use abi::{DataOrganization, DecompilerOptions, Platform, language_id, language_id_with_options};
+pub use specs::sleigh_home;
 
 use std::ffi::{CStr, CString, c_char};
-use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Mutex;
 
 use rampage_arch::Arch;
@@ -209,8 +210,18 @@ unsafe extern "C" {
         writable: *const u8,
     ) -> *mut Opaque;
     fn rampage_decomp_add_symbol(handle: *mut Opaque, addr: u64, name: *const c_char);
+    fn rampage_decomp_symbol(handle: *mut Opaque, addr: u64, name: *const c_char) -> *const c_char;
+    fn rampage_decomp_import(
+        handle: *mut Opaque,
+        slot: u64,
+        target: u64,
+        has_target: u8,
+        name: *const c_char,
+    ) -> *const c_char;
+    fn rampage_decomp_prototype(handle: *mut Opaque, addr: u64, indirect: u8, text: *const c_char) -> *const c_char;
     fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
+    fn rampage_decomp_import_target(handle: *mut Opaque, slot: u64) -> u64;
     fn rampage_decomp_data_organization(handle: *mut Opaque, pointer: *mut i32, int: *mut i32, long: *mut i32);
     fn rampage_decomp_set_modes(
         handle: *mut Opaque,
@@ -220,6 +231,14 @@ unsafe extern "C" {
     ) -> *const c_char;
     fn rampage_decomp_function(handle: *mut Opaque, addr: u64, name: *const c_char, thumb: u8) -> *mut c_char;
     fn rampage_decomp_free_string(text: *mut c_char);
+    fn rampage_decomp_token_count(handle: *mut Opaque) -> usize;
+    fn rampage_decomp_token(
+        handle: *mut Opaque,
+        index: usize,
+        kind: *mut *const c_char,
+        address: *mut u64,
+        has_address: *mut u8,
+    ) -> *const c_char;
     fn rampage_decomp_close(handle: *mut Opaque);
 }
 
@@ -290,26 +309,6 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Locates a directory holding a `Ghidra/Processors` specification tree, in order of preference:
-/// `GHIDRA_INSTALL_DIR` if set, then the specifications vendored with this crate, then a Homebrew Ghidra install.
-/// The vendored specifications mean a source build needs no external Ghidra install.
-pub fn sleigh_home() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("GHIDRA_INSTALL_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    let bundled = PathBuf::from(env!("RAMPAGE_BUNDLED_SPECS"));
-    if bundled.join("Ghidra").is_dir() {
-        return Some(bundled);
-    }
-    let output = Command::new("brew").args(["--prefix", "ghidra"]).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let prefix = String::from_utf8(output.stdout).ok()?;
-    let libexec = PathBuf::from(prefix.trim()).join("libexec");
-    libexec.join("Ghidra").is_dir().then_some(libexec)
-}
-
 /// A decompiler over one program's executable segments.
 pub struct Decompiler {
     handle: *mut Opaque,
@@ -318,10 +317,85 @@ pub struct Decompiler {
     language_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Token {
+    pub text: String,
+    pub kind: String,
+    pub address: Option<u64>,
+}
+
 // SAFETY: the handle is only ever used while holding FFI_LOCK, so it is touched by one thread at a time.
 unsafe impl Send for Decompiler {}
 
 impl Decompiler {
+    /// Copies address-linked semantic tokens from the most recent successful decompilation.
+    pub fn tokens(&self) -> Vec<Token> {
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid handle under FFI_LOCK; indices remain valid while the lock is held.
+        let count = unsafe { rampage_decomp_token_count(self.handle) };
+        (0..count)
+            .map(|index| {
+                let (mut kind, mut address, mut present) = (std::ptr::null(), 0, 0);
+                let text = unsafe { rampage_decomp_token(self.handle, index, &mut kind, &mut address, &mut present) };
+                Token {
+                    text: unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned(),
+                    kind: unsafe { CStr::from_ptr(kind) }.to_string_lossy().into_owned(),
+                    address: (present != 0).then_some(address),
+                }
+            })
+            .collect()
+    }
+    /// Returns the registered import target, including an external-only address reserved outside the image.
+    pub fn import_target(&self, slot: u64) -> Option<u64> {
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: read-only query over a valid handle under the global FFI lock.
+        let target = unsafe { rampage_decomp_import_target(self.handle, slot) };
+        (target != 0).then_some(target)
+    }
+    fn valid_address(&self, address: u64) -> Result<(), Error> {
+        if self.arch.pointer_size() == 4 && address > u64::from(u32::MAX) {
+            return Err(Error::Ghidra("address exceeds target width".to_owned()));
+        }
+        Ok(())
+    }
+
+    /// Registers or updates a function's display name, independent of its signature identity.
+    pub fn set_symbol(&mut self, address: u64, name: &str) -> Result<(), Error> {
+        self.valid_address(address)?;
+        let name = CString::new(name).map_err(|_| Error::Ghidra("symbol contains NUL".to_owned()))?;
+        if name.as_bytes().is_empty() {
+            return Err(Error::Ghidra("empty symbol".to_owned()));
+        }
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: handle, name and address are valid throughout this serialized call.
+        ffi_result(unsafe { rampage_decomp_symbol(self.handle, address, name.as_ptr()) })
+    }
+
+    /// Binds an import slot to a known stub or an external-only function. Slot bytes are not interpreted as code.
+    pub fn add_import(&mut self, slot: u64, target: Option<u64>, name: &str) -> Result<(), Error> {
+        self.valid_address(slot)?;
+        if let Some(target) = target {
+            self.valid_address(target)?;
+        }
+        let name = CString::new(name).map_err(|_| Error::Ghidra("symbol contains NUL".to_owned()))?;
+        if name.as_bytes().is_empty() {
+            return Err(Error::Ghidra("empty import name".to_owned()));
+        }
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle, checked addresses and a live C string.
+        ffi_result(unsafe {
+            rampage_decomp_import(self.handle, slot, target.unwrap_or(0), u8::from(target.is_some()), name.as_ptr())
+        })
+    }
+
+    /// Applies one C signature by address, not by its declaration's name. `indirect` addresses an import slot.
+    pub fn apply_prototype(&mut self, address: u64, indirect: bool, declaration: &str) -> Result<(), Error> {
+        self.valid_address(address)?;
+        let declaration = CString::new(declaration).map_err(|_| Error::Ghidra("prototype contains NUL".to_owned()))?;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle and a live C declaration; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_prototype(self.handle, address, u8::from(indirect), declaration.as_ptr()) })
+    }
     /// Opens a decompiler for `arch` over `segments`. Each segment's bytes stay mapped at its base for the life
     /// of the decompiler, so functions anywhere in the loaded code can be decompiled.
     pub fn open(arch: Arch, big_endian: bool, segments: &[Segment]) -> Result<Decompiler, Error> {
@@ -507,6 +581,15 @@ impl Decompiler {
     }
 }
 
+fn ffi_result(error: *const c_char) -> Result<(), Error> {
+    if error.is_null() {
+        Ok(())
+    } else {
+        // SAFETY: callers hold FFI_LOCK while copying the shim-owned, NUL-terminated error string.
+        Err(Error::Ghidra(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned()))
+    }
+}
+
 impl Drop for Decompiler {
     fn drop(&mut self) {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -554,7 +637,7 @@ mod tests {
             return;
         }
         let home = sleigh_home().expect("bundled specifications");
-        assert!(home.ends_with("specs"), "{home:?}");
+        assert!(home.file_name().unwrap().to_string_lossy().starts_with("specs-"), "{home:?}");
         assert!(home.join("Ghidra/Processors/x86/data/languages/x86.sla").is_file());
     }
 

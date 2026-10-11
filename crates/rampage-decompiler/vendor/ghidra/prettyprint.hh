@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: install an address-aware low-level token emitter.
 /// \file prettyprint.hh
 /// \brief Routines for emitting high-level (C) language syntax in a well formatted way.
 
@@ -1139,6 +1140,7 @@ public:
   virtual bool emitsMarkup(void) const { return lowlevel->emitsMarkup(); }
   virtual void resetDefaults(void);
   virtual void setMarkup(bool val);
+  void setEmitter(Emit *replacement) { delete lowlevel; lowlevel = replacement; }
 };
 
 /// \brief Helper class for sending cancelable print commands to an ExitXml

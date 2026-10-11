@@ -21,7 +21,7 @@ const DEFAULT_STRING_LENGTH: usize = 4;
 pub struct Project {
     pub binary: Binary,
     names: Names,
-    annotations: RwLock<Annotations>,
+    pub(crate) annotations: RwLock<Annotations>,
     analysis: OnceLock<Result<Analysis, UnsupportedArch>>,
     triage: OnceLock<Triage>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
@@ -66,7 +66,7 @@ impl Project {
         }
     }
 
-    fn annotations(&self) -> RwLockReadGuard<'_, Annotations> {
+    pub(crate) fn annotations(&self) -> RwLockReadGuard<'_, Annotations> {
         self.annotations.read().expect("annotations lock")
     }
 
@@ -85,7 +85,7 @@ impl Project {
         self.function_name_in(&self.annotations(), address)
     }
 
-    fn function_name_in(&self, annotations: &Annotations, address: u64) -> String {
+    pub(crate) fn function_name_in(&self, annotations: &Annotations, address: u64) -> String {
         annotations.name(address).map_or_else(|| self.names.function_name(address), str::to_owned)
     }
 
@@ -146,12 +146,34 @@ impl Project {
 
     /// Reverts the last edit made through this project in this process. Returns it.
     pub fn undo(&self) -> Result<Option<Edit>, ApiError> {
-        self.annotations.write().expect("annotations lock").undo().map_err(ApiError::Invalid)
+        let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
+        self.annotations
+            .write()
+            .expect("annotations lock")
+            .undo_validated(|candidate| {
+                if candidate.types().is_empty() && candidate.signatures().is_empty() {
+                    return Ok(());
+                }
+                self.validate_annotation_snapshot(&state, &options, candidate)
+            })
+            .map_err(ApiError::Invalid)
     }
 
     /// Reapplies the last undone edit. Returns it.
     pub fn redo(&self) -> Result<Option<Edit>, ApiError> {
-        self.annotations.write().expect("annotations lock").redo().map_err(ApiError::Invalid)
+        let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
+        self.annotations
+            .write()
+            .expect("annotations lock")
+            .redo_validated(|candidate| {
+                if candidate.types().is_empty() && candidate.signatures().is_empty() {
+                    return Ok(());
+                }
+                self.validate_annotation_snapshot(&state, &options, candidate)
+            })
+            .map_err(ApiError::Invalid)
     }
 
     /// Every user name and comment, by address.
@@ -160,7 +182,12 @@ impl Project {
         let rows = |map: &BTreeMap<u64, String>| {
             map.iter().map(|(&address, text)| Annotation { address, text: text.clone() }).collect()
         };
-        AnnotationList { names: rows(annotations.names()), comments: rows(annotations.comments()) }
+        AnnotationList {
+            names: rows(annotations.names()),
+            comments: rows(annotations.comments()),
+            signatures: rows(annotations.signatures()),
+            types: rows(annotations.types()),
+        }
     }
 
     pub fn summary(&self) -> Summary<'_> {

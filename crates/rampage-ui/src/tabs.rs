@@ -15,6 +15,7 @@ pub enum Tab {
     Exports,
     Disassembly,
     Graph,
+    Pseudocode,
     Xrefs,
     Assistant,
     Triage,
@@ -49,6 +50,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
                 _ => "Disassembly".to_owned(),
             },
             Tab::Graph => "Graph".to_owned(),
+            Tab::Pseudocode => "Pseudocode".to_owned(),
             Tab::Xrefs => "Xrefs".to_owned(),
             Tab::Assistant => "Assistant".to_owned(),
             Tab::Triage => "Triage".to_owned(),
@@ -67,6 +69,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
                 self.workspace.graph_shown_pass = Some(ui.ctx().cumulative_pass_nr());
                 graph::show(ui, self.workspace);
             }
+            Tab::Pseudocode => pseudocode(ui, self.workspace),
             Tab::Xrefs => xrefs(ui, self.workspace),
             Tab::Assistant => {
                 if crate::assistant::show(ui, &mut self.workspace.assistant) {
@@ -80,6 +83,37 @@ impl egui_dock::TabViewer for Viewer<'_> {
 
     fn is_closeable(&self, _tab: &Tab) -> bool {
         false
+    }
+}
+
+fn pseudocode(ui: &mut Ui, workspace: &mut Workspace) {
+    workspace.want_pseudocode(ui.ctx());
+    if let Some(error) = workspace.pseudocode.error() {
+        ui.label(error);
+        return;
+    }
+    let Some(result) = workspace.pseudocode.ready() else {
+        ui.spinner();
+        return;
+    };
+    ui.label(&result.language_id);
+    let mut target = None;
+    egui::ScrollArea::both().show(ui, |ui| {
+        ui.label(RichText::new(&result.code).monospace());
+        ui.separator();
+        ui.label("Address-linked tokens");
+        ui.horizontal_wrapped(|ui| {
+            for token in &result.tokens {
+                if let Some(address) = token.address
+                    && ui.link(&token.text).on_hover_text(format!("{address:#x} ({})", token.kind)).clicked()
+                {
+                    target = Some(address);
+                }
+            }
+        });
+    });
+    if let Some(address) = target {
+        workspace.goto(address);
     }
 }
 

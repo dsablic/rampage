@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: keep function display names synchronized with symbol renames.
 #ifndef __FUNCDATA_HH__
 #define __FUNCDATA_HH__
 
@@ -138,6 +139,7 @@ public:
   Funcdata(const string &nm,const string &disp,Scope *conf,const Address &addr,FunctionSymbol *sym,int4 sz=0);	///< Constructor
   ~Funcdata(void);							///< Destructor
   const string &getName(void) const { return name; }			///< Get the function's local symbol name
+  void setDisplayName(const string &value) { name = value; displayName = value; }
   const string &getDisplayName(void) const { return displayName; }	///< Get the name to display in output
   const Address &getAddress(void) const { return baseaddr; }		///< Get the entry point address
   int4 getSize(void) const { return size; }				///< Get the function body size in bytes

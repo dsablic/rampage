@@ -8,6 +8,7 @@
 #include "printc.hh"
 #include "grammar.hh"
 #include "sleigh.hh"
+#include "tokens.hh"
 
 #include <cstdlib>
 #include <algorithm>
@@ -84,6 +85,8 @@ public:
 
     void attachToSpace(AddrSpace *id) { spaceid = id; }
 
+    bool mapped(uintb address) const { return segmentAt(address) != nullptr; }
+
     void loadFill(uint1 *ptr, int4 size, const Address &addr) override {
         if (size < 0 || readPrefix(ptr, size, addr, false) != size)
             throw DataUnavailError("Data range is unavailable");
@@ -159,6 +162,8 @@ public:
         const_cast<Sleigh *>(static_cast<const Sleigh *>(translate))->clearCache();
     }
 
+    bool mapped(uintb address) const { return image->mapped(address); }
+
     // Until buildLoader hands the image to `loader` (which the base destructor frees), we still own it. This
     // keeps ownership correct when init fails partway, so the error path neither leaks nor double-frees.
     ~MemArchitecture() override {
@@ -171,6 +176,44 @@ public:
 struct Handle {
     MemArchitecture *arch = nullptr;
     std::string error;
+    uintb nextExternal = 0;
+    std::map<uintb, ExternRefSymbol *> imports;
+    std::map<uintb, uintb> externalSlots;
+    std::vector<rampage::Token> tokens;
+    bool poisoned = false;
+    bool fallbackError = false;
+};
+
+void failDecompilation(Handle *handle, Funcdata *function, const char *message) noexcept {
+    handle->poisoned = true;
+    handle->fallbackError = true;
+    try { handle->error = message; handle->fallbackError = false; } catch (...) {}
+    handle->tokens.clear();
+    try {
+        handle->arch->print->clear();
+        handle->arch->print->setOutputStream(nullptr);
+        if (function != nullptr) handle->arch->clearAnalysis(function);
+        handle->poisoned = false;
+    } catch (...) {}
+}
+
+class LimitedOutput : public std::streambuf {
+    std::string data;
+protected:
+    int_type overflow(int_type character) override {
+        if (traits_type::eq_int_type(character, traits_type::eof())) return traits_type::not_eof(character);
+        if (data.size() >= 4 * 1024 * 1024) throw LowlevelError("Decompiler output limit exceeded");
+        data.push_back(traits_type::to_char_type(character));
+        return character;
+    }
+    std::streamsize xsputn(const char *text, std::streamsize count) override {
+        if (count < 0 || uint64_t(count) > 4 * 1024 * 1024 - data.size())
+            throw LowlevelError("Decompiler output limit exceeded");
+        data.append(text, count);
+        return count;
+    }
+public:
+    const std::string &str() const { return data; }
 };
 
 } // namespace
@@ -205,6 +248,8 @@ void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nse
         DocumentStorage store;
         arch->init(store);
         handle->arch = arch;
+        arch->print->setEmitter(new rampage::TokenEmitter(handle->tokens));
+        handle->nextExternal = arch->getDefaultCodeSpace()->getHighest();
     } catch (LowlevelError &err) {
         handle->error = err.explain;
         delete arch; // frees the image too, whether or not init handed it over
@@ -219,7 +264,7 @@ void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nse
 // called before decompiling callers. Ignored on failure (e.g. an address outside any space).
 void rampage_decomp_add_symbol(void *h, uint64_t addr, const char *name) {
     Handle *handle = static_cast<Handle *>(h);
-    if (handle->arch == nullptr || name == nullptr || name[0] == '\0') return;
+    if (handle->arch == nullptr || handle->poisoned || name == nullptr || name[0] == '\0') return;
     try {
         Architecture *arch = handle->arch;
         Address entry(arch->getDefaultCodeSpace(), addr);
@@ -232,10 +277,94 @@ void rampage_decomp_add_symbol(void *h, uint64_t addr, const char *name) {
     }
 }
 
+const char *rampage_decomp_symbol(void *h, uint64_t addr, const char *name) {
+    Handle *handle = static_cast<Handle *>(h);
+    if (handle->poisoned) return "Decompiler handle is unavailable";
+    try {
+        Address entry(handle->arch->getDefaultCodeSpace(), addr);
+        Scope *global = handle->arch->symboltab->getGlobalScope();
+        Funcdata *function = global->queryFunction(entry);
+        if (function == nullptr) global->addFunction(entry, name);
+        else {
+            global->renameSymbol(function->getSymbol(), name);
+            function->setDisplayName(name);
+        }
+        handle->error.clear();
+        return nullptr;
+    } catch (LowlevelError &error) {
+        handle->error = error.explain;
+        return handle->error.c_str();
+    }
+}
+
+const char *rampage_decomp_import(void *h, uint64_t slot, uint64_t target, uint8_t hasTarget, const char *name) {
+    Handle *handle = static_cast<Handle *>(h);
+    if (handle->poisoned) return "Decompiler handle is unavailable";
+    try {
+        AddrSpace *space = handle->arch->getDefaultCodeSpace();
+        Scope *global = handle->arch->symboltab->getGlobalScope();
+        if (handle->imports.find(slot) != handle->imports.end())
+            throw LowlevelError("Import slot is already registered");
+        if (hasTarget == 0) {
+            uintb size = handle->arch->min_funcsymbol_size;
+            if (handle->nextExternal < size) throw LowlevelError("No address available for external function");
+            uintb candidate = (handle->nextExternal - (size - 1)) / size * size;
+            bool free = false;
+            uintb attempts = 0;
+            while (candidate >= size && !free && attempts++ < 65536) {
+                free = global->findOverlap(Address(space, candidate), size) == nullptr;
+                for (uintb offset = 0; offset < size; ++offset) {
+                    if (handle->arch->mapped(candidate + offset)
+                        || global->queryFunction(Address(space, candidate + offset)) != nullptr) free = false;
+                }
+                if (!free) candidate -= size;
+            }
+            if (!free) throw LowlevelError("No address available for external function");
+            target = candidate;
+            handle->nextExternal = candidate - 1;
+            global->addFunction(Address(space, target), name);
+            handle->externalSlots[target] = slot;
+        }
+        if (global->queryFunction(Address(space, target)) == nullptr)
+            throw LowlevelError("Import target is not registered");
+        handle->imports[slot] = global->addExternalRef(Address(space, slot), Address(space, target), name);
+        handle->error.clear();
+        return nullptr;
+    } catch (LowlevelError &error) {
+        handle->error = error.explain;
+        return handle->error.c_str();
+    }
+}
+
+const char *rampage_decomp_prototype(void *h, uint64_t addr, uint8_t indirect, const char *text) {
+    Handle *handle = static_cast<Handle *>(h);
+    if (handle->poisoned) return "Decompiler handle is unavailable";
+    try {
+        Address entry(handle->arch->getDefaultCodeSpace(), addr);
+        Scope *global = handle->arch->symboltab->getGlobalScope();
+        Funcdata *function = indirect != 0 ? global->queryExternalRefFunction(entry) : global->queryFunction(entry);
+        if (function == nullptr) throw LowlevelError("Prototype target is not registered");
+        PrototypePieces pieces;
+        std::istringstream input(text);
+        parse_protopieces(pieces, input, handle->arch);
+        handle->arch->clearAnalysis(function);
+        function->getFuncProto().setPieces(pieces);
+        handle->error.clear();
+        return nullptr;
+    } catch (LowlevelError &error) {
+        handle->error = error.explain;
+        return handle->error.c_str();
+    } catch (ParseError &error) {
+        handle->error = error.explain;
+        return handle->error.c_str();
+    }
+}
+
 // Parses C declarations (typedefs, prototypes) into the program's type database, so matching functions get
 // signatures and their arguments are typed. Returns an error string on a parse failure, else null.
 const char *rampage_decomp_parse_c(void *h, const char *text) {
     Handle *handle = static_cast<Handle *>(h);
+    if (handle->poisoned) return "Decompiler handle is unavailable";
     if (handle->arch == nullptr || text == nullptr) return nullptr;
     try {
         std::istringstream in(text);
@@ -253,7 +382,14 @@ const char *rampage_decomp_parse_c(void *h, const char *text) {
 
 const char *rampage_decomp_error(void *h) {
     Handle *handle = static_cast<Handle *>(h);
+    if (handle->fallbackError) return "Native decompiler failed; handle is unavailable";
     return handle->error.empty() ? nullptr : handle->error.c_str();
+}
+
+uint64_t rampage_decomp_import_target(void *h, uint64_t slot) {
+    Handle *handle = static_cast<Handle *>(h);
+    auto found = handle->imports.find(slot);
+    return found == handle->imports.end() ? 0 : found->second->getRefAddr().getOffset();
 }
 
 void rampage_decomp_data_organization(void *h, int32_t *pointerSize, int32_t *intSize, int32_t *longSize) {
@@ -265,6 +401,7 @@ void rampage_decomp_data_organization(void *h, int32_t *pointerSize, int32_t *in
 
 const char *rampage_decomp_set_modes(void *h, size_t count, const uint64_t *addresses, const uint8_t *thumb) {
     Handle *handle = static_cast<Handle *>(h);
+    if (handle->poisoned) return "Decompiler handle is unavailable";
     try {
         for (size_t i = 0; i < count; ++i) {
             Address address(handle->arch->getDefaultCodeSpace(), addresses[i]);
@@ -282,9 +419,10 @@ const char *rampage_decomp_set_modes(void *h, size_t count, const uint64_t *addr
 // (32-bit ARM), the function is decoded as Thumb. Returns a malloc'd string the caller frees, or null on failure.
 char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t thumb) {
     Handle *handle = static_cast<Handle *>(h);
-    if (handle->arch == nullptr) return nullptr;
+    if (handle->arch == nullptr || handle->poisoned) return nullptr;
     Architecture *arch = handle->arch;
     Funcdata *fd = nullptr;
+    handle->tokens.clear();
     try {
         Address entry(arch->getDefaultCodeSpace(), addr);
         if (arch->context != nullptr) {
@@ -307,18 +445,39 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         fd->followFlow(entry, high);
         arch->allacts.getCurrent()->reset(*fd);
         arch->allacts.getCurrent()->perform(*fd);
-        std::ostringstream out;
+        LimitedOutput buffer;
+        std::ostream out(&buffer);
+        out.exceptions(std::ios::badbit | std::ios::failbit);
         arch->print->setOutputStream(&out);
         arch->print->docFunction(fd);
-        std::string text = out.str();
+        rampage::collectFlow(fd, handle->tokens);
+        for (auto &token : handle->tokens) {
+            if (!token.hasAddress || (token.kind != "call" && token.kind != "function")) continue;
+            auto external = handle->externalSlots.find(token.address);
+            if (external != handle->externalSlots.end()) token.address = external->second;
+        }
+        const std::string &text = buffer.str();
         char *result = static_cast<char *>(malloc(text.size() + 1));
         if (result != nullptr) memcpy(result, text.c_str(), text.size() + 1);
         return result;
     } catch (LowlevelError &err) {
-        handle->error = err.explain;
-        if (fd != nullptr) arch->clearAnalysis(fd);
+        failDecompilation(handle, fd, err.explain.c_str());
+        return nullptr;
+    } catch (std::exception &error) {
+        failDecompilation(handle, fd, error.what());
+        return nullptr;
+    } catch (...) {
+        failDecompilation(handle, fd, "Unexpected native decompiler exception");
         return nullptr;
     }
+}
+
+size_t rampage_decomp_token_count(void *h) { return static_cast<Handle *>(h)->tokens.size(); }
+
+const char *rampage_decomp_token(void *h, size_t index, const char **kind, uint64_t *address, uint8_t *hasAddress) {
+    const auto &token = static_cast<Handle *>(h)->tokens.at(index);
+    *kind = token.kind.c_str(); *address = token.address; *hasAddress = token.hasAddress ? 1 : 0;
+    return token.text.c_str();
 }
 
 void rampage_decomp_free_string(char *s) { free(s); }

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: reject array bounds that cannot be represented without narrowing.
 /* A Bison parser, made by GNU Bison 3.7.4.  */
 
 /* Bison implementation for Yacc-like parsers in C
@@ -2277,6 +2278,8 @@ void FunctionModifier::getInTypes(vector<Datatype *> &intypes,Architecture *glb)
 {
   for(uint4 i=0;i<paramlist.size();++i) {
     Datatype *ct = paramlist[i]->buildType(glb);
+    if (ct->getMetatype() == TYPE_ARRAY)
+      throw ParseError("Array parameters require an explicit pointer declaration");
     intypes.push_back( ct );
   }
 }
@@ -2597,6 +2600,8 @@ vector<uint4> *CParse::newPointer(void)
 TypeDeclarator *CParse::newArray(TypeDeclarator *dec,uint4 flags,uintb *num)
 
 {
+  if (*num > 65536 || *num == 0)
+    throw ParseError("Array bound must be in 1..65536");
   ArrayModifier *newmod = new ArrayModifier(flags,(int4)*num);
   dec->mods.push_back(newmod);
   return dec;

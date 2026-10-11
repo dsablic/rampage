@@ -1,0 +1,122 @@
+use std::collections::BTreeMap;
+
+use rampage_analysis::functions::{stub_names, thunk_names};
+use rampage_decompiler::Decompiler;
+use rampage_decompiler::worker::WorkerOperation;
+use rampage_loaders::SymbolKind;
+
+use crate::{ApiError, Project, annotations::Annotations};
+
+fn canonical(name: &str) -> &str {
+    name.strip_suffix("@plt").or_else(|| name.strip_suffix("@got")).unwrap_or(name)
+}
+
+fn failure(address: u64, operation: &str, error: impl std::fmt::Display) -> ApiError {
+    ApiError::Unavailable(format!("{operation} at {address:#x}: {error}"))
+}
+
+pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<WorkerOperation>, ApiError> {
+    let mut operations = Vec::new();
+    let binary = &project.binary;
+    let stubs: BTreeMap<_, _> = stub_names(binary).into_iter().chain(thunk_names(binary)).collect();
+    let mut identities: BTreeMap<_, _> = project
+        .analysis()?
+        .program
+        .functions
+        .iter()
+        .map(|function| {
+            let identity = binary
+                .symbols
+                .iter()
+                .find(|symbol| symbol.address == function.address && symbol.kind == SymbolKind::Function)
+                .map(|symbol| symbol.name.clone())
+                .or_else(|| stubs.get(&function.address).cloned())
+                .or_else(|| {
+                    binary
+                        .exports
+                        .iter()
+                        .find(|export| export.address == function.address)
+                        .map(|export| export.name.clone())
+                })
+                .unwrap_or_default();
+            (function.address, identity)
+        })
+        .collect();
+    identities.extend(stubs.iter().map(|(&address, name)| (address, name.clone())));
+    for (&address, identity) in &identities {
+        let display = project.function_name_in(annotations, address);
+        operations.push(WorkerOperation::Symbol { address, name: display });
+        if !identity.is_empty() {
+            operations.push(WorkerOperation::RuntimePrototype {
+                address,
+                indirect: false,
+                name: canonical(identity).to_owned(),
+                optional: true,
+            });
+        }
+    }
+    for slot in &binary.import_slots {
+        let display = annotations.name(slot.address).unwrap_or(&slot.name).to_owned();
+        operations.push(WorkerOperation::Import { slot: slot.address, target: None, name: display });
+        operations.push(WorkerOperation::RuntimePrototype {
+            address: slot.address,
+            indirect: true,
+            name: canonical(&slot.name).to_owned(),
+            optional: true,
+        });
+    }
+    Ok(operations)
+}
+
+pub(super) fn register(project: &Project, annotations: &Annotations, engine: &mut Decompiler) -> Result<(), ApiError> {
+    for operation in plan(project, annotations)? {
+        match operation {
+            WorkerOperation::Symbol { address, name } => {
+                engine.set_symbol(address, &name).map_err(|error| failure(address, "register symbol", error))?
+            }
+            WorkerOperation::Import { slot, target, name } => {
+                engine.add_import(slot, target, &name).map_err(|error| failure(slot, "register import", error))?
+            }
+            WorkerOperation::RuntimePrototype { address, indirect, name, .. } => {
+                if let Some(prototype) = engine.c_prototype(&name) {
+                    engine
+                        .apply_prototype(address, indirect, &prototype)
+                        .map_err(|error| failure(address, "apply runtime prototype", error))?;
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn stub_targets(project: &Project, slot: u64) -> Vec<u64> {
+    let binary = &project.binary;
+    let mut result = Vec::new();
+    for (start, _) in stub_names(binary).into_iter().chain(thunk_names(binary)) {
+        let Ok(mut decoder) = binary.decoder() else { break };
+        let mut at = start;
+        for _ in 0..8 {
+            let Some(bytes) = binary.code_from(at) else { break };
+            let instruction = decoder.decode(bytes, at);
+            if instruction.data_ref == Some(slot) {
+                result.push(start);
+                break;
+            }
+            if instruction.len == 0
+                || matches!(
+                    instruction.flow,
+                    rampage_arch::Flow::Return
+                        | rampage_arch::Flow::Halt
+                        | rampage_arch::Flow::Invalid
+                        | rampage_arch::Flow::IndirectJump
+                        | rampage_arch::Flow::Jump(_)
+                )
+            {
+                break;
+            }
+            at += u64::from(instruction.len);
+        }
+    }
+    result
+}
