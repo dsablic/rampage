@@ -18,7 +18,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - `a2c9ec0`: word-sized STP/LDP and signed LDPSW pairs with full-width SP writeback.
 - `1556f22`: opt-in structured SSA pseudocode, parallel phi bindings and CFG-versus-region execution tests.
 
-### Active increment — reviewed, not yet committed
+### Latest increment — reviewed and committed
 
 - [x] Local operand-use evidence: integer widths, address/code operands, signed/unsigned operation roles.
   This is not source-type inference; shift counts do not inherit pointer roles. Traversal is bounded.
@@ -29,7 +29,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Latest release workspace suite and warnings-denied Clippy passed.
 - [ ] Complete the latest full debug workspace run: it timed out before completion, with no reported test failure.
   Earlier full debug suites passed; focused current-increment tests pass. Diagnose the timeout before signing off.
-- [ ] Final formatting/diff checks, line-length cleanup and commit of this increment.
+- [x] Final formatting/diff checks, line-length cleanup and commit of this increment.
 
 ### Validation and external blockers
 
@@ -79,7 +79,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 
 - [x] Conservative ADR/ADRP/ADD/MOV/LDR/BR/BLR discovery; calls/stores invalidate captured-memory assumptions.
 - [x] Explicit bounded absolute64/signed-relative32 table inspection, without guessed dispatch bounds.
-- [x] Reviewed active increment: image-validated SSA target evidence, including a spilled constant target.
+- [x] Image-validated SSA target evidence, including a spilled constant target.
 - [ ] Automatic dispatch recognition, proven index bounds and validated table entries tied to the branch site.
 - [ ] Feed proven targets into discovery/CFG/xrefs with deterministic closure and retained source evidence.
 - [ ] Mutable pointers only after alias/reaching-store proof; authenticated or unmapped targets remain unresolved.
@@ -104,7 +104,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 
 ### Next execution order
 
-1. Finish validation and commit the reviewed type-use/indirect-target increment.
+1. Investigate the full-debug timeout and complete the remaining workspace-validation gate.
 2. Extend common integer semantics and nonconstant spill recovery, keeping alias boundaries conservative.
 3. Recover bounded dispatch tables and integrate proven targets into CFG/discovery with regression fixtures.
 4. Broaden structuring and type/signature propagation; keep SSA diagnostics separate from recovered source.
@@ -178,7 +178,7 @@ an initial foundation complete.
 
 Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,
 CLI/API/MCP regressions, malformed-input bounds, native/compiled fixtures, seven exporter tests, the opt-in live
-capture test, two debugger-cleanup regressions, Ruff/ty and fresh-context reviews. The active increment's latest
+capture test, two debugger-cleanup regressions, Ruff/ty and fresh-context reviews. The latest increment's
 full-debug timeout is tracked separately above; it is not represented as a passing suite.
 
 Checklist from the second code-review round. Most of it is in `crates/rampage-arch/src/aarch32/flow.rs`.

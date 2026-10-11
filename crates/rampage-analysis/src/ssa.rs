@@ -66,6 +66,9 @@ pub enum Variable {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expression {
+    IndirectBranch {
+        target: Box<Expression>,
+    },
     Extend {
         value: Box<Expression>,
         from_bits: u8,
@@ -214,6 +217,7 @@ fn define(definitions: &mut Vec<Definition>, state: &mut [usize; VARIABLES], ind
 
 pub(crate) fn references(value: &Expression, out: &mut Vec<usize>) {
     match value {
+        Expression::IndirectBranch { target } => references(target, out),
         Expression::Return { target, integer_values, memory } => {
             references(target, out);
             out.extend(integer_values);
@@ -294,6 +298,12 @@ fn budget(input: &[InputBlock]) -> Result<(), String> {
         }
         for effect in &insn.effects {
             match effect {
+                Effect::IndirectBranch { target } => {
+                    if !matches!(insn.flow, Flow::Jump(_) | Flow::IndirectJump) {
+                        return Err("indirect branch effect requires jump flow".to_owned());
+                    }
+                    validate_values(&[target], &mut nodes)?;
+                }
                 Effect::MemoryLoad { destination, address, bits, result_bits, signed } => {
                     if rampage_arch::ir::extend(0, *bits, *result_bits, *signed).is_none() {
                         return Err("invalid memory load widths".to_owned());
@@ -475,6 +485,9 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
             } else {
                 for effect in &insn.effects {
                     match effect {
+                        Effect::IndirectBranch { target } => statement
+                            .observations
+                            .push(Expression::IndirectBranch { target: Box::new(expression(target, state, 0)?) }),
                         Effect::MemoryLoad { destination: target, address, bits, result_bits, signed } => {
                             let load = Expression::Load {
                                 memory: state[MEMORY],
@@ -687,6 +700,7 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
 
 fn rewrite(value: &mut Expression, remap: &[usize]) {
     match value {
+        Expression::IndirectBranch { target } => rewrite(target, remap),
         Expression::Return { target, integer_values, memory } => {
             rewrite(target, remap);
             for value in integer_values {

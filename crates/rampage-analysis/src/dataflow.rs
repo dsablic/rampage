@@ -20,8 +20,19 @@ pub struct DataFlow {
     pub argument_registers: Vec<u8>,
     pub integer_returns: Vec<IntegerReturn>,
     pub forwarded_loads: Vec<ForwardedLoad>,
+    pub indirect_targets: Vec<IndirectTarget>,
     pub incomplete_instructions: usize,
     pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IndirectTarget {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub target: u64,
+    pub call: bool,
+    pub input_definitions: Vec<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -298,6 +309,37 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
             })
         })
         .collect();
+    let mut indirect_targets = Vec::new();
+    for statement in ssa.blocks.iter().filter(|block| block.reachable).flat_map(|block| &block.statements) {
+        if statement.barrier {
+            continue;
+        }
+        let (input, call) = match statement.flow {
+            rampage_arch::Flow::IndirectJump => (
+                statement.observations.iter().find_map(|observation| match observation {
+                    Expression::IndirectBranch { target } => Some(target.as_ref()),
+                    _ => None,
+                }),
+                false,
+            ),
+            rampage_arch::Flow::IndirectCall => (
+                statement.observations.iter().find_map(|observation| match observation {
+                    Expression::Call { target, .. } => Some(target.as_ref()),
+                    _ => None,
+                }),
+                true,
+            ),
+            _ => continue,
+        };
+        let Some(input) = input else { continue };
+        if let Known::Constant(target) = evaluate(input, &values) {
+            let mut input_definitions = Vec::new();
+            crate::ssa::references(input, &mut input_definitions);
+            input_definitions.sort_unstable();
+            input_definitions.dedup();
+            indirect_targets.push(IndirectTarget { address: statement.address, target, call, input_definitions });
+        }
+    }
     Ok(DataFlow {
         constants: values
             .iter()
@@ -311,6 +353,7 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
         argument_registers: arguments.into_iter().collect(),
         integer_returns,
         forwarded_loads,
+        indirect_targets,
         incomplete_instructions: ssa
             .blocks
             .iter()
@@ -330,6 +373,8 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
              64 levels and 64 source stores per load."
                 .to_owned(),
             "Conflicting values and unsupported semantics remain unknown; no pointer alias analysis.".to_owned(),
+            "Indirect targets are constant-value evidence only; code mapping and alignment require image validation."
+                .to_owned(),
         ],
     })
 }

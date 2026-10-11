@@ -22,6 +22,9 @@ pub struct FunctionSummary {
     pub structured_control: Option<rampage_analysis::structure::StructuredControl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_pseudocode: Option<rampage_analysis::pseudocode::Pseudocode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_evidence: Option<rampage_analysis::type_evidence::TypeEvidence>,
+    pub validated_indirect_targets: Vec<rampage_analysis::dataflow::IndirectTarget>,
 }
 
 impl Project {
@@ -92,6 +95,44 @@ impl Project {
                 None
             }
         };
+        let type_evidence = match ssa.as_ref().map(rampage_analysis::type_evidence::analyze).transpose() {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                limitations.push(format!("Type evidence omitted: {error}"));
+                None
+            }
+        };
+        let validated_indirect_targets = dataflow
+            .as_ref()
+            .map(|data| {
+                data.indirect_targets
+                    .iter()
+                    .filter_map(|evidence| {
+                        if evidence.target == 0
+                            || evidence.target % 4 != 0
+                            || !self.binary.is_code(evidence.target)
+                            || self
+                                .binary
+                                .segment_containing(evidence.target)
+                                .is_none_or(|segment| !segment.perms.execute || !segment.perms.read)
+                        {
+                            return None;
+                        }
+                        let bytes = self.binary.code_from(evidence.target)?.get(..4)?;
+                        let instruction = self.binary.decoder().ok()?.decode(bytes, evidence.target);
+                        if instruction.flow == rampage_arch::Flow::Invalid {
+                            return None;
+                        }
+                        Some(rampage_analysis::dataflow::IndirectTarget {
+                            address: evidence.address,
+                            target: evidence.target,
+                            call: evidence.call,
+                            input_definitions: evidence.input_definitions.clone(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let edges: Vec<_> = graph.edges.iter().map(|edge| (edge.from, edge.to)).collect();
         let control = match ssa.as_ref().map(|ssa| rampage_analysis::control::analyze(ssa, &edges)).transpose() {
             Ok(control) => control,
@@ -137,6 +178,8 @@ impl Project {
             control,
             structured_control,
             structured_pseudocode,
+            type_evidence,
+            validated_indirect_targets,
             limitations,
         })
     }

@@ -11,3 +11,4 @@ pub mod ssa;
 pub mod strings;
 pub mod structure;
 pub mod triage;
+pub mod type_evidence;

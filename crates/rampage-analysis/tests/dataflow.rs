@@ -241,3 +241,22 @@ fn malformed_return_indices_and_placement_are_checked_errors() {
     ssa.definitions[0].expression = ssa.blocks[0].statements[0].observations[0].clone();
     assert!(dataflow::analyze(&ssa).is_err());
 }
+
+#[test]
+fn discard_observations_are_not_indirect_branch_target_evidence() {
+    let input = [InputBlock {
+        address: 0,
+        instructions: vec![LiftedInstruction {
+            address: 0,
+            bits: 64,
+            flow: Flow::IndirectJump,
+            complete: true,
+            effects: vec![
+                Effect::Discard { value: Value::Constant { value: 0x2000 } },
+                Effect::IndirectBranch { target: Value::Register { number: 9 } },
+            ],
+        }],
+    }];
+    let data = dataflow::analyze(&ssa::build(&input, &[], 0).unwrap()).unwrap();
+    assert!(data.indirect_targets.is_empty());
+}

@@ -40,6 +40,7 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
             }
             let valid = |id: usize| id < ssa.definitions.len();
             match expr {
+                Expression::IndirectBranch { target } => stack.push((target, depth + 1)),
                 Expression::Extend { value, from_bits, to_bits, signed } => {
                     if rampage_arch::ir::extend(0, *from_bits, *to_bits, *signed).is_none() {
                         return Err("invalid extension widths".to_owned());
@@ -210,6 +211,7 @@ fn name(id: usize, ssa: &Ssa) -> String {
 fn expression(expr: &Expression, ssa: &Ssa, remaining: &mut usize) -> Result<String, String> {
     *remaining = remaining.checked_sub(1).ok_or("pseudocode expression budget exceeded")?;
     Ok(match expr {
+        Expression::IndirectBranch { target } => format!("indirect_target({})", expression(target, ssa, remaining)?),
         Expression::Extend { value, from_bits, to_bits, signed } => format!(
             "{}ext{from_bits}_to{to_bits}({})",
             if *signed { "s" } else { "z" },

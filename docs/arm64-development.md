@@ -80,6 +80,12 @@ Word-sized STP/LDP pairs and signed LDPSW pairs retain their 4-byte stride and l
 Every incoming memory path must agree. Only provably disjoint writes within the same address domain are skipped;
 unknown aliases, calls, partial overlaps and memory cycles stop inference. Snapshot bytes are not used as load
 values. Forwarding is limited to eight passes, 200,000 memory visits, 64 levels and 64 source stores per load.
+`type_evidence` records local integer-width, signed/unsigned operation and address/code-operand uses. Multiple
+roles are retained rather than forced into one source type; integer indices used in address expressions are
+not declared pointers. Traversal is capped at 100,000 expression visits.
+`validated_indirect_targets` records constant BR/BLR targets whose entire aligned instruction lies in backed,
+readable executable code. The target may come from a proven reaching store; no CFG edges or function seeds
+are inserted from this summary evidence, and unresolved/authenticated operations remain explicit.
 
 The next gates are more scalar/FP/SIMD semantics, alias-aware memory analysis, broader control-flow structuring,
 typed arguments/returns, automatic dispatch recovery and live runtime integration. PAC, exceptions, TLS, varargs,

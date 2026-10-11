@@ -194,3 +194,80 @@ fn signed_byte_spill_forwards_a_return_candidate_without_snapshot_memory() {
     let text = summary.pseudocode.unwrap().text;
     assert!(text.contains("load8(") && text.contains("sext8_to64("));
 }
+
+#[test]
+fn spilled_indirect_target_is_image_validated_without_inserting_a_cfg_edge() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64-spilled-target.snapshot.json");
+    let summary = Project::new(Binary::open(&path).unwrap()).function_summary(0x1000).unwrap();
+    assert_eq!(summary.validated_indirect_targets.len(), 1);
+    assert_eq!(summary.validated_indirect_targets[0].target, 0x2000);
+    assert_eq!(summary.validated_indirect_targets[0].address, 0x1014);
+    assert!(summary.graph.edges.is_empty());
+    let mut binary = Binary::open(path).unwrap();
+    binary.segments[1].perms.execute = false;
+    let summary = Project::new(binary).function_summary(0x1000).unwrap();
+    assert!(summary.validated_indirect_targets.is_empty());
+    assert_eq!(summary.dataflow.unwrap().indirect_targets.len(), 1);
+}
+
+#[test]
+fn indirect_target_instruction_must_fit_entirely_inside_code() {
+    let mut bytes = vec![0u8; 0x1280];
+    bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    let put16 = |bytes: &mut [u8], at, value: u16| bytes[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    let put32 = |bytes: &mut [u8], at, value: u32| bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    let put64 = |bytes: &mut [u8], at, value: u64| bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
+    put16(&mut bytes, 16, 2);
+    put16(&mut bytes, 18, 183);
+    put32(&mut bytes, 20, 1);
+    put64(&mut bytes, 24, 0x1000);
+    put64(&mut bytes, 32, 64);
+    put64(&mut bytes, 40, 0x1140);
+    put16(&mut bytes, 52, 64);
+    put16(&mut bytes, 54, 56);
+    put16(&mut bytes, 56, 1);
+    put16(&mut bytes, 58, 64);
+    put16(&mut bytes, 60, 5);
+    put16(&mut bytes, 62, 4);
+    put32(&mut bytes, 64, 1);
+    put32(&mut bytes, 68, 5);
+    put64(&mut bytes, 72, 0x100);
+    put64(&mut bytes, 80, 0x1000);
+    put64(&mut bytes, 88, 0x1000);
+    put64(&mut bytes, 96, 0x1004);
+    put64(&mut bytes, 104, 0x1004);
+    put64(&mut bytes, 112, 0x100);
+    for (index, word) in
+        [0xd100_43ffu32, 0xd284_0008, 0xf900_03e8, 0xf940_03e9, 0x9100_43ff, 0xd61f_0120].into_iter().enumerate()
+    {
+        put32(&mut bytes, 0x100 + index * 4, word);
+    }
+    put32(&mut bytes, 0x1100, 0xd65f_03c0);
+    let names = b"\0.dispatch\0.target\0.data\0.shstrtab\0";
+    bytes[0x1108..0x1108 + names.len()].copy_from_slice(names);
+    for (index, name, flags, address, offset, size, kind) in [
+        (1, 1, 6, 0x1000, 0x100, 24, 1),
+        (2, 11, 6, 0x2000, 0x1100, 2, 1),
+        (3, 19, 2, 0x2002, 0x1102, 2, 1),
+        (4, 25, 0, 0, 0x1108, names.len() as u64, 3),
+    ] {
+        let at = 0x1140 + index * 64;
+        put32(&mut bytes, at, name);
+        put32(&mut bytes, at + 4, kind);
+        put64(&mut bytes, at + 8, flags);
+        put64(&mut bytes, at + 16, address);
+        put64(&mut bytes, at + 24, offset);
+        put64(&mut bytes, at + 32, size);
+        put64(&mut bytes, at + 48, 1);
+    }
+    let path = std::env::temp_dir().join(format!("rampage-code-range-{}.elf", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let result = Binary::open(&path);
+    std::fs::remove_file(&path).unwrap();
+    let binary = result.unwrap();
+    assert!(binary.read(0x2000, 4).is_some());
+    assert_eq!(binary.code_from(0x2000).unwrap().len(), 2);
+    let summary = Project::new(binary).function_summary(0x1000).unwrap();
+    assert!(summary.validated_indirect_targets.is_empty());
+}

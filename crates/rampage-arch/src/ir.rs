@@ -149,6 +149,7 @@ pub fn extend(value: u64, from_bits: u8, to_bits: u8, signed: bool) -> Option<u6
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Effect {
+    IndirectBranch { target: Value },
     MemoryLoad { destination: Value, address: Value, bits: u8, result_bits: u8, signed: bool },
     MemoryStore { address: Value, value: Value, bits: u8 },
     Return { target: Value },
@@ -639,7 +640,7 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
         lifted.effects.push(Effect::Return { target: register(rn, false) });
         lifted.complete = true;
     } else if word & 0xffff_fc1f == 0xd61f_0000 {
-        lifted.effects.push(Effect::Control { inputs: vec![register(rn, false)] });
+        lifted.effects.push(Effect::IndirectBranch { target: register(rn, false) });
         lifted.complete = true;
     }
     if !lifted.complete {
