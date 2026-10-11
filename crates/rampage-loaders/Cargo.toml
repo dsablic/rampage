@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+gimli = { version = "=0.34.0", default-features = false, features = ["read", "std"] }
 serde_json.workspace = true
 plist = "1.8.0"
 rampage-arch.workspace = true
