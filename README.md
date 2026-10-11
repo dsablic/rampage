@@ -40,8 +40,14 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
    [crates/rampage-decompiler](crates/rampage-decompiler).
 - Persistent types: address-bound signatures, calling conventions, type declarations and typed globals share the
   annotation log and dependency-checked undo/redo. Embedded DWARF scalar/pointer signatures can be previewed and
-  imported without replacing analyst signatures. Named Itanium vtables provide bounded class evidence, not
-  inferred object layouts. See [debug signature import](docs/debug-signatures.md).
+  imported without replacing analyst signatures. Named Itanium and MSVC vtables provide bounded class evidence
+  (with the C++ class name), not inferred object layouts. See [debug signature import](docs/debug-signatures.md).
+- Library identification: a FLIRT/Function-ID-style signature of each function, hashed with position-dependent
+  bytes masked out (relative branch and call targets, x86 RIP-relative displacements, AArch64 PC-relative
+  encodings), so the same library function matches across binaries linked at different addresses. Build a database
+  from a binary whose functions are named (`rampage signatures`) and apply it to name the matching functions of a
+  stripped one (`rampage identify`). x86, x86-64 and AArch64; see
+  [crates/rampage-signatures](crates/rampage-signatures).
 
 ## Usage
 
