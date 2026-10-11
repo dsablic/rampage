@@ -162,6 +162,75 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("pthread_mutex_unlock", "int4 pthread_mutex_unlock(void *mutex)"),
     // assert / error helpers
     ("__assert_fail", "void __assert_fail(char *assertion, char *file, uint4 line, char *fn)"),
+    // stdio (more)
+    ("vsprintf", "int4 vsprintf(char *str, char *fmt, void *ap)"),
+    ("fileno", "int4 fileno(void *stream)"),
+    ("ungetc", "int4 ungetc(int4 c, void *stream)"),
+    ("fseeko", "int4 fseeko(void *stream, {long} off, int4 whence)"),
+    ("ftello", "{long} ftello(void *stream)"),
+    ("getline", "{ssize_t} getline(char **line, {size_t} *n, void *stream)"),
+    ("getdelim", "{ssize_t} getdelim(char **line, {size_t} *n, int4 delim, void *stream)"),
+    // string / memory (more)
+    ("strsep", "char * strsep(char **stringp, char *delim)"),
+    ("strtok_r", "char * strtok_r(char *str, char *delim, char **saveptr)"),
+    ("strlcpy", "{size_t} strlcpy(char *dst, char *src, {size_t} size)"),
+    ("strlcat", "{size_t} strlcat(char *dst, char *src, {size_t} size)"),
+    ("memccpy", "void * memccpy(void *dst, void *src, int4 c, {size_t} n)"),
+    ("strcasestr", "char * strcasestr(char *haystack, char *needle)"),
+    ("memrchr", "void * memrchr(void *s, int4 c, {size_t} n)"),
+    // stdlib (more)
+    ("strtoll", "{long} strtoll(char *s, char **end, int4 base)"),
+    ("strtoull", "{ulong} strtoull(char *s, char **end, int4 base)"),
+    ("mkstemp", "int4 mkstemp(char *template)"),
+    ("getopt", "int4 getopt(int4 argc, char **argv, char *optstring)"),
+    ("setlocale", "char * setlocale(int4 category, char *locale)"),
+    ("putenv", "int4 putenv(char *entry)"),
+    ("unsetenv", "int4 unsetenv(char *name)"),
+    // unistd / files (more)
+    ("fcntl", "int4 fcntl(int4 fd, int4 cmd, ...)"),
+    ("ioctl", "int4 ioctl(int4 fd, {ulong} request, ...)"),
+    ("stat", "int4 stat(char *path, void *buf)"),
+    ("fstat", "int4 fstat(int4 fd, void *buf)"),
+    ("lstat", "int4 lstat(char *path, void *buf)"),
+    ("mmap", "void * mmap(void *addr, {size_t} length, int4 prot, int4 flags, int4 fd, {long} offset)"),
+    ("munmap", "int4 munmap(void *addr, {size_t} length)"),
+    ("mprotect", "int4 mprotect(void *addr, {size_t} length, int4 prot)"),
+    ("readlink", "{ssize_t} readlink(char *path, char *buf, {size_t} size)"),
+    ("symlink", "int4 symlink(char *target, char *linkpath)"),
+    ("kill", "int4 kill(int4 pid, int4 sig)"),
+    ("waitpid", "int4 waitpid(int4 pid, void *status, int4 options)"),
+    ("signal", "void * signal(int4 signum, void *handler)"),
+    ("getuid", "uint4 getuid(void)"),
+    ("geteuid", "uint4 geteuid(void)"),
+    ("socket", "int4 socket(int4 domain, int4 type, int4 protocol)"),
+    ("connect", "int4 connect(int4 fd, void *addr, uint4 addrlen)"),
+    ("send", "{ssize_t} send(int4 fd, void *buf, {size_t} n, int4 flags)"),
+    ("recv", "{ssize_t} recv(int4 fd, void *buf, {size_t} n, int4 flags)"),
+    // C++ runtime (Itanium ABI)
+    ("_Znwm", "void * _Znwm({size_t} size)"),
+    ("_Znam", "void * _Znam({size_t} size)"),
+    ("_ZdlPv", "void _ZdlPv(void *p)"),
+    ("_ZdaPv", "void _ZdaPv(void *p)"),
+    ("__cxa_throw", "void __cxa_throw(void *thrown, void *type, void *destructor)"),
+    ("__cxa_begin_catch", "void * __cxa_begin_catch(void *exception)"),
+    ("__cxa_end_catch", "void __cxa_end_catch(void)"),
+    ("__cxa_atexit", "int4 __cxa_atexit(void *fn, void *arg, void *dso)"),
+    ("__cxa_guard_acquire", "int4 __cxa_guard_acquire(void *guard)"),
+    ("__cxa_guard_release", "void __cxa_guard_release(void *guard)"),
+    ("__stack_chk_fail", "void __stack_chk_fail(void)"),
+    ("__errno_location", "int4 * __errno_location(void)"),
+    // Win32 (common)
+    ("GetProcAddress", "void * GetProcAddress(void *module, char *name)"),
+    ("LoadLibraryA", "void * LoadLibraryA(char *name)"),
+    ("GetModuleHandleA", "void * GetModuleHandleA(char *name)"),
+    ("VirtualAlloc", "void * VirtualAlloc(void *addr, {size_t} size, uint4 type, uint4 protect)"),
+    ("VirtualProtect", "int4 VirtualProtect(void *addr, {size_t} size, uint4 protect, uint4 *old)"),
+    ("WriteFile", "int4 WriteFile(void *file, void *buf, uint4 n, uint4 *written, void *overlapped)"),
+    ("ReadFile", "int4 ReadFile(void *file, void *buf, uint4 n, uint4 *read, void *overlapped)"),
+    ("CloseHandle", "int4 CloseHandle(void *handle)"),
+    ("GetLastError", "uint4 GetLastError(void)"),
+    ("ExitProcess", "void ExitProcess(uint4 exit_code)"),
+    ("MessageBoxA", "int4 MessageBoxA(void *wnd, char *text, char *caption, uint4 type)"),
 ];
 
 /// The C prototype for a well-known library function, spelled with `name` as the function's name so it binds to
@@ -651,6 +720,45 @@ mod tests {
         let text = decompiler.decompile(0x1000, "sum_to", false).expect("decompile");
         assert!(text.contains("sum_to"), "{text}");
         assert!(text.contains("return"), "{text}");
+    }
+
+    // A 14-case `switch` dispatching distinct arithmetic, compiled at -O2 for arm64 (clang), as the contiguous
+    // __TEXT __text + __const bytes: the function at 0x328 and its byte jump table at 0x3d0. Decoding it exercises
+    // the decompiler's indirect-branch (jump-table) recovery.
+    const SWITCH_AARCH64: &[u8] = &[
+        0x1f, 0x34, 0x00, 0x71, 0xe8, 0x04, 0x00, 0x54, 0xe8, 0x03, 0x00, 0x2a, 0x09, 0x00, 0x00, 0x90, 0x29,
+        0x41, 0x0f, 0x91, 0x8a, 0x00, 0x00, 0x10, 0x2b, 0x69, 0x68, 0x38, 0x4a, 0x09, 0x0b, 0x8b, 0x40, 0x01,
+        0x1f, 0xd6, 0x40, 0x00, 0x01, 0x0b, 0xc0, 0x03, 0x5f, 0xd6, 0xe0, 0x03, 0x01, 0x4b, 0xc0, 0x03, 0x5f,
+        0xd6, 0x48, 0x00, 0x00, 0x32, 0x29, 0x0c, 0xc8, 0x1a, 0x20, 0x85, 0x08, 0x1b, 0xc0, 0x03, 0x5f, 0xd6,
+        0x20, 0x04, 0x02, 0x0b, 0xc0, 0x03, 0x5f, 0xd6, 0x40, 0x00, 0x01, 0x4a, 0xc0, 0x03, 0x5f, 0xd6, 0x40,
+        0x7c, 0x01, 0x1b, 0xc0, 0x03, 0x5f, 0xd6, 0x48, 0x00, 0x00, 0x32, 0x20, 0x0c, 0xc8, 0x1a, 0xc0, 0x03,
+        0x5f, 0xd6, 0x40, 0x00, 0x01, 0x0a, 0xc0, 0x03, 0x5f, 0xd6, 0x20, 0x00, 0x02, 0x4b, 0xc0, 0x03, 0x5f,
+        0xd6, 0x20, 0x20, 0xc2, 0x1a, 0xc0, 0x03, 0x5f, 0xd6, 0x40, 0x04, 0x01, 0x0b, 0xc0, 0x03, 0x5f, 0xd6,
+        0x20, 0x28, 0xc2, 0x1a, 0xc0, 0x03, 0x5f, 0xd6, 0xe0, 0x03, 0x21, 0x2a, 0xc0, 0x03, 0x5f, 0xd6, 0x40,
+        0x00, 0x01, 0x2a, 0xc0, 0x03, 0x5f, 0xd6, 0x00, 0x00, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6, 0x00, 0x13,
+        0x0c, 0x0e, 0x04, 0x15, 0x19, 0x11, 0x1d, 0x0a, 0x1b, 0x02, 0x08, 0x17,
+    ];
+
+    #[test]
+    fn switch_dispatch_is_surfaced_in_structured_results() {
+        if sleigh_home().is_none() {
+            return;
+        }
+        // The segment spans both the code and the read-only byte table it indexes. On an isolated snippet Ghidra
+        // does not always complete table recovery (it lacks whole-program context), so this asserts the structured
+        // result surfaces the switch either way: as a recovered jump table, or as a diagnosed indirect branch.
+        let segments = [Segment { base: 0x328, bytes: SWITCH_AARCH64, writable: false }];
+        let mut decompiler = Decompiler::open(Arch::Aarch64, false, &segments).expect("open");
+        decompiler.decompile(0x328, "dispatch", false).expect("decompile");
+        let result = decompiler.structured_result().expect("results");
+        let recovered = result.jump_tables.iter().any(|table| table.targets.len() >= 2);
+        let diagnosed = result.diagnostics.as_ref().is_some_and(|diagnostics| {
+            diagnostics.unresolved_indirect_jumps > 0
+                || diagnostics.partial_jump_tables > 0
+                || diagnostics.unresolved_calls > 0
+                || diagnostics.warnings.iter().any(|warning| warning.message.contains("indirect jump"))
+        });
+        assert!(recovered || diagnosed, "switch not surfaced: {result:?}");
     }
 
     #[test]
