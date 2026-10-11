@@ -15,8 +15,13 @@ fn function_comparisons_require_matching_identity_and_report_missing_and_extra_a
     let comparison = project.compare_functions(&reference).unwrap();
     assert_eq!(comparison.matched, 1);
     assert!(comparison.missing.is_empty());
+    assert_eq!(comparison.recall, Some(1.0));
+    assert_eq!(comparison.precision, Some(1.0 / comparison.rampage_functions as f64));
     reference.functions.clear();
-    assert!(!project.compare_functions(&reference).unwrap().extra.is_empty());
+    let empty_reference = project.compare_functions(&reference).unwrap();
+    assert!(!empty_reference.extra.is_empty());
+    assert_eq!(empty_reference.recall, None);
+    assert!(serde_json::to_value(empty_reference).unwrap()["recall"].is_null());
     reference.image_sha256 = "wrong".to_owned();
     assert!(project.compare_functions(&reference).is_err());
     reference.image_sha256 = project.triage().image_hashes.sha256.clone();
@@ -66,6 +71,8 @@ fn a_minority_of_out_of_range_reference_addresses_count_as_missing() {
     };
     let comparison = project.compare_functions(&reference).unwrap();
     assert_eq!(comparison.matched, 1);
+    assert_eq!(comparison.recall, Some(0.5));
+    assert_eq!(comparison.precision, Some(1.0 / comparison.rampage_functions as f64));
     assert!(comparison.missing.contains(&0x1));
     assert!(comparison.limitations.iter().any(|note| note.contains("outside rampage's code ranges")));
 }

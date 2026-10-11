@@ -43,6 +43,8 @@ pub struct Comparison {
     pub matched: usize,
     pub reference_functions: usize,
     pub rampage_functions: usize,
+    pub precision: Option<f64>,
+    pub recall: Option<f64>,
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
     pub missing: Vec<u64>,
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
@@ -98,12 +100,15 @@ impl Project {
         if out_of_range > 0 {
             limitations.push(format!("{out_of_range} reference addresses are outside rampage's code ranges."));
         }
+        let matched = actual.intersection(&expected).count();
         Ok(Comparison {
             reference_tool: reference.tool.clone(),
             reference_version: reference.version.clone(),
-            matched: actual.intersection(&expected).count(),
+            matched,
             reference_functions: expected.len(),
             rampage_functions: actual.len(),
+            precision: (!actual.is_empty()).then(|| matched as f64 / actual.len() as f64),
+            recall: (!expected.is_empty()).then(|| matched as f64 / expected.len() as f64),
             missing: expected.difference(&actual).copied().collect(),
             extra: actual.difference(&expected).copied().collect(),
             limitations,

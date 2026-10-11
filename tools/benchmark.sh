@@ -13,12 +13,14 @@ set -euo pipefail
 
 RAMPAGE="$1"; GHIDRA="$2"; shift 2
 HEADLESS="$GHIDRA/support/analyzeHeadless"
+VERSION=$(sed -n 's/^application.version=//p' "$GHIDRA/Ghidra/application.properties")
+test -n "$VERSION"
 SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export JAVA_HOME="${JAVA_HOME:-$(brew --prefix openjdk@21)/libexec/openjdk.jdk/Contents/Home}"
 
-printf '%-34s %8s %8s %8s %8s\n' "binary" "ghidra" "rampage" "matched" "recall"
+printf '%-34s %8s %8s %8s %9s %8s\n' "binary" "ghidra" "rampage" "matched" "precision" "recall"
 while [ "$#" -ge 2 ]; do
     fixture="$1"; arch="$2"; shift 2
     starts="$WORK/starts.txt"; ref="$WORK/ref.json"
@@ -26,11 +28,11 @@ while [ "$#" -ge 2 ]; do
     "$HEADLESS" "$WORK/proj" bench -import "$fixture" -scriptPath "$SCRIPTS" \
         -postScript ghidra_function_starts.java "$starts" -deleteProject >/dev/null 2>&1
     sha=$(shasum -a 256 "$fixture" | cut -d' ' -f1)
-    python3 - "$starts" "$ref" "$sha" "$arch" <<'PY'
+    python3 - "$starts" "$ref" "$sha" "$arch" "$VERSION" <<'PY'
 import json, sys
-starts, ref, sha, arch = sys.argv[1:5]
+starts, ref, sha, arch, version = sys.argv[1:6]
 funcs = [l.strip() for l in open(starts) if l.strip()]
-json.dump({"tool": "ghidra", "version": "12.1.4", "image_sha256": sha, "arch": arch, "functions": funcs},
+json.dump({"tool": "ghidra", "version": version, "image_sha256": sha, "arch": arch, "functions": funcs},
           open(ref, "w"))
 PY
     result=$("$RAMPAGE" compare "$fixture" --reference "$ref" --json)
@@ -39,7 +41,8 @@ import json, os, sys
 fixture, result = sys.argv[1], sys.argv[2]
 c = json.loads(result)
 ref, ram, matched = c["reference_functions"], c["rampage_functions"], c["matched"]
-recall = matched / ref if ref else 0.0
-print(f'{os.path.basename(fixture):<34} {ref:>8} {ram:>8} {matched:>8} {recall:>7.1%}')
+metric = lambda value: 'N/A' if value is None else f'{value:.1%}'
+print(f'{os.path.basename(fixture):<34} {ref:>8} {ram:>8} {matched:>8} '
+      f'{metric(c["precision"]):>9} {metric(c["recall"]):>8}')
 PY
 done
