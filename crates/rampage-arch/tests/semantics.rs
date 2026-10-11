@@ -199,3 +199,27 @@ fn scalar_memory_tracks_access_width_result_extension_and_full_width_writeback()
     assert_eq!(ir::extend(0x8000, 16, 64, true), Some(0xffff_ffff_ffff_8000));
     assert_eq!(ir::extend(u64::MAX, 8, 64, false), Some(255));
 }
+
+#[test]
+fn word_pairs_scale_offsets_and_signed_pair_results_independently_of_sp() {
+    let registers = [0; 31];
+    let stp = lift(0x29bf_07e0);
+    assert!(stp.complete);
+    assert_eq!(stp.bits, 64);
+    for (effect, expected) in stp.effects[..2].iter().zip([0xffff_fff8, 0xffff_fffc]) {
+        assert!(matches!(effect, Effect::MemoryStore { address, bits: 32, .. }
+            if value(address, &registers, 0x1_0000_0000) == expected));
+    }
+    let ldp = lift(0x28c1_0fe2);
+    assert!(matches!(ldp.effects[0], Effect::MemoryLoad { bits: 32, result_bits: 32, signed: false, .. }));
+    assert!(matches!(&ldp.effects[2], Effect::Assign { destination: Value::StackPointer, value: expr }
+        if value(expr, &registers, 0x1_0000_0000) == 0x1_0000_0008));
+    let signed = lift(0x697f_0fe2);
+    assert!(signed.complete);
+    assert!(
+        signed
+            .effects
+            .iter()
+            .all(|effect| matches!(effect, Effect::MemoryLoad { bits: 32, result_bits: 64, signed: true, .. }))
+    );
+}

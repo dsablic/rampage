@@ -166,3 +166,24 @@ fn shared_suffix_memoization_does_not_bypass_memory_path_depth() {
     }
     assert!(dataflow::analyze(&ssa).unwrap().forwarded_loads.is_empty());
 }
+
+#[test]
+fn word_pair_spills_recover_both_results_and_entry_relative_slots() {
+    use rampage_arch::{Arch, Target, decoder};
+    let words = [0x5280_0000u32, 0x1280_0001, 0x29bf_07e0, 0x28c1_0fe2, 0xd65f_03c0];
+    let instructions = words
+        .iter()
+        .enumerate()
+        .map(|(index, &word)| {
+            let bytes = word.to_le_bytes();
+            let instruction = decoder(&Target::new(Arch::Aarch64)).unwrap().decode(&bytes, index as u64 * 4);
+            let lifted = rampage_arch::ir::lift(Arch::Aarch64, &bytes, &instruction);
+            assert!(lifted.complete);
+            lifted
+        })
+        .collect();
+    let data = dataflow::analyze(&ssa::build(&[InputBlock { address: 0, instructions }], &[], 0).unwrap()).unwrap();
+    assert_eq!(data.forwarded_loads.len(), 2);
+    assert_eq!(data.stack_slots.iter().map(|slot| (slot.offset, slot.bits)).collect::<Vec<_>>(), [(-8, 32), (-4, 32)]);
+    assert!(data.forwarded_loads.iter().any(|load| load.value == 0xffff_ffff));
+}

@@ -558,11 +558,17 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
         lifted.effects.push(Effect::FlagsConditional { condition: (word & 15) as u8 });
         lifted.complete = true;
     } else if scalar_memory(&mut lifted, name, word) {
-    } else if (name.starts_with("STP_64_") || name.starts_with("LDP_64_"))
+    } else if (name.starts_with("STP_64_")
+        || name.starts_with("LDP_64_")
+        || name.starts_with("STP_32_")
+        || name.starts_with("LDP_32_")
+        || name.starts_with("LDPSW_64_"))
         && (name.ends_with("ldstpair_off") || name.ends_with("ldstpair_pre") || name.ends_with("ldstpair_post"))
     {
         let rt2 = ((word >> 10) & 31) as u8;
-        let offset = crate::mrs::sign_extend(u64::from((word >> 15) & 127), 7) * 8;
+        let bits = if name.contains("_32_") || name.starts_with("LDPSW") { 32 } else { 64 };
+        let stride = u64::from(bits / 8);
+        let offset = crate::mrs::sign_extend(u64::from((word >> 15) & 127), 7) * stride as i64;
         let updated = Value::Add {
             left: Box::new(register(rn, true)),
             right: Box::new(Value::Constant { value: offset as u64 }),
@@ -586,9 +592,21 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
             let address = if index == 0 {
                 address.clone()
             } else {
-                Value::Add { left: Box::new(address.clone()), right: Box::new(Value::Constant { value: 8 }) }
+                Value::Add { left: Box::new(address.clone()), right: Box::new(Value::Constant { value: stride }) }
             };
-            lifted.effects.push(if load {
+            lifted.effects.push(if bits == 32 {
+                if load {
+                    Effect::MemoryLoad {
+                        destination: register(rt, false),
+                        address,
+                        bits,
+                        result_bits: if name.starts_with("LDPSW") { 64 } else { 32 },
+                        signed: name.starts_with("LDPSW"),
+                    }
+                } else {
+                    Effect::MemoryStore { address, value: register(rt, false), bits }
+                }
+            } else if load {
                 if rt == 31 {
                     Effect::LoadDiscard { address }
                 } else {
