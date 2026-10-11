@@ -11,6 +11,7 @@ mod jumptable;
 mod listing;
 mod project;
 mod rows;
+mod runtime_compare;
 mod session;
 mod summary;
 pub mod tools;
@@ -37,6 +38,7 @@ pub use rows::{
     Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page, StringsQuery,
     Summary,
 };
+pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, RuntimeRange};
 pub use session::Session;
 pub use summary::FunctionSummary;
 pub use xrefs::{XrefQuery, XrefRow};

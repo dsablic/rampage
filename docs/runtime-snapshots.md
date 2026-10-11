@@ -21,6 +21,21 @@ expression-evaluation stops and is checked during capture and before publication
 It does not resume, launch or attach. Use `--thumb` for Thumb code.
 Preserve the actual runtime addresses: they already include ASLR.
 
+For an explicitly selected loaded module, use a UUID and original-image address instead of calculating ASLR
+addresses manually:
+
+```text
+rampage-snapshot capture.json --module-region 01234567-89ab-cdef-0123-456789abcdef:0x100001000:0x100:r-x
+```
+
+`--module-region UUID:IMAGE_ADDRESS:SIZE:PERMS` and `--module-seed UUID:IMAGE_ADDRESS` may be repeated and mixed
+with explicit runtime ranges/seeds. Module selection requires an unambiguous compact or standard dashed UUID,
+matching architecture, checked header slide and coverage by loaded section leaves. Every intersecting leaf
+must agree with that slide; mapping holes and contradictory section mappings are rejected. Enumeration is
+limited to 4,096 modules and section traversal to 16,384 combined items across selected modules. Opaque identifiers
+remain available as provenance for explicit runtime captures but cannot be used as UUID selectors. No module
+file is loaded or debugger expression evaluated, and no unselected section bytes are captured.
+
 Bytes come from LLDB `ReadMemory`, which normalizes inserted software-breakpoint traps. Provenance records
 that normalization; do not interpret a capture as a byte-for-byte view of breakpoint-patched process memory.
 
@@ -128,3 +143,22 @@ by leaving ASLR enabled rather than requesting its disablement.
 against the explicitly supplied Mach-O image and translates the runtime address using the recorded header
 slide. It never opens paths stored inside a snapshot. UUID correlation does not assert that runtime bytes
 equal the original file and does not reconstruct relocations or authenticated pointers.
+
+## Compare selected runtime bytes with an original image
+
+```sh
+rampage compare-runtime capture.json --original module.dylib \
+  --module 01234567-89ab-cdef-0123-456789abcdef --range 0x1010:0x100 --json
+```
+
+Select 1–256 non-overlapping runtime `--range ADDRESS:SIZE` arguments, totaling at most one MiB. The original
+Mach-O must match the recorded UUID, architecture and original header base. The report includes capture
+identity, selected original-slice SHA-256, header bases, requested/equal/changed/unavailable byte totals and
+coalesced spans. Unavailable spans distinguish capture-only, original-only and both-side gaps. Unreadable,
+unbacked and truncated bytes remain unavailable, including declared original zero-fill. Reports exceeding
+16,384 spans are rejected; select smaller ranges instead.
+
+Comparison opens only the explicit snapshot and original, not annotation sidecars or paths stored in metadata.
+It does not apply symbol/type annotations. Differences can be relocations, runtime changes or debugger
+breakpoint normalization; neither differences nor equality prove transformed-code recovery or ABI correctness.
+The `compare_runtime_bytes` API uses the same rules.

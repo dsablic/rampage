@@ -197,7 +197,7 @@ def test_export_records_module_slides_and_register_provenance(
             GetLoadAddress=lambda target: 0x1000,
             GetFileAddress=lambda: 0,
         ),
-        GetUUIDString=lambda: "fixture-uuid",
+        GetUUIDString=lambda: "01234567-89ab-cdef-0123-456789abcdef",
         GetFileSpec=lambda: filespec,
     )
     target = SimpleNamespace(
@@ -623,3 +623,194 @@ def test_interrupted_serialization_preserves_interrupt_and_removes_sensitive_tem
     with pytest.raises(KeyboardInterrupt):
         exporter.publish_snapshot({}, tmp_path / "interrupted.json", lambda: None)
     assert list(tmp_path.iterdir()) == []
+
+
+def loaded_module(
+    runtime: int = 0x1000, machine: str = "arm64", hole: bool = False
+) -> Any:
+    def section(image: int, load: int) -> Any:
+        return SimpleNamespace(
+            GetNumSubSections=lambda: 0,
+            GetFileAddress=lambda: image,
+            GetLoadAddress=lambda target: load,
+            GetByteSize=lambda: 2,
+        )
+
+    leaves = [
+        section(0x100000100, runtime + 0x100),
+        section(
+            0x100000103 if hole else 0x100000102, runtime + (0x103 if hole else 0x102)
+        ),
+    ]
+    parent = SimpleNamespace(
+        GetNumSubSections=lambda: len(leaves),
+        GetSubSectionAtIndex=lambda index: leaves[index],
+    )
+    return SimpleNamespace(
+        GetObjectFileHeaderAddress=lambda: SimpleNamespace(
+            GetFileAddress=lambda: 0x100000000, GetLoadAddress=lambda target: runtime
+        ),
+        GetUUIDString=lambda: "01234567-89ab-cdef-0123-456789abcdef",
+        GetFileSpec=lambda: SimpleNamespace(GetFilename=lambda: "fixture"),
+        GetTriple=lambda: f"{machine}-apple-macosx",
+        GetNumSections=lambda: 1,
+        GetSectionAtIndex=lambda index: parent,
+    )
+
+
+@pytest.mark.parametrize("runtime", [0x1000, 0x200000000])
+def test_module_selection_uses_checked_header_slide_and_loaded_section_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime: int
+) -> None:
+    api = SimpleNamespace(
+        SBError=ReadError,
+        SBMemoryRegionInfo=MemoryRegion,
+        eStateStopped=1,
+        eByteOrderBig=1,
+        LLDB_INVALID_ADDRESS=2**64 - 1,
+    )
+    monkeypatch.setitem(sys.modules, "lldb", api)
+    process = Process()
+
+    def mapping(address: int, region: MemoryRegion) -> ReadError:
+        region.base, region.end = runtime, runtime + 0x1000
+        return ReadError()
+
+    monkeypatch.setattr(process, "GetMemoryRegionInfo", mapping)
+    target = debugger(process).GetSelectedTarget()
+    target.GetNumModules = lambda: 1
+    target.GetModuleAtIndex = lambda index: loaded_module(runtime)
+    output = tmp_path / "module.json"
+    result = Result()
+    selection = "0123456789ABCDEF0123456789ABCDEF:0x100000100"
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} --module-region {selection}:4:r-x --module-seed {selection}",
+        result,
+        {},
+    )
+    assert result.error is None
+    assert process.reads == [(runtime + 0x100, 4)]
+    snapshot = json.loads(output.read_text())
+    assert snapshot["seeds"] == [hex(runtime + 0x100)]
+    assert snapshot["modules"][0]["runtime_base"] == hex(runtime)
+
+
+@pytest.mark.parametrize(
+    "issue", ["hole", "architecture", "ambiguous", "unknown", "overflow"]
+)
+def test_invalid_module_selections_fail_before_target_memory_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, issue: str
+) -> None:
+    api = SimpleNamespace(
+        SBError=ReadError,
+        SBMemoryRegionInfo=MemoryRegion,
+        eStateStopped=1,
+        eByteOrderBig=1,
+        LLDB_INVALID_ADDRESS=2**64 - 1,
+    )
+    monkeypatch.setitem(sys.modules, "lldb", api)
+    process = Process()
+    target = debugger(process).GetSelectedTarget()
+    target.GetNumModules = lambda: 2 if issue == "ambiguous" else 1
+    target.GetModuleAtIndex = lambda index: loaded_module(
+        2**64 - 2 if issue == "overflow" else 0x1000,
+        "x86_64" if issue == "architecture" else "arm64",
+        issue == "hole",
+    )
+    identity = "0" * 32 if issue == "unknown" else "0123456789abcdef0123456789abcdef"
+    result = Result()
+    output = tmp_path / "invalid-module.json"
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} --module-region {identity}:0x100000100:4:r-x",
+        result,
+        {},
+    )
+    assert result.error is not None
+    assert process.reads == []
+    assert not output.exists()
+
+
+def test_opaque_module_identifiers_do_not_prevent_explicit_runtime_range_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = SimpleNamespace(
+        SBError=ReadError,
+        SBMemoryRegionInfo=MemoryRegion,
+        eStateStopped=1,
+        eByteOrderBig=1,
+        LLDB_INVALID_ADDRESS=2**64 - 1,
+    )
+    monkeypatch.setitem(sys.modules, "lldb", api)
+    process = Process()
+    target = debugger(process).GetSelectedTarget()
+    module = loaded_module()
+    opaque = "0123456789abcdef0123456789abcdef01234567"
+    module.GetUUIDString = lambda: opaque
+    target.GetNumModules = lambda: 1
+    target.GetModuleAtIndex = lambda index: module
+    result = Result()
+    output = tmp_path / "opaque.json"
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} --region 0x1000:4:r-x",
+        result,
+        {},
+    )
+    assert result.error is None
+    assert json.loads(output.read_text())["modules"][0]["uuid"] == opaque
+
+
+def test_contained_overlapping_section_cannot_hide_a_contradictory_slide() -> None:
+    exporter = load_exporter()
+    target = SimpleNamespace(GetTriple=lambda: "arm64-apple-macosx")
+    module = loaded_module()
+    metadata = {
+        "uuid": "0123456789abcdef0123456789abcdef",
+        "image_base": "0x100000000",
+        "runtime_base": "0x1000",
+    }
+    ranges = {metadata["uuid"]: [(0x100000100, 0x1100, 4), (0x100000101, 0x9101, 1)]}
+    with pytest.raises(ValueError, match="header slide"):
+        exporter.resolve_module_range(
+            f"{metadata['uuid']}:0x100000100",
+            [(module, metadata)],
+            target,
+            SimpleNamespace(),
+            ranges,
+            4,
+        )
+
+
+def test_runtime_aliases_of_unselected_sections_are_rejected() -> None:
+    exporter = load_exporter()
+    target = SimpleNamespace(GetTriple=lambda: "arm64-apple-macosx")
+    metadata = {
+        "uuid": "0123456789abcdef0123456789abcdef",
+        "image_base": "0x100000000",
+        "runtime_base": "0x1000",
+    }
+    ranges = {metadata["uuid"]: [(0x100000100, 0x1100, 4), (0x100000200, 0x1100, 4)]}
+    with pytest.raises(ValueError, match="header slide"):
+        exporter.resolve_module_range(
+            f"{metadata['uuid']}:0x100000100",
+            [(loaded_module(), metadata)],
+            target,
+            SimpleNamespace(),
+            ranges,
+            4,
+        )
+
+
+def test_section_inspection_budget_is_shared_across_selected_modules() -> None:
+    api = SimpleNamespace(LLDB_INVALID_ADDRESS=2**64 - 1)
+    exporter = load_exporter()
+    budget = [3]
+    assert (
+        len(exporter.module_ranges(loaded_module(), SimpleNamespace(), api, budget))
+        == 2
+    )
+    assert budget == [0]
+    with pytest.raises(ValueError, match="inspection limit"):
+        exporter.module_ranges(loaded_module(), SimpleNamespace(), api, budget)

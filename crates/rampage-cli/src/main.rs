@@ -122,6 +122,16 @@ enum Command {
         #[arg(long)]
         at: String,
     },
+    /// Compare explicit captured ranges to a UUID-matched original without transferring annotations
+    CompareRuntime {
+        file: PathBuf,
+        #[arg(long)]
+        original: PathBuf,
+        #[arg(long)]
+        module: String,
+        #[arg(long, required = true)]
+        range: Vec<String>,
+    },
     /// List imported functions with their libraries and import slots
     Imports {
         file: PathBuf,
@@ -230,6 +240,9 @@ fn main() -> ExitCode {
         }
         Command::Correlate { file, original, module, at } => {
             commands::correlate(&mut out, &file, &original, &module, &at, &options)
+        }
+        Command::CompareRuntime { file, original, module, range } => {
+            commands::compare_runtime(&mut out, &file, &original, &module, &range, &options)
         }
         Command::Imports { file, contains } => {
             commands::imports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)

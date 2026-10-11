@@ -10,6 +10,173 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NoReturn
 
+MAX_MODULES = 4096
+MAX_MODULE_SECTIONS = 16384
+
+
+def module_uuid(value: str) -> str:
+    compact = len(value) == 32 and all(
+        character in "0123456789abcdefABCDEF" for character in value
+    )
+    dashed = len(value) == 36 and all(
+        character == "-"
+        if index in {8, 13, 18, 23}
+        else character in "0123456789abcdefABCDEF"
+        for index, character in enumerate(value)
+    )
+    if not compact and not dashed:
+        raise ValueError("module selection requires a compact or standard dashed UUID")
+    return value.replace("-", "").lower()
+
+
+def module_identity(value: str) -> str:
+    try:
+        return module_uuid(value)
+    except ValueError:
+        return value
+
+
+def loaded_modules(target: Any, lldb: Any) -> list[tuple[Any, dict[str, str]]]:
+    count = target.GetNumModules()
+    if count < 0 or count > MAX_MODULES:
+        raise ValueError("capture exceeds module inspection limit")
+    modules: list[tuple[Any, dict[str, str]]] = []
+    seen: set[str] = set()
+    for index in range(count):
+        module = target.GetModuleAtIndex(index)
+        header = module.GetObjectFileHeaderAddress()
+        runtime_base, image_base = (
+            header.GetLoadAddress(target),
+            header.GetFileAddress(),
+        )
+        uuid = module.GetUUIDString()
+        if (
+            not uuid
+            or runtime_base == lldb.LLDB_INVALID_ADDRESS
+            or image_base == lldb.LLDB_INVALID_ADDRESS
+        ):
+            continue
+        identity = module_identity(uuid)
+        if identity in seen:
+            raise ValueError("module UUID has ambiguous loaded mappings")
+        seen.add(identity)
+        if not 0 <= image_base < 2**64 - 1 or not 0 <= runtime_base < 2**64 - 1:
+            raise ValueError("invalid module header address")
+        modules.append(
+            (
+                module,
+                {
+                    "name": module.GetFileSpec().GetFilename(),
+                    "path": str(module.GetFileSpec()),
+                    "uuid": uuid,
+                    "image_base": hex(image_base),
+                    "runtime_base": hex(runtime_base),
+                },
+            )
+        )
+    return modules
+
+
+def module_ranges(
+    module: Any, target: Any, lldb: Any, budget: list[int] | None = None
+) -> list[tuple[int, int, int]]:
+    if budget is None:
+        budget = [MAX_MODULE_SECTIONS]
+    count = module.GetNumSections()
+    if count < 0 or count > budget[0]:
+        raise ValueError("module exceeds section inspection limit")
+    pending = [module.GetSectionAtIndex(index) for index in range(count)]
+    ranges: list[tuple[int, int, int]] = []
+    while pending:
+        section = pending.pop()
+        budget[0] -= 1
+        if budget[0] < 0:
+            raise ValueError("module exceeds section inspection limit")
+        children = section.GetNumSubSections()
+        if children < 0 or len(pending) + children > budget[0]:
+            raise ValueError("module exceeds section inspection limit")
+        if children:
+            pending.extend(
+                section.GetSubSectionAtIndex(index) for index in range(children)
+            )
+            continue
+        image, runtime, size = (
+            section.GetFileAddress(),
+            section.GetLoadAddress(target),
+            section.GetByteSize(),
+        )
+        if (
+            image == lldb.LLDB_INVALID_ADDRESS
+            or runtime == lldb.LLDB_INVALID_ADDRESS
+            or size == 0
+        ):
+            continue
+        if (
+            image < 0
+            or runtime < 0
+            or size < 0
+            or max(image, runtime) + size > 2**64 - 1
+        ):
+            raise ValueError("invalid loaded section range")
+        ranges.append((image, runtime, size))
+    ranges.sort()
+    return ranges
+
+
+def resolve_module_range(
+    selection: str,
+    modules: list[tuple[Any, dict[str, str]]],
+    target: Any,
+    lldb: Any,
+    ranges: dict[str, list[tuple[int, int, int]]],
+    size: int,
+    budget: list[int] | None = None,
+) -> int:
+    raw_uuid, raw_address = selection.split(":", 1)
+    wanted, image = module_uuid(raw_uuid), int(raw_address, 0)
+    matches = [
+        (module, metadata)
+        for module, metadata in modules
+        if module_identity(metadata["uuid"]) == wanted
+    ]
+    if len(matches) != 1:
+        raise ValueError("selected UUID is not a uniquely loaded module")
+    module, metadata = matches[0]
+    machine = module.GetTriple().split("-")[0]
+    target_machine = target.GetTriple().split("-")[0]
+    if machine.replace("arm64e", "arm64") != target_machine.replace("arm64e", "arm64"):
+        raise ValueError("selected module architecture differs from capture target")
+    image_base, runtime_base = (
+        int(metadata["image_base"], 16),
+        int(metadata["runtime_base"], 16),
+    )
+    if image < image_base or size <= 0 or image + size > 2**64 - 1:
+        raise ValueError("invalid original-image range")
+    runtime = runtime_base + image - image_base
+    if runtime + size > 2**64 - 1:
+        raise ValueError("module slide overflows runtime range")
+    if wanted not in ranges:
+        ranges[wanted] = module_ranges(module, target, lldb, budget)
+    current, end = image, image + size
+    for file_address, load_address, length in ranges[wanted]:
+        if (
+            (file_address < end and image < file_address + length)
+            or (load_address < runtime + size and runtime < load_address + length)
+        ) and load_address - file_address != runtime_base - image_base:
+            raise ValueError(
+                "selected section does not match the recorded header slide"
+            )
+    for file_address, load_address, length in ranges[wanted]:
+        if file_address > current:
+            break
+        if current < file_address + length:
+            current = min(end, file_address + length)
+            if current == end:
+                return runtime
+    raise ValueError(
+        "selected original-image range is not covered by loaded module sections"
+    )
+
 
 class CommandParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
@@ -99,9 +266,18 @@ def export_snapshot(
     parser = CommandParser(prog="rampage-snapshot", exit_on_error=False)
     parser.add_argument("output", type=Path)
     parser.add_argument(
-        "--region", action="append", required=True, metavar="ADDRESS:SIZE:PERMS"
+        "--region", action="append", default=[], metavar="ADDRESS:SIZE:PERMS"
+    )
+    parser.add_argument(
+        "--module-region",
+        action="append",
+        default=[],
+        metavar="UUID:IMAGE_ADDRESS:SIZE:PERMS",
     )
     parser.add_argument("--seed", action="append", default=[])
+    parser.add_argument(
+        "--module-seed", action="append", default=[], metavar="UUID:IMAGE_ADDRESS"
+    )
     parser.add_argument("--thumb", action="store_true")
     parser.add_argument(
         "--compiler", help="explicit decompiler compiler specification ID"
@@ -146,12 +322,35 @@ def export_snapshot(
             raise ValueError("invalid compiler specification ID")
         if arguments.output.exists() or arguments.output.is_symlink():
             raise ValueError("output already exists")
-        if len(arguments.region) > 4096:
+        if not arguments.region and not arguments.module_region:
+            raise ValueError("select at least one explicit region or module region")
+        if len(arguments.region) + len(arguments.module_region) > 4096:
             raise ValueError("capture exceeds the 4096-region limit")
+        modules = loaded_modules(target, lldb)
+        ranges: dict[str, list[tuple[int, int, int]]] = {}
+        section_budget = [MAX_MODULE_SECTIONS]
+        selected = list(arguments.region)
+        for specification in arguments.module_region:
+            uuid, image, raw_size, permissions = specification.split(":", 3)
+            size = int(raw_size, 0)
+            if size <= 0 or size > 64 * 1024 * 1024:
+                raise ValueError("invalid module region size")
+            runtime = resolve_module_range(
+                f"{uuid}:{image}", modules, target, lldb, ranges, size, section_budget
+            )
+            selected.append(f"{runtime:#x}:{size}:{permissions}")
         specifications: list[tuple[int, int, str]] = []
         seeds = [int(seed, 0) for seed in arguments.seed]
+        if len(seeds) + len(arguments.module_seed) > 4096:
+            raise ValueError("capture exceeds seed limit")
+        seeds.extend(
+            resolve_module_range(
+                selection, modules, target, lldb, ranges, 1, section_budget
+            )
+            for selection in arguments.module_seed
+        )
         total = 0
-        for specification in arguments.region:
+        for specification in selected:
             raw_address, raw_size, permissions = specification.split(":")
             address, size = int(raw_address, 0), int(raw_size, 0)
             if size <= 0 or address < 0 or address + size > 2**64 - 1:
@@ -220,29 +419,6 @@ def export_snapshot(
         snapshot["target"] = {"platform": platform}
         if arguments.compiler is not None:
             snapshot["target"]["compiler"] = arguments.compiler
-        modules: list[dict[str, str]] = []
-        for index in range(target.GetNumModules()):
-            module = target.GetModuleAtIndex(index)
-            header = module.GetObjectFileHeaderAddress()
-            runtime_base = header.GetLoadAddress(target)
-            image_base = header.GetFileAddress()
-            uuid = module.GetUUIDString()
-            if (
-                uuid
-                and runtime_base != lldb.LLDB_INVALID_ADDRESS
-                and image_base != lldb.LLDB_INVALID_ADDRESS
-            ):
-                modules.append(
-                    {
-                        "name": module.GetFileSpec().GetFilename(),
-                        "path": str(module.GetFileSpec()),
-                        "uuid": uuid,
-                        "image_base": hex(image_base),
-                        "runtime_base": hex(runtime_base),
-                    }
-                )
-            if len(modules) > 4096:
-                raise ValueError("capture exceeds module limit")
         registers: list[dict[str, str]] = []
         thread = process.GetSelectedThread()
         if thread.IsValid():
@@ -267,7 +443,7 @@ def export_snapshot(
                                 "value": hex(value),
                             }
                         )
-        snapshot["modules"] = modules
+        snapshot["modules"] = [metadata for _, metadata in modules]
         snapshot["registers"] = registers
         ensure_stopped()
         cleanup_warning = publish_snapshot(snapshot, arguments.output, ensure_stopped)

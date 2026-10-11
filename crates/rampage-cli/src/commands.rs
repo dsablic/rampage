@@ -229,6 +229,48 @@ fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
     Ok(Session::default().open(path, options.arch)?)
 }
 
+pub fn compare_runtime(
+    out: &mut impl Write,
+    path: &Path,
+    original: &Path,
+    module: &str,
+    ranges: &[String],
+    options: &Options,
+) -> Result<()> {
+    let project = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
+    let original = rampage_loaders::Binary::open_with(original, Some(project.binary.arch))?;
+    let ranges = ranges
+        .iter()
+        .map(|range| {
+            let (address, size) =
+                range.split_once(':').ok_or_else(|| anyhow::anyhow!("range requires ADDRESS:SIZE"))?;
+            let size =
+                size.strip_prefix("0x").map_or_else(|| size.parse::<u64>(), |hex| u64::from_str_radix(hex, 16))?;
+            Ok(rampage_api::RuntimeRange { address: project.resolve(address)?, size })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let result = project.compare_runtime_bytes(module, &original, &ranges)?;
+    if options.json {
+        return write_json(out, &result);
+    }
+    writeln!(
+        out,
+        "{} equal, {} changed, {} unavailable bytes ({} requested)",
+        result.equal_bytes, result.changed_bytes, result.unavailable_bytes, result.requested_bytes
+    )?;
+    for span in result.spans {
+        writeln!(
+            out,
+            "{:#x} -> {:#x}: {} bytes {:?}",
+            span.runtime_address, span.image_address, span.size, span.status
+        )?;
+    }
+    for limitation in result.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
 /// Serializes before writing so that I/O errors such as a closed pipe surface as `io::Error`.
 fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result<()> {
     let mut json = serde_json::to_vec_pretty(value)?;

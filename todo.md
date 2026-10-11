@@ -212,7 +212,9 @@ Work in this order, with synthetic regressions and fresh-context review for each
    debugger attachment, licensing changes or target-memory writes; controlled live tests use our own fixtures.
    - [x] Exact mapping permissions, bounded inspection, complete reads, expression-stop identity checks and
      atomic no-clobber publication; breakpoint normalization recorded in provenance.
-   - [ ] Module-qualified range selection and broader multi-thread/module capture acceptance.
+   - [x] Explicit UUID/original-address range and seed selection with checked slides, section coverage and
+     conflicting-mapping rejection; controlled live fixture validation.
+   - [ ] Broader multi-thread/module capture acceptance and module-specific byte-order context.
 4. [ ] Runtime target identity: persist platform/compiler context, mapping-aware capture identity and module/
    thread provenance so an ARM64 macOS capture does not silently use generic AAPCS64 decompilation defaults.
    - [x] Validated optional platform/compiler context, exported by LLDB and used by native/worker defaults.
@@ -221,6 +223,9 @@ Work in this order, with synthetic regressions and fresh-context review for each
      (including ARM BE8), and persisted session reuse by capture identity.
 5. [ ] UUID-validated static/runtime comparison: compare explicit matching captured ranges, retain byte-change
    and unavailable-range evidence, transfer only justified symbol/type information with checked ASLR slides.
+   - [x] Bounded API/CLI byte comparison with equal/changed/unavailable spans and capture/original identities;
+     annotation-free explicit inputs and controlled live comparison.
+   - [ ] Reviewed symbol/type-transfer policy and runtime comparison navigation/agent integration.
 6. [ ] Captured indirect-call evidence: show wrapper slot/value/target observations separately from proven flow;
    writable, authenticated, unmapped or incomplete pointers remain unresolved without additional evidence.
 7. [ ] Authorized runtime acceptance: user supplies an already-loaded/stopped instance in a legitimate host;

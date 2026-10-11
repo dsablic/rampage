@@ -23,13 +23,11 @@ fn uuid(text: &str) -> Option<String> {
 }
 
 impl Project {
-    /// Correlates an explicit captured address with an explicitly opened UUID-matched Mach-O image.
-    pub fn correlate_runtime(
+    pub(crate) fn runtime_module_bases(
         &self,
         module_uuid: &str,
         original: &Binary,
-        address: u64,
-    ) -> Result<RuntimeCorrelation, ApiError> {
+    ) -> Result<(String, u64, u64), ApiError> {
         if self.binary.format != Format::Snapshot || self.binary.arch != original.arch {
             return Err(ApiError::Invalid(
                 "correlation requires a snapshot and matching original architecture".to_owned(),
@@ -64,6 +62,16 @@ impl Project {
                 "recorded original header base does not match the original image".to_owned(),
             ));
         }
+        Ok((wanted, image_base, runtime_base))
+    }
+    /// Correlates an explicit captured address with an explicitly opened UUID-matched Mach-O image.
+    pub fn correlate_runtime(
+        &self,
+        module_uuid: &str,
+        original: &Binary,
+        address: u64,
+    ) -> Result<RuntimeCorrelation, ApiError> {
+        let (wanted, image_base, runtime_base) = self.runtime_module_bases(module_uuid, original)?;
         let image_address = address
             .checked_sub(runtime_base)
             .and_then(|offset| image_base.checked_add(offset))

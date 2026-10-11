@@ -59,8 +59,11 @@ def test_stopped_fixture_exports_runtime_metadata_and_correlates_original(
         "    function = context.GetFunction()\n"
         "    start = function.GetStartAddress().GetLoadAddress(target)\n"
         "    end = function.GetEndAddress().GetLoadAddress(target)\n"
+        "    module = context.GetModule()\n"
+        "    uuid = module.GetUUIDString()\n"
+        "    image = function.GetStartAddress().GetFileAddress()\n"
         f"    destination = {export_command!r}\n"
-        "    region = f'--region {start:#x}:{end-start}:r-x --seed {start:#x}'\n"
+        "    region = f'--module-region {uuid}:{image:#x}:{end-start}:r-x --module-seed {uuid}:{image:#x}'\n"
         "    debugger.HandleCommand(destination + region)\n"
         "def __lldb_init_module(debugger: Any, internal: dict[str, Any]) -> None:\n"
         "    debugger.HandleCommand(\n"
@@ -137,6 +140,28 @@ def test_stopped_fixture_exports_runtime_metadata_and_correlates_original(
     assert int(correlation["image_address"], 16) == int(seed, 16) - int(
         module["runtime_base"], 16
     ) + int(module["image_base"], 16)
+    comparison_output = subprocess.run(
+        [
+            str(cli),
+            "--json",
+            "compare-runtime",
+            str(snapshot_path),
+            "--original",
+            str(executable),
+            "--module",
+            module["uuid"],
+            "--range",
+            f"{seed}:4",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    comparison = json.loads(comparison_output.stdout)
+    assert comparison["requested_bytes"] == comparison["equal_bytes"] == 4
+    assert comparison["changed_bytes"] == comparison["unavailable_bytes"] == 0
+    assert comparison["original_image_sha256"]
 
 
 @pytest.mark.parametrize("failure", [KeyboardInterrupt, subprocess.TimeoutExpired])
