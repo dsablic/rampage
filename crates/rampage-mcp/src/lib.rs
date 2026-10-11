@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rampage_api::Session;
 use rampage_api::tools::{self, Tool};
+use rampage_api::{Project, Session};
 use rampage_arch::Arch;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, ListToolsResult,
@@ -19,7 +19,8 @@ const INSTRUCTIONS: &str = "\
 rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, \
 RISC-V, SPARC, s390x and m68k. Every tool takes the binary's file path; the first call that needs analysis runs it \
 once and caches the result, so later calls are fast. Addresses are hex strings like \"0x401000\". Wherever a tool \
-takes an address you may also pass a symbol, export or import name (an import name finds its stub) or a sub_<hex> \
+takes an address (except comparison ranges) you may also pass a symbol, export or import name \
+(an import name finds its stub) or a sub_<hex> \
 name. Start with triage for hashes, entropy, hardening and packing hints, or binary_info for the layout; then \
 list_functions (filter with name_contains, page with offset/limit), then decompile a function to C to understand \
 it (the best starting point; falls back to function_summary where no decompiler specification is available), or \
@@ -28,7 +29,9 @@ starting points for finding behavior. Record \
 findings with rename and set_comment: they persist beside the binary and every client of the same binary, \
 including the rampage UI, picks them up. Memory snapshots and bundle directories use the same tools. \
 analysis_diagnostics reports decode confidence limits; language_metadata exposes demangled names and bounded \
-metadata; function_summary returns a structural CFG/reference summary, not decompiled source.";
+metadata; function_summary returns a structural CFG/reference summary, not decompiled source. \
+compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal runtime ranges, returning paginated \
+byte evidence without sidecars or annotation transfer. Verify identities when combining pages.";
 
 /// A tool's schema with the arguments every tool takes besides its own: which binary, and which slice of a
 /// universal one.
@@ -73,11 +76,20 @@ impl RampageServer {
         let path = arguments.remove("path");
         let arch = arguments.remove("arch");
         let outcome = (|| -> Result<String, String> {
+            let tool =
+                self.tools.iter().find(|tool| tool.name == name).ok_or_else(|| format!("unknown tool {name}"))?;
             let path = path.as_ref().and_then(Value::as_str).ok_or("`path` is required")?;
             let arch = arch.as_ref().and_then(Value::as_str).map(str::parse::<Arch>).transpose()?;
-            let project = self.session.open(&PathBuf::from(path), arch).map_err(|error| error_text(&error))?;
-            // Other clients (the UI, the CLI) may have saved names since the last call.
-            project.refresh_annotations().map_err(|error| error_text(&error))?;
+            let project = if tool.reads_annotations {
+                let project = self.session.open(&PathBuf::from(path), arch).map_err(|error| error_text(&error))?;
+                // Other clients (the UI, the CLI) may have saved names since the last call.
+                project.refresh_annotations().map_err(|error| error_text(&error))?;
+                project
+            } else {
+                Arc::new(Project::new(
+                    rampage_loaders::Binary::open_with(path, arch).map_err(|error| error_text(&error))?,
+                ))
+            };
             match tools::call(&self.tools, &project, name, Value::Object(arguments)) {
                 (output, false) => Ok(output),
                 (error, true) => Err(error),

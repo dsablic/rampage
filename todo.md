@@ -226,6 +226,8 @@ Work in this order, with synthetic regressions and fresh-context review for each
    - [x] Bounded API/CLI byte comparison with equal/changed/unavailable spans and capture/original identities;
      annotation-free explicit inputs and controlled live comparison.
    - [ ] Reviewed symbol/type-transfer policy and runtime comparison navigation/agent integration.
+   - [x] Shared agent/MCP byte comparisons with paginated spans, full-range totals and identities;
+     fresh explicit MCP inputs bypass annotation sidecars and discovery.
 6. [ ] Captured indirect-call evidence: show wrapper slot/value/target observations separately from proven flow;
    writable, authenticated, unmapped or incomplete pointers remain unresolved without additional evidence.
    - [x] Explicit API/CLI/MCP pointer-slot observations with raw values, permissions and mapping identity;

@@ -52,6 +52,7 @@ async fn lists_all_tools_with_instructions() {
         "analysis_diagnostics",
         "binary_info",
         "class_evidence",
+        "compare_runtime_bytes",
         "decompile",
         "disassemble",
         "function_graph",
@@ -174,6 +175,51 @@ async fn pointer_observations_preserve_writable_slot_values_without_annotations(
     assert_eq!(observation["candidate_target"], "0x1002");
     let annotations = json_of(&call(&client, "list_annotations", json!({"path": path})).await);
     assert!(annotations["names"].as_array().unwrap().is_empty());
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn runtime_comparison_ignores_sidecars_and_requires_explicit_matching_originals() {
+    struct Directory(PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let directory = Directory(std::env::temp_dir().join(format!("rampage-mcp-compare-{}", std::process::id())));
+    std::fs::create_dir(&directory.0).unwrap();
+    let original = fixture("hello-arm64.macho");
+    let binary = rampage_loaders::Binary::open(&original).unwrap();
+    let rampage_loaders::Details::MachO(details) = &binary.details else { panic!("not Mach-O") };
+    let uuid = details.uuid.as_deref().unwrap();
+    let image_base =
+        binary.segments.iter().find(|segment| segment.file_offset == 0 && segment.file_size > 0).unwrap().address;
+    let snapshot = json!({"format": "rampage-snapshot-v1", "arch": "aarch64", "entry": null,
+        "provenance": "controlled MCP comparison", "regions": [{"name": "header", "address": "0x1000",
+            "permissions": "r--", "bytes": "cffaedfe"}], "modules": [{"name": "fixture",
+            "path": "/never/open/this", "uuid": uuid, "image_base": format!("{image_base:#x}"),
+            "runtime_base": "0x1000"}]});
+    let path = directory.0.join("snapshot.json");
+    std::fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    std::fs::create_dir(path.with_extension("json.rampage")).unwrap();
+    let client = connect().await;
+    let mut arguments = json!({"path": path, "original": original, "module": uuid,
+        "ranges": [{"address": "0x1000", "size": 6}], "limit": 1});
+    let first = json_of(&call(&client, "compare_runtime_bytes", arguments.clone()).await);
+    assert_eq!(first["equal_bytes"], 4);
+    assert_eq!(first["unavailable_bytes"], 2);
+    assert_eq!(first["spans_total"], 2);
+    assert_eq!(first["spans"].as_array().unwrap().len(), 1);
+    arguments["offset"] = json!(1);
+    let second = json_of(&call(&client, "compare_runtime_bytes", arguments.clone()).await);
+    assert_eq!(second["spans"][0]["status"], "capture_unavailable");
+    assert_eq!(second["capture_identity"], first["capture_identity"]);
+    arguments["module"] = json!("00000000000000000000000000000000");
+    assert_eq!(call(&client, "compare_runtime_bytes", arguments.clone()).await.is_error, Some(true));
+    arguments["original"] = json!("/nonexistent/explicit-original");
+    let error = call(&client, "compare_runtime_bytes", arguments).await;
+    assert_eq!(error.is_error, Some(true));
+    assert!(text(&error).starts_with("/nonexistent/explicit-original: "), "{}", text(&error));
     client.cancel().await.unwrap();
 }
 

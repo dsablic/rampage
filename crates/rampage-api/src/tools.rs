@@ -20,10 +20,15 @@ pub struct Tool {
     /// Acts on a person's view of the binary (`show_address`), so only clients with one offer it.
     pub interactive: bool,
     pub effect: Effect,
+    /// Whether MCP should open and refresh the persistent annotation sidecar before calling this tool.
+    pub reads_annotations: bool,
     handler: Handler,
 }
 
 impl Tool {
+    fn without_annotations(self) -> Self {
+        Self { reads_annotations: false, ..self }
+    }
     fn interactive(self) -> Self {
         Self { interactive: true, effect: Effect::ShowAddress, ..self }
     }
@@ -63,7 +68,16 @@ where
 {
     let handler = move |project: &Project, input: Value| -> Result<Value, String> {
         let arguments: A = serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
-        let result = run(project, arguments).map_err(|error| error.to_string())?;
+        let result = run(project, arguments).map_err(|error| {
+            let mut text = error.to_string();
+            let mut source = std::error::Error::source(&error);
+            while let Some(cause) = source {
+                text.push_str(": ");
+                text.push_str(&cause.to_string());
+                source = cause.source();
+            }
+            text
+        })?;
         serde_json::to_value(result).map_err(|error| error.to_string())
     };
     Tool {
@@ -72,6 +86,7 @@ where
         input_schema: schema::<A>(),
         interactive: false,
         effect: Effect::None,
+        reads_annotations: true,
         handler: Box::new(handler),
     }
 }
@@ -97,6 +112,58 @@ struct DiagnosticsArgs {
     /// Explicitly run whole-program discovery; otherwise reuse cached discovery or sample bytes only.
     #[serde(default)]
     include_discovery: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct RuntimeRangeArgs {
+    /// Explicit runtime hexadecimal address, not a symbol or annotation alias.
+    address: String,
+    /// Nonzero byte count; all ranges together must fit within one MiB.
+    size: u64,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct RuntimeComparisonArgs {
+    /// Explicit original Mach-O path; paths recorded in capture metadata are never opened.
+    original: std::path::PathBuf,
+    /// UUID of the recorded module; original UUID, architecture and header base must agree.
+    module: String,
+    /// 1–256 non-overlapping explicit runtime ranges.
+    ranges: Vec<RuntimeRangeArgs>,
+    /// Comparison spans to skip; totals always cover every requested range.
+    offset: Option<usize>,
+    /// Span page size (default 100, at most 200).
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct RuntimeComparisonPage {
+    #[serde(flatten)]
+    comparison: crate::RuntimeComparison,
+    spans_total: usize,
+    offset: usize,
+}
+
+fn compare_runtime_page(project: &Project, args: RuntimeComparisonArgs) -> Result<RuntimeComparisonPage, ApiError> {
+    if args.ranges.is_empty() || args.ranges.len() > 256 {
+        return Err(ApiError::Invalid("select 1..256 runtime comparison ranges".to_owned()));
+    }
+    let ranges = args
+        .ranges
+        .iter()
+        .map(|range| {
+            let address = rampage_loaders::snapshot::address(&range.address)
+                .map_err(|error| ApiError::Invalid(error.to_string()))?;
+            Ok(crate::RuntimeRange { address, size: range.size })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let original = rampage_loaders::Binary::open_with(&args.original, Some(project.binary.arch))
+        .map_err(|source| ApiError::Load { path: args.original, source })?;
+    let mut comparison = project.compare_runtime_bytes(&args.module, &original, &ranges)?;
+    let spans_total = comparison.spans.len();
+    let offset = args.offset.unwrap_or(0).min(spans_total);
+    comparison.spans = comparison.spans.into_iter().skip(offset).take(args.limit.unwrap_or(100).min(200)).collect();
+    Ok(RuntimeComparisonPage { comparison, spans_total, offset })
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -218,12 +285,20 @@ pub fn tools() -> Vec<Tool> {
             "Observe one captured pointer slot, including writable memory; never inserts a call or discovery edge.",
             |project, args: At| project.observe_pointer(project.resolve(&args.at)?),
         ),
+        tool(
+            "compare_runtime_bytes",
+            "Compare explicit captured ranges with a UUID-matched original Mach-O. Paginated spans, full-range totals; \
+             no annotation transfer or claim of recovered flow. Opens only the explicit original path.",
+            compare_runtime_page,
+        )
+        .without_annotations(),
         Tool {
             name: "binary_info",
             description: "Format, architecture, entry point, segments and sections of the binary.",
             input_schema: schema::<Nothing>(),
             interactive: false,
             effect: Effect::None,
+            reads_annotations: true,
             handler: Box::new(|project, input| {
                 let _: Nothing =
                     serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;

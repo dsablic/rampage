@@ -3387,6 +3387,7 @@ version = "0.1.0"
 dependencies = [
  "rampage-api",
  "rampage-arch",
+ "rampage-loaders",
  "rmcp",
  "serde_json",
  "tokio",

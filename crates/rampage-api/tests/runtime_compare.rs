@@ -185,3 +185,37 @@ fn declared_zero_fill_inside_a_backed_segment_remains_original_unavailable() {
     assert_eq!((result.equal_bytes, result.changed_bytes, result.unavailable_bytes), (4, 0, 4));
     assert_eq!(result.spans[1].status, ByteComparison::OriginalUnavailable);
 }
+
+#[test]
+fn agent_comparison_pages_keep_full_range_totals_and_valid_json() {
+    let fixture = Fixture::new();
+    let mut bytes = fixture.original.image_bytes()[..400].to_vec();
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        if index % 2 != 0 {
+            *byte ^= 0xff;
+        }
+    }
+    let project = fixture.project(0x1000, 0, &bytes);
+    let tools = rampage_api::tools::tools();
+    let original = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-arm64.macho");
+    let input = serde_json::json!({"original": original, "module": fixture.uuid,
+        "ranges": [{"address": "0x1000", "size": 400}], "limit": 1000});
+    let (text, failed) = rampage_api::tools::call(&tools, &project, "compare_runtime_bytes", input.clone());
+    assert!(!failed, "{text}");
+    let first: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(first["spans_total"], 400);
+    assert_eq!(first["spans"].as_array().unwrap().len(), 200);
+    assert_eq!(first["changed_bytes"], 200);
+    assert_eq!(first["equal_bytes"], 200);
+    let mut input = input;
+    input["offset"] = serde_json::json!(200);
+    input["limit"] = serde_json::json!(200);
+    let (text, failed) = rampage_api::tools::call(&tools, &project, "compare_runtime_bytes", input);
+    assert!(!failed, "{text}");
+    let second: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(second["offset"], 200);
+    assert_eq!(second["spans"][0]["runtime_address"], "0x10c8");
+    assert_eq!(second["capture_identity"], first["capture_identity"]);
+    assert_eq!(second["original_image_sha256"], first["original_image_sha256"]);
+    assert_eq!(second["requested_bytes"], 400);
+}

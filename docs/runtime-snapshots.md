@@ -163,6 +163,13 @@ It does not apply symbol/type annotations. Differences can be relocations, runti
 breakpoint normalization; neither differences nor equality prove transformed-code recovery or ABI correctness.
 The `compare_runtime_bytes` API uses the same rules.
 
+Agents and MCP can call `compare_runtime_bytes` with an explicit `original` path, `module` UUID and
+`ranges: [{"address": "0x1010", "size": 256}]`. Addresses must be hexadecimal, not annotation aliases.
+Span pagination uses `offset` and `limit` (default 100, capped at 200); `spans_total` describes the complete
+span list, while totals and hashes always cover every requested range. Each page recomputes the comparison;
+check capture/original identities before combining pages. MCP loads fresh explicit inputs without sidecars
+for this tool, rather than reusing an annotation-bearing session. No whole-program discovery is performed.
+
 ## Observe a captured pointer slot
 
 ```sh
