@@ -203,12 +203,16 @@ Work in this order, with synthetic regressions and fresh-context review for each
 1. [x] Structured recovery diagnostics: export engine warnings, bad-data/unimplemented flags and unresolved
    calls/jump tables. Surface warnings in CLI/API/MCP/UI and separate successful output from usable recovery in
    benchmarks; no unqualified "complete" or "clean implies correct" label.
-2. [ ] Discovery-confidence summaries: relate candidates to bounded sampled regions and preserve evidence for
+2. [x] Discovery-confidence summaries: relate candidates to bounded sampled regions and preserve evidence for
    suspicious tiny fragments, invalid decode and code/data ambiguity. Do not silently delete candidate functions
-   or infer encryption from entropy alone.
+   or infer encryption from entropy alone. Use cached discovery modes; whole-program discovery is an explicit
+   opt-in (`audit --include-discovery` / MCP `include_discovery`), not a hidden prerequisite for sampling.
 3. [ ] Authorized capture workflow: bounded module/range selection and actual memory-permission checks in the
    stopped-process LLDB exporter, capture failures and provenance. No automatic plugin launch, installation,
    debugger attachment, licensing changes or target-memory writes; controlled live tests use our own fixtures.
+   - [x] Exact mapping permissions, bounded inspection, complete reads, expression-stop identity checks and
+     atomic no-clobber publication; breakpoint normalization recorded in provenance.
+   - [ ] Module-qualified range selection and broader multi-thread/module capture acceptance.
 4. [ ] Runtime target identity: persist platform/compiler context, mapping-aware capture identity and module/
    thread provenance so an ARM64 macOS capture does not silently use generic AAPCS64 decompilation defaults.
 5. [ ] UUID-validated static/runtime comparison: compare explicit matching captured ranges, retain byte-change

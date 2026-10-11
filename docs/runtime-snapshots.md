@@ -13,8 +13,16 @@ rampage-snapshot capture.json --region 0x1000:0x100:r-x --region 0x3000:0x20:rw-
 ```
 
 Select ranges explicitly. The exporter reads those ranges, refuses partial reads and existing output files,
-and limits captured bytes to 64 MiB. It does not resume, launch or attach. Use `--thumb` for Thumb code.
+and limits captured bytes to 64 MiB. Requested permissions must exactly match every underlying readable mapped
+range reported by LLDB; writable memory cannot be labelled immutable and non-executable memory cannot be
+labelled code. Mapping inspection is limited to 16,384 queries. Captures are published atomically without
+overwriting existing files, and failed writes leave no partial destination. The stop identity includes
+expression-evaluation stops and is checked during capture and before publication.
+It does not resume, launch or attach. Use `--thumb` for Thumb code.
 Preserve the actual runtime addresses: they already include ASLR.
+
+Bytes come from LLDB `ReadMemory`, which normalizes inserted software-breakpoint traps. Provenance records
+that normalization; do not interpret a capture as a byte-for-byte view of breakpoint-patched process memory.
 
 ## Open in rampage
 
@@ -32,6 +40,12 @@ does not prove that a later architectural load still observes the captured value
 Stores and calls invalidate subsequent captured-memory inference conservatively; unknown memory effects
 are not simulated.
 Missing memory remains unavailable instead of being fabricated as zeros.
+
+`audit` samples bounded code-region prefixes without running whole-program discovery. Add `--include-discovery`
+to correlate candidate entries with those exact samples and use branch-learned ARM/Thumb modes. The MCP
+`analysis_diagnostics` tool accepts `include_discovery`; otherwise it reuses existing cached discovery when
+available. Tiny-candidate counts and region signals are evidence, not verified function counts. Unsampled
+candidate entries are reported separately; flagged prefixes do not assess every byte of a function.
 
 ## Snapshot format
 
