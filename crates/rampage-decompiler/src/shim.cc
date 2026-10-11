@@ -8,6 +8,7 @@
 #include "printc.hh"
 #include "grammar.hh"
 
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 #include <vector>
@@ -82,6 +83,12 @@ class MemArchitecture : public SleighArchitecture {
 public:
     MemArchitecture(const string &target, MemImage *img, ostream *estream)
         : SleighArchitecture("memory", target, estream), image(img) {}
+
+    // Until buildLoader hands the image to `loader` (which the base destructor frees), we still own it. This
+    // keeps ownership correct when init fails partway, so the error path neither leaks nor double-frees.
+    ~MemArchitecture() override {
+        if (loader != image) delete image;
+    }
 };
 
 struct Handle {
@@ -111,21 +118,18 @@ void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nse
         seg.writable = writable[i] != 0;
         segments.push_back(std::move(seg));
     }
-    MemImage *image = new MemImage(std::move(segments));
+    // Built directly (not through the "raw" capability, which would open a file) so the image is ours.
+    MemArchitecture *arch = new MemArchitecture(langid, new MemImage(std::move(segments)), &std::cerr);
     try {
-        ArchitectureCapability *capa = ArchitectureCapability::getCapability("raw");
-        // Build directly so the image is ours; the raw capability would open a file instead.
-        MemArchitecture *arch = new MemArchitecture(langid, image, &std::cerr);
         DocumentStorage store;
         arch->init(store);
         handle->arch = arch;
-        (void)capa;
     } catch (LowlevelError &err) {
-        delete image;
         handle->error = err.explain;
+        delete arch; // frees the image too, whether or not init handed it over
     } catch (DecoderError &err) {
-        delete image;
         handle->error = err.explain;
+        delete arch;
     }
     return handle;
 }
