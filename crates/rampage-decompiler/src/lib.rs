@@ -59,13 +59,18 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("open", "int4 open(char *path, int4 flags, ...)"),
 ];
 
-/// The C prototype for a well-known library function, as a declaration ready to parse, or `None` when the name
-/// is not one rampage carries a prototype for. The name is matched after stripping a leading underscore and a
-/// `@plt`/`@got` suffix, so stub spellings like `puts@plt` and `_malloc` resolve.
+/// The C prototype for a well-known library function, spelled with `name` as the function's name so it binds to
+/// a symbol registered under that exact name. `None` when the name is not one rampage carries a prototype for, or
+/// is not a plain C identifier (so it cannot be parsed). The library function is matched after stripping a leading
+/// underscore and any `@plt`/`@got` suffix, so stub spellings like `puts@plt` and `_malloc` resolve.
 pub fn c_prototype(name: &str) -> Option<String> {
-    let bare = name.trim_start_matches('_');
-    let bare = bare.split('@').next().unwrap_or(bare);
-    C_PROTOTYPES.iter().find(|(known, _)| *known == bare).map(|(_, decl)| format!("extern {decl};"))
+    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return None;
+    }
+    let bare = name.trim_start_matches('_').split('@').next().unwrap_or(name);
+    let (known, decl) = C_PROTOTYPES.iter().find(|(known, _)| *known == bare)?;
+    // The stored declaration spells the canonical name; substitute the actual symbol name so it binds to it.
+    Some(format!("extern {};", decl.replacen(known, name, 1)))
 }
 
 #[repr(C)]
@@ -302,13 +307,18 @@ mod tests {
         let segments = [Segment { base: 0x1000, bytes: X64_TEXT, writable: false }];
         let mut decompiler = Decompiler::open(Arch::X86_64, false, &segments).expect("open");
         // A prototype binds only to an existing symbol, so register the name first.
-        decompiler.add_symbol(0x1000, "puts");
-        let prototype = c_prototype("puts@plt").expect("known prototype");
+        decompiler.add_symbol(0x1000, "_puts");
+        // The Mach-O stub name (_puts) keeps its exact spelling in the generated prototype.
+        let prototype = c_prototype("_puts").expect("known prototype");
+        assert!(prototype.contains("_puts"));
         decompiler.parse_c(&prototype).expect("prototype applies");
     }
 
     #[test]
-    fn unknown_names_have_no_prototype() {
+    fn prototype_name_matching() {
         assert!(c_prototype("my_custom_function").is_none());
+        // Non-identifier spellings cannot be parsed, so they get no prototype.
+        assert!(c_prototype("puts@plt").is_none());
+        assert!(c_prototype("malloc").unwrap().contains("malloc"));
     }
 }

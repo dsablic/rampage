@@ -46,8 +46,10 @@ impl Project {
                 Some((segment.address, bytes, segment.perms.write))
             })
             .collect();
-        if !owned.iter().any(|(address, _, _)| binary.is_code(*address)) {
-            return Err(ApiError::Unavailable("no code segments to decompile".to_owned()));
+        // A segment can hold more than code (a Mach-O __TEXT starts with headers), so require an executable
+        // segment rather than one that begins at code.
+        if !binary.segments.iter().any(|segment| segment.perms.execute && segment.file_size > 0) {
+            return Err(ApiError::Unavailable("no executable segments to decompile".to_owned()));
         }
         let segments: Vec<Segment> =
             owned.iter().map(|(base, bytes, writable)| Segment { base: *base, bytes, writable: *writable }).collect();
