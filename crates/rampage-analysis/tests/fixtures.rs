@@ -130,6 +130,18 @@ fn stubs_are_named_after_the_imports_they_jump_through() {
 }
 
 #[test]
+fn plt_resolver_and_stubs_are_discovered_even_without_direct_calls() {
+    // The PLT[0] resolver is only jumped to indirectly, so recursive descent alone never reaches it; seeding the
+    // stub sections makes it a discovered function, matching how IDA and Ghidra list the PLT.
+    for name in ["hello-x64-dyn.elf", "hello-arm64.elf"] {
+        let binary = open(name);
+        let plt = binary.sections.iter().find(|section| section.name == ".plt").expect("has .plt");
+        let program = functions::analyze(&binary).unwrap();
+        assert!(program.function_at(plt.address).is_some(), "{name}: PLT[0] resolver not discovered");
+    }
+}
+
+#[test]
 fn arm64_plt_padding_does_not_shift_stub_names() {
     let binary = open("hello-arm64.elf");
     let stubs = functions::stub_names(&binary);

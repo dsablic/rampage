@@ -44,7 +44,22 @@ pub fn analyze(binary: &Binary) -> Result<Program, UnsupportedArch> {
     binary.decoder()?;
     let mut seeds: Vec<u64> = from_symbols(binary).iter().map(|function| function.address).collect();
     seeds.extend(&binary.function_starts);
+    seeds.extend(stub_seeds(binary));
     Ok(discover(binary, || binary.decoder().expect("architecture checked above"), &seeds))
+}
+
+/// Function entries in the stub sections: each section's first stub (the ELF PLT[0] resolver) and every named
+/// import stub. These are real functions even when nothing in the discovered code calls them directly, such as
+/// the resolver or a lazily-bound or otherwise unreferenced stub, so seeding them improves discovery recall.
+fn stub_seeds(binary: &Binary) -> Vec<u64> {
+    let mut seeds: Vec<u64> = binary
+        .sections
+        .iter()
+        .filter(|section| STUB_SECTIONS.contains(&section.name.as_str()) && section.size > 0)
+        .map(|section| section.address)
+        .collect();
+    seeds.extend(stub_names(binary).into_iter().map(|(address, _)| address));
+    seeds
 }
 
 /// Sections that hold one small jump-through-a-slot stub per import.
