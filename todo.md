@@ -1,5 +1,30 @@
 # To do
 
+## IDA/Ghidra gap-closing wave (done this round)
+
+- [x] Library identification (FLIRT/Function-ID style): `rampage-signatures` masks position-dependent bytes
+  (relative branch/call targets, x86 RIP-relative displacements, AArch64 PC-relative encodings) and matches a
+  function across differently linked builds. `SignatureDb` build/apply; `rampage signatures`/`identify` CLI;
+  `build_signatures`/`identify_functions` agent tools. x86, x86-64, AArch64.
+- [x] MSVC name demangling and C++ class names recovered from Itanium/MSVC vtables (analysis metadata).
+- [x] Discovery recall: PLT resolver and stub functions are seeded (closes the dynamic-fixture recall gap).
+- [x] Decompiler: flaky worker-timeout test made deterministic; prototype table expanded (C++ runtime, Win32);
+  jump-table recovery confirmed surfaced in structured results.
+- [x] PDB reader: `rampage_loaders::pdb::pdb_symbols` reads MSVC procedure/public symbols to names+RVAs,
+  bounded and panic-free (error paths tested).
+- [x] Capability detection: `rampage-capabilities` tags behaviors (networking, injection, anti-debug, crypto,
+  filesystem, registry, input capture, dynamic loading) from imports/symbols/strings. `capabilities` tool + CLI.
+
+### Pending follow-ups from this wave
+
+- [ ] Apply PDB names in the API (VA = RVA + PE ImageBase, name only unnamed functions). Deferred: unverifiable
+  without a real `.pdb` fixture, and no `lld-link` locally to generate one. Wire + test once a PDB fixture exists.
+- [ ] Bundled starter signature databases for common runtimes (libc, libstdc++), so `identify` names library
+  code out of the box. Needs a corpus-generation decision (which libs/versions; platform-specific).
+- [ ] Extend signatures to ARM32/Thumb (needs Thumb-range awareness) and MIPS/PowerPC (fixed-width masking).
+- [ ] C++ class LAYOUT / stripped RTTI type_info scanning (Agent deferred: large, false-positive risk).
+
+
 ## Decompiler: embedded Ghidra (the decompilation path)
 
 Decompilation is provided by `rampage-decompiler`, which embeds Ghidra's decompiler (Apache-2.0) in process and
