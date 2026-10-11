@@ -21,8 +21,10 @@ RISC-V, SPARC, s390x and m68k. Every tool takes the binary's file path; the firs
 once and caches the result, so later calls are fast. Addresses are hex strings like \"0x401000\". Wherever a tool \
 takes an address you may also pass a symbol, export or import name (an import name finds its stub) or a sub_<hex> \
 name. Start with triage for hashes, entropy, hardening and packing hints, or binary_info for the layout; then \
-list_functions (filter with name_contains, page with offset/limit), disassemble or function_graph a function, and \
-follow references with xrefs. list_imports and list_strings are good starting points for finding behavior. Record \
+list_functions (filter with name_contains, page with offset/limit), then decompile a function to C to understand \
+it (the best starting point; falls back to function_summary where no decompiler specification is available), or \
+disassemble or function_graph it, and follow references with xrefs. list_imports and list_strings are good \
+starting points for finding behavior. Record \
 findings with rename and set_comment: they persist beside the binary and every client of the same binary, \
 including the rampage UI, picks them up. Memory snapshots and bundle directories use the same tools. \
 analysis_diagnostics reports decode confidence limits; language_metadata exposes demangled names and bounded \

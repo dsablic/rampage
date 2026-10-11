@@ -47,8 +47,8 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   Evidence does not insert CFG edges or function seeds; mutable snapshot-pointer inference stays disabled.
 - [x] Independent reviews completed; reported bugs fixed and retained as regressions.
 - [x] Latest release workspace suite and warnings-denied Clippy passed.
-- [ ] Complete the latest full debug workspace run: it timed out before completion, with no reported test failure.
-  Earlier full debug suites passed; focused current-increment tests pass. Diagnose the timeout before signing off.
+- [x] Full debug workspace run completes (~1m45s); the earlier timeout was the one-time vendored C++ build of
+  the decompiler, now cached. Suite is green with the decompiler integrated.
 - [x] Final formatting/diff checks, line-length cleanup and commit of this increment.
 
 ### Validation and external blockers
