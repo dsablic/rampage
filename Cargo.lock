@@ -3346,6 +3346,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rampage-decompiler"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "rampage-arch",
+]
+
+[[package]]
 name = "rampage-loaders"
 version = "0.1.0"
 dependencies = [
