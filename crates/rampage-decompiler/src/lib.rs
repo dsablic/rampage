@@ -22,41 +22,145 @@ static FFI_LOCK: Mutex<()> = Mutex::new(());
 /// known symbols are registered. Size-typed parameters use `uint8`, correct for the 64-bit targets this matters
 /// most for.
 const C_PROTOTYPES: &[(&str, &str)] = &[
+    // stdio
     ("puts", "int4 puts(char *s)"),
+    ("fputs", "int4 fputs(char *s, void *stream)"),
     ("printf", "int4 printf(char *fmt, ...)"),
     ("fprintf", "int4 fprintf(void *stream, char *fmt, ...)"),
+    ("dprintf", "int4 dprintf(int4 fd, char *fmt, ...)"),
     ("sprintf", "int4 sprintf(char *str, char *fmt, ...)"),
     ("snprintf", "int4 snprintf(char *str, uint8 n, char *fmt, ...)"),
+    ("vprintf", "int4 vprintf(char *fmt, void *ap)"),
+    ("vfprintf", "int4 vfprintf(void *stream, char *fmt, void *ap)"),
+    ("vsnprintf", "int4 vsnprintf(char *str, uint8 n, char *fmt, void *ap)"),
     ("scanf", "int4 scanf(char *fmt, ...)"),
+    ("fscanf", "int4 fscanf(void *stream, char *fmt, ...)"),
+    ("sscanf", "int4 sscanf(char *str, char *fmt, ...)"),
     ("putchar", "int4 putchar(int4 c)"),
-    ("perror", "int4 perror(char *s)"),
+    ("getchar", "int4 getchar(void)"),
+    ("fputc", "int4 fputc(int4 c, void *stream)"),
+    ("fgetc", "int4 fgetc(void *stream)"),
+    ("putc", "int4 putc(int4 c, void *stream)"),
+    ("getc", "int4 getc(void *stream)"),
+    ("fgets", "char * fgets(char *s, int4 n, void *stream)"),
+    ("perror", "void perror(char *s)"),
+    ("fopen", "void * fopen(char *path, char *mode)"),
+    ("fdopen", "void * fdopen(int4 fd, char *mode)"),
+    ("freopen", "void * freopen(char *path, char *mode, void *stream)"),
+    ("fclose", "int4 fclose(void *stream)"),
+    ("fflush", "int4 fflush(void *stream)"),
+    ("fseek", "int4 fseek(void *stream, int8 off, int4 whence)"),
+    ("ftell", "int8 ftell(void *stream)"),
+    ("rewind", "void rewind(void *stream)"),
+    ("fread", "uint8 fread(void *ptr, uint8 size, uint8 n, void *stream)"),
+    ("fwrite", "uint8 fwrite(void *ptr, uint8 size, uint8 n, void *stream)"),
+    ("setvbuf", "int4 setvbuf(void *stream, char *buf, int4 mode, uint8 size)"),
+    ("remove", "int4 remove(char *path)"),
+    ("rename", "int4 rename(char *from, char *to)"),
+    ("tmpfile", "void * tmpfile(void)"),
+    // string
     ("strlen", "uint8 strlen(char *s)"),
+    ("strnlen", "uint8 strnlen(char *s, uint8 n)"),
     ("strcpy", "char * strcpy(char *dst, char *src)"),
     ("strncpy", "char * strncpy(char *dst, char *src, uint8 n)"),
+    ("strcat", "char * strcat(char *dst, char *src)"),
+    ("strncat", "char * strncat(char *dst, char *src, uint8 n)"),
     ("strcmp", "int4 strcmp(char *a, char *b)"),
     ("strncmp", "int4 strncmp(char *a, char *b, uint8 n)"),
-    ("strcat", "char * strcat(char *dst, char *src)"),
+    ("strcasecmp", "int4 strcasecmp(char *a, char *b)"),
+    ("strncasecmp", "int4 strncasecmp(char *a, char *b, uint8 n)"),
     ("strchr", "char * strchr(char *s, int4 c)"),
+    ("strrchr", "char * strrchr(char *s, int4 c)"),
     ("strstr", "char * strstr(char *haystack, char *needle)"),
+    ("strtok", "char * strtok(char *str, char *delim)"),
+    ("strspn", "uint8 strspn(char *s, char *accept)"),
+    ("strcspn", "uint8 strcspn(char *s, char *reject)"),
+    ("strpbrk", "char * strpbrk(char *s, char *accept)"),
     ("strdup", "char * strdup(char *s)"),
+    ("strndup", "char * strndup(char *s, uint8 n)"),
+    ("strerror", "char * strerror(int4 errnum)"),
+    ("strtol", "int8 strtol(char *s, char **end, int4 base)"),
+    ("strtoul", "uint8 strtoul(char *s, char **end, int4 base)"),
+    ("strtod", "float8 strtod(char *s, char **end)"),
+    // memory
     ("memcpy", "void * memcpy(void *dst, void *src, uint8 n)"),
     ("memmove", "void * memmove(void *dst, void *src, uint8 n)"),
     ("memset", "void * memset(void *s, int4 c, uint8 n)"),
     ("memcmp", "int4 memcmp(void *a, void *b, uint8 n)"),
+    ("memchr", "void * memchr(void *s, int4 c, uint8 n)"),
+    ("bzero", "void bzero(void *s, uint8 n)"),
+    ("bcopy", "void bcopy(void *src, void *dst, uint8 n)"),
+    // stdlib
     ("malloc", "void * malloc(uint8 n)"),
     ("calloc", "void * calloc(uint8 count, uint8 size)"),
     ("realloc", "void * realloc(void *p, uint8 n)"),
+    ("reallocarray", "void * reallocarray(void *p, uint8 count, uint8 size)"),
     ("free", "void free(void *p)"),
+    ("aligned_alloc", "void * aligned_alloc(uint8 align, uint8 n)"),
+    ("posix_memalign", "int4 posix_memalign(void **p, uint8 align, uint8 n)"),
     ("exit", "void exit(int4 status)"),
+    ("_exit", "void _exit(int4 status)"),
+    ("abort", "void abort(void)"),
+    ("atexit", "int4 atexit(void *fn)"),
+    ("getenv", "char * getenv(char *name)"),
+    ("setenv", "int4 setenv(char *name, char *value, int4 overwrite)"),
+    ("system", "int4 system(char *command)"),
     ("atoi", "int4 atoi(char *s)"),
-    ("fopen", "void * fopen(char *path, char *mode)"),
-    ("fclose", "int4 fclose(void *stream)"),
-    ("fread", "uint8 fread(void *ptr, uint8 size, uint8 n, void *stream)"),
-    ("fwrite", "uint8 fwrite(void *ptr, uint8 size, uint8 n, void *stream)"),
+    ("atol", "int8 atol(char *s)"),
+    ("atof", "float8 atof(char *s)"),
+    ("abs", "int4 abs(int4 x)"),
+    ("labs", "int8 labs(int8 x)"),
+    ("qsort", "void qsort(void *base, uint8 n, uint8 size, void *cmp)"),
+    ("bsearch", "void * bsearch(void *key, void *base, uint8 n, uint8 size, void *cmp)"),
+    ("rand", "int4 rand(void)"),
+    ("srand", "void srand(uint4 seed)"),
+    // ctype
+    ("isalpha", "int4 isalpha(int4 c)"),
+    ("isdigit", "int4 isdigit(int4 c)"),
+    ("isalnum", "int4 isalnum(int4 c)"),
+    ("isspace", "int4 isspace(int4 c)"),
+    ("isupper", "int4 isupper(int4 c)"),
+    ("islower", "int4 islower(int4 c)"),
+    ("toupper", "int4 toupper(int4 c)"),
+    ("tolower", "int4 tolower(int4 c)"),
+    // unistd / POSIX I/O
     ("read", "int8 read(int4 fd, void *buf, uint8 n)"),
     ("write", "int8 write(int4 fd, void *buf, uint8 n)"),
     ("close", "int4 close(int4 fd)"),
     ("open", "int4 open(char *path, int4 flags, ...)"),
+    ("lseek", "int8 lseek(int4 fd, int8 off, int4 whence)"),
+    ("unlink", "int4 unlink(char *path)"),
+    ("access", "int4 access(char *path, int4 mode)"),
+    ("dup", "int4 dup(int4 fd)"),
+    ("dup2", "int4 dup2(int4 old, int4 new)"),
+    ("pipe", "int4 pipe(void *fds)"),
+    ("fork", "int4 fork(void)"),
+    ("execv", "int4 execv(char *path, char **argv)"),
+    ("execve", "int4 execve(char *path, char **argv, char **envp)"),
+    ("execvp", "int4 execvp(char *file, char **argv)"),
+    ("getpid", "int4 getpid(void)"),
+    ("sleep", "uint4 sleep(uint4 seconds)"),
+    ("usleep", "int4 usleep(uint4 usec)"),
+    ("getcwd", "char * getcwd(char *buf, uint8 size)"),
+    ("chdir", "int4 chdir(char *path)"),
+    // math
+    ("pow", "float8 pow(float8 x, float8 y)"),
+    ("sqrt", "float8 sqrt(float8 x)"),
+    ("fabs", "float8 fabs(float8 x)"),
+    ("floor", "float8 floor(float8 x)"),
+    ("ceil", "float8 ceil(float8 x)"),
+    ("sin", "float8 sin(float8 x)"),
+    ("cos", "float8 cos(float8 x)"),
+    // time
+    ("time", "int8 time(void *t)"),
+    ("clock", "int8 clock(void)"),
+    // pthread (basics)
+    ("pthread_create", "int4 pthread_create(void *thread, void *attr, void *start, void *arg)"),
+    ("pthread_join", "int4 pthread_join(void *thread, void **retval)"),
+    ("pthread_mutex_lock", "int4 pthread_mutex_lock(void *mutex)"),
+    ("pthread_mutex_unlock", "int4 pthread_mutex_unlock(void *mutex)"),
+    // assert / error helpers
+    ("__assert_fail", "void __assert_fail(char *assertion, char *file, uint4 line, char *fn)"),
 ];
 
 /// The C prototype for a well-known library function, spelled with `name` as the function's name so it binds to
@@ -67,8 +171,11 @@ pub fn c_prototype(name: &str) -> Option<String> {
     if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         return None;
     }
+    let find = |key: &str| C_PROTOTYPES.iter().find(|(known, _)| *known == key);
+    // Prefer an exact match (so names that really start with an underscore, like `_exit`, resolve), then fall
+    // back to the stripped spelling (so a Mach-O `_puts` stub or a `puts@plt` thunk matches `puts`).
     let bare = name.trim_start_matches('_').split('@').next().unwrap_or(name);
-    let (known, decl) = C_PROTOTYPES.iter().find(|(known, _)| *known == bare)?;
+    let (known, decl) = find(name).or_else(|| find(bare))?;
     // The stored declaration spells the canonical name; substitute the actual symbol name so it binds to it.
     Some(format!("extern {};", decl.replacen(known, name, 1)))
 }
@@ -337,5 +444,22 @@ mod tests {
         // Non-identifier spellings cannot be parsed, so they get no prototype.
         assert!(c_prototype("puts@plt").is_none());
         assert!(c_prototype("malloc").unwrap().contains("malloc"));
+    }
+
+    #[test]
+    fn every_bundled_prototype_parses() {
+        if sleigh_home().is_none() {
+            return;
+        }
+        // A buffer large enough to give every prototype its own symbol address.
+        let code = vec![0xc3u8; C_PROTOTYPES.len() * 8 + 16];
+        let segments = [Segment { base: 0x1000, bytes: &code, writable: false }];
+        let mut decompiler = Decompiler::open(Arch::X86_64, false, &segments).expect("open");
+        for (index, (name, _)) in C_PROTOTYPES.iter().enumerate() {
+            let address = 0x1000 + (index as u64) * 8;
+            decompiler.add_symbol(address, name);
+            let prototype = c_prototype(name).expect("table entries have prototypes");
+            decompiler.parse_c(&prototype).unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
     }
 }
