@@ -18,7 +18,7 @@ pub struct RuntimeCorrelation {
 }
 
 fn uuid(text: &str) -> Option<String> {
-    let value: String = text.chars().filter(|&character| character != '-').collect();
+    let value = rampage_loaders::snapshot::canonical_module_identity(text);
     (value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())).then(|| value.to_ascii_lowercase())
 }
 

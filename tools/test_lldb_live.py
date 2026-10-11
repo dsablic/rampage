@@ -87,6 +87,7 @@ def test_stopped_fixture_exports_runtime_metadata_and_correlates_original(
     assert snapshot_path.is_file(), output
     snapshot = json.loads(snapshot_path.read_text())
     assert snapshot["arch"] == "aarch64"
+    assert snapshot["target"]["platform"] == "darwin"
     seed = snapshot["seeds"][0]
     registers = {
         register["name"]: int(register["value"], 16)

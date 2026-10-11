@@ -215,6 +215,10 @@ Work in this order, with synthetic regressions and fresh-context review for each
    - [ ] Module-qualified range selection and broader multi-thread/module capture acceptance.
 4. [ ] Runtime target identity: persist platform/compiler context, mapping-aware capture identity and module/
    thread provenance so an ARM64 macOS capture does not silently use generic AAPCS64 decompilation defaults.
+   - [x] Validated optional platform/compiler context, exported by LLDB and used by native/worker defaults.
+   - [x] Canonical mapping-aware triage identity and normalized UUID-duplicate validation.
+   - [ ] Broader thread/module provenance consistency checks, module-specific code/data endian validation
+     (including ARM BE8), and persisted session reuse by capture identity.
 5. [ ] UUID-validated static/runtime comparison: compare explicit matching captured ranges, retain byte-change
    and unavailable-range evidence, transfer only justified symbol/type information with checked ASLR slides.
 6. [ ] Captured indirect-call evidence: show wrapper slot/value/target observations separately from proven flow;

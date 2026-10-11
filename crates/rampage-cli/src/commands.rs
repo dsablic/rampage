@@ -384,6 +384,9 @@ pub fn triage(out: &mut impl Write, path: &Path, options: &Options) -> Result<()
     writeln!(out, "md5       {}", triage.image_hashes.md5)?;
     writeln!(out, "sha1      {}", triage.image_hashes.sha1)?;
     writeln!(out, "sha256    {}", triage.image_hashes.sha256)?;
+    if let Some(identity) = &triage.capture_identity {
+        writeln!(out, "capture   {} ({})", identity.sha256, identity.schema)?;
+    }
     if let (Some(size), Some(hashes)) = (triage.file_size, &triage.file_hashes) {
         writeln!(out, "file      {size} bytes (universal binary), sha256 {}", hashes.sha256)?;
     }

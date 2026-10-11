@@ -103,6 +103,9 @@ def export_snapshot(
     )
     parser.add_argument("--seed", action="append", default=[])
     parser.add_argument("--thumb", action="store_true")
+    parser.add_argument(
+        "--compiler", help="explicit decompiler compiler specification ID"
+    )
     try:
         arguments = parser.parse_args(shlex.split(command))
         target = debugger.GetSelectedTarget()
@@ -132,6 +135,15 @@ def export_snapshot(
             raise ValueError(f"unsupported capture architecture: {machine}")
         if arguments.thumb and arch != "arm":
             raise ValueError("--thumb requires an ARM32 target")
+        if arguments.compiler is not None and (
+            not arguments.compiler
+            or len(arguments.compiler) > 64
+            or not all(
+                character.isascii() and (character.isalnum() or character == "_")
+                for character in arguments.compiler
+            )
+        ):
+            raise ValueError("invalid compiler specification ID")
         if arguments.output.exists() or arguments.output.is_symlink():
             raise ValueError("output already exists")
         if len(arguments.region) > 4096:
@@ -197,6 +209,17 @@ def export_snapshot(
             "seeds": [hex(seed) for seed in seeds],
             "entry": None,
         }
+        triple = target.GetTriple()
+        platform = (
+            "darwin"
+            if "-apple-" in triple
+            else "windows"
+            if "-windows-" in triple
+            else "default"
+        )
+        snapshot["target"] = {"platform": platform}
+        if arguments.compiler is not None:
+            snapshot["target"]["compiler"] = arguments.compiler
         modules: list[dict[str, str]] = []
         for index in range(target.GetNumModules()):
             module = target.GetModuleAtIndex(index)

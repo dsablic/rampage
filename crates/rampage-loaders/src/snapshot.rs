@@ -23,6 +23,24 @@ pub struct Snapshot {
     pub modules: Vec<SnapshotModule>,
     #[serde(default)]
     pub registers: Vec<SnapshotRegister>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<SnapshotTarget>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotTarget {
+    pub platform: SnapshotPlatform,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compiler: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotPlatform {
+    Default,
+    Darwin,
+    Windows,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -65,6 +83,17 @@ pub fn address(text: &str) -> Result<u64, LoadError> {
     value.ok_or_else(|| LoadError::Malformed(format!("expected a hexadecimal address, got {text:?}")))
 }
 
+/// Normalize recognized UUID spellings; preserve opaque producer identifiers without inventing aliases.
+pub fn canonical_module_identity(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let compact = bytes.len() == 32 && bytes.iter().all(u8::is_ascii_hexdigit);
+    let dashed = bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) { *byte == b'-' } else { byte.is_ascii_hexdigit() }
+        });
+    if compact || dashed { value.replace('-', "").to_ascii_lowercase() } else { value.to_owned() }
+}
+
 pub(crate) fn load(source: Vec<u8>, wanted: Option<Arch>) -> Result<Binary, LoadError> {
     let snapshot: Snapshot = serde_json::from_slice(&source)
         .map_err(|error| LoadError::Malformed(format!("invalid memory snapshot: {error}")))?;
@@ -72,6 +101,13 @@ pub(crate) fn load(source: Vec<u8>, wanted: Option<Arch>) -> Result<Binary, Load
         return Err(LoadError::Malformed("expected rampage-snapshot-v1 with 1–4096 regions".to_owned()));
     }
     let arch: Arch = snapshot.arch.parse().map_err(LoadError::Unsupported)?;
+    if let Some(compiler) = snapshot.target.as_ref().and_then(|target| target.compiler.as_deref())
+        && (compiler.is_empty()
+            || compiler.len() > 64
+            || !compiler.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
+    {
+        return Err(LoadError::Malformed("invalid snapshot compiler specification ID".to_owned()));
+    }
     if wanted.is_some_and(|wanted| wanted != arch) {
         return Err(LoadError::Unsupported(format!("snapshot architecture is {arch}")));
     }
@@ -84,7 +120,7 @@ pub(crate) fn load(source: Vec<u8>, wanted: Option<Arch>) -> Result<Binary, Load
             || module.path.len() > 4096
             || module.uuid.is_empty()
             || module.uuid.len() > 128
-            || !uuids.insert(&module.uuid)
+            || !uuids.insert(canonical_module_identity(&module.uuid))
         {
             return Err(LoadError::Malformed("invalid or duplicate snapshot module identity".to_owned()));
         }
@@ -194,6 +230,7 @@ pub(crate) fn load(source: Vec<u8>, wanted: Option<Arch>) -> Result<Binary, Load
     )?;
     binary.snapshot_modules = snapshot.modules;
     binary.snapshot_registers = snapshot.registers;
+    binary.snapshot_target = snapshot.target;
     Ok(binary)
 }
 
@@ -237,6 +274,45 @@ mod tests {
             assert!(load(source[..end].to_vec(), None).is_err());
         }
         assert!(load(source, Some(Arch::X86_64)).is_err());
+    }
+
+    #[test]
+    fn declared_target_context_is_preserved_and_malformed_context_is_rejected() {
+        let mut input = fixture();
+        input["target"] = serde_json::json!({"platform": "darwin", "compiler": "apple"});
+        let binary = load(serde_json::to_vec(&input).unwrap(), None).unwrap();
+        let context = binary.snapshot_target.unwrap();
+        assert_eq!(context.platform, SnapshotPlatform::Darwin);
+        assert_eq!(context.compiler.as_deref(), Some("apple"));
+        for context in [
+            serde_json::json!({"platform": "unknown"}),
+            serde_json::json!({"platform": "darwin", "compiler": "../apple"}),
+            serde_json::json!({"platform": "darwin", "compiler": ""}),
+            serde_json::json!({"platform": "darwin", "compiler": "a".repeat(65)}),
+        ] {
+            input["target"] = context;
+            assert!(load(serde_json::to_vec(&input).unwrap(), None).is_err());
+        }
+        input.as_object_mut().unwrap().remove("target");
+        assert!(load(serde_json::to_vec(&input).unwrap(), None).unwrap().snapshot_target.is_none());
+    }
+
+    #[test]
+    fn equivalent_uuid_spellings_cannot_create_ambiguous_module_mappings() {
+        let mut input = fixture();
+        input["modules"] = serde_json::json!([
+            {"name": "first", "path": "first", "uuid": "0123456789abcdef0123456789abcdef",
+                "image_base": "0x0", "runtime_base": "0x1000"},
+            {"name": "second", "path": "second", "uuid": "01234567-89AB-CDEF-0123-456789ABCDEF",
+                "image_base": "0x0", "runtime_base": "0x2000"}
+        ]);
+        assert!(load(serde_json::to_vec(&input).unwrap(), None).is_err());
+        input["modules"][0]["uuid"] = serde_json::json!("fixture-uuid");
+        input["modules"][1]["uuid"] = serde_json::json!("fixtureuuid");
+        assert!(load(serde_json::to_vec(&input).unwrap(), None).is_ok());
+        input["modules"][0]["uuid"] = serde_json::json!("0123456789abcdef0123456789abcdef");
+        input["modules"][1]["uuid"] = serde_json::json!("0123456789abcdef0123456789abcdef-");
+        assert!(load(serde_json::to_vec(&input).unwrap(), None).is_ok());
     }
 
     #[test]

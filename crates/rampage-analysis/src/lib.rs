@@ -1,3 +1,4 @@
+pub mod capture_identity;
 pub mod classes;
 pub mod control;
 pub mod dataflow;

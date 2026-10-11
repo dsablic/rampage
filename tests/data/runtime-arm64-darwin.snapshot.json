@@ -1,0 +1,11 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "aarch64",
+  "target": {"platform": "darwin"},
+  "provenance": "synthetic macOS ARM64 capture context fixture",
+  "regions": [
+    {"name": "text", "address": "0x1000", "permissions": "r-x", "bytes": "e00080d2c0035fd6"}
+  ],
+  "seeds": ["0x1000"],
+  "entry": "0x1000"
+}

@@ -75,6 +75,22 @@ history are not captured. Authenticated pointers and unknown indirect targets ar
 A capture is not a decompiler
 or a complete debugger integration. `audit` reports evidence and limitations, not proof of encryption.
 
+Optional `target` metadata contains `platform` (`default`, `darwin` or `windows`) and an optional compiler
+specification ID. The LLDB exporter records the platform from its target triple; `--compiler` records an
+explicit compiler choice. Native and isolated decompilation use that context by default, including Darwin
+ARM64's `apple` model. Explicit project/CLI compiler options override it; resetting project options restores
+the captured context. Older snapshots without `target` keep generic defaults. Compiler IDs are syntax-checked
+when loading and must resolve to the selected processor specification when decompiling; invalid IDs never
+silently fall back. Recorded target context is a declaration, not independent proof of ABI correctness.
+
+`triage` reports an optional `capture_identity` (`rampage-capture-identity-v1`) for snapshots. Its SHA-256
+covers canonical architecture, instruction/data byte order, declared target context, region addresses/sizes/
+permissions/backed bytes, Thumb ranges, seeds/entry and module identities/header bases. Region/module ordering
+and equivalent UUID/address spellings do not affect it. Opaque non-UUID module identifiers remain exact.
+Names, paths, descriptive provenance and register metadata are excluded; this is a mapping/analysis-context
+identity, not a whole-process-state fingerprint, execution proof or authenticity guarantee. Ordinary raw
+image/file hashes remain available and must not substitute for mapping identity in snapshot comparisons.
+
 `rampage summarize capture.json --at 0x1000 --json` includes partial IR alongside the graph and references.
 `complete` applies to each lifted instruction, not the function. Unimplemented instruction semantics produce
 barriers. ARM64 integer coverage includes immediate/shifted ADD/SUB and NZCV, logical operations, wide moves,

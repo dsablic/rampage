@@ -220,6 +220,7 @@ impl Project {
             provenance: binary.provenance.as_deref(),
             snapshot_modules: &binary.snapshot_modules,
             snapshot_registers: &binary.snapshot_registers,
+            snapshot_target: binary.snapshot_target.as_ref(),
         }
     }
 

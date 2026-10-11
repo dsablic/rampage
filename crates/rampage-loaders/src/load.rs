@@ -72,6 +72,8 @@ pub struct Binary {
     pub snapshot_modules: Vec<crate::snapshot::SnapshotModule>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub snapshot_registers: Vec<crate::snapshot::SnapshotRegister>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_target: Option<crate::snapshot::SnapshotTarget>,
     #[serde(skip)]
     image: Range<usize>,
 }
@@ -137,6 +139,7 @@ impl Binary {
             provenance: Some(provenance),
             snapshot_modules: Vec::new(),
             snapshot_registers: Vec::new(),
+            snapshot_target: None,
         })
     }
 
@@ -338,6 +341,7 @@ impl Binary {
             provenance: None,
             snapshot_modules: Vec::new(),
             snapshot_registers: Vec::new(),
+            snapshot_target: None,
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);

@@ -85,9 +85,17 @@ pub(crate) fn default_options(binary: &rampage_loaders::Binary) -> DecompilerOpt
         rampage_loaders::Format::Elf | rampage_loaders::Format::Snapshot => Platform::Default,
     };
     let target = binary.target();
+    let (platform, compiler) = binary.snapshot_target.as_ref().map_or((platform, None), |context| {
+        let platform = match context.platform {
+            rampage_loaders::snapshot::SnapshotPlatform::Default => Platform::Default,
+            rampage_loaders::snapshot::SnapshotPlatform::Darwin => Platform::Darwin,
+            rampage_loaders::snapshot::SnapshotPlatform::Windows => Platform::Windows,
+        };
+        (platform, context.compiler.clone())
+    });
     DecompilerOptions {
         platform,
-        compiler: None,
+        compiler,
         arm_be8: binary.arch == rampage_arch::Arch::Arm && target.data_big_endian && !target.big_endian,
     }
 }

@@ -16,6 +16,8 @@ pub struct Triage {
     /// The image: the whole file, or one slice of a universal binary.
     pub image_size: u64,
     pub image_hashes: Hashes,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_identity: Option<crate::capture_identity::CaptureIdentity>,
     /// The whole file's size and hashes, when the image is one slice of it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_size: Option<u64>,
@@ -174,6 +176,7 @@ pub fn triage(binary: &Binary) -> Triage {
     let mut triage = Triage {
         image_size: image.len() as u64,
         image_hashes,
+        capture_identity: crate::capture_identity::capture_identity(binary),
         file_size: sliced.then_some(file.len() as u64),
         file_hashes,
         entropy: image_entropy,

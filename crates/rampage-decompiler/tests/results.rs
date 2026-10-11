@@ -237,15 +237,15 @@ fn unresolved_wrapper_jump_remains_a_recovery_warning() {
 #[test]
 fn recovery_flags_are_reset_when_a_function_is_redecoded_in_another_mode() {
     let bytes = [0x70, 0x47, 0xff, 0xff];
-    let mut engine = Decompiler::open(Arch::Arm, false,
-        &[Segment { base: 0x1000, bytes: &bytes, writable: false }]).unwrap();
+    let mut engine =
+        Decompiler::open(Arch::Arm, false, &[Segment { base: 0x1000, bytes: &bytes, writable: false }]).unwrap();
     engine.decompile(0x1000, "mixed_mode", false).unwrap();
     assert!(engine.structured_result().unwrap().diagnostics.unwrap().bad_data);
     engine.decompile(0x1000, "mixed_mode", true).unwrap();
     let result = engine.structured_result().unwrap();
     assert_eq!(result.recovery_status(), RecoveryStatus::NoReportedIssues);
-    let mut fresh = Decompiler::open(Arch::Arm, false,
-        &[Segment { base: 0x1000, bytes: &bytes, writable: false }]).unwrap();
+    let mut fresh =
+        Decompiler::open(Arch::Arm, false, &[Segment { base: 0x1000, bytes: &bytes, writable: false }]).unwrap();
     fresh.decompile(0x1000, "mixed_mode", true).unwrap();
     assert_eq!(result.diagnostics, fresh.structured_result().unwrap().diagnostics);
 }

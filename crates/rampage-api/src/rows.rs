@@ -103,6 +103,8 @@ pub struct Summary<'a> {
     pub snapshot_modules: &'a [rampage_loaders::snapshot::SnapshotModule],
     #[serde(skip_serializing_if = "<[rampage_loaders::snapshot::SnapshotRegister]>::is_empty")]
     pub snapshot_registers: &'a [rampage_loaders::snapshot::SnapshotRegister],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_target: Option<&'a rampage_loaders::snapshot::SnapshotTarget>,
 }
 
 #[derive(Debug, Serialize)]

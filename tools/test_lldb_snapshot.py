@@ -127,6 +127,8 @@ def test_export_reads_only_requested_ranges_and_never_overwrites(
     snapshot = json.loads(output.read_text())
     assert snapshot["regions"][0]["bytes"] == "c0035fd6"
     assert snapshot["seeds"] == ["0x1000"]
+    assert snapshot["target"] == {"platform": "darwin"}
+    assert "software-breakpoint traps normalized" in snapshot["provenance"]
     exporter.export_snapshot(debugger(process), command, result, {})
     assert result.error is not None
     assert json.loads(output.read_text()) == snapshot
@@ -254,6 +256,7 @@ def test_export_records_module_slides_and_register_provenance(
         "--region 0x1000:4:r-x --seed 0x2000",
         "--region 0x1000:4:r-x --region 0x1000:4:r-x",
         "--region 0x1000:4:r-x --thumb",
+        "--region 0x1000:4:r-x --compiler ../apple",
     ],
 )
 def test_export_validation_fails_before_any_memory_read_or_output(
@@ -279,6 +282,35 @@ def test_export_validation_fails_before_any_memory_read_or_output(
     assert result.error is not None
     assert not output.exists()
     assert process.reads == []
+
+
+def test_explicit_compiler_is_recorded_without_executing_target_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "lldb",
+        SimpleNamespace(
+            SBError=ReadError,
+            SBMemoryRegionInfo=MemoryRegion,
+            eStateStopped=1,
+            eByteOrderBig=1,
+        ),
+    )
+    process = Process()
+    output = tmp_path / "explicit-compiler.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process),
+        f"{output} --region 0x1000:4:r-x --compiler apple",
+        result,
+        {},
+    )
+    assert result.error is None
+    assert json.loads(output.read_text())["target"] == {
+        "platform": "darwin",
+        "compiler": "apple",
+    }
 
 
 @pytest.mark.parametrize(

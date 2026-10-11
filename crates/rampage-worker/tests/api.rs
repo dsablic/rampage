@@ -41,6 +41,20 @@ fn isolated_and_native_bad_code_diagnostics_match() {
 }
 
 #[test]
+fn isolated_decompilation_preserves_declared_capture_platform() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64-darwin.snapshot.json");
+    let project = Project::new(Binary::open(path).unwrap());
+    project.set_decompiler_worker(Some(DecompilerWorkerConfig {
+        executable: Some(env!("CARGO_BIN_EXE_rampage-worker").into()),
+        ..Default::default()
+    }));
+    let result = project.decompile(0x1000).unwrap();
+    assert!(result.language_id.ends_with(":apple"));
+    assert!(result.code.contains("return 7;"), "{}", result.code);
+}
+
+#[test]
 fn annotation_validation_does_not_require_an_entry_and_recovery_does_not_require_a_worker() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
     let mut binary = Binary::open(path).unwrap();
