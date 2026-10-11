@@ -12,6 +12,8 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Rampage to support aligned, rounded goto_stack allocations.
  */
 #include "modelrules.hh"
 #include "funcdata.hh"
@@ -707,13 +709,22 @@ GotoStack::GotoStack(const ParamListStandard *res,int4 val)
   : AssignAction(res)
 {
   stackEntry = (const ParamEntry *)0;
+  alignment = 0;
+  slotsize = 0;
   fillinOutputActive = true;
 }
 
 GotoStack::GotoStack(const ParamListStandard *res)
+  : GotoStack(res,0,0)
+{
+}
+
+GotoStack::GotoStack(const ParamListStandard *res,int4 align,int4 slot)
   : AssignAction(res)
 {
   stackEntry = (const ParamEntry *)0;
+  alignment = align;
+  slotsize = slot;
   fillinOutputActive = true;
   initializeEntry();
 }
@@ -722,6 +733,22 @@ uint4 GotoStack::assignAddress(Datatype *dt,const PrototypePieces &proto,int4 po
 			       vector<int4> &status,ParameterPieces &res) const
 {
   int4 grp = stackEntry->getGroup();
+  if (alignment != 0 || slotsize != 0) {
+    int8 consumed = dt->getSize();
+    if (slotsize != 0)
+      consumed = ((consumed + slotsize - 1) / slotsize) * slotsize;
+    if (consumed > stackEntry->getSize())
+      throw LowlevelError("Aligned goto_stack allocation exceeds the stack parameter range");
+    int4 cursor = status[grp];
+    Address addr = stackEntry->getAddrBySlot(cursor,(int4)consumed,max(dt->getAlignment(),alignment),false);
+    if (addr.isInvalid())
+      throw LowlevelError("Aligned goto_stack allocation exceeds the stack parameter range");
+    status[grp] = cursor;
+    res.type = dt;
+    res.addr = addr;
+    res.flags = 0;
+    return success;
+  }
   res.type = dt;
   res.addr = stackEntry->getAddrBySlot(status[grp],dt->getSize(),dt->getAlignment());
   res.flags = 0;
@@ -749,8 +776,23 @@ void GotoStack::decode(Decoder &decoder)
 
 {
   uint4 elemId = decoder.openElement(ELEM_GOTO_STACK);
+  for(;;) {
+    uint4 attribId = decoder.getNextAttributeId();
+    if (attribId == 0) break;
+    if (attribId == ATTRIB_ALIGN) {
+      uintb value = decoder.readUnsignedInteger();
+      if (value == 0 || value > 0x40000000 || (value & (value - 1)) != 0)
+        throw DecoderError("goto_stack alignment must be a positive power of two");
+      alignment = (int4)value;
+      slotsize = alignment;
+    }
+  }
   decoder.closeElement(elemId);
   initializeEntry();
+  if (alignment != 0 && (stackEntry->getAlign() == 0 || alignment % stackEntry->getAlign() != 0))
+    throw DecoderError("goto_stack alignment must be a multiple of the stack entry alignment");
+  if (alignment != 0 && stackEntry->getSpace()->isBigEndian())
+    throw DecoderError("Aligned goto_stack is only supported for little-endian stack entries");
 }
 
 ConvertToPointer::ConvertToPointer(const ParamListStandard *res)

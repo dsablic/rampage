@@ -471,6 +471,7 @@ fn write_edit(out: &mut impl Write, result: &EditResult, options: &Options) -> R
         Field::Comment => "comment",
         Field::Signature => "signature",
         Field::Types => "types",
+        Field::Global => "global",
     };
     let state = if result.changed { "" } else { " (unchanged)" };
     match &result.value {
@@ -497,5 +498,23 @@ pub fn annotations(out: &mut impl Write, path: &Path, options: &Options) -> Resu
     for annotation in &list.types {
         writeln!(out, "{:#018x} types {}", annotation.address, annotation.text)?;
     }
+    for annotation in &list.globals {
+        writeln!(out, "{:#018x} global {}", annotation.address, annotation.text)?;
+    }
+    Ok(())
+}
+
+pub fn debug_types(out: &mut impl Write, path: &Path, apply: bool, options: &Options) -> Result<()> {
+    let result = open(path, options)?.import_debug_signatures(apply)?;
+    if options.json {
+        return write_json(out, &result);
+    }
+    for signature in result.preview.signatures {
+        writeln!(out, "{:#x} {}", signature.address, signature.declaration)?;
+    }
+    for warning in result.preview.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    writeln!(out, "applied {}, preserved {}", result.applied.len(), result.preserved.len())?;
     Ok(())
 }

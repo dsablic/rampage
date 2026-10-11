@@ -68,8 +68,8 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
     Ok(operations)
 }
 
-pub(super) fn register(project: &Project, annotations: &Annotations, engine: &mut Decompiler) -> Result<(), ApiError> {
-    for operation in plan(project, annotations)? {
+pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -> Result<(), ApiError> {
+    for operation in operations {
         match operation {
             WorkerOperation::Symbol { address, name } => {
                 engine.set_symbol(address, &name).map_err(|error| failure(address, "register symbol", error))?
@@ -84,7 +84,16 @@ pub(super) fn register(project: &Project, annotations: &Annotations, engine: &mu
                         .map_err(|error| failure(address, "apply runtime prototype", error))?;
                 }
             }
-            _ => unreachable!(),
+            WorkerOperation::ParseTypes { declarations } => {
+                engine.parse_c(&declarations).map_err(|error| ApiError::Invalid(error.to_string()))?
+            }
+            WorkerOperation::Global { address, declaration } => {
+                engine.add_global(address, &declaration).map_err(|error| failure(address, "apply global", error))?
+            }
+            WorkerOperation::Prototype { address, indirect, declaration } => engine
+                .apply_prototype(address, indirect, &declaration)
+                .map_err(|error| failure(address, "apply signature", error))?,
+            WorkerOperation::Mode { .. } => unreachable!(),
         }
     }
     Ok(())

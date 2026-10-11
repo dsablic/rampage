@@ -8,6 +8,10 @@ fn relocated_executable_uses_embedded_specs_with_an_empty_home_and_no_ghidra() {
     let result = (|| {
         let executable = root.join("rampage");
         std::fs::copy(assert_cmd::cargo::cargo_bin("rampage"), &executable)?;
+        let worker = assert_cmd::cargo::cargo_bin("rampage").with_file_name("rampage-worker");
+        if worker.is_file() {
+            std::fs::copy(worker, root.join("rampage-worker"))?;
+        }
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
         let output = std::process::Command::new(executable)
             .args(["decompile", "--at", "add"])

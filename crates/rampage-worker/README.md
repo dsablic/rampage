@@ -7,7 +7,9 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
-## Protocol version 1
+## Protocol version 2
+
+Protocol 2 adds structured result schemas; version-1 executables are rejected rather than silently mixed.
 
 Requests own all data. Addresses and mapping sizes are JSON integers; `hex_bytes` contains consecutive hexadecimal
 pairs with no prefix. Mapping permissions and zero-fill size are preserved. `options.platform` is `default`,
@@ -15,7 +17,7 @@ pairs with no prefix. Mapping permissions and zero-fill size are preserved. `opt
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "arch": "x86_64",
   "big_endian": false,
   "options": { "platform": "default", "compiler": null },
@@ -50,8 +52,8 @@ failed setup operation is a structured error identifying the operation index. `o
 runtime identities while preserving other setup errors. Unknown fields and versions are
 rejected.
 
-Responses are `{ "version": 1, "status": "ok", "output": ... }` or
-`{ "version": 1, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
+Responses are `{ "version": 2, "status": "ok", "output": ... }` or
+`{ "version": 2, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
 `data_organization` (`pointer`, `int`, `long` byte widths), and optional semantic `tokens` with `text`, `kind`, and
 optional numeric `address`.
 

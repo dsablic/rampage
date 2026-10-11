@@ -22,6 +22,39 @@ pub struct Decompilation {
     /// Exact processor/compiler specification used for this result.
     pub language_id: String,
     pub tokens: Vec<DecompiledToken>,
+    #[serde(serialize_with = "serialize_structure")]
+    pub structure: rampage_decompiler::StructuredResult,
+}
+
+fn serialize_structure<S: serde::Serializer>(
+    structure: &rampage_decompiler::StructuredResult,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    fn addresses(value: &mut serde_json::Value, key: Option<&str>) {
+        match value {
+            serde_json::Value::Number(number)
+                if matches!(key, Some("address" | "start" | "end" | "source" | "target" | "switch_address")) =>
+            {
+                if let Some(address) = number.as_u64() {
+                    *value = serde_json::Value::String(format!("{address:#x}"));
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    addresses(item, if key == Some("targets") { Some("target") } else { key });
+                }
+            }
+            serde_json::Value::Object(object) => {
+                for (key, value) in object {
+                    addresses(value, Some(key));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(structure).map_err(serde::ser::Error::custom)?;
+    addresses(&mut value, None);
+    value.serialize(serializer)
 }
 
 #[derive(Debug, Serialize)]
@@ -30,6 +63,7 @@ pub struct DecompiledToken {
     pub kind: String,
     #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub address: Option<u64>,
+    pub span: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -39,6 +73,7 @@ pub(crate) struct DecompilerState {
     names: std::collections::BTreeMap<u64, String>,
     signatures: std::collections::BTreeMap<u64, String>,
     types: std::collections::BTreeMap<u64, String>,
+    globals: std::collections::BTreeMap<u64, String>,
     pub(crate) worker: Option<rampage_decompiler::worker::WorkerConfig>,
 }
 
@@ -48,7 +83,12 @@ pub(crate) fn default_options(binary: &rampage_loaders::Binary) -> DecompilerOpt
         rampage_loaders::Format::MachO => Platform::Darwin,
         rampage_loaders::Format::Elf | rampage_loaders::Format::Snapshot => Platform::Default,
     };
-    DecompilerOptions { platform, compiler: None }
+    let target = binary.target();
+    DecompilerOptions {
+        platform,
+        compiler: None,
+        arm_be8: binary.arch == rampage_arch::Arch::Arm && target.data_big_endian && !target.big_endian,
+    }
 }
 
 impl Project {
@@ -58,7 +98,7 @@ impl Project {
         options: &DecompilerOptions,
         candidate: &crate::annotations::Annotations,
     ) -> Result<(), String> {
-        if candidate.types().is_empty() && candidate.signatures().is_empty() {
+        if candidate.types().is_empty() && candidate.signatures().is_empty() && candidate.globals().is_empty() {
             return Ok(());
         }
         if let Some(config) = &state.worker {
@@ -97,6 +137,15 @@ impl Project {
         self.set_type_annotation(crate::annotations::Field::Types, address, declarations)
     }
 
+    pub fn set_global(&self, address: u64, declaration: Option<&str>) -> Result<crate::EditResult, ApiError> {
+        if declaration.is_some()
+            && (self.binary.is_code(address) || !self.binary.segments.iter().any(|segment| segment.contains(address)))
+        {
+            return Err(ApiError::Invalid("global address requires mapped data, not code".to_owned()));
+        }
+        self.set_type_annotation(crate::annotations::Field::Global, address, declaration)
+    }
+
     fn set_type_annotation(
         &self,
         field: crate::annotations::Field,
@@ -129,7 +178,12 @@ impl Project {
 
     /// Overrides automatic format-based compiler selection. `None` restores automatic selection.
     /// Invalid specifications return an error on the next decompilation, never fall back silently.
-    pub fn set_decompiler_options(&self, options: Option<DecompilerOptions>) {
+    pub fn set_decompiler_options(&self, mut options: Option<DecompilerOptions>) {
+        if default_options(&self.binary).arm_be8
+            && let Some(options) = &mut options
+        {
+            options.arm_be8 = true;
+        }
         let mut state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         state.engine = None;
         state.options = options;
@@ -163,7 +217,10 @@ impl Project {
         if slot.names != *annotations.names() {
             slot.engine = None;
         }
-        if slot.signatures != *annotations.signatures() || slot.types != *annotations.types() {
+        if slot.signatures != *annotations.signatures()
+            || slot.types != *annotations.types()
+            || slot.globals != *annotations.globals()
+        {
             slot.engine = None;
         }
         if slot.engine.is_none() {
@@ -172,6 +229,7 @@ impl Project {
             slot.names = annotations.names().clone();
             slot.signatures = annotations.signatures().clone();
             slot.types = annotations.types().clone();
+            slot.globals = annotations.globals().clone();
         }
         let decompiler = slot.engine.as_mut().expect("just built");
         let thumb = if self.binary.arch == rampage_arch::Arch::Arm {
@@ -184,9 +242,22 @@ impl Project {
         let tokens = decompiler
             .tokens()
             .into_iter()
-            .map(|token| DecompiledToken { text: token.text, kind: token.kind, address: token.address })
+            .map(|token| DecompiledToken {
+                text: token.text,
+                kind: token.kind,
+                address: token.address,
+                span: token.span,
+            })
             .collect();
-        Ok(Decompilation { address: start, name, code, language_id: decompiler.language_id().to_owned(), tokens })
+        let structure = decompiler.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        Ok(Decompilation {
+            address: start,
+            name,
+            code,
+            language_id: decompiler.language_id().to_owned(),
+            tokens,
+            structure,
+        })
     }
 
     /// Builds a decompiler over the program's loadable segments and registers the names rampage knows, so calls
@@ -210,38 +281,9 @@ impl Project {
             decompiler.set_code_modes(&modes).map_err(|error| ApiError::Unavailable(error.to_string()))?;
         }
 
-        symbols::register(self, annotations, &mut decompiler)?;
-        for declarations in annotations.types().values() {
-            types::validate(declarations)?;
-            for declaration in types::declarations(declarations)? {
-                if declaration
-                    .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-                    .any(|word| word == "extern")
-                {
-                    return Err(ApiError::Invalid("type input cannot contain function signatures".to_owned()));
-                }
-                decompiler.parse_c(declaration).map_err(|error| ApiError::Invalid(error.to_string()))?;
-            }
-        }
-        for (&address, declaration) in annotations.signatures() {
-            types::validate(declaration)?;
-            let indirect = binary.import_slot(address).is_some();
-            if !indirect {
-                decompiler
-                    .set_symbol(address, &self.function_name_in(annotations, address))
-                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
-            }
-            decompiler
-                .apply_prototype(address, indirect, declaration)
-                .map_err(|error| ApiError::Invalid(format!("signature at {address:#x}: {error}")))?;
-            if indirect {
-                for target in symbols::stub_targets(self, address) {
-                    decompiler
-                        .apply_prototype(target, false, declaration)
-                        .map_err(|error| ApiError::Invalid(format!("stub signature at {target:#x}: {error}")))?;
-                }
-            }
-        }
+        let mut operations = symbols::plan(self, annotations)?;
+        operations.extend(types::plan(self, annotations)?);
+        symbols::apply(operations, &mut decompiler)?;
         Ok(decompiler)
     }
 }

@@ -185,6 +185,7 @@ impl App {
             Field::Comment => format!("Comment {:#x}", editing.address),
             Field::Signature => format!("Signature {:#x}", editing.address),
             Field::Types => format!("Types {:#x}", editing.address),
+            Field::Global => format!("Global {:#x}", editing.address),
         };
         let mut done = false;
         let mut cancel = false;

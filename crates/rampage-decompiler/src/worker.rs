@@ -20,7 +20,7 @@ use crate::{Decompiler, DecompilerOptions, MemoryRegion, Platform};
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,11 +50,13 @@ pub struct WorkerOptions {
     pub platform: String,
     #[serde(default)]
     pub compiler: Option<String>,
+    #[serde(default)]
+    pub arm_be8: bool,
 }
 
 impl Default for WorkerOptions {
     fn default() -> Self {
-        Self { platform: "default".to_owned(), compiler: None }
+        Self { platform: "default".to_owned(), compiler: None, arm_be8: false }
     }
 }
 
@@ -97,6 +99,10 @@ pub enum WorkerOperation {
     ParseTypes {
         declarations: String,
     },
+    Global {
+        address: u64,
+        declaration: String,
+    },
     Mode {
         modes: Vec<WorkerCodeMode>,
     },
@@ -123,7 +129,7 @@ pub struct WorkerFunction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerResponse {
-    Ok { version: u32, output: WorkerOutput },
+    Ok { version: u32, output: Box<WorkerOutput> },
     Error { version: u32, message: String },
 }
 
@@ -135,6 +141,8 @@ pub struct WorkerOutput {
     pub data_organization: WorkerDataOrganization,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<Vec<WorkerToken>>,
+    #[serde(default)]
+    pub structure: Option<crate::StructuredResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +159,8 @@ pub struct WorkerToken {
     pub text: String,
     pub kind: String,
     pub address: Option<u64>,
+    #[serde(default)]
+    pub span: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -280,7 +290,7 @@ pub fn run_supervised(
     let response = decode_supervised_response(stdout.as_slice(), config.max_stdout_bytes, budget)?;
     budget.check()?;
     match response {
-        WorkerResponse::Ok { version, output } if version == PROTOCOL_VERSION => Ok(output),
+        WorkerResponse::Ok { version, output } if version == PROTOCOL_VERSION => Ok(*output),
         WorkerResponse::Error { version, message } if version == PROTOCOL_VERSION => {
             Err(WorkerError::Decompile(message))
         }
@@ -415,7 +425,7 @@ fn serialize_bounded(value: &impl Serialize, limit: usize) -> Result<Vec<u8>, Wo
 /// The worker binary handles exactly one JSON request, then exits. Errors are JSON responses, not stderr text.
 pub fn serve_stdio() -> Result<(), WorkerError> {
     let response = match read_request(io::stdin().lock()).and_then(execute_request) {
-        Ok(output) => WorkerResponse::Ok { version: PROTOCOL_VERSION, output },
+        Ok(output) => WorkerResponse::Ok { version: PROTOCOL_VERSION, output: Box::new(output) },
         Err(message) => WorkerResponse::Error { version: PROTOCOL_VERSION, message },
     };
     let bytes = match serialize_bounded(&response, MAX_STDOUT_BYTES) {
@@ -478,7 +488,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
         "darwin" => Platform::Darwin,
         other => return Err(format!("unknown decompiler platform {other:?}")),
     };
-    let options = DecompilerOptions { platform, compiler: request.options.compiler };
+    let options = DecompilerOptions { platform, compiler: request.options.compiler, arm_be8: request.options.arm_be8 };
     if request.mappings.len() > 4096 {
         return Err("worker memory region limit exceeded (4096)".to_owned());
     }
@@ -515,6 +525,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
                 engine.apply_prototype(address, indirect, &declaration)
             }
             WorkerOperation::ParseTypes { declarations } => engine.parse_c(&declarations),
+            WorkerOperation::Global { address, declaration } => engine.add_global(address, &declaration),
             WorkerOperation::Mode { modes } => {
                 let modes: Vec<_> = modes.into_iter().map(|mode| (mode.address, mode.thumb)).collect();
                 engine.set_code_modes(&modes)
@@ -546,10 +557,12 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
         engine
             .tokens()
             .into_iter()
-            .map(|token| WorkerToken { text: token.text, kind: token.kind, address: token.address })
+            .map(|token| WorkerToken { text: token.text, kind: token.kind, address: token.address, span: token.span })
             .collect()
     });
     let organization = engine.data_organization();
+    let structure =
+        if request.validate_only { None } else { Some(engine.structured_result().map_err(|error| error.to_string())?) };
     Ok(WorkerOutput {
         text,
         language_id: engine.language_id().to_owned(),
@@ -559,6 +572,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
             long: organization.long,
         },
         tokens,
+        structure,
     })
 }
 
@@ -1063,16 +1077,18 @@ mod tests {
     fn expired_response_budget_never_returns_a_successful_output() {
         let response = WorkerResponse::Ok {
             version: PROTOCOL_VERSION,
-            output: WorkerOutput {
+            output: Box::new(WorkerOutput {
                 text: "return 0;".to_owned(),
                 language_id: "fixture".to_owned(),
+                structure: None,
                 data_organization: WorkerDataOrganization { pointer: 8, int: 4, long: 8 },
                 tokens: Some(vec![WorkerToken {
                     text: "return".to_owned(),
                     kind: "keyword".to_owned(),
                     address: None,
+                    span: None,
                 }]),
-            },
+            }),
         };
         let bytes = serde_json::to_vec(&response).unwrap();
         let budget = SupervisorBudget { timeout: Duration::ZERO, ..budget(None) };

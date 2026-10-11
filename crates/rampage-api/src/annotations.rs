@@ -18,6 +18,7 @@ pub enum Field {
     Comment,
     Signature,
     Types,
+    Global,
 }
 
 /// One change: `field` at `address` went from `previous` to `value` (`None` removes it).
@@ -47,6 +48,7 @@ pub struct Annotations {
     comments: BTreeMap<u64, String>,
     signatures: BTreeMap<u64, String>,
     types: BTreeMap<u64, String>,
+    globals: BTreeMap<u64, String>,
     /// Edits applied in this session, for undo; and undone ones, for redo.
     done: Vec<Edit>,
     undone: Vec<Edit>,
@@ -83,6 +85,7 @@ impl Annotations {
             comments: self.comments.clone(),
             signatures: self.signatures.clone(),
             types: self.types.clone(),
+            globals: self.globals.clone(),
             ..Self::default()
         }
     }
@@ -97,6 +100,7 @@ impl Annotations {
             self.comments.clear();
             self.signatures.clear();
             self.types.clear();
+            self.globals.clear();
         }
         for edit in &edits {
             self.apply(edit);
@@ -125,8 +129,12 @@ impl Annotations {
                 Some(value) => drop(self.comments.insert(edit.address, value.clone())),
                 None => drop(self.comments.remove(&edit.address)),
             },
-            Field::Signature | Field::Types => {
-                let values = if edit.field == Field::Signature { &mut self.signatures } else { &mut self.types };
+            Field::Signature | Field::Types | Field::Global => {
+                let values = match edit.field {
+                    Field::Signature => &mut self.signatures,
+                    Field::Types => &mut self.types,
+                    _ => &mut self.globals,
+                };
                 match &edit.value {
                     Some(value) => {
                         values.insert(edit.address, value.clone());
@@ -207,6 +215,40 @@ impl Annotations {
         Ok(true)
     }
 
+    pub(crate) fn import_signatures(
+        &mut self,
+        signatures: &[(u64, String)],
+        prepare: impl Fn(&Self, u64, &str) -> String,
+        validate: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<Vec<u64>, String> {
+        let _lock = self.log_lock()?;
+        self.refresh()?;
+        let mut candidate = self.snapshot();
+        let mut seen = std::collections::BTreeSet::new();
+        let edits: Vec<_> = signatures
+            .iter()
+            .filter(|(address, _)| !self.signatures.contains_key(address) && seen.insert(*address))
+            .map(|(address, declaration)| Edit {
+                field: Field::Signature,
+                address: *address,
+                value: Some(prepare(self, *address, declaration)),
+                previous: None,
+            })
+            .collect();
+        for edit in &edits {
+            candidate.apply(edit);
+        }
+        validate(&candidate)?;
+        let mut applied = Vec::new();
+        for edit in edits {
+            self.commit(&edit)?;
+            self.undone.clear();
+            applied.push(edit.address);
+            self.done.push(edit);
+        }
+        Ok(applied)
+    }
+
     /// Reverts the last edit made through this instance. Returns the edit undone.
     pub fn undo(&mut self) -> Result<Option<Edit>, String> {
         self.undo_validated(|_| Ok(()))
@@ -216,13 +258,18 @@ impl Annotations {
         &mut self,
         validate: impl FnOnce(&Self) -> Result<(), String>,
     ) -> Result<Option<Edit>, String> {
+        if self.done.is_empty() {
+            return Ok(None);
+        }
         let _lock = self.log_lock()?;
         self.refresh()?;
         let Some(edit) = self.done.last().cloned() else { return Ok(None) };
         self.check_unchanged(&edit, &edit.value)?;
         let mut candidate = self.snapshot();
         candidate.apply(&edit.inverse());
-        if matches!(edit.field, Field::Signature | Field::Types) {
+        if matches!(edit.field, Field::Signature | Field::Types | Field::Global)
+            || (edit.field == Field::Name && !candidate.globals().is_empty())
+        {
             validate(&candidate)?;
         }
         self.commit(&edit.inverse())?;
@@ -240,13 +287,18 @@ impl Annotations {
         &mut self,
         validate: impl FnOnce(&Self) -> Result<(), String>,
     ) -> Result<Option<Edit>, String> {
+        if self.undone.is_empty() {
+            return Ok(None);
+        }
         let _lock = self.log_lock()?;
         self.refresh()?;
         let Some(edit) = self.undone.last().cloned() else { return Ok(None) };
         self.check_unchanged(&edit, &edit.previous)?;
         let mut candidate = self.snapshot();
         candidate.apply(&edit);
-        if matches!(edit.field, Field::Signature | Field::Types) {
+        if matches!(edit.field, Field::Signature | Field::Types | Field::Global)
+            || (edit.field == Field::Name && !candidate.globals().is_empty())
+        {
             validate(&candidate)?;
         }
         self.commit(&edit)?;
@@ -270,6 +322,7 @@ impl Annotations {
             Field::Comment => &self.comments,
             Field::Signature => &self.signatures,
             Field::Types => &self.types,
+            Field::Global => &self.globals,
         }
     }
 
@@ -299,6 +352,10 @@ impl Annotations {
 
     pub fn types(&self) -> &BTreeMap<u64, String> {
         &self.types
+    }
+
+    pub fn globals(&self) -> &BTreeMap<u64, String> {
+        &self.globals
     }
 }
 
@@ -460,5 +517,25 @@ mod tests {
         annotations.apply(&edit(0x20, "foo"));
         annotations.apply(&edit(0x20, "baz"));
         assert_eq!(annotations.address_of("foo"), Some(0x10));
+    }
+
+    #[test]
+    fn debug_import_deduplicates_entries_and_does_not_replace_existing_signatures() {
+        let mut annotations = Annotations::in_memory();
+        annotations.set(Field::Signature, 0x10, Some("int4 preserved(void);".to_owned())).unwrap();
+        let candidates = vec![
+            (0x10, "int4 ignored(void);".to_owned()),
+            (0x20, "int4 first(void);".to_owned()),
+            (0x20, "int4 second(void);".to_owned()),
+        ];
+        let applied =
+            annotations.import_signatures(&candidates, |_, _, declaration| declaration.to_owned(), |_| Ok(())).unwrap();
+        assert_eq!(applied, vec![0x20]);
+        assert_eq!(annotations.signatures()[&0x10], "int4 preserved(void);");
+        assert_eq!(annotations.signatures()[&0x20], "int4 first(void);");
+        annotations.undo().unwrap();
+        assert!(!annotations.signatures().contains_key(&0x20));
+        annotations.redo().unwrap();
+        assert_eq!(annotations.signatures()[&0x20], "int4 first(void);");
     }
 }

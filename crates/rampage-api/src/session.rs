@@ -51,14 +51,20 @@ impl Session {
         }
         // Another thread may have loaded the same slice meanwhile; everyone shares the first.
         let key = (canonical, binary.arch);
-        let project =
-            state.projects.entry(key).or_insert_with(|| Arc::new(Project::with_annotations(binary, annotations)));
-        if let Some(executable) = std::env::var_os("RAMPAGE_WORKER") {
-            project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
-                executable: Some(PathBuf::from(executable)),
-                ..Default::default()
-            }));
-        }
+        let worker = std::env::var_os("RAMPAGE_WORKER").map(PathBuf::from).or_else(|| {
+            let sibling = std::env::current_exe().ok()?.with_file_name("rampage-worker");
+            sibling.is_file().then_some(sibling)
+        });
+        let project = state.projects.entry(key).or_insert_with(|| {
+            let project = Project::with_annotations(binary, annotations);
+            if let Some(executable) = worker {
+                project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
+                    executable: Some(executable),
+                    ..Default::default()
+                }));
+            }
+            Arc::new(project)
+        });
         Ok(Arc::clone(project))
     }
 }

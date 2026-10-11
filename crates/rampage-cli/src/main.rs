@@ -157,6 +157,12 @@ enum Command {
     },
     /// List the user's names and comments
     Annotations { file: PathBuf },
+    /// Preview embedded DWARF scalar/pointer function signatures, optionally persist them
+    DebugTypes {
+        file: PathBuf,
+        #[arg(long)]
+        apply: bool,
+    },
     /// Serve the Model Context Protocol over stdin/stdout for AI agents
     Mcp,
     /// List code and data cross-references to or from an address, symbol or function
@@ -229,6 +235,7 @@ fn main() -> ExitCode {
         Command::Rename { file, at, name, .. } => commands::rename(&mut out, &file, &at, name.as_deref(), &options),
         Command::Comment { file, at, text, .. } => commands::comment(&mut out, &file, &at, text.as_deref(), &options),
         Command::Annotations { file } => commands::annotations(&mut out, &file, &options),
+        Command::DebugTypes { file, apply } => commands::debug_types(&mut out, &file, apply, &options),
         Command::Mcp => unreachable!("handled before opening stdout"),
     }
     .and_then(|()| out.flush().map_err(Into::into));

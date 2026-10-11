@@ -87,6 +87,12 @@ pub struct At {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct DebugImportArgs {
+    #[serde(default)]
+    apply: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 pub struct JumpTableArgs {
     pub at: String,
     /// Exact analyst-specified entry count (1–4096).
@@ -183,6 +189,17 @@ pub fn tools() -> Vec<Tool> {
             "Demangled symbols, named Itanium vtables/RTTI and Objective-C selector strings, with limits.",
             |project, _: Nothing| Ok(rampage_analysis::language::metadata(&project.binary)),
         ),
+        tool(
+            "class_evidence",
+            "Bounded named Itanium vtable/RTTI evidence with validated code slots; not inferred C++ layouts.",
+            |project, _: Nothing| Ok(rampage_analysis::classes::recover(&project.binary)),
+        ),
+        tool(
+            "import_debug_signatures",
+            "Preview bounded embedded-DWARF signatures; apply=true persists them without replacing user signatures.",
+            |project, arguments: DebugImportArgs| project.import_debug_signatures(arguments.apply),
+        )
+        .annotates(),
         tool(
             "analysis_diagnostics",
             "Decode coverage and evidence of unreliable static code, with explicit limitations. \
@@ -291,6 +308,15 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: CommentArgs| {
                 let text = edit_value(arguments.text, arguments.clear, "text")?;
                 project.set_types(project.resolve(&arguments.at)?, text.as_deref())
+            },
+        )
+        .annotates(),
+        tool(
+            "set_global",
+            "Persist a named C data declaration at a mapped non-code address.",
+            |project, arguments: CommentArgs| {
+                let text = edit_value(arguments.text, arguments.clear, "text")?;
+                project.set_global(project.resolve(&arguments.at)?, text.as_deref())
             },
         )
         .annotates(),

@@ -17,6 +17,8 @@ pub struct DecompilerOptions {
     /// Ghidra compiler ID, such as `gcc`, `windows`, `apcs` or `macosx`.
     /// Overrides platform selection; it must exist for the selected processor language.
     pub compiler: Option<String>,
+    /// ARM BE8: little-endian instructions and big-endian data.
+    pub arm_be8: bool,
 }
 
 /// Byte widths reported by the selected compiler specification, never by the host platform.
@@ -40,7 +42,7 @@ pub(crate) fn is_windows(compiler: &str) -> bool {
 }
 
 pub(crate) fn has_c_runtime(compiler: &str) -> bool {
-    matches!(compiler, "default" | "gcc" | "macosx" | "apcs") || is_windows(compiler)
+    matches!(compiler, "default" | "gcc" | "macosx" | "apcs" | "apple") || is_windows(compiler)
 }
 
 pub(crate) fn validate_data_organization(arch: Arch, compiler: &str, actual: DataOrganization) -> Result<(), Error> {
@@ -68,6 +70,7 @@ pub fn language_id_with_options(arch: Arch, big_endian: bool, options: &Decompil
         Arch::X86 => ("x86:LE:32:default".to_owned(), "gcc"),
         Arch::X86_64 => ("x86:LE:64:default".to_owned(), "gcc"),
         Arch::Aarch64 => (format!("AARCH64:{endian}:64:v8A"), "default"),
+        Arch::Arm if options.arm_be8 => ("ARM:LEBE:32:v8LEInstruction".to_owned(), "default"),
         Arch::Arm => (format!("ARM:{endian}:32:v8"), "default"),
         Arch::Mips => (format!("MIPS:{endian}:32:default"), "default"),
         Arch::Mips64 => (format!("MIPS:{endian}:64:default"), "default"),
@@ -80,6 +83,9 @@ pub fn language_id_with_options(arch: Arch, big_endian: bool, options: &Decompil
         Arch::M68k => ("68000:BE:32:default".to_owned(), "default"),
         Arch::S390x => return Err(Error::UnsupportedArch(arch)),
     };
+    if options.arm_be8 && (arch != Arch::Arm || !big_endian) {
+        return Err(Error::Ghidra("BE8 requires ARM with big-endian data".to_owned()));
+    }
     let compiler = if let Some(compiler) = options.compiler.as_deref() {
         if compiler.is_empty() || !compiler.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_') {
             return Err(Error::Ghidra("invalid compiler specification ID".to_owned()));
@@ -92,6 +98,7 @@ pub fn language_id_with_options(arch: Arch, big_endian: bool, options: &Decompil
                 return Err(Error::Ghidra(format!("no Windows compiler default for {arch}")));
             }
             (Platform::Darwin, Arch::PowerPc | Arch::PowerPc64, true) => "macosx",
+            (Platform::Darwin, Arch::Aarch64, false) => "apple",
             (Platform::Default | Platform::Darwin, _, _) => default_compiler,
         }
     };

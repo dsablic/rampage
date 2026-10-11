@@ -11,6 +11,8 @@
             id="AARCH64:LE:64:v8A">
     <description>Generic ARM64 v8.5-A LE instructions, LE data, missing some 8.5 vector</description>
     <compiler name="default" spec="AARCH64.cspec" id="default"/>
+    <!-- Modified for rampage: explicit Darwin C ABI compiler specification. -->
+    <compiler name="Apple clang" spec="AARCH64_apple.cspec" id="apple"/>
     <compiler name="Visual Studio" spec="AARCH64_win.cspec" id="windows"/>
     <compiler name="golang" spec="AARCH64_golang.cspec" id="golang"/>
     <compiler name="Swift" spec="AARCH64_swift.cspec" id="swift"/>

@@ -1,4 +1,46 @@
 use crate::ApiError;
+use rampage_decompiler::worker::WorkerOperation;
+
+pub(super) fn plan(
+    project: &crate::Project,
+    annotations: &crate::annotations::Annotations,
+) -> Result<Vec<WorkerOperation>, ApiError> {
+    let mut operations = Vec::new();
+    for text in annotations.types().values() {
+        validate(text)?;
+        for declaration in declarations(text)? {
+            if declaration
+                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+                .any(|word| word == "extern")
+            {
+                return Err(ApiError::Invalid("type input cannot contain function signatures".to_owned()));
+            }
+            operations.push(WorkerOperation::ParseTypes { declarations: declaration.to_owned() });
+        }
+    }
+    for (&address, declaration) in annotations.globals() {
+        validate(declaration)?;
+        operations.push(WorkerOperation::Global { address, declaration: declaration.clone() });
+    }
+    for (&address, declaration) in annotations.signatures() {
+        validate(declaration)?;
+        let indirect = project.binary.import_slot(address).is_some();
+        if !indirect {
+            operations.push(WorkerOperation::Symbol { address, name: project.function_name_in(annotations, address) });
+        }
+        operations.push(WorkerOperation::Prototype { address, indirect, declaration: declaration.clone() });
+        if indirect {
+            for stub in super::symbols::stub_targets(project, address) {
+                operations.push(WorkerOperation::Prototype {
+                    address: stub,
+                    indirect: false,
+                    declaration: declaration.clone(),
+                });
+            }
+        }
+    }
+    Ok(operations)
+}
 
 pub(super) fn validate(text: &str) -> Result<(), ApiError> {
     if text.len() > 65536 || text.contains(['#', '"', '\'', '/']) {

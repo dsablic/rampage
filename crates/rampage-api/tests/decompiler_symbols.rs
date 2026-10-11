@@ -42,6 +42,14 @@ fn semantic_tokens_link_caller_operations_and_named_call_targets() {
     assert!(result.tokens.iter().any(|token| token.kind == "block" && token.address == Some(main)));
     assert!(result.tokens.iter().any(|token| token.kind == "call" && token.address == Some(puts)));
     assert_eq!(second.tokens.len(), result.tokens.len());
+    let json = serde_json::to_value(&result).unwrap();
+    assert!(json["structure"]["blocks"][0]["start"].as_str().unwrap().starts_with("0x"));
+    for token in &result.tokens {
+        if let Some((start, end)) = token.span {
+            assert_eq!(&result.code[start..end], token.text);
+        }
+    }
+    assert!(result.tokens.iter().filter_map(|token| token.span).count() >= 3);
 }
 
 #[test]

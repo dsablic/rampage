@@ -12,6 +12,8 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by Rampage to support aligned, rounded goto_stack allocations.
  */
 /// \file modelrules.hh
 /// \brief Definitions for rules governing mapping of data-type to address for prototype models
@@ -323,13 +325,20 @@ public:
 };
 
 /// \brief Action assigning a parameter Address from the next available stack location
+///
+/// Optional \b align specifies both minimum alignment and consumed-size rounding on little-endian stacks.
+/// Exhausting the aligned stack range throws instead of trying a different storage rule.
 class GotoStack : public AssignAction {
   const ParamEntry *stackEntry;	///< Parameter Entry corresponding to the stack
+  int4 alignment;		///< Minimum byte alignment, or zero for the entry's default
+  int4 slotsize;			///< Round consumed bytes to this size, or zero for the entry's default
   void initializeEntry(void);	///< Find stack entry in resource list
 public:
   GotoStack(const ParamListStandard *res,int4 val);	///< Constructor for use with decode
   GotoStack(const ParamListStandard *res);	///< Constructor
-  virtual AssignAction *clone(const ParamListStandard *newResource) const { return new GotoStack(newResource); }
+  GotoStack(const ParamListStandard *res,int4 align,int4 slot);	///< Constructor preserving stack policy
+  virtual AssignAction *clone(const ParamListStandard *newResource) const {
+    return new GotoStack(newResource,alignment,slotsize); }
   virtual uint4 assignAddress(Datatype *dt,const PrototypePieces &proto,int4 pos,TypeFactory &tlist,
 			      vector<int4> &status,ParameterPieces &res) const;
   virtual bool fillinOutputMap(ParamActive *active) const;

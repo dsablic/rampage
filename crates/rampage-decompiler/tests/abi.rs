@@ -13,7 +13,7 @@ fn open(arch: Arch, bytes: &[u8], platform: Platform) -> Decompiler {
             writable: false,
             executable: true,
         }],
-        &DecompilerOptions { platform, compiler: None },
+        &DecompilerOptions { platform, compiler: None, arm_be8: false },
     )
     .unwrap()
 }
@@ -83,7 +83,7 @@ fn a_32_bit_malloc_call_uses_one_size_argument() {
 fn explicit_compiler_ids_override_defaults_and_invalid_ids_are_errors() {
     let regions =
         [MemoryRegion { base: 0x1000, bytes: &[0xc3], size: 1, readable: true, writable: false, executable: true }];
-    let options = DecompilerOptions { platform: Platform::Windows, compiler: Some("gcc".to_owned()) };
+    let options = DecompilerOptions { platform: Platform::Windows, compiler: Some("gcc".to_owned()), arm_be8: false };
     let decompiler = Decompiler::open_with_options(Arch::X86_64, false, &regions, &options).unwrap();
     assert!(decompiler.language_id().ends_with(":gcc"));
     assert_eq!(decompiler.data_organization().long, 8);
@@ -116,7 +116,7 @@ fn default_c_models_cover_all_bundled_targets_and_powerpc_darwin() {
     ] {
         let regions =
             [MemoryRegion { base: 0x1000, bytes: &[0], size: 1, readable: true, writable: false, executable: true }];
-        let options = DecompilerOptions { platform, compiler: None };
+        let options = DecompilerOptions { platform, compiler: None, arm_be8: false };
         let decompiler = Decompiler::open_with_options(arch, big_endian, &regions, &options).unwrap();
         assert_eq!(
             decompiler.data_organization(),

@@ -99,7 +99,73 @@ fn pseudocode(ui: &mut Ui, workspace: &mut Workspace) {
     ui.label(&result.language_id);
     let mut target = None;
     egui::ScrollArea::both().show(ui, |ui| {
-        ui.label(RichText::new(&result.code).monospace());
+        let mut job = egui::text::LayoutJob::default();
+        let mut offset = 0;
+        let mut links = Vec::new();
+        for token in &result.tokens {
+            let Some((start, end)) = token.span else { continue };
+            if start < offset
+                || end < start
+                || end > result.code.len()
+                || !result.code.is_char_boundary(start)
+                || !result.code.is_char_boundary(end)
+            {
+                continue;
+            }
+            if result.code[start..end] != token.text {
+                continue;
+            }
+            job.append(
+                &result.code[offset..start],
+                0.0,
+                egui::TextFormat { font_id: egui::FontId::monospace(13.0), color: theme::TEXT, ..Default::default() },
+            );
+            job.append(
+                &result.code[start..end],
+                0.0,
+                egui::TextFormat {
+                    font_id: egui::FontId::monospace(13.0),
+                    color: if token.address.is_some() { theme::ADDRESS } else { theme::TEXT },
+                    ..Default::default()
+                },
+            );
+            if let Some(address) = token.address {
+                links.push((start..end, address));
+            }
+            offset = end;
+        }
+        job.append(
+            &result.code[offset..],
+            0.0,
+            egui::TextFormat { font_id: egui::FontId::monospace(13.0), color: theme::TEXT, ..Default::default() },
+        );
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        let (rect, response) = ui.allocate_exact_size(galley.size(), Sense::click());
+        ui.painter().galley(rect.min, galley.clone(), theme::TEXT);
+        if response.clicked()
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let pointer = pointer - rect.min;
+            let offsets: Vec<_> = result.code.char_indices().map(|(offset, _)| offset).collect();
+            let mut ordinal = 0;
+            for row in &galley.rows {
+                for glyph in &row.glyphs {
+                    let left = row.pos.x + glyph.pos.x;
+                    let bounds = egui::Rect::from_min_max(
+                        egui::pos2(left, row.pos.y),
+                        egui::pos2(left + glyph.advance_width, row.pos.y + row.size.y),
+                    );
+                    if bounds.contains(egui::pos2(pointer.x, pointer.y)) {
+                        let byte = offsets.get(ordinal).copied().unwrap_or(result.code.len());
+                        target = links.iter().find(|(range, _)| range.contains(&byte)).map(|(_, address)| *address);
+                    }
+                    ordinal += 1;
+                }
+                if row.ends_with_newline {
+                    ordinal += 1;
+                }
+            }
+        }
         ui.separator();
         ui.label("Address-linked tokens");
         ui.horizontal_wrapped(|ui| {

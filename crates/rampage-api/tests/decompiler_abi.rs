@@ -35,3 +35,16 @@ fn snapshot_compiler_override_is_explicit_and_bad_overrides_do_not_fall_back() {
     }));
     assert!(project.decompile(0x1000).is_err());
 }
+
+#[test]
+fn compiler_overrides_preserve_loader_be8_instruction_byte_order() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm-be8.snapshot.json");
+    let project = Project::new(Binary::open(path).unwrap());
+    let automatic = project.decompile(0x1000).unwrap();
+    assert!(automatic.language_id.contains(":LEBE:"));
+    assert!(automatic.code.contains("return 7;"), "{}", automatic.code);
+    project.set_decompiler_options(Some(DecompilerOptions { compiler: Some("apcs".to_owned()), ..Default::default() }));
+    let overridden = project.decompile(0x1000).unwrap();
+    assert!(overridden.language_id.contains(":LEBE:"));
+    assert!(overridden.code.contains("return 7;"), "{}", overridden.code);
+}

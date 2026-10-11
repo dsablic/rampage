@@ -25,6 +25,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/shim.cc");
     println!("cargo:rerun-if-changed=src/tokens.hh");
+    println!("cargo:rerun-if-changed=src/results.hh");
     println!("cargo:rerun-if-changed=vendor/ghidra");
 }
 

@@ -379,6 +379,7 @@ impl Workspace {
             Field::Comment => self.project.comment(editing.address, value),
             Field::Signature => self.project.set_signature(editing.address, value),
             Field::Types => self.project.set_types(editing.address, value),
+            Field::Global => self.project.set_global(editing.address, value),
         };
         match result {
             Ok(edit) => {

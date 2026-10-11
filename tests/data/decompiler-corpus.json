@@ -1,0 +1,48 @@
+{
+  "schema": "rampage-decompiler-corpus-v1",
+  "metadata": {
+    "dataset": "controlled rampage integration fixtures",
+    "settings": {"annotations": "none", "processor_context": "loader defaults"},
+    "limitations": "Selected facts only; not matched-setting Ghidra equivalence or full ABI coverage"
+  },
+  "cases": [
+    {
+      "id": "elf-x64-main",
+      "image": "../fixtures/bin/hello-x64-dyn.elf",
+      "function": "main",
+      "arch": "x86_64",
+      "expected_params": 0,
+      "expected_calls": [{"name": "puts@plt", "indirect": false}],
+      "expected_strings": ["\"rampage fixture greeting\""],
+      "expected_contains": ["return 5;"],
+      "expected_not_contains": ["WARNING:"]
+    },
+    {
+      "id": "elf-arm64-main",
+      "image": "../fixtures/bin/hello-arm64.elf",
+      "function": "main",
+      "arch": "aarch64",
+      "expected_params": 0,
+      "expected_calls": [{"name": "puts@plt", "indirect": false}],
+      "expected_strings": ["\"rampage fixture greeting\""],
+      "expected_contains": ["return 5;"],
+      "expected_not_contains": ["WARNING:"]
+    },
+    {
+      "id": "snapshot-arm-be8",
+      "image": "runtime-arm-be8.snapshot.json",
+      "function": "0x1000",
+      "arch": "arm",
+      "expected_contains": ["return 7;"],
+      "expected_not_contains": ["WARNING:"]
+    },
+    {
+      "id": "snapshot-windows-x64",
+      "image": "runtime-x64-windows-arguments.snapshot.json",
+      "function": "0x1000",
+      "compiler": "windows",
+      "expected_params": 2,
+      "expected_not_contains": ["param_3", "WARNING:"]
+    }
+  ]
+}

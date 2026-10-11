@@ -53,3 +53,8 @@ It explicitly reports that mappings/types/options are not yet matched; equality 
 semantic score. On `hello-x64-dyn.elf`/`main`, Ghidra 12.1.4 produced 77 bytes and rampage produced 79 bytes, both
 without emitted warning lines. The differing display names/signatures require matched-setting comparison before
 an accuracy conclusion is drawn.
+
+The versioned integration corpus runs with
+`python3 tools/decompiler_corpus.py target/debug/rampage --manifest tests/data/decompiler-corpus.json --isolated`.
+Its four controlled cases passed 15 selected assertions (x64/ARM64 greeting calls, BE8 instructions and Windows
+x64 arguments). That pass is bounded integration coverage, not a general decompilation accuracy percentage.

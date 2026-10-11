@@ -31,12 +31,17 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   ELF; a bare import name finds its stub), and import slots (GOT entries, Mach-O symbol pointers, the PE import
   address table) as `__imp_<name>`. Disassembly comments
   each branch or data reference with the name or string it points to.
-- Decompilation: functions decompile to C through an embedded build of Ghidra's decompiler (Apache-2.0), in
-  process, for every architecture rampage decodes except s390x. rampage's own function names are fed in so calls
-  render by name, common libc calls are given prototypes so their string arguments show, and 32-bit ARM Thumb
-  functions decode in Thumb mode. The processor specifications are vendored, so a source build decompiles with no
-  external Ghidra install (override with `GHIDRA_INSTALL_DIR`). See
-  [crates/rampage-decompiler](crates/rampage-decompiler).
+- Decompilation: embedded Ghidra (Apache-2.0) supports every decoded architecture except s390x, with target-sized
+  runtime prototypes, ARM/Thumb context, BE8 and a Darwin ARM64 compiler model. Results include rendered C,
+  address-linked tokens, signatures, storage mappings, CFG edges and recovered calls/jump tables. Specifications
+  are embedded, so relocated executables need no external installation (override with `GHIDRA_INSTALL_DIR`).
+  Sessions select a supervised sibling worker when installed; `--isolated` requires worker execution explicitly.
+  Direct library projects can opt in through `set_decompiler_worker`. See
+   [crates/rampage-decompiler](crates/rampage-decompiler).
+- Persistent types: address-bound signatures, calling conventions, type declarations and typed globals share the
+  annotation log and dependency-checked undo/redo. Embedded DWARF scalar/pointer signatures can be previewed and
+  imported without replacing analyst signatures. Named Itanium vtables provide bounded class evidence, not
+  inferred object layouts. See [debug signature import](docs/debug-signatures.md).
 
 ## Usage
 
@@ -48,6 +53,8 @@ rampage audit   <file>                       # bounded decode coverage and unrel
 rampage metadata <file>                      # demangled symbols, named RTTI/vtables, ObjC selectors
 rampage inventory <directory>                # binaries in bundles/extracted packages; no execution
 rampage decompile <file> --at <addr|symbol>   # decompile a function to C (embedded Ghidra decompiler)
+rampage decompile <file> --at main --isolated # require supervised native execution
+rampage debug-types <file> [--apply]          # preview/import bounded embedded DWARF signatures
 rampage summarize <file> --at <addr|symbol>   # CFG/reference summary, not decompiled source
 rampage pseudocode <file> --at <addr|symbol>  # partial ARM64 SSA pseudocode with explicit unknowns
 rampage compare <file> --reference <json>     # image-matched, versioned function-start comparisons
@@ -62,7 +69,7 @@ rampage funcs   <file> [--name TEXT]         # recursive-descent function discov
 rampage xrefs   <file> --to|--from <addr|name>
 rampage rename  <file> <addr|name> <new name|--clear>
 rampage comment <file> <addr|name> <text|--clear>
-rampage annotations <file>                   # the user's names and comments
+rampage annotations <file>                   # names, comments, signatures, types and globals
 rampage mcp                                  # MCP server on stdin/stdout
 
 # global flags
@@ -73,7 +80,8 @@ rampage mcp                                  # MCP server on stdin/stdout
 Addresses accept `0x` hex, decimal, symbol and export names, or `sub_<hex>`. In JSON output every address is
 a `"0x…"` string, because JSON numbers lose precision above 2^53 in common consumers.
 
-Names and comments are saved beside the binary in `<file>.rampage` (`<file>.<arch>.rampage` for a slice of a
+Names, comments and typed annotations are saved beside the binary in `<file>.rampage`
+(`<file>.<arch>.rampage` for a slice of a
 universal binary): an append-only JSON Lines log of edits, each recording the value it replaced, so undo is just
 another edit and the file is a full history. Several clients can share it: the UI picks up names an agent saves
 through MCP within a second.
@@ -90,6 +98,7 @@ band across the image. Keys: Space listing/graph, G go to, Esc or Alt+Left back,
 comment, Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo. Drop a file on the window to open it. Analysis runs in the
 background; on Chrome's framework (190,000 functions, 930,000 strings) frames take a few milliseconds. `cargo test
 -p rampage-ui` renders the UI offscreen into `crates/rampage-ui/tests/snapshots`.
+The Pseudocode tab loads decompilation in the background and navigates inline address-linked tokens.
 
 The Assistant tab talks to Claude about the open binary: the model reads functions, graphs, strings and
 cross-references through rampage's tools, renames and comments what it works out, and points the listing at what it
@@ -100,7 +109,8 @@ are sent to Anthropic's API.
 
 `rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the tools
 `triage`, `binary_info`, `list_functions`, `disassemble`, `list_strings`, `list_imports`, `list_exports`, `xrefs`,
-`rename`, `set_comment`, `undo`, `redo` and `list_annotations`. Agents' names and comments land in the same log the
+`decompile`, `rename`, `set_comment`, `set_signature`, `set_types`, `set_global`, `import_debug_signatures`,
+`class_evidence`, `undo`, `redo` and `list_annotations`. Agents' annotations land in the same log the
 UI and CLI use, and the UI shows them as they arrive. Analysis runs once per binary and is cached for the session.
 To add it to Claude Code:
 
@@ -125,11 +135,16 @@ arm64 slice in about 1.4 s. Repeated MCP queries are answered from the cached an
 | `rampage-mcp` | MCP server |
 | `rampage-cli` | The `rampage` binary |
 | `rampage-ui` | The desktop UI |
+| `rampage-decompiler` | Embedded native engine, specifications and supervised protocol |
+| `rampage-worker` | Isolated native decompiler process |
 
 `tools/armgen` regenerates the decoder tables from an AARCHMRS release, one instruction set at a time:
 `cargo run --release -p armgen -- <AARCHMRS directory> A64 crates/rampage-arch/src/a64/spec.rs`.
 
 Test fixtures live in `tests/fixtures`; `tests/fixtures/build.sh` rebuilds them (needs zig and Apple clang).
+`tools/install.sh [ROOT] [--ui]` builds the worker and CLI before installing them together.
+The [corpus runner](docs/decompiler-corpus.md) measures selected recovered facts and resource diagnostics;
+passing fixture assertions is not IDA/Ghidra parity or semantic equivalence.
 
 Runtime images use a validated sparse JSON snapshot with virtual addresses, explicit seeds and provenance.
 The same CLI, UI and MCP tools open snapshots and bundle directories. See

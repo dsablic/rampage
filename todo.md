@@ -18,8 +18,9 @@ libc prototypes (so string arguments show), and decodes Thumb in Thumb mode.
 - [ ] C++ class recovery: typed vtables/RTTI and `this` pointers in the decompiler. The embedded library reads
   types from C declarations or XML, not Ghidra `.gdt` archives, so this needs a header/type pipeline, not a
   `.gdt` import. Larger, separate effort.
-- [ ] Richer `main`/entry signature recovery; apply user-set types to the decompiler.
-- [ ] Bundle for relocated/installed binaries (embed specs or install them), so a `cargo install` binary that is
+- [x] Apply user-set types/signatures to the decompiler and import bounded embedded debug signatures.
+- [ ] Richer automatic `main`/entry signature recovery without debug metadata.
+- [x] Bundle for relocated/installed binaries (embed specs or install them), so a `cargo install` binary that is
    moved away from its build tree still finds specs without `GHIDRA_INSTALL_DIR`.
 
 ### Integration acceptance order
@@ -36,27 +37,37 @@ guarantee identical output: memory mappings, ABI, mode context, symbols/types an
 3. [x] Compiler ABI selection: PE Windows and Darwin PowerPC defaults, explicit API/CLI overrides, strict
    compiler-ID/data-model validation and target-sized runtime declarations. Reviewed coverage includes
    ILP32/LP64/LLP64, Windows x86 cdecl, clangwindows aliases and all 13 bundled processor targets.
-   - [ ] Remaining ABI-specific work: Darwin ARM64 variadic/stack rules, ARM BE8 instruction/data byte order,
+   - [x] ARM BE8 mixed instruction/data endian selection, preserved by compiler overrides.
+   - [x] Darwin ARM64 fixed stack packing and explicit variadic slot allocator/compiler model.
+   - [ ] Remaining ABI-specific work: general Darwin ARM64 variadic call recovery and narrow caller extension,
      and OS/library-specific typedefs such as off_t/time_t rather than guessed automatic declarations.
 4. [x] Symbol/type synchronization: address-bound prototypes, independent import slots, metadata identity
    separate from display spelling, reported failures, cached engine refresh on name/type edits and undo/redo.
-5. [ ] Portable specification packaging and supervised resource/cancellation boundaries for hostile inputs,
-   including allocation-failure containment at the C ABI.
+5. [x] Portable specification packaging and supervised resource/cancellation integration,
+   including allocation-failure containment at the C ABI. This is not an OS sandbox or native memory-safety proof.
    - [x] Embed specifications, versioned verified cache and relocated executable regression without Ghidra.
    - [x] Bound text/token output; contain standard exceptions during decompilation.
    - [x] Opt-in supervised worker with wall-clock cancellation, bounded concurrent pipe I/O and memory enforcement
      (Linux hard limits; macOS sampled RSS), API/CLI/session integration without native fallback.
-   - [ ] Make isolation the packaged default; complete C ABI exception containment and other supervisor platforms.
+   - [x] Packaged sessions automatically select a sibling worker; install script ships worker and CLI together.
+   - [x] Complete C ABI exception containment with allocation-free fallback and poisoned-state handling.
+   - [ ] Other supervisor platforms and native upstream memory-safety remediation.
 6. [ ] Persistent user types/signatures/calling conventions and typed globals, then debug-type imports and
    class recovery.
    - [x] Validated persistent signatures and type declarations, API/MCP tools and shared-log dependency checks.
-   - [ ] Typed globals, debug-type imports and automatic class recovery.
-7. [ ] Address-linked structured results and clickable pseudocode, plus engine-derived flow where useful.
+   - [x] Validated persistent typed globals with complete mapped-data storage and dependency checks.
+   - [x] Bounded embedded-DWARF scalar/pointer signature preview/import with non-overwriting application.
+   - [x] Bounded named Itanium vtable/RTTI/code-slot class evidence; no asserted object layouts.
+   - [ ] Exact aggregate/debug-layout import, external PDB/dSYM support and automatic class-layout recovery.
+7. [x] Address-linked structured results and clickable pseudocode, including engine-derived flow evidence.
    - [x] Semantic address-linked tokens and background UI pseudocode/navigation panel.
-   - [ ] Character spans, variable/block/signature schemas and recovered calls/jump tables.
+   - [x] Variable/storage/block/signature schemas and recovered call/jump-table destinations.
+   - [x] Rendered-byte spans, inline pseudocode navigation and raw jump-table labels with absent-label nulls.
 8. [ ] Versioned differential benchmarks: precision/recall, thunks, signatures/calls/strings/switches, warnings,
    coverage and time/memory across stripped/symbolized compiler/optimization/ABI corpora.
    - [x] Discovery precision/recall and installed Ghidra version instead of a hard-coded version.
+   - [x] Versioned bounded corpus runner with explicit signature/call/string/switch assertions, failure coverage,
+     timing and resource diagnostics; not an equivalence score.
    - [ ] Matched-setting differential decompilation corpus and coverage/runtime/memory metrics.
 
 **This supersedes the hand-written "Deep ARM64 track" below as the route to decompiled output.** That native

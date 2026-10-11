@@ -3,8 +3,8 @@ use std::sync::atomic::AtomicBool;
 
 use rampage_decompiler::DecompilerOptions;
 use rampage_decompiler::worker::{
-    PROTOCOL_VERSION, WorkerCodeMode, WorkerConfig, WorkerFunction, WorkerMapping, WorkerOperation, WorkerOptions,
-    WorkerRequest, run_supervised,
+    PROTOCOL_VERSION, WorkerCodeMode, WorkerConfig, WorkerFunction, WorkerMapping, WorkerOptions, WorkerRequest,
+    run_supervised,
 };
 
 use super::{Decompilation, DecompiledToken, context, image, symbols, types};
@@ -61,36 +61,7 @@ pub(super) fn decompile(
     let thumb = binary.arch == rampage_arch::Arch::Arm
         && context::mode_at(&binary.target(), &project.analysis()?.program.code_modes, address);
     let mut operations = symbols::plan(project, annotations)?;
-    for declarations in annotations.types().values() {
-        types::validate(declarations)?;
-        for declaration in types::declarations(declarations)? {
-            if declaration
-                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-                .any(|word| word == "extern")
-            {
-                return Err(ApiError::Invalid("type input cannot contain function signatures".to_owned()));
-            }
-            operations.push(WorkerOperation::ParseTypes { declarations: declaration.to_owned() });
-        }
-    }
-    for (&target, declaration) in annotations.signatures() {
-        types::validate(declaration)?;
-        let indirect = binary.import_slot(target).is_some();
-        if !indirect {
-            operations
-                .push(WorkerOperation::Symbol { address: target, name: project.function_name_in(annotations, target) });
-        }
-        operations.push(WorkerOperation::Prototype { address: target, indirect, declaration: declaration.clone() });
-        if indirect {
-            for stub in symbols::stub_targets(project, target) {
-                operations.push(WorkerOperation::Prototype {
-                    address: stub,
-                    indirect: false,
-                    declaration: declaration.clone(),
-                });
-            }
-        }
-    }
+    operations.extend(types::plan(project, annotations)?);
     let request = WorkerRequest {
         version: PROTOCOL_VERSION,
         arch: binary.arch.to_string(),
@@ -103,6 +74,7 @@ pub(super) fn decompile(
             }
             .to_owned(),
             compiler: options.compiler.clone(),
+            arm_be8: options.arm_be8,
         },
         mappings,
         code_modes: modes.into_iter().map(|(address, thumb)| WorkerCodeMode { address, thumb }).collect(),
@@ -120,7 +92,12 @@ pub(super) fn decompile(
         .tokens
         .unwrap_or_default()
         .into_iter()
-        .map(|token| DecompiledToken { text: token.text, kind: token.kind, address: token.address })
+        .map(|token| DecompiledToken { text: token.text, kind: token.kind, address: token.address, span: token.span })
         .collect();
-    Ok(Decompilation { address, name, code: output.text, language_id: output.language_id, tokens })
+    let structure = if validate_only {
+        rampage_decompiler::StructuredResult::empty()
+    } else {
+        output.structure.ok_or_else(|| ApiError::Unavailable("worker omitted structured result".to_owned()))?
+    };
+    Ok(Decompilation { address, name, code: output.text, language_id: output.language_id, tokens, structure })
 }

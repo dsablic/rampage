@@ -6,8 +6,10 @@
 //! `GHIDRA_INSTALL_DIR` to override that tree.
 
 mod abi;
+pub mod results;
 mod specs;
 pub mod worker;
+pub use results::{StructuredResult, parse_results};
 
 pub use abi::{DataOrganization, DecompilerOptions, Platform, language_id, language_id_with_options};
 pub use specs::sleigh_home;
@@ -219,6 +221,7 @@ unsafe extern "C" {
         name: *const c_char,
     ) -> *const c_char;
     fn rampage_decomp_prototype(handle: *mut Opaque, addr: u64, indirect: u8, text: *const c_char) -> *const c_char;
+    fn rampage_decomp_global(handle: *mut Opaque, addr: u64, text: *const c_char) -> *const c_char;
     fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
     fn rampage_decomp_import_target(handle: *mut Opaque, slot: u64) -> u64;
@@ -232,6 +235,8 @@ unsafe extern "C" {
     fn rampage_decomp_function(handle: *mut Opaque, addr: u64, name: *const c_char, thumb: u8) -> *mut c_char;
     fn rampage_decomp_free_string(text: *mut c_char);
     fn rampage_decomp_token_count(handle: *mut Opaque) -> usize;
+    fn rampage_decomp_token_span(handle: *mut Opaque, index: usize, start: *mut usize, end: *mut usize) -> u8;
+    fn rampage_decomp_results(handle: *mut Opaque) -> *const c_char;
     fn rampage_decomp_token(
         handle: *mut Opaque,
         index: usize,
@@ -322,26 +327,50 @@ pub struct Token {
     pub text: String,
     pub kind: String,
     pub address: Option<u64>,
+    pub span: Option<(usize, usize)>,
 }
 
 // SAFETY: the handle is only ever used while holding FFI_LOCK, so it is touched by one thread at a time.
 unsafe impl Send for Decompiler {}
 
 impl Decompiler {
+    pub fn structured_result(&self) -> Result<StructuredResult, Error> {
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid handle under FFI_LOCK; JSON is owned by the handle until its next decompilation.
+        let text = unsafe { rampage_decomp_results(self.handle) };
+        if text.is_null() {
+            return Err(Error::Ghidra("no successful structured decompilation result".to_owned()));
+        }
+        parse_results(&unsafe { CStr::from_ptr(text) }.to_string_lossy())
+    }
+    /// Registers a typed global; overlaps are rejected rather than replacing another symbol.
+    pub fn add_global(&mut self, address: u64, declaration: &str) -> Result<(), Error> {
+        self.valid_address(address)?;
+        let declaration = CString::new(declaration).map_err(|_| Error::Ghidra("global contains NUL".to_owned()))?;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: checked address, valid handle and C declaration throughout the serialized call.
+        ffi_result(unsafe { rampage_decomp_global(self.handle, address, declaration.as_ptr()) })
+    }
     /// Copies address-linked semantic tokens from the most recent successful decompilation.
     pub fn tokens(&self) -> Vec<Token> {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: valid handle under FFI_LOCK; indices remain valid while the lock is held.
         let count = unsafe { rampage_decomp_token_count(self.handle) };
         (0..count)
-            .map(|index| {
+            .filter_map(|index| {
                 let (mut kind, mut address, mut present) = (std::ptr::null(), 0, 0);
                 let text = unsafe { rampage_decomp_token(self.handle, index, &mut kind, &mut address, &mut present) };
-                Token {
+                if text.is_null() || kind.is_null() {
+                    return None;
+                }
+                let (mut start, mut end) = (0, 0);
+                let span = unsafe { rampage_decomp_token_span(self.handle, index, &mut start, &mut end) };
+                Some(Token {
                     text: unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned(),
                     kind: unsafe { CStr::from_ptr(kind) }.to_string_lossy().into_owned(),
                     address: (present != 0).then_some(address),
-                }
+                    span: (span != 0).then_some((start, end)),
+                })
             })
             .collect()
     }
@@ -690,7 +719,7 @@ mod tests {
             (Arch::X86_64, Platform::Windows),
             (Arch::Aarch64, Platform::Windows),
         ] {
-            let options = DecompilerOptions { platform, compiler: None };
+            let options = DecompilerOptions { platform, compiler: None, arm_be8: false };
             let mut decompiler = Decompiler::open_with_options(arch, false, &regions, &options).expect("open");
             for (index, (name, _)) in C_PROTOTYPES.iter().enumerate() {
                 let address = 0x1000 + (index as u64) * 8;

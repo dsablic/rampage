@@ -3,6 +3,7 @@
 pub mod annotations;
 mod benchmark;
 mod correlation;
+mod debug_import;
 mod decompile;
 mod graph;
 mod jumptable;
@@ -21,6 +22,7 @@ use rampage_loaders::LoadError;
 
 pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use correlation::RuntimeCorrelation;
+pub use debug_import::DebugImport;
 pub use decompile::Decompilation;
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
 pub use jumptable::{JumpTable, JumpTableEntry};

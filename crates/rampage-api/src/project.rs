@@ -119,6 +119,8 @@ impl Project {
             }
         }
         // Check and set under one lock, so that two clients cannot give one name to two addresses.
+        let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
         let mut annotations = self.annotations.write().expect("annotations lock");
         annotations.refresh().map_err(ApiError::Invalid)?;
         if let Some(name) = name
@@ -128,7 +130,14 @@ impl Project {
             return Err(ApiError::Invalid(format!("{name:?} already names {existing:#x}")));
         }
         let value = name.map(str::to_owned);
-        let changed = annotations.set(Field::Name, address, value.clone()).map_err(ApiError::Invalid)?;
+        let changed = annotations
+            .set_validated(Field::Name, address, value.clone(), |candidate| {
+                if candidate.globals().is_empty() {
+                    return Ok(());
+                }
+                self.validate_annotation_snapshot(&state, &options, candidate)
+            })
+            .map_err(ApiError::Invalid)?;
         Ok(EditResult { address, field: Field::Name, value, changed })
     }
 
@@ -152,7 +161,7 @@ impl Project {
             .write()
             .expect("annotations lock")
             .undo_validated(|candidate| {
-                if candidate.types().is_empty() && candidate.signatures().is_empty() {
+                if candidate.types().is_empty() && candidate.signatures().is_empty() && candidate.globals().is_empty() {
                     return Ok(());
                 }
                 self.validate_annotation_snapshot(&state, &options, candidate)
@@ -168,7 +177,7 @@ impl Project {
             .write()
             .expect("annotations lock")
             .redo_validated(|candidate| {
-                if candidate.types().is_empty() && candidate.signatures().is_empty() {
+                if candidate.types().is_empty() && candidate.signatures().is_empty() && candidate.globals().is_empty() {
                     return Ok(());
                 }
                 self.validate_annotation_snapshot(&state, &options, candidate)
@@ -187,6 +196,7 @@ impl Project {
             comments: rows(annotations.comments()),
             signatures: rows(annotations.signatures()),
             types: rows(annotations.types()),
+            globals: rows(annotations.globals()),
         }
     }
 
