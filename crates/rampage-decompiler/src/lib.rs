@@ -8,8 +8,13 @@
 use std::ffi::{CStr, CString, c_char};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
 
 use rampage_arch::Arch;
+
+/// Ghidra's decompiler library keeps process-global state and is not built for concurrent use, so every call
+/// into it is serialized. Decompilation is CPU-bound but fast, so this is not a throughput concern in practice.
+static FFI_LOCK: Mutex<()> = Mutex::new(());
 
 #[repr(C)]
 struct Opaque {
@@ -24,17 +29,21 @@ unsafe extern "C" {
         bases: *const u64,
         ptrs: *const *const u8,
         lens: *const usize,
+        writable: *const u8,
     ) -> *mut Opaque;
+    fn rampage_decomp_add_symbol(handle: *mut Opaque, addr: u64, name: *const c_char);
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
     fn rampage_decomp_function(handle: *mut Opaque, addr: u64, name: *const c_char) -> *mut c_char;
     fn rampage_decomp_free_string(text: *mut c_char);
     fn rampage_decomp_close(handle: *mut Opaque);
 }
 
-/// A segment of program bytes placed at a virtual address.
+/// A segment of program bytes placed at a virtual address. Non-writable segments are treated as read-only, so
+/// the decompiler can fold their contents (strings, constant pointers) into its output.
 pub struct Segment<'a> {
     pub base: u64,
     pub bytes: &'a [u8],
+    pub writable: bool,
 }
 
 #[derive(Debug)]
@@ -104,6 +113,9 @@ pub struct Decompiler {
     handle: *mut Opaque,
 }
 
+// SAFETY: the handle is only ever used while holding FFI_LOCK, so it is touched by one thread at a time.
+unsafe impl Send for Decompiler {}
+
 impl Decompiler {
     /// Opens a decompiler for `arch` over `segments`. Each segment's bytes stay mapped at its base for the life
     /// of the decompiler, so functions anywhere in the loaded code can be decompiled.
@@ -116,11 +128,21 @@ impl Decompiler {
         let bases: Vec<u64> = segments.iter().map(|segment| segment.base).collect();
         let ptrs: Vec<*const u8> = segments.iter().map(|segment| segment.bytes.as_ptr()).collect();
         let lens: Vec<usize> = segments.iter().map(|segment| segment.bytes.len()).collect();
+        let writable: Vec<u8> = segments.iter().map(|segment| u8::from(segment.writable)).collect();
 
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: the pointers and lengths describe `segments`, which outlive this call; the shim copies the
         // bytes before returning.
         let handle = unsafe {
-            rampage_decomp_open(home.as_ptr(), langid.as_ptr(), segments.len(), bases.as_ptr(), ptrs.as_ptr(), lens.as_ptr())
+            rampage_decomp_open(
+                home.as_ptr(),
+                langid.as_ptr(),
+                segments.len(),
+                bases.as_ptr(),
+                ptrs.as_ptr(),
+                lens.as_ptr(),
+                writable.as_ptr(),
+            )
         };
         if handle.is_null() {
             return Err(Error::Ghidra("could not allocate decompiler".to_owned()));
@@ -135,9 +157,19 @@ impl Decompiler {
         Ok(Decompiler { handle })
     }
 
+    /// Registers a known function address with a name, so calls to it render by name. Call before decompiling
+    /// callers; names that fail to apply (e.g. a bad address) are silently skipped.
+    pub fn add_symbol(&mut self, address: u64, name: &str) {
+        let Ok(name) = CString::new(name) else { return };
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: handle is valid for the life of self; name is a valid C string for the call.
+        unsafe { rampage_decomp_add_symbol(self.handle, address, name.as_ptr()) };
+    }
+
     /// Decompiles the function at `address` to C. `name`, when non-empty, is used as the function's name.
     pub fn decompile(&mut self, address: u64, name: &str) -> Result<String, Error> {
         let name = CString::new(name).unwrap_or_default();
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: handle is valid; the returned string is malloc'd by the shim and freed below.
         let text = unsafe { rampage_decomp_function(self.handle, address, name.as_ptr()) };
         if text.is_null() {
@@ -157,6 +189,7 @@ impl Decompiler {
 
 impl Drop for Decompiler {
     fn drop(&mut self) {
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: handle came from rampage_decomp_open and is closed exactly once.
         unsafe { rampage_decomp_close(self.handle) };
     }
@@ -183,7 +216,7 @@ mod tests {
         if sleigh_home().is_none() {
             return;
         }
-        let segments = [Segment { base: 0x1000, bytes: X64_TEXT }];
+        let segments = [Segment { base: 0x1000, bytes: X64_TEXT, writable: false }];
         let mut decompiler = Decompiler::open(Arch::X86_64, false, &segments).expect("open");
         let text = decompiler.decompile(0x1000, "sum_to").expect("decompile");
         assert!(text.contains("sum_to"), "{text}");

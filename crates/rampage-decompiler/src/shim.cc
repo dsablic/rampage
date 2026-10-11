@@ -19,9 +19,11 @@ namespace {
 struct Segment {
     uintb base;
     std::vector<uint1> bytes;
+    bool writable;
 };
 
-// An image backed by memory segments rather than a file; unmapped addresses read as zero.
+// An image backed by memory segments rather than a file; unmapped addresses read as zero. Non-writable segments
+// are reported as read-only so the decompiler can fold their contents (string and constant pointers) into output.
 class MemImage : public LoadImage {
     std::vector<Segment> segments;
     AddrSpace *spaceid = nullptr;
@@ -43,6 +45,15 @@ public:
                 }
             }
             ptr[i] = value;
+        }
+    }
+
+    void getReadonly(RangeList &list) const override {
+        if (spaceid == nullptr) return;
+        for (const Segment &seg : segments) {
+            if (!seg.writable && !seg.bytes.empty()) {
+                list.insertRange(spaceid, seg.base, seg.base + seg.bytes.size() - 1);
+            }
         }
     }
 
@@ -84,7 +95,7 @@ extern "C" {
 // Opens a decompiler over the given segments. `langid` is Ghidra's 5-part id, e.g. "x86:LE:64:default:gcc".
 // Returns a handle even on failure; rampage_decomp_error reports what went wrong.
 void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nseg, const uint64_t *bases,
-                          const uint8_t *const *ptrs, const size_t *lens) {
+                          const uint8_t *const *ptrs, const size_t *lens, const uint8_t *writable) {
     static bool started = false;
     if (!started) {
         startDecompilerLibrary(sleighhome);
@@ -96,6 +107,7 @@ void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nse
         Segment seg;
         seg.base = bases[i];
         seg.bytes.assign(ptrs[i], ptrs[i] + lens[i]);
+        seg.writable = writable[i] != 0;
         segments.push_back(std::move(seg));
     }
     MemImage *image = new MemImage(std::move(segments));
@@ -115,6 +127,23 @@ void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nse
         handle->error = err.explain;
     }
     return handle;
+}
+
+// Registers a known function address with a name, so calls to it render by name rather than by address. Must be
+// called before decompiling callers. Ignored on failure (e.g. an address outside any space).
+void rampage_decomp_add_symbol(void *h, uint64_t addr, const char *name) {
+    Handle *handle = static_cast<Handle *>(h);
+    if (handle->arch == nullptr || name == nullptr || name[0] == '\0') return;
+    try {
+        Architecture *arch = handle->arch;
+        Address entry(arch->getDefaultCodeSpace(), addr);
+        Scope *global = arch->symboltab->getGlobalScope();
+        if (global->queryFunction(entry) == nullptr) {
+            global->addFunction(entry, name);
+        }
+    } catch (LowlevelError &) {
+        // A bad address is not fatal; the symbol is simply not added.
+    }
 }
 
 const char *rampage_decomp_error(void *h) {

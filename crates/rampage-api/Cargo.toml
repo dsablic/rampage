@@ -8,10 +8,12 @@ license.workspace = true
 rampage-analysis.workspace = true
 rampage-arch.workspace = true
 rampage-loaders.workspace = true
+rampage-decompiler.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+rampage-decompiler.workspace = true
 rampage-arch.workspace = true

@@ -71,6 +71,12 @@ enum Command {
         #[arg(long)]
         at: String,
     },
+    /// Decompile a function to C with the embedded Ghidra decompiler (needs a local Ghidra install)
+    Decompile {
+        file: PathBuf,
+        #[arg(long)]
+        at: String,
+    },
     /// Partial ARM64 SSA pseudocode with explicit unknowns (not recovered C source)
     Pseudocode {
         file: PathBuf,
@@ -195,6 +201,7 @@ fn main() -> ExitCode {
         Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
         Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),
         Command::Summarize { file, at } => commands::summarize(&mut out, &file, &at, &options),
+        Command::Decompile { file, at } => commands::decompile(&mut out, &file, &at, &options),
         Command::Pseudocode { file, at, structured } => {
             commands::pseudocode(&mut out, &file, &at, structured, &options)
         }

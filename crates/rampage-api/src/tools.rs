@@ -172,6 +172,13 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: At| project.function_summary(project.resolve(&arguments.at)?),
         ),
         tool(
+            "decompile",
+            "Decompile the function at an address or name to C, using the embedded Ghidra decompiler. This is \
+             real decompilation (types, control flow, expressions), the best starting point for understanding a \
+             function. Needs a local Ghidra install for processor specs; if unavailable, use function_summary.",
+            |project, arguments: At| project.decompile(project.resolve(&arguments.at)?),
+        ),
+        tool(
             "language_metadata",
             "Demangled symbols, named Itanium vtables/RTTI and Objective-C selector strings, with limits.",
             |project, _: Nothing| Ok(rampage_analysis::language::metadata(&project.binary)),

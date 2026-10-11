@@ -215,3 +215,20 @@ fn function_graphs_connect_blocks_by_their_branches() {
         }
     }
 }
+
+#[test]
+fn decompiles_a_function_to_c_when_ghidra_is_present() {
+    // The decompiler needs a local Ghidra install for processor specs; skip cleanly without one.
+    if rampage_decompiler::sleigh_home().is_none() {
+        return;
+    }
+    let session = Session::default();
+    let project = session.open(&fixture("hello-x64.elf"), None).unwrap();
+    let address = project.resolve("add").unwrap();
+    let decompilation = project.decompile(address).unwrap();
+    assert_eq!(decompilation.name, "add");
+    assert!(decompilation.code.contains("return"), "{}", decompilation.code);
+    // A known call target renders by name, not by address.
+    let main = project.resolve("main").unwrap();
+    assert!(project.decompile(main).unwrap().code.contains("puts"));
+}

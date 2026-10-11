@@ -85,6 +85,16 @@ pub fn summarize(out: &mut impl Write, path: &Path, at: &str, options: &Options)
     Ok(())
 }
 
+pub fn decompile(out: &mut impl Write, path: &Path, at: &str, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let decompilation = project.decompile(project.resolve(at)?)?;
+    if options.json {
+        return write_json(out, &decompilation);
+    }
+    write!(out, "{}", decompilation.code)?;
+    Ok(())
+}
+
 pub fn pseudocode(out: &mut impl Write, path: &Path, at: &str, structured: bool, options: &Options) -> Result<()> {
     let project = open(path, options)?;
     let summary = project.function_summary(project.resolve(at)?)?;

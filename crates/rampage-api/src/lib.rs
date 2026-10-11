@@ -3,6 +3,7 @@
 pub mod annotations;
 mod benchmark;
 mod correlation;
+mod decompile;
 mod graph;
 mod jumptable;
 mod listing;
@@ -20,6 +21,7 @@ use rampage_loaders::LoadError;
 
 pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use correlation::RuntimeCorrelation;
+pub use decompile::Decompilation;
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
 pub use jumptable::{JumpTable, JumpTableEntry};
 pub use listing::{DisassemblyLine, FunctionListing};
@@ -46,4 +48,8 @@ pub enum ApiError {
     NotFound(String),
     #[error("{0}")]
     Invalid(String),
+    /// A capability that needs an external resource (such as the decompiler's Ghidra specifications) is not
+    /// available in this environment.
+    #[error("{0}")]
+    Unavailable(String),
 }
