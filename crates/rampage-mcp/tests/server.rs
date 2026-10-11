@@ -52,6 +52,7 @@ async fn lists_all_tools_with_instructions() {
         "analysis_diagnostics",
         "binary_info",
         "build_signatures",
+        "capabilities",
         "class_evidence",
         "compare_runtime_bytes",
         "decompile",

@@ -59,6 +59,8 @@ enum Command {
     },
     /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
     Triage { file: PathBuf },
+    /// Likely behaviors inferred from imports and strings (triage evidence, not proof)
+    Capabilities { file: PathBuf },
     /// Decode coverage and evidence that static disassembly may be unreliable
     Audit {
         file: PathBuf,
@@ -254,6 +256,7 @@ fn main() -> ExitCode {
             commands::xrefs(&mut out, &file, query, &options)
         }
         Command::Triage { file } => commands::triage(&mut out, &file, &options),
+        Command::Capabilities { file } => commands::capabilities(&mut out, &file, &options),
         Command::Audit { file, include_discovery } => commands::audit(&mut out, &file, include_discovery, &options),
         Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
         Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),

@@ -667,3 +667,17 @@ pub fn identify(out: &mut impl Write, path: &Path, db: &Path, apply: bool, optio
     }
     Ok(())
 }
+
+pub fn capabilities(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let capabilities = open(path, options)?.capabilities();
+    if options.json {
+        return write_json(out, &capabilities);
+    }
+    if capabilities.is_empty() {
+        writeln!(out, "no capabilities detected")?;
+    }
+    for capability in capabilities {
+        writeln!(out, "[{}] {} ({})", capability.category, capability.name, capability.evidence.join(", "))?;
+    }
+    Ok(())
+}

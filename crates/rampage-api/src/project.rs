@@ -333,6 +333,12 @@ impl Project {
         Page::of(selected, query.offset, query.limit).map(Export::clone)
     }
 
+    /// The cached readable strings scanned at the default minimum length, shared by strings queries and
+    /// capability detection.
+    pub(crate) fn scanned_strings(&self) -> &[FoundString] {
+        self.strings.get_or_init(|| strings::scan(&self.binary, DEFAULT_STRING_LENGTH))
+    }
+
     pub fn strings(&self, query: &StringsQuery) -> Page<FoundString> {
         let min_len = query.min_len.unwrap_or(DEFAULT_STRING_LENGTH);
         let matcher = Matcher::new(query.contains.as_deref());

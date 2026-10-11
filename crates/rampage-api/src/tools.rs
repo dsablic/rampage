@@ -329,6 +329,13 @@ pub fn tools() -> Vec<Tool> {
             |project, args: DiagnosticsArgs| project.analysis_diagnostics(args.include_discovery),
         ),
         tool(
+            "capabilities",
+            "Likely behaviors (networking, process creation and injection, anti-debugging, cryptography, \
+             filesystem/registry, input capture) inferred from imports and strings. Triage evidence, not proof \
+             the behavior executes.",
+            |project, _: Nothing| Ok(project.capabilities()),
+        ),
+        tool(
             "observe_pointer",
             "Observe one captured pointer slot, including writable memory; never inserts a call or discovery edge.",
             |project, args: At| project.observe_pointer(project.resolve(&args.at)?),

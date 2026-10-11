@@ -16,6 +16,7 @@ rampage-api = { path = "crates/rampage-api" }
 rampage-mcp = { path = "crates/rampage-mcp" }
 rampage-decompiler = { path = "crates/rampage-decompiler" }
 rampage-signatures = { path = "crates/rampage-signatures" }
+rampage-capabilities = { path = "crates/rampage-capabilities" }
 anyhow = "1.0.104"
 assert_cmd = "2.2.2"
 # Fallback decoders for architectures without a native, spec-generated one.

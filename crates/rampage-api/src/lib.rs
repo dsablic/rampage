@@ -3,6 +3,7 @@
 pub mod annotations;
 mod benchmark;
 mod branch_observation;
+mod capabilities;
 mod correlation;
 mod debug_import;
 mod decompile;
@@ -36,6 +37,7 @@ pub use listing::{DisassemblyLine, FunctionListing};
 pub use pointer_observation::{PointerAssessment, PointerObservation};
 pub use project::Project;
 pub use rampage_analysis::triage::Triage;
+pub use rampage_capabilities::Capability;
 pub use rampage_decompiler::results::RecoveryStatus;
 pub use rampage_decompiler::worker::WorkerConfig as DecompilerWorkerConfig;
 pub use rampage_decompiler::{DecompilerOptions, Platform as DecompilerPlatform};

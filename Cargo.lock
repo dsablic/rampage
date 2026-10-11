@@ -3347,6 +3347,7 @@ version = "0.1.0"
 dependencies = [
  "rampage-analysis",
  "rampage-arch",
+ "rampage-capabilities",
  "rampage-decompiler",
  "rampage-loaders",
  "rampage-signatures",
@@ -3364,6 +3365,13 @@ dependencies = [
  "iced-x86",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rampage-capabilities"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
