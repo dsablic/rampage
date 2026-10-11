@@ -86,7 +86,7 @@ unsafe extern "C" {
     fn rampage_decomp_add_symbol(handle: *mut Opaque, addr: u64, name: *const c_char);
     fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
-    fn rampage_decomp_function(handle: *mut Opaque, addr: u64, name: *const c_char) -> *mut c_char;
+    fn rampage_decomp_function(handle: *mut Opaque, addr: u64, name: *const c_char, thumb: u8) -> *mut c_char;
     fn rampage_decomp_free_string(text: *mut c_char);
     fn rampage_decomp_close(handle: *mut Opaque);
 }
@@ -234,11 +234,12 @@ impl Decompiler {
     }
 
     /// Decompiles the function at `address` to C. `name`, when non-empty, is used as the function's name.
-    pub fn decompile(&mut self, address: u64, name: &str) -> Result<String, Error> {
+    /// `thumb` decodes the function as Thumb on 32-bit ARM; it is ignored on other targets.
+    pub fn decompile(&mut self, address: u64, name: &str, thumb: bool) -> Result<String, Error> {
         let name = CString::new(name).unwrap_or_default();
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: handle is valid; the returned string is malloc'd by the shim and freed below.
-        let text = unsafe { rampage_decomp_function(self.handle, address, name.as_ptr()) };
+        let text = unsafe { rampage_decomp_function(self.handle, address, name.as_ptr(), u8::from(thumb)) };
         if text.is_null() {
             let error = unsafe { rampage_decomp_error(self.handle) };
             let message = if error.is_null() {
@@ -285,7 +286,7 @@ mod tests {
         }
         let segments = [Segment { base: 0x1000, bytes: X64_TEXT, writable: false }];
         let mut decompiler = Decompiler::open(Arch::X86_64, false, &segments).expect("open");
-        let text = decompiler.decompile(0x1000, "sum_to").expect("decompile");
+        let text = decompiler.decompile(0x1000, "sum_to", false).expect("decompile");
         assert!(text.contains("sum_to"), "{text}");
         assert!(text.contains("return"), "{text}");
     }

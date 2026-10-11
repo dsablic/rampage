@@ -27,7 +27,9 @@ impl Project {
             *slot = Some(self.build_decompiler()?);
         }
         let decompiler = slot.as_mut().expect("just built");
-        let code = decompiler.decompile(start, &name).map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        let thumb = self.binary.arch == rampage_arch::Arch::Arm && self.binary.target().is_thumb(start);
+        let code =
+            decompiler.decompile(start, &name, thumb).map_err(|error| ApiError::Unavailable(error.to_string()))?;
         Ok(Decompilation { address: start, name, code })
     }
 

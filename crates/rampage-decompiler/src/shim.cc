@@ -171,13 +171,21 @@ const char *rampage_decomp_error(void *h) {
     return handle->error.empty() ? nullptr : handle->error.c_str();
 }
 
-// Decompiles the function at `addr` to C. Returns a malloc'd string the caller frees, or null on failure.
-char *rampage_decomp_function(void *h, uint64_t addr, const char *name) {
+// Decompiles the function at `addr` to C. When `thumb` is set and the target has a TMode context variable
+// (32-bit ARM), the function is decoded as Thumb. Returns a malloc'd string the caller frees, or null on failure.
+char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t thumb) {
     Handle *handle = static_cast<Handle *>(h);
     if (handle->arch == nullptr) return nullptr;
     Architecture *arch = handle->arch;
     try {
         Address entry(arch->getDefaultCodeSpace(), addr);
+        if (thumb != 0 && arch->context != nullptr) {
+            try {
+                arch->context->setVariable("TMode", entry, 1);
+            } catch (LowlevelError &) {
+                // The target has no TMode variable; nothing to set.
+            }
+        }
         Scope *global = arch->symboltab->getGlobalScope();
         Funcdata *fd = global->queryFunction(entry);
         if (fd == nullptr) {
