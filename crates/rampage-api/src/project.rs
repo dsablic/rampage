@@ -48,6 +48,9 @@ struct BlockSpan {
 }
 
 impl Project {
+    pub(crate) fn cached_analysis(&self) -> Option<&Analysis> {
+        self.analysis.get().and_then(|analysis| analysis.as_ref().ok())
+    }
     /// A project whose annotations live in memory only.
     pub fn new(binary: Binary) -> Self {
         Self::with_annotations(binary, Annotations::in_memory())

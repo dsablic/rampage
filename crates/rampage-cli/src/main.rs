@@ -60,7 +60,12 @@ enum Command {
     /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
     Triage { file: PathBuf },
     /// Decode coverage and evidence that static disassembly may be unreliable
-    Audit { file: PathBuf },
+    Audit {
+        file: PathBuf,
+        /// Run whole-program discovery and correlate candidates with bounded samples
+        #[arg(long)]
+        include_discovery: bool,
+    },
     /// Demangled symbols, named vtables/RTTI and Objective-C selector strings
     Metadata { file: PathBuf },
     /// Inventory binaries in a bundle or already-extracted package without executing it
@@ -209,7 +214,7 @@ fn main() -> ExitCode {
             commands::xrefs(&mut out, &file, query, &options)
         }
         Command::Triage { file } => commands::triage(&mut out, &file, &options),
-        Command::Audit { file } => commands::audit(&mut out, &file, &options),
+        Command::Audit { file, include_discovery } => commands::audit(&mut out, &file, include_discovery, &options),
         Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
         Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),
         Command::Summarize { file, at } => commands::summarize(&mut out, &file, &at, &options),

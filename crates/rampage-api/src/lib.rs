@@ -5,6 +5,7 @@ mod benchmark;
 mod correlation;
 mod debug_import;
 mod decompile;
+mod diagnostics;
 mod graph;
 mod jumptable;
 mod listing;

@@ -16,11 +16,23 @@ pub struct Options {
     pub arch: Option<Arch>,
 }
 
-pub fn audit(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+pub fn audit(out: &mut impl Write, path: &Path, include_discovery: bool, options: &Options) -> Result<()> {
     let project = open(path, options)?;
-    let audit = rampage_analysis::diagnostics::diagnostics(&project.binary);
+    let audit = project.analysis_diagnostics(include_discovery)?;
     if options.json {
         return write_json(out, &audit);
+    }
+    if let Some(discovery) = &audit.discovery {
+        writeln!(
+            out,
+            "{} discovery candidates (not verified functions); {} tiny (at most {} instructions)",
+            discovery.total_candidates, discovery.tiny_candidates, discovery.tiny_instruction_limit
+        )?;
+        writeln!(
+            out,
+            "{} candidate entries in flagged samples; {} outside sampled ranges",
+            discovery.candidates_in_flagged_sampled_ranges, discovery.candidates_outside_sampled_ranges
+        )?;
     }
     for region in audit.regions {
         writeln!(
@@ -29,6 +41,13 @@ pub fn audit(out: &mut impl Write, path: &Path, options: &Options) -> Result<()>
             region.address, region.name, region.invalid, region.instructions, region.entropy
         )?;
         writeln!(out, "  {}", region.assessment)?;
+        if let Some(discovery) = region.discovery {
+            writeln!(
+                out,
+                "  {} candidate entries in this sample; {} tiny",
+                discovery.candidates, discovery.tiny_candidates
+            )?;
+        }
     }
     for limitation in audit.limitations {
         writeln!(out, "note: {limitation}")?;

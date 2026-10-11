@@ -93,6 +93,13 @@ struct DebugImportArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct DiagnosticsArgs {
+    /// Explicitly run whole-program discovery; otherwise reuse cached discovery or sample bytes only.
+    #[serde(default)]
+    include_discovery: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 pub struct JumpTableArgs {
     pub at: String,
     /// Exact analyst-specified entry count (1–4096).
@@ -204,7 +211,7 @@ pub fn tools() -> Vec<Tool> {
             "analysis_diagnostics",
             "Decode coverage and evidence of unreliable static code, with explicit limitations. \
              Does not assert encryption.",
-            |project, _: Nothing| Ok(rampage_analysis::diagnostics::diagnostics(&project.binary)),
+            |project, args: DiagnosticsArgs| project.analysis_diagnostics(args.include_discovery),
         ),
         Tool {
             name: "binary_info",
