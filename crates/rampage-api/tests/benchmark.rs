@@ -50,3 +50,22 @@ fn comparison_metadata_rejects_terminal_controls_and_snapshot_mapping_ambiguity(
     };
     assert!(project.compare_functions(&reference).is_err());
 }
+
+#[test]
+fn a_minority_of_out_of_range_reference_addresses_count_as_missing() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+    let project = Project::new(Binary::open(path).unwrap());
+    let main = project.resolve("main").unwrap();
+    // One real function and one address outside any code range: the run succeeds and the stray counts as missing.
+    let reference = ReferenceAnalysis {
+        tool: "fixture".to_owned(),
+        version: "1".to_owned(),
+        image_sha256: project.triage().image_hashes.sha256.clone(),
+        arch: "x86_64".to_owned(),
+        functions: vec![format!("0x{main:x}"), "0x1".to_owned()],
+    };
+    let comparison = project.compare_functions(&reference).unwrap();
+    assert_eq!(comparison.matched, 1);
+    assert!(comparison.missing.contains(&0x1));
+    assert!(comparison.limitations.iter().any(|note| note.contains("outside rampage's code ranges")));
+}

@@ -79,10 +79,25 @@ impl Project {
                 rampage_loaders::snapshot::address(value).map_err(|error| ApiError::Invalid(error.to_string()))
             })
             .collect::<Result<_, _>>()?;
-        if expected.iter().any(|&address| !self.binary.is_code(address)) {
-            return Err(ApiError::Invalid("reference function address is outside executable image ranges".to_owned()));
+        // A few reference addresses outside rampage's code ranges are genuine differences (functions rampage
+        // did not find or classify as code), counted as missing. A majority out of range means the reference is
+        // in a different address space (for example unadjusted ASLR addresses), which is an error, not a result.
+        let out_of_range = expected.iter().filter(|&&address| !self.binary.is_code(address)).count();
+        if out_of_range * 2 > expected.len() {
+            return Err(ApiError::Invalid(
+                "most reference addresses are outside executable image ranges; check the address space".to_owned(),
+            ));
         }
         let actual: BTreeSet<_> = self.analysis()?.program.functions.iter().map(|function| function.address).collect();
+        let mut limitations = vec![
+            "Function-start comparison only; reference-tool output is not ground truth.".to_owned(),
+            "Matching addresses do not establish matching CFGs, types, semantics or decompilation.".to_owned(),
+            "Reference addresses must use this image's address space, not unadjusted runtime ASLR addresses."
+                .to_owned(),
+        ];
+        if out_of_range > 0 {
+            limitations.push(format!("{out_of_range} reference addresses are outside rampage's code ranges."));
+        }
         Ok(Comparison {
             reference_tool: reference.tool.clone(),
             reference_version: reference.version.clone(),
@@ -91,12 +106,7 @@ impl Project {
             rampage_functions: actual.len(),
             missing: expected.difference(&actual).copied().collect(),
             extra: actual.difference(&expected).copied().collect(),
-            limitations: vec![
-                "Function-start comparison only; reference-tool output is not ground truth.".to_owned(),
-                "Matching addresses do not establish matching CFGs, types, semantics or decompilation.".to_owned(),
-                "Reference addresses must use this image's address space, not unadjusted runtime ASLR addresses."
-                    .to_owned(),
-            ],
+            limitations,
         })
     }
 }

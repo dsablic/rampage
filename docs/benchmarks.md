@@ -1,0 +1,45 @@
+# Accuracy benchmarks
+
+rampage's analysis is measured against Ghidra as a reference. Ghidra's output is a reference, not ground truth:
+a matching function start does not establish a matching CFG, types or decompilation, and either tool can be
+wrong. The point is to catch regressions and large gaps in rampage's own analysis.
+
+## Function discovery vs Ghidra
+
+`tools/benchmark.sh` runs Ghidra headless to list function starts, builds a reference in rampage's format
+(matching the image SHA-256 and architecture), and runs `rampage compare` against it.
+
+```
+tools/benchmark.sh target/debug/rampage "$(brew --prefix ghidra)/libexec" \
+  tests/fixtures/bin/hello-x64.elf x86_64  tests/fixtures/bin/hello-arm64.elf aarch64
+```
+
+`recall` is the fraction of Ghidra's functions that rampage also found. rampage often reports more functions
+than Ghidra (the `rampage` column), because it does not fold thunks into their targets; those are not counted
+against recall.
+
+### Results (Ghidra 12.1.4, fixtures in `tests/fixtures/bin`)
+
+| binary            | arch     | ghidra | rampage | matched | recall |
+|-------------------|----------|-------:|--------:|--------:|-------:|
+| hello-x64.elf     | x86_64   |     41 |      41 |      41 | 100.0% |
+| hello-x64-dyn.elf | x86_64   |      6 |       6 |       5 |  83.3% |
+| hello-x64.exe     | x86_64   |    497 |     525 |     497 | 100.0% |
+| hello-arm64.elf   | aarch64  |      6 |       8 |       5 |  83.3% |
+| hello-arm.elf     | arm      |      4 |      10 |       4 | 100.0% |
+| hello-thumb.elf   | arm      |     44 |      44 |      43 |  97.7% |
+| hello-mips.elf    | mips     |      3 |       5 |       3 | 100.0% |
+| hello-ppc.elf     | powerpc  |     42 |      42 |      42 | 100.0% |
+| hello-riscv64.elf | riscv64  |      8 |       8 |       8 | 100.0% |
+
+On the larger PE sample rampage matches every Ghidra function. The 83–98% cases are small fixtures where a
+single miss is a large percentage; the known gap is a startup/stub entry (such as the ARM `0x10100` veneer) that
+Ghidra treats as a function and rampage does not yet discover. These are tracked for the discovery work, not the
+decompiler (which is Ghidra's engine and so agrees by construction).
+
+## Decompilation
+
+rampage decompiles through the embedded Ghidra decompiler, so its decompiled output matches Ghidra's for the
+same function by construction; there is no separate decompilation accuracy gap to measure. What is worth tracking
+there is coverage (which functions decompile without error) and the quality added by rampage's own names and
+prototypes, not divergence from Ghidra.
