@@ -59,8 +59,21 @@ pub struct LanguageSymbol {
     pub original: String,
     pub display: String,
     pub category: &'static str,
+    /// For a vtable symbol, the class it belongs to, recovered from the demangled name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class_name: Option<String>,
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
     pub vtable_targets: Vec<u64>,
+}
+
+/// The class a vtable belongs to, from its demangled name. The Itanium demanglers spell it `vtable for Foo`
+/// (c++filt) or `{vtable(Foo)}` (cpp_demangle); MSVC spells it ``Foo::`vftable'``.
+fn vtable_class(demangled: &str) -> Option<String> {
+    let name = demangled
+        .strip_prefix("vtable for ")
+        .or_else(|| demangled.strip_prefix("{vtable(").and_then(|rest| rest.strip_suffix(")}")))
+        .or_else(|| demangled.strip_suffix("::`vftable'"))?;
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 #[derive(Debug, Serialize)]
@@ -100,11 +113,14 @@ pub fn metadata(binary: &Binary) -> LanguageMetadata {
                 vtable_targets.push(pointer);
             }
         }
+        let display = display.unwrap_or_else(|| symbol.name.clone());
+        let class_name = (category == "vtable").then(|| vtable_class(&display)).flatten();
         symbols.push(LanguageSymbol {
             address: symbol.address,
             original: symbol.name.clone(),
-            display: display.unwrap_or_else(|| symbol.name.clone()),
+            display,
             category,
+            class_name,
             vtable_targets,
         });
     }
@@ -150,6 +166,14 @@ mod tests {
         assert_eq!(demangle("_ZN3foo3bar17h0123456789abcdefE").as_deref(), Some("foo::bar"));
         assert_eq!(demangle("main"), None);
         assert_eq!(demangle(&"_Z".repeat(3000)), None);
+    }
+
+    #[test]
+    fn vtable_class_reads_every_demangler_spelling() {
+        assert_eq!(vtable_class("vtable for Foo").as_deref(), Some("Foo"));
+        assert_eq!(vtable_class("{vtable(Foo::Bar)}").as_deref(), Some("Foo::Bar"));
+        assert_eq!(vtable_class("Foo::`vftable'").as_deref(), Some("Foo"));
+        assert_eq!(vtable_class("Foo::bar(int)"), None);
     }
 
     #[test]
