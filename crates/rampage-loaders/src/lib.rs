@@ -11,3 +11,4 @@ pub use details::{Details, ElfDetails, MachODetails, Overlay, PeDetails, RichEnt
 pub use load::{Binary, LoadError};
 pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
 pub mod debug;
+pub mod pdb;
