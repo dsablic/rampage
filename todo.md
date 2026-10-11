@@ -39,6 +39,8 @@ Extended-register ADD/SUB, including SP address calculations and signed/unsigned
 Scalar byte/halfword/word/doubleword loads/stores retain separate result/access widths and full-width writeback.
 Bounded exact-width constant-store forwarding resolves spills only when every memory path agrees; calls,
 unknown aliases, overlaps and memory cycles remain unknown. Mutable snapshot pointer inference remains disabled.
+Opt-in structured pseudocode renders accepted regions with explicit predecessor/parallel-phi semantics;
+word-sized and signed word-pair memory operations now retain their width/stride and SP writeback.
 
 ## General-purpose reverse-engineering roadmap
 

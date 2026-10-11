@@ -66,11 +66,15 @@ evidence for later control-flow reconstruction, not a claim that irreducible cyc
 Selected reducible shapes also expose `structured_control` regions referencing SSA blocks: sequences, branches
 with shared joins, and simple single-body loops. Loop-header effects/phis execute before the test on each
 iteration. Complex graphs, unknown dispatch and ambiguous/external successors retain the labeled fallback.
+`rampage pseudocode program --at ADDRESS --structured` prints those accepted regions as `if/else` and
+header-tested loops. Explicit predecessor tokens and parallel phi bindings preserve SSA edge selection.
+Unsupported shapes return an error for this opt-in mode; ordinary labeled pseudocode remains available.
 Phi simplification aliases only identical incoming definitions (ignoring the phi's own backedge). It does not
 inline expression trees or merge distinct predecessor values; changing loop-carried values retain their phis.
 Scalar memory effects retain separate 8/16/32/64-bit access widths and signed/unsigned 32/64-bit load results.
 Unsigned offsets, unscaled/pre/post-index addresses, register offsets and scalar literal loads are supported.
 SP writeback remains 64-bit regardless of the destination width; overlapping writeback remains a barrier.
+Word-sized STP/LDP pairs and signed LDPSW pairs retain their 4-byte stride and load-result extensions.
 
 `forwarded_loads` records constant reloads from exact-width reaching stores and their source definition IDs.
 Every incoming memory path must agree. Only provably disjoint writes within the same address domain are skipped;

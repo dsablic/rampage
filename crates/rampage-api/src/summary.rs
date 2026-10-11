@@ -20,6 +20,8 @@ pub struct FunctionSummary {
     pub control: Option<rampage_analysis::control::ControlFlow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_control: Option<rampage_analysis::structure::StructuredControl>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_pseudocode: Option<rampage_analysis::pseudocode::Pseudocode>,
 }
 
 impl Project {
@@ -113,6 +115,17 @@ impl Project {
                     None
                 }
             };
+        let structured_pseudocode = if structured_control.is_some() {
+            match ssa.as_ref().map(|ssa| rampage_analysis::pseudocode::render_structured(ssa, &edges)).transpose() {
+                Ok(output) => output,
+                Err(error) => {
+                    limitations.push(format!("Structured pseudocode omitted: {error}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
         Ok(FunctionSummary {
             graph,
             references,
@@ -123,6 +136,7 @@ impl Project {
             pseudocode,
             control,
             structured_control,
+            structured_pseudocode,
             limitations,
         })
     }

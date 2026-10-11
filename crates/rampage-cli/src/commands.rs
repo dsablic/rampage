@@ -85,11 +85,10 @@ pub fn summarize(out: &mut impl Write, path: &Path, at: &str, options: &Options)
     Ok(())
 }
 
-pub fn pseudocode(out: &mut impl Write, path: &Path, at: &str, options: &Options) -> Result<()> {
+pub fn pseudocode(out: &mut impl Write, path: &Path, at: &str, structured: bool, options: &Options) -> Result<()> {
     let project = open(path, options)?;
     let summary = project.function_summary(project.resolve(at)?)?;
-    let pseudocode = summary
-        .pseudocode
+    let pseudocode = if structured { summary.structured_pseudocode } else { summary.pseudocode }
         .ok_or_else(|| anyhow::anyhow!("pseudocode unavailable: {}", summary.limitations.join("; ")))?;
     if options.json {
         return write_json(out, &pseudocode);

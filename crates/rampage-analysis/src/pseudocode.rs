@@ -406,3 +406,121 @@ pub fn render(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<Pseudocode, String>
         ],
     })
 }
+
+fn structured_block(
+    text: &mut Output,
+    ssa: &Ssa,
+    index: usize,
+    indentation: usize,
+    remaining: &mut usize,
+) -> Result<(), String> {
+    let prefix = "  ".repeat(indentation);
+    let block = &ssa.blocks[index];
+    line!(text, "{prefix}// bb{index}: {:#x}; phi nodes select the incoming predecessor", block.address);
+    if !block.phis.is_empty() {
+        line!(text, "{prefix}parallel_phi_bindings {{");
+    }
+    for &id in &block.phis {
+        line!(
+            text,
+            "{prefix}  {} = phi_from(predecessor, {});",
+            name(id, ssa),
+            expression(&ssa.definitions[id].expression, ssa, remaining)?
+        );
+    }
+    if !block.phis.is_empty() {
+        line!(text, "{prefix}}}");
+    }
+    for statement in &block.statements {
+        if statement.barrier {
+            line!(text, "{prefix}// semantic barrier at {:#x}", statement.address);
+        }
+        for &id in &statement.definitions {
+            line!(
+                text,
+                "{prefix}{} = {};",
+                name(id, ssa),
+                expression(&ssa.definitions[id].expression, ssa, remaining)?
+            );
+        }
+        for observation in &statement.observations {
+            if matches!(observation, Expression::Load { .. } | Expression::Call { .. } | Expression::Return { .. }) {
+                line!(text, "{prefix}{};", expression(observation, ssa, remaining)?);
+            }
+        }
+        match statement.flow {
+            Flow::Return => {
+                line!(text, "{prefix}return; // signature remains unknown");
+            }
+            Flow::Halt | Flow::Invalid => {
+                line!(text, "{prefix}stop;");
+            }
+            _ => {}
+        }
+    }
+    line!(text, "{prefix}predecessor = bb{index};");
+    Ok(())
+}
+
+fn structured_region(
+    text: &mut Output,
+    ssa: &Ssa,
+    region: &crate::structure::Region,
+    indentation: usize,
+    remaining: &mut usize,
+) -> Result<(), String> {
+    use crate::structure::Region;
+    if indentation > 64 {
+        return Err("structured pseudocode nesting exceeds 64 levels".to_owned());
+    }
+    let prefix = "  ".repeat(indentation);
+    match region {
+        Region::Sequence { regions } => {
+            for region in regions {
+                structured_region(text, ssa, region, indentation, remaining)?;
+            }
+        }
+        Region::Block { block } => structured_block(text, ssa, *block, indentation, remaining)?,
+        Region::If { condition, taken, not_taken } => {
+            line!(text, "{prefix}if ({}) {{", expression(condition, ssa, remaining)?);
+            structured_region(text, ssa, taken, indentation + 1, remaining)?;
+            line!(text, "{prefix}}} else {{");
+            structured_region(text, ssa, not_taken, indentation + 1, remaining)?;
+            line!(text, "{prefix}}}");
+        }
+        Region::Loop { header, condition, body_when_true, body } => {
+            line!(text, "{prefix}while (true) {{");
+            structured_block(text, ssa, *header, indentation + 1, remaining)?;
+            let condition = expression(condition, ssa, remaining)?;
+            line!(text, "{prefix}  if ({}({condition})) break;", if *body_when_true { "!" } else { "" });
+            structured_region(text, ssa, body, indentation + 1, remaining)?;
+            line!(text, "{prefix}}}");
+        }
+    }
+    Ok(())
+}
+
+/// Prints only graph shapes accepted by conservative control structuring; expressions remain explicit SSA.
+pub fn render_structured(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<Pseudocode, String> {
+    validate(ssa, edges)?;
+    let structure = crate::structure::analyze(ssa, edges)?;
+    let mut text = Output(String::from("// Partial structured ARM64 SSA pseudocode, not typed source.\n"));
+    let mut remaining = 100_000;
+    for definition in &ssa.definitions {
+        if matches!(definition.expression, Expression::Input) {
+            line!(text, "{} = input;", name(definition.id, ssa));
+        }
+    }
+    line!(text, "predecessor = entry;");
+    structured_region(&mut text, ssa, &structure.body, 0, &mut remaining)?;
+    Ok(Pseudocode {
+        text: text.0,
+        structured: true,
+        limitations: vec![
+            "Structured control only; values remain SSA definitions, not recovered typed source variables.".to_owned(),
+            "phi_from selects the matching incoming predecessor; all block phis bind simultaneously.".to_owned(),
+            "Unknown semantics and return signatures remain explicit; unsupported graph shapes are rejected."
+                .to_owned(),
+        ],
+    })
+}

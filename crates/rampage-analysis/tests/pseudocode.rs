@@ -57,3 +57,28 @@ fn invalid_indices_and_deep_expressions_return_errors() {
     ssa.definitions[0].expression = expr;
     assert!(pseudocode::render(&ssa, &[]).is_err());
 }
+
+#[test]
+fn structured_loops_reexecute_header_phis_before_each_condition_test() {
+    let mut header = block(4, Flow::ConditionalJump(12));
+    header.instructions[0].effects =
+        vec![Effect::ConditionalControl { value: Value::Register { number: 0 }, nonzero: false, bit: None }];
+    let mut body = block(8, Flow::Jump(4));
+    body.instructions[0].effects = vec![Effect::Assign {
+        destination: Value::Register { number: 0 },
+        value: Value::Subtract {
+            left: Box::new(Value::Register { number: 0 }),
+            right: Box::new(Value::Constant { value: 1 }),
+        },
+    }];
+    let edges = [(0, 1), (1, 2), (1, 3), (2, 1)];
+    let ssa = ssa::build(&[block(0, Flow::Next), header, body, block(12, Flow::Return)], &edges, 0).unwrap();
+    let output = pseudocode::render_structured(&ssa, &edges).unwrap();
+    assert!(output.structured);
+    let loop_at = output.text.find("while (true)").unwrap();
+    let phi_at = output.text[loop_at..].find("parallel_phi_bindings").unwrap();
+    let break_at = output.text[loop_at..].find("break;").unwrap();
+    assert!(phi_at < break_at);
+    assert!(output.text.contains("predecessor = bb2;"));
+    assert!(!output.text.contains("goto "));
+}

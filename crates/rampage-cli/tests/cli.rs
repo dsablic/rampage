@@ -48,6 +48,19 @@ fn snapshot_disassembly_and_functions_use_captured_virtual_addresses() {
     let pseudocode: Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(pseudocode["structured"], false);
     assert!(pseudocode["text"].as_str().unwrap().contains("Partial ARM64 SSA"));
+    let diamond = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-ssa-diamond.snapshot.json");
+    let output = Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["--json", "pseudocode", "--at", "0x1000", "--structured"])
+        .arg(diamond)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pseudocode: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(pseudocode["structured"], true);
+    assert!(pseudocode["text"].as_str().unwrap().contains("} else {"));
     let table = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-jumptable.snapshot.json");
     let output = Command::cargo_bin("rampage")
         .unwrap()

@@ -76,6 +76,8 @@ enum Command {
         file: PathBuf,
         #[arg(long)]
         at: String,
+        #[arg(long)]
+        structured: bool,
     },
     /// Compare function starts with a versioned, image-hash-matched reference export
     Compare {
@@ -193,7 +195,9 @@ fn main() -> ExitCode {
         Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
         Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),
         Command::Summarize { file, at } => commands::summarize(&mut out, &file, &at, &options),
-        Command::Pseudocode { file, at } => commands::pseudocode(&mut out, &file, &at, &options),
+        Command::Pseudocode { file, at, structured } => {
+            commands::pseudocode(&mut out, &file, &at, structured, &options)
+        }
         Command::Compare { file, reference } => commands::compare(&mut out, &file, &reference, &options),
         Command::JumpTable { file, at, count, relative_base } => {
             commands::jump_table(&mut out, &file, &at, count, relative_base.as_deref(), &options)
