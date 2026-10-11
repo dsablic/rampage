@@ -102,6 +102,22 @@ enum Command {
         #[arg(long)]
         reference: PathBuf,
     },
+    /// Build a library-function signature database from a binary whose functions are named
+    Signatures {
+        file: PathBuf,
+        /// Write the database here (JSON); defaults to standard output
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Name functions by matching a signature database (FLIRT/Function-ID style)
+    Identify {
+        file: PathBuf,
+        #[arg(long)]
+        db: PathBuf,
+        /// Save matched names for still-unnamed functions as user names
+        #[arg(long)]
+        apply: bool,
+    },
     /// Inspect an explicit ARM64 absolute64 or signed-relative32 jump table
     JumpTable {
         file: PathBuf,
@@ -249,6 +265,8 @@ fn main() -> ExitCode {
             commands::pseudocode(&mut out, &file, &at, structured, &options)
         }
         Command::Compare { file, reference } => commands::compare(&mut out, &file, &reference, &options),
+        Command::Signatures { file, output } => commands::signatures(&mut out, &file, output.as_deref(), &options),
+        Command::Identify { file, db, apply } => commands::identify(&mut out, &file, &db, apply, &options),
         Command::JumpTable { file, at, count, relative_base } => {
             commands::jump_table(&mut out, &file, &at, count, relative_base.as_deref(), &options)
         }

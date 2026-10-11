@@ -15,6 +15,7 @@ mod project;
 mod rows;
 mod runtime_compare;
 mod session;
+mod signatures;
 mod summary;
 pub mod tools;
 mod xrefs;
@@ -38,12 +39,14 @@ pub use rampage_analysis::triage::Triage;
 pub use rampage_decompiler::results::RecoveryStatus;
 pub use rampage_decompiler::worker::WorkerConfig as DecompilerWorkerConfig;
 pub use rampage_decompiler::{DecompilerOptions, Platform as DecompilerPlatform};
+pub use rampage_signatures::SignatureDb;
 pub use rows::{
     Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page, StringsQuery,
     Summary,
 };
 pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, RuntimeRange};
 pub use session::Session;
+pub use signatures::{SignatureApplication, SignatureMatch};
 pub use summary::FunctionSummary;
 pub use xrefs::{XrefQuery, XrefRow};
 

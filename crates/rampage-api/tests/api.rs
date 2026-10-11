@@ -235,3 +235,15 @@ fn decompiles_a_function_to_c_when_ghidra_is_present() {
     // The applied libc prototype renders the string argument.
     assert!(main_c.contains("rampage fixture greeting"), "{main_c}");
 }
+
+#[test]
+fn signatures_identify_functions_across_builds() {
+    let session = Session::default();
+    let named = session.open(&fixture("hello-x64.elf"), None).unwrap();
+    let database = named.build_signatures();
+    assert!(!database.is_empty());
+    // Applied to a separately linked build, at least the leaf `add` is identified by signature.
+    let other = session.open(&fixture("hello-x64-dyn.elf"), None).unwrap();
+    let result = other.apply_signatures(&database, false).unwrap();
+    assert!(result.matches.iter().any(|m| m.name == "add"));
+}

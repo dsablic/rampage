@@ -632,3 +632,38 @@ pub fn debug_types(out: &mut impl Write, path: &Path, apply: bool, options: &Opt
     writeln!(out, "applied {}, preserved {}", result.applied.len(), result.preserved.len())?;
     Ok(())
 }
+
+pub fn signatures(out: &mut impl Write, path: &Path, output: Option<&Path>, options: &Options) -> Result<()> {
+    let database = open(path, options)?.build_signatures();
+    let json = database.to_json();
+    if let Some(output) = output {
+        std::fs::write(output, &json)?;
+        writeln!(out, "wrote {} signatures to {}", database.len(), output.display())?;
+    } else {
+        writeln!(out, "{json}")?;
+    }
+    Ok(())
+}
+
+pub fn identify(out: &mut impl Write, path: &Path, db: &Path, apply: bool, options: &Options) -> Result<()> {
+    if !std::fs::symlink_metadata(db)?.is_file() {
+        anyhow::bail!("signature database must be a regular JSON file");
+    }
+    let file = std::fs::File::open(db)?;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(file, 256 * 1024 * 1024 + 1), &mut bytes)?;
+    if bytes.len() > 256 * 1024 * 1024 {
+        anyhow::bail!("signature database exceeds 256 MiB");
+    }
+    let database = rampage_api::SignatureDb::from_json(std::str::from_utf8(&bytes)?)?;
+    let result = open(path, options)?.apply_signatures(&database, apply)?;
+    if options.json {
+        return write_json(out, &result);
+    }
+    writeln!(out, "{} matched, {} applied", result.matched, result.applied)?;
+    for item in result.matches {
+        let mark = if item.unnamed { "" } else { " (already named)" };
+        writeln!(out, "{:#x}  {}{}", item.address, item.name, mark)?;
+    }
+    Ok(())
+}
