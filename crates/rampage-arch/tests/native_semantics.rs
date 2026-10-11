@@ -194,4 +194,34 @@ mod aarch64 {
             }
         }
     }
+
+    #[test]
+    fn scalar_load_extension_matches_native_memory_reads() {
+        let bytes = [0x80u8, 0xff, 0x00, 0x80, 0xff, 0xff, 0xff, 0xff];
+        let (unsigned_byte, signed_byte32, signed_half64, signed_word64): (u64, u64, u64, u64);
+        unsafe {
+            std::arch::asm!(
+                "ldrb {unsigned:w}, [{base}]", "ldrsb {byte:w}, [{base}]",
+                "ldrsh {half}, [{base}]", "ldrsw {word}, [{base}]",
+                base = in(reg) bytes.as_ptr(), unsigned = out(reg) unsigned_byte,
+                byte = out(reg) signed_byte32, half = out(reg) signed_half64, word = out(reg) signed_word64,
+                options(readonly, nostack),
+            );
+        }
+        for (word, raw, expected) in [
+            (0x3940_0020u32, 0x80, unsigned_byte),
+            (0x39c0_0020, 0x80, signed_byte32),
+            (0x7980_0020, 0xff80, signed_half64),
+            (0xb980_0020, 0x8000_ff80, signed_word64),
+        ] {
+            let encoding = word.to_le_bytes();
+            let instruction = decoder(&Target::new(Arch::Aarch64)).unwrap().decode(&encoding, 0x1000);
+            let lifted = ir::lift(Arch::Aarch64, &encoding, &instruction);
+            assert!(lifted.complete);
+            let Effect::MemoryLoad { bits, result_bits, signed, .. } = lifted.effects[0] else {
+                panic!("missing memory load");
+            };
+            assert_eq!(ir::extend(raw, bits, result_bits, signed), Some(expected), "{word:08x}");
+        }
+    }
 }

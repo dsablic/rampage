@@ -136,9 +136,21 @@ pub fn condition(nzcv: u64, condition: u8) -> Option<bool> {
     Some(if condition < 14 && condition & 1 != 0 { !base } else { base })
 }
 
+pub fn extend(value: u64, from_bits: u8, to_bits: u8, signed: bool) -> Option<u64> {
+    if !matches!(from_bits, 8 | 16 | 32 | 64) || !matches!(to_bits, 32 | 64) || from_bits > to_bits {
+        return None;
+    }
+    let mask = crate::mrs::ones(u32::from(from_bits));
+    let value = value & mask;
+    let value = if signed && value & (1u64 << (from_bits - 1)) != 0 { value | !mask } else { value };
+    Some(value & crate::mrs::ones(u32::from(to_bits)))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Effect {
+    MemoryLoad { destination: Value, address: Value, bits: u8, result_bits: u8, signed: bool },
+    MemoryStore { address: Value, value: Value, bits: u8 },
     Return { target: Value },
     Select { destination: Value, condition: u8, when_true: Value, when_false: Value },
     SetFlags { operation: FlagOperation, left: Value, right: Value },
@@ -193,6 +205,93 @@ fn arithmetic(
     let value = if subtract { Value::Subtract { left, right } } else { Value::Add { left, right } };
     lifted.effects.push(assign(target, value));
     lifted.complete = true;
+}
+
+fn scalar_memory(lifted: &mut LiftedInstruction, name: &str, word: u32) -> bool {
+    let mut parts = name.split('_');
+    let mnemonic = parts.next().unwrap_or("");
+    let register_width = parts.next().unwrap_or("");
+    if !matches!(register_width, "32" | "64" | "32B" | "32BL" | "64B" | "64BL") {
+        return false;
+    }
+    let (load, signed, bits): (bool, bool, u8) = match mnemonic {
+        "LDRB" | "LDURB" => (true, false, 8),
+        "LDRH" | "LDURH" => (true, false, 16),
+        "LDRSB" | "LDURSB" => (true, true, 8),
+        "LDRSH" | "LDURSH" => (true, true, 16),
+        "LDRSW" | "LDURSW" => (true, true, 32),
+        "LDR" | "LDUR" => (true, false, if register_width == "64" { 64 } else { 32 }),
+        "STRB" | "STURB" => (false, false, 8),
+        "STRH" | "STURH" => (false, false, 16),
+        "STR" | "STUR" => (false, false, if register_width == "64" { 64 } else { 32 }),
+        _ => return false,
+    };
+    let rd = (word & 31) as u8;
+    let rn = ((word >> 5) & 31) as u8;
+    let base = register(rn, true);
+    let mut writeback = None;
+    let address = if name.ends_with("_loadlit") && load {
+        let offset = crate::mrs::sign_extend(u64::from((word >> 5) & 0x7ffff), 19) << 2;
+        Value::Constant { value: lifted.address.wrapping_add(offset as u64) }
+    } else if name.ends_with("_ldst_pos") {
+        Value::Add {
+            left: Box::new(base),
+            right: Box::new(Value::Constant { value: u64::from((word >> 10) & 4095) * u64::from(bits / 8) }),
+        }
+    } else if name.ends_with("_ldst_unscaled") || name.ends_with("_ldst_immpre") || name.ends_with("_ldst_immpost") {
+        let offset = crate::mrs::sign_extend(u64::from((word >> 12) & 511), 9);
+        let updated =
+            Value::Add { left: Box::new(base.clone()), right: Box::new(Value::Constant { value: offset as u64 }) };
+        if !name.ends_with("_ldst_unscaled") {
+            if rd == rn && rn != 31 {
+                lifted.effects.push(Effect::Barrier {
+                    reason: "overlapping memory writeback is constrained unpredictable".to_owned(),
+                });
+                return true;
+            }
+            writeback = Some(updated.clone());
+        }
+        if name.ends_with("_ldst_immpost") { base } else { updated }
+    } else if name.ends_with("_ldst_regoff") {
+        let option = (word >> 13) & 7;
+        if !matches!(option, 2 | 3 | 6 | 7) {
+            return false;
+        }
+        let mut offset = register(((word >> 16) & 31) as u8, false);
+        if option == 2 {
+            offset = Value::Low32 { value: Box::new(offset) };
+        } else if option == 6 {
+            offset = operation(
+                Operation::ArithmeticShiftRight,
+                operation(Operation::ShiftLeft, offset, Value::Constant { value: 32 }, 64),
+                Value::Constant { value: 32 },
+                64,
+            );
+        }
+        if word & (1 << 12) != 0 {
+            offset =
+                operation(Operation::ShiftLeft, offset, Value::Constant { value: u64::from((bits / 8).ilog2()) }, 64);
+        }
+        Value::Add { left: Box::new(base), right: Box::new(offset) }
+    } else {
+        return false;
+    };
+    lifted.effects.push(if load {
+        Effect::MemoryLoad {
+            destination: register(rd, false),
+            address,
+            bits,
+            result_bits: if register_width.starts_with("64") { 64 } else { 32 },
+            signed,
+        }
+    } else {
+        Effect::MemoryStore { address, value: register(rd, false), bits }
+    });
+    if let Some(updated) = writeback {
+        lifted.effects.push(assign(register(rn, true), updated));
+    }
+    lifted.complete = true;
+    true
 }
 
 /// A deliberately partial IR: unknown instructions are semantic barriers, never no-ops.
@@ -458,55 +557,7 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
     } else if name == "B_only_condbranch" {
         lifted.effects.push(Effect::FlagsConditional { condition: (word & 15) as u8 });
         lifted.complete = true;
-    } else if matches!(name, "LDR_32_ldst_pos" | "STR_32_ldst_pos" | "LDR_64_ldst_pos" | "STR_64_ldst_pos") {
-        lifted.bits = if name.contains("_32_") { 32 } else { 64 };
-        let address = Value::Add {
-            left: Box::new(register(rn, true)),
-            right: Box::new(Value::Constant { value: u64::from((word >> 10) & 0xfff) * u64::from(lifted.bits / 8) }),
-        };
-        let rt = register(rd, false);
-        lifted.effects.push(if word & (1 << 22) != 0 {
-            if rd == 31 { Effect::LoadDiscard { address } } else { Effect::Load { destination: rt, address } }
-        } else {
-            Effect::Store { address, value: rt }
-        });
-        lifted.complete = true;
-    } else if matches!(
-        name,
-        "LDR_64_ldst_immpost"
-            | "STR_64_ldst_immpost"
-            | "LDR_64_ldst_immpre"
-            | "STR_64_ldst_immpre"
-            | "LDUR_64_ldst_unscaled"
-            | "STUR_64_ldst_unscaled"
-    ) {
-        let offset = crate::mrs::sign_extend(u64::from((word >> 12) & 511), 9);
-        let updated = Value::Add {
-            left: Box::new(register(rn, true)),
-            right: Box::new(Value::Constant { value: offset as u64 }),
-        };
-        let post = name.ends_with("immpost");
-        let address = if post { register(rn, true) } else { updated.clone() };
-        let load = name.starts_with('L');
-        if rd == rn && rn != 31 && !name.ends_with("unscaled") {
-            lifted.effects.push(Effect::Barrier {
-                reason: "overlapping memory writeback is constrained unpredictable".to_owned(),
-            });
-            return lifted;
-        }
-        lifted.effects.push(if load {
-            if rd == 31 {
-                Effect::LoadDiscard { address }
-            } else {
-                Effect::Load { destination: register(rd, false), address }
-            }
-        } else {
-            Effect::Store { address, value: register(rd, false) }
-        });
-        if !name.ends_with("unscaled") {
-            lifted.effects.push(assign(register(rn, true), updated));
-        }
-        lifted.complete = true;
+    } else if scalar_memory(&mut lifted, name, word) {
     } else if (name.starts_with("STP_64_") || name.starts_with("LDP_64_"))
         && (name.ends_with("ldstpair_off") || name.ends_with("ldstpair_pre") || name.ends_with("ldstpair_post"))
     {
@@ -621,10 +672,10 @@ mod tests {
 
     #[test]
     fn loads_and_stores_are_distinct_effects_and_zero_register_is_constant() {
-        assert!(matches!(&instruction(0xf940_0100).effects[0], Effect::Load { .. }));
+        assert!(matches!(&instruction(0xf940_0100).effects[0], Effect::MemoryLoad { bits: 64, .. }));
         assert!(matches!(
             &instruction(0xf900_011f).effects[0],
-            Effect::Store { value: Value::Constant { value: 0 }, .. }
+            Effect::MemoryStore { value: Value::Constant { value: 0 }, bits: 64, .. }
         ));
     }
 
@@ -643,7 +694,10 @@ mod tests {
         for word in [0x9181_0420, 0xd181_0420, 0x11c0_0420, 0x91cc_0420] {
             assert!(!instruction(word).complete, "{word:08x}");
         }
-        assert!(matches!(&instruction(0xf940_03ff).effects[0], Effect::LoadDiscard { .. }));
+        assert!(matches!(
+            &instruction(0xf940_03ff).effects[0],
+            Effect::MemoryLoad { destination: Value::Constant { value: 0 }, .. }
+        ));
     }
 
     #[test]

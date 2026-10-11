@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::ssa::{Expression, Ssa, Variable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Known {
+pub(crate) enum Known {
     Pending,
     Constant(u64),
     Stack(i64),
@@ -19,8 +19,18 @@ pub struct DataFlow {
     pub stack_slots: Vec<StackSlot>,
     pub argument_registers: Vec<u8>,
     pub integer_returns: Vec<IntegerReturn>,
+    pub forwarded_loads: Vec<ForwardedLoad>,
     pub incomplete_instructions: usize,
     pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ForwardedLoad {
+    pub definition: usize,
+    pub store_definitions: Vec<usize>,
+    pub bits: u8,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub value: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,9 +66,14 @@ fn merge(left: Known, right: Known) -> Known {
     }
 }
 
-fn evaluate(expr: &Expression, values: &[Known]) -> Known {
+pub(crate) fn evaluate(expr: &Expression, values: &[Known]) -> Known {
     use Known::*;
     match expr {
+        Expression::Extend { value, from_bits, to_bits, signed } => match evaluate(value, values) {
+            Constant(value) => ir::extend(value, *from_bits, *to_bits, *signed).map_or(Unknown, Constant),
+            Pending => Pending,
+            _ => Unknown,
+        },
         Expression::Select { flags: _, condition, when_true, when_false: _ } if *condition >= 14 => {
             evaluate(when_true, values)
         }
@@ -109,8 +124,32 @@ fn evaluate(expr: &Expression, values: &[Known]) -> Known {
     }
 }
 
-pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
-    crate::pseudocode::validate(ssa, &[])?;
+fn load(expr: &Expression) -> Option<(&Expression, usize, &Expression, u8)> {
+    match expr {
+        Expression::Load { memory, address, bits } => Some((expr, *memory, address, *bits)),
+        Expression::Extend { value, .. } | Expression::Low32 { value } => load(value),
+        _ => None,
+    }
+}
+
+fn loaded(expr: &Expression, value: u64) -> Known {
+    match expr {
+        Expression::Load { .. } => Known::Constant(value),
+        Expression::Low32 { value: inner } => match loaded(inner, value) {
+            Known::Constant(value) => Known::Constant(value & 0xffff_ffff),
+            _ => Known::Unknown,
+        },
+        Expression::Extend { value: inner, from_bits, to_bits, signed } => match loaded(inner, value) {
+            Known::Constant(value) => {
+                ir::extend(value, *from_bits, *to_bits, *signed).map_or(Known::Unknown, Known::Constant)
+            }
+            _ => Known::Unknown,
+        },
+        _ => Known::Unknown,
+    }
+}
+
+fn solve(ssa: &Ssa, forwarded: &[Option<u64>]) -> Vec<Known> {
     let mut values = vec![Known::Pending; ssa.definitions.len()];
     let mut users = vec![Vec::new(); values.len()];
     for definition in &ssa.definitions {
@@ -125,7 +164,9 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
     while let Some(id) = queue.pop_front() {
         queued[id] = false;
         let definition = &ssa.definitions[id];
-        let next = if matches!(definition.expression, Expression::Input) {
+        let next = if let Some(value) = forwarded[id] {
+            loaded(&definition.expression, value)
+        } else if matches!(definition.expression, Expression::Input) {
             if definition.variable == Variable::StackPointer { Known::Stack(0) } else { Known::Unknown }
         } else {
             evaluate(&definition.expression, &values)
@@ -140,6 +181,40 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
                 }
             }
         }
+    }
+    values
+}
+
+pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
+    crate::pseudocode::validate(ssa, &[])?;
+    let mut forwarded = vec![None; ssa.definitions.len()];
+    let mut values = solve(ssa, &forwarded);
+    let mut remaining = 200_000;
+    let mut forwarded_loads = Vec::new();
+    for _ in 0..8 {
+        let mut changed = false;
+        for definition in &ssa.definitions {
+            if forwarded[definition.id].is_some() {
+                continue;
+            }
+            let Some((_, memory, address, bits)) = load(&definition.expression) else { continue };
+            if let Some(resolution) =
+                crate::reaching_store::resolve(ssa, &values, memory, address, bits, &mut remaining)
+            {
+                forwarded[definition.id] = Some(resolution.value);
+                forwarded_loads.push(ForwardedLoad {
+                    definition: definition.id,
+                    store_definitions: resolution.stores.into_iter().collect(),
+                    bits,
+                    value: resolution.value,
+                });
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+        values = solve(ssa, &forwarded);
     }
     let mut slots: BTreeMap<(i64, u8), StackSlot> = BTreeMap::new();
     let mut accessed = |expr: &Expression, at| {
@@ -166,7 +241,7 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
         for &id in &statement.definitions {
             let expression = &ssa.definitions[id].expression;
             accessed(expression, statement.address);
-            if let Expression::Low32 { value } = expression {
+            if let Expression::Low32 { value } | Expression::Extend { value, .. } = expression {
                 accessed(value, statement.address);
             }
         }
@@ -235,6 +310,7 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
         stack_slots: slots.into_values().collect(),
         argument_registers: arguments.into_iter().collect(),
         integer_returns,
+        forwarded_loads,
         incomplete_instructions: ssa
             .blocks
             .iter()
@@ -247,7 +323,12 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
                 .to_owned(),
             "X0/X1 at RET are possible integer return values; void, aggregate and FP/SIMD signatures remain unknown."
                 .to_owned(),
-            "Loads are not constant-folded; stack offsets require agreement at joins and may be unknown.".to_owned(),
+            "Loads forward only exact-width constant stores agreed across paths; \
+             partial overlaps, calls and unknown aliases stop inference."
+                .to_owned(),
+            "Memory forwarding is bounded to eight passes, 200,000 memory visits, \
+             64 levels and 64 source stores per load."
+                .to_owned(),
             "Conflicting values and unsupported semantics remain unknown; no pointer alias analysis.".to_owned(),
         ],
     })

@@ -81,7 +81,9 @@ mod arm64 {
              return (a + (b << 3)) ^ 0xff;\n}\n\
              __attribute__((noinline)) unsigned long choose(unsigned long a) {\n\
              if (a == 0) return 7;\nreturn a + 3;\n}\n\
-             int main(void) { return sample(3, 5) != 212 || choose(0) != 7 || choose(5) != 8; }\n",
+             __attribute__((noinline)) long spill(void) {\n\
+             volatile unsigned char byte = 128;\nreturn (signed char)byte;\n}\n\
+             int main(void) {\nreturn sample(3, 5) != 212 || choose(0) != 7 || choose(5) != 8 || spill() != -128;\n}\n",
         )
         .unwrap();
         let output = std::process::Command::new("clang")
@@ -119,5 +121,11 @@ mod arm64 {
         for (left, expected) in [(0, 7), (5, 8), (u64::MAX, 2)] {
             assert_eq!(execute(&choose.ir, left, 0), expected);
         }
+        let spill = project.function_summary(project.resolve("_spill").unwrap()).unwrap();
+        assert!(spill.ir.iter().all(|instruction| instruction.complete), "{:#?}", spill.graph);
+        let data = spill.dataflow.unwrap();
+        assert_eq!(data.integer_returns.len(), 1);
+        assert_eq!(data.integer_returns[0].constant_values[0].as_deref(), Some("0xffffffffffffff80"));
+        assert!(!data.forwarded_loads.is_empty());
     }
 }

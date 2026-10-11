@@ -172,3 +172,22 @@ fn arm64_stack_pairs_report_entry_relative_slots() {
         assert_eq!(slot.reads, [0x100c]);
     }
 }
+
+#[test]
+fn signed_byte_spill_forwards_a_return_candidate_without_snapshot_memory() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64-byte-spill.snapshot.json");
+    let summary = Project::new(Binary::open(path).unwrap()).function_summary(0x1000).unwrap();
+    assert!(summary.ir.iter().all(|instruction| instruction.complete));
+    let data = summary.dataflow.unwrap();
+    assert_eq!(data.stack_slots.len(), 1);
+    assert_eq!(data.stack_slots[0].offset, -13);
+    assert_eq!(data.stack_slots[0].bits, 8);
+    assert_eq!(data.stack_slots[0].writes, [0x1008]);
+    assert_eq!(data.stack_slots[0].reads, [0x100c]);
+    assert_eq!(data.forwarded_loads.len(), 1);
+    assert_eq!(data.integer_returns[0].constant_values[0].as_deref(), Some("0xffffffffffffff80"));
+    assert!(data.argument_registers.is_empty());
+    let text = summary.pseudocode.unwrap().text;
+    assert!(text.contains("load8(") && text.contains("sext8_to64("));
+}

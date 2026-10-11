@@ -68,6 +68,14 @@ with shared joins, and simple single-body loops. Loop-header effects/phis execut
 iteration. Complex graphs, unknown dispatch and ambiguous/external successors retain the labeled fallback.
 Phi simplification aliases only identical incoming definitions (ignoring the phi's own backedge). It does not
 inline expression trees or merge distinct predecessor values; changing loop-carried values retain their phis.
+Scalar memory effects retain separate 8/16/32/64-bit access widths and signed/unsigned 32/64-bit load results.
+Unsigned offsets, unscaled/pre/post-index addresses, register offsets and scalar literal loads are supported.
+SP writeback remains 64-bit regardless of the destination width; overlapping writeback remains a barrier.
+
+`forwarded_loads` records constant reloads from exact-width reaching stores and their source definition IDs.
+Every incoming memory path must agree. Only provably disjoint writes within the same address domain are skipped;
+unknown aliases, calls, partial overlaps and memory cycles stop inference. Snapshot bytes are not used as load
+values. Forwarding is limited to eight passes, 200,000 memory visits, 64 levels and 64 source stores per load.
 
 The next gates are more scalar/FP/SIMD semantics, alias-aware memory analysis, broader control-flow structuring,
 typed arguments/returns, automatic dispatch recovery and live runtime integration. PAC, exceptions, TLS, varargs,

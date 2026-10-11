@@ -36,6 +36,9 @@ Per-RET integer-return candidates retain X0/X1 definitions and constants without
 SSA removes redundant phi aliases without expression expansion; changing loop values retain predecessor inputs.
 Native checks cover all condition codes and all NZCV combinations.
 Extended-register ADD/SUB, including SP address calculations and signed/unsigned extensions, is now lifted.
+Scalar byte/halfword/word/doubleword loads/stores retain separate result/access widths and full-width writeback.
+Bounded exact-width constant-store forwarding resolves spills only when every memory path agrees; calls,
+unknown aliases, overlaps and memory cycles remain unknown. Mutable snapshot pointer inference remains disabled.
 
 ## General-purpose reverse-engineering roadmap
 

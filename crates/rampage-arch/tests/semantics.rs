@@ -160,3 +160,42 @@ fn extended_arithmetic_handles_sign_zero_stack_and_discard_operands() {
     assert!(matches!(lifted.effects[1], Effect::Discard { .. }));
     assert!(!lift(0x8b21_57e0).complete);
 }
+
+#[test]
+fn scalar_memory_tracks_access_width_result_extension_and_full_width_writeback() {
+    let mut registers = [0; 31];
+    registers[1] = 0x2000;
+    registers[2] = u64::MAX;
+    for (word, bits, result_bits, signed, expected_address) in [
+        (0x3940_0fe0, 8, 32, false, 0x1000_0000_0003),
+        (0x3980_0c20, 8, 64, true, 0x2003),
+        (0x79c0_07e0, 16, 32, true, 0x1000_0000_0002),
+        (0xb840_47e0, 32, 32, false, 0x1000_0000_0000),
+        (0xb89f_cfe0, 32, 64, true, 0x0fff_ffff_fffc),
+        (0x385f_f020, 8, 32, false, 0x1fff),
+        (0x78a2_d820, 16, 64, true, 0x1ffe),
+        (0xf862_7820, 64, 64, false, 0x1ff8),
+        (0x1800_0040, 32, 32, false, 0x1008),
+        (0x9800_0040, 32, 64, true, 0x1008),
+    ] {
+        let lifted = lift(word);
+        assert!(lifted.complete, "{word:08x}");
+        assert_eq!(lifted.bits, 64);
+        assert!(
+            matches!(&lifted.effects[0], Effect::MemoryLoad { address, bits: actual_bits,
+            result_bits: actual_result, signed: actual_signed, .. } if *actual_bits == bits
+            && *actual_result == result_bits && *actual_signed == signed
+            && value(address, &registers, 0x1000_0000_0000) == expected_address),
+            "{word:08x}"
+        );
+    }
+    let post = lift(0xb840_47e0);
+    assert!(matches!(&post.effects[1], Effect::Assign { destination: Value::StackPointer, value: expr }
+        if value(expr, &registers, 0x1000_0000_0000) == 0x1000_0000_0004));
+    for (word, expected_bits) in [(0x7900_07e0, 16), (0x3822_4820, 8)] {
+        assert!(matches!(lift(word).effects[0], Effect::MemoryStore { bits, .. } if bits == expected_bits));
+    }
+    assert_eq!(ir::extend(0x80, 8, 32, true), Some(0xffff_ff80));
+    assert_eq!(ir::extend(0x8000, 16, 64, true), Some(0xffff_ffff_ffff_8000));
+    assert_eq!(ir::extend(u64::MAX, 8, 64, false), Some(255));
+}

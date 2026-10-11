@@ -66,6 +66,12 @@ pub enum Variable {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Expression {
+    Extend {
+        value: Box<Expression>,
+        from_bits: u8,
+        to_bits: u8,
+        signed: bool,
+    },
     Return {
         target: Box<Expression>,
         integer_values: [usize; 2],
@@ -226,7 +232,9 @@ pub(crate) fn references(value: &Expression, out: &mut Vec<usize>) {
             references(left, out);
             references(right, out);
         }
-        Expression::Low32 { value } | Expression::Condition { value, .. } => references(value, out),
+        Expression::Low32 { value } | Expression::Condition { value, .. } | Expression::Extend { value, .. } => {
+            references(value, out)
+        }
         Expression::FlagsCondition { flags, .. } => out.push(*flags),
         Expression::Call { target, arguments, memory, result_buffer, stack_pointer, .. } => {
             references(target, out);
@@ -286,6 +294,24 @@ fn budget(input: &[InputBlock]) -> Result<(), String> {
         }
         for effect in &insn.effects {
             match effect {
+                Effect::MemoryLoad { destination, address, bits, result_bits, signed } => {
+                    if rampage_arch::ir::extend(0, *bits, *result_bits, *signed).is_none() {
+                        return Err("invalid memory load widths".to_owned());
+                    }
+                    if !barrier && !matches!(destination, Value::Constant { value: 0 }) {
+                        definitions += 1;
+                    }
+                    validate_values(&[destination, address], &mut nodes)?;
+                }
+                Effect::MemoryStore { address, value, bits } => {
+                    if !matches!(bits, 8 | 16 | 32 | 64) {
+                        return Err("invalid memory store width".to_owned());
+                    }
+                    if !barrier {
+                        definitions += 1;
+                    }
+                    validate_values(&[address, value], &mut nodes)?;
+                }
                 Effect::Return { target } => {
                     if insn.flow != Flow::Return {
                         return Err("return effect requires return flow".to_owned());
@@ -449,6 +475,41 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
             } else {
                 for effect in &insn.effects {
                     match effect {
+                        Effect::MemoryLoad { destination: target, address, bits, result_bits, signed } => {
+                            let load = Expression::Load {
+                                memory: state[MEMORY],
+                                address: Box::new(expression(address, state, 0)?),
+                                bits: *bits,
+                            };
+                            if matches!(target, Value::Constant { value: 0 }) {
+                                statement.observations.push(load);
+                            } else {
+                                let index = destination(target).ok_or("memory load destination is not writable")?;
+                                let value = Expression::Extend {
+                                    value: Box::new(load),
+                                    from_bits: *bits,
+                                    to_bits: *result_bits,
+                                    signed: *signed,
+                                };
+                                statement.definitions.push(define(&mut definitions, state, index, value));
+                            }
+                        }
+                        Effect::MemoryStore { address, value, bits } => {
+                            let value = Expression::Store {
+                                memory: state[MEMORY],
+                                address: Box::new(expression(address, state, 0)?),
+                                value: Box::new(Expression::Binary {
+                                    operation: Operation::And,
+                                    left: Box::new(expression(value, state, 0)?),
+                                    right: Box::new(Expression::Constant {
+                                        value: if *bits == 64 { u64::MAX } else { (1u64 << bits) - 1 },
+                                    }),
+                                    bits: 64,
+                                }),
+                                bits: *bits,
+                            };
+                            statement.definitions.push(define(&mut definitions, state, MEMORY, value));
+                        }
                         Effect::Return { target } => statement.observations.push(Expression::Return {
                             target: Box::new(expression(target, state, 0)?),
                             integer_values: [state[0], state[1]],
@@ -646,7 +707,9 @@ fn rewrite(value: &mut Expression, remap: &[usize]) {
             rewrite(left, remap);
             rewrite(right, remap);
         }
-        Expression::Low32 { value } | Expression::Condition { value, .. } => rewrite(value, remap),
+        Expression::Low32 { value } | Expression::Condition { value, .. } | Expression::Extend { value, .. } => {
+            rewrite(value, remap)
+        }
         Expression::FlagsCondition { flags, .. } => *flags = remap[*flags],
         Expression::Call { target, arguments, memory, result_buffer, stack_pointer, .. } => {
             rewrite(target, remap);

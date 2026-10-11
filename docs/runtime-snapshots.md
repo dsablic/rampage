@@ -70,9 +70,11 @@ caller-saved registers/memory; unknown, FP/SIMD and authenticated operations rem
 
 The `ssa` field in AArch64 summaries gives each register and memory definition a unique ID. Block-entry phi
 nodes name incoming definitions by predecessor block, including an external input edge when the entry has
-a backedge. Stores create memory versions; loads reference them but are not folded into constants. Unknown
+a backedge. Stores create memory versions; loads retain references even when dataflow reports a forwarded constant.
+Unknown
 instructions invalidate register and memory knowledge. A 32-bit result is represented as `low32`, zero-extended
-into its architectural register. Unreachable blocks contribute no phi inputs.
+into its architectural register. Scalar signed loads use explicit width-extension expressions.
+Unreachable blocks contribute no phi inputs.
 Loads/stores retain their access widths; conditional controls retain polarity and the tested bit where applicable.
 
 SSA is omitted with a limitation message for functions exceeding 512 blocks, 20,000 instructions or 4,096
@@ -82,6 +84,8 @@ SSA allocation. It represents data flow over partial IR, not source-level variab
 `rampage pseudocode capture.json --at 0x1000` prints an explicitly partial SSA-style view, retaining labels,
 phi nodes, memory widths and unknowns. It does not claim structured C source. Function summaries also include
 bounded constant and entry-SP-relative stack-slot evidence; conflicting predecessor values stay unknown.
+Exact-width constant spill/reloads can be forwarded with source-store evidence. This does not infer values
+from captured memory: unknown aliases, partial overlaps, calls and cyclic memory stop forwarding.
 
 Optional `modules` entries have `name`, `path`, `uuid`, `image_base` and `runtime_base`. Optional `registers`
 entries have hexadecimal `thread_id`/`value` and a register `name`. Both lists are limited to 4,096 entries;

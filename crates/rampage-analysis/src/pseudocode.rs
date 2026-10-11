@@ -40,6 +40,12 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
             }
             let valid = |id: usize| id < ssa.definitions.len();
             match expr {
+                Expression::Extend { value, from_bits, to_bits, signed } => {
+                    if rampage_arch::ir::extend(0, *from_bits, *to_bits, *signed).is_none() {
+                        return Err("invalid extension widths".to_owned());
+                    }
+                    stack.push((value, depth + 1));
+                }
                 Expression::Return { target, integer_values, memory } => {
                     if !allow_return || depth != 0 {
                         return Err("return must be a return-statement observation".to_owned());
@@ -82,13 +88,19 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
                     }
                     nodes += inputs.len();
                 }
-                Expression::Load { memory, address, .. } => {
+                Expression::Load { memory, address, bits } => {
+                    if !matches!(bits, 8 | 16 | 32 | 64) {
+                        return Err("invalid load width".to_owned());
+                    }
                     if !valid(*memory) {
                         return Err("invalid memory definition".to_owned());
                     }
                     stack.push((address, depth + 1));
                 }
-                Expression::Store { memory, address, value, .. } => {
+                Expression::Store { memory, address, value, bits } => {
+                    if !matches!(bits, 8 | 16 | 32 | 64) {
+                        return Err("invalid store width".to_owned());
+                    }
                     if !valid(*memory) {
                         return Err("invalid memory definition".to_owned());
                     }
@@ -119,9 +131,34 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
         check(&definition.expression, false)?;
     }
     let mut statements = 0;
-    for block in &ssa.blocks {
+    let mut phi_owners = vec![false; ssa.definitions.len()];
+    for (index, block) in ssa.blocks.iter().enumerate() {
         if block.phis.iter().any(|&id| id >= ssa.definitions.len()) {
             return Err("invalid block phi".to_owned());
+        }
+        if block.predecessors.len() > 4096 || block.predecessors.iter().any(|&id| id >= ssa.blocks.len()) {
+            return Err("invalid block predecessors".to_owned());
+        }
+        let mut expected: Vec<_> = block.predecessors.iter().copied().map(Some).collect();
+        if index == ssa.entry {
+            expected.push(None);
+        }
+        expected.sort_unstable();
+        if expected.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err("duplicate block predecessor".to_owned());
+        }
+        for &id in &block.phis {
+            if std::mem::replace(&mut phi_owners[id], true) {
+                return Err("phi belongs to multiple blocks".to_owned());
+            }
+            let Expression::Phi { inputs } = &ssa.definitions[id].expression else {
+                return Err("block phi must refer to a phi definition".to_owned());
+            };
+            let mut actual: Vec<_> = inputs.iter().map(|input| input.predecessor).collect();
+            actual.sort_unstable();
+            if actual != expected {
+                return Err("phi must cover every predecessor exactly once".to_owned());
+            }
         }
         for statement in &block.statements {
             statements += 1;
@@ -132,6 +169,13 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
                 check(observation, statement.flow == Flow::Return)?;
             }
         }
+    }
+    if ssa
+        .definitions
+        .iter()
+        .any(|definition| matches!(definition.expression, Expression::Phi { .. }) && !phi_owners[definition.id])
+    {
+        return Err("phi definition has no owning block".to_owned());
     }
     Ok(())
 }
@@ -166,6 +210,11 @@ fn name(id: usize, ssa: &Ssa) -> String {
 fn expression(expr: &Expression, ssa: &Ssa, remaining: &mut usize) -> Result<String, String> {
     *remaining = remaining.checked_sub(1).ok_or("pseudocode expression budget exceeded")?;
     Ok(match expr {
+        Expression::Extend { value, from_bits, to_bits, signed } => format!(
+            "{}ext{from_bits}_to{to_bits}({})",
+            if *signed { "s" } else { "z" },
+            expression(value, ssa, remaining)?
+        ),
         Expression::Return { target, integer_values, memory } => format!(
             "integer_return_candidates([{}, {}], memory={}, target={})",
             name(integer_values[0], ssa),
