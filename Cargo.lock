@@ -3394,6 +3394,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rampage-signatures"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "rampage-arch",
+ "rampage-loaders",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "rampage-ui"
 version = "0.1.0"
 dependencies = [
