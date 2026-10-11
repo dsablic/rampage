@@ -16,7 +16,9 @@ vendored Apache-2.0 sources.
 
 ## Processor specifications
 
-The compiled SLEIGH specifications (`.sla`) are not vendored. At runtime the crate locates a local Ghidra
-install that contains a `Ghidra/Processors` tree: `GHIDRA_INSTALL_DIR` if set, otherwise a Homebrew install
-(`brew --prefix ghidra`). Without one, `Decompiler::open` returns `Error::NoSleighHome` and callers fall back
-to rampage's own analysis. s390x has no Ghidra specification and is unsupported.
+The compiled SLEIGH specifications (`.sla`) and their processor/compiler specs for every supported architecture
+are vendored under `specs/` (about 4.5 MB, from the same Ghidra 12.1.4 release), so a source build decompiles with
+no external Ghidra install. `sleigh_home` resolves them in order: `GHIDRA_INSTALL_DIR` if set, then the vendored
+`specs/` (the path is baked at build time), then a Homebrew install (`brew --prefix ghidra`). A relocated binary
+built elsewhere falls back to an install or the environment override. s390x has no Ghidra specification and is
+unsupported.

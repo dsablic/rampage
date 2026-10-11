@@ -34,9 +34,9 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
 - Decompilation: functions decompile to C through an embedded build of Ghidra's decompiler (Apache-2.0), in
   process, for every architecture rampage decodes except s390x. rampage's own function names are fed in so calls
   render by name, common libc calls are given prototypes so their string arguments show, and 32-bit ARM Thumb
-  functions decode in Thumb mode. It needs a local Ghidra install for the processor specifications (set
-  `GHIDRA_INSTALL_DIR`, or install via Homebrew); without one, rampage falls back to its structural summaries.
-  See [crates/rampage-decompiler](crates/rampage-decompiler).
+  functions decode in Thumb mode. The processor specifications are vendored, so a source build decompiles with no
+  external Ghidra install (override with `GHIDRA_INSTALL_DIR`). See
+  [crates/rampage-decompiler](crates/rampage-decompiler).
 
 ## Usage
 

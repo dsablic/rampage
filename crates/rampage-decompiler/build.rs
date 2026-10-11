@@ -21,6 +21,12 @@ fn main() {
 
     // libz is needed for Ghidra's compressed .sla spec loading.
     println!("cargo:rustc-link-lib=z");
+
+    // Bake the path to the vendored SLEIGH specifications, so a source build decompiles with no external Ghidra
+    // install. `sleigh_home` prefers this when the directory is present.
+    let specs = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR")).join("specs");
+    println!("cargo:rustc-env=RAMPAGE_BUNDLED_SPECS={}", specs.display());
+
     println!("cargo:rerun-if-changed=src/shim.cc");
     println!("cargo:rerun-if-changed=vendor/ghidra");
 }

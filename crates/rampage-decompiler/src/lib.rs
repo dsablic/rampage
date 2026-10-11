@@ -151,11 +151,16 @@ pub fn language_id(arch: Arch, big_endian: bool) -> Option<String> {
     Some(id)
 }
 
-/// Locates a directory holding Ghidra's `Ghidra/Processors` specification tree: `GHIDRA_INSTALL_DIR` if set,
-/// otherwise a Homebrew install.
+/// Locates a directory holding a `Ghidra/Processors` specification tree, in order of preference:
+/// `GHIDRA_INSTALL_DIR` if set, then the specifications vendored with this crate, then a Homebrew Ghidra install.
+/// The vendored specifications mean a source build needs no external Ghidra install.
 pub fn sleigh_home() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("GHIDRA_INSTALL_DIR") {
         return Some(PathBuf::from(dir));
+    }
+    let bundled = PathBuf::from(env!("RAMPAGE_BUNDLED_SPECS"));
+    if bundled.join("Ghidra").is_dir() {
+        return Some(bundled);
     }
     let output = Command::new("brew").args(["--prefix", "ghidra"]).output().ok()?;
     if !output.status.success() {
@@ -297,6 +302,18 @@ mod tests {
     #[test]
     fn s390x_is_unsupported() {
         assert!(language_id(Arch::S390x, true).is_none());
+    }
+
+    #[test]
+    fn bundled_specifications_are_found_without_an_install() {
+        // With no override, the specifications vendored with the crate should be used, so decompilation works
+        // out of the box.
+        if std::env::var_os("GHIDRA_INSTALL_DIR").is_some() {
+            return;
+        }
+        let home = sleigh_home().expect("bundled specifications");
+        assert!(home.ends_with("specs"), "{home:?}");
+        assert!(home.join("Ghidra/Processors/x86/data/languages/x86.sla").is_file());
     }
 
     #[test]
