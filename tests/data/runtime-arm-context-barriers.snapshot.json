@@ -1,0 +1,12 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "arm",
+  "provenance": "one mapping with discovered Thumb branch/continuation and an unseeded ARM gap",
+  "regions": [
+    {"name": "text", "address": "0xff0", "permissions": "r-x",
+     "bytes":
+       "04e02de5010000fa04f09de4000000000ee000000000000000000000000000000500a0e31eff2fe1000000000000000007207047"}
+  ],
+  "seeds": ["0xff0"],
+  "entry": "0xff0"
+}

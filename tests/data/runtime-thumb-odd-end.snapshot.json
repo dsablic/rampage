@@ -1,0 +1,10 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "arm",
+  "provenance": "complete Thumb function followed by one padding byte",
+  "regions": [
+    {"name": "text", "address": "0x1000", "permissions": "r-x", "bytes": "0720704700", "thumb": true}
+  ],
+  "seeds": ["0x1000"],
+  "entry": "0x1000"
+}

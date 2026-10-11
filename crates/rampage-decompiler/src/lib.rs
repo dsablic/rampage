@@ -201,6 +201,12 @@ unsafe extern "C" {
     fn rampage_decomp_add_symbol(handle: *mut Opaque, addr: u64, name: *const c_char);
     fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
+    fn rampage_decomp_set_modes(
+        handle: *mut Opaque,
+        count: usize,
+        addresses: *const u64,
+        thumb: *const u8,
+    ) -> *const c_char;
     fn rampage_decomp_function(handle: *mut Opaque, addr: u64, name: *const c_char, thumb: u8) -> *mut c_char;
     fn rampage_decomp_free_string(text: *mut c_char);
     fn rampage_decomp_close(handle: *mut Opaque);
@@ -319,6 +325,7 @@ pub fn sleigh_home() -> Option<PathBuf> {
 /// A decompiler over one program's executable segments.
 pub struct Decompiler {
     handle: *mut Opaque,
+    arch: Arch,
 }
 
 // SAFETY: the handle is only ever used while holding FFI_LOCK, so it is touched by one thread at a time.
@@ -385,7 +392,7 @@ impl Decompiler {
             unsafe { rampage_decomp_close(handle) };
             return Err(Error::Ghidra(message));
         }
-        Ok(Decompiler { handle })
+        Ok(Decompiler { handle, arch })
     }
 
     /// Registers a known function address with a name, so calls to it render by name. Call before decompiling
@@ -409,6 +416,31 @@ impl Decompiler {
         } else {
             Err(Error::Ghidra(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned()))
         }
+    }
+
+    /// Installs ARM context boundaries, which need not be aligned instruction addresses.
+    pub fn set_code_modes(&mut self, modes: &[(u64, bool)]) -> Result<(), Error> {
+        if modes.is_empty() {
+            return Ok(());
+        }
+        if self.arch != Arch::Arm
+            || modes.iter().any(|&(address, _)| address > u64::from(u32::MAX))
+            || modes.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+        {
+            return Err(Error::Ghidra("mode points require sorted, unique ARM context boundaries".to_owned()));
+        }
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        for batch in modes.chunks(4096) {
+            let addresses: Vec<_> = batch.iter().map(|&(address, _)| address).collect();
+            let thumb: Vec<_> = batch.iter().map(|&(_, thumb)| u8::from(thumb)).collect();
+            // SAFETY: arrays have identical lengths and remain valid throughout the serialized call.
+            let error =
+                unsafe { rampage_decomp_set_modes(self.handle, batch.len(), addresses.as_ptr(), thumb.as_ptr()) };
+            if !error.is_null() {
+                return Err(Error::Ghidra(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned()));
+            }
+        }
+        Ok(())
     }
 
     /// Decompiles the function at `address` to C. `name`, when non-empty, is used as the function's name.

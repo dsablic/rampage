@@ -1,0 +1,12 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "arm",
+  "provenance": "LLVM-checked ARM caller, BLX-learned Thumb callee and later ARM function",
+  "regions": [
+    {"name": "caller", "address": "0x1000", "permissions": "r-x", "bytes": "04e02de5020000fa04f09de4"},
+    {"name": "thumb_callee", "address": "0x1014", "permissions": "r-x", "bytes": "07207047"},
+    {"name": "arm_function", "address": "0x1020", "permissions": "r-x", "bytes": "0500a0e31eff2fe1"}
+  ],
+  "seeds": ["0x1000", "0x1020"],
+  "entry": "0x1000"
+}

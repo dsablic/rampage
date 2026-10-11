@@ -1,0 +1,10 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "arm",
+  "provenance": "Thumb function at the top of the 32-bit address space",
+  "regions": [
+    {"name": "text", "address": "0xfffffffc", "permissions": "r-x", "bytes": "07207047", "thumb": true}
+  ],
+  "seeds": ["0xfffffffc"],
+  "entry": "0xfffffffc"
+}

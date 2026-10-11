@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// Modified for rampage: separate speculative lookahead from validated instruction bytes.
+// Modified for rampage: validated instruction reads and explicit translation-cache invalidation.
 #include "sleigh.hh"
 #include "loadimage.hh"
 
@@ -551,6 +551,29 @@ void Sleigh::reset(LoadImage *ld,ContextDatabase *c_db)
   discache = (DisassemblyCache *)0;
 }
 
+void Sleigh::clearCache(void)
+
+{
+  unique_ptr<ContextCache> nextCache(new ContextCache(context_db));
+  unique_ptr<DisassemblyCache> nextDiscache(buildDisassemblyCache(nextCache.get()));
+  pcode_cache.clear();
+  clearForDelete();
+  cache = nextCache.release();
+  discache = nextDiscache.release();
+}
+
+DisassemblyCache *Sleigh::buildDisassemblyCache(ContextCache *contextCache)
+
+{
+  uint4 parser_cachesize = 2;
+  uint4 parser_windowsize = 32;
+  if ((maxdelayslotbytes > 1)||(unique_allocatemask != 0)) {
+    parser_cachesize = 8;
+    parser_windowsize = 256;
+  }
+  return new DisassemblyCache(this,contextCache,getConstantSpace(),parser_cachesize,parser_windowsize);
+}
+
 /// The .sla file from the document store is loaded and cache objects are prepared
 /// \param store is the document store containing the main \<sleigh> tag.
 void Sleigh::initialize(DocumentStorage &store)
@@ -570,13 +593,7 @@ void Sleigh::initialize(DocumentStorage &store)
   }
   else
     reregisterContext();
-  uint4 parser_cachesize = 2;
-  uint4 parser_windowsize = 32;
-  if ((maxdelayslotbytes > 1)||(unique_allocatemask != 0)) {
-    parser_cachesize = 8;
-    parser_windowsize = 256;
-  }
-  discache = new DisassemblyCache(this,cache,getConstantSpace(),parser_cachesize,parser_windowsize);
+  discache = buildDisassemblyCache(cache);
 }
 
 /// \brief Obtain a parse tree for the instruction at the given address

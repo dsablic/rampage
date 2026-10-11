@@ -30,12 +30,14 @@ guarantee identical output: memory mappings, ABI, mode context, symbols/types an
 1. [x] Memory correctness: explicit backed/zero-fill/unavailable mappings, read/execute permissions, strict
    instruction-range checks after speculative SLEIGH lookahead and real string terminators. Review fixes cover
    partial-flow retries, target-width bounds, wrapped reads and UTF-16 boundary terminators.
-2. [ ] Mode correctness: ARM/Thumb transitions independent of request order; use loader and discovery context,
-   including known mixed-mode ranges and interworking. Active increment.
+2. [x] Mode correctness: ARM/Thumb transitions independent of request order; merge loader and discovery context,
+   preserve equal-valued barriers and accept padding/end boundaries. Each image owns its translator; caches
+   invalidate safely. Reviewed regressions cover corrupt specs, interleaved images and a million mode points.
 3. [ ] ABI correctness: select platform/compiler specs, width-correct C declarations and explicit ABI overrides.
 4. [ ] Symbol/type synchronization: import identity separate from display spelling, report prototype failures,
    refresh decompiler names after edits/undo/redo/external annotation changes.
-5. [ ] Portable specification packaging and supervised resource/cancellation boundaries for hostile inputs.
+5. [ ] Portable specification packaging and supervised resource/cancellation boundaries for hostile inputs,
+   including allocation-failure containment at the C ABI.
 6. [ ] Persistent user types/signatures/calling conventions and typed globals, then debug-type imports and
    class recovery.
 7. [ ] Address-linked structured results and clickable pseudocode, plus engine-derived flow where useful.

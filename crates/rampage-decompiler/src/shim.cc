@@ -7,11 +7,13 @@
 #include "funcdata.hh"
 #include "printc.hh"
 #include "grammar.hh"
+#include "sleigh.hh"
 
 #include <cstdlib>
 #include <algorithm>
 #include <cstring>
 #include <sstream>
+#include <memory>
 #include <vector>
 
 using namespace ghidra;
@@ -120,6 +122,11 @@ public:
 class MemArchitecture : public SleighArchitecture {
     MemImage *image;
 
+    Translate *buildTranslator(DocumentStorage &store) override {
+        // restoreFromSpec owns this pointer until initialization assigns Architecture::translate.
+        return new Sleigh(loader, context);
+    }
+
     void buildLoader(DocumentStorage &store) override {
         collectSpecFiles(*errorstream);
         loader = image;
@@ -137,15 +144,21 @@ public:
     MemArchitecture(const string &target, MemImage *img, ostream *estream)
         : SleighArchitecture("memory", target, estream), image(img) {}
 
+    void resetTranslationCache() {
+        const_cast<Sleigh *>(static_cast<const Sleigh *>(translate))->clearCache();
+    }
+
     // Until buildLoader hands the image to `loader` (which the base destructor frees), we still own it. This
     // keeps ownership correct when init fails partway, so the error path neither leaks nor double-frees.
     ~MemArchitecture() override {
+        delete translate;
+        translate = nullptr;
         if (loader != image) delete image;
     }
 };
 
 struct Handle {
-    Architecture *arch = nullptr;
+    MemArchitecture *arch = nullptr;
     std::string error;
 };
 
@@ -232,6 +245,21 @@ const char *rampage_decomp_error(void *h) {
     return handle->error.empty() ? nullptr : handle->error.c_str();
 }
 
+const char *rampage_decomp_set_modes(void *h, size_t count, const uint64_t *addresses, const uint8_t *thumb) {
+    Handle *handle = static_cast<Handle *>(h);
+    try {
+        for (size_t i = 0; i < count; ++i) {
+            Address address(handle->arch->getDefaultCodeSpace(), addresses[i]);
+            handle->arch->context->setVariable("TMode", address, thumb[i] != 0 ? 1 : 0);
+        }
+        handle->error.clear();
+        return nullptr;
+    } catch (LowlevelError &error) {
+        handle->error = error.explain;
+        return handle->error.c_str();
+    }
+}
+
 // Decompiles the function at `addr` to C. When `thumb` is set and the target has a TMode context variable
 // (32-bit ARM), the function is decoded as Thumb. Returns a malloc'd string the caller frees, or null on failure.
 char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t thumb) {
@@ -241,13 +269,14 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
     Funcdata *fd = nullptr;
     try {
         Address entry(arch->getDefaultCodeSpace(), addr);
-        if (thumb != 0 && arch->context != nullptr) {
+        if (arch->context != nullptr) {
             try {
-                arch->context->setVariable("TMode", entry, 1);
+                arch->context->setVariable("TMode", entry, thumb != 0 ? 1 : 0);
             } catch (LowlevelError &) {
                 // The target has no TMode variable; nothing to set.
             }
         }
+        handle->arch->resetTranslationCache();
         Scope *global = arch->symboltab->getGlobalScope();
         fd = global->queryFunction(entry);
         if (fd == nullptr) {

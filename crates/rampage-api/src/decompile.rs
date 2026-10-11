@@ -1,7 +1,10 @@
 //! C decompilation of a function, through the embedded Ghidra decompiler (`rampage-decompiler`). The decompiler
 //! is built once per project over its executable segments and reused for every function.
 
-use rampage_decompiler::{Decompiler, MemoryRegion};
+mod context;
+mod image;
+
+use rampage_decompiler::Decompiler;
 use serde::Serialize;
 
 use crate::{ApiError, Project};
@@ -29,7 +32,11 @@ impl Project {
             *slot = Some(self.build_decompiler()?);
         }
         let decompiler = slot.as_mut().expect("just built");
-        let thumb = self.binary.arch == rampage_arch::Arch::Arm && self.binary.target().is_thumb(start);
+        let thumb = if self.binary.arch == rampage_arch::Arch::Arm {
+            context::mode_at(&self.binary.target(), &self.analysis()?.program.code_modes, start)
+        } else {
+            false
+        };
         let code =
             decompiler.decompile(start, &name, thumb).map_err(|error| ApiError::Unavailable(error.to_string()))?;
         Ok(Decompilation { address: start, name, code })
@@ -39,43 +46,7 @@ impl Project {
     /// render by name. Read-only segments are mapped read-only so strings and constant pointers fold into output.
     fn build_decompiler(&self) -> Result<Decompiler, ApiError> {
         let binary = &self.binary;
-        let mut regions = Vec::new();
-        for segment in &binary.segments {
-            if segment.size == 0 || !(segment.perms.read || segment.perms.execute) {
-                continue;
-            }
-            let region = |base, bytes, size| MemoryRegion {
-                base,
-                bytes,
-                size,
-                readable: segment.perms.read,
-                writable: segment.perms.write,
-                executable: segment.perms.execute,
-            };
-            let bytes = if segment.file_size == 0 {
-                &[][..]
-            } else {
-                binary.read_to_segment_end(segment.address).unwrap_or(&[])
-            };
-            let zero_fill = binary.format != rampage_loaders::Format::Snapshot;
-            if bytes.len() as u64 == segment.file_size {
-                let size = if zero_fill { segment.size } else { segment.file_size };
-                if size != 0 {
-                    regions.push(region(segment.address, bytes, size));
-                }
-                continue;
-            }
-            if !bytes.is_empty() {
-                regions.push(region(segment.address, bytes, bytes.len() as u64));
-            }
-            if segment.file_size < segment.size && zero_fill {
-                let base = segment
-                    .address
-                    .checked_add(segment.file_size)
-                    .ok_or_else(|| ApiError::Invalid("zero-fill mapping overflows".to_owned()))?;
-                regions.push(region(base, &[], segment.size - segment.file_size));
-            }
-        }
+        let regions = image::regions(binary)?;
         // A segment can hold more than code (a Mach-O __TEXT starts with headers), so require an executable
         // segment rather than one that begins at code.
         if !binary.segments.iter().any(|segment| segment.perms.execute && segment.file_size > 0) {
@@ -83,6 +54,10 @@ impl Project {
         }
         let mut decompiler = Decompiler::open_regions(binary.arch, binary.big_endian, &regions)
             .map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        if binary.arch == rampage_arch::Arch::Arm {
+            let modes = context::arm_points(binary, &self.analysis()?.program.code_modes);
+            decompiler.set_code_modes(&modes).map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        }
 
         // Known function names (analysis starts and named import stubs, with any user renames) so calls render
         // by name rather than by address.

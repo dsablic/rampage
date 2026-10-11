@@ -10,9 +10,14 @@ A `Decompiler` is opened once over a program's executable segments and decompile
 library set (the Makefile's `LIBDECOMP` sources) without the BFD loader, the Ghidra-process bridge and the
 SLEIGH compiler. `src/shim.cc` is rampage's own C ABI over that library.
 
-Three vendored files have small integration changes: `loadimage.hh` adds instruction-lookahead, instruction-range
+Four vendored files have small integration changes: `loadimage.hh` adds instruction-lookahead, instruction-range
 validation and partial-string-read hooks; `sleigh.cc` validates decoded lengths; `stringmanage.cc` consumes only
-available string bytes. Default hooks preserve the upstream loader behavior. All other vendored sources are unchanged.
+available string bytes; `sleigh.hh` and `sleigh.cc` expose translation-cache invalidation without re-registering
+context variables. Default loader hooks preserve upstream behavior. All other vendored sources are unchanged.
+
+Ghidra is Copyright the National Security Agency, licensed under the Apache License 2.0; `vendor/ghidra/LICENSE`
+is that license. rampage's own code is under the workspace's MIT/Apache-2.0 terms, but this crate links the
+vendored Apache-2.0 sources.
 
 ## Memory mappings
 
@@ -22,9 +27,18 @@ not zero-filled. SLEIGH may look ahead beyond a mapping, but every byte of the r
 executable and mapped. Data reads require a complete readable range; strings require a mapped terminator.
 `Segment`/`open` remain a convenience for raw readable executable buffers without zero-fill tails.
 
-Ghidra is Copyright the National Security Agency, licensed under the Apache License 2.0; `vendor/ghidra/LICENSE`
-is that license. rampage's own code is under the workspace's MIT/Apache-2.0 terms, but this crate links the
-vendored Apache-2.0 sources.
+## Instruction context
+
+Each handle owns its SLEIGH translator so opening another image cannot replace its loader or context. ARM mode
+points can be installed with `set_code_modes`; the project layer merges loader ranges with instruction modes
+learned by discovery. Every decompilation sets the entry mode explicitly, including ARM rather than Thumb,
+and invalidates translation caches. Mixed-mode requests do not depend on which function was requested first.
+Equal-valued context points remain barriers between independently decoded code. Context boundaries can be odd
+when padding ends a Thumb range; exclusive ends beyond the target address space are not installed as points.
+Failed specification initialization keeps translator ownership with Ghidra until initialization succeeds.
+Mode points are validated before mutation and passed to the C ABI in batches of at most 4,096, without a
+whole-program point-count cutoff. The million-point scale gate runs with
+`cargo test -p rampage-decompiler --test context -- --include-ignored`.
 
 ## Processor specifications
 

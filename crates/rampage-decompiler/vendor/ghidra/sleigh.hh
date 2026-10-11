@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: clear translation caches without re-registering context variables.
 /// \file sleigh.hh
 /// \brief Classes and utilities for the main SLEIGH engine
 
@@ -166,6 +167,7 @@ class Sleigh : public SleighBase {
   mutable DisassemblyCache *discache;	///< Cache of recently parsed instructions
   mutable PcodeCacher pcode_cache;	///< Cache of p-code data just prior to emitting
   void clearForDelete(void);		///< Delete the context and disassembly caches
+  DisassemblyCache *buildDisassemblyCache(ContextCache *contextCache);
 protected:
   ParserContext *obtainContext(const Address &addr,int4 state) const;
   void resolve(ParserContext &pos) const;	///< Generate a parse tree suitable for disassembly
@@ -174,6 +176,7 @@ public:
   Sleigh(LoadImage *ld,ContextDatabase *c_db);		///< Constructor
   virtual ~Sleigh(void);				///< Destructor
   void reset(LoadImage *ld,ContextDatabase *c_db);	///< Reset the engine for a new program
+  void clearCache(void);
   virtual void initialize(DocumentStorage &store);
   virtual void registerContext(const string &name,int4 sbit,int4 ebit);
   virtual void setContextDefault(const string &nm,uintm val);
