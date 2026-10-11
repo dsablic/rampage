@@ -1,0 +1,13 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "x86_64",
+  "provenance": "typed puts call with deliberately unterminated captured string",
+  "regions": [
+    {"name": "caller", "address": "0x1000", "permissions": "r-x",
+     "bytes": "bf00300000e8f60f000031c0c3"},
+    {"name": "puts", "address": "0x2000", "permissions": "r-x", "bytes": "c3"},
+    {"name": "string", "address": "0x3000", "permissions": "r--", "bytes": "616263"}
+  ],
+  "seeds": ["0x1000", "0x2000"],
+  "entry": "0x1000"
+}
