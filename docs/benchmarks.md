@@ -46,3 +46,10 @@ Differential decompilation must compare equivalent inputs and settings rather th
 
 Remaining metrics include success/warning coverage, inferred signatures, typed calls, recovered strings and switch
 targets, and time/memory use. Function-start recall alone does not establish decompiler accuracy or tool parity.
+
+`tools/decompile-benchmark.sh RAMPAGE GHIDRA IMAGE FUNCTION` runs a bounded single-function reference probe and
+reports image identity, engine/compiler selection, normalized text equality and warning lines in emitted C.
+It explicitly reports that mappings/types/options are not yet matched; equality is diagnostic rather than a
+semantic score. On `hello-x64-dyn.elf`/`main`, Ghidra 12.1.4 produced 77 bytes and rampage produced 79 bytes, both
+without emitted warning lines. The differing display names/signatures require matched-setting comparison before
+an accuracy conclusion is drawn.
