@@ -1,7 +1,7 @@
 //! C decompilation of a function, through the embedded Ghidra decompiler (`rampage-decompiler`). The decompiler
 //! is built once per project over its executable segments and reused for every function.
 
-use rampage_decompiler::{Decompiler, Segment};
+use rampage_decompiler::{Decompiler, MemoryRegion};
 use serde::Serialize;
 
 use crate::{ApiError, Project};
@@ -16,10 +16,12 @@ pub struct Decompilation {
 }
 
 impl Project {
-    /// Decompiles the function containing `address` to C. Requires a local Ghidra install for the processor
-    /// specifications; see `rampage-decompiler`.
+    /// Decompiles the function containing `address` to C using bundled processor specifications.
     pub fn decompile(&self, address: u64) -> Result<Decompilation, ApiError> {
         let start = self.function_containing(address)?.unwrap_or(address);
+        if self.binary.code_from(start).is_none() {
+            return Err(ApiError::Invalid("decompilation requires a file-backed code address".to_owned()));
+        }
         let name = self.function_name(start);
 
         let mut slot = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -37,23 +39,49 @@ impl Project {
     /// render by name. Read-only segments are mapped read-only so strings and constant pointers fold into output.
     fn build_decompiler(&self) -> Result<Decompiler, ApiError> {
         let binary = &self.binary;
-        let owned: Vec<(u64, Vec<u8>, bool)> = binary
-            .segments
-            .iter()
-            .filter(|segment| segment.file_size > 0)
-            .filter_map(|segment| {
-                let bytes = binary.read(segment.address, segment.file_size)?.to_vec();
-                Some((segment.address, bytes, segment.perms.write))
-            })
-            .collect();
+        let mut regions = Vec::new();
+        for segment in &binary.segments {
+            if segment.size == 0 || !(segment.perms.read || segment.perms.execute) {
+                continue;
+            }
+            let region = |base, bytes, size| MemoryRegion {
+                base,
+                bytes,
+                size,
+                readable: segment.perms.read,
+                writable: segment.perms.write,
+                executable: segment.perms.execute,
+            };
+            let bytes = if segment.file_size == 0 {
+                &[][..]
+            } else {
+                binary.read_to_segment_end(segment.address).unwrap_or(&[])
+            };
+            let zero_fill = binary.format != rampage_loaders::Format::Snapshot;
+            if bytes.len() as u64 == segment.file_size {
+                let size = if zero_fill { segment.size } else { segment.file_size };
+                if size != 0 {
+                    regions.push(region(segment.address, bytes, size));
+                }
+                continue;
+            }
+            if !bytes.is_empty() {
+                regions.push(region(segment.address, bytes, bytes.len() as u64));
+            }
+            if segment.file_size < segment.size && zero_fill {
+                let base = segment
+                    .address
+                    .checked_add(segment.file_size)
+                    .ok_or_else(|| ApiError::Invalid("zero-fill mapping overflows".to_owned()))?;
+                regions.push(region(base, &[], segment.size - segment.file_size));
+            }
+        }
         // A segment can hold more than code (a Mach-O __TEXT starts with headers), so require an executable
         // segment rather than one that begins at code.
         if !binary.segments.iter().any(|segment| segment.perms.execute && segment.file_size > 0) {
             return Err(ApiError::Unavailable("no executable segments to decompile".to_owned()));
         }
-        let segments: Vec<Segment> =
-            owned.iter().map(|(base, bytes, writable)| Segment { base: *base, bytes, writable: *writable }).collect();
-        let mut decompiler = Decompiler::open(binary.arch, binary.big_endian, &segments)
+        let mut decompiler = Decompiler::open_regions(binary.arch, binary.big_endian, &regions)
             .map_err(|error| ApiError::Unavailable(error.to_string()))?;
 
         // Known function names (analysis starts and named import stubs, with any user renames) so calls render

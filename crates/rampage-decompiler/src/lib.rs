@@ -193,6 +193,9 @@ unsafe extern "C" {
         bases: *const u64,
         ptrs: *const *const u8,
         lens: *const usize,
+        sizes: *const u64,
+        readable: *const u8,
+        executable: *const u8,
         writable: *const u8,
     ) -> *mut Opaque;
     fn rampage_decomp_add_symbol(handle: *mut Opaque, addr: u64, name: *const c_char);
@@ -209,6 +212,41 @@ pub struct Segment<'a> {
     pub base: u64,
     pub bytes: &'a [u8],
     pub writable: bool,
+}
+
+/// An explicit mapping. Bytes beyond `bytes` up to `size` are declared zero-fill, not missing file data.
+pub struct MemoryRegion<'a> {
+    pub base: u64,
+    pub bytes: &'a [u8],
+    pub size: u64,
+    pub readable: bool,
+    pub writable: bool,
+    pub executable: bool,
+}
+
+fn validate_regions(arch: Arch, regions: &[MemoryRegion]) -> Result<(), Error> {
+    if regions.len() > 4096 {
+        return Err(Error::Ghidra("memory region limit exceeded (4096)".to_owned()));
+    }
+    let mut ranges = Vec::with_capacity(regions.len());
+    for region in regions {
+        if region.size == 0 || region.bytes.len() as u64 > region.size {
+            return Err(Error::Ghidra("invalid memory region size".to_owned()));
+        }
+        let last = region
+            .base
+            .checked_add(region.size - 1)
+            .ok_or_else(|| Error::Ghidra("memory region overflows address space".to_owned()))?;
+        if arch.pointer_size() == 4 && last > u64::from(u32::MAX) {
+            return Err(Error::Ghidra("memory region exceeds the target address space".to_owned()));
+        }
+        ranges.push((region.base, last));
+    }
+    ranges.sort_unstable();
+    if ranges.windows(2).any(|pair| pair[0].1 >= pair[1].0) {
+        return Err(Error::Ghidra("overlapping decompiler memory regions".to_owned()));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -290,15 +328,35 @@ impl Decompiler {
     /// Opens a decompiler for `arch` over `segments`. Each segment's bytes stay mapped at its base for the life
     /// of the decompiler, so functions anywhere in the loaded code can be decompiled.
     pub fn open(arch: Arch, big_endian: bool, segments: &[Segment]) -> Result<Decompiler, Error> {
+        let regions: Vec<_> = segments
+            .iter()
+            .map(|segment| MemoryRegion {
+                base: segment.base,
+                bytes: segment.bytes,
+                size: segment.bytes.len() as u64,
+                readable: true,
+                writable: segment.writable,
+                executable: true,
+            })
+            .collect();
+        Self::open_regions(arch, big_endian, &regions)
+    }
+
+    /// Opens explicitly permissioned mappings, retaining zero-fill without allocating its entire virtual size.
+    pub fn open_regions(arch: Arch, big_endian: bool, regions: &[MemoryRegion]) -> Result<Decompiler, Error> {
+        validate_regions(arch, regions)?;
         let langid = language_id(arch, big_endian).ok_or(Error::UnsupportedArch(arch))?;
         let home = sleigh_home().ok_or(Error::NoSleighHome)?;
         let home = CString::new(home.as_os_str().to_string_lossy().as_bytes()).map_err(|_| Error::NoSleighHome)?;
         let langid = CString::new(langid).map_err(|_| Error::UnsupportedArch(arch))?;
 
-        let bases: Vec<u64> = segments.iter().map(|segment| segment.base).collect();
-        let ptrs: Vec<*const u8> = segments.iter().map(|segment| segment.bytes.as_ptr()).collect();
-        let lens: Vec<usize> = segments.iter().map(|segment| segment.bytes.len()).collect();
-        let writable: Vec<u8> = segments.iter().map(|segment| u8::from(segment.writable)).collect();
+        let bases: Vec<u64> = regions.iter().map(|region| region.base).collect();
+        let ptrs: Vec<*const u8> = regions.iter().map(|region| region.bytes.as_ptr()).collect();
+        let lens: Vec<usize> = regions.iter().map(|region| region.bytes.len()).collect();
+        let sizes: Vec<u64> = regions.iter().map(|region| region.size).collect();
+        let readable: Vec<u8> = regions.iter().map(|region| u8::from(region.readable)).collect();
+        let executable: Vec<u8> = regions.iter().map(|region| u8::from(region.executable)).collect();
+        let writable: Vec<u8> = regions.iter().map(|region| u8::from(region.writable)).collect();
 
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: the pointers and lengths describe `segments`, which outlive this call; the shim copies the
@@ -307,10 +365,13 @@ impl Decompiler {
             rampage_decomp_open(
                 home.as_ptr(),
                 langid.as_ptr(),
-                segments.len(),
+                regions.len(),
                 bases.as_ptr(),
                 ptrs.as_ptr(),
                 lens.as_ptr(),
+                sizes.as_ptr(),
+                readable.as_ptr(),
+                executable.as_ptr(),
                 writable.as_ptr(),
             )
         };

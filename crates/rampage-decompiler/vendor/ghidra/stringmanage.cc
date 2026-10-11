@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: partial readable string chunks never synthesize a terminator.
 #include "stringmanage.hh"
 #include "architecture.hh"
 #include "crc32.hh"
@@ -456,10 +457,16 @@ const vector<uint1> &StringManagerUnicode::getStringData(const Address &addr,Dat
 	  return stringData.byteData;		// Could not find terminator
 	}
       }
-      glb->loader->loadFill(testBuffer + curBufferSize, amount,
-			    addr + curBufferSize);
-      foundTerminator = hasCharTerminator(testBuffer + curBufferSize, amount,
-					  charsize);
+      if (uintb(curBufferSize) > addr.getSpace()->getHighest() - addr.getOffset())
+        throw DataUnavailError("String read exceeds address space");
+      amount = glb->loader->loadString(testBuffer + curBufferSize, amount, addr + curBufferSize);
+      int4 completeAmount = amount - amount % charsize;
+      if (completeAmount <= 0)
+        throw DataUnavailError("String read is unavailable or splits a character");
+      foundTerminator = hasCharTerminator(testBuffer + curBufferSize, completeAmount, charsize);
+      if (!foundTerminator && completeAmount != amount)
+        throw DataUnavailError("String read splits an unterminated character");
+      newBufferSize = curBufferSize + completeAmount;
       curBufferSize = newBufferSize;
     } while (!foundTerminator);
   } catch (DataUnavailError &err) {

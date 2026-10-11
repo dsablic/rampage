@@ -20,7 +20,27 @@ libc prototypes (so string arguments show), and decodes Thumb in Thumb mode.
   `.gdt` import. Larger, separate effort.
 - [ ] Richer `main`/entry signature recovery; apply user-set types to the decompiler.
 - [ ] Bundle for relocated/installed binaries (embed specs or install them), so a `cargo install` binary that is
-  moved away from its build tree still finds specs without `GHIDRA_INSTALL_DIR`.
+   moved away from its build tree still finds specs without `GHIDRA_INSTALL_DIR`.
+
+### Integration acceptance order
+
+Each increment requires regressions, review and targeted simplification. Sharing Ghidra's engine does not
+guarantee identical output: memory mappings, ABI, mode context, symbols/types and options must agree too.
+
+1. [x] Memory correctness: explicit backed/zero-fill/unavailable mappings, read/execute permissions, strict
+   instruction-range checks after speculative SLEIGH lookahead and real string terminators. Review fixes cover
+   partial-flow retries, target-width bounds, wrapped reads and UTF-16 boundary terminators.
+2. [ ] Mode correctness: ARM/Thumb transitions independent of request order; use loader and discovery context,
+   including known mixed-mode ranges and interworking. Active increment.
+3. [ ] ABI correctness: select platform/compiler specs, width-correct C declarations and explicit ABI overrides.
+4. [ ] Symbol/type synchronization: import identity separate from display spelling, report prototype failures,
+   refresh decompiler names after edits/undo/redo/external annotation changes.
+5. [ ] Portable specification packaging and supervised resource/cancellation boundaries for hostile inputs.
+6. [ ] Persistent user types/signatures/calling conventions and typed globals, then debug-type imports and
+   class recovery.
+7. [ ] Address-linked structured results and clickable pseudocode, plus engine-derived flow where useful.
+8. [ ] Versioned differential benchmarks: precision/recall, thunks, signatures/calls/strings/switches, warnings,
+   coverage and time/memory across stripped/symbolized compiler/optimization/ABI corpora.
 
 **This supersedes the hand-written "Deep ARM64 track" below as the route to decompiled output.** That native
 IR/SSA/pseudocode work stays as complementary, evidence-bounded diagnostics (and feeds the function list the

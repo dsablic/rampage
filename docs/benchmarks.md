@@ -34,12 +34,14 @@ against recall.
 
 On the larger PE sample rampage matches every Ghidra function. The 83–98% cases are small fixtures where a
 single miss is a large percentage; the known gap is a startup/stub entry (such as the ARM `0x10100` veneer) that
-Ghidra treats as a function and rampage does not yet discover. These are tracked for the discovery work, not the
-decompiler (which is Ghidra's engine and so agrees by construction).
+Ghidra treats as a function and rampage does not yet discover. These are tracked for discovery work separately
+from the embedded decompiler's integration accuracy.
 
 ## Decompilation
 
-rampage decompiles through the embedded Ghidra decompiler, so its decompiled output matches Ghidra's for the
-same function by construction; there is no separate decompilation accuracy gap to measure. What is worth tracking
-there is coverage (which functions decompile without error) and the quality added by rampage's own names and
-prototypes, not divergence from Ghidra.
+rampage uses Ghidra's decompiler engine, but identical engines do not guarantee identical results. Memory mappings,
+processor context, compiler specifications, relocation handling, symbols/types and analysis options all affect output.
+Differential decompilation must compare equivalent inputs and settings rather than assuming agreement.
+
+Remaining metrics include success/warning coverage, inferred signatures, typed calls, recovered strings and switch
+targets, and time/memory use. Function-start recall alone does not establish decompiler accuracy or tool parity.

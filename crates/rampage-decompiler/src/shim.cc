@@ -9,6 +9,7 @@
 #include "grammar.hh"
 
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <sstream>
 #include <vector>
@@ -21,40 +22,92 @@ namespace {
 struct Segment {
     uintb base;
     std::vector<uint1> bytes;
+    uintb size;
+    bool readable;
+    bool executable;
     bool writable;
 };
 
-// An image backed by memory segments rather than a file; unmapped addresses read as zero. Non-writable segments
-// are reported as read-only so the decompiler can fold their contents (string and constant pointers) into output.
+// Backed bytes and declared zero-fill share a mapping; unavailable addresses never become data.
 class MemImage : public LoadImage {
     std::vector<Segment> segments;
     AddrSpace *spaceid = nullptr;
 
+    const Segment *segmentAt(uintb address) const {
+        auto next = std::upper_bound(segments.begin(), segments.end(), address,
+            [](uintb address, const Segment &segment) { return address < segment.base; });
+        if (next == segments.begin()) return nullptr;
+        const Segment &segment = *--next;
+        return address - segment.base < segment.size ? &segment : nullptr;
+    }
+
+    int4 readPrefix(uint1 *output, int4 size, const Address &address, bool instruction) const {
+        if (size <= 0) return 0;
+        uintb start = address.getOffset();
+        int4 copied = 0;
+        while (copied < size) {
+            if (start > address.getSpace()->getHighest()
+                || uintb(copied) > address.getSpace()->getHighest() - start) break;
+            uintb at = start + copied;
+            const Segment *segment = segmentAt(at);
+            if (segment == nullptr || (instruction ? !segment->executable : !segment->readable)) break;
+            uintb offset = at - segment->base;
+            int4 amount = int4(std::min<uintb>(size - copied, segment->size - offset));
+            uintb lastAvailable = address.getSpace()->getHighest() - at;
+            if (uintb(amount - 1) > lastAvailable) amount = int4(lastAvailable + 1);
+            if (output != nullptr) {
+                size_t backed = offset < segment->bytes.size()
+                    ? size_t(std::min<uintb>(amount, segment->bytes.size() - offset)) : 0;
+                if (backed != 0) memcpy(output + copied, segment->bytes.data() + offset, backed);
+                memset(output + copied + backed, 0, amount - backed);
+            }
+            copied += amount;
+        }
+        return copied;
+    }
+
+    void requireRange(int4 size, const Address &address, bool instruction) const {
+        if (size < 0 || readPrefix(nullptr, size, address, instruction) != size) {
+            std::ostringstream message;
+            message << "Unavailable " << (instruction ? "instruction" : "data") << " at " << address.getOffset();
+            throw DataUnavailError(message.str());
+        }
+    }
+
 public:
-    MemImage(std::vector<Segment> segs) : LoadImage("memory"), segments(std::move(segs)) {}
+    MemImage(std::vector<Segment> segs) : LoadImage("memory"), segments(std::move(segs)) {
+        std::sort(segments.begin(), segments.end(),
+            [](const Segment &a, const Segment &b) { return a.base < b.base; });
+    }
 
     void attachToSpace(AddrSpace *id) { spaceid = id; }
 
     void loadFill(uint1 *ptr, int4 size, const Address &addr) override {
-        uintb start = addr.getOffset();
-        for (int4 i = 0; i < size; ++i) {
-            uintb at = start + i;
-            uint1 value = 0;
-            for (const Segment &seg : segments) {
-                if (at >= seg.base && at < seg.base + seg.bytes.size()) {
-                    value = seg.bytes[at - seg.base];
-                    break;
-                }
-            }
-            ptr[i] = value;
-        }
+        if (size < 0 || readPrefix(ptr, size, addr, false) != size)
+            throw DataUnavailError("Data range is unavailable");
+    }
+
+    void loadInstruction(uint1 *ptr, int4 size, const Address &addr) override {
+        requireRange(1, addr, true);
+        memset(ptr, 0, size);
+        readPrefix(ptr, size, addr, true);
+    }
+
+    void validateInstruction(int4 size, const Address &addr) override {
+        requireRange(size, addr, true);
+    }
+
+    int4 loadString(uint1 *ptr, int4 size, const Address &addr) override {
+        int4 copied = readPrefix(ptr, size, addr, false);
+        if (copied == 0) throw DataUnavailError("String address is unavailable");
+        return copied;
     }
 
     void getReadonly(RangeList &list) const override {
         if (spaceid == nullptr) return;
         for (const Segment &seg : segments) {
-            if (!seg.writable && !seg.bytes.empty()) {
-                list.insertRange(spaceid, seg.base, seg.base + seg.bytes.size() - 1);
+            if (seg.readable && !seg.writable && seg.size != 0) {
+                list.insertRange(spaceid, seg.base, seg.base + seg.size - 1);
             }
         }
     }
@@ -103,7 +156,8 @@ extern "C" {
 // Opens a decompiler over the given segments. `langid` is Ghidra's 5-part id, e.g. "x86:LE:64:default:gcc".
 // Returns a handle even on failure; rampage_decomp_error reports what went wrong.
 void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nseg, const uint64_t *bases,
-                          const uint8_t *const *ptrs, const size_t *lens, const uint8_t *writable) {
+                          const uint8_t *const *ptrs, const size_t *lens, const uint64_t *sizes,
+                          const uint8_t *readable, const uint8_t *executable, const uint8_t *writable) {
     static bool started = false;
     if (!started) {
         startDecompilerLibrary(sleighhome);
@@ -114,7 +168,10 @@ void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nse
     for (size_t i = 0; i < nseg; ++i) {
         Segment seg;
         seg.base = bases[i];
-        seg.bytes.assign(ptrs[i], ptrs[i] + lens[i]);
+        if (lens[i] != 0) seg.bytes.assign(ptrs[i], ptrs[i] + lens[i]);
+        seg.size = sizes[i];
+        seg.readable = readable[i] != 0;
+        seg.executable = executable[i] != 0;
         seg.writable = writable[i] != 0;
         segments.push_back(std::move(seg));
     }
@@ -181,6 +238,7 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
     Handle *handle = static_cast<Handle *>(h);
     if (handle->arch == nullptr) return nullptr;
     Architecture *arch = handle->arch;
+    Funcdata *fd = nullptr;
     try {
         Address entry(arch->getDefaultCodeSpace(), addr);
         if (thumb != 0 && arch->context != nullptr) {
@@ -191,13 +249,13 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
             }
         }
         Scope *global = arch->symboltab->getGlobalScope();
-        Funcdata *fd = global->queryFunction(entry);
+        fd = global->queryFunction(entry);
         if (fd == nullptr) {
             string funcname = (name != nullptr && name[0] != '\0') ? name : "";
             if (funcname.empty()) arch->nameFunction(entry, funcname);
             fd = global->addFunction(entry, funcname)->getFunction();
         }
-        if (fd->isProcStarted()) arch->clearAnalysis(fd);
+        arch->clearAnalysis(fd);
         Address high(arch->getDefaultCodeSpace(), arch->getDefaultCodeSpace()->getHighest());
         fd->followFlow(entry, high);
         arch->allacts.getCurrent()->reset(*fd);
@@ -211,6 +269,7 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         return result;
     } catch (LowlevelError &err) {
         handle->error = err.explain;
+        if (fd != nullptr) arch->clearAnalysis(fd);
         return nullptr;
     }
 }

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: separate speculative lookahead from validated instruction bytes.
 #include "sleigh.hh"
 #include "loadimage.hh"
 
@@ -609,7 +610,7 @@ ParserContext *Sleigh::obtainContext(const Address &addr,int4 state) const
 void Sleigh::resolve(ParserContext &pos) const
 
 {
-  loader->loadFill(pos.getBuffer(),16,pos.getAddr());
+  loader->loadInstruction(pos.getBuffer(),16,pos.getAddr());
   ParserWalkerChange walker(&pos);
   pos.deallocateState(walker);	// Clear the previous resolve and initialize the walker
   Constructor *ct,*subct;
@@ -654,6 +655,7 @@ void Sleigh::resolve(ParserContext &pos) const
 	pos.setDelaySlot(templ->delaySlot());
     }
   }
+  loader->validateInstruction(pos.getLength(),pos.getAddr());
   pos.setNaddr(pos.getAddr()+pos.getLength());	// Update Naddr to pointer after instruction
   pos.setParserState(ParserContext::disassembly);
 }

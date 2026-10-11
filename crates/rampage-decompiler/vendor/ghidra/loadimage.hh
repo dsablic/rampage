@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: optional lookahead, instruction validation and bounded string-read hooks.
 /// \file loadimage.hh
 /// \brief Classes and API for accessing a binary load image
 
@@ -78,6 +79,9 @@ public:
   virtual ~LoadImage(void);	///< LoadImage destructor
   const string &getFileName(void) const; ///< Get the name of the LoadImage
   virtual void loadFill(uint1 *ptr,int4 size,const Address &addr)=0; ///< Get data from the LoadImage
+  virtual void loadInstruction(uint1 *ptr,int4 size,const Address &addr) { loadFill(ptr,size,addr); }
+  virtual void validateInstruction(int4 size,const Address &addr) {}
+  virtual int4 loadString(uint1 *ptr,int4 size,const Address &addr) { loadFill(ptr,size,addr); return size; }
   virtual void openSymbols(void) const; ///< Prepare to read symbols
   virtual void closeSymbols(void) const; ///< Stop reading symbols
   virtual bool getNextSymbol(LoadImageFunc &record) const; ///< Get the next symbol record
