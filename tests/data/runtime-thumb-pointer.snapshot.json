@@ -1,0 +1,10 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "arm",
+  "provenance": "controlled tagged-pointer mode fixture",
+  "regions": [
+    {"name": "thumb_code", "address": "0x1002", "permissions": "r-x", "bytes": "00bf", "thumb": true},
+    {"name": "slots", "address": "0x3000", "permissions": "rw-", "bytes": "02100000031000000000000003100080"}
+  ],
+  "entry": null
+}

@@ -60,6 +60,8 @@ rampage pseudocode <file> --at <addr|symbol>  # partial ARM64 SSA pseudocode wit
 rampage compare <file> --reference <json>     # image-matched, versioned function-start comparisons
 rampage jump-table <file> --at <addr> --count N # explicit immutable ARM64 table validation
 rampage correlate <snapshot> --original <file> --module <uuid> --at <addr> # runtime/image correlation
+rampage compare-runtime <snapshot> --original <file> --module <uuid> --range <addr>:<size>
+rampage observe-pointer <snapshot> --at <slot> # raw captured value, not a proven call edge
 rampage info    <file>                       # format, arch, entry, segments, sections
 rampage imports <file> [--contains TEXT]     # imported functions, libraries and import slots
 rampage exports <file> [--contains TEXT]
@@ -110,8 +112,9 @@ are sent to Anthropic's API.
 `rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the tools
 `triage`, `binary_info`, `list_functions`, `disassemble`, `list_strings`, `list_imports`, `list_exports`, `xrefs`,
 `decompile`, `rename`, `set_comment`, `set_signature`, `set_types`, `set_global`, `import_debug_signatures`,
-`class_evidence`, `undo`, `redo` and `list_annotations`. Agents' annotations land in the same log the
+`class_evidence`, `observe_pointer`, `undo`, `redo` and `list_annotations`. Agents' annotations land in the same log the
 UI and CLI use, and the UI shows them as they arrive. Analysis runs once per binary and is cached for the session.
+`observe_pointer` exposes captured slot evidence without modifying discovery.
 To add it to Claude Code:
 
 ```

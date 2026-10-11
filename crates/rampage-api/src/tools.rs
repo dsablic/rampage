@@ -213,6 +213,11 @@ pub fn tools() -> Vec<Tool> {
              Does not assert encryption.",
             |project, args: DiagnosticsArgs| project.analysis_diagnostics(args.include_discovery),
         ),
+        tool(
+            "observe_pointer",
+            "Observe one captured pointer slot, including writable memory; never inserts a call or discovery edge.",
+            |project, args: At| project.observe_pointer(project.resolve(&args.at)?),
+        ),
         Tool {
             name: "binary_info",
             description: "Format, architecture, entry point, segments and sections of the binary.",

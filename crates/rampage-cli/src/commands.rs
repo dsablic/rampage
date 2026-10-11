@@ -271,6 +271,25 @@ pub fn compare_runtime(
     Ok(())
 }
 
+pub fn observe_pointer(out: &mut impl Write, path: &Path, at: &str, options: &Options) -> Result<()> {
+    let project = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
+    let observation = project.observe_pointer(project.resolve(at)?)?;
+    if options.json {
+        return write_json(out, &observation);
+    }
+    writeln!(out, "slot {:#x}, {} bytes: {:?}", observation.slot, observation.pointer_size, observation.assessment)?;
+    if let Some(value) = observation.raw_value {
+        writeln!(out, "captured raw value: {value:#x}")?;
+    }
+    if let Some(target) = observation.candidate_target {
+        writeln!(out, "code candidate: {target:#x} (not a proven edge)")?;
+    }
+    for limitation in observation.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
 /// Serializes before writing so that I/O errors such as a closed pipe surface as `io::Error`.
 fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result<()> {
     let mut json = serde_json::to_vec_pretty(value)?;

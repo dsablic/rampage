@@ -132,6 +132,12 @@ enum Command {
         #[arg(long, required = true)]
         range: Vec<String>,
     },
+    /// Observe one captured pointer without changing discovery or treating mutable data as proven flow
+    ObservePointer {
+        file: PathBuf,
+        #[arg(long)]
+        at: String,
+    },
     /// List imported functions with their libraries and import slots
     Imports {
         file: PathBuf,
@@ -244,6 +250,7 @@ fn main() -> ExitCode {
         Command::CompareRuntime { file, original, module, range } => {
             commands::compare_runtime(&mut out, &file, &original, &module, &range, &options)
         }
+        Command::ObservePointer { file, at } => commands::observe_pointer(&mut out, &file, &at, &options),
         Command::Imports { file, contains } => {
             commands::imports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
         }

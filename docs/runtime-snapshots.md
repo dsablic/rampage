@@ -162,3 +162,17 @@ Comparison opens only the explicit snapshot and original, not annotation sidecar
 It does not apply symbol/type annotations. Differences can be relocations, runtime changes or debugger
 breakpoint normalization; neither differences nor equality prove transformed-code recovery or ABI correctness.
 The `compare_runtime_bytes` API uses the same rules.
+
+## Observe a captured pointer slot
+
+```sh
+rampage observe-pointer capture.json --at 0x3000 --json
+```
+
+`observe-pointer` and the API/MCP `observe_pointer` read one complete captured pointer word using the snapshot's
+pointer width and data byte order. JSON/API/MCP output includes raw value, slot permissions, capture identity and an
+optional code-candidate address. Writable slots may be observed but are never treated as proven future loads
+or added as call/discovery edges. Code candidates require readable executable backing for the minimum aligned
+instruction span; that does not verify instruction semantics or a function boundary. ARM mode bits must match
+the captured Thumb context before tag clearing. Other tags and pointer authentication are not stripped.
+Missing, unreadable or truncated slot words remain unavailable. CLI observations ignore annotation sidecars.

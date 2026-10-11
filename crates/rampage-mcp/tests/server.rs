@@ -64,6 +64,7 @@ async fn lists_all_tools_with_instructions() {
         "list_functions",
         "list_imports",
         "list_strings",
+        "observe_pointer",
         "redo",
         "rename",
         "set_comment",
@@ -157,6 +158,22 @@ async fn failures_are_tool_errors_the_caller_can_read() {
     let bad_arch = call(&client, "binary_info", json!({ "path": path, "arch": "vax" })).await;
     assert!(text(&bad_arch).contains("unknown architecture"));
 
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn pointer_observations_preserve_writable_slot_values_without_annotations() {
+    let client = connect().await;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/data/runtime-thumb-pointer.snapshot.json")
+        .to_string_lossy()
+        .into_owned();
+    let observation = json_of(&call(&client, "observe_pointer", json!({"path": path, "at": "0x3004"})).await);
+    assert_eq!(observation["raw_value"], "0x1003");
+    assert_eq!(observation["slot_permissions"]["write"], true);
+    assert_eq!(observation["candidate_target"], "0x1002");
+    let annotations = json_of(&call(&client, "list_annotations", json!({"path": path})).await);
+    assert!(annotations["names"].as_array().unwrap().is_empty());
     client.cancel().await.unwrap();
 }
 

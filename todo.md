@@ -228,6 +228,9 @@ Work in this order, with synthetic regressions and fresh-context review for each
    - [ ] Reviewed symbol/type-transfer policy and runtime comparison navigation/agent integration.
 6. [ ] Captured indirect-call evidence: show wrapper slot/value/target observations separately from proven flow;
    writable, authenticated, unmapped or incomplete pointers remain unresolved without additional evidence.
+   - [x] Explicit API/CLI/MCP pointer-slot observations with raw values, permissions and mapping identity;
+     no edge insertion, no authentication/high-bit stripping and checked ARM mode tags.
+   - [ ] Link observations to decoded branch sites, module-qualified targets and before/after capture evidence.
 7. [ ] Authorized runtime acceptance: user supplies an already-loaded/stopped instance in a legitimate host;
    capture selected code and referenced data, correlate the original UUID, rerun diagnostics/decompilation and
    report before/after warning/coverage metrics. This is blocked on an authorized host capture, not static parsing.
