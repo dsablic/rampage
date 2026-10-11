@@ -108,6 +108,9 @@ pub fn decompile(
         return write_json(out, &decompilation);
     }
     write!(out, "{}", decompilation.code)?;
+    if decompilation.recovery_status != rampage_api::RecoveryStatus::NoReportedIssues {
+        writeln!(out, "\n/* Recovery: {} */", decompilation.recovery_status.label())?;
+    }
     Ok(())
 }
 

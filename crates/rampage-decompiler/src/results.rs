@@ -11,6 +11,9 @@ pub struct StructuredResult {
     pub blocks: Vec<BasicBlock>,
     pub calls: Vec<Call>,
     pub jump_tables: Vec<JumpTable>,
+    /// None means the producer did not export recovery diagnostics, not that recovery was issue-free.
+    #[serde(default)]
+    pub diagnostics: Option<RecoveryDiagnostics>,
 }
 
 impl StructuredResult {
@@ -27,6 +30,68 @@ impl StructuredResult {
             blocks: Vec::new(),
             calls: Vec::new(),
             jump_tables: Vec::new(),
+            diagnostics: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct RecoveryDiagnostics {
+    pub bad_data: bool,
+    pub unimplemented: bool,
+    pub unresolved_calls: usize,
+    pub unresolved_indirect_jumps: usize,
+    pub partial_jump_tables: usize,
+    pub warnings: Vec<RecoveryWarning>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct RecoveryWarning {
+    pub kind: WarningKind,
+    pub address: Option<u64>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarningKind {
+    Header,
+    Body,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryStatus {
+    Incomplete,
+    Warnings,
+    NoReportedIssues,
+    Unavailable,
+}
+
+impl RecoveryStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Incomplete => "incomplete recovery",
+            Self::Warnings => "recovery warnings",
+            Self::NoReportedIssues => "no reported recovery issues (not a correctness guarantee)",
+            Self::Unavailable => "recovery diagnostics unavailable",
+        }
+    }
+}
+
+impl StructuredResult {
+    pub fn recovery_status(&self) -> RecoveryStatus {
+        let Some(diagnostics) = &self.diagnostics else { return RecoveryStatus::Unavailable };
+        if diagnostics.bad_data || diagnostics.unimplemented {
+            RecoveryStatus::Incomplete
+        } else if !diagnostics.warnings.is_empty()
+            || diagnostics.unresolved_calls != 0
+            || diagnostics.unresolved_indirect_jumps != 0
+            || diagnostics.partial_jump_tables != 0
+        {
+            RecoveryStatus::Warnings
+        } else {
+            RecoveryStatus::NoReportedIssues
         }
     }
 }

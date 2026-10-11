@@ -97,6 +97,24 @@ fn pseudocode(ui: &mut Ui, workspace: &mut Workspace) {
         return;
     };
     ui.label(&result.language_id);
+    if result.recovery_status != rampage_api::RecoveryStatus::NoReportedIssues {
+        ui.colored_label(Color32::YELLOW, result.recovery_status.label());
+        if let Some(diagnostics) = &result.structure.diagnostics {
+            ui.collapsing("Recovery diagnostics", |ui| {
+                ui.label(format!(
+                    "Bad data: {}; unimplemented: {}; unresolved calls: {}; indirect jumps: {}; partial tables: {}",
+                    diagnostics.bad_data,
+                    diagnostics.unimplemented,
+                    diagnostics.unresolved_calls,
+                    diagnostics.unresolved_indirect_jumps,
+                    diagnostics.partial_jump_tables
+                ));
+                for warning in &diagnostics.warnings {
+                    ui.label(&warning.message);
+                }
+            });
+        }
+    }
     let mut target = None;
     egui::ScrollArea::both().show(ui, |ui| {
         let mut job = egui::text::LayoutJob::default();

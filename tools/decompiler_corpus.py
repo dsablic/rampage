@@ -602,7 +602,63 @@ def validate_result(value: Any) -> dict[str, Any]:
                 raise CorpusError(
                     "decompile JSON needs unsigned integer or null switch case values"
                 )
+    diagnostics = structure.get("diagnostics")
+    if diagnostics is not None:
+        if not isinstance(diagnostics, dict):
+            raise CorpusError("recovery diagnostics must be an object or null")
+        for key in ("bad_data", "unimplemented"):
+            if not isinstance(diagnostics.get(key), bool):
+                raise CorpusError(f"recovery diagnostics needs boolean {key}")
+        for key in (
+            "unresolved_calls",
+            "unresolved_indirect_jumps",
+            "partial_jump_tables",
+        ):
+            number = diagnostics.get(key)
+            if not isinstance(number, int) or isinstance(number, bool) or number < 0:
+                raise CorpusError(
+                    f"recovery diagnostics needs nonnegative integer {key}"
+                )
+        warnings = diagnostics.get("warnings")
+        if not isinstance(warnings, list):
+            raise CorpusError("recovery diagnostics needs a warnings list")
+        for warning in warnings:
+            if (
+                not isinstance(warning, dict)
+                or not isinstance(warning.get("kind"), str)
+                or warning.get("kind")
+                not in {
+                    "header",
+                    "body",
+                }
+            ):
+                raise CorpusError("recovery warning needs header/body kind")
+            if not isinstance(warning.get("message"), str) or "address" not in warning:
+                raise CorpusError("recovery warning needs message and address")
+            if warning["address"] is not None:
+                parse_address(warning["address"])
+    if "recovery_status" in value and value["recovery_status"] != recovery_status(
+        diagnostics
+    ):
+        raise CorpusError("recovery status disagrees with engine diagnostics")
     return value
+
+
+def recovery_status(diagnostics: dict[str, Any] | None) -> str:
+    if diagnostics is None:
+        return "unavailable"
+    if diagnostics["bad_data"] or diagnostics["unimplemented"]:
+        return "incomplete"
+    if diagnostics["warnings"] or any(
+        diagnostics[key]
+        for key in (
+            "unresolved_calls",
+            "unresolved_indirect_jumps",
+            "partial_jump_tables",
+        )
+    ):
+        return "warnings"
+    return "no_reported_issues"
 
 
 def evaluate_assertions(
@@ -774,6 +830,8 @@ def run_case(
                     "name": result["name"],
                     "language_id": result["language_id"],
                     "compiler_id": result["language_id"].rsplit(":", 1)[-1],
+                    "recovery_status": recovery_status(structure.get("diagnostics")),
+                    "recovery_diagnostics": structure.get("diagnostics"),
                     "warning_lines": sum(
                         "WARNING:" in line for line in result["code"].splitlines()
                     ),
@@ -867,6 +925,16 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
         "failed_cases": len(records) - successful,
         "passed_cases": sum(record["case_passed"] for record in records),
         "success_rate": successful / len(records) if records else None,
+        "recovery_status_counts": dict(
+            sorted(
+                Counter(
+                    record["metrics"]["recovery_status"]
+                    for record in records
+                    if record["success"]
+                ).items()
+            )
+        ),
+        "recovery_status_case_denominator": successful,
         "assertions": summarize_checks(checks),
         "assertions_by_category": {
             category: summarize_checks(

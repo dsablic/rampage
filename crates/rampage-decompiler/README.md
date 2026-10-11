@@ -13,7 +13,8 @@ SLEIGH compiler. `src/shim.cc` is rampage's own C ABI over that library.
 Vendored integration changes: `loadimage.hh` adds instruction-lookahead, instruction-range
 validation and partial-string-read hooks; `sleigh.cc` validates decoded lengths; `stringmanage.cc` consumes only
 available string bytes; `sleigh.hh` and `sleigh.cc` expose translation-cache invalidation without re-registering
-context variables; `funcdata.hh` synchronizes display names; `grammar.cc` and `type.cc` bound array layouts;
+context variables; `funcdata.hh` synchronizes display names and `funcdata.cc` resets per-analysis recovery flags;
+`grammar.cc` and `type.cc` bound array layouts;
 `prettyprint.hh` and `printlanguage.hh` allow an address-aware token emitter. Default loader hooks preserve
 upstream behavior; `modelrules.hh` and `modelrules.cc` add optional aligned stack-slot assignment for Darwin.
 Other vendored sources are unchanged.
@@ -110,6 +111,13 @@ The UI pseudocode panel loads in the background and coalesces navigation while a
 carry byte spans in the rendered C, enabling inline navigation; flow-only records remain spanless. Jump tables
 include recovered raw case-value bit patterns, with null for absent labels. Engine output is evidence, not a
 guarantee of recovered source types or original source structure.
+
+Recovery diagnostics export the engine's warning database, current-pass bad-data/unimplemented flags and counts
+of unresolved calls, indirect jumps and partial jump tables. `recovery_status` distinguishes `incomplete`,
+`warnings`, `no_reported_issues` and `unavailable`; producing C is not proof of usable recovery, and absence of
+reported issues is not proof of correctness. Older result producers without diagnostics remain `unavailable`.
+The CLI and pseudocode panel surface issues; corpus reports keep output success and recovery-status counts
+separate. Header warnings have no instruction address; body warnings carry their engine instruction address.
 
 Text output is bounded to four MiB and tokens to 262,144; the engine also retains its instruction-flow bound.
 `rampage decompile --isolated` uses a supervised sibling `rampage-worker`; `RAMPAGE_WORKER` explicitly selects

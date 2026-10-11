@@ -119,6 +119,66 @@ class CorpusTests(unittest.TestCase):
         self.image = self.root / "image with spaces.elf"
         self.image.write_bytes(b"controlled image")
 
+    def test_successful_output_does_not_hide_incomplete_recovery(self) -> None:
+        result = json.loads(json.dumps(RESULT))
+        result["structure"]["diagnostics"] = {
+            "bad_data": True,
+            "unimplemented": False,
+            "unresolved_calls": 0,
+            "unresolved_indirect_jumps": 0,
+            "partial_jump_tables": 0,
+            "warnings": [
+                {"kind": "body", "address": "0x1000", "message": "bad instruction"}
+            ],
+        }
+        result["recovery_status"] = "incomplete"
+        self.executable.with_suffix(".json").write_text(json.dumps(result))
+        record = corpus.run_case(
+            str(self.executable),
+            corpus.Case("bad", self.image, "example"),
+            5,
+            65536,
+            False,
+        )
+        self.assertTrue(record["success"])
+        self.assertEqual(record["metrics"]["recovery_status"], "incomplete")
+        self.assertEqual(
+            corpus.aggregate([record])["recovery_status_counts"], {"incomplete": 1}
+        )
+
+    def test_legacy_results_are_unassessed_not_issue_free(self) -> None:
+        self.assertEqual(
+            corpus.recovery_status(
+                corpus.validate_result(RESULT)["structure"].get("diagnostics")
+            ),
+            "unavailable",
+        )
+
+    def test_malformed_or_conflicting_recovery_diagnostics_are_rejected(self) -> None:
+        diagnostics = {
+            "bad_data": False,
+            "unimplemented": False,
+            "unresolved_calls": 1,
+            "unresolved_indirect_jumps": 0,
+            "partial_jump_tables": 0,
+            "warnings": [],
+        }
+        for key, value in [
+            ("unresolved_calls", True),
+            ("bad_data", "false"),
+            ("warnings", [{}]),
+            ("warnings", [{"kind": [], "message": "bad", "address": None}]),
+            ("warnings", [{"kind": {}, "message": "bad", "address": None}]),
+        ]:
+            result = json.loads(json.dumps(RESULT))
+            result["structure"]["diagnostics"] = diagnostics | {key: value}
+            with self.assertRaises(corpus.CorpusError):
+                corpus.validate_result(result)
+        result["structure"]["diagnostics"] = diagnostics
+        result["recovery_status"] = "no_reported_issues"
+        with self.assertRaises(corpus.CorpusError):
+            corpus.validate_result(result)
+
     def case(
         self, function: str = "example", assertions: dict[str, Any] | None = None
     ) -> corpus.Case:

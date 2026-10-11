@@ -7,6 +7,12 @@ The report is JSON, not a spreadsheet.
 
 ## Command
 
+Successful output is distinct from recovery quality. Results with engine diagnostics report bad-data and
+unimplemented flags, warning records and unresolved-flow counts; aggregation reports status counts over
+successful outputs separately. Older outputs without these diagnostics are `unavailable`, not issue-free.
+`no_reported_issues` is not a semantic-equivalence or correctness claim. Fixture assertions can intentionally
+pass for a warning-bearing result; the assertion score does not override the reported recovery status.
+
 ```sh
 python3 tools/decompiler_corpus.py target/debug/rampage \
   --case tests/fixtures/bin/hello-x64-dyn.elf main \

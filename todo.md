@@ -192,6 +192,36 @@ have been incorporated; any future copied/ported components require their applic
 
 ## General-purpose reverse-engineering roadmap
 
+### Transformed static code and runtime analysis
+
+Successful loading, discovery and C emission do not establish usable recovery. High entropy, invalid decoding,
+unresolved wrapper jumps, missing debug types and absent named vtables need explicit diagnostics. These are
+evidence and limitations, not proof of encryption or verified function counts.
+
+Work in this order, with synthetic regressions and fresh-context review for each increment:
+
+1. [x] Structured recovery diagnostics: export engine warnings, bad-data/unimplemented flags and unresolved
+   calls/jump tables. Surface warnings in CLI/API/MCP/UI and separate successful output from usable recovery in
+   benchmarks; no unqualified "complete" or "clean implies correct" label.
+2. [ ] Discovery-confidence summaries: relate candidates to bounded sampled regions and preserve evidence for
+   suspicious tiny fragments, invalid decode and code/data ambiguity. Do not silently delete candidate functions
+   or infer encryption from entropy alone.
+3. [ ] Authorized capture workflow: bounded module/range selection and actual memory-permission checks in the
+   stopped-process LLDB exporter, capture failures and provenance. No automatic plugin launch, installation,
+   debugger attachment, licensing changes or target-memory writes; controlled live tests use our own fixtures.
+4. [ ] Runtime target identity: persist platform/compiler context, mapping-aware capture identity and module/
+   thread provenance so an ARM64 macOS capture does not silently use generic AAPCS64 decompilation defaults.
+5. [ ] UUID-validated static/runtime comparison: compare explicit matching captured ranges, retain byte-change
+   and unavailable-range evidence, transfer only justified symbol/type information with checked ASLR slides.
+6. [ ] Captured indirect-call evidence: show wrapper slot/value/target observations separately from proven flow;
+   writable, authenticated, unmapped or incomplete pointers remain unresolved without additional evidence.
+7. [ ] Authorized runtime acceptance: user supplies an already-loaded/stopped instance in a legitimate host;
+   capture selected code and referenced data, correlate the original UUID, rerun diagnostics/decompilation and
+   report before/after warning/coverage metrics. This is blocked on an authorized host capture, not static parsing.
+
+Commercial plugin bytes and captured process contents are local investigation inputs, not committed fixtures.
+No protection bypass, patching or claims of license-state recovery are part of this work.
+
 Acceptance gate for each milestone: behavioral regressions, malformed-input tests, `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings`, workspace tests, and independent review. Commercial samples are
 read-only triage inputs, never bypass or patch fixtures. Runtime tests use programs we build ourselves.

@@ -1,0 +1,10 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "x86_64",
+  "provenance": "synthetic invalid instruction recovery fixture",
+  "regions": [
+    {"name": "text", "address": "0x1000", "permissions": "r-x", "bytes": "0f04000000000000000000000000000000000000000000000000000000000000"}
+  ],
+  "seeds": ["0x1000"],
+  "entry": "0x1000"
+}

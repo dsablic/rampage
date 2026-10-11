@@ -1,7 +1,7 @@
 use rampage_arch::Arch;
 use rampage_decompiler::{Decompiler, MemoryRegion, Segment};
 
-use rampage_decompiler::results::{ResultProvenance, StorageKind, parse_results};
+use rampage_decompiler::results::{RecoveryStatus, ResultProvenance, StorageKind, parse_results};
 
 fn snapshot() -> serde_json::Value {
     serde_json::json!({
@@ -34,6 +34,7 @@ fn parser_preserves_full_width_addresses_and_unknown_call_targets() {
     assert_eq!(result.calls[1].source, Some(0));
     assert_eq!(result.calls[1].target, Some(u64::MAX - 1));
     assert_eq!(result.provenance, ResultProvenance::EngineRecovered);
+    assert_eq!(result.recovery_status(), RecoveryStatus::Unavailable);
 }
 
 #[test]
@@ -109,6 +110,7 @@ fn engine_result_contains_parameter_types_storage_and_instruction_boundaries() {
     assert_eq!(result.blocks[0].start, Some(0x1000));
     assert_eq!(result.blocks[0].end, Some(0x1002));
     assert!(result.blocks[0].successors.is_empty());
+    assert_eq!(result.recovery_status(), RecoveryStatus::NoReportedIssues);
 }
 
 #[test]
@@ -194,6 +196,58 @@ fn engine_result_preserves_unresolved_indirect_calls_without_inventing_targets()
     assert_eq!(result.calls[0].source, Some(0x1000));
     assert_eq!(result.calls[0].target, None);
     assert!(result.calls[0].indirect);
+    assert_eq!(result.recovery_status(), RecoveryStatus::Warnings);
+    assert_eq!(result.diagnostics.unwrap().unresolved_calls, 1);
+}
+
+#[test]
+fn bad_instruction_output_has_engine_diagnostics_and_warnings_do_not_accumulate() {
+    let mut bytes = [0; 32];
+    bytes[..2].copy_from_slice(&[0x0f, 0x04]);
+    let mut engine =
+        Decompiler::open(Arch::X86_64, false, &[Segment { base: 0x1000, bytes: &bytes, writable: false }]).unwrap();
+    let code = engine.decompile(0x1000, "bad_code", false).unwrap();
+    assert!(code.contains("halt_baddata"), "{code}");
+    let first = engine.structured_result().unwrap();
+    assert_eq!(first.recovery_status(), RecoveryStatus::Incomplete);
+    let diagnostics = first.diagnostics.unwrap();
+    assert!(diagnostics.bad_data);
+    assert!(diagnostics.warnings.iter().any(|warning| warning.message.contains("Bad instruction")));
+    assert!(diagnostics.warnings.iter().any(|warning| warning.address == Some(0x1000)));
+    engine.decompile(0x1000, "bad_code", false).unwrap();
+    assert_eq!(engine.structured_result().unwrap().diagnostics.unwrap(), diagnostics);
+}
+
+#[test]
+fn unresolved_wrapper_jump_remains_a_recovery_warning() {
+    let bytes = [0xff, 0x25, 0xfa, 0x1f, 0, 0];
+    let regions = [
+        MemoryRegion { base: 0x1000, bytes: &bytes, size: 6, readable: true, writable: false, executable: true },
+        MemoryRegion { base: 0x3000, bytes: &[0; 8], size: 8, readable: true, writable: true, executable: false },
+    ];
+    let mut engine = Decompiler::open_regions(Arch::X86_64, false, &regions).unwrap();
+    engine.decompile(0x1000, "wrapper", false).unwrap();
+    let result = engine.structured_result().unwrap();
+    assert_eq!(result.recovery_status(), RecoveryStatus::Warnings);
+    let diagnostics = result.diagnostics.unwrap();
+    assert_eq!(diagnostics.unresolved_calls, 1);
+    assert!(diagnostics.warnings.iter().any(|warning| warning.message.contains("Treating indirect jump")));
+}
+
+#[test]
+fn recovery_flags_are_reset_when_a_function_is_redecoded_in_another_mode() {
+    let bytes = [0x70, 0x47, 0xff, 0xff];
+    let mut engine = Decompiler::open(Arch::Arm, false,
+        &[Segment { base: 0x1000, bytes: &bytes, writable: false }]).unwrap();
+    engine.decompile(0x1000, "mixed_mode", false).unwrap();
+    assert!(engine.structured_result().unwrap().diagnostics.unwrap().bad_data);
+    engine.decompile(0x1000, "mixed_mode", true).unwrap();
+    let result = engine.structured_result().unwrap();
+    assert_eq!(result.recovery_status(), RecoveryStatus::NoReportedIssues);
+    let mut fresh = Decompiler::open(Arch::Arm, false,
+        &[Segment { base: 0x1000, bytes: &bytes, writable: false }]).unwrap();
+    fresh.decompile(0x1000, "mixed_mode", true).unwrap();
+    assert_eq!(result.diagnostics, fresh.structured_result().unwrap().diagnostics);
 }
 
 #[test]

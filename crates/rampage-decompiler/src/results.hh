@@ -6,6 +6,7 @@
 #include "op.hh"
 #include "type.hh"
 #include "translate.hh"
+#include "comment.hh"
 
 #include <cstddef>
 #include <cstdint>
@@ -360,7 +361,48 @@ inline std::string collectResults(ghidra::Funcdata *function,
         }
         json.append("]}");
     }
-    json.append("]}");
+    json.append("],\"diagnostics\":{\"bad_data\":");
+    json.boolean(function->hasBadData());
+    json.append(",\"unimplemented\":");
+    json.boolean(function->hasUnimplemented());
+    json.append(",\"unresolved_calls\":");
+    size_t unresolvedCalls = 0;
+    for (ghidra::int4 i = 0; i < function->numCalls(); ++i) {
+        if (function->getCallSpecs(i)->getEntryAddress().isInvalid()) ++unresolvedCalls;
+    }
+    json.number(unresolvedCalls);
+    json.append(",\"unresolved_indirect_jumps\":");
+    size_t unresolvedJumps = 0;
+    for (auto op = function->beginOpAlive(); op != function->endOpAlive(); ++op) {
+        if ((*op)->code() == ghidra::CPUI_BRANCHIND && function->findJumpTable(*op) == nullptr) ++unresolvedJumps;
+    }
+    json.number(unresolvedJumps);
+    json.append(",\"partial_jump_tables\":");
+    size_t partialTables = 0;
+    for (ghidra::int4 i = 0; i < function->numJumpTables(); ++i) {
+        if (function->getJumpTable(i)->isPartial()) ++partialTables;
+    }
+    json.number(partialTables);
+    json.append(",\"warnings\":[");
+    const auto *comments = function->getArch()->commentdb;
+    bool firstWarning = true;
+    for (auto entry = comments->beginComment(function->getAddress());
+         entry != comments->endComment(function->getAddress()); ++entry) {
+        const auto *warning = *entry;
+        if ((warning->getType() & (ghidra::Comment::warning | ghidra::Comment::warningheader)) == 0) continue;
+        countItem(count);
+        if (!firstWarning) json.append(",");
+        firstWarning = false;
+        bool header = (warning->getType() & ghidra::Comment::warningheader) != 0;
+        json.append("{\"kind\":");
+        json.quote(header ? "header" : "body");
+        json.append(",\"address\":");
+        if (header) json.append("null"); else json.address(warning->getAddr());
+        json.append(",\"message\":");
+        json.quote(warning->getText());
+        json.append("}");
+    }
+    json.append("]}}");
     return json.take();
 }
 

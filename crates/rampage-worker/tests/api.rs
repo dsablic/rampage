@@ -16,12 +16,28 @@ fn api_supervised_path_matches_native_imports_tokens_and_typed_annotations() {
     assert_eq!(isolated.language_id, native.language_id);
     assert_eq!(isolated.tokens.len(), native.tokens.len());
     assert_eq!(isolated.structure, native.structure);
+    assert_eq!(isolated.recovery_status, native.recovery_status);
     let add = project.resolve("add").unwrap();
     project.set_signature(add, Some("int4 sum(int4 left,int4 right);")).unwrap();
     let typed = project.decompile(add).unwrap();
     assert!(typed.code.contains("int4 left"), "{}", typed.code);
     let cancelled = std::sync::atomic::AtomicBool::new(true);
     assert!(project.decompile_cancellable(add, &cancelled).is_err());
+}
+
+#[test]
+fn isolated_and_native_bad_code_diagnostics_match() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-x64-bad-code.snapshot.json");
+    let project = Project::new(Binary::open(path).unwrap());
+    let native = project.decompile(0x1000).unwrap();
+    project.set_decompiler_worker(Some(DecompilerWorkerConfig {
+        executable: Some(env!("CARGO_BIN_EXE_rampage-worker").into()),
+        ..Default::default()
+    }));
+    let isolated = project.decompile(0x1000).unwrap();
+    assert_eq!(isolated.recovery_status, rampage_api::RecoveryStatus::Incomplete);
+    assert_eq!(isolated.structure.diagnostics, native.structure.diagnostics);
 }
 
 #[test]

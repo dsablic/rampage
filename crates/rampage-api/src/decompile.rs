@@ -24,6 +24,7 @@ pub struct Decompilation {
     pub tokens: Vec<DecompiledToken>,
     #[serde(serialize_with = "serialize_structure")]
     pub structure: rampage_decompiler::StructuredResult,
+    pub recovery_status: rampage_decompiler::results::RecoveryStatus,
 }
 
 fn serialize_structure<S: serde::Serializer>(
@@ -256,6 +257,7 @@ impl Project {
             code,
             language_id: decompiler.language_id().to_owned(),
             tokens,
+            recovery_status: structure.recovery_status(),
             structure,
         })
     }

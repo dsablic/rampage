@@ -99,5 +99,13 @@ pub(super) fn decompile(
     } else {
         output.structure.ok_or_else(|| ApiError::Unavailable("worker omitted structured result".to_owned()))?
     };
-    Ok(Decompilation { address, name, code: output.text, language_id: output.language_id, tokens, structure })
+    Ok(Decompilation {
+        address,
+        name,
+        code: output.text,
+        language_id: output.language_id,
+        tokens,
+        recovery_status: structure.recovery_status(),
+        structure,
+    })
 }
