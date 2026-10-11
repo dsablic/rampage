@@ -1,6 +1,26 @@
 # To do
 
-## Current status
+## Decompiler: embedded Ghidra (the decompilation path)
+
+Decompilation is provided by `rampage-decompiler`, which embeds Ghidra's decompiler (Apache-2.0) in process and
+exposes it through `Project::decompile`, the `decompile` tool (API/MCP/assistant) and `rampage decompile`. It
+covers every architecture rampage decodes except s390x, renders calls by rampage's own names, applies common
+libc prototypes (so string arguments show), and decodes Thumb in Thumb mode.
+
+- [x] Embed the library, build from vendored sources, in-memory image, language-id mapping.
+- [x] Decompile to C on demand over all executable segments; read-only data mapped for string folding.
+- [x] Feed rampage's function names; apply libc prototypes; Thumb mode for 32-bit ARM.
+- [ ] Bind full library signatures (vtable/type archives), not just the curated libc set.
+- [ ] Richer `main`/entry signature recovery; apply user-set types to the decompiler.
+- [ ] Vendor the SLEIGH `.sla` specs (or build them) so no external Ghidra install is required.
+
+**This supersedes the hand-written "Deep ARM64 track" below as the route to decompiled output.** That native
+IR/SSA/pseudocode work stays as complementary, evidence-bounded diagnostics (and feeds the function list the
+decompiler works from); it is no longer the path to source recovery, so it is not worth hand-reimplementing what
+Ghidra already provides (types, structuring, FP/SIMD, every architecture). Keep only the parts that improve
+rampage's own discovery and CFG, which the decompiler depends on.
+
+## Current status (native analysis track, now complementary)
 
 Deep ARM64 support is **in progress**, not IDA/Ghidra parity or complete typed-source recovery.
 Checked items below describe bounded, tested capabilities; sections marked partial still have acceptance work remaining.
@@ -38,7 +58,8 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Controlled live export on Apple LLDB `2103.0.34.103`: executable bytes, module identities and registers;
   explicit original Mach-O correlation verified with ASLR enabled. Capture artifacts were removed.
 - [x] Previous committed milestones passed full debug/release suites and fresh-context review.
-- [ ] Actual IDA/Ghidra comparisons: neither executable was found on PATH; no comparative accuracy claim is made.
+- [ ] Actual IDA/Ghidra comparisons for rampage's own analysis (discovery/CFG/xrefs). Ghidra is now installed
+  locally (used by the decompiler), so this is unblocked; IDA is still absent. No comparative claim yet.
 - [ ] Resolve the local `rust-objcopy` missing-`libLLVM.dylib` stripping warning; release tests still execute.
 
 ## Deep ARM64 track and remaining work

@@ -4,9 +4,10 @@ A high-performance, open source reverse engineering toolkit written in Rust. The
 IDA Pro alternative where AI agents are first-class clients: a scriptable CLI and an MCP server come first,
 and a GUI arrives later as one more client of the same API.
 
-Status: early. Milestones 1-5 are done: the one-shot CLI, recursive-descent function discovery with
-cross-references, the MCP server, an AArch64 decoder generated from Arm's specification, and saved annotations.
-Triage and a first desktop UI are in. See [the design](docs/plans/2026-10-10-rampage-design.md) for the roadmap.
+Status: early, but with real teeth. The one-shot CLI, recursive-descent function discovery with
+cross-references, the MCP server, an AArch64 decoder generated from Arm's specification, saved annotations,
+triage and a first desktop UI are in. Functions decompile to C through an embedded build of Ghidra's
+decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the roadmap.
 
 ## Supported today
 
@@ -30,6 +31,12 @@ Triage and a first desktop UI are in. See [the design](docs/plans/2026-10-10-ram
   ELF; a bare import name finds its stub), and import slots (GOT entries, Mach-O symbol pointers, the PE import
   address table) as `__imp_<name>`. Disassembly comments
   each branch or data reference with the name or string it points to.
+- Decompilation: functions decompile to C through an embedded build of Ghidra's decompiler (Apache-2.0), in
+  process, for every architecture rampage decodes except s390x. rampage's own function names are fed in so calls
+  render by name, common libc calls are given prototypes so their string arguments show, and 32-bit ARM Thumb
+  functions decode in Thumb mode. It needs a local Ghidra install for the processor specifications (set
+  `GHIDRA_INSTALL_DIR`, or install via Homebrew); without one, rampage falls back to its structural summaries.
+  See [crates/rampage-decompiler](crates/rampage-decompiler).
 
 ## Usage
 
@@ -40,6 +47,7 @@ rampage triage  <file>                       # hashes, entropy, format details, 
 rampage audit   <file>                       # bounded decode coverage and unreliable-code evidence
 rampage metadata <file>                      # demangled symbols, named RTTI/vtables, ObjC selectors
 rampage inventory <directory>                # binaries in bundles/extracted packages; no execution
+rampage decompile <file> --at <addr|symbol>   # decompile a function to C (embedded Ghidra decompiler)
 rampage summarize <file> --at <addr|symbol>   # CFG/reference summary, not decompiled source
 rampage pseudocode <file> --at <addr|symbol>  # partial ARM64 SSA pseudocode with explicit unknowns
 rampage compare <file> --reference <json>     # image-matched, versioned function-start comparisons
