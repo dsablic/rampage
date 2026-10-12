@@ -12,6 +12,11 @@
 #   zig-version                    the toolchain that produced them; a different zig can change code and hashes
 #   manifest.json                  every slice, for: rampage-eval run --manifest OUT_DIR/manifest.json
 #
+# The generated manifest has no min_recall or min_precision, so its gate only rejects wrong (and, for libid,
+# spurious) answers; it is for measuring. The committed tests/fixtures/data/eval-manifest.json, which holds the
+# baselines, is never rewritten by this script, not even with --fixtures: after re-measuring, ratchet its floors
+# by hand.
+#
 # Slices per arch:
 #   libid-twin-<arch>    reference DB vs the reference's own stripped twin. Every byte matches, so misses are
 #                        hash collisions; an upper bound, not what users see.
@@ -38,17 +43,26 @@
 # Usage: tools/eval-corpus.sh OUT_DIR [--fixtures]
 set -euo pipefail
 
-if [[ $# -lt 1 ]]; then
+usage() {
     echo "usage: $0 OUT_DIR [--fixtures]" >&2
     exit 2
+}
+fixtures=false
+if [[ $# -lt 1 || $# -gt 2 || "$1" == -* ]]; then
+    usage
+fi
+if [[ $# -eq 2 ]]; then
+    [[ "$2" == "--fixtures" ]] || usage
+    fixtures=true
 fi
 out=$(mkdir -p "$1" && cd "$1" && pwd)
-fixtures=false
-[[ "${2:-}" == "--fixtures" ]] && fixtures=true
+eval_bin=${RAMPAGE_EVAL:-}
+# A relative RAMPAGE_EVAL names a path from the caller's directory, which the cd below leaves.
+[[ -z "$eval_bin" || "$eval_bin" == /* ]] || eval_bin="$PWD/$eval_bin"
 
 cd "$(dirname "$0")"
 repo=$(cd .. && pwd)
-eval_bin=${RAMPAGE_EVAL:-"$repo/target/debug/rampage-eval"}
+eval_bin=${eval_bin:-"$repo/target/debug/rampage-eval"}
 if [[ ! -x "$eval_bin" ]]; then
     echo "rampage-eval not found at $eval_bin; run: cargo build -p rampage-eval" >&2
     exit 1
@@ -79,7 +93,17 @@ count() {
     echo "$n"
 }
 
+# A JSON string literal holding $1.
+json_string() {
+    local text=${1//\\/\\\\}
+    printf '"%s"' "${text//\"/\\\"}"
+}
+
 slices=()
+# Appends one manifest slice: name, extra JSON fields (each followed by ", "), target file, truth file.
+add_slice() {
+    slices+=("$(json_string "$1"): {$2\"target\": $(json_string "$3"), \"truth\": $(json_string "$4")}")
+}
 for entry in "${targets[@]}"; do
     read -r triple tag <<<"$entry"
     mkdir -p "$out/ref-$tag" "$out/program-$tag"
@@ -107,17 +131,20 @@ for entry in "${targets[@]}"; do
     "$eval_bin" truth "$out/target-$tag.symbolized.elf" --stripped "$out/target-$tag.elf" \
         "${library[@]}" "${programs[@]}" >"$out/truth-cross-$tag.json"
 
-    echo "  -> $tag: twin $(count "$out/truth-twin-$tag.json") functions," \
-        "cross $(count "$out/truth-cross-$tag.json") identifiable"
+    # Assigned first: an exit inside a command substitution only leaves the subshell, and set -e then stops on
+    # the failed assignment.
+    twin_count=$(count "$out/truth-twin-$tag.json")
+    cross_count=$(count "$out/truth-cross-$tag.json")
+    echo "  -> $tag: twin $twin_count functions, cross $cross_count identifiable"
 
-    refs=$(cd "$out" && printf '"%s", ' ref-"$tag"/*.elf)
+    refs=""
+    for reference in "$out/ref-$tag"/*.elf; do
+        refs+="$(json_string "ref-$tag/$(basename "$reference")"), "
+    done
     refs="[${refs%, }]"
-    slice() { # name, extra fields, target, truth
-        slices+=("\"$1-$tag\": {$2\"target\": \"$3-$tag.elf\", \"truth\": \"truth-$4-$tag.json\"}")
-    }
-    slice libid-twin "\"refs\": $refs, " twin twin
-    slice libid-cross "\"refs\": $refs, " target cross
-    slice discovery '"family": "discovery", ' twin twin
+    add_slice "libid-twin-$tag" "\"refs\": $refs, " "twin-$tag.elf" "truth-twin-$tag.json"
+    add_slice "libid-cross-$tag" "\"refs\": $refs, " "target-$tag.elf" "truth-cross-$tag.json"
+    add_slice "discovery-$tag" '"family": "discovery", ' "twin-$tag.elf" "truth-twin-$tag.json"
 
     if $fixtures; then
         bin="$repo/tests/fixtures/bin"

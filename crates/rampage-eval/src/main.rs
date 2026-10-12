@@ -4,8 +4,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use rampage_eval::{Evaluation, Gate, Report, Truth};
-use rampage_loaders::{Binary, SymbolKind};
-use rampage_signatures::SignatureDb;
+use rampage_loaders::Binary;
+use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
 
 /// Self-supervised evaluation of rampage heuristics against strip-and-compare ground truth.
@@ -43,7 +43,8 @@ enum Command {
     },
     /// Score a heuristic family on stripped targets against their truth, per slice. Prints
     /// {"slices": {"<name>": report}, "gates": {..}} as JSON and a one-line summary per slice on stderr; exits 1
-    /// when any slice fails its gate (any wrong answer; for libid any spurious name; recall below --min-recall).
+    /// when any slice fails its gate (any wrong answer; for libid any spurious name; recall or precision below
+    /// --min-recall or --min-precision).
     Run(RunArgs),
 }
 
@@ -67,8 +68,8 @@ impl Family {
     }
 
     /// Discovery tolerates spurious starts: code without a sized symbol is still code.
-    fn gate(self, min_recall: f64) -> Gate {
-        Gate { allow_spurious: matches!(self, Family::Discovery), min_recall }
+    fn gate(self, min_recall: f64, min_precision: f64) -> Gate {
+        Gate { allow_spurious: matches!(self, Family::Discovery), min_recall, min_precision }
     }
 }
 
@@ -92,9 +93,12 @@ struct RunArgs {
     /// The recall baseline; a lower measured recall fails the gate.
     #[arg(long, default_value_t = 0.0, conflicts_with = "manifest")]
     min_recall: f64,
+    /// The precision baseline; a lower measured precision fails the gate.
+    #[arg(long, default_value_t = 0.0, conflicts_with = "manifest")]
+    min_precision: f64,
     /// Evaluate every slice of a manifest instead: {"slices": {"<name>": {"family": "libid"|"discovery",
-    /// "refs": [..], "dbs": [..], "target": "..", "truth": "..", "min_recall": 0.0}}}, paths relative to the
-    /// manifest; refs and dbs apply to libid only.
+    /// "refs": [..], "dbs": [..], "target": "..", "truth": "..", "min_recall": 0.0, "min_precision": 0.0}}},
+    /// paths relative to the manifest; refs and dbs apply to libid only.
     #[arg(long, conflicts_with_all = ["databases", "references"])]
     manifest: Option<PathBuf>,
     /// Keep at most this many disagreements per slice in the JSON (the counts still cover all of them).
@@ -132,8 +136,7 @@ fn truth(
     let binary = open(symbolized)?;
     if let Some(stripped) = stripped {
         let twin = open(stripped)?;
-        let functions = binary.symbols.iter().filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0);
-        for symbol in functions {
+        for symbol in named_functions(&binary) {
             let ours = binary.read(symbol.address, symbol.size);
             if ours.is_none() || ours != twin.read(symbol.address, symbol.size) {
                 return Err(format!(
@@ -184,6 +187,8 @@ struct Slice {
     #[serde(default)]
     min_recall: f64,
     #[serde(default)]
+    min_precision: f64,
+    #[serde(default)]
     refs: Vec<PathBuf>,
     #[serde(default)]
     dbs: Vec<PathBuf>,
@@ -202,6 +207,15 @@ impl Slice {
         for path in &self.refs {
             let binary = open(path)?;
             match &mut combined {
+                // extend_from_binary() ignores another architecture; an eval must not drop an input silently.
+                Some(db) if db.arch() != binary.arch => {
+                    return Err(format!(
+                        "{}: a {} reference cannot be combined with a {} database",
+                        path.display(),
+                        binary.arch,
+                        db.arch()
+                    ));
+                }
                 Some(db) => db.extend_from_binary(&binary),
                 None => combined = Some(SignatureDb::from_binary(&binary)),
             }
@@ -214,9 +228,9 @@ impl Slice {
                     return Err(format!(
                         "{}: a {} scheme-{} database cannot be combined with a {} scheme-{} one",
                         path.display(),
-                        db.arch,
+                        db.arch(),
                         db.scheme(),
-                        existing.arch,
+                        existing.arch(),
                         existing.scheme()
                     ));
                 }
@@ -230,7 +244,7 @@ impl Slice {
     /// The slice's report, and its target's architecture (part of the default slice name).
     fn evaluate(&self) -> Result<(Report, String), String> {
         let target = open(&self.target)?;
-        let arch = target.arch.to_string();
+        let arch = target.arch;
         let truth =
             Truth::from_json(&read(&self.truth)?).map_err(|error| format!("{}: {error}", self.truth.display()))?;
         let unsupported = |_| format!("unsupported architecture {arch}");
@@ -239,15 +253,15 @@ impl Slice {
                 let db = self.database()?;
                 // A database for another architecture matches nothing, which would read as a clean (if useless)
                 // pass.
-                if db.arch != arch {
+                if db.arch() != arch {
                     let target = self.target.display();
-                    return Err(format!("{target}: database architecture {:?} is not the target's {arch:?}", db.arch));
+                    return Err(format!("{target}: database architecture {} is not the target's {arch}", db.arch()));
                 }
                 rampage_eval::evaluate(&db, &target, &truth).map_err(unsupported)?
             }
             Family::Discovery => rampage_eval::evaluate_discovery(&target, &truth).map_err(unsupported)?,
         };
-        Ok((report, arch))
+        Ok((report, arch.to_string()))
     }
 }
 
@@ -263,6 +277,7 @@ fn manifest(path: &Path) -> Result<Vec<(Option<String>, Slice)>, String> {
             let slice = Slice {
                 family: slice.family,
                 min_recall: slice.min_recall,
+                min_precision: slice.min_precision,
                 refs: resolve(slice.refs),
                 dbs: resolve(slice.dbs),
                 target: base.join(slice.target),
@@ -283,6 +298,7 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
             let slice = Slice {
                 family: args.family,
                 min_recall: args.min_recall,
+                min_precision: args.min_precision,
                 refs: args.references,
                 dbs: args.databases,
                 target,
@@ -297,7 +313,7 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
         let name = name.unwrap_or_else(|| format!("{}-{arch}", slice.family.tag()));
         eprintln!("{name}: {}", report.summary());
         report.truncate_disagreements(args.max_disagreements);
-        evaluation.insert(name, report, slice.family.gate(slice.min_recall));
+        evaluation.insert(name, report, slice.family.gate(slice.min_recall, slice.min_precision));
     }
     for (name, failures) in evaluation.failures() {
         eprintln!("{name}: FAIL {}", failures.join(", "));

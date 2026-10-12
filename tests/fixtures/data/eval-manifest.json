@@ -22,19 +22,21 @@
       "refs": ["../bin/eval-ref-aarch64.elf"],
       "target": "../bin/eval-target-aarch64.elf",
       "truth": "eval-truth-cross-aarch64.json",
-      "min_recall": 0.8227
+      "min_recall": 0.8354
     },
     "discovery-x86_64": {
       "family": "discovery",
       "target": "../bin/eval-twin-x86_64.elf",
       "truth": "eval-truth-twin-x86_64.json",
-      "min_recall": 1.0
+      "min_recall": 1.0,
+      "min_precision": 0.9886
     },
     "discovery-aarch64": {
       "family": "discovery",
       "target": "../bin/eval-twin-aarch64.elf",
       "truth": "eval-truth-twin-aarch64.json",
-      "min_recall": 1.0
+      "min_recall": 1.0,
+      "min_precision": 0.7366
     }
   }
 }

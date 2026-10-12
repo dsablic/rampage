@@ -16,8 +16,10 @@
 //! Hashes are versioned. Scheme 1 ([`function_hash`]) is the masking above. Scheme 2 ([`function_hash_in`]) also
 //! masks constants that are layout-dependent addresses: on x86/x86-64, displacements and immediates pointing into
 //! the image ([`MaskContext`]), as non-PIE code embeds them; on AArch64, the low 12 bits completing an ADRP page
-//! address. A [`SignatureDb`] records its scheme and [`SignatureDb::identify_in`] hashes with it, so databases saved
-//! under scheme 1 keep matching exactly as before.
+//! address. It also masks relative fields scheme 1 missed or over-masked on Thumb and MIPS (see
+//! [`function_hash_in`]); scheme 1's hashes stay frozen. A [`SignatureDb`] records its scheme and
+//! [`SignatureDb::identify_in`] hashes with it, so databases saved under scheme 1 keep matching exactly as before.
+//! New databases, the bundled ones included, are scheme 2.
 //!
 //! A confidence gate rejects non-discriminating bodies so they are neither stored nor matched: a body whose
 //! masked form carries too little content (a single-branch thunk masks to almost nothing, all-nop padding is one
@@ -35,7 +37,7 @@ use std::ops::Range;
 pub use bundled::bundled;
 use iced_x86::{ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
 use rampage_arch::{Arch, Target};
-use rampage_loaders::{Binary, SymbolKind};
+use rampage_loaders::{Binary, Symbol, SymbolKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -125,8 +127,7 @@ impl MaskContext {
 /// Accumulates a function's masked instruction stream and measures whether it carries enough discriminating
 /// content to be worth storing or matching. Each path feeds one instruction's masked encoding (with the
 /// position-dependent fields already zeroed); [`Fingerprint::finish`] applies the confidence gate and either
-/// yields the hash or `None`. Hashing is unchanged for accepted bodies, so a body that passes hashes exactly as
-/// before the gate existed.
+/// yields the hash or `None`. The gate only accepts or rejects: it never changes an accepted body's hash.
 struct Fingerprint {
     hasher: Sha256,
     instructions: u32,
@@ -173,30 +174,6 @@ fn fold(bytes: &[u8]) -> u64 {
         acc = acc.wrapping_mul(0x0000_0100_0000_01b3);
     }
     acc
-}
-
-/// The x86 bitness for an architecture, or `None` when it is not an x86 target.
-fn x86_bitness(arch: Arch) -> Option<u32> {
-    match arch {
-        Arch::X86 => Some(32),
-        Arch::X86_64 => Some(64),
-        _ => None,
-    }
-}
-
-/// Whether signature hashing is supported for an architecture.
-fn supported(arch: Arch) -> bool {
-    matches!(
-        arch,
-        Arch::X86
-            | Arch::X86_64
-            | Arch::Aarch64
-            | Arch::Arm
-            | Arch::Mips
-            | Arch::Mips64
-            | Arch::PowerPc
-            | Arch::PowerPc64
-    )
 }
 
 /// Masks the position-dependent immediate bits of a little-endian AArch64 instruction word, leaving opcode and
@@ -251,15 +228,77 @@ impl AdrpPages {
         let add_unshifted = word & 0x7fc0_0000 == 0x1100_0000;
         let load_store_unsigned = word & 0x3b00_0000 == 0x3900_0000;
         let completes = (add_unshifted || load_store_unsigned) && self.registers & (1 << source) != 0;
-        let call = word & 0xfc00_0000 == 0x9400_0000 || word & 0xffff_fc1f == 0xd63f_0000;
-        if call {
-            // A call clobbers the caller-saved x0..x18.
-            self.registers &= !0x7_ffff;
-        } else {
-            self.registers &= !(1 << destination);
-        }
+        self.registers &= !written_registers(word);
         if completes { masked & !(0xfff << 10) } else { masked }
     }
+}
+
+/// The general registers, as a bitset, that an AArch64 instruction may write. Branches, stores and other
+/// instructions whose bits 4:0 are not a destination write none. Where the encoding does not say cheaply (SIMD&FP
+/// moves to a general register, exclusives, unusual load/store forms) every candidate field counts as written:
+/// forgetting a page register only leaves a low half unmasked.
+fn written_registers(word: u32) -> u32 {
+    let rt = 1u32 << (word & 0x1f);
+    match (word >> 25) & 0xf {
+        0b1000 | 0b1001 => rt, // data processing, immediate
+        0b0101 | 0b1101 => rt, // data processing, register
+        0b0111 | 0b1111 => rt, // SIMD and floating point
+        0b1010 | 0b1011 => {
+            let call = word & 0xfc00_0000 == 0x9400_0000 || word & 0xffff_fc1f == 0xd63f_0000;
+            let system_read = word & 0xffe0_0000 == 0xd520_0000; // MRS, SYSL
+            if call {
+                // x0..x18 are caller-saved and the link register x30 takes the return address.
+                0x7_ffff | 1 << 30
+            } else if system_read {
+                rt
+            } else {
+                0
+            }
+        }
+        0b0100 | 0b0110 | 0b1100 | 0b1110 => load_store_writes(word),
+        _ => 0,
+    }
+}
+
+/// [`written_registers`] for the load/store class: a general-register load writes Rt (and Rt2 for a pair), and a
+/// pre- or post-indexed access writes its base Rn back.
+fn load_store_writes(word: u32) -> u32 {
+    let rt = 1u32 << (word & 0x1f);
+    let rn = 1u32 << ((word >> 5) & 0x1f);
+    let rt2 = 1u32 << ((word >> 10) & 0x1f);
+    let rs = 1u32 << ((word >> 16) & 0x1f);
+    let only = |condition: bool, registers: u32| if condition { registers } else { 0 };
+    let vector = word & 0x0400_0000 != 0;
+    let opc = (word >> 22) & 0b11;
+    if word & 0x3800_0000 == 0x2800_0000 {
+        // Pair: L is bit 22; bits 24:23 are 01 (post-index) or 11 (pre-index) with write-back.
+        let load = word & 0x0040_0000 != 0 && !vector;
+        return only(load, rt | rt2) | only(word & 0x0080_0000 != 0, rn);
+    }
+    if word & 0x3b00_0000 == 0x1800_0000 {
+        // Literal: opc (bits 31:30) 0b11 is PRFM, which writes nothing.
+        return only(!vector && word >> 30 != 0b11, rt);
+    }
+    if word & 0x3800_0000 == 0x3800_0000 {
+        let unsigned_offset = word & 0x0100_0000 != 0;
+        let register_form = word & 0x0020_0000 != 0;
+        let low = (word >> 10) & 0b11;
+        if !unsigned_offset && register_form && low != 0b10 {
+            // Atomic memory operations (bits 11:10 == 00) and pointer-authenticated loads, which may write back.
+            return rt | only(low == 0b11, rn);
+        }
+        let prefetch = word >> 30 == 0b11 && opc == 0b10;
+        let load = !vector && opc != 0 && !prefetch;
+        // Pre- and post-indexed immediates (bit 10 set) write the base back.
+        let write_back = !unsigned_offset && !register_form && low & 1 == 1;
+        return only(load, rt) | only(write_back, rn);
+    }
+    if word & 0xbe00_0000 == 0x0c00_0000 {
+        // SIMD structure loads and stores touch only vector registers, plus the base when post-indexed.
+        return only(word & 0x0080_0000 != 0, rn);
+    }
+    // Exclusive, ordered, compare-and-swap, memory tagging and other forms.
+    rt | rt2 | rs
 }
 
 /// Hashes a stream of fixed 4-byte instruction words, reading each in `big_endian` order and applying `mask` to
@@ -289,8 +328,9 @@ fn mask_arm_a32(word: u32) -> u32 {
 
 /// Masks the imm fields of a 16-bit Thumb branch, leaving opcode and condition. Covers the unconditional B
 /// (bits [15:11] == 0b11100, 11-bit imm) and the conditional B (bits [15:12] == 0b1101 with a real condition,
-/// 8-bit imm; conditions 0b1110/0b1111 are undefined/SVC, not branches).
-fn mask_thumb16(hw: u16) -> u16 {
+/// 8-bit imm; conditions 0b1110/0b1111 are undefined/SVC, not branches). Scheme 2 (`current`) also masks CBZ/CBNZ
+/// (`1011 o0i1 imm5 Rn`), whose i:imm5 offset is relative too; scheme 1 keeps it so its hashes never change.
+fn mask_thumb16(hw: u16, current: bool) -> u16 {
     if hw >> 11 == 0b11100 {
         return hw & !0x07ff;
     }
@@ -300,22 +340,34 @@ fn mask_thumb16(hw: u16) -> u16 {
             return hw & !0x00ff;
         }
     }
+    if current && hw & 0xf500 == 0xb100 {
+        return hw & !0x02f8;
+    }
     hw
 }
 
-/// Masks the imm fields of a 32-bit Thumb BL/BLX/B.W, whose first halfword is `0b11110 S imm10` and whose second
-/// is `0b11 J1 x J2 imm11`. Bit 12 of the second halfword distinguishes BL from BLX, so it is kept; the S, J1, J2
-/// and imm bits are masked in both halfwords. Any other 32-bit instruction passes through unchanged.
-fn mask_thumb32(hw1: u16, hw2: u16) -> (u16, u16) {
-    if hw1 >> 11 == 0b11110 && hw2 >> 14 == 0b11 {
+/// Masks the imm fields of a 32-bit Thumb branch, whose first halfword is `0b11110 S ...` and whose second is
+/// `0b1 J1 x J2 imm11`. BL/BLX (second halfword `0b11 ...`, bit 12 telling them apart and so kept) mask S, imm10,
+/// J1, J2 and imm11. Scheme 2 (`current`) also masks B.W (T4, `0b10 J1 1 J2`) the same way and the conditional
+/// B<c>.W (T3, `0b10 J1 0 J2`), keeping its condition (first halfword bits 9:6; 0b111x there is not a branch).
+/// Any other 32-bit instruction passes through unchanged.
+fn mask_thumb32(hw1: u16, hw2: u16, current: bool) -> (u16, u16) {
+    if hw1 >> 11 != 0b11110 {
+        return (hw1, hw2);
+    }
+    if hw2 >> 14 == 0b11 || (current && hw2 & 0xd000 == 0x9000) {
         return (hw1 & !0x07ff, hw2 & !0x2fff);
+    }
+    if current && hw2 & 0xd000 == 0x8000 && (hw1 >> 6) & 0xf < 0b1110 {
+        return (hw1 & !0x043f, hw2 & !0x2fff);
     }
     (hw1, hw2)
 }
 
 /// Hashes a Thumb (T32) function, decoding halfword-by-halfword from the start. A first halfword with
 /// bits [15:11] in {0b11101, 0b11110, 0b11111} begins a 32-bit instruction (two halfwords), else it is 16-bit.
-fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
+/// `current` selects scheme 2's masking.
+fn thumb_hash(bytes: &[u8], big_endian: bool, current: bool) -> Option<FunctionHash> {
     let read_hw = |pair: &[u8]| {
         let raw = [pair[0], pair[1]];
         if big_endian { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) }
@@ -329,7 +381,7 @@ fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
                 break;
             }
             let hw2 = read_hw(&bytes[index + 2..index + 4]);
-            let (m1, m2) = mask_thumb32(hw1, hw2);
+            let (m1, m2) = mask_thumb32(hw1, hw2, current);
             // One push of the two halfwords concatenated hashes identically to two sequential updates.
             let mut encoding = [0u8; 4];
             encoding[..2].copy_from_slice(&m1.to_le_bytes());
@@ -337,7 +389,7 @@ fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
             fingerprint.push(&encoding);
             index += 4;
         } else {
-            fingerprint.push(&mask_thumb16(hw1).to_le_bytes());
+            fingerprint.push(&mask_thumb16(hw1, current).to_le_bytes());
             index += 2;
         }
     }
@@ -345,16 +397,24 @@ fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
 }
 
 /// Masks the position-dependent target of a MIPS branch. J/JAL (opcode 0b000010/0b000011) carry a 26-bit
-/// instr_index; the conditional branches BEQ/BNE/BLEZ/BGTZ (opcodes 0x04..=0x07) and REGIMM (opcode 0x01,
-/// BLTZ/BGEZ) carry a 16-bit PC-relative offset. Generic I-type immediates (addiu/lui/ori) are left intact.
+/// instr_index; the conditional branches BEQ/BNE/BLEZ/BGTZ (opcodes 0x04..=0x07) and the REGIMM branches (opcode
+/// 0x01: BLTZ/BGEZ and their -L, -AL, -ALL forms) carry a 16-bit PC-relative offset. Generic I-type immediates
+/// (addiu/lui/ori) are left intact.
+///
+/// Scheme 1 masks the 16-bit field of every REGIMM instruction, including the traps and SYNCI whose field is data,
+/// and misses the branch-likely opcodes; its hashes are frozen, so scheme 2 (`current`) fixes both.
 ///
 /// Conservative choice: a `lui`/`addiu` HI/LO address pair is a genuine data immediate here, so it is not masked
 /// and will differ across differently based links. That lowers the cross-link match rate but never mismatches;
 /// recovering those pairs needs relocation/dataflow analysis, left for a later version.
-fn mask_mips(word: u32) -> u32 {
+fn mask_mips(word: u32, current: bool) -> u32 {
+    let regimm_branch = matches!((word >> 16) & 0x1f, 0x00..=0x03 | 0x10..=0x13);
     match word >> 26 {
         0b000010 | 0b000011 => word & !0x03ff_ffff,
-        0b000001 | 0b000100 | 0b000101 | 0b000110 | 0b000111 => word & !0x0000_ffff,
+        0b000001 if regimm_branch || !current => word & !0x0000_ffff,
+        0b000100..=0b000111 => word & !0x0000_ffff,
+        // BEQL/BNEL/BLEZL/BGTZL.
+        0b010100..=0b010111 if current => word & !0x0000_ffff,
         _ => word,
     }
 }
@@ -446,12 +506,34 @@ pub fn alias_rank(name: &str) -> (bool, usize, &str) {
     (name.starts_with('_'), name.len(), name)
 }
 
+/// Every named function symbol with a nonzero size, aliases included: the functions a symbol table delimits.
+pub fn named_functions(binary: &Binary) -> impl Iterator<Item = &Symbol> {
+    binary
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty())
+}
+
+/// One of [`named_functions`] per address, the spelling [`alias_rank`] prefers. Several names at one address are
+/// aliases of one function, not different functions.
+pub fn canonical_functions(binary: &Binary) -> BTreeMap<u64, &Symbol> {
+    let mut by_address: BTreeMap<u64, &Symbol> = BTreeMap::new();
+    for symbol in named_functions(binary) {
+        let best = by_address.entry(symbol.address).or_insert(symbol);
+        if alias_rank(&symbol.name) < alias_rank(&best.name) {
+            *best = symbol;
+        }
+    }
+    by_address
+}
+
 /// The masked content hash of the function whose bytes start at `address`, or `None` for an unsupported
 /// architecture or input with no decodable instructions. `target` supplies the architecture, the instruction
 /// byte order (used by the fixed-width paths), and, for 32-bit ARM, whether `address` holds Thumb code.
 ///
-/// This is hash scheme 1 ([`LEGACY_SCHEME`]), which the bundled databases and older saved ones use; new databases
-/// use [`function_hash_in`].
+/// This is hash scheme 1 ([`LEGACY_SCHEME`]), which databases saved before scheme 2 use, and the exact hash a
+/// scheme-2 database falls back to for functions whose masked hash is ambiguous. New databases, the bundled ones
+/// included, use [`function_hash_in`].
 pub fn function_hash(target: &Target, bytes: &[u8], address: u64) -> Option<FunctionHash> {
     hash(target, bytes, address, None)
 }
@@ -459,8 +541,10 @@ pub fn function_hash(target: &Target, bytes: &[u8], address: u64) -> Option<Func
 /// The scheme 2 ([`CURRENT_SCHEME`]) hash: [`function_hash`] plus masking of layout-dependent constants. On x86 and
 /// x86-64, displacements and immediates whose value lies inside `image` (absolute addresses of the image's own
 /// code and data, as non-PIE code embeds them) are masked. On AArch64, the low 12 bits that complete an ADRP page
-/// address are masked (this needs no context). 32-bit ARM, MIPS and PowerPC hash as in scheme 1: their absolute
-/// addresses (ARM literal pools, MIPS `lui`/`addiu` pairs) are not masked yet.
+/// address are masked (this needs no context). Thumb also masks B.W, B<c>.W and CBZ/CBNZ offsets, and MIPS the
+/// branch-likely offsets while keeping REGIMM trap immediates, relative fields scheme 1 handled wrongly but cannot
+/// change. Absolute addresses on 32-bit ARM, MIPS and PowerPC (ARM literal pools, MIPS `lui`/`addiu` pairs) are
+/// not masked yet.
 pub fn function_hash_in(target: &Target, image: &MaskContext, bytes: &[u8], address: u64) -> Option<FunctionHash> {
     hash(target, bytes, address, Some(image))
 }
@@ -484,16 +568,16 @@ pub fn function_hash_scheme(
 /// `image` selects the scheme: `None` is scheme 1, `Some` is scheme 2 with that image's address ranges.
 fn hash(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>) -> Option<FunctionHash> {
     match target.arch {
-        Arch::X86 | Arch::X86_64 => x86_hash(x86_bitness(target.arch)?, bytes, address, image),
+        Arch::X86 => x86_hash(32, bytes, address, image),
+        Arch::X86_64 => x86_hash(64, bytes, address, image),
         Arch::Aarch64 if image.is_some() => {
             let mut pages = AdrpPages::default();
             fixed_word_hash(bytes, false, |word| pages.mask(word))
         }
-        // x86 and AArch64 are fixed little-endian; their behavior is unchanged by the endianness threading.
         Arch::Aarch64 => fixed_word_hash(bytes, false, mask_aarch64),
-        Arch::Arm if target.is_thumb(address) => thumb_hash(bytes, target.big_endian),
+        Arch::Arm if target.is_thumb(address) => thumb_hash(bytes, target.big_endian, image.is_some()),
         Arch::Arm => fixed_word_hash(bytes, target.big_endian, mask_arm_a32),
-        Arch::Mips | Arch::Mips64 => fixed_word_hash(bytes, target.big_endian, mask_mips),
+        Arch::Mips | Arch::Mips64 => fixed_word_hash(bytes, target.big_endian, |word| mask_mips(word, image.is_some())),
         Arch::PowerPc | Arch::PowerPc64 => fixed_word_hash(bytes, target.big_endian, mask_ppc),
         _ => None,
     }
@@ -503,7 +587,8 @@ fn hash(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SignatureDb {
     /// The architecture the signatures were built for; matches are refused across architectures.
-    pub arch: String,
+    #[serde(with = "arch_name")]
+    arch: Arch,
     /// The hash scheme the entries were made with ([`LEGACY_SCHEME`] or [`CURRENT_SCHEME`]). Databases saved
     /// before schemes existed have no field and are scheme 1.
     #[serde(default = "legacy_scheme")]
@@ -511,67 +596,105 @@ pub struct SignatureDb {
     /// Masked hash (lowercase hex) to function name. Hashes that mapped to more than one name are dropped, so a
     /// match is never ambiguous.
     entries: BTreeMap<String, String>,
-    /// Exact (unmasked, scheme 1) hash to name, kept only for functions whose masked hash was ambiguous. Two
-    /// functions that differ only in which global they touch (`gmtime`/`localtime`) mask to one hash, but their exact
-    /// bytes still tell them apart within the same layout. Consulted only when the masked hash is unknown.
+    /// Exact (scheme 1) hash to name, kept only for functions whose masked hash was ambiguous. Two functions that
+    /// differ only in which global they touch (`gmtime`/`localtime`) mask to one hash, but their exact bytes still
+    /// tell them apart within the same layout. Consulted only when the masked hash has no entry.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     exact: BTreeMap<String, String>,
+    /// Masked hashes seen with more than one name, remembered so that adding one of the names again (from another
+    /// binary or database) cannot make the hash answer.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    ambiguous: BTreeSet<String>,
+    /// Exact hashes seen with more than one name.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    ambiguous_exact: BTreeSet<String>,
+    /// The exact hash behind each entry, known for databases built in this process: when a later binary makes the
+    /// masked hash ambiguous, the earlier function still gets its exact fallback. Not saved, as it would double
+    /// the file for what only building needs; a loaded entry that becomes ambiguous simply stops answering.
+    #[serde(skip)]
+    entry_exact: BTreeMap<String, String>,
 }
 
 fn legacy_scheme() -> u32 {
     LEGACY_SCHEME
 }
 
-impl Default for SignatureDb {
-    fn default() -> SignatureDb {
-        SignatureDb { arch: String::new(), scheme: CURRENT_SCHEME, entries: BTreeMap::new(), exact: BTreeMap::new() }
-    }
-}
+/// An [`Arch`] saved as its name (`"x86_64"`), the format databases have always used.
+mod arch_name {
+    use rampage_arch::Arch;
+    use serde::{Deserialize, Deserializer, Serializer};
 
-/// Every distinct name seen for a masked hash while building, with each name's exact hash when one was computed.
-#[derive(Default)]
-struct Builder {
-    names: BTreeMap<String, Vec<(String, Option<String>)>>,
-}
-
-impl Builder {
-    #[cfg(test)]
-    fn add(&mut self, hash: FunctionHash, name: &str) {
-        self.add_exact(hash, None, name);
+    pub fn serialize<S: Serializer>(arch: &Arch, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(arch)
     }
 
-    fn add_exact(&mut self, hash: FunctionHash, exact: Option<FunctionHash>, name: &str) {
-        let seen = self.names.entry(hex(&hash)).or_default();
-        if !seen.iter().any(|(existing, _)| existing == name) {
-            seen.push((name.to_owned(), exact.map(|exact| hex(&exact))));
-        }
-    }
-
-    fn finish(self, arch: Arch, scheme: u32) -> SignatureDb {
-        let mut entries = BTreeMap::new();
-        let mut exact: BTreeMap<String, Option<String>> = BTreeMap::new();
-        for (hash, names) in self.names {
-            if let [(name, _)] = names.as_slice() {
-                entries.insert(hash, name.clone());
-                continue;
-            }
-            for (name, key) in names {
-                let Some(key) = key else { continue };
-                match exact.get_mut(&key) {
-                    None => {
-                        exact.insert(key, Some(name));
-                    }
-                    Some(slot) if slot.as_deref() != Some(name.as_str()) => *slot = None, // ambiguous even exactly
-                    Some(_) => {}
-                }
-            }
-        }
-        let exact = exact.into_iter().filter_map(|(hash, name)| Some((hash, name?))).collect();
-        SignatureDb { arch: arch.to_string(), scheme, entries, exact }
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Arch, D::Error> {
+        String::deserialize(deserializer)?.parse().map_err(serde::de::Error::custom)
     }
 }
 
 impl SignatureDb {
+    fn empty(arch: Arch, scheme: u32) -> SignatureDb {
+        SignatureDb {
+            arch,
+            scheme,
+            entries: BTreeMap::new(),
+            exact: BTreeMap::new(),
+            ambiguous: BTreeSet::new(),
+            ambiguous_exact: BTreeSet::new(),
+            entry_exact: BTreeMap::new(),
+        }
+    }
+
+    /// Records the function `name` with masked hash `hash` and, when known, exact hash `exact`. A masked hash seen
+    /// with a second name is ambiguous for good, and every function behind it falls back to its exact hash.
+    fn add(&mut self, hash: FunctionHash, exact: Option<FunctionHash>, name: &str) {
+        let hash = hex(&hash);
+        let exact = exact.map(|exact| hex(&exact));
+        if !self.ambiguous.contains(&hash) {
+            match self.entries.get(&hash) {
+                Some(existing) if existing == name => return,
+                Some(_) => self.make_ambiguous(hash),
+                None => {
+                    if let Some(exact) = exact {
+                        self.entry_exact.insert(hash.clone(), exact);
+                    }
+                    self.entries.insert(hash, name.to_owned());
+                    return;
+                }
+            }
+        }
+        if let Some(exact) = exact {
+            self.add_exact(exact, name.to_owned());
+        }
+    }
+
+    /// Marks a masked hash ambiguous, moving its entry's function (if any) to the exact fallback.
+    fn make_ambiguous(&mut self, hash: String) {
+        if let Some(name) = self.entries.remove(&hash)
+            && let Some(exact) = self.entry_exact.remove(&hash)
+        {
+            self.add_exact(exact, name);
+        }
+        self.ambiguous.insert(hash);
+    }
+
+    fn add_exact(&mut self, exact: String, name: String) {
+        if self.ambiguous_exact.contains(&exact) {
+            return;
+        }
+        match self.exact.get(&exact) {
+            Some(existing) if *existing != name => {
+                self.exact.remove(&exact);
+                self.ambiguous_exact.insert(exact);
+            }
+            Some(_) => {}
+            None => {
+                self.exact.insert(exact, name);
+            }
+        }
+    }
+
     /// Builds [`CURRENT_SCHEME`] signatures from every named function in `binary` whose bytes are available, masking
     /// with the binary's own [`MaskContext`]. Functions whose bodies are byte-identical after masking but have
     /// different names are treated as ambiguous and left unmatchable.
@@ -582,62 +705,64 @@ impl SignatureDb {
     /// Builds signatures from `binary` under a specific hash `scheme`, e.g. [`LEGACY_SCHEME`] to extend or compare
     /// against an older database. An unknown scheme yields an empty database.
     pub fn from_binary_with_scheme(binary: &Binary, scheme: u32) -> SignatureDb {
-        let mut builder = Builder::default();
-        if supported(binary.arch) {
-            let target = binary.target();
-            let image = MaskContext::from_binary(binary);
-            // Several names at one address are aliases of one function, not a collision: keep one spelling, or
-            // the builder would drop the hash as ambiguous and the function could never be identified.
-            let mut by_address = BTreeMap::new();
-            for symbol in &binary.symbols {
-                if symbol.kind != SymbolKind::Function || symbol.size == 0 || symbol.name.is_empty() {
-                    continue;
-                }
-                by_address
-                    .entry(symbol.address)
-                    .and_modify(|best: &mut &rampage_loaders::Symbol| {
-                        if alias_rank(&symbol.name) < alias_rank(&best.name) {
-                            *best = symbol;
-                        }
-                    })
-                    .or_insert(symbol);
-            }
-            for symbol in by_address.into_values() {
-                if let Some(bytes) = binary.read(symbol.address, symbol.size)
-                    && let Some(hash) = function_hash_scheme(scheme, &target, &image, bytes, symbol.address)
-                {
-                    // Under the legacy scheme the masked hash already is the exact one.
-                    let exact = (scheme != LEGACY_SCHEME)
-                        .then(|| function_hash(&target, bytes, symbol.address))
-                        .flatten();
-                    builder.add_exact(hash, exact, &symbol.name);
-                }
+        let mut db = SignatureDb::empty(binary.arch, scheme);
+        db.add_binary(binary);
+        db
+    }
+
+    fn add_binary(&mut self, binary: &Binary) {
+        let target = binary.target();
+        let image = MaskContext::from_binary(binary);
+        // One spelling per address: aliases hashed under each name would make the hash ambiguous.
+        for symbol in canonical_functions(binary).into_values() {
+            if let Some(bytes) = binary.read(symbol.address, symbol.size)
+                && let Some(hash) = function_hash_scheme(self.scheme, &target, &image, bytes, symbol.address)
+            {
+                // Under the legacy scheme the masked hash already is the exact one.
+                let exact =
+                    (self.scheme != LEGACY_SCHEME).then(|| function_hash(&target, bytes, symbol.address)).flatten();
+                self.add(hash, exact, &symbol.name);
             }
         }
-        builder.finish(binary.arch, scheme)
     }
 
     /// Adds every named function from `binary` to this database, hashed under this database's scheme, so one
-    /// database can span several libraries.
+    /// database can span several libraries. Names collide across binaries exactly as within one: a masked hash
+    /// with two names stops answering and the functions behind it fall back to their exact hashes. A binary for
+    /// another architecture is ignored.
     pub fn extend_from_binary(&mut self, binary: &Binary) {
-        let additions = SignatureDb::from_binary_with_scheme(binary, self.scheme);
-        if additions.arch == self.arch {
-            add_unambiguous(&mut self.entries, additions.entries);
-            add_unambiguous(&mut self.exact, additions.exact);
+        if binary.arch == self.arch {
+            self.add_binary(binary);
         }
     }
 
     /// Overlays `other` onto this database, letting `other`'s names win on any shared hash (so a user database
-    /// takes precedence over a bundled one). Databases for different architectures or hash schemes do not mix
-    /// (their hashes are not comparable), so a mismatched `other` is ignored; [`SignatureDb::can_merge`] tells.
+    /// takes precedence over a bundled one); a hash `other` knows to be ambiguous stops answering here too.
+    /// Databases for different architectures or hash schemes do not mix (their hashes are not comparable), so a
+    /// mismatched `other` is ignored; [`SignatureDb::can_merge`] tells.
     pub fn merge(&mut self, other: &SignatureDb) {
         if !self.can_merge(other) {
             return;
         }
+        for hash in &other.ambiguous {
+            self.entries.remove(hash);
+            self.entry_exact.remove(hash);
+            self.ambiguous.insert(hash.clone());
+        }
         for (hash, name) in &other.entries {
+            self.ambiguous.remove(hash);
+            match other.entry_exact.get(hash) {
+                Some(exact) => self.entry_exact.insert(hash.clone(), exact.clone()),
+                None => self.entry_exact.remove(hash),
+            };
             self.entries.insert(hash.clone(), name.clone());
         }
+        for hash in &other.ambiguous_exact {
+            self.exact.remove(hash);
+            self.ambiguous_exact.insert(hash.clone());
+        }
         for (hash, name) in &other.exact {
+            self.ambiguous_exact.remove(hash);
             self.exact.insert(hash.clone(), name.clone());
         }
     }
@@ -645,6 +770,11 @@ impl SignatureDb {
     /// Whether [`SignatureDb::merge`] would take `other`'s entries: same architecture and hash scheme.
     pub fn can_merge(&self, other: &SignatureDb) -> bool {
         self.arch == other.arch && self.scheme == other.scheme
+    }
+
+    /// The architecture this database's signatures were built for.
+    pub fn arch(&self) -> Arch {
+        self.arch
     }
 
     /// The hash scheme of this database's entries.
@@ -655,9 +785,11 @@ impl SignatureDb {
     /// The name for the function whose bytes start at `address`, hashed without knowledge of the image's layout.
     /// `target` carries the architecture and instruction byte order (see [`function_hash`]).
     ///
-    /// For a scheme 1 database this is exact. For a scheme 2 database it hashes with an empty [`MaskContext`], so
-    /// absolute addresses stay in the hash and a function that embeds any will not match: it finds a subset of
-    /// what [`SignatureDb::identify_in`] finds, never different names. Prefer `identify_in`.
+    /// For a scheme 1 database this is the same as [`SignatureDb::identify_in`]. For a scheme 2 database it hashes
+    /// with an empty [`MaskContext`], so absolute addresses stay in the hash and a function that embeds any will not
+    /// match. When the target's image covers the same address ranges as the reference's, it finds a subset of what
+    /// `identify_in` finds, under the same names; with other layouts a constant can be an image address in one and
+    /// not the other, and the two lookups can disagree. Prefer `identify_in`.
     pub fn identify(&self, target: &Target, bytes: &[u8], address: u64) -> Option<&str> {
         self.identify_in(target, &MaskContext::default(), bytes, address)
     }
@@ -665,7 +797,7 @@ impl SignatureDb {
     /// The name for the function whose bytes start at `address` in the image described by `image` (see
     /// [`MaskContext::from_binary`]), hashed under this database's own scheme. The architecture must match.
     pub fn identify_in(&self, target: &Target, image: &MaskContext, bytes: &[u8], address: u64) -> Option<&str> {
-        if self.arch != target.arch.to_string() {
+        if self.arch != target.arch {
             return None;
         }
         let hash = function_hash_scheme(self.scheme, target, image, bytes, address)?;
@@ -689,26 +821,18 @@ impl SignatureDb {
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_owned())
+        serde_json::to_string(self).expect("string maps and plain fields always serialize")
     }
 
+    /// Parses a saved database. A hash scheme this version does not know is an error: none of its hashes could
+    /// ever match.
     pub fn from_json(text: &str) -> Result<SignatureDb, serde_json::Error> {
-        serde_json::from_str(text)
-    }
-}
-
-/// Adds `additions` to `entries`; a hash already present under a different name becomes ambiguous and is removed.
-fn add_unambiguous(entries: &mut BTreeMap<String, String>, additions: BTreeMap<String, String>) {
-    for (hash, name) in additions {
-        match entries.get(&hash) {
-            Some(existing) if existing != &name => {
-                entries.remove(&hash);
-            }
-            Some(_) => {}
-            None => {
-                entries.insert(hash, name);
-            }
+        let db: SignatureDb = serde_json::from_str(text)?;
+        if ![LEGACY_SCHEME, CURRENT_SCHEME].contains(&db.scheme) {
+            let message = format!("unknown signature hash scheme {} (this version knows 1 and 2)", db.scheme);
+            return Err(serde::de::Error::custom(message));
         }
+        Ok(db)
     }
 }
 
@@ -834,23 +958,97 @@ mod tests {
 
     #[test]
     fn database_drops_ambiguous_hashes_and_round_trips() {
-        let mut builder = Builder::default();
+        let mut db = SignatureDb::empty(Arch::X86_64, LEGACY_SCHEME);
         let x64 = target(Arch::X86_64, false);
         let hash = function_hash(&x64, &sample(), 0x1000).unwrap();
-        builder.add(hash, "first");
-        builder.add(hash, "first");
+        db.add(hash, None, "first");
+        db.add(hash, None, "first");
         let mut other = [0u8; 32];
         other[0] = 1;
-        builder.add(other, "unique");
-        // A second name for the same hash makes it ambiguous.
-        builder.add(hash, "second");
-        let db = builder.finish(Arch::X86_64, LEGACY_SCHEME);
-        assert_eq!(db.identify(&x64, &sample(), 0x1000), None); // ambiguous dropped
+        db.add(other, None, "unique");
+        // A second name for the same hash makes it ambiguous, and a later copy of either name cannot revive it.
+        db.add(hash, None, "second");
+        db.add(hash, None, "first");
+        assert_eq!(db.identify(&x64, &sample(), 0x1000), None);
         assert_eq!(db.len(), 1);
 
-        let restored = SignatureDb::from_json(&db.to_json()).unwrap();
-        assert_eq!(restored.arch, "x86_64");
+        let mut restored = SignatureDb::from_json(&db.to_json()).unwrap();
+        assert_eq!(restored.arch(), Arch::X86_64);
+        assert!(db.to_json().starts_with(r#"{"arch":"x86_64","#), "{}", db.to_json());
         assert_eq!(restored.len(), 1);
+        restored.add(hash, None, "second");
+        assert_eq!(restored.identify(&x64, &sample(), 0x1000), None);
+    }
+
+    /// Two layouts of one masked body, as `gmtime`/`localtime` or one function in two different binaries.
+    fn colliding_pair() -> (Vec<u8>, Vec<u8>) {
+        (
+            absolute_sample([0x40_a000, 0x40_b000, 0x40_c000, 0x40_d000]),
+            absolute_sample([0x40_a100, 0x40_b100, 0x40_c100, 0x40_d100]),
+        )
+    }
+
+    /// Adds `body` as `name` the way building from a binary does.
+    fn add_function(db: &mut SignatureDb, body: &[u8], name: &str) {
+        let x64 = target(Arch::X86_64, false);
+        let masked = function_hash_in(&x64, &image(), body, 0x1000).unwrap();
+        db.add(masked, function_hash(&x64, body, 0x1000), name);
+    }
+
+    /// The corpus reference keeping only the function symbols named in `names`.
+    fn reference_with(names: &[&str]) -> Binary {
+        let mut binary = Binary::open(fixture("eval-ref-x86_64.elf")).unwrap();
+        binary.symbols.retain(|symbol| symbol.kind != SymbolKind::Function || names.contains(&symbol.name.as_str()));
+        binary
+    }
+
+    /// `gmtime` and `localtime` differ only in their static result buffer, so they share a scheme-2 hash.
+    #[test]
+    fn extending_tracks_collisions_across_binaries() {
+        let both = reference_with(&["gmtime", "localtime"]);
+        let name_of = |db: &SignatureDb, function: &str| {
+            let symbol = both.symbols.iter().find(|symbol| symbol.name == function).unwrap();
+            let bytes = both.read(symbol.address, symbol.size).unwrap();
+            db.identify_in(&both.target(), &MaskContext::from_binary(&both), bytes, symbol.address).map(str::to_owned)
+        };
+        let alone = SignatureDb::from_binary(&reference_with(&["gmtime"]));
+        assert_eq!(name_of(&alone, "localtime").as_deref(), Some("gmtime"), "the pair no longer collides");
+
+        // The other name arrives from a second binary: both fall back to their exact hashes.
+        let mut db = SignatureDb::from_binary(&reference_with(&["gmtime"]));
+        db.extend_from_binary(&reference_with(&["localtime"]));
+        assert_eq!(name_of(&db, "gmtime").as_deref(), Some("gmtime"));
+        assert_eq!(name_of(&db, "localtime").as_deref(), Some("localtime"));
+        // A third binary naming one of them again does not revive the masked hash.
+        db.extend_from_binary(&reference_with(&["gmtime"]));
+        assert_eq!(name_of(&db, "localtime").as_deref(), Some("localtime"));
+
+        // A binary ambiguous inside does not leave the earlier entry shadowing the exact fallback.
+        let mut db = SignatureDb::from_binary(&reference_with(&["gmtime"]));
+        db.extend_from_binary(&both);
+        assert_eq!(name_of(&db, "localtime").as_deref(), Some("localtime"));
+    }
+
+    #[test]
+    fn merging_an_ambiguity_drops_the_old_entry() {
+        let x64 = target(Arch::X86_64, false);
+        let (first, second) = colliding_pair();
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        add_function(&mut db, &first, "gmtime");
+        let mut other = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        add_function(&mut other, &first, "gmtime");
+        add_function(&mut other, &second, "localtime");
+        // Merging the ambiguity in must stop the old masked entry from shadowing the exact fallback.
+        db.merge(&other);
+        assert_eq!(db.identify_in(&x64, &image(), &second, 0x1000), Some("localtime"));
+        let relinked = absolute_sample([0x40_a300, 0x40_b300, 0x40_c300, 0x40_d300]);
+        assert_eq!(db.identify_in(&x64, &image(), &relinked, 0x1000), None);
+        // The same holds for a database loaded from JSON, which carries the ambiguity with it.
+        let mut bundled = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        add_function(&mut bundled, &first, "gmtime");
+        bundled.merge(&SignatureDb::from_json(&other.to_json()).unwrap());
+        assert_eq!(bundled.identify_in(&x64, &image(), &relinked, 0x1000), None);
+        assert_eq!(bundled.identify_in(&x64, &image(), &second, 0x1000), Some("localtime"));
     }
 
     /// Builds a database from a fixture and confirms at least one named function identifies back to its own name
@@ -860,10 +1058,7 @@ mod tests {
         let db = SignatureDb::from_binary(&binary);
         assert!(!db.is_empty(), "{name}: empty database");
         let target = binary.target();
-        let hits = binary
-            .symbols
-            .iter()
-            .filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty())
+        let hits = named_functions(&binary)
             .filter(|symbol| {
                 binary
                     .read(symbol.address, symbol.size)
@@ -915,6 +1110,48 @@ mod tests {
         assert_ne!(function_hash(&thumb, &base, 0), function_hash(&thumb, &changed_imm, 0));
     }
 
+    /// movs r0, #1; `branch`; movs r1, #2; bx lr.
+    fn thumb_body(branch: &[u16]) -> Vec<u8> {
+        let halfwords: Vec<u16> = [&[0x2001], branch, &[0x2102, 0x4770]].concat();
+        halfwords_to_bytes(&halfwords, false)
+    }
+
+    /// Whether scheme 2 hashes `base` and `relinked` (Thumb branches) alike while scheme 1, whose hashes are
+    /// frozen, still tells them apart.
+    fn thumb_relinks_under_scheme_2_only(base: &[u16], relinked: &[u16]) {
+        let thumb = thumb_target(false);
+        let current = |branch| function_hash_in(&thumb, &MaskContext::default(), &thumb_body(branch), 0);
+        assert!(current(base).is_some());
+        assert_eq!(current(base), current(relinked), "{base:x?} vs {relinked:x?}");
+        let legacy = |branch| function_hash(&thumb, &thumb_body(branch), 0);
+        assert_ne!(legacy(base), legacy(relinked), "{base:x?} vs {relinked:x?}");
+    }
+
+    #[test]
+    fn thumb_scheme_2_masks_wide_unconditional_branches() {
+        // B.W (T4): 11110 S imm10, 10 J1 1 J2 imm11.
+        thumb_relinks_under_scheme_2_only(&[0xf000, 0xb800], &[0xf412, 0x99ab]);
+    }
+
+    #[test]
+    fn thumb_scheme_2_masks_wide_conditional_branches_but_keeps_the_condition() {
+        // B<c>.W (T3): 11110 S cond imm6, 10 J1 0 J2 imm11; beq here.
+        thumb_relinks_under_scheme_2_only(&[0xf000, 0x8000], &[0xf43f, 0xafff]);
+        let thumb = thumb_target(false);
+        let hash = |branch| function_hash_in(&thumb, &MaskContext::default(), &thumb_body(branch), 0);
+        assert_ne!(hash(&[0xf000, 0x8000]), hash(&[0xf040, 0x8000]), "beq.w and bne.w must differ");
+    }
+
+    #[test]
+    fn thumb_scheme_2_masks_compare_and_branch_offsets() {
+        // CBZ r0 (1011 o0i1 imm5 Rn) with offsets 0 and the maximum.
+        thumb_relinks_under_scheme_2_only(&[0xb100], &[0xb3f8]);
+        let thumb = thumb_target(false);
+        let hash = |branch| function_hash_in(&thumb, &MaskContext::default(), &thumb_body(branch), 0);
+        assert_ne!(hash(&[0xb100]), hash(&[0xb900]), "cbz and cbnz must differ");
+        assert_ne!(hash(&[0xb100]), hash(&[0xb101]), "the tested register must count");
+    }
+
     #[test]
     fn thumb_endianness_reads_the_same_logical_halfwords() {
         let halfwords = [0x2001u16, 0xd0fe, 0xe7fe, 0xf000, 0xf800, 0x4770];
@@ -938,6 +1175,22 @@ mod tests {
         // A changed I-type immediate (addiu 0x20 -> 0x40), which we deliberately do NOT mask, must differ.
         let changed_imm = words_to_bytes(&[0x3c02_0001, 0x2442_0040, 0x0c10_0000, 0x1040_0005, 0x0000_0000], true);
         assert_ne!(function_hash(&mips, &base, 0), function_hash(&mips, &changed_imm, 0));
+    }
+
+    #[test]
+    fn mips_scheme_2_masks_regimm_branches_and_branch_likely_but_not_trap_immediates() {
+        let mips = target(Arch::Mips, true);
+        // addiu $v0, $v0, 0x20; `word`; lui $v0, 1; jr $ra.
+        let body = |word: u32| words_to_bytes(&[0x2442_0020, word, 0x3c02_0001, 0x03e0_0008], true);
+        let current = |word| function_hash_in(&mips, &MaskContext::default(), &body(word), 0);
+        let legacy = |word| function_hash(&mips, &body(word), 0);
+        // BLTZAL $v0 (REGIMM rt 0x10) and BEQL $v0, $zero (opcode 0x14): relative offsets.
+        assert_eq!(current(0x0450_0005), current(0x0450_abcd));
+        assert_eq!(current(0x5040_0005), current(0x5040_abcd));
+        assert_ne!(legacy(0x5040_0005), legacy(0x5040_abcd), "scheme 1 hashes are frozen");
+        // TGEI $v0, imm (REGIMM rt 0x08): a data immediate, which scheme 1 masked.
+        assert_ne!(current(0x0448_0010), current(0x0448_0020));
+        assert_eq!(legacy(0x0448_0010), legacy(0x0448_0020), "scheme 1 hashes are frozen");
     }
 
     #[test]
@@ -1109,14 +1362,12 @@ mod tests {
     fn exact_hashes_disambiguate_functions_that_differ_only_in_their_globals() {
         // Like gmtime/localtime: identical code reaching different static buffers masks to one hash.
         let x64 = target(Arch::X86_64, false);
-        let gmtime = absolute_sample([0x40_a000, 0x40_b000, 0x40_c000, 0x40_d000]);
-        let localtime = absolute_sample([0x40_a100, 0x40_b100, 0x40_c100, 0x40_d100]);
+        let (gmtime, localtime) = colliding_pair();
         let masked = function_hash_in(&x64, &image(), &gmtime, 0x1000).unwrap();
         assert_eq!(Some(masked), function_hash_in(&x64, &image(), &localtime, 0x1000));
-        let mut builder = Builder::default();
-        builder.add_exact(masked, function_hash(&x64, &gmtime, 0x1000), "gmtime");
-        builder.add_exact(masked, function_hash(&x64, &localtime, 0x1000), "localtime");
-        let db = builder.finish(Arch::X86_64, CURRENT_SCHEME);
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        add_function(&mut db, &gmtime, "gmtime");
+        add_function(&mut db, &localtime, "localtime");
         assert_eq!(db.identify_in(&x64, &image(), &gmtime, 0x1000), Some("gmtime"));
         assert_eq!(db.identify_in(&x64, &image(), &localtime, 0x1000), Some("localtime"));
         // A relinked copy matches neither exactly: no name rather than a guessed one.
@@ -1186,6 +1437,32 @@ mod tests {
     }
 
     #[test]
+    fn adrp_tracking_survives_instructions_that_write_no_register() {
+        let a64 = target(Arch::Aarch64, false);
+        // adrp x8, page; b.hi +8; ldr w0, [x8, #lo12]; ret. B.cond's bits 4:0 are its condition (hi = 8).
+        let body =
+            |lo12: u32| words_to_bytes(&[0x9000_0008, 0x5400_0048, 0xb940_0100 | (lo12 / 4) << 10, 0xd65f_03c0], false);
+        let image = MaskContext::default();
+        assert_eq!(function_hash_in(&a64, &image, &body(0x10), 0), function_hash_in(&a64, &image, &body(0x24), 0));
+        // str w0, [x8, #lo12] in place of the branch: a store reads its bits 4:0, so x8 still holds the page.
+        let store =
+            |lo12: u32| words_to_bytes(&[0x9000_0008, 0xb900_0100 | (lo12 / 4) << 10, 0xb940_0100, 0xd65f_03c0], false);
+        assert_eq!(function_hash_in(&a64, &image, &store(0x10), 0), function_hash_in(&a64, &image, &store(0x24), 0));
+    }
+
+    #[test]
+    fn adrp_tracking_forgets_registers_written_as_a_second_destination() {
+        let a64 = target(Arch::Aarch64, false);
+        let image = MaskContext::default();
+        // adrp x1, page; ldp x0, x1, [sp]; add x2, x1, #imm; ret. The LDP overwrites x1 through Rt2.
+        let pair = |imm: u32| words_to_bytes(&[0x9000_0001, 0xa940_07e0, 0x9100_0022 | imm << 10, 0xd65f_03c0], false);
+        assert_ne!(function_hash_in(&a64, &image, &pair(0x10), 0), function_hash_in(&a64, &image, &pair(0x20), 0));
+        // adrp x1, page; ldr x0, [x1], #8; add x2, x1, #imm; ret. The post-index writes x1 back.
+        let post = |imm: u32| words_to_bytes(&[0x9000_0001, 0xf840_8420, 0x9100_0022 | imm << 10, 0xd65f_03c0], false);
+        assert_ne!(function_hash_in(&a64, &image, &post(0x10), 0), function_hash_in(&a64, &image, &post(0x20), 0));
+    }
+
+    #[test]
     fn mask_context_normalizes_and_answers_membership() {
         let context = MaskContext::new([0x30..0x40, 0x10..0x20, 0x18..0x28, 0x50..0x50]);
         assert_eq!(context.ranges(), &[0x10..0x28, 0x30..0x40]);
@@ -1213,30 +1490,27 @@ mod tests {
         assert_eq!(current.scheme(), CURRENT_SCHEME);
         assert_eq!(SignatureDb::from_json(&current.to_json()).unwrap().scheme(), CURRENT_SCHEME);
         let before = current.len();
-        let mut older = Builder::default();
-        older.add([7; 32], "older");
-        let older = older.finish(Arch::X86_64, LEGACY_SCHEME);
+        let mut older = SignatureDb::empty(Arch::X86_64, LEGACY_SCHEME);
+        older.add([7; 32], None, "older");
         assert!(!current.can_merge(&older));
         current.merge(&older);
         assert_eq!(current.len(), before);
-        let mut newer = Builder::default();
-        newer.add([7; 32], "newer");
-        current.merge(&newer.finish(Arch::X86_64, CURRENT_SCHEME));
+        let mut newer = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        newer.add([7; 32], None, "newer");
+        current.merge(&newer);
         assert_eq!(current.len(), before + 1);
-        let mut unknown = SignatureDb::from_json(r#"{"arch":"x86_64","scheme":99,"entries":{}}"#).unwrap();
+        let unknown = SignatureDb::from_json(r#"{"arch":"x86_64","scheme":99,"entries":{}}"#).unwrap_err();
+        assert!(unknown.to_string().contains("unknown signature hash scheme 99"), "{unknown}");
         assert!(SignatureDb::from_binary_with_scheme(&Binary::open(fixture("hello-x64.elf")).unwrap(), 99).is_empty());
-        unknown.extend_from_binary(&Binary::open(fixture("hello-x64.elf")).unwrap());
-        assert!(unknown.is_empty());
     }
 
     #[test]
     fn scheme_2_identify_without_context_never_renames() {
         let x64 = target(Arch::X86_64, false);
         let body = absolute_sample([0x40_a2c8, 0x40_b000, 0x40_c000, 0x40_d000]);
-        let mut builder = Builder::default();
-        builder.add(function_hash_in(&x64, &image(), &body, 0x1000).unwrap(), "uses_globals");
-        builder.add(function_hash_in(&x64, &image(), &sample(), 0x1000).unwrap(), "leaf");
-        let db = builder.finish(Arch::X86_64, CURRENT_SCHEME);
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        db.add(function_hash_in(&x64, &image(), &body, 0x1000).unwrap(), None, "uses_globals");
+        db.add(function_hash_in(&x64, &image(), &sample(), 0x1000).unwrap(), None, "leaf");
         assert_eq!(db.identify_in(&x64, &image(), &body, 0x1000), Some("uses_globals"));
         // Without the image's layout the absolute addresses stay in the hash, so it cannot match...
         assert_eq!(db.identify(&x64, &body, 0x1000), None);

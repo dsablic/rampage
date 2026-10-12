@@ -8,8 +8,10 @@ use std::path::PathBuf;
 
 use iced_x86::{Decoder, DecoderOptions, FlowControl};
 use rampage_arch::Arch;
-use rampage_loaders::{Binary, SymbolKind};
-use rampage_signatures::{CURRENT_SCHEME, LEGACY_SCHEME, MaskContext, SignatureDb, bundled};
+use rampage_loaders::Binary;
+use rampage_signatures::{
+    CURRENT_SCHEME, LEGACY_SCHEME, MaskContext, SignatureDb, bundled, canonical_functions, named_functions,
+};
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
@@ -154,7 +156,8 @@ fn measure_musl_static(arch: &str) -> [usize; 2] {
     let extents = extents(&target, &call_targets(&target));
     let legacy = names(&SignatureDb::from_binary_with_scheme(&reference, LEGACY_SCHEME), &target, &extents);
     let current = names(&SignatureDb::from_binary(&reference), &target, &extents);
-    // Scheme 2 masks a superset of scheme 1's fields; only a new ambiguity could lose a name, and none does here.
+    // On x86-64 and AArch64 scheme 2 masks a superset of scheme 1's fields; only a new ambiguity could lose a name,
+    // and none does here.
     for (address, name) in &legacy {
         assert_eq!(current.get(address), Some(name), "{arch}: scheme 2 lost or renamed {name} at {address:#x}");
     }
@@ -193,15 +196,11 @@ fn same_binary_twin_does_not_regress() {
     for arch in ["x86_64", "aarch64"] {
         let reference = open(&format!("eval-ref-{arch}.elf"));
         let mut truth = BTreeMap::new();
-        let mut sized = Vec::new();
-        for symbol in &reference.symbols {
-            if symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty() {
-                truth.entry(symbol.address).or_insert_with(Vec::new).push(symbol.name.clone());
-                sized.push((symbol.address, symbol.size));
-            }
+        for symbol in named_functions(&reference) {
+            truth.entry(symbol.address).or_insert_with(Vec::new).push(symbol.name.clone());
         }
-        sized.sort();
-        sized.dedup_by_key(|(address, _)| *address);
+        let sized: Vec<(u64, u64)> =
+            canonical_functions(&reference).values().map(|symbol| (symbol.address, symbol.size)).collect();
         let count = |db: &SignatureDb| {
             let found = names(db, &reference, &sized);
             let wrong = found.iter().filter(|(address, name)| !truth[*address].contains(name)).count();
