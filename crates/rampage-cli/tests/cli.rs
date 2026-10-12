@@ -106,6 +106,23 @@ fn every_command_succeeds_on_every_x64_fixture() {
 }
 
 #[test]
+fn carve_lists_universal_slices_in_text_and_json() {
+    let output = rampage(&["carve"], "hello-universal.macho").success().get_output().stdout.clone();
+    let text = String::from_utf8(output).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "0x00000000 mach_o_fat validated big-endian extent 0xc2b0");
+    assert_eq!(lines[1], "  slice x86_64 at 0x1000 size 0x2110");
+    assert!(lines.contains(&"0x00001000 mach_o validated x86_64 64-bit little-endian extent 0x2110"), "{text}");
+    assert!(lines.contains(&"3 candidates in 0xc2b0 of 0xc2b0 bytes"), "{text}");
+
+    let carving = json(&["--json", "carve", "--max-candidates", "2"], "hello-universal.macho");
+    assert_eq!(carving["candidates"].as_array().unwrap().len(), 2);
+    assert_eq!(carving["candidates"][1]["offset"], 0x1000);
+    assert_eq!(carving["truncated"], true);
+    assert!(carving["limitations"][0].as_str().unwrap().contains("candidate cap (2) at offset 0x4000"));
+}
+
+#[test]
 fn info_json_reports_format_and_entry() {
     let info = json(&["--json", "info"], "hello-x64.elf");
     assert_eq!(info["format"], "elf");

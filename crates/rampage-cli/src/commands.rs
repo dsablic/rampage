@@ -86,6 +86,40 @@ pub fn inventory(out: &mut impl Write, path: &Path, options: &Options) -> Result
     Ok(())
 }
 
+pub fn carve(out: &mut impl Write, path: &Path, max_candidates: usize, options: &Options) -> Result<()> {
+    let carving = rampage_api::carve(path, Some(max_candidates))?;
+    if options.json {
+        return write_json(out, &carving);
+    }
+    for candidate in &carving.candidates {
+        let mut facts = vec![candidate.kind.to_string(), candidate.confidence.to_string()];
+        facts.extend(candidate.arch.clone());
+        facts.extend(candidate.bits.map(|bits| format!("{bits}-bit")));
+        facts.extend(candidate.endianness.map(|endianness| endianness.to_string()));
+        facts.extend(candidate.declared_size.map(|size| format!("size {size:#x}")));
+        facts.extend(candidate.uncompressed_size.map(|size| format!("uncompressed {size:#x}")));
+        facts.extend(candidate.extent.map(|extent| format!("extent {extent:#x}")));
+        writeln!(out, "{:#010x} {}", candidate.offset, facts.join(" "))?;
+        for slice in &candidate.slices {
+            writeln!(out, "  slice {} at {:#x} size {:#x}", slice.arch, slice.offset, slice.size)?;
+        }
+        for note in &candidate.notes {
+            writeln!(out, "  {note}")?;
+        }
+    }
+    writeln!(
+        out,
+        "{} candidates in {:#x} of {:#x} bytes",
+        carving.candidates.len(),
+        carving.scanned_bytes,
+        carving.file_size
+    )?;
+    for limitation in &carving.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
 pub fn summarize(out: &mut impl Write, path: &Path, at: &str, options: &Options) -> Result<()> {
     let project = open(path, options)?;
     let summary = project.function_summary(project.resolve(at)?)?;

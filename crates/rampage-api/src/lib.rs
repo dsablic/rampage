@@ -4,6 +4,7 @@ pub mod annotations;
 mod benchmark;
 mod branch_observation;
 mod capabilities;
+mod carve;
 mod correlation;
 mod debug_import;
 mod decompile;
@@ -33,6 +34,7 @@ use rampage_loaders::LoadError;
 
 pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use branch_observation::{BranchObservation, BranchSlotStatus};
+pub use carve::{CarvingPage, MAX_CARVE_PAGE, carve, carve_page};
 pub use correlation::RuntimeCorrelation;
 pub use debug_import::DebugImport;
 pub use decompile::Decompilation;

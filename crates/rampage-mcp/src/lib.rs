@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rampage_api::tools::{self, Tool};
+use rampage_api::tools::{self, FileTool, Tool};
 use rampage_api::{Project, Session};
 use rampage_arch::Arch;
 use rmcp::model::{
@@ -43,7 +43,9 @@ byte evidence without sidecars or annotation transfer. Verify identities when co
 observe_indirect_branch takes explicit hexadecimal start/at addresses for a bounded ARM64 branch window; \
 slot links are conditional decoding evidence, not proof of execution or a call edge. \
 compare_pointer_observations takes another explicit capture path and hexadecimal at/other_at slots; \
-before/after ordering and slot correspondence are supplied by the analyst, not independently verified.";
+before/after ordering and slot correspondence are supplied by the analyst, not independently verified. \
+carve scans any file (firmware, installer, archive) for embedded executables and containers by validated header, \
+with offsets and header-estimated extents; it extracts and decompresses nothing.";
 
 /// A tool's schema with the arguments every tool takes besides its own: which binary, and which slice of a
 /// universal one.
@@ -72,19 +74,26 @@ fn with_binary_arguments(schema: &Value) -> Map<String, Value> {
 pub struct RampageServer {
     session: Arc<Session>,
     tools: Arc<Vec<Tool>>,
+    file_tools: Arc<Vec<FileTool>>,
 }
 
 impl Default for RampageServer {
     fn default() -> Self {
         // Without a person's view of the binary, tools that act on one have nothing to do.
         let tools = tools::tools().into_iter().filter(|tool| !tool.interactive).collect();
-        Self { session: Arc::default(), tools: Arc::new(tools) }
+        Self { session: Arc::default(), tools: Arc::new(tools), file_tools: Arc::new(tools::file_tools()) }
     }
 }
 
 impl RampageServer {
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
     fn run(&self, name: &str, mut arguments: Map<String, Value>) -> CallToolResult {
+        if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
+            return match tool.call(Value::Object(arguments)) {
+                Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
+                Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+            };
+        }
         let path = arguments.remove("path");
         let arch = arguments.remove("arch");
         let outcome = (|| -> Result<String, String> {
@@ -137,10 +146,15 @@ impl ServerHandler for RampageServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
+        let file_tools = self.file_tools.iter().map(|tool| {
+            let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
+            rmcp::model::Tool::new(tool.name, tool.description, schema)
+        });
         let tools = self
             .tools
             .iter()
             .map(|tool| rmcp::model::Tool::new(tool.name, tool.description, with_binary_arguments(&tool.input_schema)))
+            .chain(file_tools)
             .collect();
         Ok(ListToolsResult::with_all_items(tools))
     }

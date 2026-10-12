@@ -54,6 +54,7 @@ async fn lists_all_tools_with_instructions() {
         "build_signatures",
         "capa_detect",
         "capabilities",
+        "carve",
         "class_evidence",
         "compare_pointer_observations",
         "compare_runtime_bytes",
@@ -94,6 +95,29 @@ async fn lists_all_tools_with_instructions() {
     let info = client.peer_info().unwrap();
     assert_eq!(info.server_info.as_ref().unwrap().name, "rampage");
     assert!(info.instructions.as_deref().unwrap().contains("list_functions"));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn carve_scans_any_file_by_path_with_pages() {
+    let client = connect().await;
+    let path = fixture("hello-universal.macho");
+    let carving = json_of(&call(&client, "carve", json!({ "path": path, "offset": 1, "limit": 1 })).await);
+    assert_eq!(carving["candidates_total"], 3);
+    assert_eq!(carving["offset"], 1);
+    let candidates = carving["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["offset"], 0x1000);
+    assert_eq!(candidates[0]["kind"], "mach_o");
+    assert_eq!(candidates[0]["confidence"], "validated");
+    assert_eq!(candidates[0]["arch"], "x86_64");
+    assert_eq!(carving["truncated"], false);
+
+    let license = fixture("Microsoft.Bcl.HashCode.dll.LICENSE.txt");
+    assert_eq!(json_of(&call(&client, "carve", json!({ "path": license })).await)["candidates_total"], 0);
+    let failed = call(&client, "carve", json!({ "path": "/dev/zero" })).await;
+    assert_eq!(failed.is_error, Some(true));
+    assert!(text(&failed).contains("not a regular file"), "{}", text(&failed));
     client.cancel().await.unwrap();
 }
 
