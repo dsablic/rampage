@@ -53,6 +53,12 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   only the library build it was made from; regenerate or extend the bundled set with `tools/gen-signatures.sh`.
 - Go binaries: stripped Go function names are recovered from the embedded pclntab at load, so they appear in the
   function list, metadata and disassembly even after `-ldflags "-s -w"`.
+- Heuristic databases: one detection layer where each database is data, with permissive defaults bundled and the
+  rest supplied at runtime. `rampage detect` names the producing packer, compiler, protector, installer or linker
+  from an authored signature database (and accepts your own PeID `userdb.txt`); `rampage yara` runs your YARA
+  rules through the embedded yara-x engine; `rampage capa` evaluates a Mandiant capa-rules directory (file-scope
+  features only); `rampage capabilities` applies the built-in corroborated rules. Every hit carries its evidence
+  and is a triage signal, not proof. Also exposed as the `detect_tools`, `yara_scan` and `capa_detect` tools.
 
 ## Usage
 
@@ -60,6 +66,10 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
 cargo build --release
 
 rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
+rampage detect  <file> [--peid <userdb.txt>]  # producing packer/compiler/protector/installer/linker
+rampage yara    <file> --rules <file|dir>     # run user-supplied YARA rules (embedded yara-x)
+rampage capa    <file> --rules <dir>          # evaluate Mandiant capa rules (file-scope subset)
+rampage capabilities <file>                   # built-in corroborated behavior indicators
 rampage audit   <file>                       # bounded decode coverage and unreliable-code evidence
 rampage metadata <file>                      # demangled symbols, named RTTI/vtables, ObjC selectors
 rampage inventory <directory>                # binaries in bundles/extracted packages; no execution

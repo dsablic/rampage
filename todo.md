@@ -91,17 +91,34 @@ One pluggable detection layer: each database is a data file, permissive defaults
 else user-supplied at runtime; every hit is a tagged finding (kind, name, confidence, evidence), not proof.
 Licensing discipline: bundle only permissive, author our own starter sets, load the rest at runtime.
 
-- [ ] Packer/compiler/protector/installer identification (`rampage-detect`): EP byte-pattern + section + import
-  + overlay/entropy signatures, an authored Apache-clean starter DB, and a user-supplied PEiD `userdb.txt`
-  loader. (In progress.)
-- [ ] YARA engine (`rampage-yara`): embed `yara-x` (BSD-3-Clause, pure Rust) to run user-supplied YARA rule
-  sets (signature-base DRL-1.1, ReversingLabs MIT, etc. are user-supplied, not bundled). (In progress.)
-- [ ] capa-rules import (`rampage-capabilities::capa`): evaluate the file-scope import/string/section/export
-  feature subset of Mandiant capa-rules (Apache-2.0); full use needs disasm feature extraction. (In progress.)
-- [ ] Integrate the above behind a unified `detect`/`scan` surface (API + CLI + MCP), author the bundled DBs,
-  and add attribution to NOTICE where a bundled set derives from a permissive upstream.
+- [x] Packer/compiler/protector/installer/linker identification (`rampage-detect`): EP byte-pattern + section +
+  import + overlay/entropy signatures with Strong/Tentative confidence, an authored Apache-clean starter DB, and a
+  user-supplied PEiD `userdb.txt` parser. Packer path is synthetic-tested only (no packed fixture: no UPX here).
+- [x] YARA engine (`rampage-yara`): `yara-x` 1.20 (BSD-3-Clause) runs user-supplied rule files/directories or
+  inline source; per-rule matched-string capture is bounded. Rule corpora stay user-supplied.
+- [x] capa-rules import (`rampage-capabilities::capa`): file-scope import/string/substring/section/export subset
+  with and/or/not/optional/N-or-more; disasm features, `match:` references and non-file scopes are skipped.
+  `Capability` now owns its strings (`Cow`), so loading rules repeatedly does not leak.
+- [x] Integration: `Project::{detect_tools, yara_scan, yara_scan_path, detect_capa}`, CLI `detect`/`yara`/`capa`,
+  MCP `detect_tools`/`yara_scan`/`capa_detect`. NOTICE unchanged: nothing upstream is vendored.
+- [ ] Confidence tuning: a single highly distinctive condition (e.g. Go's `.gopclntab`) reports Tentative; decide
+  per-signature distinctiveness so unambiguous markers report Strong.
+- [ ] A real packed fixture (UPX or similar) once a packer is available, to test the packer path end to end.
+- [ ] Optional `yara-x` feature trimming: its default modules pull in cranelift/wasmtime (~50s cold build).
 - [ ] Later DB kinds: Ghidra FidDb import (Apache, library-function ID, format conversion); ClamAV `.ndb/.ldb`
   as a user-supplied runtime input (GPL data -- never bundled); richer capa features once disasm extraction lands.
+
+## Heuristic flywheel (propose -> measure -> gate -> promote)
+
+Strategy: `docs/plans/2026-10-12-heuristic-self-improvement-flywheel.md`. The model proposes heuristic edits, a
+corpus with ground truth judges them, and the versioned DBs hold what passes. The gate is the boss: promote only
+on held-out, per-slice improvement with provenance and rollback.
+
+- [ ] Phase 1 (`docs/plans/2026-10-12-flywheel-phase1-execution.md`): `rampage-eval` crate and `rampage-eval`
+  binary, strip-and-compare matched-pair corpus (`tools/eval-corpus.sh`), precision/recall and a disagreement
+  set for library identification, per-slice (x86_64, aarch64). (In progress.)
+- [ ] Later phases: generalize the family-agnostic report to discovery recall (symbol starts), tool ID (known
+  toolchains) and type recovery (DWARF/PDB); add the proposal/gate/promote loop on top.
 
 ## Ideas from adjacent projects (REA, Ghidra-MCP)
 
