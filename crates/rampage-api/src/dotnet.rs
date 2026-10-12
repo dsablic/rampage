@@ -1,15 +1,19 @@
 //! .NET (ECMA-335) metadata of a managed assembly, from `rampage_loaders::dotnet`: the assembly identity, its
-//! references and entry point, and its types with their methods, paged and filterable because a real assembly can
-//! hold thousands of types. Method bodies are CIL bytecode and are reported, never analyzed as native code.
+//! references and entry point, its types with their methods and signatures, its P/Invoke imports and its custom
+//! attributes, each list paged and filterable because a real assembly can hold thousands of entries. Method
+//! bodies are CIL bytecode and are reported, never analyzed as native code.
 
-use rampage_loaders::dotnet::{self, Assembly, AssemblyRef, BodyKind, CliHeader, EntryPoint, Module, TypeDef};
+use rampage_loaders::dotnet::{
+    self, Assembly, AssemblyRef, BodyKind, CliHeader, CustomAttribute, EntryPoint, Module, PInvoke, TypeDef,
+};
 use serde::Serialize;
 
 use crate::rows::Matcher;
 use crate::{ApiError, Page, Project};
 
-/// Which types to list: those whose full name (`Namespace.Name`) or one of whose method names contains `contains`
-/// (case-insensitive), paged by `offset`/`limit`.
+/// Which entries to list, case-insensitively matching `contains`: types by full name (`Namespace.Name`) or a
+/// method name, P/Invoke imports by method, DLL or import name, and custom attributes by attribute type or
+/// target. `offset`/`limit` page each of the three lists alike.
 #[derive(Debug, Default, Clone)]
 pub struct DotNetQuery {
     pub contains: Option<String>,
@@ -26,9 +30,11 @@ pub struct DotNetCounts {
     pub type_refs: usize,
     pub member_refs: usize,
     pub user_strings: usize,
+    pub pinvokes: usize,
+    pub custom_attributes: usize,
 }
 
-/// The assembly-level metadata plus one page of its types.
+/// The assembly-level metadata plus one page each of its types, P/Invoke imports and custom attributes.
 #[derive(Debug, Serialize)]
 pub struct DotNetSummary {
     pub cli: CliHeader,
@@ -39,6 +45,8 @@ pub struct DotNetSummary {
     pub entry_point: Option<EntryPoint>,
     pub counts: DotNetCounts,
     pub types: Page<TypeDef>,
+    pub pinvokes: Page<PInvoke>,
+    pub custom_attributes: Page<CustomAttribute>,
     pub warnings: Vec<String>,
 }
 
@@ -59,12 +67,23 @@ impl Project {
             type_refs: metadata.type_refs.len(),
             member_refs: metadata.member_refs.len(),
             user_strings: metadata.user_strings.len(),
+            pinvokes: metadata.pinvokes.len(),
+            custom_attributes: metadata.custom_attributes.len(),
         };
         let matcher = Matcher::new(query.contains.as_deref());
         let wanted = |ty: &TypeDef| {
             matcher.matches(&ty.full_name()) || ty.methods.iter().any(|method| matcher.matches(&method.name))
         };
         let types = Page::of(metadata.types.into_iter().filter(wanted), query.offset, query.limit);
+        let any = |texts: [Option<&str>; 3]| texts.into_iter().flatten().any(|text| matcher.matches(text));
+        let pinvokes = metadata
+            .pinvokes
+            .into_iter()
+            .filter(|pinvoke| any([pinvoke.method.as_deref(), pinvoke.module.as_deref(), Some(&pinvoke.import_name)]));
+        let attributes = metadata
+            .custom_attributes
+            .into_iter()
+            .filter(|attribute| any([attribute.attribute_type.as_deref(), attribute.parent.as_deref(), None]));
         Ok(Some(DotNetSummary {
             cli: metadata.cli,
             runtime_version: metadata.runtime_version,
@@ -74,6 +93,8 @@ impl Project {
             entry_point: metadata.entry_point,
             counts,
             types,
+            pinvokes: Page::of(pinvokes, query.offset, query.limit),
+            custom_attributes: Page::of(attributes, query.offset, query.limit),
             warnings: metadata.warnings,
         }))
     }

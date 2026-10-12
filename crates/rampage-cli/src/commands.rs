@@ -768,16 +768,46 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
                 Some(il) => format!("{} bytes of IL at {:#x}", il.code_size, method.rva),
                 None => label(&method.body),
             };
-            writeln!(out, "  {}({})  {body}", method.name, method.params.join(", "))?;
+            let names =
+                if method.params.is_empty() { String::new() } else { format!("  [{}]", method.params.join(", ")) };
+            writeln!(out, "  {}{names}  {body}", method.signature)?;
         }
     }
-    let shown = summary.types.offset + summary.types.items.len();
-    if shown < summary.types.total {
-        let more = summary.types.total - shown;
-        writeln!(out, "\n... {more} more types (page with --offset {shown}, or filter with --contains)")?;
+    more_hint(out, &summary.types, "types")?;
+    if !summary.pinvokes.items.is_empty() {
+        writeln!(out)?;
     }
+    for pinvoke in &summary.pinvokes.items {
+        let module = pinvoke.module.as_deref().unwrap_or("?");
+        let method = pinvoke.method.as_deref().unwrap_or("unresolved method");
+        writeln!(out, "pinvoke    {module}!{} <- {method}", pinvoke.import_name)?;
+    }
+    more_hint(out, &summary.pinvokes, "P/Invoke imports")?;
+    if !summary.custom_attributes.items.is_empty() {
+        writeln!(out)?;
+    }
+    for attribute in &summary.custom_attributes.items {
+        let arguments = match &attribute.arguments {
+            Some(arguments) => format!("({})", arguments.join(", ")),
+            None => format!(" ({} byte value, not decoded)", attribute.blob_length),
+        };
+        let attribute_type = attribute.attribute_type.as_deref().unwrap_or("unresolved type");
+        let parent = attribute.parent.as_deref().unwrap_or("unresolved target");
+        writeln!(out, "attribute  [{attribute_type}{arguments}] on {parent}")?;
+    }
+    more_hint(out, &summary.custom_attributes, "attributes")?;
     for warning in &summary.warnings {
         writeln!(out, "warning: {warning}")?;
+    }
+    Ok(())
+}
+
+/// The `... N more` line for a page that does not reach the end of its list.
+fn more_hint<T>(out: &mut impl Write, page: &rampage_api::Page<T>, what: &str) -> Result<()> {
+    let shown = page.offset + page.items.len();
+    if shown < page.total {
+        let more = page.total - shown;
+        writeln!(out, "\n... {more} more {what} (page with --offset {shown}, or filter with --contains)")?;
     }
     Ok(())
 }

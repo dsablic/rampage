@@ -130,13 +130,14 @@ struct IdentifyArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct DotNetArgs {
-    /// Only types whose full name (Namespace.Name) or a method name contains this text (case-insensitive).
+    /// Case-insensitive filter: types whose full name (Namespace.Name) or a method name contains this text,
+    /// P/Invoke imports by method, DLL or import name, and custom attributes by attribute type or target.
     #[serde(default)]
     contains: Option<String>,
-    /// Types to skip, for paging.
+    /// Entries to skip in each list (types, P/Invoke imports, attributes), for paging.
     #[serde(default)]
     offset: Option<usize>,
-    /// Types per page (default 100, at most 1000).
+    /// Entries per page of each list (default 100, at most 1000).
     #[serde(default)]
     limit: Option<usize>,
 }
@@ -474,9 +475,11 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "dotnet_metadata",
-            "For a managed (.NET) assembly: CLI header, assembly identity, referenced assemblies, entry point and a \
-             page of types with their fields and methods (method RVAs, IL body sizes and flags). Filter with \
-             `contains`, page with offset/limit. Method bodies are CIL bytecode, not native code: disassemble and \
+            "For a managed (.NET) assembly: CLI header, assembly identity, referenced assemblies, entry point, a \
+             page of types with their fields and methods (decoded signatures such as `int32 Combine<T1>(T1)`, \
+             method RVAs, IL body sizes and flags), P/Invoke imports (DLL and export per method) and custom \
+             attributes (type, target, primitive/string constructor arguments). Filter with `contains`, page \
+             each list with offset/limit. Method bodies are CIL bytecode, not native code: disassemble and \
              decompile do not apply to them. Returns null for a native image.",
             |project, args: DotNetArgs| {
                 let query =
