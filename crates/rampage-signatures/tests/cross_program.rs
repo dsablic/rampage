@@ -21,7 +21,7 @@ fn open(name: &str) -> Binary {
 
 /// Function starts and names from an eval truth file.
 fn truth(arch: &str) -> BTreeMap<u64, String> {
-    let text = std::fs::read_to_string(fixtures().join(format!("data/eval-truth-{arch}.json"))).unwrap();
+    let text = std::fs::read_to_string(fixtures().join(format!("data/eval-truth-cross-{arch}.json"))).unwrap();
     let raw: BTreeMap<String, String> = serde_json::from_str(&text).unwrap();
     raw.into_iter().map(|(key, name)| (u64::from_str_radix(&key[2..], 16).unwrap(), name)).collect()
 }
@@ -215,12 +215,15 @@ fn same_binary_twin_does_not_regress() {
     }
 }
 
-/// The bundled databases predate schemes: they load as scheme 1, and `identify_in` hashes them exactly as
-/// `identify` always did, whatever context it is given.
+/// A database saved before schemes existed has no `scheme` field: it loads as scheme 1, and `identify_in` hashes it
+/// exactly as `identify` always did, whatever context it is given.
 #[test]
-fn bundled_scheme_1_databases_match_as_before() {
+fn legacy_databases_without_a_scheme_match_as_before() {
     for arch in [Arch::X86_64, Arch::Aarch64] {
-        let db = bundled(arch).unwrap();
+        let built = SignatureDb::from_binary_with_scheme(&open(&format!("eval-ref-{arch}.elf")), LEGACY_SCHEME);
+        let mut json: serde_json::Value = serde_json::from_str(&built.to_json()).unwrap();
+        json.as_object_mut().unwrap().remove("scheme");
+        let db = SignatureDb::from_json(&json.to_string()).unwrap();
         assert_eq!(db.scheme(), LEGACY_SCHEME);
         let target = open(&format!("musl-static-{arch}.elf"));
         let image = MaskContext::from_binary(&target);
@@ -234,7 +237,36 @@ fn bundled_scheme_1_databases_match_as_before() {
             assert_eq!(plain, db.identify_in(&platform, &image, bytes, address), "{arch} at {address:#x}");
             matched += usize::from(plain.is_some());
         }
-        eprintln!("{arch} bundled scheme 1 on musl-static: {matched} of {} call-target extents", extents.len());
-        assert!(matched > 0, "{arch}: the bundled database matched nothing");
+        assert!(matched > 0, "{arch}: the legacy database matched nothing");
+    }
+}
+
+/// The bundled databases are scheme 2: with the target's layout they name at least what a layout-blind lookup
+/// does, and every layout-blind name agrees.
+#[test]
+fn bundled_scheme_2_databases_gain_with_the_image_layout() {
+    for arch in [Arch::X86_64, Arch::Aarch64] {
+        let db = bundled(arch).unwrap();
+        assert_eq!(db.scheme(), CURRENT_SCHEME);
+        let target = open(&format!("musl-static-{arch}.elf"));
+        let image = MaskContext::from_binary(&target);
+        let platform = target.target();
+        let (mut blind, mut aware) = (0, 0);
+        for &(address, length) in &extents(&target, &call_targets(&target)) {
+            let bytes = target.read(address, length).unwrap();
+            let with_layout = db.identify_in(&platform, &image, bytes, address);
+            if let Some(name) = db.identify(&platform, bytes, address) {
+                assert_eq!(with_layout, Some(name), "{arch} at {address:#x}");
+                blind += 1;
+            }
+            aware += usize::from(with_layout.is_some());
+        }
+        eprintln!("{arch} bundled scheme 2 on musl-static: {blind} layout-blind, {aware} with the layout");
+        // x86 absolute operands need the image's ranges to be masked; AArch64's ADRP offsets need none.
+        if arch == Arch::X86_64 {
+            assert!(aware > blind, "{arch}: the image layout added no names ({aware} vs {blind})");
+        } else {
+            assert_eq!(aware, blind, "{arch}");
+        }
     }
 }
