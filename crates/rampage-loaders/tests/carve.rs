@@ -428,6 +428,22 @@ fn a_declared_member_size_past_the_file_hides_no_later_archive() {
 }
 
 #[test]
+fn gzip_header_field_searches_share_one_budget() {
+    // Plausible headers announcing a file name, with no NUL anywhere to end it.
+    let mut file: Vec<u8> = [0x1f, 0x8b, 0x08, 0x08, 1, 1, 1, 1, 2, 3].repeat(20_000);
+    file.extend(gzip());
+    let whole = carve::scan(&file, &Limits::default());
+    assert_eq!(kinds_and_extents(&file), [(200_000, Kind::Gzip, None)]);
+    assert!(!whole.truncated, "{:?}", whole.limitations);
+
+    let limits = Limits { max_probe_bytes: 100_000, ..Limits::default() };
+    let capped = carve::scan(&file, &limits);
+    assert!(capped.candidates.is_empty(), "{:?}", capped.candidates);
+    assert!(capped.truncated);
+    assert!(capped.limitations[0].contains("0x186a0-byte budget at offset 0x"), "{:?}", capped.limitations);
+}
+
+#[test]
 fn the_candidate_and_scan_caps_are_enforced_and_reported() {
     let file: Vec<u8> = (0..10).flat_map(|_| xz()).collect();
     let capped = carve::scan(&file, &Limits { max_candidates: 3, ..Limits::default() });

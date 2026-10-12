@@ -16,6 +16,9 @@ use crate::LoadError;
 pub const MAX_CANDIDATES: usize = 4096;
 /// The longest prefix of a file one scan reads.
 pub const MAX_SCAN_BYTES: u64 = 4 << 30;
+/// The most bytes one scan searches for the end of gzip header fields, whose terminator can be far from the header
+/// that names them; past it, gzip headers carrying such fields are no longer checked.
+pub const MAX_PROBE_BYTES: u64 = 64 << 20;
 /// The most table entries (ELF program and section headers, Mach-O load commands, fat slices, archive members)
 /// read for one candidate.
 const MAX_TABLE_ENTRIES: usize = 4096;
@@ -27,11 +30,12 @@ const MAX_FAT_SLICES: u64 = 64;
 pub struct Limits {
     pub max_candidates: usize,
     pub max_scan_bytes: u64,
+    pub max_probe_bytes: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_candidates: MAX_CANDIDATES, max_scan_bytes: MAX_SCAN_BYTES }
+        Self { max_candidates: MAX_CANDIDATES, max_scan_bytes: MAX_SCAN_BYTES, max_probe_bytes: MAX_PROBE_BYTES }
     }
 }
 
@@ -213,6 +217,8 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     // Archive member headers inside an archive already reported are part of it, not new archives.
     let mut zip_members_until = 0;
     let mut cpio_members_until = 0;
+    let mut probe = Probe { left: limits.max_probe_bytes, exhausted: false };
+    let mut probe_exhausted_at = None;
     for offset in 0..scanned {
         let bytes = &data[offset..];
         let found = match bytes[0] {
@@ -224,7 +230,13 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
                 zip_members_until = offset.saturating_add(walked);
                 candidate
             }),
-            0x1f => gzip(bytes),
+            0x1f => {
+                let found = gzip(bytes, &mut probe);
+                if probe.exhausted {
+                    probe_exhausted_at.get_or_insert(offset);
+                }
+                found
+            }
             0xfd => xz(bytes),
             0x28 => zstd(bytes),
             0x5d => lzma(bytes),
@@ -262,6 +274,14 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     if scanned < data.len() {
         truncated = true;
         limitations.push(format!("scanned only the first {scanned:#x} of {:#x} bytes", data.len()));
+    }
+    if let Some(offset) = probe_exhausted_at {
+        truncated = true;
+        limitations.push(format!(
+            "the search for gzip header name and comment ends ran out of its {:#x}-byte budget at offset \
+             {offset:#x}; gzip streams carrying those fields from there on were not reported",
+            limits.max_probe_bytes
+        ));
     }
     limitations.push(
         "candidates are found by magic and header checks only: nothing is extracted, decompressed or executed, \
@@ -681,10 +701,32 @@ enum Walk {
     Capped,
 }
 
-/// The longest zero-terminated gzip header field (original name, comment) read.
-const MAX_GZIP_FIELD: usize = 4096;
+/// The longest zero-terminated gzip header field (original name, comment) read, terminator included: a file name
+/// fits in it on common file systems, and a header with a longer field is not reported.
+const MAX_GZIP_FIELD: usize = 256;
 
-fn gzip(bytes: &[u8]) -> Option<Candidate> {
+/// The bytes left for searching gzip header fields, so that a file of repeated plausible headers costs no more
+/// than `Limits::max_probe_bytes` in all.
+struct Probe {
+    left: u64,
+    exhausted: bool,
+}
+
+impl Probe {
+    /// Where the first NUL in `field`'s first `MAX_GZIP_FIELD` bytes is, charging the bytes examined.
+    fn nul(&mut self, field: &[u8]) -> Option<usize> {
+        let allowed = usize::try_from(self.left).unwrap_or(usize::MAX).min(MAX_GZIP_FIELD);
+        let window = &field[..field.len().min(allowed)];
+        let end = window.iter().position(|&byte| byte == 0);
+        self.left -= end.map_or(window.len(), |end| end + 1) as u64;
+        if end.is_none() && window.len() < field.len().min(MAX_GZIP_FIELD) {
+            self.exhausted = true;
+        }
+        end
+    }
+}
+
+fn gzip(bytes: &[u8], probe: &mut Probe) -> Option<Candidate> {
     // Three magic bytes are too common to report alone: the reserved flag bits, the extra-flags and OS bytes and
     // the first deflate block header must also check out, or nothing is reported.
     if !bytes.starts_with(&[0x1f, 0x8b, 0x08]) {
@@ -702,8 +744,7 @@ fn gzip(bytes: &[u8]) -> Option<Candidate> {
     for (flag, what) in [(0x08, "original name"), (0x10, "comment")] {
         if flags & flag != 0 {
             let field = bytes.get(at..)?;
-            let field = &field[..field.len().min(MAX_GZIP_FIELD)];
-            let end = field.iter().position(|&byte| byte == 0)?;
+            let end = probe.nul(field)?;
             if flag == 0x08 {
                 candidate.notes.push(format!("{what} {:?}", String::from_utf8_lossy(&field[..end])));
             }
