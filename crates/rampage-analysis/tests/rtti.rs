@@ -167,6 +167,27 @@ fn std_local_and_internal_linkage_names_are_recovered() {
 }
 
 #[test]
+fn name_pointer_high_bit_is_an_address_bit_in_32bit_images() {
+    // A 32-bit image linked above 0x8000_0000: bit 31 of the name pointer is part of the address.
+    let mut blob = Blob::new(0x8000_1000, 4);
+    let vtable = blob.here();
+    blob.zeros(8);
+    let name = blob.cstr("4High");
+    blob.align();
+    blob.ptr(vtable).ptr(name);
+    assert_eq!(recover_itanium(&blob.image())[0].name, "High");
+
+    // 64-bit Darwin flags a non-unique name with bit 63, which is cleared before dereferencing.
+    let mut blob = Blob::new(0x1_0000_4000, 8);
+    let vtable = blob.here();
+    blob.zeros(16);
+    let name = blob.cstr("7Flagged");
+    blob.align();
+    blob.ptr(vtable).ptr(name | 1 << 63);
+    assert_eq!(recover_itanium(&blob.image())[0].name, "Flagged");
+}
+
+#[test]
 fn string_pointer_tables_are_not_typeinfo() {
     // A cipher-name table pairs a long name with a short alias; the aliases happen to demangle as class names.
     let mut blob = Blob::new(0x7000, 8);

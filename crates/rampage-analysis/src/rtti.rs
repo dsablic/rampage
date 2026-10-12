@@ -172,10 +172,15 @@ fn itanium_candidates(image: &Image) -> BTreeMap<u64, ItaniumCandidate> {
         let (Some(vtable), Some(name_raw)) = (image.read_pointer(address), image.read_pointer(name_slot)) else {
             return;
         };
-        // Darwin sets the high bit of the typeinfo name pointer to flag a non-unique type name; clear it
-        // before dereferencing. Real addresses never use that bit, so masking is safe on other platforms.
-        let name_va = name_raw & !(1u64 << (u32::from(image.pointer_size) * 8 - 1));
-        if let Some((mangled, name)) = itanium_name(image, name_va) {
+        // 64-bit Darwin sets bit 63 of the typeinfo name pointer to flag a non-unique type name. The flagged
+        // form is tried only after the plain one, since 32-bit images may genuinely live above 0x8000_0000.
+        let non_unique = 1u64 << 63;
+        let name = itanium_name(image, name_raw).or_else(|| {
+            (image.pointer_size == 8 && name_raw & non_unique != 0)
+                .then(|| itanium_name(image, name_raw & !non_unique))
+                .flatten()
+        });
+        if let Some((mangled, name)) = name {
             candidates.insert(address, ItaniumCandidate { vtable, mangled, name });
         }
     });
