@@ -39,7 +39,9 @@
 - [ ] MIPS signatures: mask `lui`/`addiu` HI/LO address pairs. Needs relocation/dataflow to avoid false matches
   (without it, a masked constant could collide two different functions); do it relocation-gated, not heuristic.
 - [ ] Verify the MSVC RTTI path against a real PE (no MSVC toolchain locally; synthetic-tested only).
-- [ ] Go pclntab: optional bounded full-image magic scan for binaries whose pclntab section was renamed/removed.
+- [x] PE enrichment: TLS callbacks seed function starts and delay-load imports surface as slots (bounded,
+  panic-free on malformed PEs).
+- [x] Go pclntab: bounded full-image magic-scan fallback when the section is absent or renamed.
 - [ ] C++ class LAYOUT reconstruction (fields/sizes), building on the RTTI name/hierarchy recovery now in place.
 
 ### Deferred capability-detection rules (capa-style, defensive triage)
@@ -62,14 +64,14 @@ where a single import is weak), and each covered by a test including a benign ne
 
 ### Licensing
 
-- [ ] Adopt a single license decision: the tree is already Apache-2.0-bound via the vendored Ghidra decompiler
-  (`rampage-decompiler` is Apache-2.0), while the other crates are `MIT OR Apache-2.0`. No dependency forces
-  copyleft: all are permissive except `colored` (MPL-2.0, dev-dependency only, not shipped) and a few
-  `... OR GPL/LGPL` multi-licenses where the permissive option is elected. Arm AARCHMRS decoder tables are
-  BSD-3-Clause (`LICENSE-ARM` present). If adopting Apache-2.0 project-wide, add a root `NOTICE` attributing
-  Ghidra (Apache-2.0) and Arm AARCHMRS (BSD-3), and consider a `THIRD-PARTY-NOTICES` for bundled assets
-  (the UI font under OFL-1.1/Ubuntu-font, Unicode data). Note: Apache-2.0-only is one-way incompatible with
-  GPLv2-only downstreams, which the current `MIT OR Apache-2.0` dual avoids.
+- [x] Adopt Apache-2.0 project-wide (all crates and the workspace). Added a root `LICENSE` (Apache-2.0 text,
+  previously missing) and a `NOTICE` attributing the vendored Ghidra decompiler (Apache-2.0) and the Arm AARCHMRS
+  decoder tables (BSD-3-Clause). The audit found no copyleft blocker: deps are permissive except `colored`
+  (MPL-2.0, dev-dependency only, not shipped) and a few `... OR GPL/LGPL` multi-licenses where the permissive
+  option is elected. Trade-off accepted: Apache-2.0-only is one-way incompatible with GPLv2-only downstreams,
+  which the former `MIT OR Apache-2.0` dual avoided.
+- [ ] Optional: a generated `THIRD-PARTY-NOTICES` aggregating Cargo dependency licenses (e.g. via cargo-about)
+  for binary distributions, and surface the bundled UI font's license (OFL-1.1/Ubuntu-font) in the UI about path.
 
 
 ## Decompiler: embedded Ghidra (the decompilation path)

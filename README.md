@@ -175,5 +175,6 @@ The [ARM64 development track](docs/arm64-development.md) records native semantic
 
 ## License
 
-MIT OR Apache-2.0. The generated AArch64 tables derive from Arm's specification data, which Arm licenses under
-the BSD 3-clause license; see `crates/rampage-arch/src/a64/LICENSE-ARM`.
+Apache-2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). The decompiler embeds Ghidra (Apache-2.0), and the
+AArch64/AArch32 decoder tables are generated from Arm's machine-readable architecture specification, which Arm
+licenses under the BSD 3-clause license (see `crates/rampage-arch/src/a64/LICENSE-ARM`).

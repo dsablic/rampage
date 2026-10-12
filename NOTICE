@@ -1,0 +1,22 @@
+Rampage
+Copyright 2026 The Rampage Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes third-party components under their own terms:
+
+- Ghidra decompiler (Apache License 2.0).
+  Portions of crates/rampage-decompiler are a vendored and adapted copy of the
+  Ghidra software reverse engineering framework's decompiler, originally
+  developed by the National Security Agency. Modified files carry a note of the
+  change. See crates/rampage-decompiler/vendor/ghidra/LICENSE.
+
+- Arm A-profile machine-readable architecture specification, AARCHMRS
+  (BSD 3-Clause License). Copyright Arm Limited or its affiliates.
+  The AArch64 and AArch32 instruction decoder tables in crates/rampage-arch are
+  generated from this specification. See crates/rampage-arch/src/a64/LICENSE-ARM
+  and crates/rampage-arch/src/aarch32/LICENSE-ARM.
+
+Dependencies obtained through Cargo are distributed under their own licenses,
+retained in their respective packages; all are permissive (MIT, Apache-2.0,
+BSD, ISC, Zlib, Unicode, and similar).
