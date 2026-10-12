@@ -64,9 +64,14 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
 - Guided investigation workflows: `triage_report`, `find_main`, `network_surface`, `find_crypto` and `diff_builds`
   compose the primitives into one bounded report. Each finding carries its evidence, source tool and confidence;
   each report ends with concrete next tool calls and states its limitations. MCP tools, or `rampage report`.
-- Measured accuracy: `rampage-eval` scores library identification against stripped twins of symbolized builds
-  (precision, recall and a disagreement set per architecture, gated on zero wrong or spurious names) -- the
-  harness behind the heuristic flywheel (`docs/plans/`).
+- Measured accuracy: `rampage-eval` scores library identification (on a stripped copy of the reference and on a
+  different program linking the same library) and function discovery (against symbol starts): precision, recall
+  and a disagreement set per architecture slice, gated on no wrong names and committed recall floors -- the
+  harness behind the heuristic flywheel (`docs/plans/`). Current cross-program library-ID recall: 0.92 (x86-64),
+  0.82 (AArch64) at precision 1.00.
+- .NET assemblies: `rampage dotnet` (and the `dotnet_metadata` tool) reads ECMA-335 metadata -- assembly
+  identity, references, entry point, types and methods with IL body sizes. CIL is reported, never treated as
+  native code.
 
 ## Usage
 
@@ -76,6 +81,7 @@ cargo build --release
 rampage report triage-report <file>          # guided overview with evidence and next steps
 rampage report find-main|network-surface|find-crypto <file>
 rampage report diff-builds <file> --other <file>
+rampage dotnet  <file> [--contains TEXT]     # .NET assembly metadata (types, methods, IL)
 rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
 rampage detect  <file> [--peid <userdb.txt>]  # producing packer/compiler/protector/installer/linker
 rampage yara    <file> --rules <file|dir>     # run user-supplied YARA rules (embedded yara-x)

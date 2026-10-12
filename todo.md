@@ -135,16 +135,26 @@ on held-out, per-slice improvement with provenance and rollback.
   library identification per slice, gate = no wrong and no spurious names, committed baselines.
 - [x] First turn of the loop: the disagreement set showed aliased functions (`malloc`/`c.malloc.malloc`) being
   dropped as ambiguous hashes. Fixed in `SignatureDb::from_binary` (one spelling per address, shared
-  `alias_rank` with the eval truth): recall 0.400 -> 0.723 (x86_64), 0.296 -> 0.580 (aarch64), precision 1.000,
-  baselines ratcheted; bundled musl DBs regenerated (96 -> 166, 98 -> 173 signatures).
-- [ ] Cross-program slice. Phase 1 targets are stripped twins of the reference (identical layout), a best case:
-  cross-program identification on the stripped musl fixture stayed at 26/24 matches after the alias fix. Add a
-  slice whose target is a different program linking the same library, with truth from its unstripped build.
-- [ ] Absolute-address masking for non-PIE code: operands whose value falls inside the image's mapped sections
-  (disp32/imm32 pointers) change with layout but are not masked today (e.g. `__init_libc` has 9; `vfprintf`
-  has none and matches across programs). Measure on the cross-program slice; gate on precision.
-- [ ] Later phases: generalize the family-agnostic report to discovery recall (symbol starts), tool ID (known
-  toolchains) and type recovery (DWARF/PDB); add the proposal/gate/promote loop on top.
+  `alias_rank` with the eval truth): recall 0.400 -> 0.723 (x86_64), 0.296 -> 0.580 (aarch64), precision 1.000;
+  bundled musl DBs regenerated (96 -> 166, 98 -> 173 signatures). Correction: an earlier note here called the
+  Phase 1 target a stripped twin of the reference; it was always a different program (`signatures-target.c`),
+  so these gains were already cross-program (with a truth that still counted program code such as `main`).
+- [x] Slices: `libid-twin-*` (stripped copy of the reference), `libid-cross-*` (a different program, truth limited
+  to identifiable library code via `truth --library --program`), `discovery-*` (function starts vs symbols).
+  Per-slice gates: no wrong names, no spurious library names, recall floors.
+- [x] Second turn: absolute-address masking (hash scheme 2). x86/x86-64 displacements and immediates pointing
+  into the image, and AArch64 ADRP low-12-bit offsets, are masked; databases carry their scheme so legacy ones
+  keep matching exactly; ambiguous masked hashes fall back to exact hashes (gmtime/localtime). Measured:
+  libid-cross recall 0.746 -> 0.921 (x86_64), 0.595 -> 0.823 (aarch64), precision 1.000, twins unchanged;
+  `rampage identify` on the stripped musl fixtures 26 -> 47 and 24 -> 47 names.
+- [ ] Discovery false positives on aarch64: precision 0.737 -- 67 of 69 spurious starts are interior blocks of
+  `printf_core` (45), `vfscanf` (19) and a few others treated as function starts. Fix in rampage-analysis
+  discovery, measured by the `discovery-aarch64` slice.
+- [ ] Remaining library-ID misses: musl's identical local `dummy` bodies (inherently ambiguous), and a few
+  functions missed even on the twin (`pop_arg`, `__errno_location`, `__lctrans`, `__addtf3`) -- not yet explained.
+- [ ] Masking for 32-bit ARM literal pools and MIPS `lui`/`addiu` pairs, once a cross-program fixture exists.
+- [ ] Later phases: tool ID (known toolchains) and type recovery (DWARF/PDB) slices; the proposal/gate/promote
+  loop on top.
 
 ## Ideas from adjacent projects (REA, Ghidra-MCP)
 
@@ -158,9 +168,16 @@ in UX/workflow ideas, not the multi-engine dispatch:
   instructions now point clients at `triage_report` first. Follow-ups: MSVC CRT startup chain in `find_main`
   (no MSVC fixture), startup heuristics beyond x86-64/AArch64 ELF, more workflows (e.g. persistence, unpacking
   triage, string decoding).
+- [x] .NET/ECMA-335 metadata (`rampage_loaders::dotnet`): CLI header, streams, Module/TypeRef/TypeDef/Field/
+  MethodDef/Param/MemberRef/Assembly/AssemblyRef/NestedClass with every other table sized; IL body headers;
+  never seeded as native code. API `dotnet_metadata` (paged, filterable), `rampage dotnet`, MCP tool, and
+  `triage_report` routes managed assemblies to it. Validated on Microsoft.Bcl.HashCode 1.1.1 (MIT, committed with
+  its licence). Not decoded yet: signatures/generics, custom attributes, properties/events, resources, P/Invoke
+  targets, exception sections; no IL disassembly.
 - [ ] Broader input front-ends (user-invoked): firmware/archive carving to enumerate embedded binaries (extend
-  the existing bundle inventory), and .NET/ECMA-335 metadata parsing (natural extension of the PE loader).
-  APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
+  the existing bundle inventory). APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
+- [ ] .NET follow-ups: decode method/field signatures and generics, custom attributes and P/Invoke (ImplMap)
+  targets; an IL disassembler so managed methods can be read.
 - [ ] Agent-efficiency operations: batch rename/annotate and naming-convention helpers; keep the MCP tool
   surface structured as it grows (lazy/grouped tool exposure).
 
