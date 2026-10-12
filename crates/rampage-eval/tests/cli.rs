@@ -76,8 +76,8 @@ fn run_prints_the_report_and_a_summary_and_passes_the_gate() {
 /// libid-twin identifies the corpus reference's own stripped twin: identical bytes, the best case. libid-cross
 /// identifies a different program linking the same static musl, scored only on functions the reference defines;
 /// it is what identifying a real binary looks like, and functions whose masked hash still encodes a
-/// layout-dependent value are its misses. discovery finds the twin's function starts; its spurious starts include
-/// unsized assembly (`_start`, `__set_thread_area`) and, on AArch64, interior blocks of large functions.
+/// layout-dependent value are its misses. discovery finds the twin's function starts; its spurious starts are
+/// unsized assembly the truth leaves out (`_start`, `__set_thread_area`).
 #[test]
 fn run_manifest_reports_every_slice_at_its_baseline() {
     let output = eval().arg("run").arg("--manifest").arg(data("eval-manifest.json")).output().unwrap();

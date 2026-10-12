@@ -298,13 +298,13 @@ fn explore(
     let trust_immediates = memory.immediates_may_be_addresses();
     let delay_slots = decoder.delay_slots();
     // Data references and code pointers an instruction contributes.
-    let record_refs = |insn: &rampage_arch::Insn, xrefs: &mut Vec<Xref>, new_seeds: &mut Vec<u64>| {
+    let record_refs = |insn: &rampage_arch::Insn, xrefs: &mut Vec<Xref>, code_pointers: &mut Vec<u64>| {
         let immediate = insn.immediate.filter(|_| trust_immediates);
         for target in insn.data_ref.into_iter().chain(immediate).filter(|&target| memory.is_mapped(target)) {
             xrefs.push(Xref { to: target, from: insn.address, kind: XrefKind::Data });
             let code = memory.code_address(target);
             if memory.is_executable(code) {
-                new_seeds.push(code);
+                code_pointers.push(code);
             }
         }
     };
@@ -312,6 +312,7 @@ fn explore(
     let mut instructions: BTreeSet<u64> = BTreeSet::new();
     let mut xrefs = Vec::new();
     let mut new_seeds = Vec::new();
+    let mut code_pointers = Vec::new();
     let mut jump_targets = Vec::new();
     let mut branch_targets = Vec::new();
     let mut instruction_modes = Vec::new();
@@ -378,11 +379,11 @@ fn explore(
                         break;
                     }
                     instructions.insert(next);
-                    record_refs(&slot, &mut xrefs, &mut new_seeds);
+                    record_refs(&slot, &mut xrefs, &mut code_pointers);
                     next = next.saturating_add(u64::from(slot.len));
                 }
             }
-            record_refs(&insn, &mut xrefs, &mut new_seeds);
+            record_refs(&insn, &mut xrefs, &mut code_pointers);
             match insn.flow {
                 Flow::Next | Flow::IndirectCall => address = next,
                 Flow::Call(target) => {
@@ -428,6 +429,10 @@ fn explore(
     jump_targets.dedup();
     let blocks = blocks.into_iter().map(|(start, end)| Block { start, end }).collect();
     let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len() };
+    // A code address a function forms inside its own body is a local label, such as the base an AArch64 switch
+    // adds its jump-table offsets to, not another function's entry.
+    let end = function.end();
+    new_seeds.extend(code_pointers.into_iter().filter(|&target| target <= start || target >= end));
     Explored { function, xrefs, new_seeds, jump_targets, branch_targets, mode_hints, instruction_modes, resolved_flows }
 }
 
@@ -477,6 +482,18 @@ mod tests {
         let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
         let from_load: Vec<_> = program.xrefs.iter().filter(|xref| xref.from == 0x10).collect();
         assert!(from_load.is_empty(), "{from_load:?}");
+    }
+
+    #[test]
+    fn a_jump_table_base_inside_the_function_is_not_a_function() {
+        // 0: cbz w0, 0x10; 4: adr x9, 0xc; 8: br x9; c: ret (a case reached only through x9); 10: ret
+        let words: [u32; 5] = [0x3400_0080, 0x1000_0049, 0xd61f_0120, 0xd65f_03c0, 0xd65f_03c0];
+        let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        let memory = FlatMemory { base: 0, bytes };
+        let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
+        let addresses: Vec<_> = program.functions.iter().map(|function| function.address).collect();
+        assert_eq!(addresses, [0]);
+        assert!(program.xrefs.contains(&Xref { to: 0xc, from: 4, kind: XrefKind::Data }), "{:?}", program.xrefs);
     }
 
     #[test]
