@@ -541,7 +541,7 @@ struct Decoder<'t, 'a> {
     warnings: &'t mut Warnings,
     /// GenericParam `(number, name)` rows by owning TypeDef or MethodDef.
     generic_params: HashMap<(u8, u32), Vec<(u32, String)>>,
-    /// Signature text left to render for this image.
+    /// Signature work (text rendered, blob bytes read) left for this image.
     budget: Cell<usize>,
 }
 
@@ -569,7 +569,7 @@ impl<'t, 'a> Decoder<'t, 'a> {
                 generic_params.entry(owner).or_default().push((number, name));
             }
         }
-        Self { tables, heaps, warnings, generic_params, budget: Cell::new(signatures::TOTAL_TEXT_BUDGET) }
+        Self { tables, heaps, warnings, generic_params, budget: Cell::new(signatures::TOTAL_BUDGET) }
     }
 }
 
