@@ -9,10 +9,13 @@
 //!
 //! `wrong` and `spurious` must stay zero; `correct` must not fall below the floor. Raise a floor only when a
 //! measured improvement lands.
+//!
+//! Function discovery runs on the twin and is scored against its sized function symbols. There `correct` has a
+//! floor too, but spurious starts are allowed: unsized code is real code, so they are measured, not gated.
 
 use std::path::PathBuf;
 
-use rampage_eval::{Report, Truth, evaluate};
+use rampage_eval::{Report, Truth, evaluate, evaluate_discovery};
 use rampage_loaders::Binary;
 use rampage_signatures::SignatureDb;
 
@@ -63,4 +66,29 @@ fn aarch64_twin_baseline_holds() {
 #[test]
 fn aarch64_cross_baseline_holds() {
     assert_libid("cross", "aarch64", 47);
+}
+
+/// Discovery on the stripped twin against its sized function symbols. Only recall is gated: spurious starts
+/// are measured (precision, the disagreement set) but tolerated, see `Gate::allow_spurious`.
+fn assert_discovery(arch: &str, floor: usize) {
+    let target = binary(&format!("eval-twin-{arch}.elf"));
+    let report = evaluate_discovery(&target, &truth(&format!("eval-truth-twin-{arch}.json"))).unwrap();
+    let detail = serde_json::to_string_pretty(&report).unwrap();
+    eprintln!("discovery-{arch}: {}", report.summary());
+    assert_eq!(report.wrong, 0);
+    assert!(report.correct >= floor, "{arch}: correct {} below floor {floor}\n{detail}", report.correct);
+}
+
+/// Measured: 174 of 174, plus 2 spurious starts, `_start` and `__set_thread_area`: assembly without `.size`,
+/// real but unsized.
+#[test]
+fn x86_64_discovery_baseline_holds() {
+    assert_discovery("x86_64", 174);
+}
+
+/// Measured: 193 of 193, plus 69 spurious starts: the same two unsized assembly functions and 67 interior blocks
+/// of `printf_core` (45), `vfscanf` (19), `sysconf`, `pop_arg` and `__strftime_fmt_1` taken for functions.
+#[test]
+fn aarch64_discovery_baseline_holds() {
+    assert_discovery("aarch64", 193);
 }

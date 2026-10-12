@@ -72,14 +72,61 @@ fn run_manifest_reports_every_slice() {
         "libid-cross-x86_64: correct=47 wrong=0 missed=16 spurious=0",
         "libid-twin-aarch64: correct=168 wrong=0 missed=25 spurious=0",
         "libid-cross-aarch64: correct=47 wrong=0 missed=32 spurious=0",
+        "discovery-x86_64: correct=174 wrong=0 missed=0 spurious=2",
+        "discovery-aarch64: correct=193 wrong=0 missed=0 spurious=69",
     ] {
         assert!(stderr.contains(line), "{line} not in {stderr}");
     }
     let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
     let names: Vec<&str> = evaluation.slices.keys().map(String::as_str).collect();
-    assert_eq!(names, ["libid-cross-aarch64", "libid-cross-x86_64", "libid-twin-aarch64", "libid-twin-x86_64"]);
-    assert!(evaluation.gates.values().all(|gate| gate.min_recall > 0.0 && !gate.allow_spurious));
+    let expected = [
+        "discovery-aarch64",
+        "discovery-x86_64",
+        "libid-cross-aarch64",
+        "libid-cross-x86_64",
+        "libid-twin-aarch64",
+        "libid-twin-x86_64",
+    ];
+    assert_eq!(names, expected);
+    for (name, gate) in &evaluation.gates {
+        assert!(gate.min_recall > 0.0, "{name} has no recall baseline");
+        assert_eq!(gate.allow_spurious, name.starts_with("discovery-"), "{name}");
+    }
     assert!(evaluation.passes_gate());
+}
+
+/// Discovery needs no database, and its spurious starts do not fail the run; a recall drop does.
+#[test]
+fn run_discovery_gates_recall_not_spurious_starts() {
+    let discovery = |truth: &std::path::Path, min_recall: &str| {
+        eval()
+            .args(["run", "--family", "discovery", "--min-recall", min_recall, "--target"])
+            .arg(fixture("eval-twin-aarch64.elf"))
+            .arg("--truth")
+            .arg(truth)
+            .output()
+            .unwrap()
+    };
+    let output = discovery(&data("eval-truth-twin-aarch64.json"), "1.0");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("discovery-aarch64: correct=193 wrong=0 missed=0 spurious=69"), "{stderr}");
+    let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
+    let report = &evaluation.slices["discovery-aarch64"];
+    let spurious = report.disagreements.iter().filter(|entry| entry.outcome == rampage_eval::Outcome::Spurious);
+    assert!(spurious.clone().all(|entry| entry.proposed.is_none() && entry.truth.is_none()));
+    assert_eq!(spurious.count(), 69);
+
+    let scratch = std::env::temp_dir().join(format!("rampage-eval-discovery-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let unreachable = scratch.join("truth.json");
+    std::fs::write(&unreachable, "{\"0x10\": \"nowhere\"}").unwrap();
+    let output = discovery(&unreachable, "0.5");
+    std::fs::remove_dir_all(&scratch).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("discovery-aarch64: FAIL recall 0.0000 below baseline 0.5000"), "{stderr}");
+    assert!(!stderr.contains("spurious, "), "{stderr}");
 }
 
 fn truth_output(args: &[PathBuf]) -> Truth {
