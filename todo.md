@@ -65,8 +65,9 @@ negative regressions. Existing rules retain their detection thresholds and canon
 - [x] Bounded GDI capture, clipboard read and registered raw-input indicators with independent API groups.
 - [x] Credential-access indicators: marker-corroborated LSA private-data access and protected-registry
   open/query/path groups with optional recognized machine-hive prefixes; no extraction or execution attribution.
-- [ ] Service control, named-pipe/IPC, DNS resolution / C2-comms refinements.
-  - [x] Corroborated service control, named-pipe client/server and DNS-plus-network indicators; no C2 attribution.
+- [x] Service control, named-pipe/IPC, DNS resolution / network-communication refinements.
+  - [x] Corroborated service control, named-pipe client/server and DNS-plus-network indicators. C2 attribution
+    is deliberately out of scope: static metadata cannot establish it.
 - [x] Narrow ransomware indicators requiring encryption, enumeration start/walk, file writes and two ransom-note
   string groups; ordinary encryption/file access is insufficient.
 - [x] Shutdown/reboot and environment/system-info gathering.
@@ -81,8 +82,13 @@ negative regressions. Existing rules retain their detection thresholds and canon
   (MPL-2.0, dev-dependency only, not shipped) and a few `... OR GPL/LGPL` multi-licenses where the permissive
   option is elected. Trade-off accepted: Apache-2.0-only is one-way incompatible with GPLv2-only downstreams,
   which the former `MIT OR Apache-2.0` dual avoided.
-- [ ] Optional: a generated `THIRD-PARTY-NOTICES` aggregating Cargo dependency licenses (e.g. via cargo-about)
-  for binary distributions, and surface the bundled UI font's license (OFL-1.1/Ubuntu-font) in the UI about path.
+- [x] Generated `THIRD-PARTY-NOTICES` for binary distributions (`python3 -I tools/third-party-notices.py`): the
+  crates linked into `rampage`/`rampage-worker`/`rampage-ui` (no dev, build or proc-macro crates), deduplicated
+  texts, plus the vendored Ghidra and Arm texts. Crates that publish no licence file are covered from the
+  upstream file (yara-x), a same-repository package under the identical licence, or the standard text of the
+  elected licence with holders from package metadata -- each labelled with its source. No copyleft-only crate.
+  Regenerate whenever Cargo.lock changes.
+- [ ] Surface the bundled UI fonts' licences (OFL-1.1/Ubuntu-font/UFL) in a UI about view.
 
 
 ## Heuristic-database layer (pluggable detection DBs)
@@ -94,17 +100,26 @@ Licensing discipline: bundle only permissive, author our own starter sets, load 
 - [x] Packer/compiler/protector/installer/linker identification (`rampage-detect`): EP byte-pattern + section +
   import + overlay/entropy signatures with Strong/Tentative confidence, an authored Apache-clean starter DB, and a
   user-supplied PEiD `userdb.txt` parser. Packer path is synthetic-tested only (no packed fixture: no UPX here).
-- [x] YARA engine (`rampage-yara`): `yara-x` 1.20 (BSD-3-Clause) runs user-supplied rule files/directories or
+- [x] YARA engine (`rampage-yara`): `yara-x` 1.21 (BSD-3-Clause) runs user-supplied rule files/directories or
   inline source; per-rule matched-string capture is bounded. Rule corpora stay user-supplied.
 - [x] capa-rules import (`rampage-capabilities::capa`): file-scope import/string/substring/section/export subset
   with and/or/not/optional/N-or-more; disasm features, `match:` references and non-file scopes are skipped.
   `Capability` now owns its strings (`Cow`), so loading rules repeatedly does not leak.
 - [x] Integration: `Project::{detect_tools, yara_scan, yara_scan_path, detect_capa}`, CLI `detect`/`yara`/`capa`,
   MCP `detect_tools`/`yara_scan`/`capa_detect`. NOTICE unchanged: nothing upstream is vendored.
-- [ ] Confidence tuning: a single highly distinctive condition (e.g. Go's `.gopclntab`) reports Tentative; decide
-  per-signature distinctiveness so unambiguous markers report Strong.
+- [x] Confidence tuning: a `UniqueSectionName` condition marks tool-branded section names (`.gopclntab`, `.vmp0`,
+  `.themida`, `.MPRESS1`, ...) as distinctive, so a lone match reports Strong; shared names stay corroborating.
+- [x] Crypto/compression constants (`rampage-constants`): 74 spec-derived constants (AES, DES, Blowfish,
+  Twofish, MD5, SHA-1/2/3, RIPEMD-160, ChaCha/Salsa, GHASH, CRC families, Deflate, Base64/32, P-256,
+  secp256k1, Ed25519), most generated in code; both byte orders; min-length and information guards. Not
+  detectable by constants: RC4, Adler-32, HMAC, TEA, Poly1305. Misses SIMD-interleaved and immediate-encoded
+  constants.
+- [ ] `find_crypto` workflow: wire `rampage-constants` with crypto imports/capabilities and xrefs to the code
+  that references each hit (after the workflows framework lands).
 - [ ] A real packed fixture (UPX or similar) once a packer is available, to test the packer path end to end.
-- [ ] Optional `yara-x` feature trimming: its default modules pull in cranelift/wasmtime (~50s cold build).
+- Won't do: `yara-x` feature trimming. Its build weight is `wasmtime`/cranelift, a mandatory dependency on
+  native targets (rules compile to WebAssembly); disabling modules would not remove it and would break user
+  rules that `import` those modules.
 - [ ] Later DB kinds: Ghidra FidDb import (Apache, library-function ID, format conversion); ClamAV `.ndb/.ldb`
   as a user-supplied runtime input (GPL data -- never bundled); richer capa features once disasm extraction lands.
 
@@ -114,9 +129,19 @@ Strategy: `docs/plans/2026-10-12-heuristic-self-improvement-flywheel.md`. The mo
 corpus with ground truth judges them, and the versioned DBs hold what passes. The gate is the boss: promote only
 on held-out, per-slice improvement with provenance and rollback.
 
-- [ ] Phase 1 (`docs/plans/2026-10-12-flywheel-phase1-execution.md`): `rampage-eval` crate and `rampage-eval`
-  binary, strip-and-compare matched-pair corpus (`tools/eval-corpus.sh`), precision/recall and a disagreement
-  set for library identification, per-slice (x86_64, aarch64). (In progress.)
+- [x] Phase 1 (`docs/plans/2026-10-12-flywheel-phase1-execution.md`): `rampage-eval` crate and binary,
+  strip-and-compare matched-pair corpus (`tools/eval-corpus.sh`), precision/recall and a disagreement set for
+  library identification per slice, gate = no wrong and no spurious names, committed baselines.
+- [x] First turn of the loop: the disagreement set showed aliased functions (`malloc`/`c.malloc.malloc`) being
+  dropped as ambiguous hashes. Fixed in `SignatureDb::from_binary` (one spelling per address, shared
+  `alias_rank` with the eval truth): recall 0.400 -> 0.723 (x86_64), 0.296 -> 0.580 (aarch64), precision 1.000,
+  baselines ratcheted; bundled musl DBs regenerated (96 -> 166, 98 -> 173 signatures).
+- [ ] Cross-program slice. Phase 1 targets are stripped twins of the reference (identical layout), a best case:
+  cross-program identification on the stripped musl fixture stayed at 26/24 matches after the alias fix. Add a
+  slice whose target is a different program linking the same library, with truth from its unstripped build.
+- [ ] Absolute-address masking for non-PIE code: operands whose value falls inside the image's mapped sections
+  (disp32/imm32 pointers) change with layout but are not masked today (e.g. `__init_libc` has 9; `vfprintf`
+  has none and matches across programs). Measure on the cross-program slice; gate on precision.
 - [ ] Later phases: generalize the family-agnostic report to discovery recall (symbol starts), tool ID (known
   toolchains) and type recovery (DWARF/PDB); add the proposal/gate/promote loop on top.
 
@@ -134,6 +159,21 @@ in UX/workflow ideas, not the multi-engine dispatch:
   APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
 - [ ] Agent-efficiency operations: batch rename/annotate and naming-convention helpers; keep the MCP tool
   surface structured as it grows (lazy/grouped tool exposure).
+
+## Plugin system (later)
+
+Native `.so`/`.dylib` plugins are out: Rust has no stable ABI, and a tool that reads hostile input should not load
+unsandboxed native code. Three layers instead, in this order:
+
+- [ ] Data packs: formalize the heuristic-DB layer as packs (a directory plus a manifest: kind, version,
+  licence, provenance) for signatures, PEiD, YARA, capa and constants. This is also how the flywheel ships.
+- [ ] Internal trait registries: built-ins register through `Loader`, `Detector`, `Workflow` and `ToolProvider`
+  traits instead of hand-wired match arms and tool lists. Prerequisite for anything external.
+- [ ] WASM component plugins (wasmtime is already a dependency via yara-x): sandboxed, language-agnostic code for
+  detectors, format loaders and workflows behind a WIT interface; bytes plus read-only analysis queries in,
+  findings out. The output schema enforces the evidence/confidence/limitations contract.
+- Freeze a public plugin API only after the internal traits settle. Many extensions need no in-process plugin:
+  another MCP server composes with rampage at the agent level.
 
 
 ## Decompiler: embedded Ghidra (the decompilation path)
@@ -395,17 +435,20 @@ read-only triage inputs, never bypass or patch fixtures. Runtime tests use progr
 
 - [x] Initial runtime images: validated sparse snapshot format, CLI/API/UI loading, explicit code seeds, provenance,
   virtual-address handling and controlled LLDB export/correlation. Persistence and cross-module work remain above.
-- [ ] Indirect flow: conservative known-register and readable-pointer resolution, starting with AArch64
-  ADR/ADRP/ADD/MOV/LDR/BR/BLR. Unknown, authenticated, mutable and unmapped targets must remain unresolved.
-- [ ] Analysis confidence: explain suspected encoded code and decode coverage without presenting random bytes
-  as trustworthy functions; support sparse memory and retain evidence rather than asserting encryption.
-- [ ] Language metadata: C++/Rust demangling while preserving original lookup names, bounded Itanium vtable/RTTI
-  discovery, and Objective-C class/method/selector metadata with malformed-pointer tests.
-- [ ] Data-flow/decompilation: first ship an explicitly limited, structured function summary with CFG and
-  references; then build a typed instruction IR, SSA, calling conventions, structuring and decompiler coverage.
-  Do not label a disassembly rewrite or model-generated prose a decompiler.
-- [ ] Containers and workspaces: bundle executable discovery, inventory of nested binaries, safe package
-  inspection without executing installers, and cross-module navigation with address/module identities.
+- [ ] Indirect flow: the conservative AArch64 ADR/ADRP/ADD/MOV/LDR/BR/BLR foundation is done (below). Remaining:
+  other architectures, and proven targets feeding discovery/CFG (Deep ARM64 track 4). Unknown, authenticated,
+  mutable and unmapped targets must remain unresolved.
+- [x] Analysis confidence: `audit`/`analysis_diagnostics` explain decode coverage and unreliable-code evidence over
+  sparse memory without asserting encryption (below).
+- [ ] Language metadata: C++/Rust demangling with original lookup names, named and stripped Itanium/MSVC RTTI,
+  and Objective-C selector inventory are done. Remaining: Objective-C class/method metadata with
+  malformed-pointer tests.
+- [x] Data-flow/decompilation: structured function summaries shipped, and decompilation comes from the embedded
+  Ghidra decompiler. The native IR/SSA work continues as diagnostics in the Deep ARM64 track; it is never
+  labelled a decompiler.
+- [ ] Containers and workspaces: bundle discovery and inventory of already-extracted packages are done (below).
+  Remaining: nested-archive inspection with extraction budgets (never executing installers) and cross-module
+  navigation with address/module identities.
 
 ### Implemented foundations
 
