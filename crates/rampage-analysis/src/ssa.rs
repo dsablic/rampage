@@ -313,6 +313,21 @@ fn budget(input: &[InputBlock]) -> Result<(), String> {
                     }
                     validate_values(&[destination, address], &mut nodes)?;
                 }
+                Effect::MemoryLoadPair { destinations, addresses, bits, result_bits, signed } => {
+                    if rampage_arch::ir::extend(0, *bits, *result_bits, *signed).is_none() {
+                        return Err("invalid memory load widths".to_owned());
+                    }
+                    if destinations[0] == destinations[1] {
+                        return Err("pair load destinations must differ".to_owned());
+                    }
+                    if !barrier {
+                        definitions += destinations
+                            .iter()
+                            .filter(|destination| !matches!(destination, Value::Constant { value: 0 }))
+                            .count();
+                    }
+                    validate_values(&[&destinations[0], &destinations[1], &addresses[0], &addresses[1]], &mut nodes)?;
+                }
                 Effect::MemoryStore { address, value, bits } => {
                     if !matches!(bits, 8 | 16 | 32 | 64) {
                         return Err("invalid memory store width".to_owned());
@@ -505,6 +520,33 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
                                     signed: *signed,
                                 };
                                 statement.definitions.push(define(&mut definitions, state, index, value));
+                            }
+                        }
+                        Effect::MemoryLoadPair { destinations, addresses, bits, result_bits, signed } => {
+                            // Resolve both addresses before either destination changes the register state.
+                            let loads = addresses
+                                .iter()
+                                .map(|address| {
+                                    Ok(Expression::Load {
+                                        memory: state[MEMORY],
+                                        address: Box::new(expression(address, state, 0)?),
+                                        bits: *bits,
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, String>>()?;
+                            for (target, load) in destinations.iter().zip(loads) {
+                                if matches!(target, Value::Constant { value: 0 }) {
+                                    statement.observations.push(load);
+                                } else {
+                                    let index = destination(target).ok_or("memory load destination is not writable")?;
+                                    let value = Expression::Extend {
+                                        value: Box::new(load),
+                                        from_bits: *bits,
+                                        to_bits: *result_bits,
+                                        signed: *signed,
+                                    };
+                                    statement.definitions.push(define(&mut definitions, state, index, value));
+                                }
                             }
                         }
                         Effect::MemoryStore { address, value, bits } => {

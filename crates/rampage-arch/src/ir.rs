@@ -151,6 +151,7 @@ pub fn extend(value: u64, from_bits: u8, to_bits: u8, signed: bool) -> Option<u6
 pub enum Effect {
     IndirectBranch { target: Value },
     MemoryLoad { destination: Value, address: Value, bits: u8, result_bits: u8, signed: bool },
+    MemoryLoadPair { destinations: [Value; 2], addresses: [Value; 2], bits: u8, result_bits: u8, signed: bool },
     MemoryStore { address: Value, value: Value, bits: u8 },
     Return { target: Value },
     Select { destination: Value, condition: u8, when_true: Value, when_false: Value },
@@ -577,7 +578,7 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
         let address = if name.ends_with("post") { register(rn, true) } else { updated.clone() };
         let load = name.starts_with("LDP");
         let writeback = !name.ends_with("off");
-        if load && (rd == rt2 || rn != 31 && (rd == rn || rt2 == rn)) {
+        if load && (rd == rt2 || writeback && rn != 31 && (rd == rn || rt2 == rn)) {
             lifted
                 .effects
                 .push(Effect::Barrier { reason: "overlapping pair load is constrained unpredictable".to_owned() });
@@ -587,6 +588,19 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
             lifted.effects.push(Effect::Barrier {
                 reason: "overlapping pair store writeback is constrained unpredictable".to_owned(),
             });
+            return lifted;
+        }
+        if load && !writeback && rn != 31 && rd == rn {
+            let second_address =
+                Value::Add { left: Box::new(address.clone()), right: Box::new(Value::Constant { value: stride }) };
+            lifted.effects.push(Effect::MemoryLoadPair {
+                destinations: [register(rd, false), register(rt2, false)],
+                addresses: [address, second_address],
+                bits,
+                result_bits: if name.starts_with("LDPSW") { 64 } else { bits },
+                signed: name.starts_with("LDPSW"),
+            });
+            lifted.complete = true;
             return lifted;
         }
         for (index, rt) in [rd, rt2].into_iter().enumerate() {

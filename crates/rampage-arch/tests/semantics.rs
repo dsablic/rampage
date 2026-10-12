@@ -223,3 +223,175 @@ fn word_pairs_scale_offsets_and_signed_pair_results_independently_of_sp() {
             .all(|effect| matches!(effect, Effect::MemoryLoad { bits: 32, result_bits: 64, signed: true, .. }))
     );
 }
+
+fn execute_pair_load(lifted: &LiftedInstruction, registers: &mut [u64; 31], sp: u64) -> Vec<(u64, u8, u8, bool)> {
+    let loaded_values = [0xffff_ffff_8000_0001, u64::MAX];
+    let mut accesses = Vec::new();
+    for effect in &lifted.effects {
+        let loads = match effect {
+            Effect::MemoryLoadPair { destinations, addresses, bits, result_bits, signed } => destinations
+                .iter()
+                .zip(addresses)
+                .map(|(destination, address)| {
+                    (destination.clone(), value(address, registers, sp), *bits, *result_bits, *signed)
+                })
+                .collect::<Vec<_>>(),
+            Effect::MemoryLoad { destination, address, bits, result_bits, signed } => {
+                vec![(destination.clone(), value(address, registers, sp), *bits, *result_bits, *signed)]
+            }
+            Effect::Load { destination, address } => {
+                vec![(destination.clone(), value(address, registers, sp), 64, 64, false)]
+            }
+            Effect::LoadDiscard { address } => {
+                vec![(Value::Constant { value: 0 }, value(address, registers, sp), 64, 64, false)]
+            }
+            _ => panic!("unexpected pair effect: {effect:?}"),
+        };
+        for (destination, address, bits, result_bits, signed) in loads {
+            let loaded = loaded_values[accesses.len()];
+            accesses.push((address, bits, result_bits, signed));
+            match destination {
+                Value::Register { number } => {
+                    registers[number as usize] = ir::extend(loaded, bits, result_bits, signed).unwrap();
+                }
+                Value::Constant { value: 0 } => {}
+                _ => panic!("pair load must not write SP: {destination:?}"),
+            }
+        }
+    }
+    accesses
+}
+
+#[test]
+fn llvm_checked_no_writeback_pair_overlaps_keep_both_original_addresses() {
+    // Encodings checked with clang's LLVM integrated assembler (-cc1as -show-encoding).
+    for (word, base, destinations, offset, bits, result_bits, signed) in [
+        (0xa940_0400, 0, [Some(0), Some(1)], 0, 64, 64, false), // ldp x0, x1, [x0]
+        (0xa940_0420, 1, [Some(0), Some(1)], 0, 64, 64, false), // ldp x0, x1, [x1]
+        (0xa960_0400, 0, [Some(0), Some(1)], -512, 64, 64, false),
+        (0xa95f_8400, 0, [Some(0), Some(1)], 504, 64, 64, false),
+        (0x2940_0400, 0, [Some(0), Some(1)], 0, 32, 32, false), // ldp w0, w1, [x0]
+        (0x2940_0420, 1, [Some(0), Some(1)], 0, 32, 32, false), // ldp w0, w1, [x1]
+        (0x2960_0400, 0, [Some(0), Some(1)], -256, 32, 32, false),
+        (0x295f_8400, 0, [Some(0), Some(1)], 252, 32, 32, false),
+        (0x6940_0400, 0, [Some(0), Some(1)], 0, 32, 64, true), // ldpsw x0, x1, [x0]
+        (0x6940_0420, 1, [Some(0), Some(1)], 0, 32, 64, true), // ldpsw x0, x1, [x1]
+        (0x6960_0400, 0, [Some(0), Some(1)], -256, 32, 64, true),
+        (0x695f_8400, 0, [Some(0), Some(1)], 252, 32, 64, true),
+        (0xa940_fc00, 0, [Some(0), None], 8, 64, 64, false), // ldp x0, xzr, [x0, #8]
+        (0xa97f_801f, 0, [None, Some(0)], -8, 64, 64, false), // ldp xzr, x0, [x0, #-8]
+        (0x2940_fc00, 0, [Some(0), None], 4, 32, 32, false),
+        (0x297f_801f, 0, [None, Some(0)], -4, 32, 32, false),
+        (0x6940_fc00, 0, [Some(0), None], 4, 32, 64, true),
+        (0x697f_801f, 0, [None, Some(0)], -4, 32, 64, true),
+    ] {
+        let lifted = lift(word);
+        assert!(lifted.complete, "{word:08x}");
+        assert_eq!(lifted.bits, 64, "{word:08x}");
+        for original_base in [0u64, 0x1_0000_0000, u64::MAX - 3] {
+            let mut registers = [7; 31];
+            registers[base] = original_base;
+            let first_address = original_base.wrapping_add(offset as u64);
+            assert_eq!(
+                execute_pair_load(&lifted, &mut registers, 0x2000),
+                [
+                    (first_address, bits, result_bits, signed),
+                    (first_address.wrapping_add(u64::from(bits / 8)), bits, result_bits, signed),
+                ],
+                "{word:08x}, base={original_base:x}"
+            );
+            let expected_values =
+                if result_bits == 32 { [0x8000_0001, 0xffff_ffff] } else { [0xffff_ffff_8000_0001, u64::MAX] };
+            for (destination, expected) in destinations.into_iter().zip(expected_values) {
+                if let Some(number) = destination {
+                    assert_eq!(registers[number], expected, "{word:08x}");
+                }
+            }
+            assert_eq!(registers[2], 7, "{word:08x}");
+        }
+    }
+}
+
+#[test]
+fn llvm_checked_pair_register_31_roles_and_overlapping_stores_are_unchanged() {
+    for (word, offset, bits, result_bits, signed) in [
+        (0xa960_03ff, -512, 64, 64, false), // ldp xzr, x0, [sp, #-512]
+        (0xa95f_ffe0, 504, 64, 64, false),  // ldp x0, xzr, [sp, #504]
+        (0x2960_03ff, -256, 32, 32, false),
+        (0x295f_ffe0, 252, 32, 32, false),
+        (0x6960_03ff, -256, 32, 64, true),
+        (0x695f_ffe0, 252, 32, 64, true),
+    ] {
+        let lifted = lift(word);
+        assert!(lifted.complete, "{word:08x}");
+        let mut registers = [7; 31];
+        let first_address = 0x1_0000_0000u64.wrapping_add(offset as u64);
+        assert_eq!(
+            execute_pair_load(&lifted, &mut registers, 0x1_0000_0000),
+            [
+                (first_address, bits, result_bits, signed),
+                (first_address + u64::from(bits / 8), bits, result_bits, signed),
+            ],
+            "{word:08x}"
+        );
+        assert_eq!(registers[1], 7);
+    }
+    for (word, base, offset, bits) in [
+        (0xa920_0400, 0, -512, 64), // stp x0, x1, [x0, #-512]
+        (0x291f_8420, 1, 252, 32),  // stp w0, w1, [x1, #252]
+    ] {
+        let lifted = lift(word);
+        assert!(lifted.complete, "{word:08x}");
+        assert_eq!(lifted.effects.len(), 2);
+        let mut registers = [0; 31];
+        registers[0] = 0x1_0000_0000;
+        registers[1] = 0x2_0000_0000;
+        for (index, effect) in lifted.effects.iter().enumerate() {
+            let (address, source) = match effect {
+                Effect::Store { address, value } if bits == 64 => (address, value),
+                Effect::MemoryStore { address, value, bits: actual_bits } if *actual_bits == bits => (address, value),
+                _ => panic!("unexpected store: {effect:?}"),
+            };
+            assert_eq!(value(source, &registers, 0), registers[index], "{word:08x}");
+            assert_eq!(
+                value(address, &registers, 0),
+                registers[base].wrapping_add(offset as u64).wrapping_add(index as u64 * u64::from(bits / 8)),
+                "{word:08x}"
+            );
+        }
+    }
+}
+
+#[test]
+fn constrained_unpredictable_pair_overlaps_and_invalid_encodings_remain_barriers() {
+    for word in [
+        0xa9c1_0400,
+        0xa9c1_0420,
+        0xa8c1_0400,
+        0xa8c1_0420, // x pair pre/post base overlaps
+        0x29c1_0400,
+        0x29c1_0420,
+        0x28c1_0400,
+        0x28c1_0420, // w pair pre/post base overlaps
+        0x69c1_0400,
+        0x69c1_0420,
+        0x68c1_0400,
+        0x68c1_0420, // signed pair pre/post base overlaps
+        0xa940_0000,
+        0x2940_0000,
+        0x6940_0000, // duplicate destinations without writeback
+        0xa940_7fff,
+        0x2940_7fff,
+        0x6940_7fff, // duplicate zero destinations with SP base
+        0xa981_0400,
+        0xa881_0420,
+        0x2981_0400,
+        0x2881_0420, // overlapping store writeback
+        0xe940_0400,
+        0x0000_0000, // unallocated encodings
+    ] {
+        let lifted = lift(word);
+        assert!(!lifted.complete, "{word:08x}");
+        assert!(matches!(lifted.effects.as_slice(), [Effect::Barrier { .. }]), "{word:08x}");
+    }
+}

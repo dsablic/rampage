@@ -374,3 +374,163 @@ fn aapcs64_calls_preserve_callee_saved_registers_but_clobber_caller_saved_values
     assert_eq!(ssa.definitions[result_buffer].variable, Variable::Register { number: 8 });
     assert_eq!(ssa.definitions[stack_pointer].variable, Variable::StackPointer);
 }
+
+#[test]
+fn llvm_checked_native_pair_loads_resolve_addresses_before_clobbering_the_base() {
+    use rampage_arch::{Arch, Target, decoder, ir};
+
+    // Literal encodings checked independently with LLVM's integrated assembler.
+    for (word, base, destinations, offset, bits, result_bits, signed) in [
+        (0xa940_0400u32, 0, [0, 1], 0, 64, 64, false),
+        (0xa940_0420, 1, [0, 1], 0, 64, 64, false),
+        (0xa960_0400, 0, [0, 1], -512, 64, 64, false),
+        (0xa95f_8400, 0, [0, 1], 504, 64, 64, false),
+        (0x2940_0400, 0, [0, 1], 0, 32, 32, false),
+        (0x2940_0420, 1, [0, 1], 0, 32, 32, false),
+        (0x2960_0400, 0, [0, 1], -256, 32, 32, false),
+        (0x295f_8400, 0, [0, 1], 252, 32, 32, false),
+        (0x6940_0400, 0, [0, 1], 0, 32, 64, true),
+        (0x6940_0420, 1, [0, 1], 0, 32, 64, true),
+        (0x6960_0400, 0, [0, 1], -256, 32, 64, true),
+        (0x695f_8400, 0, [0, 1], 252, 32, 64, true),
+        (0xa940_fc00, 0, [0, 31], 8, 64, 64, false),
+        (0xa97f_801f, 0, [31, 0], -8, 64, 64, false),
+        (0x2940_fc00, 0, [0, 31], 4, 32, 32, false),
+        (0x297f_801f, 0, [31, 0], -4, 32, 32, false),
+        (0x6940_fc00, 0, [0, 31], 4, 32, 64, true),
+        (0x697f_801f, 0, [31, 0], -4, 32, 64, true),
+        (0xa960_03ff, 31, [31, 0], -512, 64, 64, false),
+        (0xa95f_ffe0, 31, [0, 31], 504, 64, 64, false),
+        (0x2960_03ff, 31, [31, 0], -256, 32, 32, false),
+        (0x295f_ffe0, 31, [0, 31], 252, 32, 32, false),
+        (0x6960_03ff, 31, [31, 0], -256, 32, 64, true),
+        (0x695f_ffe0, 31, [0, 31], 252, 32, 64, true),
+    ] {
+        let bytes = word.to_le_bytes();
+        let insn = decoder(&Target::new(Arch::Aarch64)).unwrap().decode(&bytes, 0x1004);
+        let lifted = ir::lift(Arch::Aarch64, &bytes, &insn);
+        assert!(lifted.complete, "{word:08x}");
+        for original_base in [0u64, 0x1_0000_0000, u64::MAX - 3] {
+            let base_value = if base == 31 { Value::StackPointer } else { Value::Register { number: base } };
+            let instructions = vec![
+                LiftedInstruction {
+                    address: 0x1000,
+                    bits: 64,
+                    flow: Flow::Next,
+                    complete: true,
+                    effects: vec![Effect::Assign {
+                        destination: base_value.clone(),
+                        value: Value::Constant { value: original_base },
+                    }],
+                },
+                lifted.clone(),
+                assign(0x1008, 2, base_value, 64),
+            ];
+            let ssa = ssa::build(&[block(0x1000, instructions)], &[], 0).unwrap();
+            let statement = &ssa.blocks[0].statements[1];
+            assert!(!statement.barrier, "{word:08x}");
+            assert_eq!(statement.definitions.len() + statement.observations.len(), 2, "{word:08x}");
+            let first_address = original_base.wrapping_add(offset as u64);
+            let expected_addresses = [first_address, first_address.wrapping_add(u64::from(bits / 8))];
+            let mut memories = Vec::new();
+            for &id in &statement.definitions {
+                let definition = &ssa.definitions[id];
+                let Variable::Register { number } = definition.variable else { panic!("not a register load") };
+                let index = destinations.iter().position(|&destination| destination == number).unwrap();
+                let load = match &definition.expression {
+                    Expression::Extend { value, from_bits, to_bits, signed: actual_signed } => {
+                        assert_eq!((*from_bits, *to_bits, *actual_signed), (bits, result_bits, signed), "{word:08x}");
+                        value.as_ref()
+                    }
+                    value @ Expression::Load { .. } => {
+                        assert_eq!((bits, result_bits, signed), (64, 64, false));
+                        value
+                    }
+                    _ => panic!("not a load: {:?}", definition.expression),
+                };
+                let Expression::Load { address, bits: actual_bits, memory } = load else { panic!("not a load") };
+                assert_eq!(*actual_bits, bits, "{word:08x}");
+                assert_eq!(evaluate(&ssa, address, &[None], 0), Some(expected_addresses[index]), "{word:08x}");
+                memories.push(*memory);
+            }
+            for observation in &statement.observations {
+                let index = destinations.iter().position(|&destination| destination == 31).unwrap();
+                let Expression::Load { address, bits: actual_bits, memory } = observation else {
+                    panic!("discarded load lost its memory access")
+                };
+                assert_eq!(*actual_bits, bits, "{word:08x}");
+                assert_eq!(evaluate(&ssa, address, &[None], 0), Some(expected_addresses[index]), "{word:08x}");
+                memories.push(*memory);
+            }
+            assert_eq!(memories[0], memories[1], "{word:08x}");
+            let base_definition = if base == 31 {
+                ssa.blocks[0].statements[0].definitions[0]
+            } else {
+                *statement
+                    .definitions
+                    .iter()
+                    .find(|&&id| ssa.definitions[id].variable == Variable::Register { number: base })
+                    .unwrap()
+            };
+            let after = ssa.blocks[0].statements[2].definitions[0];
+            assert_eq!(ssa.definitions[after].expression, Expression::Reference { definition: base_definition });
+        }
+    }
+}
+
+#[test]
+fn grouped_pair_loads_validate_inputs_and_count_both_definitions_in_the_budget() {
+    let pair = |destinations, addresses, bits, result_bits| LiftedInstruction {
+        address: 0x1000,
+        bits: 64,
+        flow: Flow::Next,
+        complete: true,
+        effects: vec![Effect::MemoryLoadPair { destinations, addresses, bits, result_bits, signed: false }],
+    };
+    let destinations = [Value::Register { number: 0 }, Value::Register { number: 1 }];
+    let addresses = [Value::Register { number: 0 }, Value::Register { number: 0 }];
+    for (bits, result_bits) in [(24, 64), (64, 32), (32, 8)] {
+        assert!(
+            ssa::build(
+                &[block(0x1000, vec![pair(destinations.clone(), addresses.clone(), bits, result_bits)])],
+                &[],
+                0
+            )
+            .unwrap_err()
+            .contains("invalid memory load widths")
+        );
+    }
+    for invalid in [Value::Register { number: 31 }, Value::Constant { value: 1 }] {
+        let insn = pair([Value::Register { number: 0 }, invalid], addresses.clone(), 64, 64);
+        assert!(ssa::build(&[block(0x1000, vec![insn])], &[], 0).is_err());
+    }
+    let duplicate = pair([Value::Register { number: 0 }, Value::Register { number: 0 }], addresses.clone(), 64, 64);
+    assert!(ssa::build(&[block(0x1000, vec![duplicate])], &[], 0).unwrap_err().contains("destinations must differ"));
+    let bad_address =
+        pair(destinations.clone(), [Value::Constant { value: 0 }, Value::Register { number: 99 }], 64, 64);
+    assert!(ssa::build(&[block(0x1000, vec![bad_address])], &[], 0).is_err());
+    let repeated = pair(destinations, addresses, 64, 64);
+    assert!(ssa::build(&[block(0x1000, vec![repeated; 10_000])], &[], 0).unwrap_err().contains("definition limit"));
+}
+
+#[test]
+fn native_pair_writeback_overlap_is_still_an_ssa_semantic_barrier() {
+    use rampage_arch::{Arch, Target, decoder, ir};
+
+    for word in [0xa9c1_0400u32, 0x28c1_0420, 0x69c1_0400, 0xa940_0000, 0xa981_0400] {
+        let bytes = word.to_le_bytes();
+        let insn = decoder(&Target::new(Arch::Aarch64)).unwrap().decode(&bytes, 0x1000);
+        let lifted = ir::lift(Arch::Aarch64, &bytes, &insn);
+        let ssa = ssa::build(&[block(0x1000, vec![lifted])], &[], 0).unwrap();
+        let statement = &ssa.blocks[0].statements[0];
+        assert!(statement.barrier, "{word:08x}");
+        assert!(statement.observations.is_empty());
+        assert!(statement.definitions.iter().any(|&id| ssa.definitions[id].variable == Variable::Memory));
+        assert!(
+            statement
+                .definitions
+                .iter()
+                .all(|&id| matches!(ssa.definitions[id].expression, Expression::Unknown { .. }))
+        );
+    }
+}
