@@ -6,11 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use rampage_loaders::SymbolKind;
 use serde_json::json;
 
-use super::{Confidence, Finding, ReportLimits, Section, WorkflowReport, classify, quote};
+use super::{Confidence, Finding, ReportLimits, Section, WorkflowReport, api_matches, classify, match_api, quote};
 use crate::{ApiError, Project, XrefQuery};
 
-/// Networking API stems, compared case-insensitively after loader decorations and a Windows `A`/`W` suffix are
-/// removed. Each names the area it belongs to.
+/// Networking API patterns (see `api_matches`), each with the area it belongs to.
 const NETWORK_APIS: &[(&str, &str)] = &[
     ("socket", "sockets"),
     ("connect", "sockets"),
@@ -39,7 +38,7 @@ const NETWORK_APIS: &[(&str, &str)] = &[
     ("freeaddrinfo", "name resolution"),
     ("res_query", "name resolution"),
     ("res_search", "name resolution"),
-    ("dnsquery_", "name resolution"),
+    ("dnsquery_*", "name resolution"),
     ("inet_addr", "address conversion"),
     ("inet_pton", "address conversion"),
     ("inet_ntoa", "address conversion"),
@@ -70,22 +69,18 @@ const NETWORK_APIS: &[(&str, &str)] = &[
     ("acquirecredentialshandle", "TLS"),
 ];
 
-/// Imports that let code look up any API at run time, so networking can be reached without importing it.
-const RUNTIME_RESOLVERS: [&str; 5] = ["dlsym", "getprocaddress", "loadlibrarya", "loadlibraryw", "loadlibraryexw"];
+/// Imports that let code load a library or look up any API at run time, so networking can be reached without
+/// importing it (patterns, see `api_matches`).
+const RUNTIME_RESOLVERS: [&str; 7] =
+    ["dlopen", "dlsym", "getprocaddress", "loadlibrary", "loadlibraryex", "ldrloaddll", "ldrgetprocedureaddress"];
 /// References read per API or string when looking for the functions that use it.
 const REFERENCES_PER_ITEM: usize = 200;
 /// Functions suggested for decompilation in next steps.
 const SUGGESTED_FUNCTIONS: usize = 3;
 
 /// The area of a networking API, if `name` is one.
-fn network_api(name: &str) -> Option<(&'static str, &'static str)> {
-    let name = name.strip_prefix("__imp_").unwrap_or(name);
-    let name = name.split('@').next().unwrap_or(name).trim_start_matches('_').to_ascii_lowercase();
-    let unsuffixed = name.strip_suffix(['a', 'w']).unwrap_or(&name);
-    NETWORK_APIS
-        .iter()
-        .copied()
-        .find(|(stem, _)| name == *stem || unsuffixed == *stem || (stem.ends_with('_') && name.starts_with(stem)))
+fn network_api(name: &str) -> Option<&'static str> {
+    match_api(NETWORK_APIS, name)
 }
 
 /// Where an API is used from: the functions containing references to any of `targets`.
@@ -111,7 +106,7 @@ impl Project {
         let mut apis = Section::new("Networking APIs", limits);
         let mut seen = BTreeSet::new();
         for import in &self.binary.imports {
-            let Some((_, area)) = network_api(&import.name) else { continue };
+            let Some(area) = network_api(&import.name) else { continue };
             if !seen.insert(import.name.clone()) {
                 continue;
             }
@@ -139,7 +134,7 @@ impl Project {
             {
                 continue;
             }
-            let Some((_, area)) = network_api(&symbol.name) else { continue };
+            let Some(area) = network_api(&symbol.name) else { continue };
             seen.insert(symbol.name.clone());
             let found = self.users(&[symbol.address], analysis_error.is_none());
             apis.push(self.api_finding(
@@ -237,7 +232,7 @@ impl Project {
             .imports
             .iter()
             .map(|import| import.name.as_str())
-            .filter(|name| RUNTIME_RESOLVERS.contains(&name.trim_start_matches('_').to_ascii_lowercase().as_str()))
+            .filter(|name| RUNTIME_RESOLVERS.iter().any(|pattern| api_matches(pattern, name)))
             .collect();
         if !resolvers.is_empty() {
             report.limitation(format!(
@@ -305,16 +300,25 @@ pub(super) fn count(items: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::network_api;
+    use super::{RUNTIME_RESOLVERS, api_matches, network_api};
 
     #[test]
     fn matches_decorated_networking_names() {
-        assert_eq!(network_api("connect").map(|(stem, _)| stem), Some("connect"));
-        assert_eq!(network_api("__imp_InternetOpenUrlW").map(|(stem, _)| stem), Some("internetopenurl"));
-        assert_eq!(network_api("getaddrinfo@plt").map(|(stem, _)| stem), Some("getaddrinfo"));
-        assert_eq!(network_api("DnsQuery_A").map(|(stem, _)| stem), Some("dnsquery_"));
+        assert_eq!(network_api("connect"), Some("sockets"));
+        assert_eq!(network_api("__imp_InternetOpenUrlW"), Some("HTTP/FTP client"));
+        assert_eq!(network_api("getaddrinfo@plt"), Some("name resolution"));
+        assert_eq!(network_api("DnsQuery_A"), Some("name resolution"));
         assert_eq!(network_api("puts"), None);
         assert_eq!(network_api("sendfile"), None);
         assert_eq!(network_api("connected"), None);
+    }
+
+    #[test]
+    fn recognizes_decorated_runtime_resolvers() {
+        let resolver = |name: &str| RUNTIME_RESOLVERS.iter().any(|pattern| api_matches(pattern, name));
+        for name in ["__imp_GetProcAddress", "LoadLibraryExA", "LoadLibraryW", "dlopen", "LdrGetProcedureAddress"] {
+            assert!(resolver(name), "{name}");
+        }
+        assert!(!resolver("GetProcessId"));
     }
 }

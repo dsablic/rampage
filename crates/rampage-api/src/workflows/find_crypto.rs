@@ -9,11 +9,10 @@ use rampage_loaders::SymbolKind;
 use serde_json::json;
 
 use super::network_surface::{count, record, referencing};
-use super::{Confidence, Finding, ReportLimits, Section, WorkflowReport};
+use super::{Confidence, Finding, ReportLimits, Section, WorkflowReport, match_api};
 use crate::{ApiError, Project};
 
-/// Crypto library API names, compared case-insensitively after loader decorations and a Windows `A`/`W` suffix
-/// are removed. A trailing `*` matches a prefix. Each names the library family it belongs to.
+/// Crypto library API patterns (see `api_matches`), each with the library family it belongs to.
 const CRYPTO_APIS: &[(&str, &str)] = &[
     ("cryptacquirecontext", "Windows CryptoAPI"),
     ("cryptcreatehash", "Windows CryptoAPI"),
@@ -61,16 +60,7 @@ const SUGGESTED_FUNCTIONS: usize = 3;
 
 /// The library family of a crypto API, if `name` is one.
 fn crypto_api(name: &str) -> Option<&'static str> {
-    let name = name.strip_prefix("__imp_").unwrap_or(name);
-    let name = name.split('@').next().unwrap_or(name).trim_start_matches('_').to_ascii_lowercase();
-    let unsuffixed = name.strip_suffix(['a', 'w']).unwrap_or(&name);
-    CRYPTO_APIS.iter().find_map(|(pattern, family)| {
-        let matched = match pattern.strip_suffix('*') {
-            Some(prefix) => name.starts_with(prefix),
-            None => name == *pattern || unsuffixed == *pattern,
-        };
-        matched.then_some(*family)
-    })
+    match_api(CRYPTO_APIS, name)
 }
 
 /// Ciphers, hashes, MACs and public-key parameters, as opposed to checksums, compression and encodings.

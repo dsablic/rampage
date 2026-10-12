@@ -248,6 +248,29 @@ pub fn quote(text: &str) -> String {
     format!("{cut:?}...")
 }
 
+/// An import or symbol name without the decorations loaders and toolchains add (`__imp_`, an `@plt`, `@16` or
+/// `@GLIBC_2.2.5` suffix, leading underscores), lowercased, for matching against the API tables.
+pub(crate) fn normalize_api(name: &str) -> String {
+    let name = name.strip_prefix("__imp_").unwrap_or(name);
+    let name = name.split('@').next().unwrap_or(name);
+    name.trim_start_matches('_').to_ascii_lowercase()
+}
+
+/// Whether `name` (decorated or not) is the API `pattern` names. A pattern is a lowercase stem that also matches
+/// with a Windows `A`/`W` suffix (`connect`, `loadlibrary`), or a prefix ending in `*` (`bcrypt*`).
+pub(crate) fn api_matches(pattern: &str, name: &str) -> bool {
+    let name = normalize_api(name);
+    match pattern.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => name == pattern || name.strip_suffix(['a', 'w']) == Some(pattern),
+    }
+}
+
+/// The value of the first `(pattern, value)` entry of `table` that `name` matches (see `api_matches`).
+pub(crate) fn match_api<T: Copy>(table: &[(&str, T)], name: &str) -> Option<T> {
+    table.iter().find(|(pattern, _)| api_matches(pattern, name)).map(|&(_, value)| value)
+}
+
 /// Whether `name` is a default name the analysis made up rather than one the binary or user supplied.
 pub fn is_default_name(name: &str) -> bool {
     name.starts_with("sub_")
@@ -290,6 +313,20 @@ mod tests {
         for confidence in [Confidence::Low, Confidence::Medium, Confidence::High, Confidence::Observed] {
             assert_eq!(serde_json::to_value(confidence).unwrap(), confidence.as_str());
         }
+    }
+
+    #[test]
+    fn api_names_match_across_decorations() {
+        assert_eq!(normalize_api("__imp__exit"), "exit");
+        assert_eq!(normalize_api("getaddrinfo@plt"), "getaddrinfo");
+        assert_eq!(normalize_api("_WinMain@16"), "winmain");
+        assert!(api_matches("getprocaddress", "__imp_GetProcAddress"));
+        assert!(api_matches("loadlibraryex", "LoadLibraryExA"));
+        assert!(api_matches("bcrypt*", "BCryptOpenAlgorithmProvider"));
+        assert!(!api_matches("connect", "connected"));
+        assert!(!api_matches("send", "sendfile"));
+        assert_eq!(match_api(&[("puts", 1), ("put*", 2)], "putchar"), Some(2));
+        assert_eq!(match_api(&[("puts", 1)], "printf"), None);
     }
 
     #[test]

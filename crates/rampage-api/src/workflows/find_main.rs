@@ -7,14 +7,20 @@ use rampage_arch::{Arch, Flow};
 use rampage_loaders::{Details, Format};
 use serde_json::json;
 
-use super::{Confidence, Excerpt, Finding, ReportLimits, Section, WorkflowReport, is_default_name, quote};
+use super::{
+    Confidence, Excerpt, Finding, ReportLimits, Section, WorkflowReport, api_matches, is_default_name, normalize_api,
+    quote,
+};
 use crate::{ApiError, DisassemblyLine, Project, XrefQuery};
 
 /// Symbol names that conventionally mark a program's entry logic, most specific first.
 const ENTRY_SYMBOLS: [&str; 8] =
     ["main", "_main", "wmain", "_wmain", "WinMain", "wWinMain", "_WinMain@16", "main.main"];
-/// Calls through which a C runtime ends the process with main's return value.
-const EXIT_NAMES: [&str; 3] = ["exit", "_exit", "_cexit"];
+/// Calls through which a C runtime ends the process with main's return value (patterns, see `api_matches`;
+/// `_exit` and `_cexit` normalize to these).
+const EXIT_NAMES: [&str; 2] = ["exit", "cexit"];
+/// The C runtime functions whose first argument is main (patterns, see `api_matches`).
+const LIBC_START_MAIN: [&str; 2] = ["libc_start_main", "uclibc_main"];
 /// Instructions decoded per startup stub, and stubs followed from the entry point.
 const STUB_INSTRUCTIONS: usize = 64;
 const STUB_DEPTH: usize = 3;
@@ -34,15 +40,8 @@ struct Candidate {
     evidence: Vec<String>,
 }
 
-/// An import or symbol name without the decorations loaders add (`__imp_`, `@plt`, leading underscores).
-fn base_name(name: &str) -> &str {
-    let name = name.strip_prefix("__imp_").unwrap_or(name);
-    let name = name.split('@').next().unwrap_or(name);
-    name.trim_start_matches('_')
-}
-
 fn is_libc_start_main(name: &str) -> bool {
-    matches!(base_name(name), "libc_start_main" | "uClibc_main")
+    LIBC_START_MAIN.iter().any(|pattern| api_matches(pattern, name))
 }
 
 /// The register an instruction writes, read from its text (`mov rdi, ...` writes `rdi`).
@@ -272,10 +271,10 @@ impl Project {
     /// call before such a call, in the functions the entry point reaches, is proposed.
     fn mingw_candidates(&self) -> Result<Vec<Candidate>, ApiError> {
         let Some(entry) = self.binary.entry else { return Ok(Vec::new()) };
-        let imports: BTreeSet<&str> = self.binary.imports.iter().map(|import| base_name(&import.name)).collect();
+        let imports: BTreeSet<String> = self.binary.imports.iter().map(|import| normalize_api(&import.name)).collect();
         let internal = |target: u64| {
             self.binary.is_code(target)
-                && self.name_at(target).is_none_or(|name| !imports.contains(base_name(&name)))
+                && self.name_at(target).is_none_or(|name| !imports.contains(&normalize_api(&name)))
                 && self.binary.import_slot(target).is_none()
         };
         let mut queue = vec![entry];
@@ -294,10 +293,9 @@ impl Project {
                     Flow::IndirectCall => line.data_ref,
                     _ => None,
                 };
-                let exit = target.and_then(|target| self.name_at(target)).filter(|name| {
-                    let base = name.strip_prefix("__imp_").unwrap_or(name);
-                    EXIT_NAMES.contains(&base)
-                });
+                let exit = target
+                    .and_then(|target| self.name_at(target))
+                    .filter(|name| EXIT_NAMES.iter().any(|pattern| api_matches(pattern, name)));
                 if let Some(exit) = exit {
                     let start = index.saturating_sub(EXIT_LOOKBACK);
                     let call = (start..index).rev().find_map(|at| match lines[at].flow {
