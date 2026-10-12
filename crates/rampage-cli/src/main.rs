@@ -106,6 +106,13 @@ enum Command {
     Metadata { file: PathBuf },
     /// Inventory binaries in a bundle or already-extracted package without executing it
     Inventory { directory: PathBuf },
+    /// Scan any file for embedded executables and containers by validated header, without extracting anything
+    Carve {
+        file: PathBuf,
+        /// Stop after this many candidates
+        #[arg(long, default_value_t = rampage_loaders::carve::MAX_CANDIDATES)]
+        max_candidates: usize,
+    },
     /// Structural CFG and reference summary of a function (not decompiled source)
     Summarize {
         file: PathBuf,
@@ -345,6 +352,7 @@ fn main() -> ExitCode {
         Command::Audit { file, include_discovery } => commands::audit(&mut out, &file, include_discovery, &options),
         Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
         Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),
+        Command::Carve { file, max_candidates } => commands::carve(&mut out, &file, max_candidates, &options),
         Command::Summarize { file, at } => commands::summarize(&mut out, &file, &at, &options),
         Command::Decompile { file, at, compiler, isolated } => {
             commands::decompile(&mut out, &file, &at, compiler.as_deref(), isolated, &options)

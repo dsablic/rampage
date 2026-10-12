@@ -69,16 +69,7 @@ where
 {
     let handler = move |project: &Project, input: Value| -> Result<Value, String> {
         let arguments: A = serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
-        let result = run(project, arguments).map_err(|error| {
-            let mut text = error.to_string();
-            let mut source = std::error::Error::source(&error);
-            while let Some(cause) = source {
-                text.push_str(": ");
-                text.push_str(&cause.to_string());
-                source = cause.source();
-            }
-            text
-        })?;
+        let result = run(project, arguments).map_err(|error| error_chain(&error))?;
         serde_json::to_value(result).map_err(|error| error.to_string())
     };
     Tool {
@@ -90,6 +81,64 @@ where
         reads_annotations: true,
         handler: Box::new(handler),
     }
+}
+
+fn error_chain(error: &ApiError) -> String {
+    let mut text = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
+
+/// A tool that takes a file path instead of a project, for files no loader needs to open first.
+pub struct FileTool {
+    pub name: &'static str,
+    pub description: &'static str,
+    /// Includes the required `path` argument.
+    pub input_schema: Value,
+    handler: fn(Value) -> Result<Value, String>,
+}
+
+impl FileTool {
+    /// Runs the tool with `input`, returning its JSON result or an error the caller can read.
+    pub fn call(&self, input: Value) -> Result<Value, String> {
+        (self.handler)(input)
+    }
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct CarveArgs {
+    /// Path to the file to scan; any regular file, not only one rampage can load.
+    path: String,
+    /// Candidates to skip, for paging.
+    offset: Option<usize>,
+    /// Candidates per page (default and at most 100).
+    limit: Option<usize>,
+}
+
+/// Every tool that takes a file path instead of a project.
+pub fn file_tools() -> Vec<FileTool> {
+    vec![FileTool {
+        name: "carve",
+        description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers: \
+                      ELF, PE, Mach-O (thin and universal), zip, gzip, xz, zstd, LZMA, squashfs, cpio, uImage and \
+                      Android boot images. Each candidate has its offset, kind, validated header facts (arch, bits, \
+                      endianness, declared size) and an extent estimated from headers, with confidence validated or \
+                      magic_only. Read-only and bounded: nothing is extracted, decompressed or executed, and the \
+                      scan stops at 4096 candidates, saying so. Paginated with offset/limit.",
+        input_schema: schema::<CarveArgs>(),
+        handler: |input| {
+            let args: CarveArgs =
+                serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
+            let page = crate::carve_page(std::path::Path::new(&args.path), args.offset, args.limit)
+                .map_err(|error| error_chain(&error))?;
+            serde_json::to_value(page).map_err(|error| error.to_string())
+        },
+    }]
 }
 
 /// No arguments.

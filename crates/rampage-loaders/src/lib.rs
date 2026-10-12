@@ -1,3 +1,4 @@
+pub mod carve;
 pub mod container;
 mod details;
 mod entropy;
