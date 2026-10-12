@@ -20,8 +20,8 @@
 //! [`SignatureDb::bundled`] returns a starter database authored here from public knowledge (section layouts,
 //! embedded producer strings, import conventions), never copied from PeID's `userdb.txt`. It covers UPX, ASPack,
 //! MPRESS, PECompact, Petite, NsPack and FSG (packers); VMProtect, Themida/WinLicense and Enigma (protectors);
-//! Go, .NET, MSVC, MinGW/GCC, GCC, Clang/LLVM, Rust, Zig and Delphi/Borland (compilers); LLD and GNU ld
-//! (linkers); and NSIS and Inno Setup (installers).
+//! Go, .NET, MSVC, MinGW/GCC, GCC, Clang/LLVM, Rust, Zig and Delphi/Borland (compilers); LLD, mold and GNU
+//! gold (linkers; GNU ld leaves no mark to key on); and NSIS and Inno Setup (installers).
 //!
 //! # User-supplied databases
 //!

@@ -58,8 +58,8 @@ fn evaluate(image: &impl Image, signature: &Signature) -> Option<Detection> {
     }
     let distinctive = signature.conditions.iter().any(Condition::is_distinctive);
     // A single generic signal is tentative; a distinctive one, or several corroborating ones, is strong.
-    let confidence =
-        if distinctive || signature.conditions.len() >= 2 { Confidence::Strong } else { Confidence::Tentative };
+    let strong = !signature.corroborating && (distinctive || signature.conditions.len() >= 2);
+    let confidence = if strong { Confidence::Strong } else { Confidence::Tentative };
     Some(Detection { name: signature.name.clone(), kind: signature.kind, confidence, evidence })
 }
 
@@ -387,6 +387,19 @@ mod tests {
         assert_eq!(detections.len(), 1);
         assert_eq!(detections[0].evidence.len(), 2);
         assert_eq!(detections[0].confidence, Confidence::Strong);
+    }
+
+    #[test]
+    fn startup_object_gcc_stamps_do_not_make_a_clang_mold_build_strong_gcc() {
+        // A Clang build linked by mold against glibc: crt1.o and crti.o bring their own GCC producer strings.
+        let comment = b"GCC: (GNU) 13.2.0\0clang version 18.1.0\0mold 2.30.0 (compatible with GNU ld)\0";
+        let image = Fake::default().with_section(".comment", comment);
+        let detections = identify_image(&image, &SignatureDb::bundled());
+        let found = |name: &str| detections.iter().find(|d| d.name == name).map(|d| d.confidence);
+        assert_eq!(found("GCC"), Some(Confidence::Tentative));
+        assert_eq!(found("Clang/LLVM"), Some(Confidence::Strong));
+        assert_eq!(found("mold"), Some(Confidence::Strong));
+        assert_eq!(found("GNU ld"), None);
     }
 
     #[test]

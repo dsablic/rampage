@@ -104,9 +104,11 @@ fn compilers() -> Vec<Signature> {
         Signature::new("MSVC", Kind::Compiler, vec![versioned_import("msvcp")]).with_note("MSVCP C++ runtime import"),
         // MinGW embeds its runtime-failure banner in read-only data.
         Signature::new("MinGW/GCC", Kind::Compiler, vec![contains("Mingw-w64")]).with_note("Mingw-w64 banner"),
-        // GCC and Clang stamp a producer string into .comment.
+        // GCC and Clang stamp a producer string into .comment. "GCC:" alone is weak: glibc's crt1.o/crti.o and
+        // libgcc's crtbegin.o carry it too, so Clang- and Rust-built glibc programs show it as well.
         Signature::new("GCC", Kind::Compiler, vec![section_contains(".comment", "GCC:")])
-            .with_note(".comment GCC producer"),
+            .with_note(".comment GCC producer (also stamped by glibc/libgcc startup objects)")
+            .corroborating(),
         Signature::new("Clang/LLVM", Kind::Compiler, vec![section_contains(".comment", "clang")])
             .with_note(".comment clang producer"),
         Signature::new("Rust", Kind::Compiler, vec![contains("rustc version")]).with_note("rustc version string"),
@@ -126,8 +128,12 @@ fn linkers() -> Vec<Signature> {
     vec![
         Signature::new("LLD", Kind::Linker, vec![section_contains(".comment", "LLD")])
             .with_note(".comment LLD linker tag"),
-        Signature::new("GNU ld", Kind::Linker, vec![section_contains(".comment", "GNU ld")])
-            .with_note(".comment GNU ld tag"),
+        // GNU ld (BFD) writes no tag at all. mold's tag reads "mold x.y (...; compatible with GNU ld)", so it
+        // must be matched by its own name, not by "GNU ld".
+        Signature::new("mold", Kind::Linker, vec![section_contains(".comment", "mold ")])
+            .with_note(".comment mold linker tag"),
+        Signature::new("GNU gold", Kind::Linker, vec![unique_section(&[".note.gnu.gold-version"])])
+            .with_note("gold version note"),
     ]
 }
 

@@ -81,15 +81,24 @@ pub struct Signature {
     pub conditions: Vec<Condition>,
     /// A short human note on what the signature keys off, for documentation and output.
     pub note: Option<String>,
+    /// Whether a match is only `Tentative` on its own, however distinctive its conditions: the evidence also
+    /// turns up in builds by other tools. Another signature for the same tool can still corroborate it.
+    pub corroborating: bool,
 }
 
 impl Signature {
     pub fn new(name: &str, kind: Kind, conditions: Vec<Condition>) -> Self {
-        Self { name: name.to_owned(), kind, conditions, note: None }
+        Self { name: name.to_owned(), kind, conditions, note: None, corroborating: false }
     }
 
     pub fn with_note(mut self, note: &str) -> Self {
         self.note = Some(note.to_owned());
+        self
+    }
+
+    /// Marks the signature [`Signature::corroborating`].
+    pub fn corroborating(mut self) -> Self {
+        self.corroborating = true;
         self
     }
 }
