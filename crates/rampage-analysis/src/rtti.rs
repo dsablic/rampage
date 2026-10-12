@@ -20,7 +20,8 @@ use serde::Serialize;
 const MAX_SECTION_BYTES: u64 = 64 * 1024 * 1024;
 /// Upper bound on emitted classes.
 const MAX_RECORDS: usize = 65_536;
-/// Upper bound on pointer-aligned positions probed across all ranges.
+/// Upper bound on pointer-aligned positions probed in one range. Per range, so a large leading range cannot starve
+/// the ones after it; the total stays bounded by the file-backed bytes.
 const MAX_SCAN_POSITIONS: usize = 8_000_000;
 /// Upper bound on base entries considered for one class.
 const MAX_BASES: usize = 1024;
@@ -52,26 +53,24 @@ pub struct MappedRange<'a> {
 
 /// A mapped image presented to the parsers: byte ranges plus the ABI's pointer width and endianness.
 pub struct Image<'a> {
-    pub ranges: Vec<MappedRange<'a>>,
-    pub pointer_size: u8,
-    pub big_endian: bool,
+    /// Sorted by start address.
+    ranges: Vec<MappedRange<'a>>,
+    pointer_size: u8,
+    big_endian: bool,
 }
 
 impl<'a> Image<'a> {
-    pub fn new(ranges: Vec<MappedRange<'a>>, pointer_size: u8, big_endian: bool) -> Self {
+    pub fn new(mut ranges: Vec<MappedRange<'a>>, pointer_size: u8, big_endian: bool) -> Self {
+        ranges.sort_by_key(|range| range.vaddr);
         Image { ranges, pointer_size, big_endian }
     }
 
+    /// The range holding `va` and the offset into it. With overlapping ranges, the latest-starting one wins.
     fn locate(&self, va: u64) -> Option<(&MappedRange<'a>, usize)> {
-        for range in &self.ranges {
-            if va >= range.vaddr {
-                let delta = va - range.vaddr;
-                if delta < range.bytes.len() as u64 {
-                    return Some((range, delta as usize));
-                }
-            }
-        }
-        None
+        let index = self.ranges.partition_point(|range| range.vaddr <= va).checked_sub(1)?;
+        let range = &self.ranges[index];
+        let delta = va - range.vaddr;
+        (delta < range.bytes.len() as u64).then_some((range, delta as usize))
     }
 
     fn read(&self, va: u64, len: usize) -> Option<&'a [u8]> {
@@ -106,9 +105,8 @@ impl<'a> Image<'a> {
         u64::from(self.pointer_size)
     }
 
-    /// Visits each pointer-aligned position in every range, honouring a shared probe budget.
+    /// Visits each pointer-aligned position in every range, honouring a per-range probe budget.
     fn for_each_aligned(&self, stride: u64, min_len: u64, mut visit: impl FnMut(u64)) {
-        let mut budget = MAX_SCAN_POSITIONS;
         for range in &self.ranges {
             let len = range.bytes.len() as u64;
             if len < min_len {
@@ -116,9 +114,10 @@ impl<'a> Image<'a> {
             }
             let start = (stride - range.vaddr % stride) % stride;
             let mut offset = start;
+            let mut budget = MAX_SCAN_POSITIONS;
             while offset + min_len <= len {
                 if budget == 0 {
-                    return;
+                    break;
                 }
                 budget -= 1;
                 visit(range.vaddr + offset);
@@ -345,11 +344,13 @@ fn dedup_bases(bases: Vec<String>, own: &str) -> Vec<String> {
     bases.into_iter().filter(|base| base != own && seen.insert(base.clone())).collect()
 }
 
-/// Builds a mapped image from a binary's file-backed, non-zero-fill sections.
+/// Builds a mapped image from a binary's file-backed data sections. RTTI records, type names and the vtables they
+/// point to are data; code and other sections are left out, so they neither cost scan budget nor validate a
+/// pointer.
 fn build_image(binary: &Binary) -> Image<'_> {
     let mut ranges = Vec::new();
     for section in &binary.sections {
-        if section.kind == SectionKind::UninitializedData || section.file_offset.is_none() {
+        if !matches!(section.kind, SectionKind::Data | SectionKind::ReadOnlyData) || section.file_offset.is_none() {
             continue;
         }
         let len = section.file_size.min(section.size).min(MAX_SECTION_BYTES);

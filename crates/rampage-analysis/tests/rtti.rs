@@ -126,6 +126,22 @@ fn itanium_shared_vtable_fallback_recovers_externally_bound_records() {
 }
 
 #[test]
+fn a_large_leading_range_does_not_starve_later_ranges() {
+    // More pointer-aligned positions than the probe budget precede the RTTI range; the budget is per range.
+    let filler = vec![0u8; 40 << 20];
+    let mut blob = Blob::new(0x0400_0000, 4);
+    let vtable = blob.here();
+    blob.zeros(8);
+    let name = blob.cstr("5Later");
+    blob.align();
+    blob.ptr(vtable).ptr(name);
+    let ranges =
+        vec![MappedRange { vaddr: 0x1000, bytes: &filler }, MappedRange { vaddr: blob.base, bytes: &blob.bytes }];
+    let classes = recover_itanium(&Image::new(ranges, 4, false));
+    assert_eq!(class(&classes, "Later").type_info, 0x0400_0000 + 16);
+}
+
+#[test]
 fn itanium_lone_unbound_record_is_not_guessed() {
     // A single [vtable = 0, name] shape, with neither a mapped vtable nor shared support, stays unrecovered.
     let mut blob = Blob::new(0x6000, 8);
