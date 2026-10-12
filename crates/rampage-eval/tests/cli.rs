@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use assert_cmd::Command;
-use rampage_eval::Truth;
+use rampage_eval::{Evaluation, Truth};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -54,8 +54,24 @@ fn run_prints_the_report_and_a_summary_and_passes_the_gate() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains("x86_64: correct=26 wrong=0 missed=39 spurious=0"), "{stderr}");
-    let report: rampage_eval::Report = serde_json::from_slice(&output.stdout).unwrap();
+    let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
+    let report = &evaluation.slices["x86_64"];
     assert_eq!((report.correct, report.wrong, report.spurious), (26, 0, 0));
+}
+
+/// The committed manifest names both architecture slices; the gate reads each slice on its own, so a change
+/// that helps one architecture and regresses the other is visible.
+#[test]
+fn run_manifest_reports_every_slice() {
+    let output = eval().arg("run").arg("--manifest").arg(data("eval-manifest.json")).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("x86_64: correct=26 wrong=0"), "{stderr}");
+    assert!(stderr.contains("aarch64: correct=24 wrong=0"), "{stderr}");
+    let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
+    let names: Vec<&str> = evaluation.slices.keys().map(String::as_str).collect();
+    assert_eq!(names, ["aarch64", "x86_64"]);
+    assert!(evaluation.passes_gate());
 }
 
 #[test]

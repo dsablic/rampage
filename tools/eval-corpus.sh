@@ -6,6 +6,7 @@
 #   target-<arch>.elf    a different program, stripped (what gets identified)
 #   truth-<arch>.json    {"0x<address>": "<name>"} from the target's symbolized twin (sized function symbols)
 #   zig-version          the toolchain that produced them; a different zig can change code and hashes
+#   manifest.json        every arch slice, for: rampage-eval run --manifest OUT_DIR/manifest.json
 #
 # The stripped target is the symbolized twin with its symbols and debug sections removed in place by
 # `rampage-eval strip` (relinking with --strip-all is not equivalent: zig then builds libc differently and code
@@ -52,6 +53,7 @@ targets=(
     "aarch64-linux-musl aarch64"
 )
 
+slices=()
 for entry in "${targets[@]}"; do
     read -r triple tag <<<"$entry"
     mkdir -p "$out/ref-$tag"
@@ -69,6 +71,9 @@ for entry in "${targets[@]}"; do
     fi
     echo "  -> ref-$tag/, target-$tag.elf, truth-$tag.json ($count functions)"
 
+    refs=$(cd "$out" && printf '"%s", ' ref-"$tag"/*.elf)
+    slices+=("\"$tag\": {\"refs\": [${refs%, }], \"target\": \"target-$tag.elf\", \"truth\": \"truth-$tag.json\"}")
+
     if $fixtures; then
         mkdir -p "$repo/tests/fixtures/bin" "$repo/tests/fixtures/data"
         "$eval_bin" strip --keep-symbols "$out/ref-$tag/signatures-corpus.elf" \
@@ -78,3 +83,10 @@ for entry in "${targets[@]}"; do
         echo "  -> fixtures: eval-ref-$tag.elf, eval-target-$tag.elf, eval-truth-$tag.json"
     fi
 done
+
+{
+    echo '{"slices": {'
+    (IFS=$'\n'; echo "${slices[*]}") | sed '$!s/$/,/'
+    echo '}}'
+} >"$out/manifest.json"
+echo "  -> manifest.json"

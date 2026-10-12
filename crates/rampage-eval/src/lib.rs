@@ -112,6 +112,20 @@ impl Report {
     }
 }
 
+/// Reports keyed by slice (an architecture, a compiler, an optimization level). Kept per slice rather than
+/// pooled so a change that helps one slice cannot hide a regression in another.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Evaluation {
+    pub slices: BTreeMap<String, Report>,
+}
+
+impl Evaluation {
+    /// Every slice passes [`Report::passes_gate`].
+    pub fn passes_gate(&self) -> bool {
+        self.slices.values().all(Report::passes_gate)
+    }
+}
+
 /// Classifies one address, or `None` when neither side names it (nothing to score).
 pub fn classify(proposed: Option<&str>, truth: Option<&str>) -> Option<Outcome> {
     match (proposed, truth) {
@@ -263,6 +277,17 @@ mod tests {
 
         let report = score(vec![(0x10, None)], &truth(&[(0x10, "main")]));
         assert_eq!((report.precision, report.recall, report.missed), (0.0, 0.0, 1));
+    }
+
+    #[test]
+    fn one_failing_slice_fails_the_whole_evaluation() {
+        let clean = score(vec![named(0x10, "memcpy")], &truth(&[(0x10, "memcpy")]));
+        let spurious = score(vec![named(0x10, "memcpy")], &Truth::default());
+        let mut evaluation = Evaluation::default();
+        evaluation.slices.insert("x86_64".to_owned(), clean);
+        assert!(evaluation.passes_gate());
+        evaluation.slices.insert("aarch64".to_owned(), spurious);
+        assert!(!evaluation.passes_gate());
     }
 
     #[test]
