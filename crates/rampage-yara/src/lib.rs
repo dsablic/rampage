@@ -137,7 +137,8 @@ pub fn scan(rules: &Rules, data: &[u8]) -> Result<Vec<YaraMatch>, YaraError> {
     Ok(results.matching_rules().map(to_match).collect())
 }
 
-/// Scan a loaded binary's in-memory image (`binary.image_bytes()`).
+/// Scan a loaded binary's file bytes (`binary.image_bytes()`: the whole file, or the chosen slice of a universal
+/// binary). Match offsets are file offsets into those bytes, not virtual addresses.
 pub fn scan_binary(rules: &Rules, binary: &Binary) -> Result<Vec<YaraMatch>, YaraError> {
     scan(rules, binary.image_bytes())
 }
