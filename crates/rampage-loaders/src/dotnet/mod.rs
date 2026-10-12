@@ -32,7 +32,8 @@ use serde::Serialize;
 use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 use heaps::Heaps;
-use signatures::{Generics, Reader, UNREADABLE};
+pub use signatures::UNREADABLE;
+use signatures::{Generics, Reader};
 use tables::{Coded as C, Tables};
 
 const WARNINGS: CappedWarnings = CappedWarnings::new(256, ".NET metadata");

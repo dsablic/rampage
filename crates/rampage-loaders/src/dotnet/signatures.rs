@@ -12,7 +12,7 @@ use super::heaps::compressed_length;
 use super::tables::{self, Coded};
 
 /// What a signature that cannot be decoded, or that exceeds a cap, renders as.
-pub(super) const UNREADABLE: &str = "<unreadable>";
+pub const UNREADABLE: &str = "<unreadable>";
 const MAX_DEPTH: u32 = 32;
 const MAX_NODES: u32 = 512;
 const MAX_TEXT: usize = 8192;

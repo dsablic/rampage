@@ -870,10 +870,19 @@ fn dotnet_types(out: &mut impl Write, types: &rampage_api::Page<rampage_loaders:
             };
             let names =
                 if method.params.is_empty() { String::new() } else { format!("  [{}]", method.params.join(", ")) };
-            writeln!(out, "  {}{names}  {body}", method.signature)?;
+            writeln!(out, "  {}{names}  {body}", method_text(method))?;
         }
     }
     Ok(())
+}
+
+/// A method's rendered signature, or its name when the signature blob could not be decoded.
+fn method_text(method: &rampage_loaders::dotnet::MethodDef) -> String {
+    if method.signature == rampage_loaders::dotnet::UNREADABLE {
+        format!("{}(...) <unreadable signature>", method.name)
+    } else {
+        method.signature.clone()
+    }
 }
 
 fn dotnet_pinvokes(out: &mut impl Write, pinvokes: &rampage_api::Page<rampage_loaders::dotnet::PInvoke>) -> Result<()> {
@@ -962,4 +971,27 @@ pub fn yara(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) 
 pub fn capa(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) -> Result<()> {
     let capabilities = open(path, options)?.detect_capa(rules)?;
     render_capabilities(out, &capabilities, "no capa rules matched", options)
+}
+
+#[cfg(test)]
+mod tests {
+    use rampage_loaders::dotnet::{BodyKind, MethodDef, UNREADABLE};
+
+    #[test]
+    fn an_unreadable_method_signature_keeps_the_method_name() {
+        let mut method = MethodDef {
+            token: 0x0600_0001,
+            name: "Run".to_owned(),
+            signature: "void Run()".to_owned(),
+            rva: 0,
+            flags: 0,
+            impl_flags: 0,
+            body: BodyKind::None,
+            il: None,
+            params: Vec::new(),
+        };
+        assert_eq!(super::method_text(&method), "void Run()");
+        method.signature = UNREADABLE.to_owned();
+        assert_eq!(super::method_text(&method), "Run(...) <unreadable signature>");
+    }
 }
