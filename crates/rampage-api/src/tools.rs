@@ -396,8 +396,11 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: IdentifyArgs| {
                 let user = match &arguments.database {
                     Some(path) => {
-                        let text = std::fs::read_to_string(path)
-                            .map_err(|error| ApiError::Invalid(format!("cannot read {path}: {error}")))?;
+                        let text = crate::read_bounded(
+                            std::path::Path::new(path),
+                            crate::MAX_SIGNATURE_DB_BYTES,
+                            "signature database",
+                        )?;
                         Some(
                             rampage_signatures::SignatureDb::from_json(&text)
                                 .map_err(|error| ApiError::Invalid(error.to_string()))?,
@@ -484,10 +487,9 @@ pub fn tools() -> Vec<Tool> {
              Optionally overlay a user-supplied PeID userdb.txt. Confidence is a signal, not proof.",
             |project, args: DetectToolsArgs| {
                 let peid = match &args.peid {
-                    Some(path) => Some(
-                        std::fs::read_to_string(path)
-                            .map_err(|error| ApiError::Invalid(format!("cannot read {path}: {error}")))?,
-                    ),
+                    Some(path) => {
+                        Some(crate::read_bounded(std::path::Path::new(path), crate::MAX_PEID_BYTES, "PeID database")?)
+                    }
                     None => None,
                 };
                 project.detect_tools(peid.as_deref())

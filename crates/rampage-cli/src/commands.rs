@@ -148,17 +148,12 @@ pub fn pseudocode(out: &mut impl Write, path: &Path, at: &str, structured: bool,
     Ok(())
 }
 
+/// The largest comparison reference (JSON) `compare` reads.
+const MAX_REFERENCE_BYTES: u64 = 32 * 1024 * 1024;
+
 pub fn compare(out: &mut impl Write, path: &Path, reference: &Path, options: &Options) -> Result<()> {
-    if !std::fs::symlink_metadata(reference)?.is_file() {
-        anyhow::bail!("reference must be a regular JSON file");
-    }
-    let file = std::fs::File::open(reference)?;
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut std::io::Read::take(file, 32 * 1024 * 1024 + 1), &mut bytes)?;
-    if bytes.len() > 32 * 1024 * 1024 {
-        anyhow::bail!("comparison reference exceeds 32 MiB");
-    }
-    let reference: rampage_api::ReferenceAnalysis = serde_json::from_slice(&bytes)?;
+    let text = rampage_api::read_bounded(reference, MAX_REFERENCE_BYTES, "comparison reference")?;
+    let reference: rampage_api::ReferenceAnalysis = serde_json::from_str(&text)?;
     let result = open(path, options)?.compare_functions(&reference)?;
     if options.json {
         return write_json(out, &result);
@@ -680,16 +675,8 @@ pub fn signatures(out: &mut impl Write, path: &Path, output: Option<&Path>, opti
 }
 
 fn load_signature_database(db: &Path) -> Result<rampage_api::SignatureDb> {
-    if !std::fs::symlink_metadata(db)?.is_file() {
-        anyhow::bail!("signature database must be a regular JSON file");
-    }
-    let file = std::fs::File::open(db)?;
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut std::io::Read::take(file, 256 * 1024 * 1024 + 1), &mut bytes)?;
-    if bytes.len() > 256 * 1024 * 1024 {
-        anyhow::bail!("signature database exceeds 256 MiB");
-    }
-    Ok(rampage_api::SignatureDb::from_json(std::str::from_utf8(&bytes)?)?)
+    let text = rampage_api::read_bounded(db, rampage_api::MAX_SIGNATURE_DB_BYTES, "signature database")?;
+    Ok(rampage_api::SignatureDb::from_json(&text)?)
 }
 
 pub fn identify(
@@ -793,7 +780,7 @@ pub fn dotnet(
 
 pub fn detect(out: &mut impl Write, path: &Path, peid: Option<&Path>, options: &Options) -> Result<()> {
     let peid_text = match peid {
-        Some(peid) => Some(std::fs::read_to_string(peid)?),
+        Some(peid) => Some(rampage_api::read_bounded(peid, rampage_api::MAX_PEID_BYTES, "PeID database")?),
         None => None,
     };
     let detections = open(path, options)?.detect_tools(peid_text.as_deref())?;

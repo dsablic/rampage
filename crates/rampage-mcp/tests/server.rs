@@ -304,6 +304,18 @@ async fn large_workflow_reports_stay_valid_json_with_their_limitations() {
 }
 
 #[tokio::test]
+async fn agent_supplied_databases_must_be_bounded_regular_files() {
+    let client = connect().await;
+    let path = fixture("hello-x64.elf");
+    for (tool, argument) in [("identify_functions", "database"), ("detect_tools", "peid")] {
+        let result = call(&client, tool, json!({ "path": path, argument: "/dev/zero" })).await;
+        assert_eq!(result.is_error, Some(true), "{tool}");
+        assert!(text(&result).ends_with("/dev/zero: not a regular file"), "{tool}: {}", text(&result));
+    }
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn triage_and_imports_describe_a_binary() {
     let client = connect().await;
     let path = fixture("hello-x64-dyn.elf");
