@@ -15,6 +15,18 @@ pub struct Function {
     pub name: String,
 }
 
+/// The name analysis makes up for a function that has no other: `sub_` and the lowercase hex address, without
+/// leading zeros (`sub_401000`).
+pub fn default_name(address: u64) -> String {
+    format!("sub_{address:x}")
+}
+
+/// Whether `name` is exactly [`default_name`] of `address`. A real symbol that merely starts with `sub_`
+/// (`sub_menu_init`), or the default name of another address, is not.
+pub fn is_default_name(name: &str, address: u64) -> bool {
+    name == default_name(address)
+}
+
 /// Functions known from metadata alone: function symbols, exports into code, and the entry point.
 pub fn from_symbols(binary: &Binary) -> Vec<Function> {
     let mut by_address: BTreeMap<u64, Function> = BTreeMap::new();
@@ -199,7 +211,7 @@ impl Names {
     }
 
     pub fn function_name(&self, address: u64) -> String {
-        self.get(address).map_or_else(|| format!("sub_{address:x}"), str::to_owned)
+        self.get(address).map_or_else(|| default_name(address), str::to_owned)
     }
 
     /// Resolves a name back to its address.
