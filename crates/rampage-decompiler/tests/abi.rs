@@ -52,8 +52,15 @@ fn runtime_sizes_follow_ilp32_lp64_and_llp64_specs() {
             decompiler.add_symbol(0x1000 + index as u64 * 16, name);
             decompiler.parse_c(&prototype).unwrap();
         }
-        assert!(decompiler.c_prototype("time").is_none());
-        assert!(decompiler.c_prototype("lseek").is_none());
+        // time_t follows the `long` width; off_t is a fixed 8-byte signed type on every target.
+        let time = decompiler.c_prototype("time").unwrap();
+        assert!(time.contains(&format!("int{long} time(int{long} *tloc)")), "{arch}/{platform:?}: {time}");
+        let lseek = decompiler.c_prototype("lseek").unwrap();
+        assert!(lseek.contains("int8 lseek(int4 fd, int8 offset, int4 whence)"), "{arch}/{platform:?}: {lseek}");
+        decompiler.add_symbol(0x2000, "time");
+        decompiler.parse_c(&time).unwrap();
+        decompiler.add_symbol(0x2010, "lseek");
+        decompiler.parse_c(&lseek).unwrap();
     }
 }
 
