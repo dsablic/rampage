@@ -20,13 +20,15 @@ mod tables;
 
 use object::LittleEndian as LE;
 use object::read::pe::{ImageNtHeaders, PeFile};
+use rampage_arch::bytes::read_uint;
 use serde::Serialize;
 
+use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 use heaps::Heaps;
-use tables::{Coded, Tables};
+use tables::{Coded as C, Tables};
 
-const MAX_WARNINGS: usize = 256;
+const WARNINGS: CappedWarnings = CappedWarnings::new(256, ".NET metadata");
 const MAX_STREAMS: usize = 64;
 /// II.24.2.1: the version string length is at most 255 bytes, rounded up to a multiple of four.
 const MAX_VERSION_BYTES: usize = 256;
@@ -241,11 +243,7 @@ struct Warnings(Vec<String>);
 
 impl Warnings {
     fn push(&mut self, warning: String) {
-        if self.0.len() < MAX_WARNINGS - 1 {
-            self.0.push(warning);
-        } else if self.0.len() == MAX_WARNINGS - 1 {
-            self.0.push(".NET metadata warning limit reached; further diagnostics are truncated".to_owned());
-        }
+        WARNINGS.push(&mut self.0, warning);
     }
 }
 
@@ -392,8 +390,9 @@ fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<Dot
     let stream_count = read_u16(root, flags_offset + 2).ok_or_else(|| malformed("is truncated"))?;
 
     let mut streams = Vec::new();
-    let mut heaps = Heaps::default();
     let mut table_stream: Option<&[u8]> = None;
+    let [mut strings, mut user_strings, mut guids, mut blobs] = [None; 4];
+    let (mut uncompressed, mut jtd) = (false, false);
     let mut cursor = flags_offset + 4;
     for _ in 0..usize::from(stream_count).min(MAX_STREAMS) {
         let (Some(offset), Some(size)) = (read_u32(root, cursor), read_u32(root, cursor + 4)) else {
@@ -420,28 +419,35 @@ fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<Dot
         };
         let slot = match name.as_str() {
             "#~" | "#-" => {
-                if table_stream.is_none() {
-                    table_stream = Some(data);
-                    continue;
-                }
-                None
+                uncompressed = name == "#-";
+                &mut table_stream
             }
-            "#Strings" => Some(&mut heaps.strings),
-            "#US" => Some(&mut heaps.user_strings),
-            "#GUID" => Some(&mut heaps.guids),
-            "#Blob" => Some(&mut heaps.blobs),
+            // dnlib, following the CLR's minimal-delta handling, makes every index 4 bytes when it is present.
+            "#JTD" => {
+                jtd = true;
+                continue;
+            }
+            "#Strings" => &mut strings,
+            "#US" => &mut user_strings,
+            "#GUID" => &mut guids,
+            "#Blob" => &mut blobs,
             _ => continue,
         };
-        // The first of duplicate streams wins; later copies are a known obfuscation trick, so say so.
-        match slot {
-            Some(slot) if slot.is_empty() => *slot = data,
-            _ => warnings.push(format!("duplicate stream {name} ignored")),
+        // The CLR, and dnlib after it, reads the last of duplicate streams; obfuscators plant decoy earlier copies.
+        if slot.replace(data).is_some() {
+            warnings.push(format!("duplicate stream {name}; the last one is used"));
         }
     }
     if usize::from(stream_count) > MAX_STREAMS {
         warnings.push(format!("{stream_count} streams declared; only the first {MAX_STREAMS} are read"));
     }
 
+    let heaps = Heaps {
+        strings: strings.unwrap_or_default(),
+        user_strings: user_strings.unwrap_or_default(),
+        guids: guids.unwrap_or_default(),
+        blobs: blobs.unwrap_or_default(),
+    };
     let (user_strings, complete) = heaps.user_string_literals();
     if !complete {
         warnings.push(format!("#US heap is malformed or exceeds {} literals; truncated", heaps::MAX_USER_STRINGS));
@@ -462,7 +468,7 @@ fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<Dot
         warnings: Vec::new(),
     };
     match table_stream {
-        Some(stream) => match Tables::parse(stream, &mut warnings) {
+        Some(stream) => match Tables::parse(stream, uncompressed && jtd, &mut warnings) {
             Some(tables) => Decoder { tables: &tables, heaps, warnings: &mut warnings }.decode(&mut metadata),
             None => warnings.push("table stream header is unreadable".to_owned()),
         },
@@ -492,7 +498,7 @@ impl Decoder<'_, '_> {
 
         metadata.module = (self.tables.rows(tables::MODULE) > 0).then(|| Module {
             name: self.string(tables::MODULE, 1, 1),
-            mvid: self.cell(tables::MODULE, 1, 2).and_then(|index| self.heaps.guid(index)),
+            mvid: self.tables.cell(tables::MODULE, 1, 2).and_then(|index| self.heaps.guid(index)),
         });
         metadata.assembly = (self.tables.rows(tables::ASSEMBLY) > 0).then(|| self.assembly());
         metadata.assembly_refs =
@@ -502,6 +508,7 @@ impl Decoder<'_, '_> {
             .map(|row| MemberRef {
                 token: token(tables::MEMBER_REF, row),
                 parent: self
+                    .tables
                     .cell(tables::MEMBER_REF, row, 0)
                     .and_then(|value| self.coded_label(C::MemberRefParent, value)),
                 name: self.string(tables::MEMBER_REF, row, 1),
@@ -511,12 +518,8 @@ impl Decoder<'_, '_> {
         metadata.entry_point = self.entry_point(metadata);
     }
 
-    fn cell(&self, table: u8, row: u32, column: usize) -> Option<u32> {
-        self.tables.cell(table, row, column)
-    }
-
     fn string(&mut self, table: u8, row: u32, column: usize) -> String {
-        let offset = self.cell(table, row, column).unwrap_or(0);
+        let offset = self.tables.cell(table, row, column).unwrap_or(0);
         self.heaps.string(offset).unwrap_or_else(|| {
             self.warnings.push(format!(
                 "{} row {row}: string offset {offset:#x} is outside #Strings",
@@ -527,7 +530,8 @@ impl Decoder<'_, '_> {
     }
 
     fn blob_hex(&self, table: u8, row: u32, column: usize) -> Option<String> {
-        self.cell(table, row, column)
+        self.tables
+            .cell(table, row, column)
             .filter(|&offset| offset != 0)
             .and_then(|offset| self.heaps.blob(offset))
             .filter(|blob| !blob.is_empty())
@@ -535,7 +539,7 @@ impl Decoder<'_, '_> {
     }
 
     fn version(&self, table: u8, row: u32, first_column: usize) -> String {
-        let part = |index| self.cell(table, row, first_column + index).unwrap_or(0);
+        let part = |index| self.tables.cell(table, row, first_column + index).unwrap_or(0);
         format!("{}.{}.{}.{}", part(0), part(1), part(2), part(3))
     }
 
@@ -545,15 +549,15 @@ impl Decoder<'_, '_> {
             name: self.string(table, 1, 7),
             version: self.version(table, 1, 1),
             culture: self.string(table, 1, 8),
-            flags: self.cell(table, 1, 5).unwrap_or(0),
-            hash_algorithm: self.cell(table, 1, 0).unwrap_or(0),
+            flags: self.tables.cell(table, 1, 5).unwrap_or(0),
+            hash_algorithm: self.tables.cell(table, 1, 0).unwrap_or(0),
             public_key: self.blob_hex(table, 1, 6),
         }
     }
 
     fn assembly_ref(&mut self, row: u32) -> AssemblyRef {
         let table = tables::ASSEMBLY_REF;
-        let flags = self.cell(table, row, 4).unwrap_or(0);
+        let flags = self.tables.cell(table, row, 4).unwrap_or(0);
         AssemblyRef {
             name: self.string(table, row, 6),
             version: self.version(table, row, 0),
@@ -570,53 +574,66 @@ impl Decoder<'_, '_> {
             token: token(table, row),
             namespace: self.string(table, row, 2),
             name: self.string(table, row, 1),
-            scope: self.cell(table, row, 0).and_then(|value| self.coded_label(C::ResolutionScope, value)),
+            scope: self.tables.cell(table, row, 0).and_then(|value| self.coded_label(C::ResolutionScope, value)),
         }
     }
 
     /// A readable name for the row a coded index selects, for display only: `None` for a null or dangling index.
-    fn coded_label(&self, coded: Coded, value: u32) -> Option<String> {
+    fn coded_label(&self, coded: C, value: u32) -> Option<String> {
         let (table, row) = coded.decode(value)?;
         if row == 0 || row > self.tables.rows(table) {
             return None;
         }
-        let string = |column| self.heaps.string(self.cell(table, row, column)?);
+        let string = |column| self.heaps.string(self.tables.cell(table, row, column)?);
         let qualified = |name: Option<String>, namespace: Option<String>| {
             Some(qualified_name(namespace.as_deref().unwrap_or(""), &name?))
         };
         match table {
-            tables::TYPE_DEF => qualified(string(1), string(2)),
-            tables::TYPE_REF => qualified(string(1), string(2)),
+            tables::TYPE_DEF | tables::TYPE_REF => qualified(string(1), string(2)),
             tables::TYPE_SPEC => Some(format!("TypeSpec#{row}")),
-            tables::MODULE | tables::MODULE_REF => string(if table == tables::MODULE { 1 } else { 0 }),
+            tables::MODULE => string(1),
+            tables::MODULE_REF => string(0),
             tables::ASSEMBLY_REF => string(6),
             tables::METHOD_DEF => string(3),
             _ => Some(format!("{}#{row}", tables::TABLE_NAMES[usize::from(table)])),
         }
     }
 
-    /// The target rows of a TypeDef or MethodDef list column (II.22.37, II.22.26): from this row's start to the
-    /// next row's start, through the Ptr table when an unoptimized `#-` stream has one.
-    fn member_rows(&mut self, owner: u8, row: u32, column: usize, target: u8, ptr: u8) -> Vec<u32> {
+    /// The target rows of every owner row's list column (II.22.37, II.22.26): from a row's start to the next
+    /// row's start, through the Ptr table when an unoptimized `#-` stream has one. A start below an earlier
+    /// row's is raised to it and a target row already handed out is skipped, so each target row lands in at
+    /// most one list: out-of-order or duplicated lists in a hostile file cannot multiply the output.
+    fn member_lists(&mut self, owner: u8, column: usize, target: u8, ptr: u8) -> Vec<Vec<u32>> {
         let ptr_rows = self.tables.rows(ptr);
-        let count = if ptr_rows > 0 { ptr_rows } else { self.tables.rows(target) };
-        let start = self.cell(owner, row, column).unwrap_or(0).max(1);
-        let end = match self.cell(owner, row + 1, column) {
-            Some(next) => next.max(1),
-            None => count.saturating_add(1),
-        };
-        let end = end.min(count.saturating_add(1));
-        if start > end {
-            self.warnings.push(format!(
-                "{} row {row}: {} list is out of order",
-                tables::TABLE_NAMES[usize::from(owner)],
-                tables::TABLE_NAMES[usize::from(target)]
-            ));
-            return Vec::new();
+        let target_rows = self.tables.rows(target);
+        let count = if ptr_rows > 0 { ptr_rows } else { target_rows };
+        let limit = count.saturating_add(1);
+        let owners = self.tables.rows(owner);
+        let mut starts = Vec::with_capacity(owners as usize);
+        let mut floor = 1;
+        for row in 1..=owners {
+            let start = self.tables.cell(owner, row, column).unwrap_or(0).clamp(1, limit);
+            if start < floor {
+                self.warnings.push(format!(
+                    "{} row {row}: {} list is out of order",
+                    tables::TABLE_NAMES[usize::from(owner)],
+                    tables::TABLE_NAMES[usize::from(target)]
+                ));
+            }
+            floor = floor.max(start);
+            starts.push(floor);
         }
-        (start..end)
-            .filter_map(|index| if ptr_rows > 0 { self.cell(ptr, index, 0) } else { Some(index) })
-            .filter(|&index| index != 0 && index <= self.tables.rows(target))
+        let mut assigned = vec![false; target_rows as usize + 1];
+        (0..starts.len())
+            .map(|index| {
+                let end = starts.get(index + 1).copied().unwrap_or(limit);
+                (starts[index]..end)
+                    .filter_map(|index| if ptr_rows > 0 { self.tables.cell(ptr, index, 0) } else { Some(index) })
+                    .filter(|&row| {
+                        row != 0 && row <= target_rows && !std::mem::replace(&mut assigned[row as usize], true)
+                    })
+                    .collect()
+            })
             .collect()
     }
 
@@ -624,30 +641,29 @@ impl Decoder<'_, '_> {
         let mut enclosing = std::collections::HashMap::new();
         for row in 1..=self.tables.rows(tables::NESTED_CLASS) {
             if let (Some(nested), Some(outer)) =
-                (self.cell(tables::NESTED_CLASS, row, 0), self.cell(tables::NESTED_CLASS, row, 1))
+                (self.tables.cell(tables::NESTED_CLASS, row, 0), self.tables.cell(tables::NESTED_CLASS, row, 1))
             {
                 enclosing.insert(nested, token(tables::TYPE_DEF, outer));
             }
         }
-        (1..=self.tables.rows(tables::TYPE_DEF))
-            .map(|row| {
-                let table = tables::TYPE_DEF;
-                let fields = self
-                    .member_rows(table, row, 4, tables::FIELD, tables::FIELD_PTR)
-                    .into_iter()
-                    .map(|field| self.string(tables::FIELD, field, 1))
-                    .collect();
-                let methods = self
-                    .member_rows(table, row, 5, tables::METHOD_DEF, tables::METHOD_PTR)
-                    .into_iter()
-                    .map(|method| self.method(method))
-                    .collect();
+        let table = tables::TYPE_DEF;
+        let field_lists = self.member_lists(table, 4, tables::FIELD, tables::FIELD_PTR);
+        let method_lists = self.member_lists(table, 5, tables::METHOD_DEF, tables::METHOD_PTR);
+        let param_lists = self.member_lists(tables::METHOD_DEF, 5, tables::PARAM, tables::PARAM_PTR);
+        field_lists
+            .into_iter()
+            .zip(method_lists)
+            .zip(1..)
+            .map(|((fields, methods), row)| {
+                let fields = fields.into_iter().map(|field| self.string(tables::FIELD, field, 1)).collect();
+                let methods =
+                    methods.into_iter().map(|method| self.method(method, &param_lists[method as usize - 1])).collect();
                 TypeDef {
                     token: token(table, row),
                     namespace: self.string(table, row, 2),
                     name: self.string(table, row, 1),
-                    flags: self.cell(table, row, 0).unwrap_or(0),
-                    extends: self.cell(table, row, 3).and_then(|value| self.coded_label(C::TypeDefOrRef, value)),
+                    flags: self.tables.cell(table, row, 0).unwrap_or(0),
+                    extends: self.tables.cell(table, row, 3).and_then(|value| self.coded_label(C::TypeDefOrRef, value)),
                     enclosing: enclosing.get(&row).copied(),
                     fields,
                     methods,
@@ -656,10 +672,10 @@ impl Decoder<'_, '_> {
             .collect()
     }
 
-    fn method(&mut self, row: u32) -> MethodDef {
+    fn method(&mut self, row: u32, params: &[u32]) -> MethodDef {
         let table = tables::METHOD_DEF;
-        let rva = self.cell(table, row, 0).unwrap_or(0);
-        let impl_flags = self.cell(table, row, 1).unwrap_or(0) as u16;
+        let rva = self.tables.cell(table, row, 0).unwrap_or(0);
+        let impl_flags = self.tables.cell(table, row, 1).unwrap_or(0) as u16;
         let body = match (rva, impl_flags & CODE_TYPE_MASK) {
             (0, _) => BodyKind::None,
             (_, CODE_TYPE_NATIVE) => BodyKind::Native,
@@ -667,11 +683,10 @@ impl Decoder<'_, '_> {
             // IL and OPTIL (code type 2) both store CIL.
             _ => BodyKind::Il,
         };
-        let mut params: Vec<(u32, String)> = self
-            .member_rows(table, row, 5, tables::PARAM, tables::PARAM_PTR)
-            .into_iter()
-            .filter_map(|param| {
-                let sequence = self.cell(tables::PARAM, param, 1)?;
+        let mut params: Vec<(u32, String)> = params
+            .iter()
+            .filter_map(|&param| {
+                let sequence = self.tables.cell(tables::PARAM, param, 1)?;
                 (sequence > 0).then(|| (sequence, self.string(tables::PARAM, param, 2)))
             })
             .collect();
@@ -680,7 +695,7 @@ impl Decoder<'_, '_> {
             token: token(table, row),
             name: self.string(table, row, 3),
             rva,
-            flags: self.cell(table, row, 2).unwrap_or(0) as u16,
+            flags: self.tables.cell(table, row, 2).unwrap_or(0) as u16,
             impl_flags,
             body,
             il: None,
@@ -707,7 +722,7 @@ impl Decoder<'_, '_> {
                 }
                 Some(EntryPoint::Method { token: value, method })
             }
-            0x26 => Some(EntryPoint::File { token: value }),
+            tables::FILE => Some(EntryPoint::File { token: value }),
             _ => {
                 self.warnings.push(format!("entry point token {value:#010x} is not a MethodDef or File"));
                 None
@@ -716,32 +731,17 @@ impl Decoder<'_, '_> {
     }
 }
 
-use Coded as C;
-
 fn token(table: u8, row: u32) -> u32 {
     (u32::from(table) << 24) | (row & tables::MAX_ROWS)
 }
 
+// CLI metadata is always little-endian (II.24.1).
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
-    let end = offset.checked_add(2)?;
-    bytes.get(offset..end).map(|b| u16::from_le_bytes([b[0], b[1]]))
+    read_uint(bytes, offset, 2, false).map(|value| value as u16)
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
-    let end = offset.checked_add(4)?;
-    bytes.get(offset..end).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
-    Some(u64::from(read_u32(bytes, offset)?) | (u64::from(read_u32(bytes, offset.checked_add(4)?)?) << 32))
-}
-
-fn read_uint(bytes: &[u8], offset: usize, width: usize) -> Option<u32> {
-    match width {
-        2 => read_u16(bytes, offset).map(u32::from),
-        4 => read_u32(bytes, offset),
-        _ => None,
-    }
+    read_uint(bytes, offset, 4, false).map(|value| value as u32)
 }
 
 #[cfg(test)]

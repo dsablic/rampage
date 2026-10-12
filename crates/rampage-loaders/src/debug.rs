@@ -5,6 +5,7 @@ use gimli::{AttributeValue, Dwarf, EndianSlice, Reader, RunTimeEndian, Section, 
 use object::{CompressionFormat, Object, ObjectKind, ObjectSection};
 use serde::Serialize;
 
+use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 
 const MAX_DEBUG_BYTES: usize = 64 * 1024 * 1024;
@@ -15,6 +16,7 @@ const MAX_NESTING: usize = 256;
 const MAX_TYPE_DEPTH: usize = 32;
 const MAX_PARAMETERS: usize = 4096;
 const MAX_WARNINGS: usize = 4096;
+const WARNINGS: CappedWarnings = CappedWarnings::new(MAX_WARNINGS, "DWARF");
 const MAX_ABBREVIATIONS: usize = 4096;
 const MAX_ATTRIBUTES: usize = 256;
 const MAX_DECLARATION_BYTES: usize = 65_536;
@@ -39,11 +41,7 @@ pub struct DebugSignature {
 
 impl DebugReport {
     fn warn(&mut self, warning: String) {
-        if self.warnings.len() < MAX_WARNINGS - 1 {
-            self.warnings.push(warning);
-        } else if self.warnings.len() == MAX_WARNINGS - 1 {
-            self.warnings.push("DWARF warning limit reached; further diagnostics are truncated".to_owned());
-        }
+        WARNINGS.push(&mut self.warnings, warning);
     }
 }
 
@@ -144,7 +142,7 @@ pub fn signatures(binary: &Binary) -> Result<DebugReport, LoadError> {
     }
     let mut output_bytes = 0;
     for (&offset, node) in &nodes {
-        if report.warnings.len() >= MAX_WARNINGS - 1 {
+        if WARNINGS.is_full(&report.warnings) {
             report.warn("DWARF signature preview stopped at the warning limit".to_owned());
             break;
         }
@@ -682,7 +680,7 @@ fn declaration(
         return Err("function declaration line exceeds the 4095-byte lexer limit".to_owned());
     }
     if const_erased {
-        if report.warnings.len() >= MAX_WARNINGS - 1 {
+        if WARNINGS.is_full(&report.warnings) {
             return Err("cannot emit const-erased signature after the warning limit".to_owned());
         }
         report.warn(format!("DWARF function {name}: const qualifiers intentionally erased from signature preview"));

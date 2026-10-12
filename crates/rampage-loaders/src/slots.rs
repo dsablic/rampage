@@ -184,17 +184,21 @@ fn pe_iat<Pe: ImageNtHeaders>(file: &PeFile<Pe>) -> object::Result<Vec<ImportSlo
     let image_base = file.relative_address_base();
     let mut slots = Vec::new();
     pe_imports(file, |library, slot, import| {
-        let name = match import {
-            object::read::pe::Import::Name(_, name) => String::from_utf8_lossy(name).into_owned(),
-            object::read::pe::Import::Ordinal(ordinal) => format!("#{ordinal}"),
-        };
         if let Some(address) = image_base.checked_add(slot) {
             let library = library.map(|library| String::from_utf8_lossy(library).into_owned());
-            slots.push(ImportSlot { address, name, library });
+            slots.push(ImportSlot { address, name: import_name(import), library });
         }
     })?;
     pe_delay_slots(file, image_base, &mut slots);
     Ok(slots)
+}
+
+/// An import's name, or `#ordinal` for one imported by ordinal only.
+fn import_name(import: object::read::pe::Import) -> String {
+    match import {
+        object::read::pe::Import::Name(_, name) => String::from_utf8_lossy(name).into_owned(),
+        object::read::pe::Import::Ordinal(ordinal) => format!("#{ordinal}"),
+    }
 }
 
 /// Caps for the delay-load tables of an untrusted image: a benign binary has a handful of delay DLLs with far
@@ -238,11 +242,7 @@ fn pe_delay_slots<Pe: ImageNtHeaders>(file: &PeFile<Pe>, image_base: u64, slots:
                 .and_then(|offset| iat_rva.checked_add(offset))
                 .and_then(|rva| image_base.checked_add(rva));
             if let (Some(address), Ok(import)) = (address, table.import::<Pe>(thunk)) {
-                let name = match import {
-                    object::read::pe::Import::Name(_, name) => String::from_utf8_lossy(name).into_owned(),
-                    object::read::pe::Import::Ordinal(ordinal) => format!("#{ordinal}"),
-                };
-                slots.push(ImportSlot { address, name, library: library.clone() });
+                slots.push(ImportSlot { address, name: import_name(import), library: library.clone() });
             }
             index += 1;
         }

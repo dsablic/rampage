@@ -41,6 +41,10 @@ pub(crate) fn is_windows(compiler: &str) -> bool {
     matches!(compiler, "windows" | "clangwindows")
 }
 
+pub(crate) fn is_darwin(compiler: &str) -> bool {
+    matches!(compiler, "macosx" | "apple")
+}
+
 pub(crate) fn has_c_runtime(compiler: &str) -> bool {
     matches!(compiler, "default" | "gcc" | "macosx" | "apcs" | "apple") || is_windows(compiler)
 }

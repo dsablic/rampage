@@ -52,15 +52,41 @@ fn runtime_sizes_follow_ilp32_lp64_and_llp64_specs() {
             decompiler.add_symbol(0x1000 + index as u64 * 16, name);
             decompiler.parse_c(&prototype).unwrap();
         }
-        // time_t follows the `long` width; off_t is a fixed 8-byte signed type on every target.
+        // time_t and off_t follow the `long` width: the exported 32-bit glibc `lseek` and the MSVC CRT
+        // `_lseek` both take a `long`, and a 64-bit argument there would shift every later argument.
         let time = decompiler.c_prototype("time").unwrap();
         assert!(time.contains(&format!("int{long} time(int{long} *tloc)")), "{arch}/{platform:?}: {time}");
         let lseek = decompiler.c_prototype("lseek").unwrap();
-        assert!(lseek.contains("int8 lseek(int4 fd, int8 offset, int4 whence)"), "{arch}/{platform:?}: {lseek}");
+        let expected = format!("int{long} lseek(int4 fd, int{long} offset, int4 whence)");
+        assert!(lseek.contains(&expected), "{arch}/{platform:?}: {lseek}");
         decompiler.add_symbol(0x2000, "time");
         decompiler.parse_c(&time).unwrap();
         decompiler.add_symbol(0x2010, "lseek");
         decompiler.parse_c(&lseek).unwrap();
+    }
+}
+
+#[test]
+fn darwin_off_t_is_64_bit_and_mode_t_16_bit_even_on_ilp32() {
+    for (arch, big_endian, long) in [(Arch::Aarch64, false, 8), (Arch::PowerPc, true, 4)] {
+        let regions =
+            [MemoryRegion { base: 0x1000, bytes: &[0], size: 1, readable: true, writable: false, executable: true }];
+        let options = DecompilerOptions { platform: Platform::Darwin, compiler: None, arm_be8: false };
+        let mut decompiler = Decompiler::open_with_options(arch, big_endian, &regions, &options).unwrap();
+        assert_eq!(decompiler.data_organization().long, long);
+        for (index, (name, expected)) in [
+            ("lseek", "int8 lseek(int4 fd, int8 offset, int4 whence)".to_owned()),
+            ("chmod", "int4 chmod(char *path, uint2 mode)".to_owned()),
+            ("time", format!("int{long} time(int{long} *tloc)")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let prototype = decompiler.c_prototype(name).unwrap();
+            assert!(prototype.contains(&expected), "{arch}: {prototype}");
+            decompiler.add_symbol(0x2000 + index as u64 * 16, name);
+            decompiler.parse_c(&prototype).unwrap();
+        }
     }
 }
 

@@ -110,8 +110,7 @@ pub fn sign_extend(value: u64, width: u32) -> i64 {
 }
 
 pub fn read_u32(bytes: &[u8], offset: usize, big_endian: bool) -> Option<u32> {
-    let word = bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
-    Some(if big_endian { u32::from_be_bytes(word) } else { u32::from_le_bytes(word) })
+    crate::bytes::read_uint(bytes, offset, 4, big_endian).map(|word| word as u32)
 }
 
 /// Whether `choices` are plain spellings, rather than placeholders or syntax.

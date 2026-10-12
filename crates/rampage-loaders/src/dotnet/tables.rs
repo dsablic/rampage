@@ -1,7 +1,9 @@
 //! The `#~` / `#-` table stream: its header, the variable column widths, and the row layout of every
 //! ECMA-335 table (II.22), so any table present can be located or skipped even when it is not decoded.
 
-use super::{Warnings, read_u32, read_u64, read_uint};
+use rampage_arch::bytes::read_uint;
+
+use super::{Warnings, read_u32};
 
 /// A metadata token's row index is 24 bits (II.22), so no real table can have more rows than this.
 pub(super) const MAX_ROWS: u32 = 0x00FF_FFFF;
@@ -19,11 +21,15 @@ pub(super) const METHOD_DEF: u8 = 0x06;
 pub(super) const PARAM_PTR: u8 = 0x07;
 pub(super) const PARAM: u8 = 0x08;
 pub(super) const MEMBER_REF: u8 = 0x0A;
+const EVENT: u8 = 0x14;
+const PROPERTY: u8 = 0x17;
 pub(super) const MODULE_REF: u8 = 0x1A;
 pub(super) const TYPE_SPEC: u8 = 0x1B;
 pub(super) const ASSEMBLY: u8 = 0x20;
 pub(super) const ASSEMBLY_REF: u8 = 0x23;
+pub(super) const FILE: u8 = 0x26;
 pub(super) const NESTED_CLASS: u8 = 0x29;
+const GENERIC_PARAM: u8 = 0x2A;
 
 pub(super) const TABLE_NAMES: [&str; TABLE_COUNT] = [
     "Module",
@@ -185,11 +191,11 @@ const SCHEMA: [&[Col]; TABLE_COUNT] = [
     /* ClassLayout */ &[U16, U32, Index(TYPE_DEF)],
     /* FieldLayout */ &[U32, Index(FIELD)],
     /* StandAloneSig */ &[Blob],
-    /* EventMap */ &[Index(TYPE_DEF), Index(0x14)],
-    /* EventPtr */ &[Index(0x14)],
+    /* EventMap */ &[Index(TYPE_DEF), Index(EVENT)],
+    /* EventPtr */ &[Index(EVENT)],
     /* Event */ &[U16, Str, Col::Coded(C::TypeDefOrRef)],
-    /* PropertyMap */ &[Index(TYPE_DEF), Index(0x17)],
-    /* PropertyPtr */ &[Index(0x17)],
+    /* PropertyMap */ &[Index(TYPE_DEF), Index(PROPERTY)],
+    /* PropertyPtr */ &[Index(PROPERTY)],
     /* Property */ &[U16, Str, Blob],
     /* MethodSemantics */ &[U16, Index(METHOD_DEF), Col::Coded(C::HasSemantics)],
     /* MethodImpl */ &[Index(TYPE_DEF), Col::Coded(C::MethodDefOrRef), Col::Coded(C::MethodDefOrRef)],
@@ -211,7 +217,7 @@ const SCHEMA: [&[Col]; TABLE_COUNT] = [
     /* NestedClass */ &[Index(TYPE_DEF), Index(TYPE_DEF)],
     /* GenericParam */ &[U16, U16, Col::Coded(C::TypeOrMethodDef), Str],
     /* MethodSpec */ &[Col::Coded(C::MethodDefOrRef), Blob],
-    /* GenericParamConstraint */ &[Index(0x2A), Col::Coded(C::TypeDefOrRef)],
+    /* GenericParamConstraint */ &[Index(GENERIC_PARAM), Col::Coded(C::TypeDefOrRef)],
 ];
 
 /// Where one table lives within the stream, and the byte offset and width of each of its columns.
@@ -241,13 +247,14 @@ const EXTRA_DATA: u8 = 0x40;
 
 impl<'a> Tables<'a> {
     /// Parses the table stream header and lays out every standard table. Problems become warnings: a table
-    /// that does not fit is truncated to its readable rows and nothing after it is located.
-    pub(super) fn parse(stream: &'a [u8], warnings: &mut Warnings) -> Option<Self> {
+    /// that does not fit is truncated to its readable rows and nothing after it is located. `all_wide` makes
+    /// every heap, table and coded index 4 bytes, as a `#JTD` stream does for an uncompressed `#-` stream.
+    pub(super) fn parse(stream: &'a [u8], all_wide: bool, warnings: &mut Warnings) -> Option<Self> {
         let Some(heap_sizes) = stream.get(6).copied() else {
             warnings.push("table stream too small for its header".to_owned());
             return None;
         };
-        let valid = read_u64(stream, 8)?;
+        let valid = read_uint(stream, 8, 8, false)?;
         let mut declared = [0u32; 64];
         let mut cursor = 24usize;
         for (id, count) in declared.iter_mut().enumerate() {
@@ -268,12 +275,12 @@ impl<'a> Tables<'a> {
             warnings.push(format!("table stream marks non-standard tables present (valid {valid:#018x})"));
         }
 
-        let heap_width = |bit: u8| if heap_sizes & bit != 0 { 4 } else { 2 };
-        let index_width = |table: u8| if declared[usize::from(table)] > 0xFFFF { 4 } else { 2 };
+        let heap_width = |bit: u8| if all_wide || heap_sizes & bit != 0 { 4 } else { 2 };
+        let index_width = |table: u8| if all_wide || declared[usize::from(table)] > 0xFFFF { 4 } else { 2 };
         let coded_width = |coded: Coded| {
             let limit = 1u32 << (16 - coded.tag_bits());
             let largest = coded.tables().iter().flatten().map(|&table| declared[usize::from(table)]).max();
-            if largest.unwrap_or(0) < limit { 2 } else { 4 }
+            if all_wide || largest.unwrap_or(0) >= limit { 4 } else { 2 }
         };
 
         let mut layouts = vec![Layout::default(); TABLE_COUNT];
@@ -328,7 +335,7 @@ impl<'a> Tables<'a> {
         }
         let &(column_offset, width) = layout.columns.get(column)?;
         let position = (row as usize - 1).checked_mul(layout.row_size)?.checked_add(layout.offset)?;
-        read_uint(self.stream, position.checked_add(column_offset)?, width)
+        read_uint(self.stream, position.checked_add(column_offset)?, width, false).map(|value| value as u32)
     }
 }
 

@@ -63,6 +63,45 @@ fn magic_scan_recovers_names_when_the_section_is_renamed() {
 }
 
 #[test]
+fn magic_scan_reaches_a_pclntab_merged_into_writable_relro_data() {
+    // An externally linked PIE merges the pclntab into `.data.rel.ro`, which is writable data, not rodata.
+    // Rebuild that shape: name the `.gopclntab` header `.data.rel.ro` (reusing the longer `.note.gnu.build-id`
+    // string's bytes) and set SHF_WRITE on it.
+    let mut bytes = std::fs::read(fixture("hello-go-x64.elf")).unwrap();
+    let u16_at = |bytes: &[u8], at: usize| usize::from(u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()));
+    let u32_at = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    let u64_at = |bytes: &[u8], at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap()) as usize;
+    let (shoff, shentsize, shnum, shstrndx) =
+        (u64_at(&bytes, 0x28), u16_at(&bytes, 0x3A), u16_at(&bytes, 0x3C), u16_at(&bytes, 0x3E));
+    let header = |index: usize| shoff + index * shentsize;
+    let strtab = u64_at(&bytes, header(shstrndx) + 0x18);
+    let name_of = |bytes: &[u8], index: usize| {
+        let start = strtab + u32_at(bytes, header(index)) as usize;
+        let end = start + bytes[start..].iter().position(|&byte| byte == 0).unwrap();
+        bytes[start..end].to_vec()
+    };
+    let find = |bytes: &[u8], name: &[u8]| (0..shnum).find(|&index| name_of(bytes, index) == name).unwrap();
+    let (pclntab, note) = (find(&bytes, b".gopclntab"), find(&bytes, b".note.gnu.build-id"));
+    let note_name = u32_at(&bytes, header(note));
+    let start = strtab + note_name as usize;
+    bytes[start..start + 13].copy_from_slice(b".data.rel.ro\0");
+    bytes[header(pclntab)..header(pclntab) + 4].copy_from_slice(&note_name.to_le_bytes());
+    bytes[header(pclntab) + 8] |= 0x1;
+
+    let path = std::env::temp_dir().join(format!("rampage-go-relro-{}.elf", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let binary = Binary::open(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+
+    let relro = |section: &rampage_loaders::Section| {
+        section.name == ".data.rel.ro" && section.kind == rampage_loaders::SectionKind::Data
+    };
+    assert!(binary.sections.iter().any(relro), "the pclntab section is now writable relro data");
+    let attached = |name: &str| binary.symbols.iter().any(|s| s.name == name && s.kind == SymbolKind::Function);
+    assert!(attached("main.main"), "main.main recovered from relro data");
+}
+
+#[test]
 fn recovery_on_a_non_go_binary_is_a_clean_no_op() {
     let mut binary = Binary::open(fixture("hello-x64.elf")).unwrap();
     let before = binary.symbols.len();

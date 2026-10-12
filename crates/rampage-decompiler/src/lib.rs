@@ -252,10 +252,10 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
 /// underscore. Non-identifier stub spellings require address-based binding rather than this helper.
 /// This legacy helper assumes LP64. Use `Decompiler::c_prototype` for the selected target's widths.
 pub fn c_prototype(name: &str) -> Option<String> {
-    render_prototype(name, DataOrganization { pointer: 8, int: 4, long: 8 }, false)
+    render_prototype(name, DataOrganization { pointer: 8, int: 4, long: 8 }, false, false)
 }
 
-fn render_prototype(name: &str, sizes: DataOrganization, cdecl: bool) -> Option<String> {
+fn render_prototype(name: &str, sizes: DataOrganization, cdecl: bool, darwin: bool) -> Option<String> {
     if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         return None;
     }
@@ -264,6 +264,9 @@ fn render_prototype(name: &str, sizes: DataOrganization, cdecl: bool) -> Option<
     // back to the stripped spelling (so a Mach-O `_puts` stub matches `puts`).
     let bare = name.trim_start_matches('_');
     let (known, decl) = find(name).or_else(|| find(bare))?;
+    // Darwin's off_t is always 64-bit. Elsewhere the exported `lseek`/`pread`/`fseeko` take a `long`:
+    // 32-bit glibc and bionic name their 64-bit variants `*64`, and the MSVC CRT's `_lseek` takes `long`.
+    let off_t = if darwin { 8 } else { sizes.long };
     // The stored declaration spells the canonical name; substitute the actual symbol name so it binds to it.
     let decl = decl
         .replacen(known, name, 1)
@@ -271,14 +274,11 @@ fn render_prototype(name: &str, sizes: DataOrganization, cdecl: bool) -> Option<
         .replace("{ssize_t}", &format!("int{}", sizes.pointer))
         .replace("{long}", &format!("int{}", sizes.long))
         .replace("{ulong}", &format!("uint{}", sizes.long))
-        // off_t is 64-bit signed on every target we care about: all 64-bit Linux/Darwin, and 32-bit Darwin.
-        // Limitation: 32-bit Linux without _FILE_OFFSET_BITS=64 uses a 32-bit off_t, which this mis-sizes.
-        .replace("{off_t}", "int8")
-        // time_t is long-sized on Linux (64-bit on 64-bit, `long` on 32-bit), which int{long} tracks.
-        // Limitation: 32-bit Darwin uses a 64-bit time_t even though `long` is 32-bit there.
+        .replace("{off_t}", &format!("int{off_t}"))
+        // time_t is `long` on Linux and Darwin alike, so 32-bit on i386 and armv7 Darwin too.
         .replace("{time_t}", &format!("int{}", sizes.long))
-        // mode_t and pid_t are fixed-width: a 32-bit unsigned mode and a 32-bit signed pid on every target.
-        .replace("{mode_t}", "uint4")
+        // Darwin's mode_t is `__uint16_t`; everywhere else it is a 32-bit unsigned.
+        .replace("{mode_t}", if darwin { "uint2" } else { "uint4" })
         .replace("{pid_t}", "int4");
     let convention = if cdecl { "__cdecl " } else { "" };
     Some(format!("extern {convention}{decl};"))
@@ -629,7 +629,7 @@ impl Decompiler {
         if abi::is_windows(compiler) && matches!(name.trim_start_matches('_'), "read" | "write" | "getcwd") {
             return None;
         }
-        render_prototype(name, self.data_organization, cdecl)
+        render_prototype(name, self.data_organization, cdecl, abi::is_darwin(compiler))
     }
 
     /// Registers a known function address with a name, so calls to it render by name. Call before decompiling
@@ -826,29 +826,21 @@ mod tests {
 
     #[test]
     fn posix_typedef_placeholders_resolve_to_correct_widths() {
+        // tests/abi.rs checks lseek and time per target; this covers the remaining placeholders.
         let lp64 = DataOrganization { pointer: 8, int: 4, long: 8 };
-        // off_t is a fixed 8-byte signed type regardless of `long`.
-        let lseek = render_prototype("lseek", lp64, false).expect("lseek prototype");
-        assert!(lseek.contains("int8 lseek(int4 fd, int8 offset, int4 whence)"), "{lseek}");
-        // ssize_t tracks the pointer width; mode/off placeholders size the remaining arguments.
-        let pwrite = render_prototype("pwrite", lp64, false).expect("pwrite prototype");
+        let pwrite = render_prototype("pwrite", lp64, false, false).expect("pwrite prototype");
         assert!(pwrite.contains("int8 pwrite(int4 fd, void *buf, uint8 n, int8 offset)"), "{pwrite}");
-        let read = render_prototype("read", lp64, false).expect("read prototype");
-        assert!(read.contains("int8 read(int4 fd, void *buf, uint8 n)"), "{read}");
-        // time_t follows the `long` width (8 under LP64).
-        let time = render_prototype("time", lp64, false).expect("time prototype");
-        assert!(time.contains("int8 time(int8 *tloc)"), "{time}");
-        // mode_t is a fixed 4-byte unsigned type, pid_t a fixed 4-byte signed type.
-        let chmod = render_prototype("chmod", lp64, false).expect("chmod prototype");
+        let chmod = render_prototype("chmod", lp64, false, false).expect("chmod prototype");
         assert!(chmod.contains("int4 chmod(char *path, uint4 mode)"), "{chmod}");
-        let getppid = render_prototype("getppid", lp64, false).expect("getppid prototype");
+        let getppid = render_prototype("getppid", lp64, false, false).expect("getppid prototype");
         assert!(getppid.contains("int4 getppid(void)"), "{getppid}");
-        // On an ILP32 target off_t stays 8 bytes while time_t shrinks to the 4-byte `long`.
         let ilp32 = DataOrganization { pointer: 4, int: 4, long: 4 };
-        let lseek32 = render_prototype("lseek", ilp32, false).expect("lseek prototype");
-        assert!(lseek32.contains("int8 lseek(int4 fd, int8 offset, int4 whence)"), "{lseek32}");
-        let time32 = render_prototype("time", ilp32, false).expect("time prototype");
-        assert!(time32.contains("int4 time(int4 *tloc)"), "{time32}");
+        let ftello = render_prototype("ftello", ilp32, false, false).expect("ftello prototype");
+        assert!(ftello.contains("int4 ftello(void *stream)"), "{ftello}");
+        let darwin_ftello = render_prototype("ftello", ilp32, false, true).expect("ftello prototype");
+        assert!(darwin_ftello.contains("int8 ftello(void *stream)"), "{darwin_ftello}");
+        let umask = render_prototype("umask", lp64, false, true).expect("umask prototype");
+        assert!(umask.contains("uint2 umask(uint2 mask)"), "{umask}");
     }
 
     #[test]

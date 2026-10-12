@@ -1,5 +1,6 @@
 pub mod a64;
 pub mod aarch32;
+pub mod bytes;
 mod cs;
 mod flow;
 pub mod hex;

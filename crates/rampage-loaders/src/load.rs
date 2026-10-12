@@ -6,6 +6,7 @@ use memmap2::Mmap;
 use object::read::macho::{FatArch, FatArch32, FatArch64, MachOFatFile};
 use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol, SegmentFlags, SymbolFlags};
 use rampage_arch::Arch;
+use rampage_arch::bytes::read_uint;
 use serde::Serialize;
 use std::ops::Deref;
 
@@ -402,19 +403,22 @@ impl Binary {
         let section = self.sections.iter().find(|section| section.name == ".got")?;
         let bytes = self.read(section.address, section.size)?;
         let size = usize::from(self.arch.pointer_size());
-        let entries = bytes
-            .chunks_exact(size)
-            .map(|entry| {
-                let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
-                if self.big_endian { entry.iter().fold(0, fold) } else { entry.iter().rev().fold(0, fold) }
-            })
-            .collect();
+        let entries = bytes.chunks_exact(size).filter_map(|entry| read_uint(entry, 0, size, self.big_endian)).collect();
         Some(rampage_arch::Got { address: section.address, entries })
     }
 
     /// A decoder for this image's code.
     pub fn decoder(&self) -> Result<Box<dyn rampage_arch::Disassembler>, rampage_arch::UnsupportedArch> {
         rampage_arch::decoder(&self.target())
+    }
+
+    /// What the file stores for `section`, from its own file offset rather than through a segment, so it also
+    /// serves sections outside any segment (relocatable objects, unloaded ELF sections). `None` for a zero-fill
+    /// section or one whose file range lies outside the image.
+    pub fn section_file_bytes(&self, section: &Section) -> Option<&[u8]> {
+        let start = usize::try_from(section.file_offset?).ok()?;
+        let len = usize::try_from(section.file_size).ok()?;
+        self.image_bytes().get(start..start.checked_add(len)?)
     }
 
     /// The bytes of this image: the whole file, or one slice of a universal binary.
@@ -479,9 +483,7 @@ impl Binary {
         if !matches!(size, 4 | 8) || !permissions.read || permissions.write {
             return None;
         }
-        let bytes = self.read(address, u64::from(size))?;
-        let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
-        Some(if self.big_endian { bytes.iter().fold(0, fold) } else { bytes.iter().rev().fold(0, fold) })
+        read_uint(self.read(address, u64::from(size))?, 0, usize::from(size), self.big_endian)
     }
 
     /// Returns the file-backed bytes from `address` to the end of its segment's file data.
@@ -531,23 +533,25 @@ impl Binary {
             return text.map_or(report, |text| self.scan_gopclntab(text.address));
         };
         let Some(bytes) = self.read(section.address, section.size) else {
-            report.warnings.push("gopclntab section bytes are not mapped".to_owned());
+            report.warn("gopclntab section bytes are not mapped".to_owned());
             return report;
         };
         let Some(text) = text else {
-            report.warnings.push("gopclntab found but no text section to anchor addresses".to_owned());
+            report.warn("gopclntab found but no text section to anchor addresses".to_owned());
             return report;
         };
         crate::gopclntab::parse(bytes, text.address, self.arch.pointer_size(), self.big_endian)
     }
 
     /// Fallback for a stripped or packed image whose pclntab keeps no recognizable section name: scans the
-    /// read-only data sections for the table. A candidate is accepted only once it parses cleanly and all of
-    /// its recovered addresses sit in code, so arbitrary data cannot masquerade as a table.
+    /// read-only and relro data sections for the table (an externally linked PIE merges it into a writable
+    /// `.data.rel.ro`). A candidate is accepted only once it parses cleanly and all of its recovered addresses
+    /// sit in code, so arbitrary data cannot masquerade as a table.
     fn scan_gopclntab(&self, text_base: u64) -> crate::gopclntab::GoReport {
         let pointer_size = self.arch.pointer_size();
         for section in &self.sections {
-            if section.kind != SectionKind::ReadOnlyData || section.size == 0 {
+            let relro = section.kind == SectionKind::Data && section.name.starts_with(".data.rel.ro");
+            if !(section.kind == SectionKind::ReadOnlyData || relro) || section.size == 0 {
                 continue;
             }
             let Some(bytes) = self.read(section.address, section.size) else { continue };
@@ -563,9 +567,10 @@ impl Binary {
     }
 }
 
-/// Whether a section name is the Go pclntab under either platform's spelling.
+/// Whether a section name is the Go pclntab under any of its spellings. Go's linker names a PIE's relro copy
+/// `.data.rel.ro.gopclntab`, which Go's own objfile reader falls back to.
 fn is_gopclntab(name: &str) -> bool {
-    name == ".gopclntab" || name == "__gopclntab"
+    matches!(name, ".gopclntab" | ".data.rel.ro.gopclntab" | "__gopclntab")
 }
 
 /// Sorted, merged address ranges holding code.
@@ -799,5 +804,18 @@ fn symbol_kind_of(kind: object::SymbolKind) -> SymbolKind {
         object::SymbolKind::Text => SymbolKind::Function,
         object::SymbolKind::Data => SymbolKind::Data,
         _ => SymbolKind::Other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pclntab_section_names_include_the_relro_spelling() {
+        for name in [".gopclntab", ".data.rel.ro.gopclntab", "__gopclntab"] {
+            assert!(is_gopclntab(name), "{name}");
+        }
+        assert!(!is_gopclntab(".data.rel.ro"));
     }
 }
