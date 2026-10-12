@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::pattern::BytePattern;
+use crate::pattern::{BytePattern, MIN_DISTINCTIVE_NIBBLES};
 
 /// The category of tool a signature identifies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -59,12 +59,14 @@ pub enum Condition {
 
 impl Condition {
     /// Whether satisfying this condition on its own justifies a `Strong` reading. Distinctive conditions do;
-    /// generic ones (a bare section name, an overlay, an entropy floor) only corroborate.
+    /// generic ones (a bare section name, an overlay, an entropy floor, a byte pattern with too few fixed nibbles)
+    /// only corroborate.
     pub(crate) fn is_distinctive(&self) -> bool {
-        matches!(
-            self,
-            Self::Entry { .. } | Self::SectionContains { .. } | Self::ImportFunction(_) | Self::UniqueSectionName(_)
-        )
+        match self {
+            Self::Entry { pattern, .. } => pattern.fixed_nibbles() >= MIN_DISTINCTIVE_NIBBLES,
+            Self::SectionContains { .. } | Self::ImportFunction(_) | Self::UniqueSectionName(_) => true,
+            _ => false,
+        }
     }
 }
 

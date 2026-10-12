@@ -266,6 +266,18 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_pattern_is_strong_only_with_four_fixed_bytes() {
+        let image = Fake { entry: vec![0x61, 0xbe, 0x11, 0x22], ..Fake::default() };
+        let confidence = |pattern: &str| {
+            let sig = Signature::new("Stub", Kind::Packer, vec![entry(pattern)]);
+            super::evaluate(&image, &sig).unwrap().confidence
+        };
+        assert_eq!(confidence("61"), Confidence::Tentative);
+        assert_eq!(confidence("61 BE 1? ??"), Confidence::Tentative);
+        assert_eq!(confidence("61 BE 11 22"), Confidence::Strong);
+    }
+
+    #[test]
     fn section_name_signature_fires_on_a_crafted_section_list() {
         let sig = Signature::new(
             "UPX",
@@ -341,7 +353,7 @@ mod tests {
     fn same_tool_from_two_signatures_merges_into_one_detection() {
         let mut db = SignatureDb::new();
         db.push(Signature::new("UPX", Kind::Packer, vec![Condition::SectionName("UPX0".to_owned())]));
-        db.push(Signature::new("UPX", Kind::Packer, vec![entry("60 BE ?? ?? ?? ??")]));
+        db.push(Signature::new("UPX", Kind::Packer, vec![entry("60 BE 01 02 ?? ??")]));
         let image =
             Fake { entry: vec![0x60, 0xbe, 0x01, 0x02, 0x03, 0x04], ..Fake::default() }.with_section("UPX0", &[]);
         let detections = identify_image(&image, &db);

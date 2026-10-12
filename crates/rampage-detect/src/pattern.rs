@@ -37,7 +37,14 @@ pub enum PatternError {
     /// The pattern was longer than [`MAX_PATTERN_BYTES`].
     #[error("pattern exceeds {MAX_PATTERN_BYTES} bytes")]
     TooLong,
+    /// Every nibble was a wildcard, so the pattern would match anything.
+    #[error("pattern has no fixed nibble")]
+    AllWildcard,
 }
+
+/// The fewest fixed nibbles (four whole bytes' worth) that make a pattern distinctive on its own; a shorter one
+/// such as a lone `61` turns up by chance.
+pub const MIN_DISTINCTIVE_NIBBLES: usize = 8;
 
 /// One nibble: its value and whether it is fixed (`Some`) or a wildcard (`None`).
 fn nibble(c: char) -> Result<Option<u8>, PatternError> {
@@ -77,7 +84,16 @@ impl BytePattern {
             }
             bytes.push(MaskedByte { value, mask });
         }
-        Ok(Self { bytes })
+        let pattern = Self { bytes };
+        if pattern.fixed_nibbles() == 0 {
+            return Err(PatternError::AllWildcard);
+        }
+        Ok(pattern)
+    }
+
+    /// How many nibbles the pattern pins to a value (two per fully fixed byte).
+    pub fn fixed_nibbles(&self) -> usize {
+        self.bytes.iter().map(|byte| byte.mask.count_ones() as usize / 4).sum()
     }
 
     /// The pattern's length in bytes.
@@ -157,5 +173,11 @@ mod tests {
         assert_eq!(BytePattern::parse("6G"), Err(PatternError::BadChar('G')));
         let long = "00".repeat(MAX_PATTERN_BYTES + 1);
         assert_eq!(BytePattern::parse(&long), Err(PatternError::TooLong));
+        assert_eq!(BytePattern::parse("?? ??"), Err(PatternError::AllWildcard));
+    }
+
+    #[test]
+    fn fixed_nibbles_count_pinned_halves() {
+        assert_eq!(BytePattern::parse("60 ?? 6? ?0").unwrap().fixed_nibbles(), 4);
     }
 }

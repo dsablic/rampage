@@ -36,7 +36,7 @@ mod peid;
 
 pub use matcher::identify;
 pub use model::{Condition, Confidence, Detection, Kind, Signature, SignatureDb};
-pub use pattern::{BytePattern, MAX_PATTERN_BYTES, PatternError};
+pub use pattern::{BytePattern, MAX_PATTERN_BYTES, MIN_DISTINCTIVE_NIBBLES, PatternError};
 pub use peid::PeidError;
 
 impl SignatureDb {
