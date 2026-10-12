@@ -313,6 +313,7 @@ fn explore(
     let mut xrefs = Vec::new();
     let mut new_seeds = Vec::new();
     let mut code_pointers = Vec::new();
+    let mut jump_bases = Vec::new();
     let mut jump_targets = Vec::new();
     let mut branch_targets = Vec::new();
     let mut instruction_modes = Vec::new();
@@ -360,6 +361,7 @@ fn explore(
             if let Some(flow) = decoder.resolved_flow() {
                 resolved_flows.push(ResolvedFlow { function: start, address, flow });
             }
+            jump_bases.extend(decoder.indirect_jump_base());
             mode_hints.extend(decoder.code_modes().into_iter().map(|(at, thumb)| (address, at, thumb)));
             if insn.flow == Flow::Invalid {
                 break;
@@ -429,10 +431,11 @@ fn explore(
     jump_targets.dedup();
     let blocks = blocks.into_iter().map(|(start, end)| Block { start, end }).collect();
     let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len() };
-    // A code address a function forms inside its own body is a local label, such as the base an AArch64 switch
-    // adds its jump-table offsets to, not another function's entry.
+    // The base an AArch64 switch adds its jump-table offsets to is a label inside the function, not another
+    // function's entry. Other code addresses formed inside the extent may be: it can run past a noreturn call.
     let end = function.end();
-    new_seeds.extend(code_pointers.into_iter().filter(|&target| target <= start || target >= end));
+    let is_local_jump_base = |target: u64| start < target && target < end && jump_bases.contains(&target);
+    new_seeds.extend(code_pointers.into_iter().filter(|&target| !is_local_jump_base(target)));
     Explored { function, xrefs, new_seeds, jump_targets, branch_targets, mode_hints, instruction_modes, resolved_flows }
 }
 
@@ -494,6 +497,40 @@ mod tests {
         let addresses: Vec<_> = program.functions.iter().map(|function| function.address).collect();
         assert_eq!(addresses, [0]);
         assert!(program.xrefs.contains(&Xref { to: 0xc, from: 4, kind: XrefKind::Data }), "{:?}", program.xrefs);
+    }
+
+    #[test]
+    fn code_addresses_formed_inside_the_extent_still_seed_functions() {
+        // 0: lea rdi, [0xc]; 7: call 0x20; c: xor eax, eax; f: ret; 20: ret. The call may not return, so the
+        // extent runs on into the function at 0xc.
+        let mut bytes = vec![0x48, 0x8d, 0x3d, 0x05, 0, 0, 0, 0xe8, 0x14, 0, 0, 0, 0x31, 0xc0, 0xc3];
+        bytes.resize(0x21, 0xcc);
+        bytes[0x20] = 0xc3;
+        let program = run(&bytes, &[0]);
+        assert_eq!(blocks(&program, 0), [(0, 0xc)]);
+        assert_eq!(blocks(&program, 0xc), [(0xc, 0xf)]);
+        assert_eq!(blocks(&program, 0x20), [(0x20, 0x21)]);
+
+        // 0: lea rdi, [0x20]; 7: jmp 0x40; 20: ret; 40: ret. The jump target is folded into the function at 0,
+        // whose extent then spans the callback at 0x20.
+        let mut bytes = vec![0x48, 0x8d, 0x3d, 0x19, 0, 0, 0, 0xe9, 0x34, 0, 0, 0];
+        bytes.resize(0x41, 0xcc);
+        bytes[0x20] = 0xc3;
+        bytes[0x40] = 0xc3;
+        let program = run(&bytes, &[0]);
+        let addresses: Vec<_> = program.functions.iter().map(|function| function.address).collect();
+        assert_eq!(addresses, [0, 0x20]);
+    }
+
+    #[test]
+    fn a_switch_base_offset_by_a_table_entry_is_not_a_function() {
+        // 0: cbz w0, 0x14; 4: adr x9, 0x10; 8: add x9, x9, x0, lsl #2; c: br x9; 10: ret (case 0); 14: ret
+        let words: [u32; 6] = [0x3400_00a0, 0x1000_0069, 0x8b00_0929, 0xd61f_0120, 0xd65f_03c0, 0xd65f_03c0];
+        let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        let memory = FlatMemory { base: 0, bytes };
+        let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
+        let addresses: Vec<_> = program.functions.iter().map(|function| function.address).collect();
+        assert_eq!(addresses, [0]);
     }
 
     #[test]

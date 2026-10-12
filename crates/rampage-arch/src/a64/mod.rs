@@ -71,6 +71,7 @@ pub fn format_word(word: u32, address: u64, labels: LabelStyle) -> Option<String
 pub struct A64Disassembler {
     addresses: flow::Addresses,
     resolved: Option<Flow>,
+    jump_base: Option<u64>,
 }
 
 impl Disassembler for A64Disassembler {
@@ -79,11 +80,13 @@ impl Disassembler for A64Disassembler {
         self.addresses = flow::Addresses::default();
         self.addresses.memory_changed = memory_changed;
         self.resolved = None;
+        self.jump_base = None;
     }
 
     fn begin_run(&mut self) {
         self.addresses = flow::Addresses::default();
         self.resolved = None;
+        self.jump_base = None;
     }
 
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
@@ -92,6 +95,7 @@ impl Disassembler for A64Disassembler {
 
     fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
         self.resolved = None;
+        self.jump_base = None;
         let Some(word) = bytes.first_chunk::<4>().map(|chunk| u32::from_le_bytes(*chunk)) else {
             return Insn {
                 address,
@@ -103,10 +107,12 @@ impl Disassembler for A64Disassembler {
         };
         match decode_word(word) {
             Some(decoded) => {
-                let (flow, data_ref) = flow::analyze(&decoded, address, &mut self.addresses, read);
+                let flow::Analysis { flow, data_ref, jump_base } =
+                    flow::analyze(&decoded, address, &mut self.addresses, read);
                 if matches!(decoded.encoding.name, "BR_64_branch_reg" | "BLR_64_branch_reg") {
                     self.resolved = Some(flow);
                 }
+                self.jump_base = jump_base;
                 Insn { address, len: 4, flow, data_ref, immediate: None }
             }
             None => Insn { address, len: 4, flow: Flow::Invalid, data_ref: None, immediate: None },
@@ -122,6 +128,10 @@ impl Disassembler for A64Disassembler {
 
     fn resolved_flow(&self) -> Option<Flow> {
         self.resolved
+    }
+
+    fn indirect_jump_base(&self) -> Option<u64> {
+        self.jump_base
     }
 }
 

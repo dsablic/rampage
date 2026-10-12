@@ -239,6 +239,11 @@ pub trait Disassembler {
     fn resolved_flow(&self) -> Option<Flow> {
         None
     }
+    /// For the register-indirect jump just decoded, the code address its register was formed from: the target
+    /// itself, or the base a switch adds its jump-table offset to.
+    fn indirect_jump_base(&self) -> Option<u64> {
+        None
+    }
     /// Instructions executed after a branch before it takes effect (MIPS and SPARC delay slots).
     fn delay_slots(&self) -> u8 {
         0

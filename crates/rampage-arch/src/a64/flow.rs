@@ -20,6 +20,9 @@ pub struct Addresses {
     /// Registers holding a page rather than a full address.
     page: u32,
     value: [u64; 31],
+    /// Registers holding an unknown offset from a known full address (a switch's `add x9, x9, x10, lsl #2`).
+    derived: u32,
+    derived_base: [u64; 31],
     pub memory_changed: bool,
 }
 
@@ -30,6 +33,20 @@ impl Addresses {
 
     fn page(&self, register: u64) -> Option<u64> {
         self.get(register).filter(|_| self.page & (1 << register) != 0)
+    }
+
+    /// The full address `register` holds, or that it holds an unknown offset from.
+    fn base(&self, register: u64) -> Option<u64> {
+        let derived = register < 31 && self.derived & (1 << register) != 0;
+        let full = self.get(register).filter(|_| self.page & (1 << register) == 0);
+        full.or_else(|| derived.then(|| self.derived_base[register as usize]))
+    }
+
+    fn set_derived(&mut self, register: u64, base: u64) {
+        if register < 31 {
+            self.derived |= 1 << register;
+            self.derived_base[register as usize] = base;
+        }
     }
 
     fn set(&mut self, register: u64, address: u64, page: bool) {
@@ -43,12 +60,14 @@ impl Addresses {
     fn clear(&mut self, register: u64) {
         if register < 31 {
             self.valid &= !(1 << register);
+            self.derived &= !(1 << register);
         }
     }
 
     /// A call may change x0-x18 and x30 (AAPCS64); x19-x28 are preserved.
     fn clobber_caller_saved(&mut self) {
         self.valid &= !(0x7_ffff | (1 << 30));
+        self.derived &= !(0x7_ffff | (1 << 30));
     }
 }
 
@@ -188,12 +207,20 @@ fn index_of(encoding: &'static Encoding) -> usize {
     (encoding as *const Encoding as usize - ENCODINGS.as_ptr() as usize) / size_of::<Encoding>()
 }
 
+/// What one instruction does to control flow and which address it references.
+pub struct Analysis {
+    pub flow: Flow,
+    pub data_ref: Option<u64>,
+    /// For BR: the full address its register holds or was offset from, such as a switch's jump-table base.
+    pub jump_base: Option<u64>,
+}
+
 pub fn analyze(
     decoded: &Decoded,
     address: u64,
     addresses: &mut Addresses,
     read: &dyn Fn(u64, u8) -> Option<u64>,
-) -> (Flow, Option<u64>) {
+) -> Analysis {
     let info = &INFO[index_of(decoded.encoding)];
     let direct = |make: fn(u64) -> Flow| relative_target(decoded, address).map_or(Flow::Invalid, make);
     let mut flow = match info.flow {
@@ -225,6 +252,11 @@ pub fn analyze(
     {
         flow = if info.flow == FlowClass::IndirectCall { Flow::Call(target) } else { Flow::Jump(target) };
     }
+    let jump_base =
+        (name == "BR_64_branch_reg").then(|| decoded.field("Rn").and_then(|rn| addresses.base(rn))).flatten();
+    let offset_from = matches!(name, "ADD_64_addsub_shift" | "ADD_64_addsub_ext")
+        .then(|| decoded.field("Rn").and_then(|rn| addresses.base(rn)))
+        .flatten();
 
     let word = u64::from(decoded.word);
     let register = |w: Written| ((word >> w.start) & ones(w.width.into())) + u64::from(w.plus);
@@ -292,5 +324,8 @@ pub fn analyze(
     if let (Some((value, page)), Some(rd)) = (produced, destination) {
         addresses.set(rd, value, page);
     }
-    (flow, data_ref)
+    if let (Some(base), Some(rd)) = (offset_from, destination) {
+        addresses.set_derived(rd, base);
+    }
+    Analysis { flow, data_ref, jump_base }
 }
