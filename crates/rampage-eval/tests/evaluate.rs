@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use rampage_arch::Arch;
-use rampage_eval::{Outcome, Truth, evaluate, proposals};
+use rampage_eval::{Outcome, Truth, evaluate, function_names, proposals};
 use rampage_loaders::Binary;
 
 fn fixture(name: &str) -> PathBuf {
@@ -78,4 +78,12 @@ fn strip_removes_names_but_keeps_code_layout() {
     std::fs::write(&debugless_path, rampage_eval::strip(&bytes, true).unwrap()).unwrap();
     assert_eq!(Truth::from_binary(&Binary::open(&debugless_path).unwrap()), truth);
     std::fs::remove_dir_all(&scratch).unwrap();
+}
+
+/// A program's own functions come from its compiled object, where symbols are section-relative.
+#[test]
+fn function_names_reads_a_relocatable_object() {
+    let object = Binary::open(fixture("eval-program-corpus-x86_64.o")).unwrap();
+    let names: Vec<String> = function_names(&object).into_iter().collect();
+    assert_eq!(names, ["cmp", "main"]);
 }

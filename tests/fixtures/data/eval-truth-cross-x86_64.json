@@ -1,6 +1,5 @@
 {
   "0x1002b26": "_start_c",
-  "0x1002b50": "main",
   "0x1002c45": "dummy",
   "0x1002c4b": "dummy1",
   "0x1002c51": "__init_libc",
@@ -14,7 +13,6 @@
   "0x10030d4": "libc_exit_fini",
   "0x100310a": "exit",
   "0x100312a": "_Exit",
-  "0x1003141": "printf",
   "0x10031c7": "dummy",
   "0x10031cf": "__stdio_close",
   "0x10031f0": "__syscall_ret",
