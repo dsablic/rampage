@@ -487,6 +487,57 @@ impl Binary {
         let in_file = (self.image.len() as u64).checked_sub(file_position)?;
         self.read(address, in_segment.min(in_file)).filter(|bytes| !bytes.is_empty())
     }
+
+    /// Recovers function names from an embedded Go `gopclntab` and attaches them as `SymbolKind::Function`
+    /// symbols, the way IDA and Ghidra name stripped Go binaries. This is purely additive: it fills only
+    /// addresses that have no symbol yet, so real symbols always win, and it never alters how the image
+    /// loaded. The returned [`crate::gopclntab::GoReport`] is the separately typed record of what the table
+    /// contributed; its `GoFunction` entries are the source marker distinguishing recovered names from real
+    /// ones. An image with no usable table yields an empty report, never an error.
+    pub fn recover_go_symbols(&mut self) -> crate::gopclntab::GoReport {
+        let report = self.read_gopclntab();
+        if report.functions.is_empty() {
+            return report;
+        }
+        let mut taken: std::collections::HashSet<u64> = self.symbols.iter().map(|symbol| symbol.address).collect();
+        for function in &report.functions {
+            if !taken.insert(function.address) {
+                continue;
+            }
+            self.symbols.push(Symbol {
+                name: function.name.clone(),
+                address: function.address,
+                size: 0,
+                kind: SymbolKind::Function,
+            });
+        }
+        self.symbols.sort_by(|a, b| (a.address, &a.name).cmp(&(b.address, &b.name)));
+        report
+    }
+
+    /// Locates the `gopclntab` via its dedicated section (`.gopclntab` on ELF, `__gopclntab` on Mach-O) and
+    /// parses it against the image's text base, pointer width and byte order.
+    fn read_gopclntab(&self) -> crate::gopclntab::GoReport {
+        let mut report = crate::gopclntab::GoReport::default();
+        let Some(section) = self.sections.iter().find(|section| is_gopclntab(&section.name)) else {
+            return report;
+        };
+        let Some(bytes) = self.read(section.address, section.size) else {
+            report.warnings.push("gopclntab section bytes are not mapped".to_owned());
+            return report;
+        };
+        let Some(text) = self.sections.iter().find(|section| section.name == ".text" || section.name == "__text")
+        else {
+            report.warnings.push("gopclntab found but no text section to anchor addresses".to_owned());
+            return report;
+        };
+        crate::gopclntab::parse(bytes, text.address, self.arch.pointer_size(), self.big_endian)
+    }
+}
+
+/// Whether a section name is the Go pclntab under either platform's spelling.
+fn is_gopclntab(name: &str) -> bool {
+    name == ".gopclntab" || name == "__gopclntab"
 }
 
 /// Sorted, merged address ranges holding code.

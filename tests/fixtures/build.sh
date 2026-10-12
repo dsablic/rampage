@@ -15,7 +15,8 @@ zig cc -target powerpc-linux-musleabi -O1 -g0 -o bin/hello-ppc.elf "$src"
 zig cc -target powerpc64le-linux-gnu -O1 -g0 -o bin/hello-ppc64le.elf "$src"
 zig cc -target riscv64-linux-gnu -O1 -g0 -o bin/hello-riscv64.elf "$src"
 zig cc -target s390x-linux-gnu -O1 -g0 -o bin/hello-s390x.elf "$src"
-llvm-strip --strip-debug bin/hello-x64-dyn.elf bin/hello-arm64.elf bin/hello-{arm,thumb,mips,mipsel,ppc,ppc64le,riscv64,s390x}.elf
+llvm-strip --strip-debug bin/hello-x64-dyn.elf bin/hello-arm64.elf \
+  bin/hello-{arm,thumb,mips,mipsel,ppc,ppc64le,riscv64,s390x}.elf
 zig cc -target x86_64-linux-gnu -O1 -g0 -fPIC -shared -o bin/libhelper-x64.so src/helper.c
 llvm-strip --strip-debug bin/libhelper-x64.so
 zig cc -target x86_64-windows-gnu -O1 -g0 -o bin/hello-x64.exe "$src"
@@ -27,4 +28,7 @@ clang -arch x86_64 -O1 -dynamiclib -o bin/hello-x64.dylib "$src"
 strip -o bin/hello-x64-stripped.macho bin/hello-x64.macho
 clang -arch x86_64 -O1 -c -o bin/hello-x64.o "$src"
 zig cc -target x86_64-linux-gnu -O1 -g0 -c -o bin/hello-x64-elf.o "$src"
+# Stripped Go binaries keep their gopclntab, from which function names are recovered. Needs the Go toolchain.
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/hello-go-x64.elf src/hello.go
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/hello-go-arm64.elf src/hello.go
 python3 craft.py malformed
