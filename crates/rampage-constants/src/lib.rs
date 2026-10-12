@@ -216,8 +216,12 @@ pub struct ConstantHit {
     pub algorithm: Cow<'static, str>,
     pub kind: Kind,
     pub what: Cow<'static, str>,
+    /// The hit's virtual address, or its offset within [`ConstantHit::section`] when that is set.
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
+    /// The section holding the hit, set only for relocatable objects: all their sections start at address 0, so
+    /// an address alone cannot tell hits in different sections apart.
+    pub section: Option<String>,
     /// The byte order of a word table or big integer; `None` for byte strings.
     pub endian: Option<Endian>,
     /// How many bytes matched: the whole pattern, or a prefix at least `min_len` long.
@@ -250,6 +254,7 @@ pub fn scan(bytes: &[u8], base: u64, db: &ConstantDb) -> Vec<ConstantHit> {
                 kind: signature.kind,
                 what: signature.what.clone(),
                 address: base.wrapping_add(start as u64),
+                section: None,
                 endian: form.endian,
                 length,
                 complete: length == form.bytes.len(),
@@ -276,24 +281,29 @@ fn finish(mut hits: Vec<ConstantHit>) -> Vec<ConstantHit> {
     hits
 }
 
-/// Scans the file-backed bytes of every readable segment at its virtual address; images without segments
-/// (relocatable objects) are scanned section by section instead.
+/// Scans the file-backed bytes of every readable segment at its virtual address. Images without segments
+/// (relocatable objects) are scanned section by section instead, in section order, each hit naming its section
+/// and giving its offset within it.
 pub fn scan_binary(binary: &Binary, db: &ConstantDb) -> Vec<ConstantHit> {
     let mut hits = Vec::new();
     if binary.segments.is_empty() {
+        // Sections are finished one by one rather than pooled: they share address 0, so pooling would let a hit
+        // in one section suppress, or deduplicate, a different hit in another.
         for section in &binary.sections {
             let Some(offset) = section.file_offset else { continue };
             let start = usize::try_from(offset).unwrap_or(usize::MAX);
             let len = usize::try_from(section.file_size).unwrap_or(usize::MAX);
             if let Some(bytes) = binary.image_bytes().get(start..start.saturating_add(len)) {
-                hits.extend(scan(bytes, section.address, db));
+                let name = Some(section.name.clone());
+                hits.extend(scan(bytes, 0, db).into_iter().map(|hit| ConstantHit { section: name.clone(), ..hit }));
             }
         }
-    } else {
-        for segment in binary.segments.iter().filter(|segment| segment.perms.read && segment.file_size > 0) {
-            if let Some(bytes) = binary.read_to_segment_end(segment.address) {
-                hits.extend(scan(bytes, segment.address, db));
-            }
+        hits.truncate(MAX_HITS);
+        return hits;
+    }
+    for segment in binary.segments.iter().filter(|segment| segment.perms.read && segment.file_size > 0) {
+        if let Some(bytes) = binary.read_to_segment_end(segment.address) {
+            hits.extend(scan(bytes, segment.address, db));
         }
     }
     finish(hits)
@@ -441,6 +451,69 @@ mod tests {
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert_eq!(hits[0].what, "\"expand 32-byte k\" constant");
         assert_eq!(binary.read(hits[0].address, 16), Some(&b"expand 32-byte k"[..]));
+    }
+
+    /// A minimal x86-64 ELF relocatable object holding the given `PROGBITS` sections, all at address 0.
+    fn elf_object(sections: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut names = vec![0u8];
+        let mut name_offsets = Vec::new();
+        for (name, _) in sections.iter().copied().chain([(".shstrtab", &[][..])]) {
+            name_offsets.push(names.len() as u32);
+            names.extend_from_slice(name.as_bytes());
+            names.push(0);
+        }
+        let mut file = vec![0u8; 64];
+        let mut headers = vec![[0u8; 64]];
+        let mut add = |file: &mut Vec<u8>, name: u32, kind: u32, bytes: &[u8]| {
+            let mut header = [0u8; 64];
+            header[0..4].copy_from_slice(&name.to_le_bytes());
+            header[4..8].copy_from_slice(&kind.to_le_bytes());
+            header[24..32].copy_from_slice(&(file.len() as u64).to_le_bytes());
+            header[32..40].copy_from_slice(&(bytes.len() as u64).to_le_bytes());
+            header[48..56].copy_from_slice(&1u64.to_le_bytes());
+            file.extend_from_slice(bytes);
+            headers.push(header);
+        };
+        for ((_, bytes), &name) in sections.iter().zip(&name_offsets) {
+            add(&mut file, name, 1, bytes);
+        }
+        add(&mut file, name_offsets[sections.len()], 3, &names);
+        let section_headers = file.len() as u64;
+        file.extend(headers.iter().flatten());
+        file[..8].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1, 0]);
+        file[16..18].copy_from_slice(&1u16.to_le_bytes());
+        file[18..20].copy_from_slice(&0x3eu16.to_le_bytes());
+        file[20..24].copy_from_slice(&1u32.to_le_bytes());
+        file[40..48].copy_from_slice(&section_headers.to_le_bytes());
+        file[52..54].copy_from_slice(&64u16.to_le_bytes());
+        file[58..60].copy_from_slice(&64u16.to_le_bytes());
+        file[60..62].copy_from_slice(&(headers.len() as u16).to_le_bytes());
+        file[62..64].copy_from_slice(&(sections.len() as u16 + 1).to_le_bytes());
+        file
+    }
+
+    #[test]
+    fn object_sections_at_address_zero_do_not_cancel_each_other() {
+        let sha1 = le(&[0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476, 0xc3d2_e1f0]);
+        let mut text = noise(64, 5);
+        text[8..28].copy_from_slice(&sha1);
+        let object = elf_object(&[(".text", &text), (".rodata.md5", &sha1[..16]), (".rodata.sha1", &sha1)]);
+        let path = std::env::temp_dir().join(format!("rampage-constants-{}.o", std::process::id()));
+        std::fs::write(&path, object).unwrap();
+        let binary = Binary::open(&path);
+        std::fs::remove_file(&path).unwrap();
+        let binary = binary.unwrap();
+        assert!(binary.segments.is_empty());
+        let hits = scan_binary(&binary, ConstantDb::bundled());
+        let found: Vec<_> = hits.iter().map(|hit| (hit.section.as_deref(), hit.address, &*hit.what)).collect();
+        assert_eq!(
+            found,
+            [
+                (Some(".text"), 8, "SHA-1 initial hash value"),
+                (Some(".rodata.md5"), 0, "MD4/MD5 initial state"),
+                (Some(".rodata.sha1"), 0, "SHA-1 initial hash value"),
+            ]
+        );
     }
 
     #[test]
