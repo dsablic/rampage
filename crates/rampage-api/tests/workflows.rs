@@ -182,6 +182,45 @@ fn find_main_reports_an_honest_not_found() {
 }
 
 #[test]
+fn network_surface_maps_apis_and_strings_to_the_functions_using_them() {
+    let report = open(local_fixture("net-client-x64.elf")).network_surface(ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    let apis = section(&report, "Networking APIs");
+    for api in ["`socket`", "`connect`", "`getaddrinfo`", "`send`"] {
+        assert!(has_observation(apis, api), "{api} missing from {:?}", observations(apis));
+    }
+    let connect = apis.findings.iter().find(|finding| finding.observation.contains("`connect`")).unwrap();
+    assert!(connect.evidence.iter().any(|line| line.contains("`open_connection`")), "{connect:#?}");
+    let strings = section(&report, "Network indicators in strings");
+    let url = strings.findings.iter().find(|finding| finding.observation.starts_with("URL")).unwrap();
+    assert!(url.evidence.iter().any(|line| line.contains("referenced from `main`")), "{url:#?}");
+    let functions = section(&report, "Functions referencing networking evidence");
+    let names: Vec<&str> = observations(functions);
+    assert!(names[0].starts_with("`open_connection`"), "{names:?}");
+    assert!(names.iter().any(|name| name.starts_with("`main`")), "{names:?}");
+    assert!(has_observation(section(&report, "Networking capability tags"), "Network communication"));
+    assert!(report.next_steps.iter().any(|step| step.tool == "decompile"));
+}
+
+#[test]
+fn network_surface_without_networking_is_empty_but_honest() {
+    let report = open(fixture("hello-x64.elf")).network_surface(ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    assert!(report.sections.iter().all(|section| section.findings.is_empty()), "{report:#?}");
+    assert!(report.summary[0].starts_with("No networking APIs"), "{:?}", report.summary);
+    assert!(report.limitations.iter().any(|text| text.contains("Absence of evidence is not evidence of absence")));
+}
+
+#[test]
+fn network_surface_reports_truncation() {
+    let report = open(local_fixture("net-client-x64.elf")).network_surface(ReportLimits::new(Some(2))).unwrap();
+    assert_well_formed(&report);
+    let apis = section(&report, "Networking APIs");
+    assert_eq!(apis.findings.len(), 2);
+    assert!(apis.truncated && apis.total == 5, "{apis:#?}");
+}
+
+#[test]
 fn find_main_bounds_the_candidate_profile() {
     let report = open(fixture("musl-static-x86_64.elf")).find_main(ReportLimits::new(Some(3)), false).unwrap();
     assert_well_formed(&report);

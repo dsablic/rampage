@@ -14,6 +14,8 @@ pub enum Workflow {
     TriageReport,
     /// Locate the program's own entry logic past the runtime startup code
     FindMain,
+    /// Networking imports, network-like strings and the functions referencing them
+    NetworkSurface,
 }
 
 pub struct ReportOptions {
@@ -37,6 +39,7 @@ pub fn report(
     let report = match workflow {
         Workflow::TriageReport => project.triage_report(limits)?,
         Workflow::FindMain => project.find_main(limits, !report_options.no_decompile)?,
+        Workflow::NetworkSurface => project.network_surface(limits)?,
     };
     if options.json {
         return write_json(out, &report);

@@ -49,6 +49,15 @@ fn find_main_renders_candidates_and_the_decompilation_preview() {
 }
 
 #[test]
+fn network_surface_renders_an_empty_report_honestly() {
+    report(&["network-surface", &path("hello-x64.elf")])
+        .success()
+        .stdout(predicates::str::contains("No networking APIs"))
+        .stdout(predicates::str::contains("(nothing observed)"))
+        .stdout(predicates::str::contains("Absence of evidence is not evidence of absence"));
+}
+
+#[test]
 fn other_is_rejected_outside_diff_builds() {
     let exe = path("hello-x64.exe");
     report(&["triage-report", &exe, "--other", &exe]).failure();

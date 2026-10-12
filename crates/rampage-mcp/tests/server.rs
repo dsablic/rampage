@@ -72,6 +72,7 @@ async fn lists_all_tools_with_instructions() {
         "list_functions",
         "list_imports",
         "list_strings",
+        "network_surface",
         "observe_indirect_branch",
         "observe_pointer",
         "redo",

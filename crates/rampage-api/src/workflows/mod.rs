@@ -4,6 +4,7 @@
 
 mod find_main;
 mod indicators;
+mod network_surface;
 mod triage_report;
 
 use rampage_arch::Arch;

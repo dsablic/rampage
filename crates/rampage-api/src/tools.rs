@@ -395,6 +395,13 @@ pub fn tools() -> Vec<Tool> {
             },
         ),
         tool(
+            "network_surface",
+            "Map the networking surface as evidence: socket/DNS/HTTP/TLS imports and symbols, URL/IP/domain-like \
+             strings, the functions that reference them (via xrefs), and networking capability tags. An empty \
+             report says nothing was observed, not that the binary cannot communicate.",
+            |project, args: ReportArgs| project.network_surface(ReportLimits::new(args.max_per_section)),
+        ),
+        tool(
             "analysis_diagnostics",
             "Decode coverage and evidence of unreliable static code, with explicit limitations. \
              Does not assert encryption.",
