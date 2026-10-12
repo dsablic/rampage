@@ -36,6 +36,7 @@ pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use correlation::RuntimeCorrelation;
 pub use debug_import::DebugImport;
 pub use decompile::Decompilation;
+pub use detect::ToolDetections;
 pub use dotnet::{DotNetCounts, DotNetQuery, DotNetSummary};
 pub use files::{MAX_PEID_BYTES, MAX_SIGNATURE_DB_BYTES, read_bounded};
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};

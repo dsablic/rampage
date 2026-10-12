@@ -7,18 +7,29 @@ use std::path::Path;
 use rampage_capabilities::Capability;
 use rampage_detect::{Detection, SignatureDb, identify};
 use rampage_yara::YaraMatch;
+use serde::Serialize;
 
 use crate::{ApiError, Project};
+
+#[derive(Debug, Serialize)]
+pub struct ToolDetections {
+    pub detections: Vec<Detection>,
+    /// PeID database entries and lines that were skipped, so that a partly broken database is not silently
+    /// treated as complete.
+    pub warnings: Vec<String>,
+}
 
 impl Project {
     /// Identify the tools that likely produced this binary (packer, compiler, protector, installer, linker) from
     /// the bundled heuristic database, optionally extended with user-supplied PeID `userdb.txt` text.
-    pub fn detect_tools(&self, peid: Option<&str>) -> Result<Vec<Detection>, ApiError> {
+    pub fn detect_tools(&self, peid: Option<&str>) -> Result<ToolDetections, ApiError> {
         let mut db = SignatureDb::bundled();
+        let mut warnings = Vec::new();
         if let Some(text) = peid {
-            db.load_peid(text).map_err(|error| ApiError::Invalid(format!("PeID database: {error}")))?;
+            let skipped = db.load_peid(text).map_err(|error| ApiError::Invalid(format!("PeID database: {error}")))?;
+            warnings.extend(skipped.iter().map(|warning| format!("PeID database: {warning}")));
         }
-        Ok(identify(&self.binary, &db))
+        Ok(ToolDetections { detections: identify(&self.binary, &db), warnings })
     }
 
     /// Scan this binary's image bytes with the given YARA rule source, returning the matching rules. The rules

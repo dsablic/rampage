@@ -35,7 +35,7 @@ fn native_images_have_no_dotnet_metadata() {
 #[test]
 fn managed_dll_is_detected_strongly_and_triaged_as_managed() {
     let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();
-    let detections = project.detect_tools(None).unwrap();
+    let detections = project.detect_tools(None).unwrap().detections;
     assert!(
         detections.iter().any(|d| d.name == ".NET" && d.confidence == DetectionConfidence::Strong),
         "{detections:?}"

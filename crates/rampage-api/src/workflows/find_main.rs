@@ -89,7 +89,7 @@ impl Project {
             }
         }
         if self.binary.format == Format::Pe {
-            let mingw = self.detect_tools(None)?.iter().any(|detection| detection.name.contains("MinGW"));
+            let mingw = self.detect_tools(None)?.detections.iter().any(|detection| detection.name.contains("MinGW"));
             if mingw {
                 candidates.extend(self.mingw_candidates()?);
             } else {

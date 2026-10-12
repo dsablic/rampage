@@ -9,11 +9,11 @@ fn fixture(name: &str) -> PathBuf {
 #[test]
 fn detect_tools_names_the_producing_toolchain() {
     let go = Session::default().open(&fixture("hello-go-x64.elf"), None).unwrap();
-    let detections = go.detect_tools(None).unwrap();
+    let detections = go.detect_tools(None).unwrap().detections;
     assert!(detections.iter().any(|d| d.name == "Go" && d.kind == DetectionKind::Compiler), "{detections:?}");
 
     let elf = Session::default().open(&fixture("hello-x64.elf"), None).unwrap();
-    let detections = elf.detect_tools(None).unwrap();
+    let detections = elf.detect_tools(None).unwrap().detections;
     assert!(detections.iter().any(|d| d.name == "Clang/LLVM"), "{detections:?}");
     // An ordinary unpacked binary is not reported as packed.
     assert!(detections.iter().all(|d| d.kind != DetectionKind::Packer), "{detections:?}");
@@ -24,6 +24,12 @@ fn detect_tools_reports_a_malformed_peid_database() {
     let project = Session::default().open(&fixture("hello-x64.elf"), None).unwrap();
     let error = project.detect_tools(Some("[Broken]\nsignature = ZZ ZZ\nep_only = true\n"));
     assert!(error.is_err());
+
+    // A database with some usable entries loads them and reports the rest.
+    let partial = "[Broken]\nsignature = ZZ ZZ\nep_only = true\n[Fine]\nsignature = 4D 5A\nep_only = false\n";
+    let found = project.detect_tools(Some(partial)).unwrap();
+    assert_eq!(found.warnings.len(), 1, "{:?}", found.warnings);
+    assert!(found.warnings[0].contains("[Broken]"), "{:?}", found.warnings);
 }
 
 #[test]

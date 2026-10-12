@@ -45,7 +45,7 @@ impl Project {
         }
         report.sections.push(overview);
 
-        let detections = self.detect_tools(None)?;
+        let detections = self.detect_tools(None)?.detections;
         let mut toolchain = Section::new("Toolchain", limits);
         for detection in &detections {
             let confidence = match detection.confidence {

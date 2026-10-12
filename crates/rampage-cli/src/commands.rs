@@ -787,16 +787,19 @@ pub fn detect(out: &mut impl Write, path: &Path, peid: Option<&Path>, options: &
         Some(peid) => Some(rampage_api::read_bounded(peid, rampage_api::MAX_PEID_BYTES, "PeID database")?),
         None => None,
     };
-    let detections = open(path, options)?.detect_tools(peid_text.as_deref())?;
+    let found = open(path, options)?.detect_tools(peid_text.as_deref())?;
     if options.json {
-        return write_json(out, &detections);
+        return write_json(out, &found);
     }
-    if detections.is_empty() {
+    if found.detections.is_empty() {
         writeln!(out, "no tool signatures matched")?;
     }
-    for detection in detections {
+    for detection in &found.detections {
         let (kind, confidence) = (label(&detection.kind), label(&detection.confidence));
         writeln!(out, "[{kind}] {} ({confidence}): {}", detection.name, detection.evidence.join(", "))?;
+    }
+    for warning in &found.warnings {
+        writeln!(out, "warning: {warning}")?;
     }
     Ok(())
 }
