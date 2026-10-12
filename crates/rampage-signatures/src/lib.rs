@@ -16,8 +16,10 @@
 //! Hashes are versioned. Scheme 1 ([`function_hash`]) is the masking above. Scheme 2 ([`function_hash_in`]) also
 //! masks constants that are layout-dependent addresses: on x86/x86-64, displacements and immediates pointing into
 //! the image ([`MaskContext`]), as non-PIE code embeds them; on AArch64, the low 12 bits completing an ADRP page
-//! address. A [`SignatureDb`] records its scheme and [`SignatureDb::identify_in`] hashes with it, so databases saved
-//! under scheme 1 keep matching exactly as before.
+//! address. It also masks relative fields scheme 1 missed or over-masked on Thumb and MIPS (see
+//! [`function_hash_in`]); scheme 1's hashes stay frozen. A [`SignatureDb`] records its scheme and
+//! [`SignatureDb::identify_in`] hashes with it, so databases saved under scheme 1 keep matching exactly as before.
+//! New databases, the bundled ones included, are scheme 2.
 //!
 //! A confidence gate rejects non-discriminating bodies so they are neither stored nor matched: a body whose
 //! masked form carries too little content (a single-branch thunk masks to almost nothing, all-nop padding is one
@@ -125,8 +127,7 @@ impl MaskContext {
 /// Accumulates a function's masked instruction stream and measures whether it carries enough discriminating
 /// content to be worth storing or matching. Each path feeds one instruction's masked encoding (with the
 /// position-dependent fields already zeroed); [`Fingerprint::finish`] applies the confidence gate and either
-/// yields the hash or `None`. Hashing is unchanged for accepted bodies, so a body that passes hashes exactly as
-/// before the gate existed.
+/// yields the hash or `None`. The gate only accepts or rejects: it never changes an accepted body's hash.
 struct Fingerprint {
     hasher: Sha256,
     instructions: u32,
@@ -530,8 +531,9 @@ pub fn canonical_functions(binary: &Binary) -> BTreeMap<u64, &Symbol> {
 /// architecture or input with no decodable instructions. `target` supplies the architecture, the instruction
 /// byte order (used by the fixed-width paths), and, for 32-bit ARM, whether `address` holds Thumb code.
 ///
-/// This is hash scheme 1 ([`LEGACY_SCHEME`]), which the bundled databases and older saved ones use; new databases
-/// use [`function_hash_in`].
+/// This is hash scheme 1 ([`LEGACY_SCHEME`]), which databases saved before scheme 2 use, and the exact hash a
+/// scheme-2 database falls back to for functions whose masked hash is ambiguous. New databases, the bundled ones
+/// included, use [`function_hash_in`].
 pub fn function_hash(target: &Target, bytes: &[u8], address: u64) -> Option<FunctionHash> {
     hash(target, bytes, address, None)
 }
@@ -572,7 +574,6 @@ fn hash(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>
             let mut pages = AdrpPages::default();
             fixed_word_hash(bytes, false, |word| pages.mask(word))
         }
-        // x86 and AArch64 are fixed little-endian; their behavior is unchanged by the endianness threading.
         Arch::Aarch64 => fixed_word_hash(bytes, false, mask_aarch64),
         Arch::Arm if target.is_thumb(address) => thumb_hash(bytes, target.big_endian, image.is_some()),
         Arch::Arm => fixed_word_hash(bytes, target.big_endian, mask_arm_a32),
@@ -784,9 +785,11 @@ impl SignatureDb {
     /// The name for the function whose bytes start at `address`, hashed without knowledge of the image's layout.
     /// `target` carries the architecture and instruction byte order (see [`function_hash`]).
     ///
-    /// For a scheme 1 database this is exact. For a scheme 2 database it hashes with an empty [`MaskContext`], so
-    /// absolute addresses stay in the hash and a function that embeds any will not match: it finds a subset of
-    /// what [`SignatureDb::identify_in`] finds, never different names. Prefer `identify_in`.
+    /// For a scheme 1 database this is the same as [`SignatureDb::identify_in`]. For a scheme 2 database it hashes
+    /// with an empty [`MaskContext`], so absolute addresses stay in the hash and a function that embeds any will not
+    /// match. When the target's image covers the same address ranges as the reference's, it finds a subset of what
+    /// `identify_in` finds, under the same names; with other layouts a constant can be an image address in one and
+    /// not the other, and the two lookups can disagree. Prefer `identify_in`.
     pub fn identify(&self, target: &Target, bytes: &[u8], address: u64) -> Option<&str> {
         self.identify_in(target, &MaskContext::default(), bytes, address)
     }

@@ -1,5 +1,5 @@
 //! Starter signature databases shipped with rampage, so `identify` names common library functions out of the
-//! box. Each database is generated from a static musl libc build by `tools/signatures/gen-signatures.sh`; a
+//! box. Each database is generated from a static musl libc build by `tools/gen-signatures.sh`; a
 //! database matches only the exact library build it was made from, so these cover musl-linked binaries and the
 //! set grows as more corpora are added.
 

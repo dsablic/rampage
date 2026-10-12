@@ -156,7 +156,8 @@ fn measure_musl_static(arch: &str) -> [usize; 2] {
     let extents = extents(&target, &call_targets(&target));
     let legacy = names(&SignatureDb::from_binary_with_scheme(&reference, LEGACY_SCHEME), &target, &extents);
     let current = names(&SignatureDb::from_binary(&reference), &target, &extents);
-    // Scheme 2 masks a superset of scheme 1's fields; only a new ambiguity could lose a name, and none does here.
+    // On x86-64 and AArch64 scheme 2 masks a superset of scheme 1's fields; only a new ambiguity could lose a name,
+    // and none does here.
     for (address, name) in &legacy {
         assert_eq!(current.get(address), Some(name), "{arch}: scheme 2 lost or renamed {name} at {address:#x}");
     }
