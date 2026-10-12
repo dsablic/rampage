@@ -3,7 +3,8 @@
 //! The hex text is parsed two characters per byte. A hex digit fixes that nibble; a `?` leaves it free. So `60`
 //! matches exactly, `6?` matches `0x60..=0x6f`, `?0` matches any byte whose low nibble is zero, and `??` matches
 //! any byte at all. ASCII whitespace between bytes is ignored, so `60 E8 ?? ?? ?? ??` and `60E8????????` parse
-//! the same. Every pattern is at most [`MAX_PATTERN_BYTES`] long so a malformed signature cannot allocate wildly.
+//! the same. Every pattern is at most [`MAX_PATTERN_BYTES`] long, checked before anything is allocated, so a
+//! malformed signature cannot allocate wildly.
 
 /// Upper bound on a pattern's length in bytes; real entry-point stubs are far shorter.
 pub const MAX_PATTERN_BYTES: usize = 256;
@@ -49,19 +50,21 @@ fn nibble(c: char) -> Result<Option<u8>, PatternError> {
 impl BytePattern {
     /// Parses a hex pattern with `?` nibble wildcards. Whitespace between nibbles is ignored.
     pub fn parse(text: &str) -> Result<Self, PatternError> {
-        let nibbles: Vec<char> = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-        if nibbles.is_empty() {
+        let mut nibbles = text.chars().filter(|c| !c.is_ascii_whitespace());
+        // Counted before anything is allocated, so the length bound also bounds memory.
+        let count = nibbles.clone().count();
+        if count == 0 {
             return Err(PatternError::Empty);
         }
-        if !nibbles.len().is_multiple_of(2) {
+        if !count.is_multiple_of(2) {
             return Err(PatternError::OddNibbles);
         }
-        if nibbles.len() / 2 > MAX_PATTERN_BYTES {
+        if count / 2 > MAX_PATTERN_BYTES {
             return Err(PatternError::TooLong);
         }
-        let mut bytes = Vec::with_capacity(nibbles.len() / 2);
-        for pair in nibbles.as_chunks::<2>().0 {
-            let (high, low) = (nibble(pair[0])?, nibble(pair[1])?);
+        let mut bytes = Vec::with_capacity(count / 2);
+        while let (Some(high), Some(low)) = (nibbles.next(), nibbles.next()) {
+            let (high, low) = (nibble(high)?, nibble(low)?);
             let mut value = 0u8;
             let mut mask = 0u8;
             if let Some(high) = high {
