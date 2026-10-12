@@ -58,13 +58,24 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   from an authored signature database (and accepts your own PeID `userdb.txt`); `rampage yara` runs your YARA
   rules through the embedded yara-x engine; `rampage capa` evaluates a Mandiant capa-rules directory (file-scope
   features only); `rampage capabilities` applies the built-in corroborated rules. Every hit carries its evidence
-  and is a triage signal, not proof. Also exposed as the `detect_tools`, `yara_scan` and `capa_detect` tools.
+  and is a triage signal, not proof. Also exposed as the `detect_tools`, `yara_scan` and `capa_detect` tools. A
+  spec-derived constant database (AES, DES, Blowfish, SHA/MD5, ChaCha, CRC, Deflate, Base64, curve parameters)
+  locates algorithm tables in the image.
+- Guided investigation workflows: `triage_report`, `find_main`, `network_surface`, `find_crypto` and `diff_builds`
+  compose the primitives into one bounded report. Each finding carries its evidence, source tool and confidence;
+  each report ends with concrete next tool calls and states its limitations. MCP tools, or `rampage report`.
+- Measured accuracy: `rampage-eval` scores library identification against stripped twins of symbolized builds
+  (precision, recall and a disagreement set per architecture, gated on zero wrong or spurious names) -- the
+  harness behind the heuristic flywheel (`docs/plans/`).
 
 ## Usage
 
 ```
 cargo build --release
 
+rampage report triage-report <file>          # guided overview with evidence and next steps
+rampage report find-main|network-surface|find-crypto <file>
+rampage report diff-builds <file> --other <file>
 rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
 rampage detect  <file> [--peid <userdb.txt>]  # producing packer/compiler/protector/installer/linker
 rampage yara    <file> --rules <file|dir>     # run user-supplied YARA rules (embedded yara-x)

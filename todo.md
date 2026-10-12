@@ -114,8 +114,9 @@ Licensing discipline: bundle only permissive, author our own starter sets, load 
   secp256k1, Ed25519), most generated in code; both byte orders; min-length and information guards. Not
   detectable by constants: RC4, Adler-32, HMAC, TEA, Poly1305. Misses SIMD-interleaved and immediate-encoded
   constants.
-- [ ] `find_crypto` workflow: wire `rampage-constants` with crypto imports/capabilities and xrefs to the code
-  that references each hit (after the workflows framework lands).
+- [x] `find_crypto` workflow: constants (crypto vs checksum/compression/encoding), crypto library APIs, the
+  functions referencing either via xrefs, and crypto capability tags. Links Go's ChaCha constant to
+  `internal/chacha8rand.block` on the arm64 fixture. No committed fixture carries AES/SHA tables yet.
 - [ ] A real packed fixture (UPX or similar) once a packer is available, to test the packer path end to end.
 - Won't do: `yara-x` feature trimming. Its build weight is `wasmtime`/cranelift, a mandatory dependency on
   native targets (rules compile to WebAssembly); disabling modules would not remove it and would break user
@@ -151,9 +152,12 @@ REA ("Reverse Engineer Anything") is an open CLI+MCP orchestrator over external 
 multi-format front-ends and guided workflows. rampage builds its own engine and embeds Ghidra, so the value is
 in UX/workflow ideas, not the multi-engine dispatch:
 
-- [ ] Guided investigation workflows as first-class MCP tools (compose existing primitives): e.g. triage, locate
-  and summarize entry/main, map the network/attack surface, find crypto, diff two builds. Highest-leverage and
-  on-brand for AI-first clients.
+- [x] Guided investigation workflows (`crates/rampage-api/src/workflows/`): `triage_report`, `find_main`,
+  `network_surface`, `find_crypto`, `diff_builds`. Uniform bounded report (findings with evidence, source tool and
+  confidence; truncation stated; next-step tool calls; limitations); MCP tools, `rampage report`, and the MCP
+  instructions now point clients at `triage_report` first. Follow-ups: MSVC CRT startup chain in `find_main`
+  (no MSVC fixture), startup heuristics beyond x86-64/AArch64 ELF, more workflows (e.g. persistence, unpacking
+  triage, string decoding).
 - [ ] Broader input front-ends (user-invoked): firmware/archive carving to enumerate embedded binaries (extend
   the existing bundle inventory), and .NET/ECMA-335 metadata parsing (natural extension of the PE loader).
   APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
