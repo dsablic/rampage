@@ -128,6 +128,27 @@ const CASES: &[Case] = &[
         benign_imports: &["BCryptEncrypt", "FindFirstFileW", "FindNextFileW", "WriteFile"],
         benign_strings: &["Encrypted backup complete", "Bitcoin wallet backup", "README.txt"],
     },
+    Case {
+        id: "remote-process-injection",
+        imports: &["OpenProcess", "VirtualAllocEx", "CreateRemoteThread"],
+        strings: &[],
+        benign_imports: &["OpenProcess", "ReadProcessMemory", "VirtualQueryEx"],
+        benign_strings: &[],
+    },
+    Case {
+        id: "vm-sandbox-detection",
+        imports: &["GetSystemFirmwareTable"],
+        strings: &["VMware Virtual Platform"],
+        benign_imports: &["GetSystemFirmwareTable"],
+        benign_strings: &["SMBIOS firmware table version 3.2"],
+    },
+    Case {
+        id: "system-shutdown",
+        imports: &["InitiateSystemShutdownW"],
+        strings: &["SeShutdownPrivilege"],
+        benign_imports: &["InitiateSystemShutdownW"],
+        benign_strings: &["The system is shutting down for maintenance"],
+    },
 ];
 
 fn owned(values: &[&str]) -> Vec<String> {

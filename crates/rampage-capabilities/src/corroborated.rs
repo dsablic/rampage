@@ -246,6 +246,73 @@ pub(super) const RULES: &[CorroboratedRule] = &[
             ],
         ],
     },
+    CorroboratedRule {
+        id: "remote-process-injection",
+        name: "Remote process injection indicators",
+        category: "evasion",
+        groups: &[
+            &[Match::Import("openprocess"), Match::Import("ntopenprocess")],
+            &[
+                Match::Import("virtualallocex"),
+                Match::Import("ntallocatevirtualmemory"),
+                Match::Import("writeprocessmemory"),
+                Match::Import("ntwritevirtualmemory"),
+                Match::Import("ntmapviewofsection"),
+                Match::Import("mapviewoffileex"),
+            ],
+            &[
+                Match::Import("createremotethread"),
+                Match::Import("createremotethreadex"),
+                Match::Import("ntcreatethreadex"),
+                Match::Import("rtlcreateuserthread"),
+                Match::Import("queueuserapc"),
+                Match::Import("ntqueueapcthread"),
+                Match::Import("setthreadcontext"),
+                Match::Import("ntsetcontextthread"),
+            ],
+        ],
+    },
+    CorroboratedRule {
+        id: "vm-sandbox-detection",
+        name: "VM and sandbox fingerprinting indicators",
+        category: "evasion",
+        // Import-based fingerprinting only (reading firmware tables or adapter MACs for a hypervisor artifact);
+        // CPUID-based detection is an instruction, not an import, so it is out of reach here.
+        groups: &[
+            &[
+                Match::Import("getsystemfirmwaretable"),
+                Match::Import("enumsystemfirmwaretables"),
+                Match::Import("getadaptersinfo"),
+                Match::Import("getadaptersaddresses"),
+            ],
+            &[
+                Match::StringAsciiInsensitive("vmware"),
+                Match::StringAsciiInsensitive("virtualbox"),
+                Match::StringAsciiInsensitive("vbox"),
+                Match::StringAsciiInsensitive("qemu"),
+                Match::StringAsciiInsensitive("innotek"),
+                Match::StringAsciiInsensitive("08:00:27"),
+                Match::StringAsciiInsensitive("00:05:69"),
+            ],
+        ],
+    },
+    CorroboratedRule {
+        id: "system-shutdown",
+        name: "System shutdown or reboot indicators",
+        category: "impact",
+        groups: &[
+            &[
+                Match::Import("exitwindowsex"),
+                Match::Import("initiatesystemshutdowna"),
+                Match::Import("initiatesystemshutdownw"),
+                Match::Import("initiatesystemshutdownexa"),
+                Match::Import("initiatesystemshutdownexw"),
+                Match::Import("ntshutdownsystem"),
+                Match::Import("reboot"),
+            ],
+            &[Match::String("SeShutdownPrivilege"), Match::Import("adjusttokenprivileges")],
+        ],
+    },
 ];
 
 #[cfg(test)]
