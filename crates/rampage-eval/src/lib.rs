@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::Binary;
-use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, named_functions};
+use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, identify_program, named_functions};
 use serde::{Deserialize, Serialize};
 
 /// Known function names by address, taken from a symbolized twin of the evaluated binary.
@@ -305,21 +305,23 @@ pub fn evaluate_discovery(target: &Binary, truth: &Truth) -> Result<Report, Unsu
 /// The name `db` proposes for each function discovered in `target`, in address order.
 pub fn proposals(db: &SignatureDb, target: &Binary) -> Result<Vec<(u64, Option<String>)>, UnsupportedArch> {
     let program = rampage_analysis::functions::analyze(target)?;
-    let arch = target.target();
-    let image = MaskContext::from_binary(target);
+    // The same bodies (`DiscoveredFunction::body`) and the same program-wide identification `rampage identify`
+    // uses, so the eval measures what users get.
+    let bodies: Vec<(u64, &[u8])> =
+        program.functions.iter().filter_map(|function| Some((function.address, function.body(target)?))).collect();
+    let names = identify_program(&[db], &target.target(), &MaskContext::from_binary(target), &bodies);
     Ok(program
         .functions
         .iter()
-        .map(|function| {
-            // The same body `rampage identify` hashes (`DiscoveredFunction::body`), so the eval measures what users
-            // get.
-            let name = function
-                .body(target)
-                .and_then(|bytes| db.identify_in(&arch, &image, bytes, function.address))
-                .map(str::to_owned);
-            (function.address, name)
-        })
+        .map(|function| (function.address, names.get(&function.address).map(|name| name.to_string())))
         .collect())
+}
+
+/// Each function discovery finds in `binary`, its start mapped to the end of its body: the extents a signature
+/// database is also built over (`SignatureDb::from_binary_with_extents`), since identification hashes them.
+pub fn discovered_extents(binary: &Binary) -> Result<BTreeMap<u64, u64>, UnsupportedArch> {
+    let program = rampage_analysis::functions::analyze(binary)?;
+    Ok(program.functions.iter().map(|function| (function.address, function.end())).collect())
 }
 
 /// Discovers `target`'s functions, identifies them with `db` and scores the result against `truth`.

@@ -1,7 +1,9 @@
 //! Library-function identification: build a signature database from a binary whose functions are named, and
 //! apply one to name the matching functions of another binary (see `rampage-signatures`).
 
-use rampage_signatures::{MaskContext, SignatureDb};
+use std::collections::BTreeMap;
+
+use rampage_signatures::{MaskContext, SignatureDb, identify_program};
 use serde::Serialize;
 
 use crate::workflows::is_default_name;
@@ -25,9 +27,16 @@ pub struct SignatureApplication {
 }
 
 impl Project {
-    /// Builds a signature database from this binary's named functions.
+    /// Builds a signature database from this binary's named functions, over both their symbol sizes and the
+    /// extents discovery finds for them (which is what identification hashes in a target).
     pub fn build_signatures(&self) -> SignatureDb {
-        SignatureDb::from_binary(&self.binary)
+        let extents = match self.analysis() {
+            Ok(analysis) => {
+                analysis.program.functions.iter().map(|function| (function.address, function.end())).collect()
+            }
+            Err(_) => BTreeMap::new(),
+        };
+        SignatureDb::from_binary_with_extents(&self.binary, &extents)
     }
 
     /// Identifies discovered functions against `database`. When `apply` is set, matches for functions that are
@@ -47,19 +56,21 @@ impl Project {
             return Ok(SignatureApplication { matched: 0, applied: 0, matches: Vec::new() });
         }
         let analysis = self.analysis()?;
-        let target = self.binary.target();
+        let bodies: Vec<(u64, &[u8])> = analysis
+            .program
+            .functions
+            .iter()
+            .filter_map(|function| Some((function.address, function.body(&self.binary)?)))
+            .collect();
         let image = MaskContext::from_binary(&self.binary);
+        let names = identify_program(databases, &self.binary.target(), &image, &bodies);
         let mut matches = Vec::new();
-        for function in &analysis.program.functions {
-            let Some(bytes) = function.body(&self.binary) else { continue };
-            let identified =
-                databases.iter().find_map(|database| database.identify_in(&target, &image, bytes, function.address));
-            let Some(name) = identified else { continue };
-            let current = self.function_name(function.address);
+        for (address, name) in names {
+            let current = self.function_name(address);
             matches.push(SignatureMatch {
-                address: function.address,
+                address,
                 name: name.to_owned(),
-                unnamed: is_default_name(&current, function.address),
+                unnamed: is_default_name(&current, address),
             });
         }
 

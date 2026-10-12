@@ -175,6 +175,10 @@ fn strip(input: &Path, output: &Path, keep_symbols: bool) -> Result<ExitCode, St
     Ok(ExitCode::SUCCESS)
 }
 
+fn extents(binary: &Binary, path: &Path) -> Result<BTreeMap<u64, u64>, String> {
+    rampage_eval::discovered_extents(binary).map_err(|error| format!("{}: {error}", path.display()))
+}
+
 fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))
 }
@@ -216,8 +220,8 @@ impl Slice {
                         db.arch()
                     ));
                 }
-                Some(db) => db.extend_from_binary(&binary),
-                None => combined = Some(SignatureDb::from_binary(&binary)),
+                Some(db) => db.extend_from_binary_with_extents(&binary, &extents(&binary, path)?),
+                None => combined = Some(SignatureDb::from_binary_with_extents(&binary, &extents(&binary, path)?)),
             }
         }
         for path in &self.dbs {
