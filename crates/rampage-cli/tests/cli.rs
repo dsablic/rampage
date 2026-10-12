@@ -355,3 +355,31 @@ fn rename_and_comment_persist_beside_the_binary() {
     assert!(directory.join("hello-x64.elf.rampage").exists());
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+#[test]
+fn annotate_batch_applies_a_json_file_all_or_nothing() {
+    let directory = std::env::temp_dir().join(format!("rampage-cli-batch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("hello-x64.elf");
+    std::fs::copy(fixture("hello-x64.elf"), &path).unwrap();
+    let entries = directory.join("entries.json");
+    let rampage = |args: &[&str]| assert_cmd::Command::cargo_bin("rampage").unwrap().args(args).assert();
+    let (path_text, entries_text) = (path.to_str().unwrap(), entries.to_str().unwrap());
+    std::fs::write(&entries, r#"[{"at": "main", "name": "start_here"}, {"at": "puts", "name": "bad name"}]"#).unwrap();
+    rampage(&["annotate-batch", path_text, entries_text])
+        .failure()
+        .stderr(predicates::str::contains("nothing applied"))
+        .stderr(predicates::str::contains("entry 1"));
+    rampage(&["check-names", path_text, "start_here", "puts"])
+        .success()
+        .stdout(predicates::str::contains("start_here  free"))
+        .stdout(predicates::str::contains("puts  used by symbol"));
+    std::fs::write(&entries, r#"[{"at": "main", "name": "start_here", "comment": "greets"}]"#).unwrap();
+    rampage(&["annotate-batch", path_text, entries_text]).success().stdout(predicates::str::contains("1 of 1 entries"));
+    rampage(&["annotations", path_text])
+        .success()
+        .stdout(predicates::str::contains("start_here"))
+        .stdout(predicates::str::contains("greets"));
+    std::fs::remove_dir_all(&directory).unwrap();
+}

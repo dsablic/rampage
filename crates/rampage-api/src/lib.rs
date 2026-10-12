@@ -1,6 +1,7 @@
 //! The single command and query surface shared by the CLI, the MCP server and the UI.
 
 pub mod annotations;
+mod batch;
 mod benchmark;
 mod branch_observation;
 mod capabilities;
@@ -31,6 +32,7 @@ use std::path::PathBuf;
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::LoadError;
 
+pub use batch::{BatchEntry, BatchOutcome, BatchResult, MAX_BATCH, NameCheck};
 pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use correlation::RuntimeCorrelation;

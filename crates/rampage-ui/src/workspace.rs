@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use rampage_analysis::strings::FoundString;
-use rampage_api::annotations::Field;
+use rampage_api::annotations::{Edit, Field};
 use rampage_api::{
     ApiError, FunctionListing, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Project, Session, StringsQuery,
     Triage, XrefQuery, XrefRow,
@@ -391,17 +391,21 @@ impl Workspace {
     }
 
     pub fn undo(&mut self) {
-        match self.project.undo() {
-            Ok(Some(edit)) => self.annotations_changed(Some(edit.address)),
-            Ok(None) => {}
-            Err(error) => self.notice = Some(error.to_string()),
-        }
+        let result = self.project.undo();
+        self.step_changed(result);
     }
 
     pub fn redo(&mut self) {
-        match self.project.redo() {
-            Ok(Some(edit)) => self.annotations_changed(Some(edit.address)),
-            Ok(None) => {}
+        let result = self.project.redo();
+        self.step_changed(result);
+    }
+
+    /// Refreshes after an undo or redo: just the address one edit touched, or everything after a batch.
+    fn step_changed(&mut self, result: Result<Vec<Edit>, ApiError>) {
+        match result.as_deref() {
+            Ok([]) => {}
+            Ok([edit]) => self.annotations_changed(Some(edit.address)),
+            Ok(_) => self.annotations_changed(None),
             Err(error) => self.notice = Some(error.to_string()),
         }
     }

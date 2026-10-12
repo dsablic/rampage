@@ -50,10 +50,12 @@ async fn lists_all_tools_with_instructions() {
     names.sort();
     let expected = [
         "analysis_diagnostics",
+        "annotate_batch",
         "binary_info",
         "build_signatures",
         "capa_detect",
         "capabilities",
+        "check_names",
         "class_evidence",
         "compare_pointer_observations",
         "compare_runtime_bytes",
@@ -367,9 +369,9 @@ async fn agents_rename_and_comment() {
     let list = json_of(&call(&client, "list_annotations", json!({ "path": path })).await);
     assert_eq!(list["comments"][0]["text"], "entry");
     let undone = json_of(&call(&client, "undo", json!({ "path": path })).await);
-    assert_eq!(undone["field"], "comment");
+    assert_eq!(undone[0]["field"], "comment");
     let redone = json_of(&call(&client, "redo", json!({ "path": path })).await);
-    assert_eq!(redone["value"], "entry");
+    assert_eq!(redone[0]["value"], "entry");
     let cleared =
         json_of(&call(&client, "set_comment", json!({ "path": path, "at": "say_hello", "clear": true })).await);
     assert_eq!((&cleared["value"], &cleared["changed"]), (&json!(null), &json!(true)));
@@ -377,6 +379,49 @@ async fn agents_rename_and_comment() {
     assert_eq!(neither.is_error, Some(true));
     let bad = call(&client, "rename", json!({ "path": path, "at": "say_hello", "name": "two words" })).await;
     assert_eq!(bad.is_error, Some(true));
+    client.cancel().await.unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
+async fn agents_annotate_in_batches() {
+    let directory = std::env::temp_dir().join(format!("rampage-mcp-batch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("hello-arm64.macho");
+    std::fs::copy(fixture("hello-arm64.macho"), &path).unwrap();
+    let path = path.to_str().unwrap();
+    let client = connect().await;
+    let checks =
+        json_of(&call(&client, "check_names", json!({ "path": path, "names": ["_puts", "fresh", "0x10"] })).await);
+    assert_eq!(
+        (&checks[0]["used_by"], &checks[1]["valid"], &checks[2]["address_shaped"]),
+        (&json!("symbol"), &json!(true), &json!(true))
+    );
+
+    let entries = json!([
+        { "at": "_main", "name": "say_hello", "comment": "entry" },
+        { "at": "_puts", "name": "two words" },
+    ]);
+    let refused = call(&client, "annotate_batch", json!({ "path": path, "entries": entries })).await;
+    assert_eq!(refused.is_error, Some(true));
+    assert!(text(&refused).contains("entry 1"), "{}", text(&refused));
+    let list = json_of(&call(&client, "list_annotations", json!({ "path": path })).await);
+    assert_eq!(list["names"], json!([]));
+
+    let entries = json!([
+        { "at": "_main", "name": "say_hello", "comment": "entry" },
+        { "at": "_puts", "comment": "libc" },
+    ]);
+    let applied = json_of(&call(&client, "annotate_batch", json!({ "path": path, "entries": entries })).await);
+    assert_eq!(applied["changed"], 2);
+    let undone = json_of(&call(&client, "undo", json!({ "path": path })).await);
+    assert_eq!(undone.as_array().unwrap().len(), 3);
+    let list = json_of(&call(&client, "list_annotations", json!({ "path": path })).await);
+    assert_eq!((&list["names"], &list["comments"]), (&json!([]), &json!([])));
+    json_of(&call(&client, "redo", json!({ "path": path })).await);
+    let functions = json_of(&call(&client, "list_functions", json!({ "path": path, "name_contains": "say_" })).await);
+    assert_eq!(functions["items"][0]["name"], "say_hello");
     client.cancel().await.unwrap();
     std::fs::remove_dir_all(&directory).unwrap();
 }

@@ -113,10 +113,14 @@ impl Project {
 
     /// The address a name refers to: a user name, a symbol, export or stub name, or an import name, which finds
     /// its ELF `<import>@plt` stub, or else its import slot.
-    fn address_named(&self, annotations: &Annotations, name: &str) -> Option<u64> {
-        annotations
+    pub(crate) fn address_named(&self, annotations: &Annotations, name: &str) -> Option<u64> {
+        annotations.address_of(name).or_else(|| self.symbol_address(name))
+    }
+
+    /// The address a name refers to apart from the user's names.
+    pub(crate) fn symbol_address(&self, name: &str) -> Option<u64> {
+        self.names
             .address_of(name)
-            .or_else(|| self.names.address_of(name))
             .or_else(|| self.names.address_of(&format!("{name}@plt")))
             .or_else(|| self.names.address_of(&format!("__imp_{name}")))
     }
@@ -125,19 +129,7 @@ impl Project {
     /// keep resolving to one address.
     pub fn rename(&self, address: u64, name: Option<&str>) -> Result<EditResult, ApiError> {
         if let Some(name) = name {
-            let valid = !name.is_empty()
-                && !name.starts_with(|c: char| c.is_ascii_digit())
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || "_.$@?:".contains(c));
-            if !valid {
-                return Err(ApiError::Invalid(format!("{name:?} is not a valid name: use letters, digits and _.$@?:")));
-            }
-            // `resolve` reads `sub_<hex>` and `0x...` as addresses, so such a name could never be looked up by name;
-            // other names that merely start with `sub_` (`sub_menu_init`) are fine.
-            let address_like = name.starts_with("0x")
-                || name.strip_prefix("sub_").is_some_and(|hex| u64::from_str_radix(hex, 16).is_ok());
-            if address_like {
-                return Err(ApiError::Invalid(format!("{name:?} looks like an address; choose another name")));
-            }
+            check_name(name).map_err(ApiError::Invalid)?;
         }
         // Check and set under one lock, so that two clients cannot give one name to two addresses.
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -174,8 +166,9 @@ impl Project {
         Ok(EditResult { address, field: Field::Comment, value, changed })
     }
 
-    /// Reverts the last edit made through this project in this process. Returns it.
-    pub fn undo(&self) -> Result<Option<Edit>, ApiError> {
+    /// Reverts the last edit, or batch of edits, made through this project in this process. Returns its edits;
+    /// empty when there was nothing to undo.
+    pub fn undo(&self) -> Result<Vec<Edit>, ApiError> {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
         self.annotations
@@ -190,8 +183,8 @@ impl Project {
             .map_err(ApiError::Invalid)
     }
 
-    /// Reapplies the last undone edit. Returns it.
-    pub fn redo(&self) -> Result<Option<Edit>, ApiError> {
+    /// Reapplies the last undone edit or batch. Returns its edits; empty when there was nothing to redo.
+    pub fn redo(&self) -> Result<Vec<Edit>, ApiError> {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
         self.annotations
@@ -273,6 +266,10 @@ impl Project {
     /// Parses `0x` hex or decimal, or looks up a name: the user's, a symbol, export or stub name, an import name
     /// (finding its stub), or `sub_<hex>`.
     pub fn resolve(&self, text: &str) -> Result<u64, ApiError> {
+        self.resolve_in(&self.annotations(), text)
+    }
+
+    pub(crate) fn resolve_in(&self, annotations: &Annotations, text: &str) -> Result<u64, ApiError> {
         let text = text.trim();
         if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
             return u64::from_str_radix(hex, 16)
@@ -281,7 +278,7 @@ impl Project {
         if let Ok(address) = text.parse() {
             return Ok(address);
         }
-        if let Some(address) = self.address_named(&self.annotations(), text) {
+        if let Some(address) = self.address_named(annotations, text) {
             return Ok(address);
         }
         if let Some(address) = text.strip_prefix("sub_").and_then(|hex| u64::from_str_radix(hex, 16).ok()) {
@@ -369,6 +366,25 @@ impl Project {
             scanned.iter().filter(|string| string.text.chars().count() >= min_len && matcher.matches(&string.text));
         Page::of(selected, query.offset, query.limit).map(FoundString::clone)
     }
+}
+
+/// Refuses a name that is not an identifier, or that `resolve` would read as an address: `sub_<hex>` or `0x...`
+/// could never be looked up by name; other names that merely start with `sub_` (`sub_menu_init`) are fine.
+pub(crate) fn check_name(name: &str) -> Result<(), String> {
+    let valid = !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || "_.$@?:".contains(c));
+    if !valid {
+        return Err(format!("{name:?} is not a valid name: use letters, digits and _.$@?:"));
+    }
+    if is_address_shaped(name) {
+        return Err(format!("{name:?} looks like an address; choose another name"));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_address_shaped(name: &str) -> bool {
+    name.starts_with("0x") || name.strip_prefix("sub_").is_some_and(|hex| u64::from_str_radix(hex, 16).is_ok())
 }
 
 #[cfg(test)]

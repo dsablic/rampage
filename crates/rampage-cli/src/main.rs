@@ -249,6 +249,18 @@ enum Command {
         #[arg(long)]
         clear: bool,
     },
+    /// Apply a JSON array of {at, name?, comment?} as one undo step; nothing is applied if any entry is invalid
+    AnnotateBatch {
+        file: PathBuf,
+        /// The JSON file of entries (at most 1000)
+        entries: PathBuf,
+    },
+    /// Report whether candidate names are valid identifiers, address-shaped, or already used
+    CheckNames {
+        file: PathBuf,
+        #[arg(required = true)]
+        names: Vec<String>,
+    },
     /// List the user's names and comments
     Annotations { file: PathBuf },
     /// Preview embedded DWARF scalar/pointer function signatures, optionally persist them
@@ -368,6 +380,8 @@ fn main() -> ExitCode {
         }
         Command::Rename { file, at, name, .. } => commands::rename(&mut out, &file, &at, name.as_deref(), &options),
         Command::Comment { file, at, text, .. } => commands::comment(&mut out, &file, &at, text.as_deref(), &options),
+        Command::AnnotateBatch { file, entries } => commands::annotate_batch(&mut out, &file, &entries, &options),
+        Command::CheckNames { file, names } => commands::check_names(&mut out, &file, &names, &options),
         Command::Annotations { file } => commands::annotations(&mut out, &file, &options),
         Command::DebugTypes { file, apply } => commands::debug_types(&mut out, &file, apply, &options),
         Command::Report { workflow, file, other, limit, no_decompile } => {
