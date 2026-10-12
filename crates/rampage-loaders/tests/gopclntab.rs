@@ -36,6 +36,34 @@ fn recovers_function_names_from_a_stripped_arm64_go_binary() {
 }
 
 #[test]
+fn magic_scan_recovers_names_when_the_section_is_renamed() {
+    // Rename every `.gopclntab` so the named lookup misses and the bounded magic scan must find the table in
+    // the read-only data by its header. The section keeps its read-only flags, so its bytes are still scanned.
+    let mut bytes = std::fs::read(fixture("hello-go-x64.elf")).unwrap();
+    let needle = b".gopclntab";
+    let mut cursor = 0;
+    let mut renamed = 0;
+    while let Some(rel) = bytes[cursor..].windows(needle.len()).position(|window| window == needle) {
+        let at = cursor + rel;
+        bytes[at + 1] = b'z'; // ".zopclntab" matches no known pclntab section name
+        cursor = at + needle.len();
+        renamed += 1;
+    }
+    assert!(renamed >= 1, "fixture has no .gopclntab to rename");
+
+    let path = std::env::temp_dir().join(format!("rampage-go-scan-{}.elf", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let binary = Binary::open(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+
+    assert!(binary.sections.iter().all(|section| section.name != ".gopclntab"), "rename did not take");
+    let attached = |name: &str| binary.symbols.iter().any(|s| s.name == name && s.kind == SymbolKind::Function);
+    assert!(attached("main.main"), "main.main recovered via scan");
+    assert!(attached("main.greet"), "main.greet recovered via scan");
+    assert!(binary.symbols.iter().any(|symbol| symbol.name.starts_with("runtime.")), "runtime names via scan");
+}
+
+#[test]
 fn recovery_on_a_non_go_binary_is_a_clean_no_op() {
     let mut binary = Binary::open(fixture("hello-x64.elf")).unwrap();
     let before = binary.symbols.len();
