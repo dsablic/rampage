@@ -5,6 +5,7 @@
 use rampage_loaders::dotnet::{self, Assembly, AssemblyRef, BodyKind, CliHeader, EntryPoint, Module, TypeDef};
 use serde::Serialize;
 
+use crate::rows::Matcher;
 use crate::{ApiError, Page, Project};
 
 /// Which types to list: those whose full name (`Namespace.Name`) or one of whose method names contains `contains`
@@ -59,13 +60,9 @@ impl Project {
             member_refs: metadata.member_refs.len(),
             user_strings: metadata.user_strings.len(),
         };
-        let needle = query.contains.as_deref().map(str::to_lowercase);
-        let wanted = |ty: &TypeDef| match &needle {
-            None => true,
-            Some(needle) => {
-                ty.full_name().to_lowercase().contains(needle)
-                    || ty.methods.iter().any(|method| method.name.to_lowercase().contains(needle))
-            }
+        let matcher = Matcher::new(query.contains.as_deref());
+        let wanted = |ty: &TypeDef| {
+            matcher.matches(&ty.full_name()) || ty.methods.iter().any(|method| matcher.matches(&method.name))
         };
         let types = Page::of(metadata.types.into_iter().filter(wanted), query.offset, query.limit);
         Ok(Some(DotNetSummary {
