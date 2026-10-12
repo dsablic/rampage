@@ -60,6 +60,16 @@ fn malformed_rule_returns_compile_error_not_panic() {
 }
 
 #[test]
+fn a_slow_rule_stops_at_the_timeout() {
+    let slow = "rule slow { condition: for all i in (0..100000000000) : (uint8(i % filesize) < 0x100) }";
+    let rules = compile(slow).unwrap().with_timeout(std::time::Duration::ZERO);
+    let started = std::time::Instant::now();
+    let result = scan(&rules, b"some bytes");
+    assert!(matches!(result, Err(rampage_yara::YaraError::Timeout(_))), "{result:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+#[test]
 fn unreadable_rule_file_error_names_the_cause() {
     let missing = std::env::temp_dir().join(format!("rampage-yara-missing-{}.yar", std::process::id()));
     let message = rampage_yara::compile_files(&[&missing]).err().expect("missing file fails").to_string();

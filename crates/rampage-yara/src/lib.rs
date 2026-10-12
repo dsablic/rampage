@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use rampage_loaders::Binary;
 use serde::Serialize;
@@ -26,11 +27,31 @@ pub enum YaraError {
     Compile(String),
     #[error("scan failed: {0}")]
     Scan(String),
+    #[error("scan timed out after {0:?}")]
+    Timeout(Duration),
 }
+
+/// How long one scan may run unless [`Rules::with_timeout`] says otherwise. User rules can be arbitrarily slow
+/// (a `for` loop over every byte, say), and a scan must not hang its caller.
+pub const DEFAULT_SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A compiled set of YARA rules, ready to scan with. Opaque wrapper over `yara_x::Rules`.
 pub struct Rules {
     inner: yara_x::Rules,
+    timeout: Duration,
+}
+
+impl Rules {
+    fn new(inner: yara_x::Rules) -> Self {
+        Self { inner, timeout: DEFAULT_SCAN_TIMEOUT }
+    }
+
+    /// Sets how long each scan with these rules may run. `yara-x` checks the deadline on a one-second
+    /// heartbeat, so the limit is effectively rounded up to whole seconds.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
 }
 
 /// One pattern (string) instance that matched, located within the scanned data.
@@ -60,7 +81,7 @@ pub struct YaraMatch {
 pub fn compile(sources: &str) -> Result<Rules, YaraError> {
     let mut compiler = yara_x::Compiler::new();
     compiler.add_source(sources).map_err(|e| YaraError::Compile(e.to_string()))?;
-    Ok(Rules { inner: compiler.build() })
+    Ok(Rules::new(compiler.build()))
 }
 
 /// Compile rules from a set of files, tagging each with its path so compile errors name the source file.
@@ -78,7 +99,7 @@ pub fn compile_files<P: AsRef<Path>>(paths: &[P]) -> Result<Rules, YaraError> {
         let code = yara_x::SourceCode::from(text.as_str()).with_origin(origin);
         compiler.add_source(code).map_err(|e| YaraError::Compile(e.to_string()))?;
     }
-    Ok(Rules { inner: compiler.build() })
+    Ok(Rules::new(compiler.build()))
 }
 
 /// Compile every `.yar`/`.yara` file in a directory (non-recursive), in sorted path order for stable results. A
@@ -101,10 +122,15 @@ pub fn compile_dir<P: AsRef<Path>>(dir: P) -> Result<Rules, YaraError> {
     compile_files(&paths)
 }
 
-/// Scan raw bytes, returning the rules that matched.
+/// Scan raw bytes, returning the rules that matched. The scan stops with [`YaraError::Timeout`] once the rules'
+/// timeout ([`DEFAULT_SCAN_TIMEOUT`] unless set with [`Rules::with_timeout`]) elapses.
 pub fn scan(rules: &Rules, data: &[u8]) -> Result<Vec<YaraMatch>, YaraError> {
     let mut scanner = yara_x::Scanner::new(&rules.inner);
-    let results = scanner.scan(data).map_err(|e| YaraError::Scan(e.to_string()))?;
+    scanner.set_timeout(rules.timeout);
+    let results = scanner.scan(data).map_err(|error| match error {
+        yara_x::ScanError::Timeout => YaraError::Timeout(rules.timeout),
+        other => YaraError::Scan(other.to_string()),
+    })?;
     Ok(results.matching_rules().map(to_match).collect())
 }
 
