@@ -80,15 +80,8 @@ fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
             writeln!(out, "  (nothing observed)")?;
         }
         for finding in &section.findings {
-            let confidence = serde_json::to_value(finding.confidence)?;
             let at = finding.address.map(|address| format!(" @{address:#x}")).unwrap_or_default();
-            writeln!(
-                out,
-                "  [{}] {}{at}  ({})",
-                confidence.as_str().unwrap_or("?"),
-                finding.observation,
-                finding.source
-            )?;
+            writeln!(out, "  [{}] {}{at}  ({})", finding.confidence.as_str(), finding.observation, finding.source)?;
             for evidence in &finding.evidence {
                 writeln!(out, "      {evidence}")?;
             }

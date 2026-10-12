@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rampage_api::{Confidence, DotNetQuery, ReportLimits, Session};
+use rampage_api::{DetectionConfidence, DotNetQuery, ReportLimits, Session};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -36,7 +36,10 @@ fn native_images_have_no_dotnet_metadata() {
 fn managed_dll_is_detected_strongly_and_triaged_as_managed() {
     let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();
     let detections = project.detect_tools(None).unwrap();
-    assert!(detections.iter().any(|d| d.name == ".NET" && d.confidence == Confidence::Strong), "{detections:?}");
+    assert!(
+        detections.iter().any(|d| d.name == ".NET" && d.confidence == DetectionConfidence::Strong),
+        "{detections:?}"
+    );
     let report = project.triage_report(ReportLimits::default()).unwrap();
     assert!(report.next_steps.iter().any(|step| step.tool == "dotnet_metadata"), "{report:#?}");
     assert!(report.next_steps.iter().all(|step| step.tool != "find_main"), "{report:#?}");

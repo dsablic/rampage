@@ -47,7 +47,7 @@ pub use rampage_capabilities::Capability;
 pub use rampage_decompiler::results::RecoveryStatus;
 pub use rampage_decompiler::worker::WorkerConfig as DecompilerWorkerConfig;
 pub use rampage_decompiler::{DecompilerOptions, Platform as DecompilerPlatform};
-pub use rampage_detect::{Confidence, Detection, Kind as DetectionKind};
+pub use rampage_detect::{Confidence as DetectionConfidence, Detection, Kind as DetectionKind};
 pub use rampage_signatures::SignatureDb;
 pub use rampage_yara::{MatchedString, YaraMatch};
 pub use rows::{

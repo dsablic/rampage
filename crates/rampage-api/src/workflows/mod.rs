@@ -39,6 +39,18 @@ pub enum Confidence {
     Observed,
 }
 
+impl Confidence {
+    /// The level as it appears in a report's JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Observed => "observed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     pub observation: String,
@@ -271,6 +283,13 @@ mod tests {
         assert_eq!(finding.evidence.len(), MAX_EVIDENCE + 1);
         assert_eq!(finding.evidence.iter().filter(|item| item.starts_with("... and")).count(), 1);
         assert_eq!(finding.evidence.last().unwrap(), "... and 5 more");
+    }
+
+    #[test]
+    fn confidence_names_match_the_json() {
+        for confidence in [Confidence::Low, Confidence::Medium, Confidence::High, Confidence::Observed] {
+            assert_eq!(serde_json::to_value(confidence).unwrap(), confidence.as_str());
+        }
     }
 
     #[test]

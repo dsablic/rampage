@@ -116,11 +116,10 @@ impl Project {
         match candidates.first() {
             Some(best) => {
                 let name = self.function_name(best.address);
-                let confidence = serde_json::to_value(best.confidence).unwrap_or_default();
                 report.summary.push(format!(
                     "Most likely entry logic: `{name}` at {:#x} ({} confidence, from {}).",
                     best.address,
-                    confidence.as_str().unwrap_or("?"),
+                    best.confidence.as_str(),
                     best.source
                 ));
                 if candidates.len() > 1 {
