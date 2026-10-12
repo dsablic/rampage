@@ -179,7 +179,8 @@ impl ReportTarget {
     }
 }
 
-/// The uniform result of every workflow.
+/// The uniform result of every workflow. Sections serialize last, so that a reader cut short by size still has the
+/// summary, limitations and next steps.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowReport {
     pub workflow: &'static str,
@@ -188,12 +189,12 @@ pub struct WorkflowReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub other: Option<ReportTarget>,
     pub summary: Vec<String>,
-    pub sections: Vec<Section>,
+    pub limitations: Vec<String>,
     pub next_steps: Vec<NextStep>,
     /// Suggestions dropped past `MAX_NEXT_STEPS`.
     #[serde(skip_serializing_if = "is_zero")]
     pub next_steps_omitted: usize,
-    pub limitations: Vec<String>,
+    pub sections: Vec<Section>,
 }
 
 fn is_zero(count: &usize) -> bool {
@@ -228,6 +229,32 @@ impl WorkflowReport {
 
     pub fn limitation(&mut self, text: impl Into<String>) {
         self.limitations.push(text.into());
+    }
+
+    /// Shrinks the report until its compact JSON is at most `max_bytes` long, by halving the findings of the
+    /// section holding the most (each cut section reads as truncated) and, failing that, dropping excerpts. The
+    /// summary, limitations and next steps are kept whole, and a limitation says the report was cut.
+    pub fn fit(&mut self, max_bytes: usize) {
+        let size = |report: &Self| serde_json::to_string(report).map_or(0, |json| json.len());
+        if size(self) <= max_bytes {
+            return;
+        }
+        self.limitation(format!(
+            "The report was cut to fit {max_bytes} bytes: some sections hold fewer findings than requested (each \
+             gives its total) and excerpts may be dropped. Ask for a smaller max_per_section, or page through the \
+             primitive tools for the rest."
+        ));
+        while size(self) > max_bytes {
+            let fullest = self.sections.iter_mut().filter(|section| !section.findings.is_empty());
+            if let Some(section) = fullest.max_by_key(|section| section.findings.len()) {
+                section.findings.truncate(section.findings.len() / 2);
+                section.truncated = true;
+            } else if let Some(section) = self.sections.iter_mut().find(|section| section.excerpt.is_some()) {
+                section.excerpt = None;
+            } else {
+                break;
+            }
+        }
     }
 
     /// The section titled `title`, for tests and renderers.
@@ -643,6 +670,36 @@ mod tests {
         assert_eq!(report.next_steps.len(), MAX_NEXT_STEPS);
         assert_eq!(report.next_steps_omitted, 3);
         assert_eq!(serde_json::to_value(&report).unwrap()["next_steps_omitted"], 3);
+    }
+
+    #[test]
+    fn fitting_shrinks_sections_and_keeps_the_rest() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+        let project = Project::new(rampage_loaders::Binary::open(path).unwrap());
+        let mut report = WorkflowReport::new("test", &project);
+        report.summary.push("summary".to_owned());
+        report.limitation("limitation");
+        let limits = ReportLimits::new(Some(MAX_SECTION_LIMIT));
+        for title in ["big", "small"] {
+            let mut section = Section::new(title, limits);
+            let count = if title == "big" { MAX_SECTION_LIMIT } else { 3 };
+            section.extend((0..count).map(|index| Finding::new("test", Confidence::Low, "x".repeat(100 + index))));
+            report.sections.push(section);
+        }
+        let untouched = serde_json::to_string(&report).unwrap();
+        report.fit(untouched.len());
+        assert_eq!(serde_json::to_string(&report).unwrap(), untouched);
+
+        report.fit(8_000);
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.len() <= 8_000, "{}", json.len());
+        let big = report.section("big").unwrap();
+        assert!(big.truncated && big.total == MAX_SECTION_LIMIT && big.findings.len() < 50);
+        assert_eq!(report.section("small").unwrap().findings.len(), 3);
+        assert_eq!(report.summary, ["summary"]);
+        assert_eq!(report.limitations.len(), 2);
+        assert!(report.limitations[1].contains("cut to fit 8000 bytes"));
+        assert!(json.find("\"limitations\"").unwrap() < json.find("\"sections\"").unwrap());
     }
 
     #[test]

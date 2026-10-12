@@ -286,6 +286,24 @@ async fn runtime_comparison_ignores_sidecars_and_requires_explicit_matching_orig
 }
 
 #[tokio::test]
+async fn large_workflow_reports_stay_valid_json_with_their_limitations() {
+    let client = connect().await;
+    let arguments = json!({
+        "path": fixture("hello-x64.elf"),
+        "other": fixture("hello-go-x64.elf"),
+        "max_per_section": 200,
+    });
+    let result = call(&client, "diff_builds", arguments).await;
+    assert!(text(&result).len() <= 60_000, "{}", text(&result).len());
+    let report = json_of(&result);
+    let limitations = report["limitations"].as_array().unwrap();
+    assert!(limitations.iter().any(|text| text.as_str().unwrap().contains("Hash matching is signature-level")));
+    assert!(limitations.iter().any(|text| text.as_str().unwrap().contains("cut to fit")));
+    assert!(report["sections"].as_array().unwrap().iter().any(|section| section["truncated"] == true));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn triage_and_imports_describe_a_binary() {
     let client = connect().await;
     let path = fixture("hello-x64-dyn.elf");
