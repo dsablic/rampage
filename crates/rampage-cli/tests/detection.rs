@@ -118,6 +118,18 @@ fn dotnet_pages_types_and_shows_the_module_and_entry_point() {
 }
 
 #[test]
+fn dotnet_shows_signatures_and_attributes() {
+    rampage(&["dotnet", "--contains", "hashcode"], ASSEMBLY)
+        .success()
+        .stdout(contains("  int32 Combine<T1>(T1)  [value1]  "))
+        .stdout(contains("attribute  [System.Reflection.AssemblyTitleAttribute(\"Microsoft.Bcl.HashCode\")] on "))
+        .stdout(contains("[System.Diagnostics.DebuggableAttribute (8 byte value, not decoded)]"));
+    let json = json(&["--json", "dotnet", "--contains", "Obsolete"], ASSEMBLY);
+    assert_eq!(json["custom_attributes"]["total"], 2);
+    assert_eq!(json["pinvokes"]["total"], 0);
+}
+
+#[test]
 fn identify_overlays_or_replaces_the_bundled_database() {
     rampage(&["identify", "--no-bundled"], "hello-x64.elf").failure().stderr(contains("--db"));
     let bundled = json(&["--json", "identify"], "hello-x64.elf");

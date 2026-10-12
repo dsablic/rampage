@@ -30,6 +30,10 @@ struct Spec {
     decoy_streams: bool,
     /// An uncompressed `#-` table stream beside a `#JTD` stream, which makes every index 4 bytes wide.
     jtd: bool,
+    /// Replaces Main's method signature blob.
+    main_signature: Option<Vec<u8>>,
+    /// Replaces the custom attribute's value blob.
+    attribute_value: Option<Vec<u8>>,
 }
 
 const SECTION_RVA: u32 = 0x2000;
@@ -84,7 +88,16 @@ fn pad4(bytes: &mut Vec<u8>) {
 fn build(spec: &Spec) -> Vec<u8> {
     let mut strings = Heap::new();
     let mut blobs = Heap::new();
-    let signature = blobs.blob(&[0x00, 0x00, 0x01]);
+    let field_signature = blobs.blob(&[0x06, 0x08]);
+    // Main(string[]), Compute<T>(T, T) returning int32, Helper(), Run(native int) returning int32.
+    let main_signature = blobs.blob(spec.main_signature.as_deref().unwrap_or(&[0x00, 1, 0x01, 0x1D, 0x0E]));
+    let compute_signature = blobs.blob(&[0x10, 1, 2, 0x08, 0x1E, 0, 0x1E, 0]);
+    let helper_signature = blobs.blob(&[0x00, 0, 0x01]);
+    let run_signature = blobs.blob(&[0x00, 1, 0x08, 0x18]);
+    // Object::.ctor(string, int32) as an instance method, and an attribute value calling it with ("abc", 42).
+    let ctor_signature = blobs.blob(&[0x20, 2, 0x01, 0x0E, 0x08]);
+    let attribute_value =
+        blobs.blob(spec.attribute_value.as_deref().unwrap_or(&[0x01, 0x00, 3, b'a', b'b', b'c', 42, 0, 0, 0, 0, 0]));
     let token_blob = blobs.blob(&[0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a]);
     let guids: Vec<u8> = (1..=16).collect();
     let mut user_strings = vec![0u8, 11];
@@ -128,14 +141,15 @@ fn build(spec: &Spec) -> Vec<u8> {
     tables.put(0x0010_0002, 4).put(inner, s).put(0, s).put((1 << 2) | 1, tdor).put(2, i).put(method_lists[2], i);
     // Field
     let counter = strings.string("counter");
-    tables.put(0x0001, 2).put(counter, s).put(signature, b);
+    tables.put(0x0001, 2).put(counter, s).put(field_signature, b);
     // MethodDef: Main (tiny IL), Compute (fat IL), Helper (native), Run (abstract, no body).
     let main = if spec.bad_method_name { 0xFFFF } else { strings.string("Main") };
     let (compute, helper, run) = (strings.string("Compute"), strings.string("Helper"), strings.string("Run"));
-    tables.put(tiny_rva, 4).put(0, 2).put(0x0016, 2).put(main, s).put(signature, b).put(1, i);
-    tables.put(fat_rva, 4).put(0, 2).put(0x0006, 2).put(compute, s).put(signature, b).put(2, i);
-    tables.put(native_rva, 4).put(0x0001, 2).put(0x0016, 2).put(helper, s).put(signature, b).put(5, i);
-    tables.put(0, 4).put(0, 2).put(0x0446, 2).put(run, s).put(signature, b).put(5, i);
+    tables.put(tiny_rva, 4).put(0, 2).put(0x0016, 2).put(main, s).put(main_signature, b).put(1, i);
+    tables.put(fat_rva, 4).put(0, 2).put(0x0006, 2).put(compute, s).put(compute_signature, b).put(2, i);
+    tables.put(native_rva, 4).put(0x0001, 2).put(0x0016, 2).put(helper, s).put(helper_signature, b).put(5, i);
+    // Run is static pinvokeimpl (0x2000) and has no body.
+    tables.put(0, 4).put(0, 2).put(0x2096, 2).put(run, s).put(run_signature, b).put(5, i);
     // Param: Main(args); Compute's return row (sequence 0) and its parameters stored out of order.
     let (args, x, y) = (strings.string("args"), strings.string("x"), strings.string("y"));
     tables.put(0, 2).put(1, 2).put(args, s);
@@ -144,9 +158,13 @@ fn build(spec: &Spec) -> Vec<u8> {
     tables.put(0, 2).put(1, 2).put(x, s);
     // MemberRef: Object::.ctor (MemberRefParent tag 1 = TypeRef).
     let ctor = strings.string(".ctor");
-    tables.put((1 << 3) | 1, mrp).put(ctor, s).put(signature, b);
-    // CustomAttribute: never decoded, but its width depends on HasCustomAttribute and must be skipped right.
-    tables.put((1 << 5) | 7, hca).put((1 << 3) | 3, i).put(0, b);
+    tables.put((1 << 3) | 1, mrp).put(ctor, s).put(ctor_signature, b);
+    // CustomAttribute on the Module (HasCustomAttribute tag 7), constructed by MemberRef 1 (tag 3).
+    tables.put((1 << 5) | 7, hca).put((1 << 3) | 3, i).put(attribute_value, b);
+    // ModuleRef, and ImplMap binding Run (MemberForwarded tag 1 = MethodDef) to native.dll!RunNative.
+    let (native_dll, run_native) = (strings.string("native.dll"), strings.string("RunNative"));
+    tables.put(native_dll, s);
+    tables.put(0x0100, 2).put((4 << 1) | 1, i).put(run_native, s).put(1, i);
     // Assembly
     let demo_assembly = strings.string("Demo");
     tables.put(0x8004, 4).put(1, 2).put(2, 2).put(3, 2).put(4, 2).put(0, 4).put(0, b).put(demo_assembly, s).put(0, s);
@@ -155,8 +173,11 @@ fn build(spec: &Spec) -> Vec<u8> {
     tables.put(4, 2).put(0, 2).put(0, 2).put(0, 2).put(0, 4).put(token_blob, b).put(mscorlib, s).put(0, s).put(0, b);
     // NestedClass: Inner (TypeDef 3) inside Program (TypeDef 2).
     tables.put(3, i).put(2, i);
+    // GenericParam: Compute's T (TypeOrMethodDef tag 1 = MethodDef 2).
+    let t = strings.string("T");
+    tables.put(0, 2).put(0, 2).put((2 << 1) | 1, i).put(t, s);
 
-    let present: [(u8, u32); 11] = [
+    let present: [(u8, u32); 14] = [
         (0x00, 1),
         (0x01, type_refs),
         (0x02, spec.declared_type_defs.unwrap_or(3)),
@@ -165,9 +186,12 @@ fn build(spec: &Spec) -> Vec<u8> {
         (0x08, 4),
         (0x0A, 1),
         (0x0C, 1),
+        (0x1A, 1),
+        (0x1C, 1),
         (0x20, 1),
         (0x23, 1),
         (0x29, 1),
+        (0x2A, 1),
     ];
     let heap_sizes = u8::from(spec.wide_strings) | (u8::from(spec.wide_guids) << 1) | (u8::from(spec.wide_blobs) << 2);
     let mut table_stream = vec![0, 0, 0, 0, 2, 0, heap_sizes, 1];
@@ -350,7 +374,31 @@ fn reads_a_synthetic_assembly() {
     let program = program(&metadata);
     assert_eq!((program.namespace.as_str(), program.token, program.flags), ("Demo", 0x0200_0002, 0x0010_0001));
     assert_eq!(program.extends.as_deref(), Some("System.Object"));
-    assert_eq!(program.fields, ["counter"]);
+    let fields: Vec<(&str, &str)> =
+        program.fields.iter().map(|field| (field.name.as_str(), field.signature.as_str())).collect();
+    assert_eq!(fields, [("counter", "int32 counter")]);
+    assert_eq!(program.fields[0].token, 0x0400_0001);
+    let signatures: Vec<&str> = program.methods.iter().map(|method| method.signature.as_str()).collect();
+    assert_eq!(
+        signatures,
+        ["void Main(string[])", "int32 Compute<T>(T, T)", "void Helper()", "int32 Run(native int)"],
+        "MVAR takes its name from GenericParam"
+    );
+    assert_eq!(metadata.member_refs[0].signature, "instance void .ctor(string, int32)");
+    assert_eq!(metadata.pinvokes.len(), 1);
+    let pinvoke = &metadata.pinvokes[0];
+    assert_eq!((pinvoke.method_token, pinvoke.method.as_deref()), (0x0600_0004, Some("Demo.Program::Run")));
+    assert_eq!((pinvoke.module.as_deref(), pinvoke.import_name.as_str()), (Some("native.dll"), "RunNative"));
+    assert_eq!(pinvoke.flags, 0x0100);
+    assert_eq!(metadata.custom_attributes.len(), 1);
+    let attribute = &metadata.custom_attributes[0];
+    assert_eq!((attribute.parent_token, attribute.parent.as_deref()), (0x0000_0001, Some("Demo.dll")));
+    assert_eq!(
+        (attribute.attribute_type.as_deref(), attribute.constructor_token),
+        (Some("System.Object"), 0x0A00_0001)
+    );
+    assert_eq!(attribute.arguments.as_deref(), Some(&["\"abc\"".to_owned(), "42".to_owned()][..]));
+    assert_eq!(attribute.blob_length, 12);
     let methods: Vec<(&str, BodyKind)> =
         program.methods.iter().map(|method| (method.name.as_str(), method.body)).collect();
     assert_eq!(
@@ -398,6 +446,8 @@ fn heap_size_flags_widen_heap_indexes() {
         assert_eq!(wide.assembly, narrow.assembly, "{spec:?}");
         assert_eq!(wide.assembly_refs, narrow.assembly_refs, "{spec:?}");
         assert_eq!(wide.module, narrow.module, "{spec:?}");
+        assert_eq!(wide.pinvokes, narrow.pinvokes, "{spec:?}");
+        assert_eq!(wide.custom_attributes, narrow.custom_attributes, "{spec:?}");
     }
     let all = Spec { wide_strings: true, wide_guids: true, wide_blobs: true, ..Spec::default() };
     assert_eq!(parse(&all).unwrap().unwrap().types, narrow.types);
@@ -416,6 +466,8 @@ fn coded_indexes_widen_at_the_tag_limit() {
         assert_eq!(metadata.types, narrow.types, "{extra_type_refs}");
         assert_eq!(metadata.member_refs, narrow.member_refs, "{extra_type_refs}");
         assert_eq!(metadata.assembly_refs, narrow.assembly_refs, "{extra_type_refs}");
+        assert_eq!(metadata.pinvokes, narrow.pinvokes, "{extra_type_refs}");
+        assert_eq!(metadata.custom_attributes, narrow.custom_attributes, "{extra_type_refs}");
     }
 }
 
@@ -483,6 +535,32 @@ fn a_jtd_stream_widens_every_index_of_an_uncompressed_table_stream() {
     assert_eq!(jtd.assembly_refs, normal.assembly_refs);
     assert_eq!(jtd.member_refs, normal.member_refs);
     assert_eq!(jtd.module, normal.module);
+    assert_eq!(jtd.pinvokes, normal.pinvokes);
+    assert_eq!(jtd.custom_attributes, normal.custom_attributes);
+}
+
+#[test]
+fn malformed_signature_and_attribute_blobs_are_reported_not_guessed() {
+    let normal = parse(&Spec::default()).unwrap().unwrap();
+    // Truncated, an unknown element type, a parameter count past the blob's end, and a dangling TypeRef.
+    let blobs: [&[u8]; 5] = [&[], &[0x00, 1], &[0x00, 0, 0x99], &[0x00, 0x7F, 0x01, 0x08], &[0x00, 0, 0x12, 0x7D]];
+    for blob in blobs {
+        let spec = Spec { main_signature: Some(blob.to_vec()), ..Spec::default() };
+        let metadata = parse(&spec).unwrap().unwrap();
+        let methods = &program(&metadata).methods;
+        assert_eq!(methods[0].signature, "<unreadable>", "{blob:02x?}");
+        assert_eq!(methods[0].params, ["args"], "{blob:02x?}: the Param rows still decode");
+        assert_eq!(methods[1..], program(&normal).methods[1..], "{blob:02x?}");
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("MethodDef row 1: signature")), "{blob:02x?}");
+    }
+    for value in [vec![0x01, 0x00, 3, b'a'], vec![0x02, 0x00], vec![0x01, 0x00, 0xFF, 42, 0, 0, 0]] {
+        let metadata = parse(&Spec { attribute_value: Some(value.clone()), ..Spec::default() }).unwrap().unwrap();
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.blob_length, value.len());
+        let expected = (value.len() == 7).then(|| vec!["null".to_owned(), "42".to_owned()]);
+        assert_eq!(attribute.arguments, expected, "{value:02x?}");
+        assert_eq!(attribute.attribute_type.as_deref(), Some("System.Object"));
+    }
 }
 
 #[test]
@@ -538,7 +616,45 @@ fn reads_a_real_assembly() {
 
     let hash_code = metadata.types.iter().find(|ty| ty.namespace == "System" && ty.name == "HashCode").unwrap();
     assert_eq!(hash_code.extends.as_deref(), Some("System.ValueType"));
-    assert!(hash_code.fields.iter().any(|field| field == "_queue1"));
+    assert!(hash_code.fields.iter().any(|field| field.signature == "uint32 _queue1"));
+    let signatures: Vec<&str> = hash_code.methods.iter().map(|method| method.signature.as_str()).collect();
+    for expected in [
+        "int32 Combine<T1>(T1)",
+        "int32 Combine<T1, T2, T3, T4, T5, T6, T7, T8>(T1, T2, T3, T4, T5, T6, T7, T8)",
+        "void Initialize(uint32&, uint32&, uint32&, uint32&)",
+        "instance void Add<T>(T, System.Collections.Generic.IEqualityComparer<T>)",
+        "instance bool Equals(object)",
+    ] {
+        assert!(signatures.contains(&expected), "{expected} not in {signatures:#?}");
+    }
+    let interop = metadata.types.iter().find(|ty| ty.name == "Interop").unwrap();
+    assert_eq!(interop.methods[0].signature, "void GetRandomBytes(uint8*, int32)");
+    let sr = metadata.types.iter().find(|ty| ty.namespace == "System" && ty.name == "SR").unwrap();
+    assert_eq!(sr.fields[0].signature, "System.Resources.ResourceManager s_resourceManager");
+    assert!(metadata.pinvokes.is_empty(), "the assembly has no ImplMap rows");
+
+    assert_eq!(metadata.custom_attributes.len(), 76);
+    let attribute = |name: &str| {
+        let full = format!("System.Reflection.{name}");
+        metadata.custom_attributes.iter().find(move |attribute| attribute.attribute_type.as_deref() == Some(&full))
+    };
+    let title = attribute("AssemblyTitleAttribute").unwrap();
+    assert_eq!((title.parent_token, title.parent.as_deref()), (0x2000_0001, Some("Microsoft.Bcl.HashCode")));
+    assert_eq!(title.arguments.as_deref(), Some(&["\"Microsoft.Bcl.HashCode\"".to_owned()][..]));
+    let obsolete = metadata
+        .custom_attributes
+        .iter()
+        .find(|attribute| attribute.parent.as_deref() == Some("System.HashCode::Equals") && attribute.blob_length == 83)
+        .unwrap();
+    assert_eq!(obsolete.attribute_type.as_deref(), Some("System.ObsoleteAttribute"));
+    assert_eq!(obsolete.arguments.as_ref().unwrap()[1], "true");
+    // DebuggableAttribute takes an enum, whose underlying type lives in another assembly: reported, not guessed.
+    let debuggable = metadata
+        .custom_attributes
+        .iter()
+        .find(|attribute| attribute.attribute_type.as_deref() == Some("System.Diagnostics.DebuggableAttribute"))
+        .unwrap();
+    assert_eq!((debuggable.arguments.as_ref(), debuggable.blob_length), (None, 8));
     assert_eq!(hash_code.methods.iter().filter(|method| method.name == "Combine").count(), 8);
     // Checked against the raw bytes: fat header 0x3013 at file offset 0x504, code size 0xE1.
     let combine5 = hash_code.methods.iter().find(|method| method.token == 0x0600_000D).unwrap();

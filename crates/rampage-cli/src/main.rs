@@ -62,16 +62,17 @@ enum Command {
     Triage { file: PathBuf },
     /// Likely behaviors inferred from imports and strings (triage evidence, not proof)
     Capabilities { file: PathBuf },
-    /// .NET assembly metadata: identity, references, entry point, and types with their methods
+    /// .NET assembly metadata: identity, references, entry point, types with method signatures, P/Invoke, attributes
     Dotnet {
         file: PathBuf,
-        /// Only types whose full name or a method name contains this text (case-insensitive)
+        /// Only types whose full name or a method name, P/Invoke imports whose method, DLL or import name, and
+        /// attributes whose type or target contains this text (case-insensitive)
         #[arg(long)]
         contains: Option<String>,
-        /// Types to skip, for paging
+        /// Entries to skip in each list (types, P/Invoke imports, attributes), for paging
         #[arg(long, default_value_t = 0)]
         offset: usize,
-        /// Types per page
+        /// Entries per page of each list
         #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
         limit: u64,
     },

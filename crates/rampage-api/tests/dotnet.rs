@@ -24,6 +24,25 @@ fn dotnet_metadata_reports_identity_and_filters_types() {
 
     let page = project.dotnet_metadata(&DotNetQuery { limit: Some(1), ..DotNetQuery::default() }).unwrap().unwrap();
     assert_eq!((page.types.items.len(), page.types.total), (1, all.counts.types));
+    assert_eq!((page.custom_attributes.items.len(), page.custom_attributes.total), (1, 76));
+}
+
+#[test]
+fn dotnet_metadata_reports_signatures_and_filters_attributes() {
+    let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();
+    let query = DotNetQuery { contains: Some("combine".to_owned()), ..DotNetQuery::default() };
+    let summary = project.dotnet_metadata(&query).unwrap().unwrap();
+    let combine = summary.types.items[0].methods.iter().find(|method| method.name == "Combine").unwrap();
+    assert_eq!(combine.signature, "int32 Combine<T1>(T1)");
+    assert_eq!((summary.counts.pinvokes, summary.pinvokes.total), (0, 0));
+
+    let query = DotNetQuery { contains: Some("obsolete".to_owned()), ..DotNetQuery::default() };
+    let obsolete = project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes;
+    let parents: Vec<Option<&str>> = obsolete.items.iter().map(|attribute| attribute.parent.as_deref()).collect();
+    assert_eq!(parents, [Some("System.HashCode::GetHashCode"), Some("System.HashCode::Equals")]);
+    let query = DotNetQuery { contains: Some("HashCode::Equals".to_owned()), ..DotNetQuery::default() };
+    let on_equals = project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes;
+    assert_eq!(on_equals.total, 3, "attributes match by their target too");
 }
 
 #[test]
