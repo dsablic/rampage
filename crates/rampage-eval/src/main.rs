@@ -202,6 +202,15 @@ impl Slice {
         for path in &self.refs {
             let binary = open(path)?;
             match &mut combined {
+                // extend_from_binary() ignores another architecture; an eval must not drop an input silently.
+                Some(db) if db.arch() != binary.arch => {
+                    return Err(format!(
+                        "{}: a {} reference cannot be combined with a {} database",
+                        path.display(),
+                        binary.arch,
+                        db.arch()
+                    ));
+                }
                 Some(db) => db.extend_from_binary(&binary),
                 None => combined = Some(SignatureDb::from_binary(&binary)),
             }

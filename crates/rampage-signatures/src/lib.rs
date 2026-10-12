@@ -730,8 +730,15 @@ impl SignatureDb {
         serde_json::to_string(self).expect("string maps and plain fields always serialize")
     }
 
+    /// Parses a saved database. A hash scheme this version does not know is an error: none of its hashes could
+    /// ever match.
     pub fn from_json(text: &str) -> Result<SignatureDb, serde_json::Error> {
-        serde_json::from_str(text)
+        let db: SignatureDb = serde_json::from_str(text)?;
+        if ![LEGACY_SCHEME, CURRENT_SCHEME].contains(&db.scheme) {
+            let message = format!("unknown signature hash scheme {} (this version knows 1 and 2)", db.scheme);
+            return Err(serde::de::Error::custom(message));
+        }
+        Ok(db)
     }
 }
 
@@ -1317,10 +1324,9 @@ mod tests {
         newer.add([7; 32], None, "newer");
         current.merge(&newer);
         assert_eq!(current.len(), before + 1);
-        let mut unknown = SignatureDb::from_json(r#"{"arch":"x86_64","scheme":99,"entries":{}}"#).unwrap();
+        let unknown = SignatureDb::from_json(r#"{"arch":"x86_64","scheme":99,"entries":{}}"#).unwrap_err();
+        assert!(unknown.to_string().contains("unknown signature hash scheme 99"), "{unknown}");
         assert!(SignatureDb::from_binary_with_scheme(&Binary::open(fixture("hello-x64.elf")).unwrap(), 99).is_empty());
-        unknown.extend_from_binary(&Binary::open(fixture("hello-x64.elf")).unwrap());
-        assert!(unknown.is_empty());
     }
 
     #[test]

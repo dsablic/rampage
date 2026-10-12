@@ -200,6 +200,39 @@ fn run_refuses_a_database_for_another_architecture() {
 }
 
 #[test]
+fn run_refuses_a_reference_for_another_architecture() {
+    let output = run_x86_64(
+        &data("eval-truth-cross-x86_64.json"),
+        "eval-target-x86_64.elf",
+        &["--ref", fixture("eval-ref-aarch64.elf").to_str().unwrap()],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("a aarch64 reference cannot be combined with a x86_64 database"), "{stderr}");
+}
+
+#[test]
+fn run_refuses_an_unknown_hash_scheme() {
+    let scratch = std::env::temp_dir().join(format!("rampage-eval-scheme-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let future = scratch.join("future.json");
+    std::fs::write(&future, r#"{"arch":"x86_64","scheme":3,"entries":{}}"#).unwrap();
+    let output = eval()
+        .args(["run", "--db"])
+        .arg(&future)
+        .arg("--target")
+        .arg(fixture("eval-target-x86_64.elf"))
+        .arg("--truth")
+        .arg(data("eval-truth-cross-x86_64.json"))
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&scratch).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("unknown signature hash scheme 3"), "{stderr}");
+}
+
+#[test]
 fn run_fails_a_slice_below_its_recall_baseline() {
     let output = run_x86_64(&data("eval-truth-cross-x86_64.json"), "eval-target-x86_64.elf", &["--min-recall", "0.95"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
