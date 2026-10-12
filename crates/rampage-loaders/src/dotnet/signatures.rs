@@ -395,7 +395,7 @@ fn fixed_argument(cursor: &mut Cursor, kind: Kind) -> Option<String> {
     let Kind::Element(element) = kind else {
         return (kind == Kind::SystemType)
             .then(|| ser_string(cursor))?
-            .map(|name| name.map_or_else(|| "null".to_owned(), |name| format!("typeof({name})")));
+            .map(|name| name.map_or_else(|| "null".to_owned(), |name| format!("typeof({}){}", name.text, name.cut())));
     };
     Some(match element {
         0x02 => (cursor.byte()? != 0).to_string(),
@@ -413,20 +413,46 @@ fn fixed_argument(cursor: &mut Cursor, kind: Kind) -> Option<String> {
         0x0B => u64::from_le_bytes(cursor.array()?).to_string(),
         0x0C => f32::from_le_bytes(cursor.array()?).to_string(),
         0x0D => f64::from_le_bytes(cursor.array()?).to_string(),
-        ELEMENT_STRING => ser_string(cursor)?.map_or_else(|| "null".to_owned(), |text| format!("{text:?}")),
+        ELEMENT_STRING => {
+            ser_string(cursor)?.map_or_else(|| "null".to_owned(), |text| format!("{:?}{}", text.text, text.cut()))
+        }
         _ => return None,
     })
 }
 
-/// A SerString: 0xFF for null, else a compressed length and UTF-8 bytes. Kept text is capped.
-fn ser_string(cursor: &mut Cursor) -> Option<Option<String>> {
+/// The kept text of a SerString, and its full length in bytes when the text was cut.
+struct SerString {
+    text: String,
+    cut_from: Option<usize>,
+}
+
+impl SerString {
+    /// The truncation mark to append after the rendered text: empty when nothing was cut.
+    fn cut(&self) -> String {
+        self.cut_from.map_or_else(String::new, |length| format!("... ({length} bytes)"))
+    }
+}
+
+/// A SerString: 0xFF for null, else a compressed length and UTF-8 bytes. Kept text is capped, and cut on a
+/// character boundary so the cap never invents a replacement character.
+fn ser_string(cursor: &mut Cursor) -> Option<Option<SerString>> {
     if cursor.peek()? == 0xFF {
         cursor.byte();
         return Some(None);
     }
     let length = usize::try_from(cursor.compressed()?).ok()?;
     let bytes = cursor.take(length)?;
-    Some(Some(String::from_utf8_lossy(&bytes[..length.min(MAX_ARGUMENT_BYTES)]).into_owned()))
+    if length <= MAX_ARGUMENT_BYTES {
+        return Some(Some(SerString { text: String::from_utf8_lossy(bytes).into_owned(), cut_from: None }));
+    }
+    let mut kept = &bytes[..MAX_ARGUMENT_BYTES];
+    // A character split by the cap is incomplete rather than invalid: drop its leading bytes.
+    if let Err(error) = std::str::from_utf8(kept)
+        && error.error_len().is_none()
+    {
+        kept = &kept[..error.valid_up_to()];
+    }
+    Some(Some(SerString { text: String::from_utf8_lossy(kept).into_owned(), cut_from: Some(length) }))
 }
 
 #[cfg(test)]
@@ -603,6 +629,16 @@ mod tests {
         let arguments = attribute_arguments(&params, &value).unwrap();
         assert_eq!(arguments, ["\"hi\"", "-2", "true", "typeof(Int)", "null", "'x'"]);
         assert_eq!(attribute_arguments(&[], &[1, 0, 0, 0]), Some(vec![]));
+        // 1023 ASCII bytes then a 2-byte character straddling the 1024-byte cap, in a 1500-byte string.
+        let mut long = vec![1, 0, 0x80 | (1500 >> 8) as u8, (1500 & 0xFF) as u8];
+        long.extend([b'a'; 1023]);
+        long.extend("é".as_bytes());
+        long.extend([b'b'; 1500 - 1025]);
+        let cut = attribute_arguments(&params[..1], &long).unwrap();
+        assert_eq!(cut, [format!("\"{}\"... (1500 bytes)", "a".repeat(1023))]);
+        long[4..].copy_from_slice(&[b'c'; 1500]);
+        let cut = attribute_arguments(&params[3..4], &long).unwrap();
+        assert_eq!(cut, [format!("typeof({})... (1500 bytes)", "c".repeat(1024))]);
         assert_eq!(attribute_arguments(&[], &[0, 1]), None, "no prolog");
         assert_eq!(attribute_arguments(&params[1..2], &[1, 0, 1, 2]), None, "truncated int32");
         assert_eq!(attribute_arguments(&params[..1], &[1, 0, 9, b'a']), None, "string past the blob");
