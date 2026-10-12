@@ -190,7 +190,14 @@ pub struct WorkflowReport {
     pub summary: Vec<String>,
     pub sections: Vec<Section>,
     pub next_steps: Vec<NextStep>,
+    /// Suggestions dropped past `MAX_NEXT_STEPS`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub next_steps_omitted: usize,
     pub limitations: Vec<String>,
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 impl WorkflowReport {
@@ -202,15 +209,20 @@ impl WorkflowReport {
             summary: Vec::new(),
             sections: Vec::new(),
             next_steps: Vec::new(),
+            next_steps_omitted: 0,
             limitations: Vec::new(),
         }
     }
 
-    /// Suggests a follow-up call, ignoring duplicates and anything past `MAX_NEXT_STEPS`.
+    /// Suggests a follow-up call, ignoring duplicates and counting anything past `MAX_NEXT_STEPS`.
     pub fn step(&mut self, tool: &'static str, arguments: Value, reason: impl Into<String>) {
-        let duplicate = self.next_steps.iter().any(|step| step.tool == tool && step.arguments == arguments);
-        if !duplicate && self.next_steps.len() < MAX_NEXT_STEPS {
+        if self.next_steps.iter().any(|step| step.tool == tool && step.arguments == arguments) {
+            return;
+        }
+        if self.next_steps.len() < MAX_NEXT_STEPS {
             self.next_steps.push(NextStep { tool, arguments, reason: reason.into() });
+        } else {
+            self.next_steps_omitted += 1;
         }
     }
 
@@ -617,6 +629,20 @@ mod tests {
             let finding = finding.unwrap_or_else(|| panic!("{name}: {section:#?}"));
             assert!(finding.evidence[0].ends_with("references from discovered functions"), "{finding:#?}");
         }
+    }
+
+    #[test]
+    fn next_steps_past_the_cap_are_counted() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+        let project = Project::new(rampage_loaders::Binary::open(path).unwrap());
+        let mut report = WorkflowReport::new("test", &project);
+        for index in 0..MAX_NEXT_STEPS + 3 {
+            report.step("decompile", serde_json::json!({ "at": index }), "read it");
+        }
+        report.step("decompile", serde_json::json!({ "at": 0 }), "a duplicate is not a dropped step");
+        assert_eq!(report.next_steps.len(), MAX_NEXT_STEPS);
+        assert_eq!(report.next_steps_omitted, 3);
+        assert_eq!(serde_json::to_value(&report).unwrap()["next_steps_omitted"], 3);
     }
 
     #[test]

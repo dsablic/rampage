@@ -101,6 +101,9 @@ fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
         for step in &report.next_steps {
             writeln!(out, "  {} {}  -- {}", step.tool, step.arguments, step.reason)?;
         }
+        if report.next_steps_omitted > 0 {
+            writeln!(out, "  ... and {} more not listed", report.next_steps_omitted)?;
+        }
     }
     writeln!(out, "\nlimitations:")?;
     for limitation in &report.limitations {
