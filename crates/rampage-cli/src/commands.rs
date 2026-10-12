@@ -645,7 +645,7 @@ pub fn signatures(out: &mut impl Write, path: &Path, output: Option<&Path>, opti
     Ok(())
 }
 
-pub fn identify(out: &mut impl Write, path: &Path, db: &Path, apply: bool, options: &Options) -> Result<()> {
+fn load_signature_database(db: &Path) -> Result<rampage_api::SignatureDb> {
     if !std::fs::symlink_metadata(db)?.is_file() {
         anyhow::bail!("signature database must be a regular JSON file");
     }
@@ -655,8 +655,30 @@ pub fn identify(out: &mut impl Write, path: &Path, db: &Path, apply: bool, optio
     if bytes.len() > 256 * 1024 * 1024 {
         anyhow::bail!("signature database exceeds 256 MiB");
     }
-    let database = rampage_api::SignatureDb::from_json(std::str::from_utf8(&bytes)?)?;
-    let result = open(path, options)?.apply_signatures(&database, apply)?;
+    Ok(rampage_api::SignatureDb::from_json(std::str::from_utf8(&bytes)?)?)
+}
+
+pub fn identify(
+    out: &mut impl Write,
+    path: &Path,
+    db: Option<&Path>,
+    no_bundled: bool,
+    apply: bool,
+    options: &Options,
+) -> Result<()> {
+    if no_bundled && db.is_none() {
+        anyhow::bail!("--no-bundled needs a --db to apply");
+    }
+    let user = match db {
+        Some(db) => Some(load_signature_database(db)?),
+        None => None,
+    };
+    let project = open(path, options)?;
+    let result = if no_bundled {
+        project.apply_signatures(user.as_ref().expect("checked above"), apply)?
+    } else {
+        project.apply_signatures_default(user.as_ref(), apply)?
+    };
     if options.json {
         return write_json(out, &result);
     }

@@ -13,8 +13,11 @@
 //! order (MIPS and PowerPC ship in both endiannesses). Only genuinely PC-relative branch/call targets are masked;
 //! data immediates are kept because they discriminate functions. Other architectures return `None`.
 
+mod bundled;
+
 use std::collections::BTreeMap;
 
+pub use bundled::bundled;
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpKind, Register};
 use rampage_arch::{Arch, Target};
 use rampage_loaders::{Binary, SymbolKind};
@@ -316,6 +319,18 @@ impl SignatureDb {
                     }
                 }
             }
+        }
+    }
+
+    /// Overlays `other` onto this database, letting `other`'s names win on any shared hash (so a user database
+    /// takes precedence over a bundled one). Databases for different architectures do not mix, so a mismatched
+    /// `other` is ignored.
+    pub fn merge(&mut self, other: &SignatureDb) {
+        if self.arch != other.arch {
+            return;
+        }
+        for (hash, name) in &other.entries {
+            self.entries.insert(hash.clone(), name.clone());
         }
     }
 

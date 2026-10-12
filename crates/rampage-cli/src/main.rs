@@ -114,8 +114,12 @@ enum Command {
     /// Name functions by matching a signature database (FLIRT/Function-ID style)
     Identify {
         file: PathBuf,
+        /// A signature database to apply, overlaid on the bundled starter database unless --no-bundled is set
         #[arg(long)]
-        db: PathBuf,
+        db: Option<PathBuf>,
+        /// Do not apply the bundled starter database (requires --db)
+        #[arg(long)]
+        no_bundled: bool,
         /// Save matched names for still-unnamed functions as user names
         #[arg(long)]
         apply: bool,
@@ -269,7 +273,9 @@ fn main() -> ExitCode {
         }
         Command::Compare { file, reference } => commands::compare(&mut out, &file, &reference, &options),
         Command::Signatures { file, output } => commands::signatures(&mut out, &file, output.as_deref(), &options),
-        Command::Identify { file, db, apply } => commands::identify(&mut out, &file, &db, apply, &options),
+        Command::Identify { file, db, no_bundled, apply } => {
+            commands::identify(&mut out, &file, db.as_deref(), no_bundled, apply, &options)
+        }
         Command::JumpTable { file, at, count, relative_base } => {
             commands::jump_table(&mut out, &file, &at, count, relative_base.as_deref(), &options)
         }

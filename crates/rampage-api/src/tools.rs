@@ -115,8 +115,10 @@ struct SignatureBuildArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct IdentifyArgs {
-    /// File path of a signature database built with build_signatures.
-    database: String,
+    /// Optional file path of a signature database built with build_signatures, overlaid on the bundled starter
+    /// database. Omit it to match against the bundled database alone.
+    #[serde(default)]
+    database: Option<String>,
     /// Persist matched names for still-unnamed functions as user names (never overwriting existing names).
     #[serde(default)]
     apply: bool,
@@ -311,14 +313,23 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "identify_functions",
-            "Name functions by matching a signature database built with build_signatures, so statically linked \
-             library code in a stripped binary gets recognized. apply=true saves names for unnamed functions.",
+            "Name functions by matching signature databases (FLIRT/Function-ID style), so statically linked \
+             library code in a stripped binary gets recognized. Applies the bundled starter database for the \
+             architecture; an optional database path is overlaid on top. apply=true saves names for unnamed \
+             functions.",
             |project, arguments: IdentifyArgs| {
-                let text = std::fs::read_to_string(&arguments.database)
-                    .map_err(|error| ApiError::Invalid(format!("cannot read {}: {error}", arguments.database)))?;
-                let database = rampage_signatures::SignatureDb::from_json(&text)
-                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
-                project.apply_signatures(&database, arguments.apply)
+                let user = match &arguments.database {
+                    Some(path) => {
+                        let text = std::fs::read_to_string(path)
+                            .map_err(|error| ApiError::Invalid(format!("cannot read {path}: {error}")))?;
+                        Some(
+                            rampage_signatures::SignatureDb::from_json(&text)
+                                .map_err(|error| ApiError::Invalid(error.to_string()))?,
+                        )
+                    }
+                    None => None,
+                };
+                project.apply_signatures_default(user.as_ref(), arguments.apply)
             },
         )
         .annotates(),
