@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::pattern::BytePattern;
+use crate::pattern::{BytePattern, MIN_DISTINCTIVE_NIBBLES};
 
 /// The category of tool a signature identifies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -19,7 +19,7 @@ pub enum Kind {
 
 /// How much weight the evidence carries. These are heuristics, never proof: a `Strong` detection rests on a
 /// distinctive pattern (an entry-point stub, an embedded toolchain string) or on several corroborating
-/// conditions, while a `Tentative` one rests on a single generic signal like a lone section name.
+/// conditions or signatures, while a `Tentative` one rests on a single generic signal like a lone section name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Confidence {
@@ -47,6 +47,9 @@ pub enum Condition {
     SectionContains { section: Option<String>, needle: Vec<u8> },
     /// An import from a library whose name contains this text (case-insensitive) is present.
     ImportLibrary(String),
+    /// An import from a library named this prefix and then a version number (case-insensitive), such as
+    /// `msvcr` matching `MSVCR120.dll` but not the unversioned system `msvcrt.dll` that MinGW also links.
+    VersionedImportLibrary(String),
     /// An imported function with this exact name (case-insensitive) is present.
     ImportFunction(String),
     /// The image has an overlay (data appended past everything its structures describe).
@@ -59,12 +62,14 @@ pub enum Condition {
 
 impl Condition {
     /// Whether satisfying this condition on its own justifies a `Strong` reading. Distinctive conditions do;
-    /// generic ones (a bare section name, an overlay, an entropy floor) only corroborate.
+    /// generic ones (a bare section name, an overlay, an entropy floor, a byte pattern with too few fixed nibbles)
+    /// only corroborate.
     pub(crate) fn is_distinctive(&self) -> bool {
-        matches!(
-            self,
-            Self::Entry { .. } | Self::SectionContains { .. } | Self::ImportFunction(_) | Self::UniqueSectionName(_)
-        )
+        match self {
+            Self::Entry { pattern, .. } => pattern.fixed_nibbles() >= MIN_DISTINCTIVE_NIBBLES,
+            Self::SectionContains { .. } | Self::ImportFunction(_) | Self::UniqueSectionName(_) => true,
+            _ => false,
+        }
     }
 }
 
@@ -76,15 +81,24 @@ pub struct Signature {
     pub conditions: Vec<Condition>,
     /// A short human note on what the signature keys off, for documentation and output.
     pub note: Option<String>,
+    /// Whether a match is only `Tentative` on its own, however distinctive its conditions: the evidence also
+    /// turns up in builds by other tools. Another signature for the same tool can still corroborate it.
+    pub corroborating: bool,
 }
 
 impl Signature {
     pub fn new(name: &str, kind: Kind, conditions: Vec<Condition>) -> Self {
-        Self { name: name.to_owned(), kind, conditions, note: None }
+        Self { name: name.to_owned(), kind, conditions, note: None, corroborating: false }
     }
 
     pub fn with_note(mut self, note: &str) -> Self {
         self.note = Some(note.to_owned());
+        self
+    }
+
+    /// Marks the signature [`Signature::corroborating`].
+    pub fn corroborating(mut self) -> Self {
+        self.corroborating = true;
         self
     }
 }

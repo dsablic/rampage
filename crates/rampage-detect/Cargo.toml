@@ -5,7 +5,8 @@ edition.workspace = true
 license = "Apache-2.0"
 
 [dependencies]
+# Already in the lock through yara-x; finds every un-anchored pattern's search key in one pass.
+aho-corasick = "1.1.3"
 rampage-loaders.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
+thiserror.workspace = true

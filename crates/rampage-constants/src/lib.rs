@@ -66,12 +66,20 @@ pub enum Pattern {
     U32(Vec<u32>),
     U64(Vec<u64>),
     BigInt(Vec<u8>),
+    /// Text that code keeps either as a string or as 32-bit words loaded little-endian, such as ChaCha's
+    /// "expand 32-byte k". The string itself has no byte order; the words stored big-endian (each 4-byte group
+    /// reversed) report [`Endian::Big`]. The length must be a multiple of 4.
+    Text(Vec<u8>),
 }
 
 impl Pattern {
     fn forms(&self) -> Vec<(Vec<u8>, Option<Endian>)> {
         let (little, big): (Vec<u8>, Vec<u8>) = match self {
             Self::Bytes(bytes) => return vec![(bytes.clone(), None)],
+            Self::Text(text) => {
+                let swapped = text.chunks(4).flat_map(|word| word.iter().rev().copied()).collect();
+                return vec![(text.clone(), None), (swapped, Some(Endian::Big))];
+            }
             Self::U16(values) => (
                 values.iter().flat_map(|value| value.to_le_bytes()).collect(),
                 values.iter().flat_map(|value| value.to_be_bytes()).collect(),
@@ -94,7 +102,7 @@ impl Pattern {
 
     pub fn byte_len(&self) -> usize {
         match self {
-            Self::Bytes(bytes) | Self::BigInt(bytes) => bytes.len(),
+            Self::Bytes(bytes) | Self::BigInt(bytes) | Self::Text(bytes) => bytes.len(),
             Self::U16(values) => 2 * values.len(),
             Self::U32(values) => 4 * values.len(),
             Self::U64(values) => 8 * values.len(),
@@ -145,8 +153,9 @@ impl ConstantDb {
     pub fn new(signatures: Vec<ConstantSignature>) -> Result<Self, InvalidSignature> {
         let mut forms = Vec::new();
         for (index, signature) in signatures.iter().enumerate() {
-            validate(signature)?;
-            for (bytes, endian) in signature.pattern.forms() {
+            let layouts = signature.pattern.forms();
+            validate(signature, &layouts)?;
+            for (bytes, endian) in layouts {
                 let anchor = best_anchor(&bytes[..signature.min_len]);
                 forms.push(Form { signature: index, bytes, endian, anchor });
             }
@@ -173,7 +182,7 @@ impl ConstantDb {
     }
 }
 
-fn validate(signature: &ConstantSignature) -> Result<(), InvalidSignature> {
+fn validate(signature: &ConstantSignature, layouts: &[(Vec<u8>, Option<Endian>)]) -> Result<(), InvalidSignature> {
     let fail = |reason: String| Err(InvalidSignature { what: signature.what.to_string(), reason });
     let len = signature.pattern.byte_len();
     if signature.min_len < MIN_PATTERN_LEN {
@@ -182,7 +191,10 @@ fn validate(signature: &ConstantSignature) -> Result<(), InvalidSignature> {
     if signature.min_len > len {
         return fail(format!("min_len {} exceeds the pattern's {len} bytes", signature.min_len));
     }
-    for (bytes, _) in signature.pattern.forms() {
+    if matches!(signature.pattern, Pattern::Text(_)) && !len.is_multiple_of(4) {
+        return fail(format!("text pattern of {len} bytes does not split into 32-bit words"));
+    }
+    for (bytes, _) in layouts {
         let prefix = &bytes[..signature.min_len];
         let mut seen = [false; 256];
         prefix.iter().for_each(|&byte| seen[usize::from(byte)] = true);
@@ -216,8 +228,12 @@ pub struct ConstantHit {
     pub algorithm: Cow<'static, str>,
     pub kind: Kind,
     pub what: Cow<'static, str>,
+    /// The hit's virtual address, or its offset within [`ConstantHit::section`] when that is set.
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
+    /// The section holding the hit, set only for relocatable objects: all their sections start at address 0, so
+    /// an address alone cannot tell hits in different sections apart.
+    pub section: Option<String>,
     /// The byte order of a word table or big integer; `None` for byte strings.
     pub endian: Option<Endian>,
     /// How many bytes matched: the whole pattern, or a prefix at least `min_len` long.
@@ -225,12 +241,30 @@ pub struct ConstantHit {
     pub complete: bool,
 }
 
+/// The hits of one scan, and whether [`MAX_HITS`] cut it short (so hits past the last one reported were not
+/// looked for).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ScanReport {
+    pub hits: Vec<ConstantHit>,
+    pub truncated: bool,
+}
+
 /// Finds every signature in `bytes`, which are mapped at `base`. Returns at most [`MAX_HITS`] hits, ordered by
 /// address. When two hits start at the same place in the same byte order, only the longer is kept: the
 /// MD5 initial state is a prefix of SHA-1's, and naming both would hide the more specific answer.
 pub fn scan(bytes: &[u8], base: u64, db: &ConstantDb) -> Vec<ConstantHit> {
+    scan_report(bytes, base, db).hits
+}
+
+/// [`scan`], also reporting whether the hit cap was reached.
+pub fn scan_report(bytes: &[u8], base: u64, db: &ConstantDb) -> ScanReport {
     let mut hits = Vec::new();
     for position in 0..bytes.len().saturating_sub(ANCHOR_LEN - 1) {
+        // Checked only between positions: stopping among one position's candidates could keep a short prefix
+        // match and drop the longer one that would have suppressed it.
+        if hits.len() >= MAX_HITS {
+            return finish(hits, true);
+        }
         let pair = usize::from(u16::from_le_bytes([bytes[position], bytes[position + 1]]));
         if db.prefilter[pair >> 6] & 1 << (pair & 63) == 0 {
             continue;
@@ -250,53 +284,70 @@ pub fn scan(bytes: &[u8], base: u64, db: &ConstantDb) -> Vec<ConstantHit> {
                 kind: signature.kind,
                 what: signature.what.clone(),
                 address: base.wrapping_add(start as u64),
+                section: None,
                 endian: form.endian,
                 length,
                 complete: length == form.bytes.len(),
             });
-            if hits.len() == MAX_HITS {
-                return finish(hits);
-            }
         }
     }
-    finish(hits)
+    finish(hits, false)
 }
 
-fn finish(mut hits: Vec<ConstantHit>) -> Vec<ConstantHit> {
-    hits.sort_by(|a, b| (a.address, b.length, &a.what, a.endian).cmp(&(b.address, a.length, &b.what, b.endian)));
+fn finish(mut hits: Vec<ConstantHit>, truncated: bool) -> ScanReport {
+    // Longest first within each start and byte order, so each group's first hit carries the length to keep.
+    hits.sort_by(|a, b| (a.address, a.endian, b.length, &a.what).cmp(&(b.address, b.endian, a.length, &b.what)));
     // Overlapping segments report the same hit twice.
     hits.dedup();
-    let longest: HashMap<(u64, Option<Endian>), usize> = hits.iter().fold(HashMap::new(), |mut longest, hit| {
-        let entry = longest.entry((hit.address, hit.endian)).or_insert(0);
-        *entry = (*entry).max(hit.length);
-        longest
-    });
-    hits.retain(|hit| longest[&(hit.address, hit.endian)] == hit.length);
-    hits.truncate(MAX_HITS);
-    hits
+    let hits = hits
+        .chunk_by(|a, b| (a.address, a.endian) == (b.address, b.endian))
+        .flat_map(|group| group.iter().take_while(|hit| hit.length == group[0].length).cloned())
+        .collect();
+    cap(hits, truncated)
 }
 
-/// Scans the file-backed bytes of every readable segment at its virtual address; images without segments
-/// (relocatable objects) are scanned section by section instead.
+fn cap(mut hits: Vec<ConstantHit>, truncated: bool) -> ScanReport {
+    let truncated = truncated || hits.len() > MAX_HITS;
+    hits.truncate(MAX_HITS);
+    ScanReport { hits, truncated }
+}
+
+/// Scans the file-backed bytes of every readable segment at its virtual address. Images without segments
+/// (relocatable objects) are scanned section by section instead, in section order, each hit naming its section
+/// and giving its offset within it.
 pub fn scan_binary(binary: &Binary, db: &ConstantDb) -> Vec<ConstantHit> {
+    scan_binary_report(binary, db).hits
+}
+
+/// [`scan_binary`], also reporting whether the hit cap was reached.
+pub fn scan_binary_report(binary: &Binary, db: &ConstantDb) -> ScanReport {
     let mut hits = Vec::new();
+    let mut truncated = false;
+    let mut add = |report: ScanReport| {
+        truncated |= report.truncated;
+        report.hits
+    };
     if binary.segments.is_empty() {
+        // Sections are finished one by one rather than pooled: they share address 0, so pooling would let a hit
+        // in one section suppress, or deduplicate, a different hit in another.
         for section in &binary.sections {
             let Some(offset) = section.file_offset else { continue };
             let start = usize::try_from(offset).unwrap_or(usize::MAX);
             let len = usize::try_from(section.file_size).unwrap_or(usize::MAX);
             if let Some(bytes) = binary.image_bytes().get(start..start.saturating_add(len)) {
-                hits.extend(scan(bytes, section.address, db));
+                let name = Some(section.name.clone());
+                let found = add(scan_report(bytes, 0, db));
+                hits.extend(found.into_iter().map(|hit| ConstantHit { section: name.clone(), ..hit }));
             }
         }
-    } else {
-        for segment in binary.segments.iter().filter(|segment| segment.perms.read && segment.file_size > 0) {
-            if let Some(bytes) = binary.read_to_segment_end(segment.address) {
-                hits.extend(scan(bytes, segment.address, db));
-            }
+        return cap(hits, truncated);
+    }
+    for segment in binary.segments.iter().filter(|segment| segment.perms.read && segment.file_size > 0) {
+        if let Some(bytes) = binary.read_to_segment_end(segment.address) {
+            hits.extend(add(scan_report(bytes, segment.address, db)));
         }
     }
-    finish(hits)
+    finish(hits, truncated)
 }
 
 #[cfg(test)]
@@ -409,6 +460,28 @@ mod tests {
     }
 
     #[test]
+    fn the_cap_never_splits_one_position_s_candidates() {
+        // "short" is a prefix of "long" and is tried first. One lone "short" makes the raw count odd, so the cap
+        // lands between a position's "short" and "long" candidates.
+        let signature = |what: &'static str, len: u8| ConstantSignature {
+            algorithm: "test".into(),
+            kind: Kind::Hash,
+            what: what.into(),
+            source: "test".into(),
+            pattern: Pattern::Bytes((0..len).collect()),
+            min_len: usize::from(len),
+        };
+        let db = ConstantDb::new(vec![signature("short", 16), signature("long", 24)]).unwrap();
+        let mut buffer: Vec<u8> = (0..16).chain([0xee; 8]).collect();
+        buffer.extend((0..24).cycle().take(24 * MAX_HITS));
+        let report = scan_report(&buffer, 0, &db);
+        assert!(report.truncated);
+        assert_eq!(report.hits[0].what, "short");
+        assert!(report.hits[1..].iter().all(|hit| hit.what == "long"), "{:?}", report.hits.last());
+        assert!(!scan_report(&buffer[..100], 0, &db).truncated);
+    }
+
+    #[test]
     fn low_information_signatures_are_rejected() {
         let p256_prime = (0..32).map(|i| [0xff, 0xff, 0xff, 0xff, 0, 0, 0, 1][i.min(7)]).collect();
         let signature = ConstantSignature {
@@ -430,7 +503,20 @@ mod tests {
         let json = serde_json::to_value(&hits).unwrap();
         assert_eq!(json[0]["address"], "0x1002");
         assert_eq!(json[0]["kind"], "stream_cipher");
-        assert_eq!(json[0]["endian"], "little");
+        assert_eq!(json[0]["endian"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn chacha_text_has_no_byte_order_but_its_big_endian_words_do() {
+        let db = ConstantDb::bundled();
+        let mut buffer = noise(128, 6);
+        buffer[8..24].copy_from_slice(b"expand 32-byte k");
+        buffer[64..80].copy_from_slice(b"apxe3 dnyb-2k et");
+        let what = "\"expand 32-byte k\" constant";
+        assert_eq!(
+            summary(&scan(&buffer, 0, db)),
+            [(8, what, None, 16, true), (64, what, Some(Endian::Big), 16, true)]
+        );
     }
 
     #[test]
@@ -441,6 +527,69 @@ mod tests {
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert_eq!(hits[0].what, "\"expand 32-byte k\" constant");
         assert_eq!(binary.read(hits[0].address, 16), Some(&b"expand 32-byte k"[..]));
+    }
+
+    /// A minimal x86-64 ELF relocatable object holding the given `PROGBITS` sections, all at address 0.
+    fn elf_object(sections: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut names = vec![0u8];
+        let mut name_offsets = Vec::new();
+        for (name, _) in sections.iter().copied().chain([(".shstrtab", &[][..])]) {
+            name_offsets.push(names.len() as u32);
+            names.extend_from_slice(name.as_bytes());
+            names.push(0);
+        }
+        let mut file = vec![0u8; 64];
+        let mut headers = vec![[0u8; 64]];
+        let mut add = |file: &mut Vec<u8>, name: u32, kind: u32, bytes: &[u8]| {
+            let mut header = [0u8; 64];
+            header[0..4].copy_from_slice(&name.to_le_bytes());
+            header[4..8].copy_from_slice(&kind.to_le_bytes());
+            header[24..32].copy_from_slice(&(file.len() as u64).to_le_bytes());
+            header[32..40].copy_from_slice(&(bytes.len() as u64).to_le_bytes());
+            header[48..56].copy_from_slice(&1u64.to_le_bytes());
+            file.extend_from_slice(bytes);
+            headers.push(header);
+        };
+        for ((_, bytes), &name) in sections.iter().zip(&name_offsets) {
+            add(&mut file, name, 1, bytes);
+        }
+        add(&mut file, name_offsets[sections.len()], 3, &names);
+        let section_headers = file.len() as u64;
+        file.extend(headers.iter().flatten());
+        file[..8].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1, 0]);
+        file[16..18].copy_from_slice(&1u16.to_le_bytes());
+        file[18..20].copy_from_slice(&0x3eu16.to_le_bytes());
+        file[20..24].copy_from_slice(&1u32.to_le_bytes());
+        file[40..48].copy_from_slice(&section_headers.to_le_bytes());
+        file[52..54].copy_from_slice(&64u16.to_le_bytes());
+        file[58..60].copy_from_slice(&64u16.to_le_bytes());
+        file[60..62].copy_from_slice(&(headers.len() as u16).to_le_bytes());
+        file[62..64].copy_from_slice(&(sections.len() as u16 + 1).to_le_bytes());
+        file
+    }
+
+    #[test]
+    fn object_sections_at_address_zero_do_not_cancel_each_other() {
+        let sha1 = le(&[0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476, 0xc3d2_e1f0]);
+        let mut text = noise(64, 5);
+        text[8..28].copy_from_slice(&sha1);
+        let object = elf_object(&[(".text", &text), (".rodata.md5", &sha1[..16]), (".rodata.sha1", &sha1)]);
+        let path = std::env::temp_dir().join(format!("rampage-constants-{}.o", std::process::id()));
+        std::fs::write(&path, object).unwrap();
+        let binary = Binary::open(&path);
+        std::fs::remove_file(&path).unwrap();
+        let binary = binary.unwrap();
+        assert!(binary.segments.is_empty());
+        let hits = scan_binary(&binary, ConstantDb::bundled());
+        let found: Vec<_> = hits.iter().map(|hit| (hit.section.as_deref(), hit.address, &*hit.what)).collect();
+        assert_eq!(
+            found,
+            [
+                (Some(".text"), 8, "SHA-1 initial hash value"),
+                (Some(".rodata.md5"), 0, "MD4/MD5 initial state"),
+                (Some(".rodata.sha1"), 0, "SHA-1 initial hash value"),
+            ]
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Tests against the shared real fixtures. These cover the compiler/linker/Go paths on genuine binaries and
 //! confirm an ordinary unpacked binary is not misreported as packed. No UPX binary is installed, so the packer
-//! path is exercised only by the synthetic tests in `synthetic.rs`.
+//! path is exercised only by the crafted-image unit tests in `src/matcher.rs`.
 
-use rampage_detect::{identify, Confidence, Kind, SignatureDb};
+use rampage_detect::{Confidence, Kind, SignatureDb, identify};
 use rampage_loaders::Binary;
 
 fn fixture(name: &str) -> std::path::PathBuf {

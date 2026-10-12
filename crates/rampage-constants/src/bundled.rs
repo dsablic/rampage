@@ -138,7 +138,7 @@ fn other_primitives() -> Vec<ConstantSignature> {
             Kind::StreamCipher,
             "\"expand 32-byte k\" constant",
             CHACHA,
-            Pattern::U32(sigma_words(b"expand 32-byte k")),
+            Pattern::Text(b"expand 32-byte k".to_vec()),
             None,
         ),
         signature(
@@ -146,7 +146,7 @@ fn other_primitives() -> Vec<ConstantSignature> {
             Kind::StreamCipher,
             "\"expand 16-byte k\" constant",
             CHACHA,
-            Pattern::U32(sigma_words(b"expand 16-byte k")),
+            Pattern::Text(b"expand 16-byte k".to_vec()),
             None,
         ),
         signature("AES-GCM", Kind::Mac, "GHASH 4-bit reduction table (16-bit)", GCM, Pattern::U16(ghash.clone()), None),

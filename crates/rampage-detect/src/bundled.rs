@@ -2,15 +2,15 @@
 //! layouts, embedded toolchain strings, import conventions). None of it is copied from PeID's `userdb.txt`.
 //!
 //! Each signature is deliberately conservative: it keys off fingerprints that are cheap to read and rarely
-//! collide, and it reports evidence rather than a verdict. The data lives as a `const` table of tuples that
-//! [`bundled`] turns into [`Signature`]s, so there is no file to parse and no runtime format to trust.
+//! collide, and it reports evidence rather than a verdict. The rules are plain [`Signature`] builder calls that
+//! [`bundled`] collects, so there is no file to parse and no runtime format to trust.
 
 use crate::model::{Condition, Kind, Signature, SignatureDb};
 use crate::pattern::BytePattern;
 
 /// Builds the bundled database. Any entry-point pattern here is a string constant validated by a unit test, so a
 /// typo cannot ship silently.
-pub fn bundled() -> SignatureDb {
+pub(crate) fn bundled() -> SignatureDb {
     let mut db = SignatureDb::new();
     db.extend(packers());
     db.extend(protectors());
@@ -47,11 +47,14 @@ fn section_contains(name: &str, needle: &str) -> Condition {
     Condition::SectionContains { section: Some(name.to_owned()), needle: needle.as_bytes().to_vec() }
 }
 
+fn versioned_import(prefix: &str) -> Condition {
+    Condition::VersionedImportLibrary(prefix.to_owned())
+}
+
 fn packers() -> Vec<Signature> {
     vec![
         // UPX renames the first two sections UPX0 (unpacked) and UPX1 (packed); both present is a reliable tell.
-        Signature::new("UPX", Kind::Packer, vec![section("UPX0"), section("UPX1")])
-            .with_note("UPX0 and UPX1 sections"),
+        Signature::new("UPX", Kind::Packer, vec![section("UPX0"), section("UPX1")]).with_note("UPX0 and UPX1 sections"),
         // The classic 32-bit UPX stub: pushad, then a pointer load into esi/edi.
         Signature::new("UPX", Kind::Packer, vec![ep("60 BE ?? ?? ?? ?? 8D BE ?? ?? ?? ??")])
             .with_note("pushad + lea esi/edi entry stub"),
@@ -65,8 +68,7 @@ fn packers() -> Vec<Signature> {
         Signature::new("Petite", Kind::Packer, vec![unique_section(&[".petite"])]).with_note("Petite section name"),
         Signature::new("NsPack", Kind::Packer, vec![unique_section(&[".nsp0", ".nsp1", ".nsp2"])])
             .with_note("NsPack section names"),
-        Signature::new("FSG", Kind::Packer, vec![ep("87 25 ?? ?? ?? ?? 61 94")])
-            .with_note("FSG entry stub"),
+        Signature::new("FSG", Kind::Packer, vec![ep("87 25 ?? ?? ?? ?? 61 94")]).with_note("FSG entry stub"),
     ]
 }
 
@@ -95,16 +97,18 @@ fn compilers() -> Vec<Signature> {
         Signature::new(".NET", Kind::Compiler, vec![Condition::ImportLibrary("mscoree".to_owned())])
             .with_note("mscoree.dll import"),
         Signature::new(".NET", Kind::Compiler, vec![section(".cormeta")]).with_note(".cormeta CLR metadata"),
-        // MSVC links against a versioned C/C++ runtime import library.
-        Signature::new("MSVC", Kind::Compiler, vec![Condition::ImportLibrary("vcruntime".to_owned())])
-            .with_note("VCRUNTIME import"),
-        Signature::new("MSVC", Kind::Compiler, vec![Condition::ImportLibrary("msvcr".to_owned())])
-            .with_note("MSVCR runtime import"),
+        // MSVC links against a versioned C/C++ runtime. The unversioned msvcrt.dll is the system runtime that
+        // MinGW and Rust's gnu targets use, so it says nothing about MSVC.
+        Signature::new("MSVC", Kind::Compiler, vec![versioned_import("vcruntime")]).with_note("VCRUNTIME import"),
+        Signature::new("MSVC", Kind::Compiler, vec![versioned_import("msvcr")]).with_note("MSVCR runtime import"),
+        Signature::new("MSVC", Kind::Compiler, vec![versioned_import("msvcp")]).with_note("MSVCP C++ runtime import"),
         // MinGW embeds its runtime-failure banner in read-only data.
         Signature::new("MinGW/GCC", Kind::Compiler, vec![contains("Mingw-w64")]).with_note("Mingw-w64 banner"),
-        // GCC and Clang stamp a producer string into .comment.
+        // GCC and Clang stamp a producer string into .comment. "GCC:" alone is weak: glibc's crt1.o/crti.o and
+        // libgcc's crtbegin.o carry it too, so Clang- and Rust-built glibc programs show it as well.
         Signature::new("GCC", Kind::Compiler, vec![section_contains(".comment", "GCC:")])
-            .with_note(".comment GCC producer"),
+            .with_note(".comment GCC producer (also stamped by glibc/libgcc startup objects)")
+            .corroborating(),
         Signature::new("Clang/LLVM", Kind::Compiler, vec![section_contains(".comment", "clang")])
             .with_note(".comment clang producer"),
         Signature::new("Rust", Kind::Compiler, vec![contains("rustc version")]).with_note("rustc version string"),
@@ -124,8 +128,12 @@ fn linkers() -> Vec<Signature> {
     vec![
         Signature::new("LLD", Kind::Linker, vec![section_contains(".comment", "LLD")])
             .with_note(".comment LLD linker tag"),
-        Signature::new("GNU ld", Kind::Linker, vec![section_contains(".comment", "GNU ld")])
-            .with_note(".comment GNU ld tag"),
+        // GNU ld (BFD) writes no tag at all. mold's tag reads "mold x.y (...; compatible with GNU ld)", so it
+        // must be matched by its own name, not by "GNU ld".
+        Signature::new("mold", Kind::Linker, vec![section_contains(".comment", "mold ")])
+            .with_note(".comment mold linker tag"),
+        Signature::new("GNU gold", Kind::Linker, vec![unique_section(&[".note.gnu.gold-version"])])
+            .with_note("gold version note"),
     ]
 }
 
@@ -149,8 +157,12 @@ mod tests {
         for signature in &db.signatures {
             assert!(!signature.conditions.is_empty(), "{} has no conditions", signature.name);
             for condition in &signature.conditions {
-                if let Condition::Entry { pattern, .. } = condition {
-                    assert!(!pattern.is_empty());
+                if let Condition::Entry { .. } = condition {
+                    assert!(
+                        condition.is_distinctive(),
+                        "{}: entry pattern too short to be distinctive",
+                        signature.name
+                    );
                 }
             }
         }

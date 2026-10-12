@@ -9,7 +9,6 @@ rampage-loaders.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 # yara-x is VirusTotal's pure-Rust YARA engine (BSD-3-Clause). Not a workspace
-# dep; pinned to a stable release at least two weeks old.
+# dep. A caret requirement (any 1.x from 1.20.0); Cargo.lock fixes the version
+# actually built.
 yara-x = "1.20.0"
-
-[dev-dependencies]

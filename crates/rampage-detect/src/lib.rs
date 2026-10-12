@@ -20,13 +20,13 @@
 //! [`SignatureDb::bundled`] returns a starter database authored here from public knowledge (section layouts,
 //! embedded producer strings, import conventions), never copied from PeID's `userdb.txt`. It covers UPX, ASPack,
 //! MPRESS, PECompact, Petite, NsPack and FSG (packers); VMProtect, Themida/WinLicense and Enigma (protectors);
-//! Go, .NET, MSVC, MinGW/GCC, GCC, Clang/LLVM, Rust, Zig and Delphi/Borland (compilers); LLD and GNU ld
-//! (linkers); and NSIS and Inno Setup (installers). See [`bundled`] for the exact rules.
+//! Go, .NET, MSVC, MinGW/GCC, GCC, Clang/LLVM, Rust, Zig and Delphi/Borland (compilers); LLD, mold and GNU
+//! gold (linkers; GNU ld leaves no mark to key on); and NSIS and Inno Setup (installers).
 //!
 //! # User-supplied databases
 //!
-//! [`parse_peid`] parses the public PeID `userdb.txt` format so users can bring their own signatures. We ship
-//! the parser, not a database.
+//! [`SignatureDb::load_peid`] parses the public PeID `userdb.txt` format so users can bring their own
+//! signatures. We ship the parser, not a database.
 
 mod bundled;
 mod matcher;
@@ -34,11 +34,10 @@ mod model;
 mod pattern;
 mod peid;
 
-pub use bundled::bundled;
 pub use matcher::identify;
 pub use model::{Condition, Confidence, Detection, Kind, Signature, SignatureDb};
-pub use pattern::{BytePattern, PatternError, MAX_PATTERN_BYTES};
-pub use peid::{parse as parse_peid, PeidError};
+pub use pattern::{BytePattern, MAX_PATTERN_BYTES, MIN_DISTINCTIVE_NIBBLES, PatternError};
+pub use peid::{PeidError, PeidWarning};
 
 impl SignatureDb {
     /// The bundled starter database (see the [crate] docs for coverage).
@@ -46,9 +45,14 @@ impl SignatureDb {
         bundled::bundled()
     }
 
-    /// Adds every signature parsed from PeID `userdb.txt` text to this database.
-    pub fn load_peid(&mut self, text: &str) -> Result<(), PeidError> {
-        self.signatures.extend(peid::parse(text)?);
-        Ok(())
+    /// Adds every usable signature parsed from PeID `userdb.txt` text to this database, returning the entries
+    /// and lines it skipped. Fails, adding nothing, only when there were problems and not one usable signature.
+    pub fn load_peid(&mut self, text: &str) -> Result<Vec<PeidWarning>, PeidError> {
+        let parsed = peid::parse(text);
+        if parsed.signatures.is_empty() && !parsed.warnings.is_empty() {
+            return Err(PeidError::NoUsableSignatures { warnings: parsed.warnings });
+        }
+        self.signatures.extend(parsed.signatures);
+        Ok(parsed.warnings)
     }
 }

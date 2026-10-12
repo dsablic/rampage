@@ -3,10 +3,12 @@
 //! The hex text is parsed two characters per byte. A hex digit fixes that nibble; a `?` leaves it free. So `60`
 //! matches exactly, `6?` matches `0x60..=0x6f`, `?0` matches any byte whose low nibble is zero, and `??` matches
 //! any byte at all. ASCII whitespace between bytes is ignored, so `60 E8 ?? ?? ?? ??` and `60E8????????` parse
-//! the same. Every pattern is at most [`MAX_PATTERN_BYTES`] long so a malformed signature cannot allocate wildly.
+//! the same. Every pattern is at most [`MAX_PATTERN_BYTES`] long, checked before anything is allocated, so a
+//! malformed signature cannot allocate wildly.
 
-/// Upper bound on a pattern's length in bytes; real entry-point stubs are far shorter.
-pub const MAX_PATTERN_BYTES: usize = 256;
+/// Upper bound on a pattern's length in bytes. Real entry-point stubs are far shorter, but hand-made PeID
+/// databases carry signatures of several hundred bytes.
+pub const MAX_PATTERN_BYTES: usize = 4096;
 
 /// One byte of a pattern: `value` holds the fixed bits and `mask` marks which bits are fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,30 +24,28 @@ pub struct BytePattern {
 }
 
 /// Why a hex pattern could not be parsed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PatternError {
     /// The pattern held no bytes (all whitespace).
+    #[error("pattern is empty")]
     Empty,
     /// The hex text had an odd number of nibbles, so a byte was left half-specified.
+    #[error("pattern has an odd number of nibbles")]
     OddNibbles,
     /// A character was neither a hex digit, a `?`, nor whitespace.
+    #[error("unexpected character {0:?} in pattern")]
     BadChar(char),
     /// The pattern was longer than [`MAX_PATTERN_BYTES`].
+    #[error("pattern exceeds {MAX_PATTERN_BYTES} bytes")]
     TooLong,
+    /// Every nibble was a wildcard, so the pattern would match anything.
+    #[error("pattern has no fixed nibble")]
+    AllWildcard,
 }
 
-impl std::fmt::Display for PatternError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "pattern is empty"),
-            Self::OddNibbles => write!(f, "pattern has an odd number of nibbles"),
-            Self::BadChar(c) => write!(f, "unexpected character {c:?} in pattern"),
-            Self::TooLong => write!(f, "pattern exceeds {MAX_PATTERN_BYTES} bytes"),
-        }
-    }
-}
-
-impl std::error::Error for PatternError {}
+/// The fewest fixed nibbles (four whole bytes' worth) that make a pattern distinctive on its own; a shorter one
+/// such as a lone `61` turns up by chance.
+pub const MIN_DISTINCTIVE_NIBBLES: usize = 8;
 
 /// One nibble: its value and whether it is fixed (`Some`) or a wildcard (`None`).
 fn nibble(c: char) -> Result<Option<u8>, PatternError> {
@@ -58,19 +58,21 @@ fn nibble(c: char) -> Result<Option<u8>, PatternError> {
 impl BytePattern {
     /// Parses a hex pattern with `?` nibble wildcards. Whitespace between nibbles is ignored.
     pub fn parse(text: &str) -> Result<Self, PatternError> {
-        let nibbles: Vec<char> = text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-        if nibbles.is_empty() {
+        let mut nibbles = text.chars().filter(|c| !c.is_ascii_whitespace());
+        // Counted before anything is allocated, so the length bound also bounds memory.
+        let count = nibbles.clone().count();
+        if count == 0 {
             return Err(PatternError::Empty);
         }
-        if !nibbles.len().is_multiple_of(2) {
+        if !count.is_multiple_of(2) {
             return Err(PatternError::OddNibbles);
         }
-        if nibbles.len() / 2 > MAX_PATTERN_BYTES {
+        if count / 2 > MAX_PATTERN_BYTES {
             return Err(PatternError::TooLong);
         }
-        let mut bytes = Vec::with_capacity(nibbles.len() / 2);
-        for pair in nibbles.as_chunks::<2>().0 {
-            let (high, low) = (nibble(pair[0])?, nibble(pair[1])?);
+        let mut bytes = Vec::with_capacity(count / 2);
+        while let (Some(high), Some(low)) = (nibbles.next(), nibbles.next()) {
+            let (high, low) = (nibble(high)?, nibble(low)?);
             let mut value = 0u8;
             let mut mask = 0u8;
             if let Some(high) = high {
@@ -83,7 +85,34 @@ impl BytePattern {
             }
             bytes.push(MaskedByte { value, mask });
         }
-        Ok(Self { bytes })
+        let pattern = Self { bytes };
+        if pattern.fixed_nibbles() == 0 {
+            return Err(PatternError::AllWildcard);
+        }
+        Ok(pattern)
+    }
+
+    /// The longest run of fully fixed bytes and its offset in the pattern, or `None` when no byte is fully fixed.
+    /// Ties go to the run with fewer `00`/`ff` bytes, which are common filler and so make poor search keys.
+    pub(crate) fn longest_literal(&self) -> Option<(usize, Vec<u8>)> {
+        let filler = |run: &[MaskedByte]| run.iter().filter(|byte| matches!(byte.value, 0x00 | 0xff)).count();
+        let mut best: Option<(usize, &[MaskedByte])> = None;
+        let mut offset = 0;
+        for run in self.bytes.chunk_by(|a, b| (a.mask == 0xff) == (b.mask == 0xff)) {
+            let better = best.is_none_or(|(_, kept)| {
+                run.len() > kept.len() || (run.len() == kept.len() && filler(run) < filler(kept))
+            });
+            if run[0].mask == 0xff && better {
+                best = Some((offset, run));
+            }
+            offset += run.len();
+        }
+        best.map(|(offset, run)| (offset, run.iter().map(|byte| byte.value).collect()))
+    }
+
+    /// How many nibbles the pattern pins to a value (two per fully fixed byte).
+    pub fn fixed_nibbles(&self) -> usize {
+        self.bytes.iter().map(|byte| byte.mask.count_ones() as usize / 4).sum()
     }
 
     /// The pattern's length in bytes.
@@ -97,8 +126,7 @@ impl BytePattern {
 
     /// Whether the pattern matches the start of `data`. A shorter `data` than the pattern never matches.
     pub fn matches_at(&self, data: &[u8]) -> bool {
-        data.len() >= self.bytes.len()
-            && self.bytes.iter().zip(data).all(|(p, &b)| b & p.mask == p.value)
+        data.len() >= self.bytes.len() && self.bytes.iter().zip(data).all(|(p, &b)| b & p.mask == p.value)
     }
 
     /// The first offset in `data` where the pattern matches, scanning left to right.
@@ -164,5 +192,19 @@ mod tests {
         assert_eq!(BytePattern::parse("6G"), Err(PatternError::BadChar('G')));
         let long = "00".repeat(MAX_PATTERN_BYTES + 1);
         assert_eq!(BytePattern::parse(&long), Err(PatternError::TooLong));
+        assert_eq!(BytePattern::parse("?? ??"), Err(PatternError::AllWildcard));
+    }
+
+    #[test]
+    fn the_longest_fixed_run_is_the_search_literal() {
+        let literal = |text: &str| BytePattern::parse(text).unwrap().longest_literal();
+        assert_eq!(literal("60 ?? E8 01 02 ?? 03"), Some((2, vec![0xe8, 0x01, 0x02])));
+        assert_eq!(literal("00 00 ?? 8B EC"), Some((3, vec![0x8b, 0xec])));
+        assert_eq!(literal("6? ?0"), None);
+    }
+
+    #[test]
+    fn fixed_nibbles_count_pinned_halves() {
+        assert_eq!(BytePattern::parse("60 ?? 6? ?0").unwrap().fixed_nibbles(), 4);
     }
 }
