@@ -148,5 +148,6 @@ fn check_names_reports_validity_and_use() {
     assert!(!checks[3].valid && !checks[3].address_shaped && checks[3].problem.is_some());
     assert!(checks[4].valid && checks[4].used_at.is_none() && checks[4].problem.is_none());
     assert!(checks[5].address_shaped && !checks[5].valid);
+    assert!(checks[5].problem.as_deref().is_some_and(|problem| problem.contains("looks like an address")));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

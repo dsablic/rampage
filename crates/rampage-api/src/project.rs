@@ -373,14 +373,15 @@ impl Project {
 /// `sub_<hex>`, so naming one function `sub_401000` would shadow the default name of the function at 0x401000.
 /// Other names that merely start with `sub_` (`sub_menu_init`) are fine.
 pub(crate) fn check_name(name: &str) -> Result<(), String> {
+    // Before the identifier rules, which refuse `0x...` too but with a less helpful reason.
+    if is_address_shaped(name) {
+        return Err(format!("{name:?} looks like an address; choose another name"));
+    }
     let valid = !name.is_empty()
         && !name.starts_with(|c: char| c.is_ascii_digit())
         && name.chars().all(|c| c.is_ascii_alphanumeric() || "_.$@?:".contains(c));
     if !valid {
         return Err(format!("{name:?} is not a valid name: use letters, digits and _.$@?:"));
-    }
-    if is_address_shaped(name) {
-        return Err(format!("{name:?} looks like an address; choose another name"));
     }
     Ok(())
 }

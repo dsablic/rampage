@@ -191,9 +191,10 @@ fn only_address_shaped_names_are_refused() {
     let path = scratch_copy("hello-arm64.macho", "address-names");
     let project = Session::default().open(&path, None).unwrap();
     let main = project.resolve("_main").unwrap();
-    assert!(project.rename(main, Some("0x1000")).is_err());
-    assert!(project.rename(main, Some("0X1000")).is_err());
-    assert!(project.rename(main, Some("sub_401000")).is_err());
+    for name in ["0x1000", "0X1000", "sub_401000"] {
+        let error = project.rename(main, Some(name)).unwrap_err().to_string();
+        assert!(error.contains("looks like an address"), "{error}");
+    }
     assert!(project.rename(main, Some("sub_menu_init")).unwrap().changed);
     assert_eq!(project.resolve("sub_menu_init").unwrap(), main);
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
