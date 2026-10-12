@@ -472,3 +472,52 @@ fn native_images_are_not_managed() {
         assert!(dotnet::metadata(&binary).unwrap().is_none(), "{name}");
     }
 }
+
+#[test]
+fn reads_a_real_assembly() {
+    // Microsoft.Bcl.HashCode 1.1.1, lib/netstandard2.0 (MIT; provenance in the .LICENSE.txt beside it).
+    let binary = Binary::open(fixture("Microsoft.Bcl.HashCode.dll")).unwrap();
+    let metadata = dotnet::metadata(&binary).unwrap().expect("a managed assembly");
+    assert!(metadata.warnings.is_empty(), "unexpected warnings: {:?}", metadata.warnings);
+    assert_eq!(metadata.runtime_version, "v4.0.30319");
+    assert_eq!(metadata.cli.flag_names, ["il_only", "strong_name_signed"]);
+    assert_eq!(metadata.entry_point, None, "a library has no entry point");
+
+    let assembly = metadata.assembly.as_ref().unwrap();
+    assert_eq!((assembly.name.as_str(), assembly.version.as_str()), ("Microsoft.Bcl.HashCode", "1.0.0.0"));
+    assert_eq!(metadata.module.as_ref().unwrap().mvid.as_deref(), Some("d56bb6e7-5667-4a1a-89c0-cdd2b2a4b04e"));
+    let netstandard = &metadata.assembly_refs[0];
+    assert_eq!((netstandard.name.as_str(), netstandard.version.as_str()), ("netstandard", "2.0.0.0"));
+    assert_eq!(netstandard.public_key_or_token.as_deref(), Some("cc7b13ffcd2ddd51"));
+
+    let hash_code = metadata.types.iter().find(|ty| ty.namespace == "System" && ty.name == "HashCode").unwrap();
+    assert_eq!(hash_code.extends.as_deref(), Some("System.ValueType"));
+    assert!(hash_code.fields.iter().any(|field| field == "_queue1"));
+    assert_eq!(hash_code.methods.iter().filter(|method| method.name == "Combine").count(), 8);
+    // Checked against the raw bytes: fat header 0x3013 at file offset 0x504, code size 0xE1.
+    let combine5 = hash_code.methods.iter().find(|method| method.token == 0x0600_000D).unwrap();
+    assert_eq!((combine5.name.as_str(), combine5.rva), ("Combine", 0x2304));
+    assert_eq!(combine5.params, ["value1", "value2", "value3", "value4", "value5"]);
+    let fat = combine5.il.unwrap();
+    assert_eq!((fat.header, fat.code_size, fat.max_stack), (IlHeader::Fat, 225, 4));
+    assert_eq!(fat.local_var_sig_token, 0x1100_0007);
+    // A tiny header: 0x1E at file offset 0x250 is a 7-byte constructor body.
+    let ctor = &metadata.types.iter().find(|ty| ty.name == "EmbeddedAttribute").unwrap().methods[0];
+    assert_eq!((ctor.name.as_str(), ctor.rva), (".ctor", 0x2050));
+    assert_eq!(ctor.il.map(|body| (body.header, body.code_size)), Some((IlHeader::Tiny, 7)));
+    let methods: Vec<&dotnet::MethodDef> = metadata.types.iter().flat_map(|ty| &ty.methods).collect();
+    assert_eq!(methods.len(), 48);
+    assert!(methods.iter().all(|method| method.body == BodyKind::Il && method.il.is_some()));
+
+    assert!(metadata.user_strings.iter().any(|literal| literal == "HashCode_EqualityNotSupported"));
+    assert!(metadata.member_refs.iter().any(|member| member.name == ".ctor"));
+
+    // IL bodies are bytecode: none may appear as native function starts or symbols. A PE image base is
+    // 64 KiB aligned, so masking the lowest section address recovers it.
+    let image_base = binary.segments.iter().map(|segment| segment.address).min().unwrap() & !0xFFFF;
+    for method in methods {
+        let address = image_base + u64::from(method.rva);
+        assert!(!binary.function_starts.contains(&address), "{} seeded as a function start", method.name);
+        assert!(binary.symbols.iter().all(|symbol| symbol.address != address), "{} named as a symbol", method.name);
+    }
+}
