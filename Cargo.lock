@@ -4427,6 +4427,7 @@ dependencies = [
 name = "rampage-detect"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "rampage-loaders",
  "serde",
  "thiserror 2.0.21",

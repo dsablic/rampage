@@ -6,9 +6,13 @@
 //! crafted inputs, which lets the section, import, overlay and entropy paths be unit-tested without forging a
 //! whole object file.
 
+use std::collections::HashMap;
+
+use aho_corasick::AhoCorasick;
 use rampage_loaders::Binary;
 
 use crate::model::{Condition, Confidence, Detection, Signature, SignatureDb};
+use crate::pattern::BytePattern;
 
 /// The facts a signature is tested against: entry-point bytes, the image, named sections, imports and overlay.
 pub(crate) trait Image {
@@ -33,9 +37,10 @@ pub fn identify(binary: &Binary, db: &SignatureDb) -> Vec<Detection> {
 }
 
 pub(crate) fn identify_image(image: &impl Image, db: &SignatureDb) -> Vec<Detection> {
+    let unanchored = Unanchored::scan(image.image_bytes(), db);
     let mut detections: Vec<Detection> = Vec::new();
     for signature in &db.signatures {
-        if let Some(detection) = evaluate(image, signature) {
+        if let Some(detection) = evaluate(image, &unanchored, signature) {
             merge(&mut detections, detection);
         }
     }
@@ -48,13 +53,13 @@ pub(crate) fn identify_image(image: &impl Image, db: &SignatureDb) -> Vec<Detect
 
 /// A signature matches only when every condition holds; the detection carries one evidence line per condition
 /// and a confidence derived from how distinctive the matched conditions were.
-fn evaluate(image: &impl Image, signature: &Signature) -> Option<Detection> {
+fn evaluate(image: &impl Image, unanchored: &Unanchored, signature: &Signature) -> Option<Detection> {
     if signature.conditions.is_empty() {
         return None;
     }
     let mut evidence = Vec::with_capacity(signature.conditions.len());
     for condition in &signature.conditions {
-        evidence.push(check(image, condition)?);
+        evidence.push(check(image, unanchored, condition)?);
     }
     let distinctive = signature.conditions.iter().any(Condition::is_distinctive);
     // A single generic signal is tentative; a distinctive one, or several corroborating ones, is strong.
@@ -63,15 +68,92 @@ fn evaluate(image: &impl Image, signature: &Signature) -> Option<Detection> {
     Some(Detection { name: signature.name.clone(), kind: signature.kind, confidence, evidence })
 }
 
+/// Where every un-anchored pattern in a database first matches the image, found in one pass for all of them.
+///
+/// Scanning the image once per pattern costs patterns x image size, seconds for a few thousand PeID entries on a
+/// megabyte-sized binary. Instead each pattern is keyed by its longest run of fixed bytes; one Aho-Corasick pass
+/// finds every occurrence of every key, and the full pattern is verified only there. Patterns with no fully fixed
+/// byte (only nibbles) have no key and fall back to a direct scan.
+struct Unanchored {
+    first: HashMap<*const BytePattern, usize>,
+}
+
+impl Unanchored {
+    fn scan(data: &[u8], db: &SignatureDb) -> Self {
+        let patterns: Vec<&BytePattern> = db
+            .signatures
+            .iter()
+            .flat_map(|signature| &signature.conditions)
+            .filter_map(|condition| match condition {
+                Condition::Entry { pattern, ep_only: false } => Some(pattern),
+                _ => None,
+            })
+            .collect();
+        let mut first = HashMap::new();
+        let mut keys: Vec<Vec<u8>> = Vec::new();
+        let mut key_index: HashMap<Vec<u8>, usize> = HashMap::new();
+        // For each key, the patterns it stands for and the key's offset inside each.
+        let mut owners: Vec<Vec<(&BytePattern, usize)>> = Vec::new();
+        let mut unkeyed = Vec::new();
+        for pattern in patterns {
+            let Some((offset, literal)) = pattern.longest_literal() else {
+                unkeyed.push(pattern);
+                continue;
+            };
+            let key = *key_index.entry(literal).or_insert_with_key(|literal| {
+                keys.push(literal.clone());
+                owners.push(Vec::new());
+                keys.len() - 1
+            });
+            owners[key].push((pattern, offset));
+        }
+        match AhoCorasick::new(&keys) {
+            Ok(automaton) => {
+                let mut pending: usize = owners.iter().map(Vec::len).sum();
+                for found in automaton.find_overlapping_iter(data) {
+                    for &(pattern, offset) in &owners[found.pattern().as_usize()] {
+                        let id = std::ptr::from_ref(pattern);
+                        // Occurrences of one key arrive in order, so the first verified start is the leftmost.
+                        if first.contains_key(&id) {
+                            continue;
+                        }
+                        if let Some(start) = found.start().checked_sub(offset)
+                            && pattern.matches_at(&data[start..])
+                        {
+                            first.insert(id, start);
+                            pending -= 1;
+                        }
+                    }
+                    if pending == 0 {
+                        break;
+                    }
+                }
+            }
+            // Building fails only past the automaton's size limits; scanning each pattern directly still works.
+            Err(_) => unkeyed.extend(owners.iter().flatten().map(|&(pattern, _)| pattern)),
+        }
+        for pattern in unkeyed {
+            if let Some(start) = pattern.find_in(data) {
+                first.insert(std::ptr::from_ref(pattern), start);
+            }
+        }
+        Self { first }
+    }
+
+    fn first_match(&self, pattern: &BytePattern) -> Option<usize> {
+        self.first.get(&std::ptr::from_ref(pattern)).copied()
+    }
+}
+
 /// Tests one condition, returning a human-readable evidence line when it holds.
-fn check(image: &impl Image, condition: &Condition) -> Option<String> {
+fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> Option<String> {
     match condition {
         Condition::Entry { pattern, ep_only } => {
             if *ep_only {
                 let bytes = image.entry_bytes(pattern.len())?;
                 pattern.matches_at(bytes).then(|| format!("entry-point bytes match {}-byte pattern", pattern.len()))
             } else {
-                let at = pattern.find_in(image.image_bytes())?;
+                let at = unanchored.first_match(pattern)?;
                 Some(format!("pattern found at image offset {at:#x}"))
             }
         }
@@ -270,13 +352,80 @@ mod tests {
         Condition::Entry { pattern: BytePattern::parse(pattern).unwrap(), ep_only: true }
     }
 
+    /// Evaluates one signature on its own, as [`identify_image`] would.
+    fn evaluate(image: &impl Image, signature: &Signature) -> Option<Detection> {
+        let db = SignatureDb::from_signatures(vec![signature.clone()]);
+        super::evaluate(image, &Unanchored::scan(image.image_bytes(), &db), &db.signatures[0])
+    }
+
+    /// Deterministic noise (xorshift64), so a failure reproduces.
+    fn noise(len: usize, mut state: u64) -> Vec<u8> {
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn thousands_of_unanchored_patterns_scan_an_image_quickly() {
+        let mut image = noise(1536 * 1024, 7);
+        // 12-byte patterns with every third byte a wildcard and some nibble wildcards, as PeID entries look.
+        let mut texts: Vec<String> = noise(4000 * 12, 8)
+            .chunks(12)
+            .map(|bytes| {
+                let hex = |(i, byte): (usize, &u8)| match i % 6 {
+                    2 => "??".to_owned(),
+                    5 => format!("{:X}?", byte >> 4),
+                    _ => format!("{byte:02X}"),
+                };
+                bytes.iter().enumerate().map(hex).collect::<Vec<_>>().join(" ")
+            })
+            .collect();
+        // Degenerate shapes: one fixed byte (a candidate almost everywhere) and only fixed nibbles.
+        texts.extend(["E8".to_owned(), "?? 4? ?? 5?".to_owned(), "?? ?? 00 00 ?? ??".to_owned()]);
+        for (index, at) in [(17, 1000), (3999, image.len() - 12)] {
+            let concrete = texts[index].replace('?', "0");
+            let bytes: Vec<u8> = concrete.split(' ').map(|hex| u8::from_str_radix(hex, 16).unwrap()).collect();
+            image[at..at + 12].copy_from_slice(&bytes);
+        }
+        let signatures = texts
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                let condition = Condition::Entry { pattern: BytePattern::parse(text).unwrap(), ep_only: false };
+                Signature::new(&format!("sig{index}"), Kind::Unknown, vec![condition])
+            })
+            .collect();
+        let db = SignatureDb::from_signatures(signatures);
+        let fake = Fake { image, ..Fake::default() };
+
+        let started = std::time::Instant::now();
+        let detections = identify_image(&fake, &db);
+        let elapsed = started.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(10), "took {elapsed:?}");
+
+        let found = |name: &str| detections.iter().find(|d| d.name == name).map(|d| d.evidence.clone());
+        assert_eq!(found("sig17"), Some(vec!["pattern found at image offset 0x3e8".to_owned()]));
+        let last = format!("pattern found at image offset {:#x}", fake.image.len() - 12);
+        assert_eq!(found("sig3999"), Some(vec![last]));
+        for (index, text) in texts.iter().enumerate().filter(|(index, _)| index % 250 == 0 || *index >= 4000) {
+            let expected = BytePattern::parse(text).unwrap().find_in(&fake.image);
+            let reported = found(&format!("sig{index}"));
+            assert_eq!(reported, expected.map(|at| vec![format!("pattern found at image offset {at:#x}")]), "{text}");
+        }
+    }
+
     #[test]
     fn entry_pattern_with_wildcards_matches_and_rejects_crafted_bytes() {
         let sig = Signature::new("Stub", Kind::Packer, vec![entry("60 BE ?? ?? ?? ??")]);
         let hit = Fake { entry: vec![0x60, 0xbe, 0x11, 0x22, 0x33, 0x44], ..Fake::default() };
         let miss = Fake { entry: vec![0x61, 0xbe, 0x11, 0x22, 0x33, 0x44], ..Fake::default() };
-        assert_eq!(super::evaluate(&hit, &sig).map(|d| d.evidence.len()), Some(1));
-        assert!(super::evaluate(&miss, &sig).is_none());
+        assert_eq!(evaluate(&hit, &sig).map(|d| d.evidence.len()), Some(1));
+        assert!(evaluate(&miss, &sig).is_none());
     }
 
     #[test]
@@ -284,7 +433,7 @@ mod tests {
         let image = Fake { entry: vec![0x61, 0xbe, 0x11, 0x22], ..Fake::default() };
         let confidence = |pattern: &str| {
             let sig = Signature::new("Stub", Kind::Packer, vec![entry(pattern)]);
-            super::evaluate(&image, &sig).unwrap().confidence
+            evaluate(&image, &sig).unwrap().confidence
         };
         assert_eq!(confidence("61"), Confidence::Tentative);
         assert_eq!(confidence("61 BE 1? ??"), Confidence::Tentative);
@@ -300,9 +449,9 @@ mod tests {
         );
         let packed = Fake::default().with_section("UPX0", &[]).with_section("UPX1", &[0xff; 64]);
         let plain = Fake::default().with_section(".text", &[0x90; 64]);
-        let detection = super::evaluate(&packed, &sig).expect("UPX section match");
+        let detection = evaluate(&packed, &sig).expect("UPX section match");
         assert_eq!(detection.confidence, Confidence::Strong);
-        assert!(super::evaluate(&plain, &sig).is_none());
+        assert!(evaluate(&plain, &sig).is_none());
     }
 
     #[test]
@@ -313,8 +462,8 @@ mod tests {
             vec![Condition::AnySectionName(vec![".MPRESS1".to_owned(), ".MPRESS2".to_owned()])],
         );
         let hit = Fake::default().with_section(".MPRESS2", &[0x00; 16]);
-        assert!(super::evaluate(&hit, &sig).is_some());
-        assert!(super::evaluate(&Fake::default(), &sig).is_none());
+        assert!(evaluate(&hit, &sig).is_some());
+        assert!(evaluate(&Fake::default(), &sig).is_none());
     }
 
     #[test]
@@ -326,9 +475,9 @@ mod tests {
             functions: vec!["_CorExeMain".to_owned()],
             ..Fake::default()
         };
-        assert!(super::evaluate(&image, &lib).is_some());
-        assert!(super::evaluate(&image, &func).is_some());
-        assert!(super::evaluate(&Fake::default(), &lib).is_none());
+        assert!(evaluate(&image, &lib).is_some());
+        assert!(evaluate(&image, &func).is_some());
+        assert!(evaluate(&Fake::default(), &lib).is_none());
     }
 
     #[test]
@@ -348,8 +497,8 @@ mod tests {
     fn overlay_and_entropy_conditions_gate_on_crafted_values() {
         let overlay_sig = Signature::new("Installer", Kind::Installer, vec![Condition::OverlayPresent]);
         let with_overlay = Fake { overlay: Some(4096), ..Fake::default() };
-        assert!(super::evaluate(&with_overlay, &overlay_sig).is_some());
-        assert!(super::evaluate(&Fake::default(), &overlay_sig).is_none());
+        assert!(evaluate(&with_overlay, &overlay_sig).is_some());
+        assert!(evaluate(&Fake::default(), &overlay_sig).is_none());
 
         // A uniform-random section reaches 8 bits/byte; a run of one value sits at 0.
         let high: Vec<u8> = (0..=255u8).cycle().take(4096).collect();
@@ -360,8 +509,8 @@ mod tests {
         );
         let packed = Fake::default().with_section(".text", &high);
         let plain = Fake::default().with_section(".text", &[0x90; 4096]);
-        assert!(super::evaluate(&packed, &entropy_sig).is_some());
-        assert!(super::evaluate(&plain, &entropy_sig).is_none());
+        assert!(evaluate(&packed, &entropy_sig).is_some());
+        assert!(evaluate(&plain, &entropy_sig).is_none());
     }
 
     #[test]
@@ -372,8 +521,8 @@ mod tests {
             vec![Condition::SectionContains { section: None, needle: b"NullsoftInst".to_vec() }],
         );
         let image = Fake { image: b"....NullsoftInst0123".to_vec(), ..Fake::default() };
-        assert!(super::evaluate(&image, &sig).is_some());
-        assert!(super::evaluate(&Fake::default(), &sig).is_none());
+        assert!(evaluate(&image, &sig).is_some());
+        assert!(evaluate(&Fake::default(), &sig).is_none());
     }
 
     #[test]
@@ -418,7 +567,7 @@ mod tests {
     fn a_single_generic_section_name_is_only_tentative() {
         let sig = Signature::new("PECompact", Kind::Packer, vec![Condition::SectionName("pec1".to_owned())]);
         let image = Fake::default().with_section("pec1", &[0u8; 8]);
-        assert_eq!(super::evaluate(&image, &sig).unwrap().confidence, Confidence::Tentative);
+        assert_eq!(evaluate(&image, &sig).unwrap().confidence, Confidence::Tentative);
     }
 
     #[test]
@@ -426,10 +575,10 @@ mod tests {
         let names = vec![".gopclntab".to_owned(), "__gopclntab".to_owned()];
         let sig = Signature::new("Go", Kind::Compiler, vec![Condition::UniqueSectionName(names)]);
         let image = Fake::default().with_section(".gopclntab", &[0u8; 8]);
-        let detection = super::evaluate(&image, &sig).unwrap();
+        let detection = evaluate(&image, &sig).unwrap();
         assert_eq!(detection.confidence, Confidence::Strong);
         assert_eq!(detection.evidence, ["section .gopclntab present"]);
         // Absent names still do not match.
-        assert!(super::evaluate(&Fake::default().with_section(".text", &[0u8; 8]), &sig).is_none());
+        assert!(evaluate(&Fake::default().with_section(".text", &[0u8; 8]), &sig).is_none());
     }
 }

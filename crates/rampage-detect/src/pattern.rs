@@ -92,6 +92,24 @@ impl BytePattern {
         Ok(pattern)
     }
 
+    /// The longest run of fully fixed bytes and its offset in the pattern, or `None` when no byte is fully fixed.
+    /// Ties go to the run with fewer `00`/`ff` bytes, which are common filler and so make poor search keys.
+    pub(crate) fn longest_literal(&self) -> Option<(usize, Vec<u8>)> {
+        let filler = |run: &[MaskedByte]| run.iter().filter(|byte| matches!(byte.value, 0x00 | 0xff)).count();
+        let mut best: Option<(usize, &[MaskedByte])> = None;
+        let mut offset = 0;
+        for run in self.bytes.chunk_by(|a, b| (a.mask == 0xff) == (b.mask == 0xff)) {
+            let better = best.is_none_or(|(_, kept)| {
+                run.len() > kept.len() || (run.len() == kept.len() && filler(run) < filler(kept))
+            });
+            if run[0].mask == 0xff && better {
+                best = Some((offset, run));
+            }
+            offset += run.len();
+        }
+        best.map(|(offset, run)| (offset, run.iter().map(|byte| byte.value).collect()))
+    }
+
     /// How many nibbles the pattern pins to a value (two per fully fixed byte).
     pub fn fixed_nibbles(&self) -> usize {
         self.bytes.iter().map(|byte| byte.mask.count_ones() as usize / 4).sum()
@@ -175,6 +193,14 @@ mod tests {
         let long = "00".repeat(MAX_PATTERN_BYTES + 1);
         assert_eq!(BytePattern::parse(&long), Err(PatternError::TooLong));
         assert_eq!(BytePattern::parse("?? ??"), Err(PatternError::AllWildcard));
+    }
+
+    #[test]
+    fn the_longest_fixed_run_is_the_search_literal() {
+        let literal = |text: &str| BytePattern::parse(text).unwrap().longest_literal();
+        assert_eq!(literal("60 ?? E8 01 02 ?? 03"), Some((2, vec![0xe8, 0x01, 0x02])));
+        assert_eq!(literal("00 00 ?? 8B EC"), Some((3, vec![0x8b, 0xec])));
+        assert_eq!(literal("6? ?0"), None);
     }
 
     #[test]
