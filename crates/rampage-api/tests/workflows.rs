@@ -260,14 +260,16 @@ fn diff_builds_pairs_stripped_functions_by_hash() {
 
 #[test]
 fn diff_builds_of_one_file_finds_no_changes() {
-    let report =
-        open(fixture("hello-x64.elf")).diff_builds(&fixture("hello-x64.elf"), ReportLimits::default()).unwrap();
-    assert_well_formed(&report);
-    assert!(report.summary[0].contains("byte-identical"), "{:?}", report.summary);
-    for title in
-        ["Changed functions", "Added functions", "Removed functions", "Import differences", "String differences"]
-    {
-        assert!(section(&report, title).findings.is_empty(), "{title}: {report:#?}");
+    // Stripped and static images include unnamed bodies too small to hash; they must still pair with themselves.
+    for name in ["hello-x64.elf", "musl-static-x86_64.elf", "hello-arm64.elf", "hello-x64.exe"] {
+        let report = open(fixture(name)).diff_builds(&fixture(name), ReportLimits::default()).unwrap();
+        assert_well_formed(&report);
+        assert!(report.summary[0].contains("byte-identical"), "{name}: {:?}", report.summary);
+        for title in
+            ["Changed functions", "Added functions", "Removed functions", "Import differences", "String differences"]
+        {
+            assert!(section(&report, title).findings.is_empty(), "{name} {title}: {report:#?}");
+        }
     }
 }
 

@@ -223,6 +223,39 @@ impl Project {
             );
         }
 
+        // Bodies too small to hash and without a unique name still pair exactly when the same address holds the
+        // same bytes on both sides; without this, diffing a file against itself would report added/removed.
+        let new_by_address: HashMap<u64, usize> = new
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !paired_new.contains(index))
+            .map(|(index, function)| (function.address, index))
+            .collect();
+        for (index, function) in base.iter().enumerate() {
+            if paired_base.contains(&index) || function.size == 0 {
+                continue;
+            }
+            let Some(&other_index) = new_by_address.get(&function.address) else { continue };
+            if new[other_index].size != function.size {
+                continue;
+            }
+            let Some(bytes) = self.binary.read(function.address, function.size) else { continue };
+            if other.binary.read(function.address, function.size) != Some(bytes) {
+                continue;
+            }
+            paired_base.insert(index);
+            paired_new.insert(other_index);
+            identical.push(
+                Finding::new(
+                    "list_functions",
+                    Confidence::Observed,
+                    format!("`{}` is byte-identical at the same address", function.name),
+                )
+                .at(function.address)
+                .evidence([format!("{:#x}, {} bytes", function.address, function.size)]),
+            );
+        }
+
         let leftover = |functions: &[Function], paired: &BTreeSet<usize>, label: &str, limits| {
             let mut section = Section::new(label, limits);
             for (_, function) in functions.iter().enumerate().filter(|(index, _)| !paired.contains(index)) {
