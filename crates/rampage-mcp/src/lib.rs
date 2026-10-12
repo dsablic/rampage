@@ -22,7 +22,14 @@ once and caches the result, so later calls are fast. Addresses are hex strings l
 takes an address (except comparison slots/ranges and branch observation windows) you may also pass a symbol, \
 export or import name \
 (an import name finds its stub) or a sub_<hex> \
-name. Start with triage for hashes, entropy, hardening and packing hints, or binary_info for the layout; then \
+name. Start with triage_report: one bounded overview (layout, triage hints, producing toolchain, capability \
+tags, imports, notable strings, library functions) that ends with concrete next tool calls. The other guided \
+workflows compose the primitives the same way: find_main (the program's own entry logic), network_surface, \
+find_crypto (algorithm constants and crypto APIs with the code that uses them) and diff_builds. Every workflow \
+finding carries its evidence, source tool and confidence, and every report states its limitations: treat findings \
+as evidence, not verdicts. Heuristic databases: detect_tools (packer/compiler/protector), identify_functions \
+(library code by signature, bundled databases applied), capabilities, yara_scan and capa_detect (user-supplied \
+rules). For a single question use triage or binary_info, then \
 list_functions (filter with name_contains, page with offset/limit), then decompile a function to C to understand \
 it (the best starting point; falls back to function_summary where no decompiler specification is available), or \
 disassemble or function_graph it, and follow references with xrefs. list_imports and list_strings are good \
