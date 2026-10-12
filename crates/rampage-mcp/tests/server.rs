@@ -326,7 +326,7 @@ async fn identify_functions_can_leave_out_the_bundled_database() {
     assert!(text(&error).contains("needs a signature database"), "{}", text(&error));
 
     let database = std::env::temp_dir().join(format!("rampage-mcp-empty-db-{}.json", std::process::id()));
-    std::fs::write(&database, rampage_api::SignatureDb::default().to_json()).unwrap();
+    std::fs::write(&database, r#"{"arch":"x86_64","scheme":2,"entries":{}}"#).unwrap();
     let alone = json_of(
         &call(&client, "identify_functions", json!({ "path": path, "database": database, "no_bundled": true })).await,
     );

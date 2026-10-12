@@ -124,7 +124,7 @@ fn identify_overlays_or_replaces_the_bundled_database() {
     rampage(&["identify"], "hello-x64.elf").success().stdout(contains(" matched, 0 applied"));
 
     let database = std::env::temp_dir().join(format!("rampage-cli-empty-db-{}.json", std::process::id()));
-    std::fs::write(&database, rampage_api::SignatureDb::default().to_json()).unwrap();
+    std::fs::write(&database, r#"{"arch":"x86_64","scheme":2,"entries":{}}"#).unwrap();
     let database_arg = database.to_str().unwrap();
     let overlaid = json(&["--json", "identify", "--db", database_arg], "hello-x64.elf");
     let alone = json(&["--json", "identify", "--db", database_arg, "--no-bundled"], "hello-x64.elf");
