@@ -126,11 +126,6 @@ pub struct Report {
 }
 
 impl Report {
-    /// The strict gate ([`Gate::default`]): no wrong name and no library name where there is none.
-    pub fn passes_gate(&self) -> bool {
-        Gate::default().check(self).is_empty()
-    }
-
     /// Keeps at most `limit` disagreements, preferring wrong, then missed, then spurious ones (the order a
     /// reviewer acts on them), each kind in address order.
     pub fn truncate_disagreements(&mut self, limit: usize) {

@@ -175,30 +175,6 @@ fn fold(bytes: &[u8]) -> u64 {
     acc
 }
 
-/// The x86 bitness for an architecture, or `None` when it is not an x86 target.
-fn x86_bitness(arch: Arch) -> Option<u32> {
-    match arch {
-        Arch::X86 => Some(32),
-        Arch::X86_64 => Some(64),
-        _ => None,
-    }
-}
-
-/// Whether signature hashing is supported for an architecture.
-fn supported(arch: Arch) -> bool {
-    matches!(
-        arch,
-        Arch::X86
-            | Arch::X86_64
-            | Arch::Aarch64
-            | Arch::Arm
-            | Arch::Mips
-            | Arch::Mips64
-            | Arch::PowerPc
-            | Arch::PowerPc64
-    )
-}
-
 /// Masks the position-dependent immediate bits of a little-endian AArch64 instruction word, leaving opcode and
 /// registers. Covers the PC-relative forms: B/BL, B.cond, CBZ/CBNZ, TBZ/TBNZ, ADR/ADRP and literal loads.
 fn mask_aarch64(word: u32) -> u32 {
@@ -484,7 +460,8 @@ pub fn function_hash_scheme(
 /// `image` selects the scheme: `None` is scheme 1, `Some` is scheme 2 with that image's address ranges.
 fn hash(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>) -> Option<FunctionHash> {
     match target.arch {
-        Arch::X86 | Arch::X86_64 => x86_hash(x86_bitness(target.arch)?, bytes, address, image),
+        Arch::X86 => x86_hash(32, bytes, address, image),
+        Arch::X86_64 => x86_hash(64, bytes, address, image),
         Arch::Aarch64 if image.is_some() => {
             let mut pages = AdrpPages::default();
             fixed_word_hash(bytes, false, |word| pages.mask(word))
@@ -503,7 +480,8 @@ fn hash(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SignatureDb {
     /// The architecture the signatures were built for; matches are refused across architectures.
-    pub arch: String,
+    #[serde(with = "arch_name")]
+    arch: Arch,
     /// The hash scheme the entries were made with ([`LEGACY_SCHEME`] or [`CURRENT_SCHEME`]). Databases saved
     /// before schemes existed have no field and are scheme 1.
     #[serde(default = "legacy_scheme")]
@@ -534,10 +512,24 @@ fn legacy_scheme() -> u32 {
     LEGACY_SCHEME
 }
 
+/// An [`Arch`] saved as its name (`"x86_64"`), the format databases have always used.
+mod arch_name {
+    use rampage_arch::Arch;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(arch: &Arch, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(arch)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Arch, D::Error> {
+        String::deserialize(deserializer)?.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 impl SignatureDb {
     fn empty(arch: Arch, scheme: u32) -> SignatureDb {
         SignatureDb {
-            arch: arch.to_string(),
+            arch,
             scheme,
             entries: BTreeMap::new(),
             exact: BTreeMap::new(),
@@ -612,9 +604,6 @@ impl SignatureDb {
     }
 
     fn add_binary(&mut self, binary: &Binary) {
-        if !supported(binary.arch) {
-            return;
-        }
         let target = binary.target();
         let image = MaskContext::from_binary(binary);
         // Several names at one address are aliases of one function, not a collision: keep one spelling, or the
@@ -650,7 +639,7 @@ impl SignatureDb {
     /// with two names stops answering and the functions behind it fall back to their exact hashes. A binary for
     /// another architecture is ignored.
     pub fn extend_from_binary(&mut self, binary: &Binary) {
-        if binary.arch.to_string() == self.arch {
+        if binary.arch == self.arch {
             self.add_binary(binary);
         }
     }
@@ -691,6 +680,11 @@ impl SignatureDb {
         self.arch == other.arch && self.scheme == other.scheme
     }
 
+    /// The architecture this database's signatures were built for.
+    pub fn arch(&self) -> Arch {
+        self.arch
+    }
+
     /// The hash scheme of this database's entries.
     pub fn scheme(&self) -> u32 {
         self.scheme
@@ -709,7 +703,7 @@ impl SignatureDb {
     /// The name for the function whose bytes start at `address` in the image described by `image` (see
     /// [`MaskContext::from_binary`]), hashed under this database's own scheme. The architecture must match.
     pub fn identify_in(&self, target: &Target, image: &MaskContext, bytes: &[u8], address: u64) -> Option<&str> {
-        if self.arch != target.arch.to_string() {
+        if self.arch != target.arch {
             return None;
         }
         let hash = function_hash_scheme(self.scheme, target, image, bytes, address)?;
@@ -733,7 +727,7 @@ impl SignatureDb {
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_owned())
+        serde_json::to_string(self).expect("string maps and plain fields always serialize")
     }
 
     pub fn from_json(text: &str) -> Result<SignatureDb, serde_json::Error> {
@@ -878,7 +872,8 @@ mod tests {
         assert_eq!(db.len(), 1);
 
         let mut restored = SignatureDb::from_json(&db.to_json()).unwrap();
-        assert_eq!(restored.arch, "x86_64");
+        assert_eq!(restored.arch(), Arch::X86_64);
+        assert!(db.to_json().starts_with(r#"{"arch":"x86_64","#), "{}", db.to_json());
         assert_eq!(restored.len(), 1);
         restored.add(hash, None, "second");
         assert_eq!(restored.identify(&x64, &sample(), 0x1000), None);

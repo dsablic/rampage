@@ -214,9 +214,9 @@ impl Slice {
                     return Err(format!(
                         "{}: a {} scheme-{} database cannot be combined with a {} scheme-{} one",
                         path.display(),
-                        db.arch,
+                        db.arch(),
                         db.scheme(),
-                        existing.arch,
+                        existing.arch(),
                         existing.scheme()
                     ));
                 }
@@ -230,7 +230,7 @@ impl Slice {
     /// The slice's report, and its target's architecture (part of the default slice name).
     fn evaluate(&self) -> Result<(Report, String), String> {
         let target = open(&self.target)?;
-        let arch = target.arch.to_string();
+        let arch = target.arch;
         let truth =
             Truth::from_json(&read(&self.truth)?).map_err(|error| format!("{}: {error}", self.truth.display()))?;
         let unsupported = |_| format!("unsupported architecture {arch}");
@@ -239,15 +239,15 @@ impl Slice {
                 let db = self.database()?;
                 // A database for another architecture matches nothing, which would read as a clean (if useless)
                 // pass.
-                if db.arch != arch {
+                if db.arch() != arch {
                     let target = self.target.display();
-                    return Err(format!("{target}: database architecture {:?} is not the target's {arch:?}", db.arch));
+                    return Err(format!("{target}: database architecture {} is not the target's {arch}", db.arch()));
                 }
                 rampage_eval::evaluate(&db, &target, &truth).map_err(unsupported)?
             }
             Family::Discovery => rampage_eval::evaluate_discovery(&target, &truth).map_err(unsupported)?,
         };
-        Ok((report, arch))
+        Ok((report, arch.to_string()))
     }
 }
 

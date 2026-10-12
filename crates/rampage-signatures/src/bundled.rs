@@ -25,7 +25,7 @@ mod tests {
     fn bundled_databases_parse_and_carry_signatures() {
         for arch in [Arch::X86_64, Arch::Aarch64] {
             let db = bundled(arch).expect("a database ships for this arch");
-            assert_eq!(db.arch, arch.to_string());
+            assert_eq!(db.arch(), arch);
             assert!(db.len() > 50, "{arch} starter database is unexpectedly small: {}", db.len());
         }
     }
