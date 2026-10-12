@@ -34,6 +34,11 @@ fn any_section(names: &[&str]) -> Condition {
     Condition::AnySectionName(names.iter().map(|name| (*name).to_owned()).collect())
 }
 
+/// Section names that carry the tool's own brand, so only that tool emits them (distinctive on their own).
+fn unique_section(names: &[&str]) -> Condition {
+    Condition::UniqueSectionName(names.iter().map(|name| (*name).to_owned()).collect())
+}
+
 fn contains(needle: &str) -> Condition {
     Condition::SectionContains { section: None, needle: needle.as_bytes().to_vec() }
 }
@@ -50,14 +55,15 @@ fn packers() -> Vec<Signature> {
         // The classic 32-bit UPX stub: pushad, then a pointer load into esi/edi.
         Signature::new("UPX", Kind::Packer, vec![ep("60 BE ?? ?? ?? ?? 8D BE ?? ?? ?? ??")])
             .with_note("pushad + lea esi/edi entry stub"),
-        Signature::new("ASPack", Kind::Packer, vec![any_section(&[".aspack", ".adata"])])
-            .with_note("ASPack section names"),
-        Signature::new("MPRESS", Kind::Packer, vec![any_section(&[".MPRESS1", ".MPRESS2"])])
+        Signature::new("ASPack", Kind::Packer, vec![unique_section(&[".aspack"])]).with_note("ASPack section name"),
+        // ASProtect also emits .adata, so on its own it only suggests ASPack.
+        Signature::new("ASPack", Kind::Packer, vec![section(".adata")]).with_note("ASPack/ASProtect .adata section"),
+        Signature::new("MPRESS", Kind::Packer, vec![unique_section(&[".MPRESS1", ".MPRESS2"])])
             .with_note("MPRESS section names"),
         Signature::new("PECompact", Kind::Packer, vec![any_section(&["pec1", "PEC2", ".pec"])])
             .with_note("PECompact section names"),
-        Signature::new("Petite", Kind::Packer, vec![section(".petite")]).with_note("Petite section name"),
-        Signature::new("NsPack", Kind::Packer, vec![any_section(&[".nsp0", ".nsp1", ".nsp2"])])
+        Signature::new("Petite", Kind::Packer, vec![unique_section(&[".petite"])]).with_note("Petite section name"),
+        Signature::new("NsPack", Kind::Packer, vec![unique_section(&[".nsp0", ".nsp1", ".nsp2"])])
             .with_note("NsPack section names"),
         Signature::new("FSG", Kind::Packer, vec![ep("87 25 ?? ?? ?? ?? 61 94")])
             .with_note("FSG entry stub"),
@@ -66,11 +72,11 @@ fn packers() -> Vec<Signature> {
 
 fn protectors() -> Vec<Signature> {
     vec![
-        Signature::new("VMProtect", Kind::Protector, vec![any_section(&[".vmp0", ".vmp1", ".vmp2"])])
+        Signature::new("VMProtect", Kind::Protector, vec![unique_section(&[".vmp0", ".vmp1", ".vmp2"])])
             .with_note("VMProtect section names"),
-        Signature::new("Themida/WinLicense", Kind::Protector, vec![any_section(&[".themida", ".winlice"])])
+        Signature::new("Themida/WinLicense", Kind::Protector, vec![unique_section(&[".themida", ".winlice"])])
             .with_note("Themida/WinLicense section names"),
-        Signature::new("Enigma", Kind::Protector, vec![any_section(&[".enigma1", ".enigma2"])])
+        Signature::new("Enigma", Kind::Protector, vec![unique_section(&[".enigma1", ".enigma2"])])
             .with_note("Enigma Protector section names"),
     ]
 }
@@ -78,7 +84,7 @@ fn protectors() -> Vec<Signature> {
 fn compilers() -> Vec<Signature> {
     vec![
         // Go keeps its program-counter line table in a dedicated section under either platform's spelling.
-        Signature::new("Go", Kind::Compiler, vec![any_section(&[".gopclntab", "__gopclntab"])])
+        Signature::new("Go", Kind::Compiler, vec![unique_section(&[".gopclntab", "__gopclntab"])])
             .with_note("Go pclntab section"),
         Signature::new("Go", Kind::Compiler, vec![contains("Go build ID:")]).with_note("Go build ID string"),
         // .NET assemblies run through the CLR shim; native code and a CLI header both betray them.

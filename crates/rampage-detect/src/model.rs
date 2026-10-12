@@ -38,6 +38,10 @@ pub enum Condition {
     SectionName(String),
     /// At least one section whose name is in this list is present.
     AnySectionName(Vec<String>),
+    /// At least one section with one of these tool-branded names (such as `.gopclntab` or `.vmp0`) is present.
+    /// Unlike [`Condition::AnySectionName`], only one tool emits these names, so a match is distinctive on its
+    /// own. It is still evidence, not proof: a section can be renamed or a name planted.
+    UniqueSectionName(Vec<String>),
     /// A section (a named one, or any when `section` is `None`) contains this byte needle. This reads the
     /// section's file-backed bytes, which also covers unloaded sections such as `.comment`.
     SectionContains { section: Option<String>, needle: Vec<u8> },
@@ -57,7 +61,10 @@ impl Condition {
     /// Whether satisfying this condition on its own justifies a `Strong` reading. Distinctive conditions do;
     /// generic ones (a bare section name, an overlay, an entropy floor) only corroborate.
     pub(crate) fn is_distinctive(&self) -> bool {
-        matches!(self, Self::Entry { .. } | Self::SectionContains { .. } | Self::ImportFunction(_))
+        matches!(
+            self,
+            Self::Entry { .. } | Self::SectionContains { .. } | Self::ImportFunction(_) | Self::UniqueSectionName(_)
+        )
     }
 }
 

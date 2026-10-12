@@ -2,7 +2,7 @@
 //! confirm an ordinary unpacked binary is not misreported as packed. No UPX binary is installed, so the packer
 //! path is exercised only by the synthetic tests in `synthetic.rs`.
 
-use rampage_detect::{identify, Kind, SignatureDb};
+use rampage_detect::{identify, Confidence, Kind, SignatureDb};
 use rampage_loaders::Binary;
 
 fn fixture(name: &str) -> std::path::PathBuf {
@@ -24,6 +24,8 @@ fn go_binary_is_detected_by_its_pclntab() {
     let go = detections.iter().find(|d| d.name == "Go").expect("Go detected");
     assert_eq!(go.kind, Kind::Compiler);
     assert!(!go.evidence.is_empty());
+    // .gopclntab is emitted only by the Go toolchain, so it is distinctive on its own.
+    assert_eq!(go.confidence, Confidence::Strong);
 }
 
 #[test]

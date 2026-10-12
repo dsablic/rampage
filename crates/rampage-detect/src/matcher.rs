@@ -85,7 +85,7 @@ fn check(image: &impl Image, condition: &Condition) -> Option<String> {
         Condition::SectionName(name) => {
             image.section_names().contains(&name.as_str()).then(|| format!("section {name} present"))
         }
-        Condition::AnySectionName(names) => {
+        Condition::AnySectionName(names) | Condition::UniqueSectionName(names) => {
             let present = image.section_names();
             names.iter().find(|name| present.contains(&name.as_str())).map(|name| format!("section {name} present"))
         }
@@ -379,5 +379,17 @@ mod tests {
         let sig = Signature::new("PECompact", Kind::Packer, vec![Condition::SectionName("pec1".to_owned())]);
         let image = Fake::default().with_section("pec1", &[0u8; 8]);
         assert_eq!(super::evaluate(&image, &sig).unwrap().confidence, Confidence::Tentative);
+    }
+
+    #[test]
+    fn a_single_tool_branded_section_name_is_strong() {
+        let names = vec![".gopclntab".to_owned(), "__gopclntab".to_owned()];
+        let sig = Signature::new("Go", Kind::Compiler, vec![Condition::UniqueSectionName(names)]);
+        let image = Fake::default().with_section(".gopclntab", &[0u8; 8]);
+        let detection = super::evaluate(&image, &sig).unwrap();
+        assert_eq!(detection.confidence, Confidence::Strong);
+        assert_eq!(detection.evidence, ["section .gopclntab present"]);
+        // Absent names still do not match.
+        assert!(super::evaluate(&Fake::default().with_section(".text", &[0u8; 8]), &sig).is_none());
     }
 }
