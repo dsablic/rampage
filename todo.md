@@ -56,9 +56,11 @@ negative regressions. Existing rules retain their detection thresholds and canon
 - [x] Bounded persistence indicators: anchored registry Run/RunOnce keys, string-corroborated task registration,
   and service installation APIs.
 - [x] Process discovery / enumeration (snapshot + first/next-process walk APIs).
-- [ ] Code-injection refinements (extend the existing process-injection rule; section-map + remote-thread APIs).
+- [x] Code-injection refinements: corroborated `remote-process-injection` rule (remote-process access, remote
+  code placement incl. section mapping, and remote execution-start groups), alongside the legacy threshold rule.
 - [x] Token / privilege indicators (token-open + privilege lookup/adjust APIs, corroborated SeDebugPrivilege).
-- [ ] Anti-VM / sandbox evasion (hypervisor-vendor strings, cpuid probing).
+- [x] VM/sandbox fingerprinting: firmware-table/adapter reads corroborated by a hypervisor artifact string.
+  Import-based only; CPUID-based detection is an instruction, not an import, so it is out of reach here.
 - [x] Bounded GDI capture, clipboard read and registered raw-input indicators with independent API groups.
 - [x] Credential-access indicators: marker-corroborated LSA private-data access and protected-registry
   open/query/path groups with optional recognized machine-hive prefixes; no extraction or execution attribution.
@@ -66,8 +68,9 @@ negative regressions. Existing rules retain their detection thresholds and canon
   - [x] Corroborated service control, named-pipe client/server and DNS-plus-network indicators; no C2 attribution.
 - [x] Narrow ransomware indicators requiring encryption, enumeration start/walk, file writes and two ransom-note
   string groups; ordinary encryption/file access is insufficient.
-- [ ] Shutdown/reboot and environment/system-info gathering.
-  - [x] Corroborated system-information/host-name/environment indicators; shutdown/reboot remains open.
+- [x] Shutdown/reboot and environment/system-info gathering.
+  - [x] Corroborated system-information/host-name/environment indicators.
+  - [x] Corroborated `system-shutdown` rule: a shutdown/reboot API with a shutdown-privilege indicator.
 
 ### Licensing
 
