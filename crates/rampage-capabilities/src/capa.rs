@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 
-use super::{Capability, normal};
+use super::{Capability, names};
 
 /// Hard caps keep loading and evaluation bounded and panic-free on adversarial input.
 const MAX_RULES: usize = 100_000;
@@ -167,7 +167,7 @@ pub fn load_capa_rules_from_str(yaml: &str) -> Result<CapaRuleSet, CapaError> {
 
 /// Evaluates every loaded rule against the imports and strings, returning a `Capability` per matching rule.
 pub fn detect_capa(rules: &CapaRuleSet, imports: &[String], strings: &[String]) -> Vec<Capability> {
-    let norm_imports: Vec<String> = imports.iter().map(|name| normal(name)).collect();
+    let norm_imports: Vec<String> = imports.iter().map(|name| names::import_stem(name)).collect();
     let ctx = Ctx { imports: &norm_imports, strings };
     let mut found = Vec::new();
     for rule in &rules.rules {
@@ -234,23 +234,10 @@ fn rule_from_value(value: &Value) -> Option<CapaRule> {
     if children.is_empty() {
         return None;
     }
-    let root = if children.len() == 1 {
-        children.into_iter().next().unwrap()
-    } else {
-        Node::And(children)
-    };
+    let root = if children.len() == 1 { children.into_iter().next().unwrap() } else { Node::And(children) };
 
     let category_src = namespace.split('/').next().filter(|s| !s.is_empty()).unwrap_or("capa");
-    Some(CapaRule {
-        id: slug(&name),
-        category: category_src.to_string(),
-        name,
-        namespace,
-        authors,
-        attack,
-        mbc,
-        root,
-    })
+    Some(CapaRule { id: slug(&name), category: category_src.to_string(), name, namespace, authors, attack, mbc, root })
 }
 
 /// A rule is file-scope when its static scope is `file`, or when no scope is declared (we default to file and
@@ -460,7 +447,7 @@ fn evidence_if(hit: bool, kind: &str, value: &str) -> (bool, Vec<String>) {
 /// (`kernel32.CreateFileW`) is dropped and the crate's import normalization is applied.
 fn normalize_symbol(raw: &str) -> String {
     let symbol = raw.rsplit('.').next().unwrap_or(raw);
-    normal(symbol)
+    names::import_stem(symbol)
 }
 
 fn slug(name: &str) -> String {

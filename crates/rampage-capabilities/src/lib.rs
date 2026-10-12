@@ -10,10 +10,9 @@ use serde::Serialize;
 
 mod capa;
 mod corroborated;
+pub mod names;
 
-pub use capa::{
-    CapaError, CapaRule, CapaRuleSet, detect_capa, load_capa_rules, load_capa_rules_from_str,
-};
+pub use capa::{CapaError, CapaRule, CapaRuleSet, detect_capa, load_capa_rules, load_capa_rules_from_str};
 
 /// A detected capability and the evidence that triggered it.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -29,7 +28,8 @@ pub struct Capability {
 /// How a rule term is matched against a candidate name.
 #[derive(Clone, Copy)]
 enum Match {
-    /// The import name equals this (case-insensitive), ignoring a leading underscore or `@plt`/ordinal suffix.
+    /// An import whose [`names::import_stem`] matches this lowercase pattern under [`names::stem_matches`]: exact
+    /// or with one trailing `A`/`W` charset suffix, or by prefix for a `*`-terminated pattern.
     Import(&'static str),
     /// A string contains this substring (case-sensitive, so `AES` does not match `aes` in a path).
     String(&'static str),
@@ -45,21 +45,42 @@ enum RegistryHive {
     UserOrMachine,
 }
 
+/// Detection inputs with the per-call normalizations computed once.
+struct Inputs<'a> {
+    imports: &'a [String],
+    /// [`names::import_stem`] of each import.
+    stems: Vec<String>,
+    strings: &'a [String],
+    /// ASCII-lowercased copy of each string.
+    lowered: Vec<String>,
+}
+
+impl<'a> Inputs<'a> {
+    fn new(imports: &'a [String], strings: &'a [String]) -> Self {
+        Inputs {
+            imports,
+            stems: imports.iter().map(|name| names::import_stem(name)).collect(),
+            strings,
+            lowered: strings.iter().map(|value| value.to_ascii_lowercase()).collect(),
+        }
+    }
+}
+
 impl Match {
-    fn matches_string(self, value: &str) -> bool {
+    /// `lowered` is `value` ASCII-lowercased.
+    fn matches_string(self, value: &str, lowered: &str) -> bool {
         match self {
             Self::Import(_) => false,
             Self::String(needle) => value.contains(needle),
-            Self::StringAsciiInsensitive(needle) => value.to_ascii_lowercase().contains(needle),
+            Self::StringAsciiInsensitive(needle) => lowered.contains(needle),
             Self::RegistryPath { path, hive, exact_key } => {
-                let value = value.to_ascii_lowercase();
                 let prefixes: &[&str] = match hive {
                     RegistryHive::Machine => &["hklm\\", "hkey_local_machine\\", "\\registry\\machine\\"],
                     RegistryHive::UserOrMachine => {
                         &["hklm\\", "hkey_local_machine\\", "\\registry\\machine\\", "hkcu\\", "hkey_current_user\\"]
                     }
                 };
-                let relative = prefixes.iter().find_map(|prefix| value.strip_prefix(*prefix)).unwrap_or(&value);
+                let relative = prefixes.iter().find_map(|prefix| lowered.strip_prefix(*prefix)).unwrap_or(lowered);
                 relative
                     .strip_prefix(path)
                     .is_some_and(|suffix| suffix.is_empty() || (!exact_key && suffix.starts_with('\\')))
@@ -67,33 +88,34 @@ impl Match {
         }
     }
 
-    fn collect_evidence(
-        self,
-        imports: &[String],
-        normalized: &[String],
-        strings: &[String],
-        evidence: &mut Vec<String>,
-    ) -> bool {
-        let mut matched = false;
+    /// The evidence kind this term reports and its canonical (rule-table) spelling.
+    fn canonical(self) -> (&'static str, &'static str) {
         match self {
-            Self::Import(needle) => {
-                for (original, name) in imports.iter().zip(normalized) {
-                    if name == needle {
-                        matched = true;
-                        add_evidence(evidence, "import", original);
-                    }
-                }
-            }
-            _ => {
-                for value in strings {
-                    if self.matches_string(value) {
-                        matched = true;
-                        add_evidence(evidence, "string", value);
-                    }
-                }
+            Self::Import(needle) => ("import", needle),
+            Self::String(needle) | Self::StringAsciiInsensitive(needle) | Self::RegistryPath { path: needle, .. } => {
+                ("string", needle)
             }
         }
-        matched
+    }
+
+    /// The original inputs this term matches, in input order.
+    fn hits<'a>(self, inputs: &Inputs<'a>) -> Vec<&'a str> {
+        match self {
+            Self::Import(pattern) => inputs
+                .imports
+                .iter()
+                .zip(&inputs.stems)
+                .filter(|(_, stem)| names::stem_matches(pattern, stem))
+                .map(|(original, _)| original.as_str())
+                .collect(),
+            _ => inputs
+                .strings
+                .iter()
+                .zip(&inputs.lowered)
+                .filter(|(value, lowered)| self.matches_string(value, lowered))
+                .map(|(value, _)| value.as_str())
+                .collect(),
+        }
     }
 }
 
@@ -121,14 +143,6 @@ struct CorroboratedRule {
     groups: &'static [&'static [Match]],
 }
 
-/// Normalizes an import name for comparison: lowercased, without a leading underscore, a `@`-suffix (`foo@plt`)
-/// or a trailing `a`/`w` ANSI/wide marker is kept (handled per-term instead).
-fn normal(name: &str) -> String {
-    let name = name.trim_start_matches('_');
-    let name = name.split('@').next().unwrap_or(name);
-    name.to_ascii_lowercase()
-}
-
 const RULES: &[Rule] = &[
     Rule {
         id: "network-socket",
@@ -146,7 +160,7 @@ const RULES: &[Rule] = &[
             Match::Import("gethostbyname"),
             Match::Import("getaddrinfo"),
             Match::Import("wsastartup"),
-            Match::Import("wsasocketa"),
+            Match::Import("wsasocket"),
             Match::Import("inet_addr"),
         ],
     },
@@ -156,9 +170,9 @@ const RULES: &[Rule] = &[
         category: "networking",
         threshold: 1,
         terms: &[
-            Match::Import("internetopena"),
-            Match::Import("internetopenurla"),
-            Match::Import("httpsendrequesta"),
+            Match::Import("internetopen"),
+            Match::Import("internetopenurl"),
+            Match::Import("httpsendrequest"),
             Match::Import("winhttpopen"),
             Match::Import("curl_easy_init"),
             Match::String("User-Agent:"),
@@ -178,9 +192,9 @@ const RULES: &[Rule] = &[
             Match::Import("posix_spawn"),
             Match::Import("system"),
             Match::Import("popen"),
-            Match::Import("createprocessa"),
-            Match::Import("createprocessw"),
-            Match::Import("shellexecutea"),
+            Match::Import("createprocess"),
+            Match::Import("shellexecute"),
+            Match::Import("shellexecuteex"),
             Match::Import("winexec"),
         ],
     },
@@ -209,7 +223,7 @@ const RULES: &[Rule] = &[
             Match::Import("checkremotedebuggerpresent"),
             Match::Import("ntqueryinformationprocess"),
             Match::Import("ptrace"),
-            Match::Import("outputdebugstringa"),
+            Match::Import("outputdebugstring"),
         ],
     },
     Rule {
@@ -220,8 +234,8 @@ const RULES: &[Rule] = &[
         terms: &[
             Match::Import("dlopen"),
             Match::Import("dlsym"),
-            Match::Import("loadlibrarya"),
-            Match::Import("loadlibraryw"),
+            Match::Import("loadlibrary"),
+            Match::Import("loadlibraryex"),
             Match::Import("getprocaddress"),
         ],
     },
@@ -243,7 +257,7 @@ const RULES: &[Rule] = &[
         category: "crypto",
         threshold: 1,
         terms: &[
-            Match::Import("cryptacquirecontexta"),
+            Match::Import("cryptacquirecontext"),
             Match::Import("cryptencrypt"),
             Match::Import("cryptdecrypt"),
             Match::Import("bcryptencrypt"),
@@ -259,8 +273,7 @@ const RULES: &[Rule] = &[
         category: "host",
         threshold: 1,
         terms: &[
-            Match::Import("createfilea"),
-            Match::Import("createfilew"),
+            Match::Import("createfile"),
             Match::Import("readfile"),
             Match::Import("writefile"),
             Match::Import("fopen"),
@@ -273,10 +286,14 @@ const RULES: &[Rule] = &[
         category: "host",
         threshold: 1,
         terms: &[
-            Match::Import("regopenkeyexa"),
-            Match::Import("regsetvalueexa"),
-            Match::Import("regcreatekeyexa"),
-            Match::String("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            Match::Import("regopenkeyex"),
+            Match::Import("regsetvalueex"),
+            Match::Import("regcreatekeyex"),
+            Match::RegistryPath {
+                path: "software\\microsoft\\windows\\currentversion\\run",
+                hive: RegistryHive::UserOrMachine,
+                exact_key: false,
+            },
         ],
     },
     Rule {
@@ -287,7 +304,7 @@ const RULES: &[Rule] = &[
         terms: &[
             Match::Import("getasynckeystate"),
             Match::Import("getkeystate"),
-            Match::Import("setwindowshookexa"),
+            Match::Import("setwindowshookex"),
             Match::Import("getrawinputdata"),
         ],
     },
@@ -303,20 +320,13 @@ const RULES: &[Rule] = &[
 /// Detects capabilities from import names and strings. Imports should be the names the binary imports (and its
 /// import-slot names); strings should be the readable strings found in the image.
 pub fn detect(imports: &[String], strings: &[String]) -> Vec<Capability> {
-    let normalized: Vec<String> = imports.iter().map(|name| normal(name)).collect();
+    let inputs = Inputs::new(imports, strings);
     let mut found = Vec::new();
     for rule in RULES {
         let mut evidence = Vec::new();
         for term in rule.terms {
-            let (kind, needle, matched) = match *term {
-                Match::Import(needle) => ("import", needle, normalized.iter().any(|name| name == needle)),
-                Match::String(needle)
-                | Match::StringAsciiInsensitive(needle)
-                | Match::RegistryPath { path: needle, .. } => {
-                    ("string", needle, strings.iter().any(|value| term.matches_string(value)))
-                }
-            };
-            if matched {
+            if !term.hits(&inputs).is_empty() {
+                let (kind, needle) = term.canonical();
                 evidence.push(format!("{kind}:{needle}"));
             }
         }
@@ -334,7 +344,11 @@ pub fn detect(imports: &[String], strings: &[String]) -> Vec<Capability> {
         let matched = rule.groups.iter().all(|group| {
             let mut matched_group = false;
             for term in *group {
-                matched_group |= term.collect_evidence(imports, &normalized, strings, &mut evidence);
+                let (kind, _) = term.canonical();
+                for value in term.hits(&inputs) {
+                    matched_group = true;
+                    add_evidence(&mut evidence, kind, value);
+                }
             }
             matched_group
         });
@@ -371,6 +385,47 @@ mod tests {
         let caps = detect(&strings(&["_ptrace", "connect@plt"]), &[]);
         assert!(caps.iter().any(|cap| cap.id == "anti-debug"));
         assert!(caps.iter().any(|cap| cap.id == "network-socket"));
+    }
+
+    #[test]
+    fn wide_only_and_thunk_imports_match_charset_neutral_terms() {
+        let imports = strings(&[
+            "ShellExecuteW",
+            "__imp_InternetOpenW",
+            "HttpSendRequestW",
+            "WSASocketW",
+            "RegOpenKeyExW",
+            "OutputDebugStringW",
+            "SetWindowsHookExW",
+            "CryptAcquireContextW",
+            "LoadLibraryExW",
+            "_imp__CreateFileW@28",
+        ]);
+        let caps = detect(&imports, &[]);
+        for (id, term) in [
+            ("process-exec", "import:shellexecute"),
+            ("http-client", "import:internetopen"),
+            ("http-client", "import:httpsendrequest"),
+            ("network-socket", "import:wsasocket"),
+            ("registry", "import:regopenkeyex"),
+            ("anti-debug", "import:outputdebugstring"),
+            ("keylogging", "import:setwindowshookex"),
+            ("cryptography", "import:cryptacquirecontext"),
+            ("dynamic-loading", "import:loadlibraryex"),
+            ("filesystem", "import:createfile"),
+        ] {
+            let cap = caps.iter().find(|cap| cap.id == id).unwrap_or_else(|| panic!("missing {id}"));
+            assert!(cap.evidence.iter().any(|value| value == term), "{id}: {:?}", cap.evidence);
+        }
+    }
+
+    #[test]
+    fn registry_autorun_term_is_case_insensitive_and_anchored() {
+        let found = |path: &str| detect(&[], &strings(&[path])).iter().any(|cap| cap.id == "registry");
+        assert!(found("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"));
+        assert!(found("HKCU\\software\\microsoft\\windows\\currentversion\\run\\Updater"));
+        assert!(!found("Vendor\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"));
+        assert!(!found("Software\\Microsoft\\Windows\\CurrentVersion\\Runtime"));
     }
 
     #[test]
