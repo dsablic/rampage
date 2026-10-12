@@ -1,4 +1,5 @@
 mod commands;
+mod report;
 
 use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
@@ -243,6 +244,17 @@ enum Command {
         #[arg(long)]
         apply: bool,
     },
+    /// Run a guided investigation workflow and print its bounded, evidence-backed report
+    Report {
+        workflow: report::Workflow,
+        file: PathBuf,
+        /// The second binary, for diff-builds
+        #[arg(long)]
+        other: Option<PathBuf>,
+        /// Findings kept per section (default 25, at most 200)
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Serve the Model Context Protocol over stdin/stdout for AI agents
     Mcp,
     /// List code and data cross-references to or from an address, symbol or function
@@ -334,6 +346,10 @@ fn main() -> ExitCode {
         Command::Comment { file, at, text, .. } => commands::comment(&mut out, &file, &at, text.as_deref(), &options),
         Command::Annotations { file } => commands::annotations(&mut out, &file, &options),
         Command::DebugTypes { file, apply } => commands::debug_types(&mut out, &file, apply, &options),
+        Command::Report { workflow, file, other, limit } => {
+            let report_options = report::ReportOptions { other, limit };
+            report::report(&mut out, workflow, &file, &report_options, &options)
+        }
         Command::Mcp => unreachable!("handled before opening stdout"),
     }
     .and_then(|()| out.flush().map_err(Into::into));

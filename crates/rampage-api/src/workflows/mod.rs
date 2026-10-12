@@ -3,6 +3,7 @@
 //! when it was cut), and every report states its limitations. Reports describe what was observed, never a verdict.
 
 mod indicators;
+mod triage_report;
 
 use rampage_arch::Arch;
 use rampage_loaders::Format;

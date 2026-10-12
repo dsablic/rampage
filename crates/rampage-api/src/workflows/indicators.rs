@@ -59,8 +59,25 @@ const TLDS: [&str; 26] = [
 ];
 
 const UNIX_ROOTS: [&str; 19] = [
-    "/etc/", "/tmp/", "/var/", "/usr/", "/bin/", "/sbin/", "/dev/", "/proc/", "/sys/", "/home/", "/root/", "/opt/",
-    "/lib/", "/lib64/", "/Library/", "/System/", "/Users/", "/Applications/", "/private/",
+    "/etc/",
+    "/tmp/",
+    "/var/",
+    "/usr/",
+    "/bin/",
+    "/sbin/",
+    "/dev/",
+    "/proc/",
+    "/sys/",
+    "/home/",
+    "/root/",
+    "/opt/",
+    "/lib/",
+    "/lib64/",
+    "/Library/",
+    "/System/",
+    "/Users/",
+    "/Applications/",
+    "/private/",
 ];
 
 const WINDOWS_VARIABLES: [&str; 7] =
@@ -109,8 +126,8 @@ fn is_ipv4(token: &str) -> bool {
         None => (token, None),
     };
     let octets: Vec<&str> = address.split('.').collect();
-    let octets_valid = octets.len() == 4
-        && octets.iter().all(|octet| (1..=3).contains(&octet.len()) && octet.parse::<u8>().is_ok());
+    let octets_valid =
+        octets.len() == 4 && octets.iter().all(|octet| (1..=3).contains(&octet.len()) && octet.parse::<u8>().is_ok());
     let port_valid = port.is_none_or(|port| port.parse::<u16>().is_ok_and(|port| port > 0));
     octets_valid && port_valid
 }

@@ -80,6 +80,7 @@ async fn lists_all_tools_with_instructions() {
         "set_signature",
         "set_types",
         "triage",
+        "triage_report",
         "undo",
         "xrefs",
         "yara_scan",
