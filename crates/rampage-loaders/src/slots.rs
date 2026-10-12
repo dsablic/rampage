@@ -193,7 +193,60 @@ fn pe_iat<Pe: ImageNtHeaders>(file: &PeFile<Pe>) -> object::Result<Vec<ImportSlo
             slots.push(ImportSlot { address, name, library });
         }
     })?;
+    pe_delay_slots(file, image_base, &mut slots);
     Ok(slots)
+}
+
+/// Caps for the delay-load tables of an untrusted image: a benign binary has a handful of delay DLLs with far
+/// fewer than these many functions, so these only bound a crafted or corrupt table.
+const MAX_DELAY_DESCRIPTORS: usize = 4096;
+const MAX_DELAY_THUNKS: u64 = 1 << 20;
+
+/// Appends the import address table slots of the delay-load directory. Delay imports are bound lazily on first
+/// use, so their slots live in a separate IAT the regular import table does not cover; code reaches a delayed
+/// function through this slot just as it does a normal one. Best-effort and panic-free: a malformed descriptor
+/// or thunk list stops the walk rather than failing the load, and the regular slots already collected stand.
+fn pe_delay_slots<Pe: ImageNtHeaders>(file: &PeFile<Pe>, image_base: u64, slots: &mut Vec<ImportSlot>) {
+    let Ok(Some(table)) = file.delay_load_import_table() else { return };
+    let Ok(mut descriptors) = table.descriptors() else { return };
+    let slot_size = if file.is_64() { 8 } else { 4 };
+    for _ in 0..MAX_DELAY_DESCRIPTORS {
+        let descriptor = match descriptors.next() {
+            Ok(Some(descriptor)) => descriptor,
+            // Ok(None) is the terminating null descriptor; an error is a corrupt table. Both stop the walk.
+            _ => break,
+        };
+        // Only version-2 (RVA-based) descriptors store RVAs; the obsolete VA-based form is left unresolved,
+        // matching how `object`'s own iterator declines it.
+        if descriptor.attributes.get(LE) & object::pe::IMAGE_DELAYLOAD_RVA_BASED == 0 {
+            continue;
+        }
+        let iat_rva = u64::from(descriptor.import_address_table_rva.get(LE));
+        let name_table_rva = descriptor.import_name_table_rva.get(LE);
+        let library = table
+            .name(descriptor.dll_name_rva.get(LE))
+            .ok()
+            .map(|library| String::from_utf8_lossy(library).into_owned());
+        let Ok(mut thunks) = table.thunks(name_table_rva) else { continue };
+        let mut index = 0u64;
+        while let Ok(Some(thunk)) = thunks.next::<Pe>() {
+            if index >= MAX_DELAY_THUNKS {
+                break;
+            }
+            let address = index
+                .checked_mul(slot_size)
+                .and_then(|offset| iat_rva.checked_add(offset))
+                .and_then(|rva| image_base.checked_add(rva));
+            if let (Some(address), Ok(import)) = (address, table.import::<Pe>(thunk)) {
+                let name = match import {
+                    object::read::pe::Import::Name(_, name) => String::from_utf8_lossy(name).into_owned(),
+                    object::read::pe::Import::Ordinal(ordinal) => format!("#{ordinal}"),
+                };
+                slots.push(ImportSlot { address, name, library: library.clone() });
+            }
+            index += 1;
+        }
+    }
 }
 
 /// Walks the regular (not delay-load) import table, calling `visit` with each import's library name (`None` when

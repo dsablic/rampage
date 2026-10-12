@@ -20,6 +20,8 @@ llvm-strip --strip-debug bin/hello-x64-dyn.elf bin/hello-arm64.elf \
 zig cc -target x86_64-linux-gnu -O1 -g0 -fPIC -shared -o bin/libhelper-x64.so src/helper.c
 llvm-strip --strip-debug bin/libhelper-x64.so
 zig cc -target x86_64-windows-gnu -O1 -g0 -o bin/hello-x64.exe "$src"
+# A PE with a TLS callback: the callback is an entry point reached before main, recovered as a function start.
+zig cc -target x86_64-windows-gnu -O1 -g0 -o bin/tls-x64.exe src/tls.c
 rm -f bin/*.pdb
 clang -arch x86_64 -O1 -o bin/hello-x64.macho "$src"
 clang -arch arm64 -O1 -o bin/hello-arm64.macho "$src"

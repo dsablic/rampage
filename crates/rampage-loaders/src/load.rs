@@ -307,6 +307,7 @@ impl Binary {
         let be8 = arch == Arch::Arm && be8_flag(parsed.flags());
         let code_big_endian = big_endian && !be8;
         let exception_directory = starts::pe_exception_directory(&parsed);
+        let tls_directory = starts::pe_tls_directory(&parsed);
         let import_slots = crate::slots::collect(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
         let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64).unwrap_or_else(|warning| {
@@ -351,6 +352,9 @@ impl Binary {
             let (starts, warning) = starts::pe(&binary, &directory);
             function_starts.extend(starts);
             binary.warnings.extend(warning);
+        }
+        if let Some(directory) = tls_directory {
+            function_starts.extend(starts::pe_tls(&binary, &directory));
         }
         let (starts, warning) = starts::eh_frame(&binary);
         function_starts.extend(starts);
