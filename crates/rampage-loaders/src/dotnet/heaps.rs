@@ -14,7 +14,7 @@ pub(super) struct Heaps<'a> {
     pub(super) blobs: &'a [u8],
 }
 
-impl Heaps<'_> {
+impl<'a> Heaps<'a> {
     /// The NUL-terminated UTF-8 identifier at `offset`, or `None` when the offset lies outside the heap.
     /// Unterminated or overlong names are cut at the heap end or the length cap.
     pub(super) fn string(&self, offset: u32) -> Option<String> {
@@ -40,7 +40,7 @@ impl Heaps<'_> {
     }
 
     /// The blob at `offset`, without its length prefix.
-    pub(super) fn blob(&self, offset: u32) -> Option<&[u8]> {
+    pub(super) fn blob(&self, offset: u32) -> Option<&'a [u8]> {
         let tail = self.blobs.get(usize::try_from(offset).ok()?..)?;
         let (length, header) = compressed_length(tail)?;
         tail.get(header..header.checked_add(length)?)

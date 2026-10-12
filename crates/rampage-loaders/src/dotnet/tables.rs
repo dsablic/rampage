@@ -21,15 +21,17 @@ pub(super) const METHOD_DEF: u8 = 0x06;
 pub(super) const PARAM_PTR: u8 = 0x07;
 pub(super) const PARAM: u8 = 0x08;
 pub(super) const MEMBER_REF: u8 = 0x0A;
-const EVENT: u8 = 0x14;
-const PROPERTY: u8 = 0x17;
+pub(super) const CUSTOM_ATTRIBUTE: u8 = 0x0C;
+pub(super) const EVENT: u8 = 0x14;
+pub(super) const PROPERTY: u8 = 0x17;
 pub(super) const MODULE_REF: u8 = 0x1A;
 pub(super) const TYPE_SPEC: u8 = 0x1B;
+pub(super) const IMPL_MAP: u8 = 0x1C;
 pub(super) const ASSEMBLY: u8 = 0x20;
 pub(super) const ASSEMBLY_REF: u8 = 0x23;
 pub(super) const FILE: u8 = 0x26;
 pub(super) const NESTED_CLASS: u8 = 0x29;
-const GENERIC_PARAM: u8 = 0x2A;
+pub(super) const GENERIC_PARAM: u8 = 0x2A;
 
 pub(super) const TABLE_NAMES: [&str; TABLE_COUNT] = [
     "Module",
