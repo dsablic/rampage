@@ -453,3 +453,17 @@ fn section_file_bytes_are_what_the_file_stores() {
     let past_end = rampage_loaders::Section { file_offset: Some(u64::MAX), ..text.clone() };
     assert_eq!(binary.section_file_bytes(&past_end), None);
 }
+
+#[test]
+fn a_truncated_image_keeps_the_head_of_its_last_section() {
+    let mut bytes = std::fs::read(fixture("hello-x64.exe")).unwrap();
+    // `.pdata` is stored at 0x34000..0x35800; keep its first 0x800 bytes and drop everything after.
+    bytes.truncate(0x3_4800);
+    let path = std::env::temp_dir().join(format!("rampage-truncated-section-{}.exe", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let binary = Binary::open(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let section = |name: &str| binary.sections.iter().find(|section| section.name == name).unwrap();
+    assert_eq!(binary.section_file_bytes(section(".pdata")), Some(&bytes[0x3_4000..]));
+    assert_eq!(binary.section_file_bytes(section(".reloc")), None, "starts past the end of the image");
+}

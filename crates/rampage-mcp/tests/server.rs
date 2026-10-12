@@ -344,6 +344,23 @@ async fn agent_supplied_databases_must_be_bounded_regular_files() {
 }
 
 #[tokio::test]
+async fn detect_tools_reports_skipped_peid_entries() {
+    let client = connect().await;
+    let peid = std::env::temp_dir().join(format!("rampage-mcp-partial-peid-{}.txt", std::process::id()));
+    let broken = "[Broken]\nsignature = ZZ ZZ\nep_only = true\n".repeat(25);
+    std::fs::write(&peid, broken + "[Fine]\nsignature = 4D 5A\nep_only = false\n").unwrap();
+    let result = call(&client, "detect_tools", json!({ "path": fixture("hello-x64.exe"), "peid": peid })).await;
+    std::fs::remove_file(&peid).unwrap();
+    let found = json_of(&result);
+    assert!(found["detections"].as_array().unwrap().iter().any(|detection| detection["name"] == "Fine"), "{found}");
+    let warnings = found["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 21, "{found}");
+    assert!(warnings[0].as_str().unwrap().contains("[Broken]"), "{found}");
+    assert_eq!(warnings[20], "PeID database: ... and 5 more problems skipped");
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn identify_functions_can_leave_out_the_bundled_database() {
     let client = connect().await;
     let path = fixture("hello-x64.elf");

@@ -192,6 +192,7 @@ fn only_address_shaped_names_are_refused() {
     let project = Session::default().open(&path, None).unwrap();
     let main = project.resolve("_main").unwrap();
     assert!(project.rename(main, Some("0x1000")).is_err());
+    assert!(project.rename(main, Some("0X1000")).is_err());
     assert!(project.rename(main, Some("sub_401000")).is_err());
     assert!(project.rename(main, Some("sub_menu_init")).unwrap().changed);
     assert_eq!(project.resolve("sub_menu_init").unwrap(), main);

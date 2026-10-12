@@ -271,7 +271,7 @@ impl Project {
 
     pub(crate) fn resolve_in(&self, annotations: &Annotations, text: &str) -> Result<u64, ApiError> {
         let text = text.trim();
-        if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        if let Some(hex) = hex_address_digits(text) {
             return u64::from_str_radix(hex, 16)
                 .map_err(|_| ApiError::Invalid(format!("invalid hex address {text:?}")));
         }
@@ -281,7 +281,7 @@ impl Project {
         if let Some(address) = self.address_named(annotations, text) {
             return Ok(address);
         }
-        if let Some(address) = text.strip_prefix("sub_").and_then(|hex| u64::from_str_radix(hex, 16).ok()) {
+        if let Some(address) = default_name_address(text) {
             return Ok(address);
         }
         Err(ApiError::NotFound(format!("no symbol or export named {text:?}")))
@@ -368,8 +368,10 @@ impl Project {
     }
 }
 
-/// Refuses a name that is not an identifier, or that `resolve` would read as an address: `sub_<hex>` or `0x...`
-/// could never be looked up by name; other names that merely start with `sub_` (`sub_menu_init`) are fine.
+/// Refuses a name that is not an identifier, or that `resolve` would read as an address. `resolve` parses `0x...`
+/// and `0X...` before looking up names, so such a name could never be looked up. It looks up names before
+/// `sub_<hex>`, so naming one function `sub_401000` would shadow the default name of the function at 0x401000.
+/// Other names that merely start with `sub_` (`sub_menu_init`) are fine.
 pub(crate) fn check_name(name: &str) -> Result<(), String> {
     let valid = !name.is_empty()
         && !name.starts_with(|c: char| c.is_ascii_digit())
@@ -384,7 +386,17 @@ pub(crate) fn check_name(name: &str) -> Result<(), String> {
 }
 
 pub(crate) fn is_address_shaped(name: &str) -> bool {
-    name.starts_with("0x") || name.strip_prefix("sub_").is_some_and(|hex| u64::from_str_radix(hex, 16).is_ok())
+    hex_address_digits(name).is_some() || default_name_address(name).is_some()
+}
+
+/// The hex digits of an address written `0x...` or `0X...`, as `resolve` reads it.
+fn hex_address_digits(text: &str) -> Option<&str> {
+    text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
+}
+
+/// The address in a default function name `sub_<hex>`, as `resolve` reads it.
+fn default_name_address(text: &str) -> Option<u64> {
+    text.strip_prefix("sub_").and_then(|hex| u64::from_str_radix(hex, 16).ok())
 }
 
 #[cfg(test)]

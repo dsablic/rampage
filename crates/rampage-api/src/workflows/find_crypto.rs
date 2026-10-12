@@ -157,7 +157,8 @@ impl Project {
 
         if scan.truncated {
             report.limitation(format!(
-                "The constant scan stopped at {} hits, so constants past the last one reported were not looked for.",
+                "The constant scan reached its cap of {} hits; hits past the cap were dropped or not searched for, \
+                 so some constants may be missing.",
                 rampage_constants::MAX_HITS
             ));
         }

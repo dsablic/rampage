@@ -293,8 +293,6 @@ pub fn quote(text: &str) -> String {
     format!("{cut:?}...")
 }
 
-/// An import or symbol name without the decorations loaders and toolchains add (`__imp_`, an `@plt`, `@16` or
-/// `@GLIBC_2.2.5` suffix, leading underscores), lowercased, for matching against the API tables.
 /// Whether `name` (decorated or not) is the API `pattern` names: the shared normalization of
 /// `rampage_capabilities::names` (a lowercase stem that also matches with a Windows `A`/`W` suffix, or a prefix
 /// ending in `*`).

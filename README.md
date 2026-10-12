@@ -55,10 +55,11 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   function list, metadata and disassembly even after `-ldflags "-s -w"`.
 - Heuristic databases: one detection layer where each database is data, with permissive defaults bundled and the
   rest supplied at runtime. `rampage detect` names the producing packer, compiler, protector, installer or linker
-  from an authored signature database (and accepts your own PeID `userdb.txt`); `rampage yara` runs your YARA
-  rules through the embedded yara-x engine; `rampage capa` evaluates a Mandiant capa-rules directory (file-scope
-  features only); `rampage capabilities` applies the built-in corroborated rules. Every hit carries its evidence
-  and is a triage signal, not proof. Also exposed as the `detect_tools`, `yara_scan` and `capa_detect` tools. A
+  from an authored signature database (and accepts your own PeID `userdb.txt`, warning about the entries it
+  skips as malformed); `rampage yara` runs your YARA rules through the embedded yara-x engine; `rampage capa`
+  evaluates a Mandiant capa-rules directory against imports, exports and strings (file-scope features only);
+  `rampage capabilities` applies the built-in corroborated rules. Every hit carries its evidence and is a triage
+  signal, not proof. Also exposed as the `detect_tools`, `yara_scan` and `capa_detect` tools. A
   spec-derived constant database (AES, DES, Blowfish, SHA/MD5, ChaCha, CRC, Deflate, Base64, curve parameters)
   locates algorithm tables in the image.
 - Guided investigation workflows: `triage_report`, `find_main`, `network_surface`, `find_crypto` and `diff_builds`
@@ -83,7 +84,7 @@ rampage report find-main|network-surface|find-crypto <file>
 rampage report diff-builds <file> --other <file>
 rampage dotnet  <file> [--contains TEXT]     # .NET assembly metadata (types, methods, IL)
 rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
-rampage detect  <file> [--peid <userdb.txt>]  # producing packer/compiler/protector/installer/linker
+rampage detect  <file> [--peid <userdb.txt>]  # producing packer/compiler/...; warns on skipped PeID entries
 rampage yara    <file> --rules <file|dir>     # run user-supplied YARA rules (embedded yara-x)
 rampage capa    <file> --rules <dir>          # evaluate Mandiant capa rules (file-scope subset)
 rampage capabilities <file>                   # built-in corroborated behavior indicators

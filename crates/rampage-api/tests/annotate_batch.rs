@@ -140,12 +140,13 @@ fn check_names_reports_validity_and_use() {
     let main = project.resolve("_main").unwrap();
     project.rename(main, Some("greet")).unwrap();
     let names: Vec<String> =
-        ["greet", "_puts", "sub_10", "two words", "fresh"].iter().map(|name| (*name).to_owned()).collect();
+        ["greet", "_puts", "sub_10", "two words", "fresh", "0X1000"].iter().map(|name| (*name).to_owned()).collect();
     let checks = project.check_names(&names).unwrap();
     assert_eq!((checks[0].used_at, checks[0].used_by, checks[0].valid), (Some(main), Some("user"), true));
     assert_eq!(checks[1].used_by, Some("symbol"));
     assert!(checks[2].address_shaped && !checks[2].valid);
     assert!(!checks[3].valid && !checks[3].address_shaped && checks[3].problem.is_some());
     assert!(checks[4].valid && checks[4].used_at.is_none() && checks[4].problem.is_none());
+    assert!(checks[5].address_shaped && !checks[5].valid);
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

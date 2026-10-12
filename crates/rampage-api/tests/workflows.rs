@@ -251,6 +251,32 @@ fn find_crypto_without_crypto_is_empty_but_honest() {
 }
 
 #[test]
+fn find_crypto_says_when_the_constant_scan_hit_its_cap() {
+    // 3000 ChaCha constants in `.text` and 2000 in `.rdata`: neither segment reaches the cap alone, but together
+    // they pass it, so the pooled scan drops the highest-addressed hits.
+    let mut bytes = std::fs::read(fixture("hello-x64.exe")).unwrap();
+    let mut plant = |file_offset: usize, count: usize| {
+        let constants = b"expand 32-byte k".repeat(count);
+        bytes[file_offset..file_offset + constants.len()].copy_from_slice(&constants);
+    };
+    plant(0x2_8400 - 16 * 3000, 3000);
+    plant(0x2_8600, 2000);
+    let directory = std::env::temp_dir().join(format!("rampage-api-crypto-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("many-constants.exe");
+    std::fs::write(&path, &bytes).unwrap();
+    let report = open(path).find_crypto(ReportLimits::default());
+    std::fs::remove_dir_all(&directory).unwrap();
+    let report = report.unwrap();
+    assert_well_formed(&report);
+    assert!(
+        report.limitations.iter().any(|text| text.contains("cap of 4096 hits") && text.contains("dropped")),
+        "{:?}",
+        report.limitations
+    );
+}
+
+#[test]
 fn network_surface_reports_truncation() {
     let report = open(local_fixture("net-client-x64.elf")).network_surface(ReportLimits::new(Some(2))).unwrap();
     assert_well_formed(&report);

@@ -1,8 +1,9 @@
 //! Imports Mandiant capa rules (github.com/mandiant/capa-rules, Apache-2.0) as a capability source.
 //!
 //! capa rules are a large curated behavior corpus. This module parses their YAML and evaluates the SUBSET of
-//! features rampage can assess from imports and strings alone, emitting the crate's `Capability` shape. It is a
-//! deliberately partial evaluator -- NOT a reimplementation of capa -- so matches remain triage-grade evidence.
+//! features rampage can assess from imports, exports and strings alone, emitting the crate's `Capability` shape.
+//! It is a deliberately partial evaluator -- NOT a reimplementation of capa -- so matches remain triage-grade
+//! evidence.
 //!
 //! Supported statements: `and`, `or`, `not`, `optional`, and `N or more`; `description:`/`comment:` items inside
 //! a statement list are annotations and are dropped. Supported leaf features:
