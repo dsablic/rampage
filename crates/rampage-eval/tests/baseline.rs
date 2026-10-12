@@ -33,10 +33,10 @@ fn assert_baseline(arch: &str, floor: usize) {
 
 #[test]
 fn x86_64_baseline_holds() {
-    assert_baseline("x86_64", 26);
+    assert_baseline("x86_64", 47);
 }
 
 #[test]
 fn aarch64_baseline_holds() {
-    assert_baseline("aarch64", 24);
+    assert_baseline("aarch64", 47);
 }

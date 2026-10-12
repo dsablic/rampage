@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::{Binary, SymbolKind};
-use rampage_signatures::SignatureDb;
+use rampage_signatures::{SignatureDb, alias_rank};
 use serde::{Deserialize, Serialize};
 
 /// Known function names by address, taken from a symbolized twin of the evaluated binary.
@@ -29,7 +29,7 @@ impl Truth {
             .filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty());
         for symbol in functions {
             let slot = names.entry(symbol.address).or_insert(&symbol.name);
-            if preference(&symbol.name) < preference(slot) {
+            if alias_rank(&symbol.name) < alias_rank(slot) {
                 *slot = &symbol.name;
             }
         }
@@ -221,10 +221,6 @@ pub fn strip(elf: &[u8], keep_symbols: bool) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
-fn preference(name: &str) -> (bool, usize, &str) {
-    (name.starts_with('_'), name.len(), name)
-}
-
 fn ratio(numerator: usize, denominator: usize) -> f64 {
     if denominator == 0 { 0.0 } else { numerator as f64 / denominator as f64 }
 }
@@ -293,10 +289,10 @@ mod tests {
     #[test]
     fn alias_preference_picks_the_public_spelling() {
         let mut names = ["__strchrnul", "strchrnul", "__libc_strchrnul"];
-        names.sort_by_key(|name| preference(name));
+        names.sort_by_key(|name| alias_rank(name));
         assert_eq!(names[0], "strchrnul");
-        assert!(preference("free") < preference("cfree"));
-        assert!(preference("abs") < preference("abt"));
+        assert!(alias_rank("free") < alias_rank("cfree"));
+        assert!(alias_rank("abs") < alias_rank("abt"));
     }
 
     #[test]

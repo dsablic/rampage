@@ -302,6 +302,13 @@ fn zero_range(bytes: &mut [u8], offset: usize, size: usize) {
     }
 }
 
+/// The sort key that picks one spelling among aliases of a function at the same address (musl exports
+/// `strchrnul` as a weak alias of `__strchrnul`; zig's libc also exports `memcpy` as
+/// `compiler_rt.memcpy.memcpyFast`): no leading underscore first, then the shortest, then alphabetical.
+pub fn alias_rank(name: &str) -> (bool, usize, &str) {
+    (name.starts_with('_'), name.len(), name)
+}
+
 /// The masked content hash of the function whose bytes start at `address`, or `None` for an unsupported
 /// architecture or input with no decodable instructions. `target` supplies the architecture, the instruction
 /// byte order (used by the fixed-width paths), and, for 32-bit ARM, whether `address` holds Thumb code.
@@ -359,10 +366,23 @@ impl SignatureDb {
         let mut builder = Builder::default();
         if supported(binary.arch) {
             let target = binary.target();
+            // Several names at one address are aliases of one function, not a collision: keep one spelling, or
+            // the builder would drop the hash as ambiguous and the function could never be identified.
+            let mut by_address = BTreeMap::new();
             for symbol in &binary.symbols {
                 if symbol.kind != SymbolKind::Function || symbol.size == 0 || symbol.name.is_empty() {
                     continue;
                 }
+                by_address
+                    .entry(symbol.address)
+                    .and_modify(|best: &mut &rampage_loaders::Symbol| {
+                        if alias_rank(&symbol.name) < alias_rank(&best.name) {
+                            *best = symbol;
+                        }
+                    })
+                    .or_insert(symbol);
+            }
+            for symbol in by_address.into_values() {
                 if let Some(bytes) = binary.read(symbol.address, symbol.size)
                     && let Some(hash) = function_hash(&target, bytes, symbol.address)
                 {
