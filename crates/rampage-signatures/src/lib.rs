@@ -327,8 +327,9 @@ fn mask_arm_a32(word: u32) -> u32 {
 
 /// Masks the imm fields of a 16-bit Thumb branch, leaving opcode and condition. Covers the unconditional B
 /// (bits [15:11] == 0b11100, 11-bit imm) and the conditional B (bits [15:12] == 0b1101 with a real condition,
-/// 8-bit imm; conditions 0b1110/0b1111 are undefined/SVC, not branches).
-fn mask_thumb16(hw: u16) -> u16 {
+/// 8-bit imm; conditions 0b1110/0b1111 are undefined/SVC, not branches). Scheme 2 (`current`) also masks CBZ/CBNZ
+/// (`1011 o0i1 imm5 Rn`), whose i:imm5 offset is relative too; scheme 1 keeps it so its hashes never change.
+fn mask_thumb16(hw: u16, current: bool) -> u16 {
     if hw >> 11 == 0b11100 {
         return hw & !0x07ff;
     }
@@ -338,22 +339,34 @@ fn mask_thumb16(hw: u16) -> u16 {
             return hw & !0x00ff;
         }
     }
+    if current && hw & 0xf500 == 0xb100 {
+        return hw & !0x02f8;
+    }
     hw
 }
 
-/// Masks the imm fields of a 32-bit Thumb BL/BLX/B.W, whose first halfword is `0b11110 S imm10` and whose second
-/// is `0b11 J1 x J2 imm11`. Bit 12 of the second halfword distinguishes BL from BLX, so it is kept; the S, J1, J2
-/// and imm bits are masked in both halfwords. Any other 32-bit instruction passes through unchanged.
-fn mask_thumb32(hw1: u16, hw2: u16) -> (u16, u16) {
-    if hw1 >> 11 == 0b11110 && hw2 >> 14 == 0b11 {
+/// Masks the imm fields of a 32-bit Thumb branch, whose first halfword is `0b11110 S ...` and whose second is
+/// `0b1 J1 x J2 imm11`. BL/BLX (second halfword `0b11 ...`, bit 12 telling them apart and so kept) mask S, imm10,
+/// J1, J2 and imm11. Scheme 2 (`current`) also masks B.W (T4, `0b10 J1 1 J2`) the same way and the conditional
+/// B<c>.W (T3, `0b10 J1 0 J2`), keeping its condition (first halfword bits 9:6; 0b111x there is not a branch).
+/// Any other 32-bit instruction passes through unchanged.
+fn mask_thumb32(hw1: u16, hw2: u16, current: bool) -> (u16, u16) {
+    if hw1 >> 11 != 0b11110 {
+        return (hw1, hw2);
+    }
+    if hw2 >> 14 == 0b11 || (current && hw2 & 0xd000 == 0x9000) {
         return (hw1 & !0x07ff, hw2 & !0x2fff);
+    }
+    if current && hw2 & 0xd000 == 0x8000 && (hw1 >> 6) & 0xf < 0b1110 {
+        return (hw1 & !0x043f, hw2 & !0x2fff);
     }
     (hw1, hw2)
 }
 
 /// Hashes a Thumb (T32) function, decoding halfword-by-halfword from the start. A first halfword with
 /// bits [15:11] in {0b11101, 0b11110, 0b11111} begins a 32-bit instruction (two halfwords), else it is 16-bit.
-fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
+/// `current` selects scheme 2's masking.
+fn thumb_hash(bytes: &[u8], big_endian: bool, current: bool) -> Option<FunctionHash> {
     let read_hw = |pair: &[u8]| {
         let raw = [pair[0], pair[1]];
         if big_endian { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) }
@@ -367,7 +380,7 @@ fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
                 break;
             }
             let hw2 = read_hw(&bytes[index + 2..index + 4]);
-            let (m1, m2) = mask_thumb32(hw1, hw2);
+            let (m1, m2) = mask_thumb32(hw1, hw2, current);
             // One push of the two halfwords concatenated hashes identically to two sequential updates.
             let mut encoding = [0u8; 4];
             encoding[..2].copy_from_slice(&m1.to_le_bytes());
@@ -375,7 +388,7 @@ fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
             fingerprint.push(&encoding);
             index += 4;
         } else {
-            fingerprint.push(&mask_thumb16(hw1).to_le_bytes());
+            fingerprint.push(&mask_thumb16(hw1, current).to_le_bytes());
             index += 2;
         }
     }
@@ -383,16 +396,24 @@ fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
 }
 
 /// Masks the position-dependent target of a MIPS branch. J/JAL (opcode 0b000010/0b000011) carry a 26-bit
-/// instr_index; the conditional branches BEQ/BNE/BLEZ/BGTZ (opcodes 0x04..=0x07) and REGIMM (opcode 0x01,
-/// BLTZ/BGEZ) carry a 16-bit PC-relative offset. Generic I-type immediates (addiu/lui/ori) are left intact.
+/// instr_index; the conditional branches BEQ/BNE/BLEZ/BGTZ (opcodes 0x04..=0x07) and the REGIMM branches (opcode
+/// 0x01: BLTZ/BGEZ and their -L, -AL, -ALL forms) carry a 16-bit PC-relative offset. Generic I-type immediates
+/// (addiu/lui/ori) are left intact.
+///
+/// Scheme 1 masks the 16-bit field of every REGIMM instruction, including the traps and SYNCI whose field is data,
+/// and misses the branch-likely opcodes; its hashes are frozen, so scheme 2 (`current`) fixes both.
 ///
 /// Conservative choice: a `lui`/`addiu` HI/LO address pair is a genuine data immediate here, so it is not masked
 /// and will differ across differently based links. That lowers the cross-link match rate but never mismatches;
 /// recovering those pairs needs relocation/dataflow analysis, left for a later version.
-fn mask_mips(word: u32) -> u32 {
+fn mask_mips(word: u32, current: bool) -> u32 {
+    let regimm_branch = matches!((word >> 16) & 0x1f, 0x00..=0x03 | 0x10..=0x13);
     match word >> 26 {
         0b000010 | 0b000011 => word & !0x03ff_ffff,
-        0b000001 | 0b000100 | 0b000101 | 0b000110 | 0b000111 => word & !0x0000_ffff,
+        0b000001 if regimm_branch || !current => word & !0x0000_ffff,
+        0b000100..=0b000111 => word & !0x0000_ffff,
+        // BEQL/BNEL/BLEZL/BGTZL.
+        0b010100..=0b010111 if current => word & !0x0000_ffff,
         _ => word,
     }
 }
@@ -518,8 +539,10 @@ pub fn function_hash(target: &Target, bytes: &[u8], address: u64) -> Option<Func
 /// The scheme 2 ([`CURRENT_SCHEME`]) hash: [`function_hash`] plus masking of layout-dependent constants. On x86 and
 /// x86-64, displacements and immediates whose value lies inside `image` (absolute addresses of the image's own
 /// code and data, as non-PIE code embeds them) are masked. On AArch64, the low 12 bits that complete an ADRP page
-/// address are masked (this needs no context). 32-bit ARM, MIPS and PowerPC hash as in scheme 1: their absolute
-/// addresses (ARM literal pools, MIPS `lui`/`addiu` pairs) are not masked yet.
+/// address are masked (this needs no context). Thumb also masks B.W, B<c>.W and CBZ/CBNZ offsets, and MIPS the
+/// branch-likely offsets while keeping REGIMM trap immediates, relative fields scheme 1 handled wrongly but cannot
+/// change. Absolute addresses on 32-bit ARM, MIPS and PowerPC (ARM literal pools, MIPS `lui`/`addiu` pairs) are
+/// not masked yet.
 pub fn function_hash_in(target: &Target, image: &MaskContext, bytes: &[u8], address: u64) -> Option<FunctionHash> {
     hash(target, bytes, address, Some(image))
 }
@@ -551,9 +574,9 @@ fn hash(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>
         }
         // x86 and AArch64 are fixed little-endian; their behavior is unchanged by the endianness threading.
         Arch::Aarch64 => fixed_word_hash(bytes, false, mask_aarch64),
-        Arch::Arm if target.is_thumb(address) => thumb_hash(bytes, target.big_endian),
+        Arch::Arm if target.is_thumb(address) => thumb_hash(bytes, target.big_endian, image.is_some()),
         Arch::Arm => fixed_word_hash(bytes, target.big_endian, mask_arm_a32),
-        Arch::Mips | Arch::Mips64 => fixed_word_hash(bytes, target.big_endian, mask_mips),
+        Arch::Mips | Arch::Mips64 => fixed_word_hash(bytes, target.big_endian, |word| mask_mips(word, image.is_some())),
         Arch::PowerPc | Arch::PowerPc64 => fixed_word_hash(bytes, target.big_endian, mask_ppc),
         _ => None,
     }
@@ -1084,6 +1107,48 @@ mod tests {
         assert_ne!(function_hash(&thumb, &base, 0), function_hash(&thumb, &changed_imm, 0));
     }
 
+    /// movs r0, #1; `branch`; movs r1, #2; bx lr.
+    fn thumb_body(branch: &[u16]) -> Vec<u8> {
+        let halfwords: Vec<u16> = [&[0x2001], branch, &[0x2102, 0x4770]].concat();
+        halfwords_to_bytes(&halfwords, false)
+    }
+
+    /// Whether scheme 2 hashes `base` and `relinked` (Thumb branches) alike while scheme 1, whose hashes are
+    /// frozen, still tells them apart.
+    fn thumb_relinks_under_scheme_2_only(base: &[u16], relinked: &[u16]) {
+        let thumb = thumb_target(false);
+        let current = |branch| function_hash_in(&thumb, &MaskContext::default(), &thumb_body(branch), 0);
+        assert!(current(base).is_some());
+        assert_eq!(current(base), current(relinked), "{base:x?} vs {relinked:x?}");
+        let legacy = |branch| function_hash(&thumb, &thumb_body(branch), 0);
+        assert_ne!(legacy(base), legacy(relinked), "{base:x?} vs {relinked:x?}");
+    }
+
+    #[test]
+    fn thumb_scheme_2_masks_wide_unconditional_branches() {
+        // B.W (T4): 11110 S imm10, 10 J1 1 J2 imm11.
+        thumb_relinks_under_scheme_2_only(&[0xf000, 0xb800], &[0xf412, 0x99ab]);
+    }
+
+    #[test]
+    fn thumb_scheme_2_masks_wide_conditional_branches_but_keeps_the_condition() {
+        // B<c>.W (T3): 11110 S cond imm6, 10 J1 0 J2 imm11; beq here.
+        thumb_relinks_under_scheme_2_only(&[0xf000, 0x8000], &[0xf43f, 0xafff]);
+        let thumb = thumb_target(false);
+        let hash = |branch| function_hash_in(&thumb, &MaskContext::default(), &thumb_body(branch), 0);
+        assert_ne!(hash(&[0xf000, 0x8000]), hash(&[0xf040, 0x8000]), "beq.w and bne.w must differ");
+    }
+
+    #[test]
+    fn thumb_scheme_2_masks_compare_and_branch_offsets() {
+        // CBZ r0 (1011 o0i1 imm5 Rn) with offsets 0 and the maximum.
+        thumb_relinks_under_scheme_2_only(&[0xb100], &[0xb3f8]);
+        let thumb = thumb_target(false);
+        let hash = |branch| function_hash_in(&thumb, &MaskContext::default(), &thumb_body(branch), 0);
+        assert_ne!(hash(&[0xb100]), hash(&[0xb900]), "cbz and cbnz must differ");
+        assert_ne!(hash(&[0xb100]), hash(&[0xb101]), "the tested register must count");
+    }
+
     #[test]
     fn thumb_endianness_reads_the_same_logical_halfwords() {
         let halfwords = [0x2001u16, 0xd0fe, 0xe7fe, 0xf000, 0xf800, 0x4770];
@@ -1107,6 +1172,22 @@ mod tests {
         // A changed I-type immediate (addiu 0x20 -> 0x40), which we deliberately do NOT mask, must differ.
         let changed_imm = words_to_bytes(&[0x3c02_0001, 0x2442_0040, 0x0c10_0000, 0x1040_0005, 0x0000_0000], true);
         assert_ne!(function_hash(&mips, &base, 0), function_hash(&mips, &changed_imm, 0));
+    }
+
+    #[test]
+    fn mips_scheme_2_masks_regimm_branches_and_branch_likely_but_not_trap_immediates() {
+        let mips = target(Arch::Mips, true);
+        // addiu $v0, $v0, 0x20; `word`; lui $v0, 1; jr $ra.
+        let body = |word: u32| words_to_bytes(&[0x2442_0020, word, 0x3c02_0001, 0x03e0_0008], true);
+        let current = |word| function_hash_in(&mips, &MaskContext::default(), &body(word), 0);
+        let legacy = |word| function_hash(&mips, &body(word), 0);
+        // BLTZAL $v0 (REGIMM rt 0x10) and BEQL $v0, $zero (opcode 0x14): relative offsets.
+        assert_eq!(current(0x0450_0005), current(0x0450_abcd));
+        assert_eq!(current(0x5040_0005), current(0x5040_abcd));
+        assert_ne!(legacy(0x5040_0005), legacy(0x5040_abcd), "scheme 1 hashes are frozen");
+        // TGEI $v0, imm (REGIMM rt 0x08): a data immediate, which scheme 1 masked.
+        assert_ne!(current(0x0448_0010), current(0x0448_0020));
+        assert_eq!(legacy(0x0448_0010), legacy(0x0448_0020), "scheme 1 hashes are frozen");
     }
 
     #[test]
