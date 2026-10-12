@@ -3,6 +3,7 @@
 //! when it was cut), and every report states its limitations. Reports describe what was observed, never a verdict.
 
 mod diff_builds;
+mod find_crypto;
 mod find_main;
 mod indicators;
 mod network_surface;

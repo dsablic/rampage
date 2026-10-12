@@ -4352,6 +4352,7 @@ dependencies = [
  "rampage-analysis",
  "rampage-arch",
  "rampage-capabilities",
+ "rampage-constants",
  "rampage-decompiler",
  "rampage-detect",
  "rampage-loaders",

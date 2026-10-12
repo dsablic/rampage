@@ -16,6 +16,8 @@ pub enum Workflow {
     FindMain,
     /// Networking imports, network-like strings and the functions referencing them
     NetworkSurface,
+    /// Algorithm constants, crypto APIs and the functions referencing them
+    FindCrypto,
     /// Compare with another build (--other): matched, changed, added and removed functions
     DiffBuilds,
 }
@@ -42,6 +44,7 @@ pub fn report(
         Workflow::TriageReport => project.triage_report(limits)?,
         Workflow::FindMain => project.find_main(limits, !report_options.no_decompile)?,
         Workflow::NetworkSurface => project.network_surface(limits)?,
+        Workflow::FindCrypto => project.find_crypto(limits)?,
         Workflow::DiffBuilds => match &report_options.other {
             Some(other) => project.diff_builds(other, limits)?,
             None => bail!("diff-builds needs --other <file>"),

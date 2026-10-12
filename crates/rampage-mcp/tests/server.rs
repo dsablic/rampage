@@ -61,6 +61,7 @@ async fn lists_all_tools_with_instructions() {
         "detect_tools",
         "diff_builds",
         "disassemble",
+        "find_crypto",
         "find_main",
         "function_graph",
         "function_summary",

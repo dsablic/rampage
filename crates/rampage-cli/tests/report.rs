@@ -37,6 +37,18 @@ fn triage_report_renders_text_and_json() {
 }
 
 #[test]
+fn find_crypto_renders_constants_and_referencing_functions() {
+    let go = path("hello-go-arm64.elf");
+    report(&["find-crypto", &go])
+        .success()
+        .stdout(predicates::str::contains("== Cryptographic constants (1)"))
+        .stdout(predicates::str::contains("expand 32-byte k"))
+        .stdout(predicates::str::contains("internal/chacha8rand.block"));
+    let value = json(&["find-crypto", &go]);
+    assert_eq!(value["workflow"], "find_crypto");
+}
+
+#[test]
 fn find_main_renders_candidates_and_the_decompilation_preview() {
     report(&["find-main", &path("hello-x64.elf")])
         .success()

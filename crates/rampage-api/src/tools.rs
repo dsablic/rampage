@@ -410,6 +410,14 @@ pub fn tools() -> Vec<Tool> {
             |project, args: ReportArgs| project.network_surface(ReportLimits::new(args.max_per_section)),
         ),
         tool(
+            "find_crypto",
+            "Map cryptographic evidence: algorithm constants embedded in the image (AES/DES/Blowfish tables, SHA/MD5 \
+             round constants, ChaCha, curve parameters; checksum/compression/encoding tables listed separately), \
+             crypto library APIs, the functions that reference them (via xrefs), and crypto capability tags. A \
+             constant shows a table is present, not that the algorithm runs.",
+            |project, args: ReportArgs| project.find_crypto(ReportLimits::new(args.max_per_section)),
+        ),
+        tool(
             "diff_builds",
             "Compare this binary with another build of the same architecture: functions paired by unique name and \
              by masked signature hash into identical, changed, hash-matched, added and removed, plus import and \

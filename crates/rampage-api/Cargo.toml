@@ -13,6 +13,7 @@ rampage-signatures.workspace = true
 rampage-capabilities.workspace = true
 rampage-detect.workspace = true
 rampage-yara.workspace = true
+rampage-constants.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

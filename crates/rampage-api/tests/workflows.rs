@@ -220,6 +220,29 @@ fn network_surface_without_networking_is_empty_but_honest() {
 }
 
 #[test]
+fn find_crypto_links_a_constant_to_the_code_that_uses_it() {
+    // Go's runtime seeds its ChaCha8 random source with the ChaCha "expand 32-byte k" constant.
+    let report = open(fixture("hello-go-arm64.elf")).find_crypto(ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    let constants = section(&report, "Cryptographic constants");
+    assert!(has_observation(constants, "expand 32-byte k"), "{constants:#?}");
+    let finding = &constants.findings[0];
+    assert!(finding.evidence.iter().any(|line| line.contains("ChaCha")), "{finding:#?}");
+    let functions = section(&report, "Functions referencing crypto evidence");
+    assert!(has_observation(functions, "`internal/chacha8rand.block`"), "{functions:#?}");
+    assert!(report.next_steps.iter().any(|step| step.tool == "decompile"), "{report:#?}");
+}
+
+#[test]
+fn find_crypto_without_crypto_is_empty_but_honest() {
+    let report = open(fixture("hello-x64.elf")).find_crypto(ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    assert!(report.sections.iter().all(|section| section.findings.is_empty()), "{report:#?}");
+    assert!(report.summary[0].starts_with("No algorithm constants"), "{:?}", report.summary);
+    assert!(report.limitations.iter().any(|text| text.contains("not that the algorithm runs")));
+}
+
+#[test]
 fn network_surface_reports_truncation() {
     let report = open(local_fixture("net-client-x64.elf")).network_surface(ReportLimits::new(Some(2))).unwrap();
     assert_well_formed(&report);

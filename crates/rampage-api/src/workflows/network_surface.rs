@@ -89,7 +89,7 @@ fn network_api(name: &str) -> Option<(&'static str, &'static str)> {
 }
 
 /// Where an API is used from: the functions containing references to any of `targets`.
-struct Users {
+pub(super) struct Users {
     /// Function start to name, for every referencing function found.
     functions: BTreeMap<u64, String>,
     references: usize,
@@ -258,7 +258,7 @@ impl Project {
         Ok(report)
     }
 
-    fn users(&self, targets: &[u64], analyzed: bool) -> Users {
+    pub(super) fn users(&self, targets: &[u64], analyzed: bool) -> Users {
         let mut users = Users { functions: BTreeMap::new(), references: 0 };
         if !analyzed {
             return users;
@@ -289,17 +289,17 @@ impl Project {
     }
 }
 
-fn referencing(users: &Users) -> Vec<String> {
+pub(super) fn referencing(users: &Users) -> Vec<String> {
     users.functions.iter().map(|(address, name)| format!("referenced from `{name}` ({address:#x})")).collect()
 }
 
-fn record(users: &mut BTreeMap<u64, (String, Vec<String>)>, found: &Users, evidence: &str) {
+pub(super) fn record(users: &mut BTreeMap<u64, (String, Vec<String>)>, found: &Users, evidence: &str) {
     for (&address, name) in &found.functions {
         users.entry(address).or_insert_with(|| (name.clone(), Vec::new())).1.push(evidence.to_owned());
     }
 }
 
-fn count(items: usize) -> String {
+pub(super) fn count(items: usize) -> String {
     if items == 1 { "references 1 item of".to_owned() } else { format!("references {items} items of") }
 }
 
