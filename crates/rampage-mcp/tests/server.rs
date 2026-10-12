@@ -85,6 +85,7 @@ async fn lists_all_tools_with_instructions() {
         "set_global",
         "set_signature",
         "set_types",
+        "string_decoding",
         "triage",
         "triage_report",
         "undo",

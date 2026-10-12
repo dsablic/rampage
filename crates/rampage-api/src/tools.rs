@@ -458,6 +458,14 @@ pub fn tools() -> Vec<Tool> {
             |project, args: ReportArgs| fitted(project.persistence_surface(ReportLimits::new(args.max_per_section))),
         ),
         tool(
+            "string_decoding",
+            "Find candidate string-decoding routines statically: functions with a short loop that loads, transforms \
+             (XOR, rotate, byte ADD/SUB) and stores bytes, their direct call sites, and the non-printable or \
+             high-entropy data blobs passed to them (address, length estimate, entropy). Nothing is emulated or \
+             executed; candidates are loop shapes with medium or low confidence.",
+            |project, args: ReportArgs| fitted(project.string_decoding(ReportLimits::new(args.max_per_section))),
+        ),
+        tool(
             "diff_builds",
             "Compare this binary with another build of the same architecture: functions paired by unique name, by \
              masked signature hash and by identical bytes at an unchanged address into identical, changed, \

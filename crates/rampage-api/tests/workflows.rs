@@ -406,3 +406,59 @@ fn persistence_surface_without_indicators_is_empty_but_honest() {
     assert!(report.limitations.iter().any(|text| text.contains("listed only beside an autostart location")));
     assert!(report.limitations.iter().any(|text| text.contains("Absence of evidence is not evidence of absence")));
 }
+
+#[test]
+fn string_decoding_finds_a_byte_xor_loop_and_the_blobs_passed_to_it() {
+    for name in ["decode-x64.elf", "decode-arm64.elf"] {
+        let report = open(local_fixture(name)).string_decoding(ReportLimits::default()).unwrap();
+        assert_well_formed(&report);
+        let routines = section(&report, "Candidate decoding routines");
+        assert_eq!(routines.total, 1, "{name}: {routines:#?}");
+        let decode = &routines.findings[0];
+        assert!(decode.observation.starts_with("`decode` has a byte loop applying XOR"), "{name}: {decode:#?}");
+        assert!(decode.observation.contains("3 direct call sites, 3 passing"), "{name}: {decode:#?}");
+        assert_eq!(decode.confidence, FindingConfidence::Medium, "{name}");
+        let sites = section(&report, "Call sites");
+        assert_eq!(sites.total, 3, "{name}: {sites:#?}");
+        assert!(sites.findings.iter().all(|site| site.evidence[0].contains("from `main`")), "{name}: {sites:#?}");
+        let blobs = section(&report, "Referenced data blobs");
+        assert_eq!(blobs.total, 3, "{name}: {blobs:#?}");
+        // The first blob is the 12-byte encoded "hello, world", cut at the next referenced blob.
+        let first = &blobs.findings[0];
+        assert!(first.evidence[0].starts_with("about 12 bytes"), "{name}: {first:#?}");
+        assert!(first.evidence[1].starts_with("entropy 3.42 bits/byte, 58% non-printable"), "{name}: {first:#?}");
+        assert_eq!(first.evidence[2], "leading bytes 32944c115887b411663db790", "{name}");
+        let functions = section(&report, "Functions calling candidates or referencing their blobs");
+        assert!(has_observation(functions, "`main` references 4 items"), "{name}: {functions:#?}");
+        assert!(report.next_steps.iter().any(|step| step.tool == "decompile"), "{name}");
+        assert!(report.limitations.iter().any(|text| text.contains("Nothing is emulated or executed")));
+    }
+}
+
+#[test]
+fn string_decoding_without_encoded_arguments_stays_low() {
+    // Go's runtime has XOR byte loops (random seeding, hex dumping) whose callers pass no encoded-looking data.
+    let report = open(fixture("hello-go-x64.elf")).string_decoding(ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    let routines = section(&report, "Candidate decoding routines");
+    assert!(routines.total > 0, "{report:#?}");
+    assert!(routines.findings.iter().all(|finding| finding.confidence == FindingConfidence::Low), "{routines:#?}");
+    assert_eq!(section(&report, "Referenced data blobs").total, 0);
+}
+
+#[test]
+fn string_decoding_without_byte_loops_is_empty_but_honest() {
+    let report = open(fixture("hello-x64.elf")).string_decoding(ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    assert!(report.sections.iter().all(|section| section.findings.is_empty()), "{report:#?}");
+    assert!(report.summary[0].starts_with("No byte loop"), "{:?}", report.summary);
+}
+
+#[test]
+fn string_decoding_reports_truncation() {
+    let report = open(local_fixture("decode-x64.elf")).string_decoding(ReportLimits::new(Some(1))).unwrap();
+    assert_well_formed(&report);
+    let sites = section(&report, "Call sites");
+    assert_eq!(sites.findings.len(), 1);
+    assert!(sites.truncated && sites.total == 3, "{sites:#?}");
+}
