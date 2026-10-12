@@ -1,9 +1,12 @@
 //! Capability detection: tags a binary with likely behaviors (networking, process injection, anti-debugging,
 //! cryptography, ...) from the names it imports and the strings it contains. This is triage-grade evidence in
 //! the spirit of Mandiant's capa, not proof: a match means the building blocks are present, not that the
-//! behavior is reached. It is most useful as a fast orientation and as structured hints for an AI agent.
+//! behavior is reached or malicious. Corroborated rules require independent metadata groups, but establish
+//! neither call ordering nor argument/data-flow relationships. No binary is executed by this detector.
 
 use serde::Serialize;
+
+mod corroborated;
 
 /// A detected capability and the evidence that triggered it.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -11,7 +14,7 @@ pub struct Capability {
     pub id: &'static str,
     pub name: &'static str,
     pub category: &'static str,
-    /// The imports or strings that matched, as `kind:value` (e.g. `import:connect`, `string:AES`).
+    /// Evidence as `kind:value`: legacy rules emit canonical matched terms; corroborated rules emit original inputs.
     pub evidence: Vec<String>,
 }
 
@@ -22,6 +25,75 @@ enum Match {
     Import(&'static str),
     /// A string contains this substring (case-sensitive, so `AES` does not match `aes` in a path).
     String(&'static str),
+    /// A string contains this lowercase ASCII substring, ignoring ASCII case.
+    StringAsciiInsensitive(&'static str),
+    /// A lowercase registry path anchored after an optional recognized hive, ending at a key boundary.
+    RegistryPath { path: &'static str, hive: RegistryHive, exact_key: bool },
+}
+
+#[derive(Clone, Copy)]
+enum RegistryHive {
+    Machine,
+    UserOrMachine,
+}
+
+impl Match {
+    fn matches_string(self, value: &str) -> bool {
+        match self {
+            Self::Import(_) => false,
+            Self::String(needle) => value.contains(needle),
+            Self::StringAsciiInsensitive(needle) => value.to_ascii_lowercase().contains(needle),
+            Self::RegistryPath { path, hive, exact_key } => {
+                let value = value.to_ascii_lowercase();
+                let prefixes: &[&str] = match hive {
+                    RegistryHive::Machine => &["hklm\\", "hkey_local_machine\\", "\\registry\\machine\\"],
+                    RegistryHive::UserOrMachine => {
+                        &["hklm\\", "hkey_local_machine\\", "\\registry\\machine\\", "hkcu\\", "hkey_current_user\\"]
+                    }
+                };
+                let relative = prefixes.iter().find_map(|prefix| value.strip_prefix(*prefix)).unwrap_or(&value);
+                relative
+                    .strip_prefix(path)
+                    .is_some_and(|suffix| suffix.is_empty() || (!exact_key && suffix.starts_with('\\')))
+            }
+        }
+    }
+
+    fn collect_evidence(
+        self,
+        imports: &[String],
+        normalized: &[String],
+        strings: &[String],
+        evidence: &mut Vec<String>,
+    ) -> bool {
+        let mut matched = false;
+        match self {
+            Self::Import(needle) => {
+                for (original, name) in imports.iter().zip(normalized) {
+                    if name == needle {
+                        matched = true;
+                        add_evidence(evidence, "import", original);
+                    }
+                }
+            }
+            _ => {
+                for value in strings {
+                    if self.matches_string(value) {
+                        matched = true;
+                        add_evidence(evidence, "string", value);
+                    }
+                }
+            }
+        }
+        matched
+    }
+}
+
+fn add_evidence(evidence: &mut Vec<String>, kind: &str, value: &str) {
+    let entry = format!("{kind}:{value}");
+    if !evidence.contains(&entry) {
+        evidence.push(entry);
+    }
 }
 
 struct Rule {
@@ -31,6 +103,14 @@ struct Rule {
     /// The rule fires when at least `threshold` distinct terms match; most rules need one, combinations need more.
     threshold: usize,
     terms: &'static [Match],
+}
+
+struct CorroboratedRule {
+    id: &'static str,
+    name: &'static str,
+    category: &'static str,
+    /// Every group must match; alternatives within a group provide only one corroborating indicator.
+    groups: &'static [&'static [Match]],
 }
 
 /// Normalizes an import name for comparison: lowercased, without a leading underscore, a `@`-suffix (`foo@plt`)
@@ -220,20 +300,32 @@ pub fn detect(imports: &[String], strings: &[String]) -> Vec<Capability> {
     for rule in RULES {
         let mut evidence = Vec::new();
         for term in rule.terms {
-            match term {
-                Match::Import(needle) => {
-                    if normalized.iter().any(|name| name == needle) {
-                        evidence.push(format!("import:{needle}"));
-                    }
+            let (kind, needle, matched) = match *term {
+                Match::Import(needle) => ("import", needle, normalized.iter().any(|name| name == needle)),
+                Match::String(needle)
+                | Match::StringAsciiInsensitive(needle)
+                | Match::RegistryPath { path: needle, .. } => {
+                    ("string", needle, strings.iter().any(|value| term.matches_string(value)))
                 }
-                Match::String(needle) => {
-                    if strings.iter().any(|string| string.contains(needle)) {
-                        evidence.push(format!("string:{needle}"));
-                    }
-                }
+            };
+            if matched {
+                evidence.push(format!("{kind}:{needle}"));
             }
         }
         if evidence.len() >= rule.threshold {
+            found.push(Capability { id: rule.id, name: rule.name, category: rule.category, evidence });
+        }
+    }
+    for rule in corroborated::RULES {
+        let mut evidence = Vec::new();
+        let matched = rule.groups.iter().all(|group| {
+            let mut matched_group = false;
+            for term in *group {
+                matched_group |= term.collect_evidence(imports, &normalized, strings, &mut evidence);
+            }
+            matched_group
+        });
+        if matched {
             found.push(Capability { id: rule.id, name: rule.name, category: rule.category, evidence });
         }
     }
