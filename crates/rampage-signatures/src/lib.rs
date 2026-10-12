@@ -12,10 +12,18 @@
 //! position-dependent fields of each instruction word by hand, reading words in the target's instruction byte
 //! order (MIPS and PowerPC ship in both endiannesses). Only genuinely PC-relative branch/call targets are masked;
 //! data immediates are kept because they discriminate functions. Other architectures return `None`.
+//!
+//! A confidence gate rejects non-discriminating bodies so they are neither stored nor matched: a body whose
+//! masked form carries too little content (a single-branch thunk masks to almost nothing, all-nop padding is one
+//! repeated word) would collide with many unrelated functions, making a "match" meaningless. [`function_hash`]
+//! returns `None` unless the body clears all of: a minimum instruction count, a minimum number of non-masked
+//! (content-bearing) bytes remaining after masking, and a minimum number of distinct instruction encodings (so
+//! constant padding is rejected). The thresholds are heuristic but conservative -- tuned to keep genuine small
+//! leaf functions while dropping trivial/degenerate bodies.
 
 mod bundled;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub use bundled::bundled;
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpKind, Register};
@@ -27,8 +35,73 @@ use sha2::{Digest, Sha256};
 /// The most instructions hashed from one function, a bound against runaway or malformed input.
 const MAX_INSTRUCTIONS: u32 = 100_000;
 
+/// Fewest decoded instructions a body must have to be a discriminating fingerprint. Below this it is a stub or
+/// thunk that many unrelated functions share.
+const MIN_INSTRUCTIONS: u32 = 4;
+
+/// Fewest non-masked (content-bearing) bytes a body must retain after masking. A pure branch/thunk masks to a
+/// lone opcode byte, so it falls far below this; genuine instructions keep registers and data immediates.
+const MIN_CONTENT_BYTES: usize = 6;
+
+/// Fewest distinct masked instruction encodings a body must have, so constant padding (an all-nop body is one
+/// repeated word) is rejected even when it is long.
+const MIN_DISTINCT: usize = 3;
+
 /// A 32-byte masked content hash of a function body.
 pub type FunctionHash = [u8; 32];
+
+/// Accumulates a function's masked instruction stream and measures whether it carries enough discriminating
+/// content to be worth storing or matching. Each path feeds one instruction's masked encoding (with the
+/// position-dependent fields already zeroed); [`Fingerprint::finish`] applies the confidence gate and either
+/// yields the hash or `None`. Hashing is unchanged for accepted bodies, so a body that passes hashes exactly as
+/// before the gate existed.
+struct Fingerprint {
+    hasher: Sha256,
+    instructions: u32,
+    content_bytes: usize,
+    /// Folds of distinct masked encodings, stopped once [`MIN_DISTINCT`] is reached so it stays small.
+    distinct: BTreeSet<u64>,
+}
+
+impl Fingerprint {
+    fn new() -> Fingerprint {
+        Fingerprint { hasher: Sha256::new(), instructions: 0, content_bytes: 0, distinct: BTreeSet::new() }
+    }
+
+    /// Feeds one instruction's masked encoding into the hash and the content measures.
+    fn push(&mut self, masked: &[u8]) {
+        self.hasher.update(masked);
+        self.instructions += 1;
+        self.content_bytes += masked.iter().filter(|&&byte| byte != 0).count();
+        if self.distinct.len() < MIN_DISTINCT {
+            self.distinct.insert(fold(masked));
+        }
+    }
+
+    /// Whether the instruction cap has been reached, so a caller can stop feeding.
+    fn full(&self) -> bool {
+        self.instructions >= MAX_INSTRUCTIONS
+    }
+
+    /// The masked content hash, or `None` when the body fails the confidence gate.
+    fn finish(self) -> Option<FunctionHash> {
+        let discriminating = self.instructions >= MIN_INSTRUCTIONS
+            && self.content_bytes >= MIN_CONTENT_BYTES
+            && self.distinct.len() >= MIN_DISTINCT;
+        discriminating.then(|| self.hasher.finalize().into())
+    }
+}
+
+/// A cheap 64-bit FNV-1a fold of a masked instruction, used only to count distinct encodings without storing the
+/// instructions themselves. Collisions merely undercount diversity, which the gate treats conservatively.
+fn fold(bytes: &[u8]) -> u64 {
+    let mut acc = 0xcbf2_9ce4_8422_2325u64;
+    for &byte in bytes {
+        acc ^= u64::from(byte);
+        acc = acc.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    acc
+}
 
 /// The x86 bitness for an architecture, or `None` when it is not an x86 target.
 fn x86_bitness(arch: Arch) -> Option<u32> {
@@ -85,18 +158,16 @@ fn mask_aarch64(word: u32) -> u32 {
 /// drop its position-dependent fields. The masked value is hashed in a fixed byte order, so the same logical
 /// function hashes equal whether the build is big- or little-endian.
 fn fixed_word_hash(bytes: &[u8], big_endian: bool, mask: impl Fn(u32) -> u32) -> Option<FunctionHash> {
-    let mut hasher = Sha256::new();
-    let mut count = 0u32;
+    let mut fingerprint = Fingerprint::new();
     let (words, _) = bytes.as_chunks::<4>();
     for word in words {
         let value = if big_endian { u32::from_be_bytes(*word) } else { u32::from_le_bytes(*word) };
-        hasher.update(mask(value).to_le_bytes());
-        count += 1;
-        if count >= MAX_INSTRUCTIONS {
+        fingerprint.push(&mask(value).to_le_bytes());
+        if fingerprint.full() {
             break;
         }
     }
-    (count > 0).then(|| hasher.finalize().into())
+    fingerprint.finish()
 }
 
 /// Masks the position-dependent offset of an ARM A32 (4-byte word) branch. B, BL and BLX(imm) share the branch
@@ -141,10 +212,9 @@ fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
         let raw = [pair[0], pair[1]];
         if big_endian { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) }
     };
-    let mut hasher = Sha256::new();
-    let mut count = 0u32;
+    let mut fingerprint = Fingerprint::new();
     let mut index = 0;
-    while index + 2 <= bytes.len() && count < MAX_INSTRUCTIONS {
+    while index + 2 <= bytes.len() && !fingerprint.full() {
         let hw1 = read_hw(&bytes[index..index + 2]);
         if matches!(hw1 >> 11, 0b11101..=0b11111) {
             if index + 4 > bytes.len() {
@@ -152,16 +222,18 @@ fn thumb_hash(bytes: &[u8], big_endian: bool) -> Option<FunctionHash> {
             }
             let hw2 = read_hw(&bytes[index + 2..index + 4]);
             let (m1, m2) = mask_thumb32(hw1, hw2);
-            hasher.update(m1.to_le_bytes());
-            hasher.update(m2.to_le_bytes());
+            // One push of the two halfwords concatenated hashes identically to two sequential updates.
+            let mut encoding = [0u8; 4];
+            encoding[..2].copy_from_slice(&m1.to_le_bytes());
+            encoding[2..].copy_from_slice(&m2.to_le_bytes());
+            fingerprint.push(&encoding);
             index += 4;
         } else {
-            hasher.update(mask_thumb16(hw1).to_le_bytes());
+            fingerprint.push(&mask_thumb16(hw1).to_le_bytes());
             index += 2;
         }
-        count += 1;
     }
-    (count > 0).then(|| hasher.finalize().into())
+    fingerprint.finish()
 }
 
 /// Masks the position-dependent target of a MIPS branch. J/JAL (opcode 0b000010/0b000011) carry a 26-bit
@@ -194,10 +266,9 @@ fn mask_ppc(word: u32) -> u32 {
 /// Hashes an x86 or x86-64 function, masking RIP-relative displacements and relative branch targets.
 fn x86_hash(bitness: u32, bytes: &[u8], address: u64) -> Option<FunctionHash> {
     let mut decoder = Decoder::with_ip(bitness, bytes, address, DecoderOptions::NONE);
-    let mut hasher = Sha256::new();
+    let mut fingerprint = Fingerprint::new();
     let mut instruction = Instruction::default();
-    let mut count = 0u32;
-    while decoder.can_decode() && count < MAX_INSTRUCTIONS {
+    while decoder.can_decode() && !fingerprint.full() {
         let start = decoder.position();
         decoder.decode_out(&mut instruction);
         if instruction.is_invalid() {
@@ -214,10 +285,9 @@ fn x86_hash(bitness: u32, bytes: &[u8], address: u64) -> Option<FunctionHash> {
         if is_relative_branch(&instruction) && offsets.has_immediate() {
             zero_range(&mut masked, offsets.immediate_offset(), offsets.immediate_size());
         }
-        hasher.update(&masked);
-        count += 1;
+        fingerprint.push(&masked);
     }
-    (count > 0).then(|| hasher.finalize().into())
+    fingerprint.finish()
 }
 
 /// Whether the instruction transfers control to a relative target, whose encoded offset is position-dependent.
@@ -614,9 +684,10 @@ mod tests {
         // A changed real data immediate (addi 0x10 -> 0x20) must differ.
         let changed_imm = words_to_bytes(&[0x3863_0020, 0x4800_0100, 0x4182_0010, 0x4e80_0020], true);
         assert_ne!(function_hash(&ppc, &base, 0), function_hash(&ppc, &changed_imm, 0));
-        // An absolute branch's target (AA=1) is left in the hash, so changing it must differ.
-        let abs_base = words_to_bytes(&[0x4800_0102, 0x4e80_0020], true);
-        let abs_other = words_to_bytes(&[0x4800_1232, 0x4e80_0020], true);
+        // An absolute branch's target (AA=1) is left in the hash, so changing it must differ. Real content
+        // surrounds the branch so the body clears the discriminating-content gate (a bare branch pair does not).
+        let abs_base = words_to_bytes(&[0x3863_0010, 0x4800_0102, 0x3884_0020, 0x4e80_0020], true);
+        let abs_other = words_to_bytes(&[0x3863_0010, 0x4800_1232, 0x3884_0020, 0x4e80_0020], true);
         assert_ne!(function_hash(&ppc, &abs_base, 0), function_hash(&ppc, &abs_other, 0));
     }
 
@@ -649,4 +720,64 @@ mod tests {
         assert_fixture_round_trips("hello-ppc.elf");
         assert_fixture_round_trips("hello-ppc64le.elf");
     }
+
+    /// sub sp,sp,#16; str w0,[sp,#12]; ldr w0,[sp,#12]; add w0,w0,#1; add sp,sp,#16; ret -- a real AArch64 leaf.
+    fn aarch64_leaf() -> [u32; 6] {
+        [0xd100_43ff, 0xb900_0fe0, 0xb940_0fe0, 0x1100_0400, 0x9100_43ff, 0xd65f_03c0]
+    }
+
+    #[test]
+    fn gate_rejects_empty_input() {
+        assert!(function_hash(&target(Arch::X86_64, false), &[], 0x1000).is_none());
+        assert!(function_hash(&target(Arch::Aarch64, false), &[], 0).is_none());
+    }
+
+    #[test]
+    fn gate_rejects_a_single_branch_thunk() {
+        // x86 jmp rel32 masks to a lone opcode byte: one non-discriminating instruction.
+        assert!(function_hash(&target(Arch::X86_64, false), &[0xe9, 0x00, 0x00, 0x00, 0x00], 0x1000).is_none());
+        // AArch64 unconditional branch: a one-word thunk.
+        let branch = words_to_bytes(&[0x1400_0000], false);
+        assert!(function_hash(&target(Arch::Aarch64, false), &branch, 0).is_none());
+    }
+
+    #[test]
+    fn gate_rejects_an_all_nop_body() {
+        // Many instructions but one repeated encoding carries no discriminating content.
+        assert!(function_hash(&target(Arch::X86_64, false), &[0x90; 16], 0x1000).is_none());
+        let nops = words_to_bytes(&[0xd503_201f; 16], false);
+        assert!(function_hash(&target(Arch::Aarch64, false), &nops, 0).is_none());
+    }
+
+    #[test]
+    fn gate_accepts_a_normal_small_function() {
+        // A real x86 leaf (the shared sample) and a real AArch64 leaf both clear the gate.
+        assert!(function_hash(&target(Arch::X86_64, false), &sample(), 0x1000).is_some());
+        let leaf = words_to_bytes(&aarch64_leaf(), false);
+        assert!(function_hash(&target(Arch::Aarch64, false), &leaf, 0x1000).is_some());
+    }
+
+    #[test]
+    fn gate_tolerates_a_truncated_trailing_instruction() {
+        // A trailing partial instruction (a lone REX prefix) decodes as invalid and is dropped; the valid
+        // leading instructions still hash to the untruncated body's value.
+        let x64 = target(Arch::X86_64, false);
+        let mut truncated = sample();
+        truncated.push(0x48); // REX.W with no following opcode
+        assert_eq!(function_hash(&x64, &truncated, 0x1000), function_hash(&x64, &sample(), 0x1000));
+    }
+
+    #[test]
+    fn gate_handles_unaligned_fixed_width_input() {
+        let a64 = target(Arch::Aarch64, false);
+        // Fewer than one full word: no instruction decodes and nothing panics.
+        assert!(function_hash(&a64, &[0x01, 0x02, 0x03], 0).is_none());
+        // A length that is not a multiple of 4: the trailing partial word is ignored, the whole words still hash.
+        let whole = words_to_bytes(&aarch64_leaf(), false);
+        let mut odd = whole.clone();
+        odd.push(0x5a); // one stray byte -> length 25
+        assert_eq!(function_hash(&a64, &odd, 0), function_hash(&a64, &whole, 0));
+        assert!(function_hash(&a64, &odd, 0).is_some());
+    }
+
 }
