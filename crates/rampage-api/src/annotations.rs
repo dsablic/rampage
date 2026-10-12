@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ApiError;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Field {
@@ -55,6 +57,8 @@ pub struct Annotations {
     undone: Vec<Vec<Edit>>,
     /// Where edits are appended; `None` keeps them in memory only.
     log: Option<Log>,
+    /// Whether `locked` holds the log's lock, which edits made inside it must not try to take again.
+    held: bool,
 }
 
 #[derive(Default)]
@@ -182,8 +186,19 @@ impl Annotations {
         self.set_validated(field, address, value, |_| Ok(()))
     }
 
+    /// Runs `work` holding the log's cross-process lock, after picking up other processes' edits, so that what it
+    /// checks against them (such as a name being free) still holds when it edits.
+    pub(crate) fn locked<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, ApiError>) -> Result<T, ApiError> {
+        let _lock = self.log_lock().map_err(ApiError::Invalid)?;
+        self.refresh().map_err(ApiError::Invalid)?;
+        self.held = true;
+        let result = work(self);
+        self.held = false;
+        result
+    }
+
     fn log_lock(&self) -> Result<Option<File>, String> {
-        let Some(log) = &self.log else { return Ok(None) };
+        let Some(log) = self.log.as_ref().filter(|_| !self.held) else { return Ok(None) };
         let mut path = log.path.as_os_str().to_owned();
         path.push(".lock");
         let file = OpenOptions::new()

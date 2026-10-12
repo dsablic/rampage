@@ -131,26 +131,27 @@ impl Project {
         if let Some(name) = name {
             check_name(name).map_err(ApiError::Invalid)?;
         }
-        // Check and set under one lock, so that two clients cannot give one name to two addresses.
+        // Check and set under the same locks, this process's and the log's, so that no two clients, in this
+        // process or another, can give one name to two addresses.
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
-        let mut annotations = self.annotations.write().expect("annotations lock");
-        annotations.refresh().map_err(ApiError::Invalid)?;
-        if let Some(name) = name
-            && let Some(existing) = self.address_named(&annotations, name)
-            && existing != address
-        {
-            return Err(ApiError::Invalid(format!("{name:?} already names {existing:#x}")));
-        }
         let value = name.map(str::to_owned);
-        let changed = annotations
-            .set_validated(Field::Name, address, value.clone(), |candidate| {
-                if candidate.globals().is_empty() {
-                    return Ok(());
-                }
-                self.validate_annotation_snapshot(&state, &options, candidate)
-            })
-            .map_err(ApiError::Invalid)?;
+        let changed = self.annotations.write().expect("annotations lock").locked(|annotations| {
+            if let Some(name) = name
+                && let Some(existing) = self.address_named(annotations, name)
+                && existing != address
+            {
+                return Err(ApiError::Invalid(format!("{name:?} already names {existing:#x}")));
+            }
+            annotations
+                .set_validated(Field::Name, address, value.clone(), |candidate| {
+                    if candidate.globals().is_empty() {
+                        return Ok(());
+                    }
+                    self.validate_annotation_snapshot(&state, &options, candidate)
+                })
+                .map_err(ApiError::Invalid)
+        })?;
         Ok(EditResult { address, field: Field::Name, value, changed })
     }
 

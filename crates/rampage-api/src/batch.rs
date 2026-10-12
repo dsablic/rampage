@@ -6,8 +6,10 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::ApiError;
-use crate::annotations::Field;
+use crate::annotations::{Annotations, Field};
+use crate::decompile::DecompilerState;
 use crate::project::{Project, check_name, is_address_shaped};
+use rampage_decompiler::DecompilerOptions;
 
 /// The most entries one batch, or one name check, takes.
 pub const MAX_BATCH: usize = 1000;
@@ -83,8 +85,17 @@ impl Project {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
         let mut annotations = self.annotations.write().expect("annotations lock");
-        annotations.refresh().map_err(ApiError::Invalid)?;
+        annotations.locked(|annotations| self.annotate_locked(&state, &options, annotations, entries))
+    }
 
+    /// `annotate_batch` once it holds the locks.
+    fn annotate_locked(
+        &self,
+        state: &DecompilerState,
+        options: &DecompilerOptions,
+        annotations: &mut Annotations,
+        entries: &[BatchEntry],
+    ) -> Result<BatchResult, ApiError> {
         let mut problems = Vec::new();
         let mut addresses = Vec::with_capacity(entries.len());
         let mut named: HashMap<u64, usize> = HashMap::new();
@@ -92,7 +103,7 @@ impl Project {
         let mut names: HashMap<&str, (usize, u64)> = HashMap::new();
         for (index, entry) in entries.iter().enumerate() {
             let mut problem = |reason: String| problems.push((index, reason));
-            let address = match self.resolve_in(&annotations, &entry.at) {
+            let address = match self.resolve_in(annotations, &entry.at) {
                 Ok(address) => address,
                 Err(error) => {
                     problem(error.to_string());
@@ -173,7 +184,7 @@ impl Project {
                 if candidate.globals().is_empty() {
                     return Ok(());
                 }
-                self.validate_annotation_snapshot(&state, &options, candidate)
+                self.validate_annotation_snapshot(state, options, candidate)
             })
             .map_err(ApiError::Invalid)?;
         for (owner, changed) in owners.into_iter().zip(changed) {

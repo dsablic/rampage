@@ -1,6 +1,9 @@
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
-use rampage_api::{BatchEntry, MAX_BATCH, Session};
+use rampage_api::annotations::{Edit, Field};
+use rampage_api::{ApiError, BatchEntry, MAX_BATCH, Session};
 
 fn scratch_copy(test: &str) -> PathBuf {
     let directory = std::env::temp_dir().join(format!("rampage-api-batch-{test}-{}", std::process::id()));
@@ -18,6 +21,59 @@ fn entry(at: &str, name: Option<&str>, comment: Option<&str>) -> BatchEntry {
 
 fn hex(address: u64) -> String {
     format!("{address:#x}")
+}
+
+/// Runs `edit` while another process holds the log's lock, and has that process name `other` `name` before
+/// letting go. Returns `edit`'s error, which it must give once it sees that name taken.
+fn race_another_process(
+    path: &Path,
+    other: u64,
+    name: &str,
+    edit: impl FnOnce() -> Result<(), ApiError> + Send,
+) -> String {
+    let log = PathBuf::from(format!("{}.rampage", path.display()));
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(format!("{}.lock", log.display()))
+        .unwrap();
+    lock.lock().unwrap();
+    std::thread::scope(|scope| {
+        let editing = scope.spawn(edit);
+        // Long enough for `edit` to have read the log and to be waiting for the lock.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let taken = Edit { field: Field::Name, address: other, value: Some(name.to_owned()), previous: None };
+        let line = format!("{}\n", serde_json::to_string(&taken).unwrap());
+        OpenOptions::new().create(true).append(true).open(&log).unwrap().write_all(line.as_bytes()).unwrap();
+        lock.unlock().unwrap();
+        editing.join().unwrap().unwrap_err().to_string()
+    })
+}
+
+#[test]
+fn rename_sees_a_name_another_process_gave_while_it_waited() {
+    let path = scratch_copy("race-rename");
+    let project = Session::default().open(&path, None).unwrap();
+    let main = project.resolve("_main").unwrap();
+    let error = race_another_process(&path, main + 4, "taken", || project.rename(main, Some("taken")).map(drop));
+    assert!(error.contains(&format!("\"taken\" already names {:#x}", main + 4)), "{error}");
+    assert_eq!(project.name_at(main), Some("_main".to_owned()));
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn a_batch_sees_a_name_another_process_gave_while_it_waited() {
+    let path = scratch_copy("race-batch");
+    let project = Session::default().open(&path, None).unwrap();
+    let main = project.resolve("_main").unwrap();
+    let error = race_another_process(&path, main + 4, "taken", || {
+        project.annotate_batch(&[entry("_main", Some("taken"), None)]).map(drop)
+    });
+    assert!(error.contains(&format!("\"taken\" already names {:#x}", main + 4)), "{error}");
+    assert!(project.undo().unwrap().is_empty());
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
 #[test]
