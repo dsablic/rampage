@@ -450,9 +450,10 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "diff_builds",
-            "Compare this binary with another build of the same architecture: functions paired by unique name and \
-             by masked signature hash into identical, changed, hash-matched, added and removed, plus import and \
-             string differences. Hash equality is signature-level, not semantic equivalence.",
+            "Compare this binary with another build of the same architecture: functions paired by unique name, by \
+             masked signature hash and by identical bytes at an unchanged address into identical, changed, \
+             hash-matched, name-only (too small to hash), added and removed, plus import and string differences. \
+             Hash equality is signature-level, not semantic equivalence.",
             |project, args: DiffBuildsArgs| {
                 let limits = ReportLimits::new(args.max_per_section);
                 fitted(project.diff_builds(std::path::Path::new(&args.other), limits))
