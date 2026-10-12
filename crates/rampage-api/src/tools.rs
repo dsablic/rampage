@@ -1,7 +1,7 @@
 //! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
-use crate::{ApiError, FunctionsQuery, ListQuery, Project, StringsQuery, XrefQuery};
+use crate::{ApiError, FunctionsQuery, ListQuery, Project, ReportLimits, StringsQuery, XrefQuery};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -141,6 +141,28 @@ struct YaraArgs {
 struct CapaArgs {
     /// Path to a directory of Mandiant capa rule YAML files (only the file-scope feature subset is evaluated).
     rules_dir: String,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct ReportArgs {
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut.
+    max_per_section: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct FindMainArgs {
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut.
+    max_per_section: Option<usize>,
+    /// Include a bounded decompilation preview of the best candidate (default true).
+    decompile: Option<bool>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct DiffBuildsArgs {
+    /// File path of the other build to compare with (same architecture); "added" means only in that build.
+    other: String,
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut.
+    max_per_section: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -362,6 +384,40 @@ pub fn tools() -> Vec<Tool> {
             },
         )
         .annotates(),
+        tool(
+            "triage_report",
+            "Guided first look in one bounded report: format and entry, hashes and packing hints, toolchain \
+             signatures, capability tags, imports by library, notable strings (URLs, IPs, paths, registry keys), \
+             function count and bundled-signature matches, with suggested next tool calls. Every finding names its \
+             source primitive and confidence; evidence, not verdicts.",
+            |project, args: ReportArgs| project.triage_report(ReportLimits::new(args.max_per_section)),
+        ),
+        tool(
+            "find_main",
+            "Locate the program's own entry logic past the runtime startup: entry symbols (main, WinMain, \
+             main.main) when present, else stated heuristics (the __libc_start_main first argument, the MinGW CRT \
+             call before exit, the Mach-O LC_MAIN entry) with confidence and the instructions they rest on. \
+             Profiles the best candidate's calls and strings with a bounded decompilation preview.",
+            |project, args: FindMainArgs| {
+                project.find_main(ReportLimits::new(args.max_per_section), args.decompile.unwrap_or(true))
+            },
+        ),
+        tool(
+            "network_surface",
+            "Map the networking surface as evidence: socket/DNS/HTTP/TLS imports and symbols, URL/IP/domain-like \
+             strings, the functions that reference them (via xrefs), and networking capability tags. An empty \
+             report says nothing was observed, not that the binary cannot communicate.",
+            |project, args: ReportArgs| project.network_surface(ReportLimits::new(args.max_per_section)),
+        ),
+        tool(
+            "diff_builds",
+            "Compare this binary with another build of the same architecture: functions paired by unique name and \
+             by masked signature hash into identical, changed, hash-matched, added and removed, plus import and \
+             string differences. Hash equality is signature-level, not semantic equivalence.",
+            |project, args: DiffBuildsArgs| {
+                project.diff_builds(std::path::Path::new(&args.other), ReportLimits::new(args.max_per_section))
+            },
+        ),
         tool(
             "analysis_diagnostics",
             "Decode coverage and evidence of unreliable static code, with explicit limitations. \

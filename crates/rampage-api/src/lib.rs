@@ -21,6 +21,7 @@ mod session;
 mod signatures;
 mod summary;
 pub mod tools;
+pub mod workflows;
 mod xrefs;
 
 use std::path::PathBuf;
@@ -55,6 +56,9 @@ pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, Runti
 pub use session::Session;
 pub use signatures::{SignatureApplication, SignatureMatch};
 pub use summary::FunctionSummary;
+pub use workflows::{
+    Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportLimits, ReportTarget, Section, WorkflowReport,
+};
 pub use xrefs::{XrefQuery, XrefRow};
 
 /// How many instructions a disassembly shows unless asked for another count.

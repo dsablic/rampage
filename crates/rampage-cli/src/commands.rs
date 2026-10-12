@@ -225,7 +225,7 @@ pub fn correlate(
     Ok(())
 }
 
-fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
+pub(crate) fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
     Ok(Session::default().open(path, options.arch)?)
 }
 
@@ -353,7 +353,7 @@ pub fn observe_indirect_branch(
 }
 
 /// Serializes before writing so that I/O errors such as a closed pipe surface as `io::Error`.
-fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result<()> {
+pub(crate) fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result<()> {
     let mut json = serde_json::to_vec_pretty(value)?;
     json.push(b'\n');
     out.write_all(&json)?;
