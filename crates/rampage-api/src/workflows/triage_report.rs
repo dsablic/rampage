@@ -103,12 +103,16 @@ impl Project {
         }
 
         let mut strings = Section::new("Notable strings", limits);
-        let mut first_string = None;
-        let mut network_strings = false;
-        for found in self.scanned_strings() {
-            let Some(indicator) = classify(&found.text) else { continue };
-            first_string.get_or_insert(found.address);
-            network_strings |= indicator.kind.is_network();
+        let mut notable: Vec<_> = self
+            .scanned_strings()
+            .iter()
+            .filter_map(|found| classify(&found.text).map(|indicator| (indicator, found)))
+            .collect();
+        // Network indicators first: build-provenance paths are common and would otherwise fill the cap.
+        notable.sort_by_key(|(indicator, found)| (indicator.kind, found.address));
+        let network_strings = notable.iter().any(|(indicator, _)| indicator.kind.is_network());
+        let first_string = notable.first().map(|(_, found)| found.address);
+        for (indicator, found) in &notable {
             strings.push(
                 Finding::new(
                     "list_strings",

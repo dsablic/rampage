@@ -73,6 +73,14 @@ fn triage_report_surfaces_network_strings_and_suggests_network_surface() {
 }
 
 #[test]
+fn triage_report_lists_network_indicators_before_build_paths() {
+    let report = open(fixture("hello-go-x64.elf")).triage_report(ReportLimits::new(Some(1))).unwrap();
+    let strings = section(&report, "Notable strings");
+    assert!(strings.truncated, "{strings:#?}");
+    assert!(strings.findings[0].observation.starts_with("URL:"), "{:?}", observations(strings));
+}
+
+#[test]
 fn triage_report_on_a_static_binary_states_the_missing_imports() {
     let report = open(fixture("musl-static-x86_64.elf")).triage_report(ReportLimits::default()).unwrap();
     assert_well_formed(&report);
