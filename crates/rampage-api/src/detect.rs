@@ -49,12 +49,13 @@ impl Project {
             .map_err(|error| ApiError::Invalid(format!("YARA scan: {error}")))
     }
 
-    /// Evaluate the capa rules under `rules_dir` against this binary's imports and strings. Only the file-scope
-    /// feature subset rampage can assess is evaluated (see `rampage_capabilities::capa`).
+    /// Evaluate the capa rules under `rules_dir` against this binary's imports, exports and strings. Only the
+    /// file-scope feature subset rampage can assess is evaluated (see `rampage_capabilities::capa`).
     pub fn detect_capa(&self, rules_dir: &Path) -> Result<Vec<Capability>, ApiError> {
         let rules = rampage_capabilities::load_capa_rules(rules_dir)
             .map_err(|error| ApiError::Invalid(format!("capa rules: {error}")))?;
         let (imports, strings) = self.capability_inputs();
-        Ok(rampage_capabilities::detect_capa(&rules, &imports, &strings))
+        let exports: Vec<String> = self.binary.exports.iter().map(|export| export.name.clone()).collect();
+        Ok(rampage_capabilities::detect_capa_with_exports(&rules, &imports, &exports, &strings))
     }
 }
