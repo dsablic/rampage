@@ -39,9 +39,10 @@
 - [ ] MIPS signatures: mask `lui`/`addiu` HI/LO address pairs. Needs relocation/dataflow to avoid false matches
   (without it, a masked constant could collide two different functions); do it relocation-gated, not heuristic.
 - [ ] Verify the MSVC RTTI path against a real PE (no MSVC toolchain locally; synthetic-tested only).
-- [ ] Signature confidence: reject non-discriminating branch-only fingerprints or require validated target/context
-  evidence before claiming library identity or applying names. Add malformed/truncated/alignment regressions;
-  raw normalized hash matches are proposals, not verified recovery.
+- [x] Signature confidence: `function_hash` gates out non-discriminating bodies (single-branch thunks, all-nop
+  padding, too-few-instruction stubs) by minimum instruction count, non-masked content bytes and distinct
+  encodings, so such bodies are neither stored nor matched. Malformed/truncated/unaligned regressions added;
+  hashing is unchanged for accepted bodies. Thresholds are conservative heuristics (only ever stricter).
 - [x] PE enrichment: TLS callbacks seed function starts and delay-load imports surface as slots (bounded,
   panic-free on malformed PEs).
 - [x] Go pclntab: bounded full-image magic-scan fallback when the section is absent or renamed.
