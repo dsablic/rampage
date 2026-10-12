@@ -3,24 +3,33 @@
 #
 # Each database names common C runtime (musl libc) functions so `rampage identify` labels library code out of
 # the box. A database is specific to the exact library build it was made from, so this pins the toolchain (zig,
-# which ships musl) and records the version below; rebuilding with a different zig can change the hashes.
+# which ships musl) and writes its version to crates/rampage-signatures/data/zig-version; rebuilding with a
+# different zig can change the hashes.
 #
-# Requires: zig (0.17.x) and a release build of the rampage CLI (cargo build -p rampage-cli --release).
+# Overwrites crates/rampage-signatures/data/musl-<arch>.json and the committed identify fixtures
+# tests/fixtures/bin/musl-static-<arch>.elf.
+#
+# Requires: zig (0.17.x) and a build of the rampage CLI: target/release/rampage by default, or any other build
+# (such as target/debug/rampage from `cargo build -p rampage-cli`) through RAMPAGE.
 set -euo pipefail
+rampage=${RAMPAGE:-}
+# A relative RAMPAGE names a path from the caller's directory, which the cd below leaves.
+[[ -z "$rampage" || "$rampage" == /* ]] || rampage="$PWD/$rampage"
 cd "$(dirname "$0")"
 repo=..
-zig_version=$(zig version)
-echo "zig ${zig_version}"
 
-rampage=${RAMPAGE:-"$repo/target/release/rampage"}
+rampage=${rampage:-"$repo/target/release/rampage"}
 if [[ ! -x "$rampage" ]]; then
-    echo "rampage CLI not found at $rampage; run: cargo build -p rampage-cli --release" >&2
+    echo "rampage CLI not found at $rampage; run: cargo build -p rampage-cli --release," \
+        "or point RAMPAGE at another build (e.g. RAMPAGE=target/debug/rampage)" >&2
     exit 1
 fi
 
 data=$repo/crates/rampage-signatures/data
 fixtures=$repo/tests/fixtures/bin
 mkdir -p "$data" "$fixtures"
+zig version >"$data/zig-version"
+echo "zig $(cat "$data/zig-version")"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
