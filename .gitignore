@@ -3,3 +3,5 @@
 /.claude/worktrees/
 # Annotation logs that tools save beside binaries.
 *.rampage
+# Python bytecode from the tools/ test scripts.
+__pycache__/
