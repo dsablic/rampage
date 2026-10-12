@@ -17,6 +17,9 @@ const MAX_LOOKUP_WORK: usize = 8_000_000;
 #[derive(Debug, Serialize)]
 pub struct ClassRecovery {
     pub classes: Vec<ClassEvidence>,
+    /// Classes recovered from RTTI data when no named vtable/typeinfo symbols exist, de-duplicated against the
+    /// symbol-derived `classes` above.
+    pub rtti_classes: Vec<crate::rtti::RttiClass>,
     pub warnings: Vec<String>,
     pub limitations: Vec<String>,
 }
@@ -255,10 +258,16 @@ fn evidence(
 pub fn recover(binary: &Binary) -> ClassRecovery {
     let mut result = ClassRecovery {
         classes: Vec::new(),
+        rtti_classes: crate::rtti::recover(binary),
         warnings: Vec::new(),
         limitations: vec![
             "Named Itanium vtable evidence only; no anonymous scanning, automatic type insertion, inheritance, \
              complete class layouts or proven virtual-call edges."
+                .to_owned(),
+            "`rtti_classes` recovers names and base edges from Itanium/MSVC RTTI data for stripped binaries; \
+             followed pointers must land in mapped sections and names must demangle. Chained-fixup or \
+             relocated pointers that are unresolved on disk are not followed, so classes whose RTTI pointers \
+             are not image-backed are missed."
                 .to_owned(),
             "Only static ELF and Mach-O read-only, image-backed tables are examined; snapshots are disabled."
                 .to_owned(),
@@ -365,5 +374,7 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
             Err(reason) => result.warnings.push(format!("Skipped named vtable at {:#x}: {reason}.", symbol.address)),
         }
     }
+    let named: std::collections::BTreeSet<&str> = result.classes.iter().map(|class| class.name.as_str()).collect();
+    result.rtti_classes.retain(|class| !named.contains(class.name.as_str()));
     result
 }

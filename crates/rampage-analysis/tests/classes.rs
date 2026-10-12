@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rampage_arch::Arch;
 use rampage_loaders::{Binary, Format, SectionKind, Symbol, SymbolKind};
 
-pub use rampage_analysis::language;
+pub use rampage_analysis::{language, rtti};
 
 #[path = "../src/classes.rs"]
 mod classes;
