@@ -4407,6 +4407,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rampage-detect"
+version = "0.1.0"
+dependencies = [
+ "rampage-loaders",
+ "serde",
+]
+
+[[package]]
 name = "rampage-loaders"
 version = "0.1.0"
 dependencies = [
