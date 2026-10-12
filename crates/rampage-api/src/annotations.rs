@@ -348,9 +348,28 @@ impl Annotations {
     /// when the step touches what the decompiler checks.
     fn replay(&mut self, edits: &[Edit], validate: impl FnOnce(&Self) -> Result<(), String>) -> Result<(), String> {
         let mut candidate = self.snapshot();
+        let mut conflicts = Vec::new();
         for edit in edits {
-            candidate.check_unchanged(edit)?;
+            if !candidate.is_unchanged(edit) {
+                conflicts.push(edit.address);
+            }
             candidate.apply(edit);
+        }
+        if !conflicts.is_empty() {
+            conflicts.sort_unstable();
+            conflicts.dedup();
+            let verb = if conflicts.len() == 1 { "was" } else { "were" };
+            return Err(format!("{} {verb} edited by another client since; not changed", address_list(&conflicts)));
+        }
+        let mut taken = Vec::new();
+        for edit in edits.iter().filter(|edit| edit.field == Field::Name) {
+            let Some(name) = &edit.value else { continue };
+            if candidate.names.iter().any(|(&address, other)| other == name && address != edit.address) {
+                taken.push(format!("{name:?}"));
+            }
+        }
+        if !taken.is_empty() {
+            return Err(format!("another client has since given {} to another address; not changed", taken.join(", ")));
         }
         let checked = edits.iter().any(|edit| {
             matches!(edit.field, Field::Signature | Field::Types | Field::Global)
@@ -362,13 +381,10 @@ impl Annotations {
         self.commit(edits)
     }
 
-    /// Fails when another client changed `edit`'s field since `edit.previous` was set there: undoing or redoing
+    /// Whether `edit`'s field still holds `edit.previous`: if another client changed it since, undoing or redoing
     /// over that change would silently discard it.
-    fn check_unchanged(&self, edit: &Edit) -> Result<(), String> {
-        if self.field_map(edit.field).get(&edit.address) == edit.previous.as_ref() {
-            return Ok(());
-        }
-        Err(format!("{:#x} was edited by another client since; not changed", edit.address))
+    fn is_unchanged(&self, edit: &Edit) -> bool {
+        self.field_map(edit.field).get(&edit.address) == edit.previous.as_ref()
     }
 
     fn field_map(&self, field: Field) -> &BTreeMap<u64, String> {
@@ -446,6 +462,18 @@ fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
         .collect();
     log.read += complete as u64;
     Ok((restart, edits))
+}
+
+/// The most addresses an error lists before counting the rest.
+const LISTED_ADDRESSES: usize = 20;
+
+fn address_list(addresses: &[u64]) -> String {
+    let mut list: Vec<String> =
+        addresses.iter().take(LISTED_ADDRESSES).map(|address| format!("{address:#x}")).collect();
+    if addresses.len() > LISTED_ADDRESSES {
+        list.push(format!("{} more", addresses.len() - LISTED_ADDRESSES));
+    }
+    list.join(", ")
 }
 
 #[cfg(unix)]
@@ -646,6 +674,47 @@ mod tests {
         ui.set(Field::Name, 0x20, Some("c".into())).unwrap();
         assert!(agent.undo().is_err());
         assert_eq!((agent.name(0x10), agent.name(0x20)), (Some("a"), Some("c")));
+        cleanup(path);
+    }
+
+    #[test]
+    fn a_conflicting_batch_undo_lists_every_changed_address_up_to_a_bound() {
+        let path = temporary_log("batch-conflicts");
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        let mut ui = Annotations::open(path.clone()).unwrap();
+        let changes: Vec<_> = (0..25).map(|index| (Field::Comment, 0x10 * index, Some("a".to_owned()))).collect();
+        agent.set_batch_validated(&changes, |_| Ok(())).unwrap();
+        ui.set(Field::Comment, 0x20, Some("b".into())).unwrap();
+        ui.set(Field::Comment, 0x30, Some("b".into())).unwrap();
+        let error = agent.undo().unwrap_err();
+        assert!(error.starts_with("0x20, 0x30 were edited by another client"), "{error}");
+        let changes: Vec<_> = (0..25).map(|index| (Field::Comment, 0x10 * index, Some("c".to_owned()))).collect();
+        ui.set_batch_validated(&changes, |_| Ok(())).unwrap();
+        let error = agent.undo().unwrap_err();
+        assert!(error.contains(", 0x130, 5 more were edited"), "{error}");
+        assert!(!error.contains("0x140"), "{error}");
+        cleanup(path);
+    }
+
+    #[test]
+    fn undo_and_redo_refuse_to_duplicate_a_name_another_client_took() {
+        let path = temporary_log("undo-name-taken");
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        let mut ui = Annotations::open(path.clone()).unwrap();
+        agent.set(Field::Name, 0x10, Some("foo".into())).unwrap();
+        agent.set(Field::Name, 0x10, Some("bar".into())).unwrap();
+        ui.set(Field::Name, 0x30, Some("foo".into())).unwrap();
+        let error = agent.undo().unwrap_err();
+        assert!(error.contains("\"foo\""), "{error}");
+        assert_eq!(agent.name(0x10), Some("bar"));
+        assert_eq!(agent.address_of("foo"), Some(0x30));
+
+        agent.set(Field::Name, 0x40, Some("baz".into())).unwrap();
+        agent.undo().unwrap();
+        ui.set(Field::Name, 0x50, Some("baz".into())).unwrap();
+        let error = agent.redo().unwrap_err();
+        assert!(error.contains("\"baz\""), "{error}");
+        assert_eq!(agent.name(0x40), None);
         cleanup(path);
     }
 }
