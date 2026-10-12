@@ -511,6 +511,11 @@ pub struct SignatureDb {
     /// Masked hash (lowercase hex) to function name. Hashes that mapped to more than one name are dropped, so a
     /// match is never ambiguous.
     entries: BTreeMap<String, String>,
+    /// Exact (unmasked, scheme 1) hash to name, kept only for functions whose masked hash was ambiguous. Two
+    /// functions that differ only in which global they touch (`gmtime`/`localtime`) mask to one hash, but their exact
+    /// bytes still tell them apart within the same layout. Consulted only when the masked hash is unknown.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    exact: BTreeMap<String, String>,
 }
 
 fn legacy_scheme() -> u32 {
@@ -519,31 +524,50 @@ fn legacy_scheme() -> u32 {
 
 impl Default for SignatureDb {
     fn default() -> SignatureDb {
-        SignatureDb { arch: String::new(), scheme: CURRENT_SCHEME, entries: BTreeMap::new() }
+        SignatureDb { arch: String::new(), scheme: CURRENT_SCHEME, entries: BTreeMap::new(), exact: BTreeMap::new() }
     }
 }
 
-/// Names seen for a hash while building; used to drop ambiguous hashes.
+/// Every distinct name seen for a masked hash while building, with each name's exact hash when one was computed.
 #[derive(Default)]
 struct Builder {
-    names: BTreeMap<String, Option<String>>,
+    names: BTreeMap<String, Vec<(String, Option<String>)>>,
 }
 
 impl Builder {
+    #[cfg(test)]
     fn add(&mut self, hash: FunctionHash, name: &str) {
-        let key = hex(&hash);
-        match self.names.get_mut(&key) {
-            None => {
-                self.names.insert(key, Some(name.to_owned()));
-            }
-            Some(slot @ Some(_)) if slot.as_deref() != Some(name) => *slot = None, // ambiguous
-            Some(_) => {}
+        self.add_exact(hash, None, name);
+    }
+
+    fn add_exact(&mut self, hash: FunctionHash, exact: Option<FunctionHash>, name: &str) {
+        let seen = self.names.entry(hex(&hash)).or_default();
+        if !seen.iter().any(|(existing, _)| existing == name) {
+            seen.push((name.to_owned(), exact.map(|exact| hex(&exact))));
         }
     }
 
     fn finish(self, arch: Arch, scheme: u32) -> SignatureDb {
-        let entries = self.names.into_iter().filter_map(|(hash, name)| Some((hash, name?))).collect();
-        SignatureDb { arch: arch.to_string(), scheme, entries }
+        let mut entries = BTreeMap::new();
+        let mut exact: BTreeMap<String, Option<String>> = BTreeMap::new();
+        for (hash, names) in self.names {
+            if let [(name, _)] = names.as_slice() {
+                entries.insert(hash, name.clone());
+                continue;
+            }
+            for (name, key) in names {
+                let Some(key) = key else { continue };
+                match exact.get_mut(&key) {
+                    None => {
+                        exact.insert(key, Some(name));
+                    }
+                    Some(slot) if slot.as_deref() != Some(name.as_str()) => *slot = None, // ambiguous even exactly
+                    Some(_) => {}
+                }
+            }
+        }
+        let exact = exact.into_iter().filter_map(|(hash, name)| Some((hash, name?))).collect();
+        SignatureDb { arch: arch.to_string(), scheme, entries, exact }
     }
 }
 
@@ -582,7 +606,11 @@ impl SignatureDb {
                 if let Some(bytes) = binary.read(symbol.address, symbol.size)
                     && let Some(hash) = function_hash_scheme(scheme, &target, &image, bytes, symbol.address)
                 {
-                    builder.add(hash, &symbol.name);
+                    // Under the legacy scheme the masked hash already is the exact one.
+                    let exact = (scheme != LEGACY_SCHEME)
+                        .then(|| function_hash(&target, bytes, symbol.address))
+                        .flatten();
+                    builder.add_exact(hash, exact, &symbol.name);
                 }
             }
         }
@@ -594,18 +622,8 @@ impl SignatureDb {
     pub fn extend_from_binary(&mut self, binary: &Binary) {
         let additions = SignatureDb::from_binary_with_scheme(binary, self.scheme);
         if additions.arch == self.arch {
-            for (hash, name) in additions.entries {
-                // A hash already present with a different name becomes ambiguous and is removed.
-                match self.entries.get(&hash) {
-                    Some(existing) if existing != &name => {
-                        self.entries.remove(&hash);
-                    }
-                    Some(_) => {}
-                    None => {
-                        self.entries.insert(hash, name);
-                    }
-                }
-            }
+            add_unambiguous(&mut self.entries, additions.entries);
+            add_unambiguous(&mut self.exact, additions.exact);
         }
     }
 
@@ -618,6 +636,9 @@ impl SignatureDb {
         }
         for (hash, name) in &other.entries {
             self.entries.insert(hash.clone(), name.clone());
+        }
+        for (hash, name) in &other.exact {
+            self.exact.insert(hash.clone(), name.clone());
         }
     }
 
@@ -648,16 +669,23 @@ impl SignatureDb {
             return None;
         }
         let hash = function_hash_scheme(self.scheme, target, image, bytes, address)?;
-        self.entries.get(&hex(&hash)).map(String::as_str)
+        if let Some(name) = self.entries.get(&hex(&hash)) {
+            return Some(name);
+        }
+        if self.exact.is_empty() {
+            return None;
+        }
+        let exact = function_hash(target, bytes, address)?;
+        self.exact.get(&hex(&exact)).map(String::as_str)
     }
 
     /// The number of unambiguous signatures.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len() + self.exact.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.exact.is_empty()
     }
 
     pub fn to_json(&self) -> String {
@@ -666,6 +694,21 @@ impl SignatureDb {
 
     pub fn from_json(text: &str) -> Result<SignatureDb, serde_json::Error> {
         serde_json::from_str(text)
+    }
+}
+
+/// Adds `additions` to `entries`; a hash already present under a different name becomes ambiguous and is removed.
+fn add_unambiguous(entries: &mut BTreeMap<String, String>, additions: BTreeMap<String, String>) {
+    for (hash, name) in additions {
+        match entries.get(&hash) {
+            Some(existing) if existing != &name => {
+                entries.remove(&hash);
+            }
+            Some(_) => {}
+            None => {
+                entries.insert(hash, name);
+            }
+        }
     }
 }
 
@@ -1060,6 +1103,27 @@ mod tests {
         assert!(function_hash_in(&x64, &image(), &base, 0x1000).is_some());
         // Scheme 1 keeps them, so the relinked copy hashes differently there.
         assert_ne!(function_hash(&x64, &base, 0x1000), function_hash(&x64, &relinked, 0x1000));
+    }
+
+    #[test]
+    fn exact_hashes_disambiguate_functions_that_differ_only_in_their_globals() {
+        // Like gmtime/localtime: identical code reaching different static buffers masks to one hash.
+        let x64 = target(Arch::X86_64, false);
+        let gmtime = absolute_sample([0x40_a000, 0x40_b000, 0x40_c000, 0x40_d000]);
+        let localtime = absolute_sample([0x40_a100, 0x40_b100, 0x40_c100, 0x40_d100]);
+        let masked = function_hash_in(&x64, &image(), &gmtime, 0x1000).unwrap();
+        assert_eq!(Some(masked), function_hash_in(&x64, &image(), &localtime, 0x1000));
+        let mut builder = Builder::default();
+        builder.add_exact(masked, function_hash(&x64, &gmtime, 0x1000), "gmtime");
+        builder.add_exact(masked, function_hash(&x64, &localtime, 0x1000), "localtime");
+        let db = builder.finish(Arch::X86_64, CURRENT_SCHEME);
+        assert_eq!(db.identify_in(&x64, &image(), &gmtime, 0x1000), Some("gmtime"));
+        assert_eq!(db.identify_in(&x64, &image(), &localtime, 0x1000), Some("localtime"));
+        // A relinked copy matches neither exactly: no name rather than a guessed one.
+        let relinked = absolute_sample([0x40_a200, 0x40_b200, 0x40_c200, 0x40_d200]);
+        assert_eq!(db.identify_in(&x64, &image(), &relinked, 0x1000), None);
+        let restored = SignatureDb::from_json(&db.to_json()).unwrap();
+        assert_eq!(restored.identify_in(&x64, &image(), &localtime, 0x1000), Some("localtime"));
     }
 
     #[test]
