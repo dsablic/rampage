@@ -299,6 +299,40 @@ fn malformed_and_truncated_headers_are_magic_only_or_absent() {
     }
 }
 
+/// A 64-bit little-endian Mach-O header with one load command `command` of `command_size` bytes, `body` long.
+fn macho_with_command(command: u32, command_size: u32, body: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0xcf, 0xfa, 0xed, 0xfe];
+    for field in [0x0100_0007, 3, 2, 1, command_size, 0, 0] {
+        bytes.extend(u32::to_le_bytes(field));
+    }
+    bytes.extend(command.to_le_bytes());
+    bytes.extend(command_size.to_le_bytes());
+    bytes.extend(body);
+    bytes
+}
+
+#[test]
+fn overflowing_or_truncated_tables_are_magic_only() {
+    let at_zero = |bytes: &[u8]| {
+        let carving = carve::scan(bytes, &Limits::default());
+        carving.candidates.iter().filter(|c| c.offset == 0).map(|c| (c.kind, c.confidence, c.extent)).collect::<Vec<_>>()
+    };
+    let mut elf = fixture("hello-x64-dyn.elf");
+    let phoff = u64::from_le_bytes(elf[32..40].try_into().unwrap()) as usize;
+    elf[phoff + 8..phoff + 16].copy_from_slice(&(u64::MAX - 0x10).to_le_bytes());
+    elf[phoff + 32..phoff + 40].copy_from_slice(&0x100u64.to_le_bytes());
+    assert_eq!(at_zero(&elf), [(Kind::Elf, Confidence::MagicOnly, None)]);
+
+    let mut segment = vec![0u8; 64];
+    segment[32..40].copy_from_slice(&(u64::MAX - 0x10).to_le_bytes());
+    segment[40..48].copy_from_slice(&0x100u64.to_le_bytes());
+    assert_eq!(at_zero(&macho_with_command(0x19, 72, &segment)), [(Kind::MachO, Confidence::MagicOnly, None)]);
+    let truncated = macho_with_command(0x19, 8, &[]);
+    assert_eq!(at_zero(&truncated), [(Kind::MachO, Confidence::MagicOnly, None)], "segment fields past the file");
+    let carving = carve::scan(&truncated, &Limits::default());
+    assert!(carving.candidates[0].notes[0].contains("truncated"), "{:?}", carving.candidates);
+}
+
 #[test]
 fn the_candidate_and_scan_caps_are_enforced_and_reported() {
     let file: Vec<u8> = (0..10).flat_map(|_| xz()).collect();

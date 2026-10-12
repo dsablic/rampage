@@ -361,10 +361,12 @@ fn elf(bytes: &[u8]) -> Option<Candidate> {
     candidate.bits = Some(bits);
     candidate.arch = Some(elf_arch(machine, bits));
     let mut end = ehsize.max(if phnum == 0 { 0 } else { ph_end }).max(if shnum == 0 { 0 } else { sh_end });
+    let overflow = || Some(Candidate::magic_only(Kind::Elf, "an ELF segment or section ends past 2^64"));
     for index in 0..phnum.min(MAX_TABLE_ENTRIES as u64) {
         let entry = phoff + index * phentsize;
         let (offset, size) = (read(entry + at(4, 8), word)?, read(entry + at(16, 32), word)?);
-        end = end.max(end_of(offset, size).unwrap_or(u64::MAX));
+        let Some(segment_end) = end_of(offset, size) else { return overflow() };
+        end = end.max(segment_end);
     }
     for index in 0..shnum.min(MAX_TABLE_ENTRIES as u64) {
         let entry = shoff + index * shentsize;
@@ -372,7 +374,8 @@ fn elf(bytes: &[u8]) -> Option<Candidate> {
             continue;
         }
         let (offset, size) = (read(entry + at(16, 24), word)?, read(entry + at(20, 32), word)?);
-        end = end.max(end_of(offset, size).unwrap_or(u64::MAX));
+        let Some(section_end) = end_of(offset, size) else { return overflow() };
+        end = end.max(section_end);
     }
     candidate.notes.extend(table_note("program headers", phnum));
     candidate.notes.extend(table_note("section headers", shnum));
@@ -496,19 +499,27 @@ fn macho(bytes: &[u8]) -> Option<Candidate> {
     let mut end = commands_end;
     let mut at = header_size;
     for _ in 0..commands.min(MAX_TABLE_ENTRIES as u64) {
-        let (command, size) = (read(at, 4)?, read(at + 4, 4)?);
+        let Some((command, size)) = read(at, 4).zip(read(at + 4, 4)) else {
+            return Some(Candidate::magic_only(Kind::MachO, "Mach-O load commands are truncated"));
+        };
         if size < 8 || !size.is_multiple_of(4) || at + size > commands_end {
             return Some(Candidate::magic_only(Kind::MachO, "Mach-O load command sizes are inconsistent"));
         }
-        let range = match command {
-            0x1 => Some((read(at + 32, 4)?, read(at + 36, 4)?)),
-            0x19 => Some((read(at + 40, 8)?, read(at + 48, 8)?)),
-            0x2 => Some((read(at + 16, 4)?, read(at + 20, 4)?)),
-            0x1d => Some((read(at + 8, 4)?, read(at + 12, 4)?)),
+        let fields = match command {
+            0x1 => Some((32, 36, 4)),
+            0x19 => Some((40, 48, 8)),
+            0x2 => Some((16, 20, 4)),
+            0x1d => Some((8, 12, 4)),
             _ => None,
         };
-        if let Some((offset, size)) = range {
-            end = end.max(end_of(offset, size).unwrap_or(u64::MAX));
+        if let Some((offset_at, size_at, width)) = fields {
+            let Some((offset, size)) = read(at + offset_at, width).zip(read(at + size_at, width)) else {
+                return Some(Candidate::magic_only(Kind::MachO, "Mach-O load commands are truncated"));
+            };
+            let Some(range_end) = end_of(offset, size) else {
+                return Some(Candidate::magic_only(Kind::MachO, "a Mach-O segment or table ends past 2^64"));
+            };
+            end = end.max(range_end);
         }
         at += size;
     }
