@@ -13,6 +13,12 @@
 //! order (MIPS and PowerPC ship in both endiannesses). Only genuinely PC-relative branch/call targets are masked;
 //! data immediates are kept because they discriminate functions. Other architectures return `None`.
 //!
+//! Hashes are versioned. Scheme 1 ([`function_hash`]) is the masking above. Scheme 2 ([`function_hash_in`]) also
+//! masks constants that are layout-dependent addresses: on x86/x86-64, displacements and immediates pointing into
+//! the image ([`MaskContext`]), as non-PIE code embeds them; on AArch64, the low 12 bits completing an ADRP page
+//! address. A [`SignatureDb`] records its scheme and [`SignatureDb::identify_in`] hashes with it, so databases saved
+//! under scheme 1 keep matching exactly as before.
+//!
 //! A confidence gate rejects non-discriminating bodies so they are neither stored nor matched: a body whose
 //! masked form carries too little content (a single-branch thunk masks to almost nothing, all-nop padding is one
 //! repeated word) would collide with many unrelated functions, making a "match" meaningless. [`function_hash`]
@@ -24,9 +30,10 @@
 mod bundled;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 pub use bundled::bundled;
-use iced_x86::{Decoder, DecoderOptions, Instruction, OpKind, Register};
+use iced_x86::{ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
 use rampage_arch::{Arch, Target};
 use rampage_loaders::{Binary, SymbolKind};
 use serde::{Deserialize, Serialize};
@@ -49,6 +56,71 @@ const MIN_DISTINCT: usize = 3;
 
 /// A 32-byte masked content hash of a function body.
 pub type FunctionHash = [u8; 32];
+
+/// Hash scheme 1: [`function_hash`], which masks only relative branch targets and PC-relative displacements.
+/// Databases saved without a `scheme` field are scheme 1.
+pub const LEGACY_SCHEME: u32 = 1;
+
+/// Hash scheme 2: [`function_hash_in`], which also masks absolute addresses into the image. New databases use it.
+pub const CURRENT_SCHEME: u32 = 2;
+
+/// Images mapped below this address are position-independent (ELF PIE/shared objects and relocatable objects
+/// start at 0), so their code cannot embed absolute addresses, and treating their small offsets as addresses
+/// would mask ordinary constants.
+const MIN_IMAGE_BASE: u64 = 0x1_0000;
+
+/// The address ranges an image occupies once mapped, which tell scheme-2 hashing which constants are absolute
+/// addresses of the image's own code and data.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MaskContext {
+    /// Sorted, non-overlapping, non-empty ranges.
+    ranges: Vec<Range<u64>>,
+}
+
+impl MaskContext {
+    /// A context over `ranges`, normalized (sorted, empty ranges dropped, overlaps merged).
+    pub fn new(ranges: impl IntoIterator<Item = Range<u64>>) -> MaskContext {
+        let mut sorted: Vec<Range<u64>> = ranges.into_iter().filter(|range| range.start < range.end).collect();
+        sorted.sort_by_key(|range| range.start);
+        let mut merged: Vec<Range<u64>> = Vec::with_capacity(sorted.len());
+        for range in sorted {
+            match merged.last_mut() {
+                Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                _ => merged.push(range),
+            }
+        }
+        MaskContext { ranges: merged }
+    }
+
+    /// The mapped, non-empty segments of `binary` (its sections when it has no segments, as for an object file).
+    /// Inaccessible segments such as Mach-O's `__PAGEZERO` are guard regions, not image contents. An image based
+    /// below [`MIN_IMAGE_BASE`] is position-independent and gets an empty context.
+    pub fn from_binary(binary: &Binary) -> MaskContext {
+        let segments = binary
+            .segments
+            .iter()
+            .filter(|segment| segment.perms.read || segment.perms.write || segment.perms.execute)
+            .map(|segment| segment.address..segment.address.saturating_add(segment.size));
+        let sections =
+            binary.sections.iter().map(|section| section.address..section.address.saturating_add(section.size));
+        let context = if binary.segments.is_empty() { MaskContext::new(sections) } else { MaskContext::new(segments) };
+        match context.ranges.first() {
+            Some(lowest) if lowest.start >= MIN_IMAGE_BASE => context,
+            _ => MaskContext::default(),
+        }
+    }
+
+    /// The normalized address ranges.
+    pub fn ranges(&self) -> &[Range<u64>] {
+        &self.ranges
+    }
+
+    /// Whether `address` lies inside the image.
+    pub fn contains(&self, address: u64) -> bool {
+        let next = self.ranges.partition_point(|range| range.start <= address);
+        next > 0 && address < self.ranges[next - 1].end
+    }
+}
 
 /// Accumulates a function's masked instruction stream and measures whether it carries enough discriminating
 /// content to be worth storing or matching. Each path feeds one instruction's masked encoding (with the
@@ -154,10 +226,46 @@ fn mask_aarch64(word: u32) -> u32 {
     word
 }
 
+/// Scheme 2's AArch64 masking: on top of [`mask_aarch64`], the 12-bit low part that completes an ADRP page address
+/// (`add xd, xn, #:lo12:sym` or a load/store `[xn, #:lo12:sym]`) is masked, because it moves with layout just like
+/// the page. Registers holding an ADRP page are tracked over a linear scan; tracking ignores control flow, so it
+/// can occasionally mask an ordinary offset, which only costs content and is deterministic for identical code.
+#[derive(Default)]
+struct AdrpPages {
+    /// Bitset of the general registers last written by an ADRP.
+    registers: u32,
+}
+
+impl AdrpPages {
+    fn mask(&mut self, word: u32) -> u32 {
+        let masked = mask_aarch64(word);
+        let destination = word & 0x1f;
+        let source = (word >> 5) & 0x1f;
+        if word & 0x9f00_0000 == 0x9000_0000 {
+            // Register 31 is xzr here, which holds nothing.
+            if destination != 31 {
+                self.registers |= 1 << destination;
+            }
+            return masked;
+        }
+        let add_unshifted = word & 0x7fc0_0000 == 0x1100_0000;
+        let load_store_unsigned = word & 0x3b00_0000 == 0x3900_0000;
+        let completes = (add_unshifted || load_store_unsigned) && self.registers & (1 << source) != 0;
+        let call = word & 0xfc00_0000 == 0x9400_0000 || word & 0xffff_fc1f == 0xd63f_0000;
+        if call {
+            // A call clobbers the caller-saved x0..x18.
+            self.registers &= !0x7_ffff;
+        } else {
+            self.registers &= !(1 << destination);
+        }
+        if completes { masked & !(0xfff << 10) } else { masked }
+    }
+}
+
 /// Hashes a stream of fixed 4-byte instruction words, reading each in `big_endian` order and applying `mask` to
 /// drop its position-dependent fields. The masked value is hashed in a fixed byte order, so the same logical
 /// function hashes equal whether the build is big- or little-endian.
-fn fixed_word_hash(bytes: &[u8], big_endian: bool, mask: impl Fn(u32) -> u32) -> Option<FunctionHash> {
+fn fixed_word_hash(bytes: &[u8], big_endian: bool, mut mask: impl FnMut(u32) -> u32) -> Option<FunctionHash> {
     let mut fingerprint = Fingerprint::new();
     let (words, _) = bytes.as_chunks::<4>();
     for word in words {
@@ -263,8 +371,9 @@ fn mask_ppc(word: u32) -> u32 {
     }
 }
 
-/// Hashes an x86 or x86-64 function, masking RIP-relative displacements and relative branch targets.
-fn x86_hash(bitness: u32, bytes: &[u8], address: u64) -> Option<FunctionHash> {
+/// Hashes an x86 or x86-64 function, masking RIP-relative displacements and relative branch targets, plus (scheme
+/// 2, when `image` is given) absolute displacements and immediates that point into the image.
+fn x86_hash(bitness: u32, bytes: &[u8], address: u64, image: Option<&MaskContext>) -> Option<FunctionHash> {
     let mut decoder = Decoder::with_ip(bitness, bytes, address, DecoderOptions::NONE);
     let mut fingerprint = Fingerprint::new();
     let mut instruction = Instruction::default();
@@ -285,9 +394,37 @@ fn x86_hash(bitness: u32, bytes: &[u8], address: u64) -> Option<FunctionHash> {
         if is_relative_branch(&instruction) && offsets.has_immediate() {
             zero_range(&mut masked, offsets.immediate_offset(), offsets.immediate_size());
         }
+        if let Some(image) = image {
+            mask_absolute(&instruction, &offsets, image, &mut masked);
+        }
         fingerprint.push(&masked);
     }
     fingerprint.finish()
+}
+
+/// Zeroes the displacement and immediate fields of `instruction` whose value is an address inside `image`. Non-PIE
+/// code embeds the absolute addresses of its own globals and functions this way, and they move with layout. Only
+/// fields of at least 4 bytes can hold such an address. A displacement is masked whatever its base/index registers:
+/// besides `[abs]` and 64-bit moffs, non-PIE code indexes global arrays and jump tables as `[reg*s + abs]` and
+/// `[reg + abs]`.
+fn mask_absolute(instruction: &Instruction, offsets: &ConstantOffsets, image: &MaskContext, masked: &mut [u8]) {
+    let relative_memory = matches!(instruction.memory_base(), Register::RIP | Register::EIP);
+    // fs:/gs: displacements are thread-local or OS-structure offsets, not image addresses.
+    let segment_relative = matches!(instruction.segment_prefix(), Register::FS | Register::GS);
+    if offsets.has_displacement()
+        && offsets.displacement_size() >= 4
+        && !relative_memory
+        && !segment_relative
+        && image.contains(instruction.memory_displacement64())
+    {
+        zero_range(masked, offsets.displacement_offset(), offsets.displacement_size());
+    }
+    if offsets.has_immediate() && offsets.immediate_size() >= 4 && !is_relative_branch(instruction) {
+        let value = (0..instruction.op_count()).find_map(|op| instruction.try_immediate(op).ok());
+        if value.is_some_and(|value| image.contains(value)) {
+            zero_range(masked, offsets.immediate_offset(), offsets.immediate_size());
+        }
+    }
 }
 
 /// Whether the instruction transfers control to a relative target, whose encoded offset is position-dependent.
@@ -312,9 +449,46 @@ pub fn alias_rank(name: &str) -> (bool, usize, &str) {
 /// The masked content hash of the function whose bytes start at `address`, or `None` for an unsupported
 /// architecture or input with no decodable instructions. `target` supplies the architecture, the instruction
 /// byte order (used by the fixed-width paths), and, for 32-bit ARM, whether `address` holds Thumb code.
+///
+/// This is hash scheme 1 ([`LEGACY_SCHEME`]), which the bundled databases and older saved ones use; new databases
+/// use [`function_hash_in`].
 pub fn function_hash(target: &Target, bytes: &[u8], address: u64) -> Option<FunctionHash> {
+    hash(target, bytes, address, None)
+}
+
+/// The scheme 2 ([`CURRENT_SCHEME`]) hash: [`function_hash`] plus masking of layout-dependent constants. On x86 and
+/// x86-64, displacements and immediates whose value lies inside `image` (absolute addresses of the image's own
+/// code and data, as non-PIE code embeds them) are masked. On AArch64, the low 12 bits that complete an ADRP page
+/// address are masked (this needs no context). 32-bit ARM, MIPS and PowerPC hash as in scheme 1: their absolute
+/// addresses (ARM literal pools, MIPS `lui`/`addiu` pairs) are not masked yet.
+pub fn function_hash_in(target: &Target, image: &MaskContext, bytes: &[u8], address: u64) -> Option<FunctionHash> {
+    hash(target, bytes, address, Some(image))
+}
+
+/// The hash of a function under `scheme` (see [`LEGACY_SCHEME`] and [`CURRENT_SCHEME`]), or `None` for an unknown
+/// scheme or a body [`function_hash`] would reject. `image` is ignored by scheme 1.
+pub fn function_hash_scheme(
+    scheme: u32,
+    target: &Target,
+    image: &MaskContext,
+    bytes: &[u8],
+    address: u64,
+) -> Option<FunctionHash> {
+    match scheme {
+        LEGACY_SCHEME => function_hash(target, bytes, address),
+        CURRENT_SCHEME => function_hash_in(target, image, bytes, address),
+        _ => None,
+    }
+}
+
+/// `image` selects the scheme: `None` is scheme 1, `Some` is scheme 2 with that image's address ranges.
+fn hash(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>) -> Option<FunctionHash> {
     match target.arch {
-        Arch::X86 | Arch::X86_64 => x86_hash(x86_bitness(target.arch)?, bytes, address),
+        Arch::X86 | Arch::X86_64 => x86_hash(x86_bitness(target.arch)?, bytes, address, image),
+        Arch::Aarch64 if image.is_some() => {
+            let mut pages = AdrpPages::default();
+            fixed_word_hash(bytes, false, |word| pages.mask(word))
+        }
         // x86 and AArch64 are fixed little-endian; their behavior is unchanged by the endianness threading.
         Arch::Aarch64 => fixed_word_hash(bytes, false, mask_aarch64),
         Arch::Arm if target.is_thumb(address) => thumb_hash(bytes, target.big_endian),
@@ -326,13 +500,27 @@ pub fn function_hash(target: &Target, bytes: &[u8], address: u64) -> Option<Func
 }
 
 /// A set of function signatures mapping a masked hash to a function name.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SignatureDb {
     /// The architecture the signatures were built for; matches are refused across architectures.
     pub arch: String,
+    /// The hash scheme the entries were made with ([`LEGACY_SCHEME`] or [`CURRENT_SCHEME`]). Databases saved
+    /// before schemes existed have no field and are scheme 1.
+    #[serde(default = "legacy_scheme")]
+    scheme: u32,
     /// Masked hash (lowercase hex) to function name. Hashes that mapped to more than one name are dropped, so a
     /// match is never ambiguous.
     entries: BTreeMap<String, String>,
+}
+
+fn legacy_scheme() -> u32 {
+    LEGACY_SCHEME
+}
+
+impl Default for SignatureDb {
+    fn default() -> SignatureDb {
+        SignatureDb { arch: String::new(), scheme: CURRENT_SCHEME, entries: BTreeMap::new() }
+    }
 }
 
 /// Names seen for a hash while building; used to drop ambiguous hashes.
@@ -353,19 +541,27 @@ impl Builder {
         }
     }
 
-    fn finish(self, arch: Arch) -> SignatureDb {
+    fn finish(self, arch: Arch, scheme: u32) -> SignatureDb {
         let entries = self.names.into_iter().filter_map(|(hash, name)| Some((hash, name?))).collect();
-        SignatureDb { arch: arch.to_string(), entries }
+        SignatureDb { arch: arch.to_string(), scheme, entries }
     }
 }
 
 impl SignatureDb {
-    /// Builds signatures from every named function in `binary` whose bytes are available. Functions whose bodies
-    /// are byte-identical after masking but have different names are treated as ambiguous and left unmatchable.
+    /// Builds [`CURRENT_SCHEME`] signatures from every named function in `binary` whose bytes are available, masking
+    /// with the binary's own [`MaskContext`]. Functions whose bodies are byte-identical after masking but have
+    /// different names are treated as ambiguous and left unmatchable.
     pub fn from_binary(binary: &Binary) -> SignatureDb {
+        SignatureDb::from_binary_with_scheme(binary, CURRENT_SCHEME)
+    }
+
+    /// Builds signatures from `binary` under a specific hash `scheme`, e.g. [`LEGACY_SCHEME`] to extend or compare
+    /// against an older database. An unknown scheme yields an empty database.
+    pub fn from_binary_with_scheme(binary: &Binary, scheme: u32) -> SignatureDb {
         let mut builder = Builder::default();
         if supported(binary.arch) {
             let target = binary.target();
+            let image = MaskContext::from_binary(binary);
             // Several names at one address are aliases of one function, not a collision: keep one spelling, or
             // the builder would drop the hash as ambiguous and the function could never be identified.
             let mut by_address = BTreeMap::new();
@@ -384,18 +580,19 @@ impl SignatureDb {
             }
             for symbol in by_address.into_values() {
                 if let Some(bytes) = binary.read(symbol.address, symbol.size)
-                    && let Some(hash) = function_hash(&target, bytes, symbol.address)
+                    && let Some(hash) = function_hash_scheme(scheme, &target, &image, bytes, symbol.address)
                 {
                     builder.add(hash, &symbol.name);
                 }
             }
         }
-        builder.finish(binary.arch)
+        builder.finish(binary.arch, scheme)
     }
 
-    /// Adds every named function from `binary` to this database, so one database can span several libraries.
+    /// Adds every named function from `binary` to this database, hashed under this database's scheme, so one
+    /// database can span several libraries.
     pub fn extend_from_binary(&mut self, binary: &Binary) {
-        let additions = SignatureDb::from_binary(binary);
+        let additions = SignatureDb::from_binary_with_scheme(binary, self.scheme);
         if additions.arch == self.arch {
             for (hash, name) in additions.entries {
                 // A hash already present with a different name becomes ambiguous and is removed.
@@ -413,10 +610,10 @@ impl SignatureDb {
     }
 
     /// Overlays `other` onto this database, letting `other`'s names win on any shared hash (so a user database
-    /// takes precedence over a bundled one). Databases for different architectures do not mix, so a mismatched
-    /// `other` is ignored.
+    /// takes precedence over a bundled one). Databases for different architectures or hash schemes do not mix
+    /// (their hashes are not comparable), so a mismatched `other` is ignored; [`SignatureDb::can_merge`] tells.
     pub fn merge(&mut self, other: &SignatureDb) {
-        if self.arch != other.arch {
+        if !self.can_merge(other) {
             return;
         }
         for (hash, name) in &other.entries {
@@ -424,13 +621,33 @@ impl SignatureDb {
         }
     }
 
-    /// The name for the function whose bytes start at `address`, if its masked hash is in the database and the
-    /// architecture matches. `target` carries the architecture and instruction byte order (see [`function_hash`]).
+    /// Whether [`SignatureDb::merge`] would take `other`'s entries: same architecture and hash scheme.
+    pub fn can_merge(&self, other: &SignatureDb) -> bool {
+        self.arch == other.arch && self.scheme == other.scheme
+    }
+
+    /// The hash scheme of this database's entries.
+    pub fn scheme(&self) -> u32 {
+        self.scheme
+    }
+
+    /// The name for the function whose bytes start at `address`, hashed without knowledge of the image's layout.
+    /// `target` carries the architecture and instruction byte order (see [`function_hash`]).
+    ///
+    /// For a scheme 1 database this is exact. For a scheme 2 database it hashes with an empty [`MaskContext`], so
+    /// absolute addresses stay in the hash and a function that embeds any will not match: it finds a subset of
+    /// what [`SignatureDb::identify_in`] finds, never different names. Prefer `identify_in`.
     pub fn identify(&self, target: &Target, bytes: &[u8], address: u64) -> Option<&str> {
+        self.identify_in(target, &MaskContext::default(), bytes, address)
+    }
+
+    /// The name for the function whose bytes start at `address` in the image described by `image` (see
+    /// [`MaskContext::from_binary`]), hashed under this database's own scheme. The architecture must match.
+    pub fn identify_in(&self, target: &Target, image: &MaskContext, bytes: &[u8], address: u64) -> Option<&str> {
         if self.arch != target.arch.to_string() {
             return None;
         }
-        let hash = function_hash(target, bytes, address)?;
+        let hash = function_hash_scheme(self.scheme, target, image, bytes, address)?;
         self.entries.get(&hex(&hash)).map(String::as_str)
     }
 
@@ -584,7 +801,7 @@ mod tests {
         builder.add(other, "unique");
         // A second name for the same hash makes it ambiguous.
         builder.add(hash, "second");
-        let db = builder.finish(Arch::X86_64);
+        let db = builder.finish(Arch::X86_64, LEGACY_SCHEME);
         assert_eq!(db.identify(&x64, &sample(), 0x1000), None); // ambiguous dropped
         assert_eq!(db.len(), 1);
 
@@ -800,4 +1017,166 @@ mod tests {
         assert!(function_hash(&a64, &odd, 0).is_some());
     }
 
+    #[test]
+    fn scheme_1_hash_is_pinned() {
+        // SHA-256 of the sample with its call target and RIP displacement zeroed, as scheme 1 always hashed it.
+        let expected = "84607e3e3071cf92e225c1205434ed2d623bb50d2abe1836e8985fe4651dfafe";
+        let x64 = target(Arch::X86_64, false);
+        assert_eq!(hex(&function_hash(&x64, &sample(), 0x1000).unwrap()), expected);
+        let image = MaskContext::new(std::iter::once(0..u64::MAX));
+        let legacy = function_hash_scheme(LEGACY_SCHEME, &x64, &image, &sample(), 0x1000).unwrap();
+        assert_eq!(hex(&legacy), expected);
+    }
+
+    /// The image of the absolute-address samples below.
+    fn image() -> MaskContext {
+        MaskContext::new([0x40_0000..0x40_8000, 0x40_8000..0x41_0000])
+    }
+
+    /// An x86-64 body with four absolute references into the image: `mov edi, imm32`, `mov rax, [abs32]`,
+    /// `mov eax, [rdi*4 + abs32]` and `movabs rax, [moffs64]`, then `add eax, 0x1234` and `ret`.
+    fn absolute_sample(addresses: [u32; 4]) -> Vec<u8> {
+        let mut bytes = vec![0xbf];
+        bytes.extend(addresses[0].to_le_bytes());
+        bytes.extend([0x48, 0x8b, 0x04, 0x25]);
+        bytes.extend(addresses[1].to_le_bytes());
+        bytes.extend([0x8b, 0x04, 0xbd]);
+        bytes.extend(addresses[2].to_le_bytes());
+        bytes.extend([0x48, 0xa1]);
+        bytes.extend(u64::from(addresses[3]).to_le_bytes());
+        bytes.extend([0x05, 0x34, 0x12, 0x00, 0x00, 0xc3]);
+        bytes
+    }
+
+    #[test]
+    fn scheme_2_masks_absolute_addresses_inside_the_image() {
+        let x64 = target(Arch::X86_64, false);
+        let base = absolute_sample([0x40_a2c8, 0x40_b000, 0x40_c000, 0x40_d000]);
+        let relinked = absolute_sample([0x40_02c8, 0x40_f010, 0x40_1000, 0x40_0008]);
+        assert_eq!(
+            function_hash_in(&x64, &image(), &base, 0x1000),
+            function_hash_in(&x64, &image(), &relinked, 0x1000)
+        );
+        assert!(function_hash_in(&x64, &image(), &base, 0x1000).is_some());
+        // Scheme 1 keeps them, so the relinked copy hashes differently there.
+        assert_ne!(function_hash(&x64, &base, 0x1000), function_hash(&x64, &relinked, 0x1000));
+    }
+
+    #[test]
+    fn scheme_2_keeps_constants_outside_the_image() {
+        let x64 = target(Arch::X86_64, false);
+        let base = absolute_sample([0x50_a2c8, 0x40_b000, 0x40_c000, 0x40_d000]);
+        let changed = absolute_sample([0x50_a2c9, 0x40_b000, 0x40_c000, 0x40_d000]);
+        assert_ne!(function_hash_in(&x64, &image(), &base, 0x1000), function_hash_in(&x64, &image(), &changed, 0x1000));
+        // The ordinary 0x1234 immediate is below the image, so it still discriminates.
+        let mut other_add = base.clone();
+        let immediate = other_add.len() - 5;
+        other_add[immediate] = 0x35;
+        assert_ne!(
+            function_hash_in(&x64, &image(), &base, 0x1000),
+            function_hash_in(&x64, &image(), &other_add, 0x1000)
+        );
+        // With no context nothing extra is masked: in-range addresses still discriminate.
+        let relinked = absolute_sample([0x40_02c8, 0x40_b000, 0x40_c000, 0x40_d000]);
+        let empty = MaskContext::default();
+        assert_ne!(function_hash_in(&x64, &empty, &base, 0x1000), function_hash_in(&x64, &empty, &relinked, 0x1000));
+    }
+
+    #[test]
+    fn scheme_2_keeps_thread_local_displacements() {
+        let x64 = target(Arch::X86_64, false);
+        // mov rax, fs:[disp32]; add eax, 0x1234; add eax, 0x1234; ret -- an fs: offset is never an image address.
+        let body = |disp: u32| {
+            let mut bytes = vec![0x64, 0x48, 0x8b, 0x04, 0x25];
+            bytes.extend(disp.to_le_bytes());
+            bytes.extend([0x05, 0x34, 0x12, 0x00, 0x00, 0x05, 0x34, 0x12, 0x00, 0x00, 0xc3]);
+            bytes
+        };
+        assert_ne!(
+            function_hash_in(&x64, &image(), &body(0x40_0010), 0),
+            function_hash_in(&x64, &image(), &body(0x40_0018), 0)
+        );
+    }
+
+    #[test]
+    fn scheme_2_masks_the_low_half_of_an_aarch64_adrp_pair() {
+        let a64 = target(Arch::Aarch64, false);
+        let image = MaskContext::default();
+        // adrp x0, page; add x0, x0, #lo12; ldr w1, [x0, #8]; ret.
+        let body = |lo12: u32, field: u32| {
+            words_to_bytes(
+                &[0x9000_0000, 0x9100_0000 | (lo12 << 10), 0xb940_0001 | (field / 4) << 10, 0xd65f_03c0],
+                false,
+            )
+        };
+        assert_eq!(
+            function_hash_in(&a64, &image, &body(0x123, 8), 0),
+            function_hash_in(&a64, &image, &body(0x456, 8), 0)
+        );
+        assert_ne!(function_hash(&a64, &body(0x123, 8), 0), function_hash(&a64, &body(0x456, 8), 0));
+        // x0 holds the full address after the add, so the load's field offset is real content.
+        assert_ne!(
+            function_hash_in(&a64, &image, &body(0x123, 8), 0),
+            function_hash_in(&a64, &image, &body(0x123, 12), 0)
+        );
+    }
+
+    #[test]
+    fn mask_context_normalizes_and_answers_membership() {
+        let context = MaskContext::new([0x30..0x40, 0x10..0x20, 0x18..0x28, 0x50..0x50]);
+        assert_eq!(context.ranges(), &[0x10..0x28, 0x30..0x40]);
+        assert!(context.contains(0x10) && context.contains(0x27) && context.contains(0x3f));
+        assert!(!context.contains(0x0f) && !context.contains(0x28) && !context.contains(0x40));
+        assert!(!MaskContext::default().contains(0));
+    }
+
+    #[test]
+    fn mask_context_covers_fixed_images_only() {
+        let fixed = MaskContext::from_binary(&Binary::open(fixture("musl-static-x86_64.elf")).unwrap());
+        assert!(!fixed.ranges().is_empty());
+        // A shared object is mapped from 0: its code holds no absolute addresses, so nothing is masked.
+        assert!(MaskContext::from_binary(&Binary::open(fixture("libhelper-x64.so")).unwrap()).ranges().is_empty());
+        // Mach-O's inaccessible __PAGEZERO (0..4 GiB) is not part of the image.
+        let macho = MaskContext::from_binary(&Binary::open(fixture("hello-x64.macho")).unwrap());
+        assert!(!macho.ranges().is_empty() && !macho.contains(0x1000));
+    }
+
+    #[test]
+    fn databases_record_their_scheme_and_do_not_mix() {
+        let legacy = SignatureDb::from_json(r#"{"arch":"x86_64","entries":{}}"#).unwrap();
+        assert_eq!(legacy.scheme(), LEGACY_SCHEME);
+        let mut current = SignatureDb::from_binary(&Binary::open(fixture("hello-x64.elf")).unwrap());
+        assert_eq!(current.scheme(), CURRENT_SCHEME);
+        assert_eq!(SignatureDb::from_json(&current.to_json()).unwrap().scheme(), CURRENT_SCHEME);
+        let before = current.len();
+        let mut older = Builder::default();
+        older.add([7; 32], "older");
+        let older = older.finish(Arch::X86_64, LEGACY_SCHEME);
+        assert!(!current.can_merge(&older));
+        current.merge(&older);
+        assert_eq!(current.len(), before);
+        let mut newer = Builder::default();
+        newer.add([7; 32], "newer");
+        current.merge(&newer.finish(Arch::X86_64, CURRENT_SCHEME));
+        assert_eq!(current.len(), before + 1);
+        let mut unknown = SignatureDb::from_json(r#"{"arch":"x86_64","scheme":99,"entries":{}}"#).unwrap();
+        assert!(SignatureDb::from_binary_with_scheme(&Binary::open(fixture("hello-x64.elf")).unwrap(), 99).is_empty());
+        unknown.extend_from_binary(&Binary::open(fixture("hello-x64.elf")).unwrap());
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn scheme_2_identify_without_context_never_renames() {
+        let x64 = target(Arch::X86_64, false);
+        let body = absolute_sample([0x40_a2c8, 0x40_b000, 0x40_c000, 0x40_d000]);
+        let mut builder = Builder::default();
+        builder.add(function_hash_in(&x64, &image(), &body, 0x1000).unwrap(), "uses_globals");
+        builder.add(function_hash_in(&x64, &image(), &sample(), 0x1000).unwrap(), "leaf");
+        let db = builder.finish(Arch::X86_64, CURRENT_SCHEME);
+        assert_eq!(db.identify_in(&x64, &image(), &body, 0x1000), Some("uses_globals"));
+        // Without the image's layout the absolute addresses stay in the hash, so it cannot match...
+        assert_eq!(db.identify(&x64, &body, 0x1000), None);
+        // ...while a body with none matches either way.
+        assert_eq!(db.identify(&x64, &sample(), 0x1000), Some("leaf"));
+    }
 }
