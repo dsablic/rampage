@@ -552,7 +552,9 @@ pub fn tools() -> Vec<Tool> {
             "detect_tools",
             "Identify the tools that likely produced the binary (packer, compiler, protector, installer, linker) \
              from a bundled heuristic database of entry-point, section, import, overlay and entropy signatures. \
-             Optionally overlay a user-supplied PeID userdb.txt. Confidence is a signal, not proof.",
+             Optionally overlay a user-supplied PeID userdb.txt. Returns {detections, warnings}: warnings name the \
+             PeID entries and lines skipped as malformed (the first 20, then a count). Confidence is a signal, not \
+             proof.",
             |project, args: DetectToolsArgs| {
                 let peid = match &args.peid {
                     Some(path) => {
@@ -571,9 +573,9 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "capa_detect",
-            "Evaluate a directory of Mandiant capa rules against the binary's imports and strings, returning the \
-             behaviors whose file-scope features match. A partial capa evaluator (no disassembly features); \
-             triage evidence, not proof.",
+            "Evaluate a directory of Mandiant capa rules against the binary's imports, exports and strings, \
+             returning the behaviors whose file-scope features match. A partial capa evaluator (no disassembly \
+             features); triage evidence, not proof.",
             |project, args: CapaArgs| project.detect_capa(std::path::Path::new(&args.rules_dir)),
         ),
         tool(

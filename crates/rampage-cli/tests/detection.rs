@@ -61,6 +61,21 @@ fn detect_labels_kind_and_confidence_as_the_json_does() {
 }
 
 #[test]
+fn detect_prints_skipped_peid_entries_as_warnings() {
+    let scratch = Scratch::new("peid");
+    let peid = scratch.0.join("userdb.txt");
+    let entries = "[Broken]\nsignature = ZZ ZZ\nep_only = true\n[Fine]\nsignature = 4D 5A\nep_only = false\n";
+    std::fs::write(&peid, entries).unwrap();
+    let peid = peid.to_str().unwrap();
+    rampage(&["detect", "--peid", peid], "hello-x64.exe")
+        .success()
+        .stdout(contains("] Fine ("))
+        .stdout(contains("warning: PeID database: ").and(contains("[Broken]")));
+    let found = json(&["--json", "detect", "--peid", peid], "hello-x64.exe");
+    assert_eq!(found["warnings"].as_array().unwrap().len(), 1, "{found}");
+}
+
+#[test]
 fn yara_scans_a_rule_file_and_a_rule_directory() {
     let rules = Scratch::new("yara");
     std::fs::write(rules.0.join("pe.yar"), "rule pe_header : format { strings: $mz = \"MZ\" condition: $mz at 0 }")
