@@ -2,7 +2,7 @@
 //! (from the `rampage-constants` database), crypto library APIs, the functions that reference either, and crypto
 //! capability tags. A constant shows that a table is present, not that the algorithm runs or what it protects.
 
-use rampage_constants::{ConstantDb, Endian, Kind, scan_binary};
+use rampage_constants::{ConstantDb, Endian, Kind, scan_binary_report};
 use serde_json::json;
 
 use super::{Confidence, Finding, ReportLimits, Section, Tracer, WorkflowReport, capability_section, match_api};
@@ -87,7 +87,8 @@ impl Project {
         let mut crypto = Section::new("Cryptographic constants", limits);
         let mut transforms = Section::new("Checksum, compression and encoding constants", limits);
         let mut first_constant = None;
-        for hit in scan_binary(&self.binary, ConstantDb::bundled()) {
+        let scan = scan_binary_report(&self.binary, ConstantDb::bundled());
+        for hit in scan.hits {
             first_constant.get_or_insert(hit.address);
             let found = tracer.users(&[hit.address]);
             let order = match hit.endian {
@@ -154,6 +155,12 @@ impl Project {
         }
         report.sections.extend([crypto, transforms, apis, functions, tags]);
 
+        if scan.truncated {
+            report.limitation(format!(
+                "The constant scan stopped at {} hits, so constants past the last one reported were not looked for.",
+                rampage_constants::MAX_HITS
+            ));
+        }
         report.limitation(
             "A constant shows that an algorithm's table is in the image, not that the algorithm runs, which data it \
              protects, or where its key comes from; libraries often carry tables they never use.",
