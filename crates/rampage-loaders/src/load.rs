@@ -413,12 +413,14 @@ impl Binary {
     }
 
     /// What the file stores for `section`, from its own file offset rather than through a segment, so it also
-    /// serves sections outside any segment (relocatable objects, unloaded ELF sections). `None` for a zero-fill
-    /// section or one whose file range lies outside the image.
+    /// serves sections outside any segment (relocatable objects, unloaded ELF sections). A section running past
+    /// the end of a truncated image is cut short there, like [`Self::read_to_segment_end`]. `None` for a zero-fill
+    /// section or one that starts past the end of the image.
     pub fn section_file_bytes(&self, section: &Section) -> Option<&[u8]> {
+        let image = self.image_bytes();
         let start = usize::try_from(section.file_offset?).ok()?;
-        let len = usize::try_from(section.file_size).ok()?;
-        self.image_bytes().get(start..start.checked_add(len)?)
+        let len = usize::try_from(section.file_size).unwrap_or(usize::MAX);
+        image.get(start..start.saturating_add(len).min(image.len()))
     }
 
     /// The bytes of this image: the whole file, or one slice of a universal binary.
