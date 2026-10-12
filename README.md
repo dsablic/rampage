@@ -46,9 +46,11 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
 - Library identification: a FLIRT/Function-ID-style signature of each function, hashed with position-dependent
   bytes masked out (relative branch and call targets, x86 RIP-relative displacements, and the PC-relative
   encodings of the fixed-width sets), so the same library function matches across binaries linked at different
-  addresses. Build a database from a binary whose functions are named (`rampage signatures`) and apply it to name
-  the matching functions of a stripped one (`rampage identify`). x86, x86-64, AArch64, 32-bit ARM (A32 and Thumb),
-  MIPS/MIPS64 and PowerPC/PowerPC64; see [crates/rampage-signatures](crates/rampage-signatures).
+  addresses. `rampage identify` applies a bundled starter database (musl libc, for x86-64 and AArch64) out of the
+  box, so stripped static library code is named without any setup; build your own from a binary whose functions
+  are named (`rampage signatures`) to overlay on top. x86, x86-64, AArch64, 32-bit ARM (A32 and Thumb),
+  MIPS/MIPS64 and PowerPC/PowerPC64; see [crates/rampage-signatures](crates/rampage-signatures). A database matches
+  only the library build it was made from; regenerate or extend the bundled set with `tools/gen-signatures.sh`.
 - Go binaries: stripped Go function names are recovered from the embedded pclntab at load, so they appear in the
   function list, metadata and disassembly even after `-ldflags "-s -w"`.
 

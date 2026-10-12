@@ -32,9 +32,12 @@
 
 - [ ] Apply PDB names in the API (VA = RVA + PE ImageBase, name only unnamed functions). Deferred: unverifiable
   without a real `.pdb` fixture, and no `lld-link` locally to generate one. Wire + test once a PDB fixture exists.
-- [ ] Bundled starter signature databases for common runtimes (libc, libstdc++), so `identify` names library
-  code out of the box. Needs a corpus-generation decision (which libs/versions; platform-specific).
-- [ ] MIPS signatures: mask `lui`/`addiu` HI/LO address pairs (needs relocation/dataflow) to raise the match rate.
+- [x] Bundled starter signature databases: `rampage identify` applies a bundled musl libc database for the
+  binary's architecture (x86-64, aarch64) out of the box; a user `--db` overlays on top, `--no-bundled` opts out.
+  Generated reproducibly by `tools/gen-signatures.sh` (pinned zig). Follow-ups: more libs (libstdc++/libc++),
+  more arches, and glibc/other musl versions; a database matches only the exact library build it was made from.
+- [ ] MIPS signatures: mask `lui`/`addiu` HI/LO address pairs. Needs relocation/dataflow to avoid false matches
+  (without it, a masked constant could collide two different functions); do it relocation-gated, not heuristic.
 - [ ] Verify the MSVC RTTI path against a real PE (no MSVC toolchain locally; synthetic-tested only).
 - [ ] Go pclntab: optional bounded full-image magic scan for binaries whose pclntab section was renamed/removed.
 - [ ] C++ class LAYOUT reconstruction (fields/sizes), building on the RTTI name/hierarchy recovery now in place.
