@@ -40,6 +40,8 @@ const MAX_STREAMS: usize = 64;
 /// II.24.2.1: the version string length is at most 255 bytes, rounded up to a multiple of four.
 const MAX_VERSION_BYTES: usize = 256;
 const METADATA_SIGNATURE: u32 = 0x424A_5342;
+/// Enclosing types prefixed to a nested type's name; deeper (or cyclic) nesting is cut off.
+const MAX_NESTING: u32 = 16;
 const BUDGET_EXHAUSTED: &str = "signature text budget exhausted; remaining signatures not rendered";
 
 /// CLI header flags (II.25.3.3.1).
@@ -276,6 +278,8 @@ pub struct PInvoke {
 pub struct CustomAttribute {
     /// Token of what the attribute is applied to: the assembly, a type, method, field, parameter, ...
     pub parent_token: u32,
+    /// The target as text: `Type::member` for a method, field, property or event, `Type::Method/param` for a
+    /// parameter, `Owner<T>` for a generic parameter, nested types as `Outer/Inner`.
     pub parent: Option<String>,
     /// The constructor's declaring type, e.g. `System.Runtime.CompilerServices.CompilerGeneratedAttribute`.
     pub attribute_type: Option<String>,
@@ -547,6 +551,10 @@ struct Decoder<'t, 'a> {
     budget: Cell<usize>,
     /// Whether the warning that the budget ran out has been given; it is given once, not per signature.
     budget_reported: bool,
+    /// The enclosing TypeDef row of each nested TypeDef row, from NestedClass.
+    enclosing: HashMap<u32, u32>,
+    /// The owning MethodDef row of each Param row, filled in as the methods are decoded.
+    param_methods: HashMap<u32, u32>,
 }
 
 /// `Namespace.Type::member` for each method and field token.
@@ -579,8 +587,23 @@ impl<'t, 'a> Decoder<'t, 'a> {
         for params in generic_params.values_mut() {
             params.sort_unstable_by_key(|&(number, _)| number);
         }
-        let budget = Cell::new(signatures::TOTAL_BUDGET);
-        Self { tables, heaps, warnings, generic_params, budget, budget_reported: false }
+        let mut enclosing = HashMap::new();
+        for row in 1..=tables.rows(tables::NESTED_CLASS) {
+            let cell = |column| tables.cell(tables::NESTED_CLASS, row, column);
+            if let (Some(nested), Some(outer)) = (cell(0), cell(1)) {
+                enclosing.insert(nested, outer);
+            }
+        }
+        Self {
+            tables,
+            heaps,
+            warnings,
+            generic_params,
+            budget: Cell::new(signatures::TOTAL_BUDGET),
+            budget_reported: false,
+            enclosing,
+            param_methods: HashMap::new(),
+        }
     }
 }
 
@@ -606,10 +629,10 @@ impl Decoder<'_, '_> {
         metadata.type_refs = (1..=self.tables.rows(tables::TYPE_REF)).map(|row| self.type_ref(row)).collect();
         metadata.member_refs = (1..=self.tables.rows(tables::MEMBER_REF)).map(|row| self.member_ref(row)).collect();
         metadata.types = self.types();
-        let owners = member_owners(&metadata.types);
+        let owners = member_owners(&metadata.types, |row| self.row_label(tables::TYPE_DEF, row));
         metadata.pinvokes = self.pinvokes(&owners);
         metadata.custom_attributes = self.custom_attributes(&owners);
-        metadata.entry_point = self.entry_point(metadata);
+        metadata.entry_point = self.entry_point(&metadata.cli, &owners);
     }
 
     fn string(&mut self, table: u8, row: u32, column: usize) -> String {
@@ -684,11 +707,8 @@ impl Decoder<'_, '_> {
             return None;
         }
         let string = |column| self.heaps.string(self.tables.cell(table, row, column)?);
-        let qualified = |name: Option<String>, namespace: Option<String>| {
-            Some(qualified_name(namespace.as_deref().unwrap_or(""), &name?))
-        };
         match table {
-            tables::TYPE_DEF | tables::TYPE_REF => qualified(string(1), string(2)),
+            tables::TYPE_DEF | tables::TYPE_REF => self.type_label(table, row, 0),
             tables::TYPE_SPEC => Some(self.type_spec_text(row).unwrap_or_else(|| format!("TypeSpec#{row}"))),
             tables::MODULE | tables::FIELD | tables::PROPERTY | tables::EVENT => string(1),
             tables::MODULE_REF => string(0),
@@ -698,6 +718,29 @@ impl Decoder<'_, '_> {
             tables::PARAM => string(2),
             tables::GENERIC_PARAM => string(3),
             _ => Some(format!("{}#{row}", tables::TABLE_NAMES[usize::from(table)])),
+        }
+    }
+
+    /// `Namespace.Name` of a TypeDef or TypeRef row after its enclosing types, in ILAsm's `Outer/Inner` form:
+    /// a TypeDef's from NestedClass, a TypeRef's from a ResolutionScope that names another TypeRef.
+    fn type_label(&self, table: u8, row: u32, depth: u32) -> Option<String> {
+        if row == 0 || row > self.tables.rows(table) {
+            return None;
+        }
+        let string = |column| self.heaps.string(self.tables.cell(table, row, column)?);
+        let name = qualified_name(&string(2).unwrap_or_default(), &string(1)?);
+        let outer = match table {
+            _ if depth >= MAX_NESTING => None,
+            tables::TYPE_DEF => self.enclosing.get(&row).map(|&outer| (tables::TYPE_DEF, outer)),
+            _ => self
+                .tables
+                .cell(table, row, 0)
+                .and_then(|value| C::ResolutionScope.decode(value))
+                .filter(|&(scope, _)| scope == tables::TYPE_REF),
+        };
+        match outer.and_then(|(table, outer)| self.type_label(table, outer, depth + 1)) {
+            Some(outer) => Some(format!("{outer}/{name}")),
+            None => Some(name),
         }
     }
 
@@ -740,18 +783,13 @@ impl Decoder<'_, '_> {
     }
 
     fn types(&mut self) -> Vec<TypeDef> {
-        let mut enclosing = std::collections::HashMap::new();
-        for row in 1..=self.tables.rows(tables::NESTED_CLASS) {
-            if let (Some(nested), Some(outer)) =
-                (self.tables.cell(tables::NESTED_CLASS, row, 0), self.tables.cell(tables::NESTED_CLASS, row, 1))
-            {
-                enclosing.insert(nested, token(tables::TYPE_DEF, outer));
-            }
-        }
         let table = tables::TYPE_DEF;
         let field_lists = self.member_lists(table, 4, tables::FIELD, tables::FIELD_PTR);
         let method_lists = self.member_lists(table, 5, tables::METHOD_DEF, tables::METHOD_PTR);
         let param_lists = self.member_lists(tables::METHOD_DEF, 5, tables::PARAM, tables::PARAM_PTR);
+        for (params, method) in param_lists.iter().zip(1..) {
+            self.param_methods.extend(params.iter().map(|&param| (param, method)));
+        }
         field_lists
             .into_iter()
             .zip(method_lists)
@@ -768,7 +806,7 @@ impl Decoder<'_, '_> {
                     name: self.string(table, row, 1),
                     flags: self.tables.cell(table, row, 0).unwrap_or(0),
                     extends: self.tables.cell(table, row, 3).and_then(|value| self.coded_label(C::TypeDefOrRef, value)),
-                    enclosing: enclosing.get(&row).copied(),
+                    enclosing: self.enclosing.get(&row).map(|&outer| token(table, outer)),
                     fields,
                     methods,
                 }
@@ -870,6 +908,10 @@ impl Decoder<'_, '_> {
     fn custom_attributes(&mut self, owners: &MemberOwners) -> Vec<CustomAttribute> {
         let table = tables::CUSTOM_ATTRIBUTE;
         let mut attributes = Vec::new();
+        if self.tables.rows(table) == 0 {
+            return attributes;
+        }
+        let members = self.property_and_event_types();
         for row in 1..=self.tables.rows(table) {
             let parent = self.tables.cell(table, row, 0).and_then(|value| C::HasCustomAttribute.decode(value));
             let constructor = self.tables.cell(table, row, 1).and_then(|value| C::CustomAttributeType.decode(value));
@@ -878,8 +920,7 @@ impl Decoder<'_, '_> {
                 self.warnings.push(format!("CustomAttribute row {row}: value blob is outside #Blob"));
             }
             let parent_token = parent.map_or(0, |(table, row)| token(table, row));
-            let parent = parent
-                .and_then(|(table, row)| owners.get(&parent_token).cloned().or_else(|| self.row_label(table, row)));
+            let parent = parent.and_then(|(table, row)| self.attribute_target(table, row, owners, &members));
             let constructor_token = constructor.map_or(0, |(table, row)| token(table, row));
             let (attribute_type, signature) = match constructor {
                 Some((tables::METHOD_DEF, method)) => (
@@ -915,6 +956,73 @@ impl Decoder<'_, '_> {
         attributes
     }
 
+    /// The TypeDef row declaring each Property and Event row, from PropertyMap and EventMap.
+    fn property_and_event_types(&mut self) -> HashMap<(u8, u32), u32> {
+        let mut types = HashMap::new();
+        let maps = [
+            (tables::PROPERTY_MAP, tables::PROPERTY, tables::PROPERTY_PTR),
+            (tables::EVENT_MAP, tables::EVENT, tables::EVENT_PTR),
+        ];
+        for (map, target, ptr) in maps {
+            for (members, row) in self.member_lists(map, 1, target, ptr).into_iter().zip(1..) {
+                if let Some(parent) = self.tables.cell(map, row, 0) {
+                    types.extend(members.into_iter().map(|member| ((target, member), parent)));
+                }
+            }
+        }
+        types
+    }
+
+    /// What a custom attribute is applied to: a member as `Type::member`, a parameter as `Type::Method/param`,
+    /// a generic parameter as `Owner<T>`, anything else by its row label. A parameter, property or event whose
+    /// owner does not resolve is named with its table, e.g. `Property Count`.
+    fn attribute_target(
+        &self,
+        table: u8,
+        row: u32,
+        owners: &MemberOwners,
+        members: &HashMap<(u8, u32), u32>,
+    ) -> Option<String> {
+        if let Some(owner) = owners.get(&token(table, row)) {
+            return Some(owner.clone());
+        }
+        let name = self.row_label(table, row)?;
+        let (owner, separator) = match table {
+            tables::PARAM => {
+                let method = self.param_methods.get(&row);
+                let sequence = self.tables.cell(table, row, 1).unwrap_or(0);
+                let name = match name.as_str() {
+                    "" if sequence == 0 => "return".to_owned(),
+                    "" => format!("#{sequence}"),
+                    _ => name,
+                };
+                let owner = method.and_then(|&method| owners.get(&token(tables::METHOD_DEF, method)).cloned());
+                return Some(self.owned_label(table, owner, &format!("/{name}"), &name));
+            }
+            tables::GENERIC_PARAM => {
+                let owner = self.tables.cell(table, row, 2).and_then(|value| C::TypeOrMethodDef.decode(value));
+                let owner = owner.and_then(|(owner, row)| match owner {
+                    tables::METHOD_DEF => owners.get(&token(owner, row)).cloned(),
+                    _ => self.row_label(owner, row),
+                });
+                return Some(self.owned_label(table, owner, &format!("<{name}>"), &name));
+            }
+            tables::PROPERTY | tables::EVENT => {
+                (members.get(&(table, row)).and_then(|&ty| self.row_label(tables::TYPE_DEF, ty)), "::")
+            }
+            _ => return Some(name),
+        };
+        Some(self.owned_label(table, owner, &format!("{separator}{name}"), &name))
+    }
+
+    /// `owner` followed by `suffix`, or, when the owner is unknown, the table's name and `name`.
+    fn owned_label(&self, table: u8, owner: Option<String>, suffix: &str, name: &str) -> String {
+        match owner {
+            Some(owner) => format!("{owner}{suffix}"),
+            None => format!("{} {name}", tables::TABLE_NAMES[usize::from(table)]),
+        }
+    }
+
     fn method(&mut self, row: u32, owner: u32, params: &[u32]) -> MethodDef {
         let table = tables::METHOD_DEF;
         let rva = self.tables.cell(table, row, 0).unwrap_or(0);
@@ -948,20 +1056,17 @@ impl Decoder<'_, '_> {
         }
     }
 
-    fn entry_point(&mut self, metadata: &DotNetMetadata) -> Option<EntryPoint> {
-        let value = metadata.cli.entry_point_token;
+    fn entry_point(&mut self, cli: &CliHeader, owners: &MemberOwners) -> Option<EntryPoint> {
+        let value = cli.entry_point_token;
         if value == 0 {
             return None;
         }
-        if metadata.cli.flags & COMIMAGE_FLAGS_NATIVE_ENTRYPOINT != 0 {
+        if cli.flags & COMIMAGE_FLAGS_NATIVE_ENTRYPOINT != 0 {
             return Some(EntryPoint::Native { rva: value });
         }
         match (value >> 24) as u8 {
             tables::METHOD_DEF => {
-                let method = metadata.types.iter().find_map(|ty| {
-                    let method = ty.methods.iter().find(|method| method.token == value)?;
-                    Some(format!("{}::{}", ty.full_name(), method.name))
-                });
+                let method = owners.get(&value).cloned();
                 if method.is_none() {
                     self.warnings.push(format!("entry point token {value:#010x} does not resolve"));
                 }
@@ -976,10 +1081,11 @@ impl Decoder<'_, '_> {
     }
 }
 
-fn member_owners(types: &[TypeDef]) -> MemberOwners {
+/// `Type::member` for every method and field, each type named by `label` from its row (with its enclosing types).
+fn member_owners(types: &[TypeDef], label: impl Fn(u32) -> Option<String>) -> MemberOwners {
     let mut owners = HashMap::new();
-    for ty in types {
-        let full_name = ty.full_name();
+    for (ty, row) in types.iter().zip(1..) {
+        let full_name = label(row).unwrap_or_else(|| ty.full_name());
         let methods = ty.methods.iter().map(|method| (method.token, &method.name));
         for (token, name) in methods.chain(ty.fields.iter().map(|field| (field.token, &field.name))) {
             owners.insert(token, format!("{full_name}::{name}"));
