@@ -338,6 +338,58 @@ fn imphash_reads_regular_imports_only() {
 }
 
 #[test]
+fn malformed_pes_load_cleanly_and_never_panic() {
+    // Enrichment (TLS callbacks, delay-load slots) reads untrusted directories; every malformed PE fixture
+    // must still load and let its enriched fields be touched without panicking.
+    let names =
+        ["delay.exe", "badimport.exe", "bigpdata.exe", "dup.exe", "overlay.exe", "signed_overlay.exe", "highbase.exe"];
+    for name in names {
+        let binary = Binary::open(malformed(name)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let _ = binary.function_starts.len() + binary.import_slots.len() + binary.imports.len();
+    }
+}
+
+#[test]
+fn tls_callbacks_become_function_starts() {
+    let binary = Binary::open(fixture("tls-x64.exe")).unwrap();
+    // Find the TLS directory's callback array the way the loader does, independent of the parser under test:
+    // the data directory entry 9 holds the directory RVA, whose fourth pointer is AddressOfCallBacks.
+    let data = std::fs::read(fixture("tls-x64.exe")).unwrap();
+    let pe = object::read::pe::PeFile64::parse(&*data).unwrap();
+    let base = object::Object::relative_address_base(&pe);
+    let directory = pe.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_TLS).expect("TLS directory");
+    let directory_va = base + u64::from(directory.virtual_address.get(object::LittleEndian));
+    let read_ptr = |va: u64| u64::from_le_bytes(binary.read(va, 8).unwrap().try_into().unwrap());
+    let callbacks = read_ptr(directory_va + 24);
+    assert_ne!(callbacks, 0, "fixture has no TLS callback array");
+    let first = read_ptr(callbacks);
+    assert_ne!(first, 0, "fixture has no TLS callback");
+
+    assert!(binary.function_starts.contains(&first), "TLS callback {first:#x} not among the starts");
+    assert!(binary.is_code(first), "TLS callback {first:#x} is not code");
+    assert!(binary.function_starts.is_sorted());
+    assert!(binary.warnings.is_empty(), "{:?}", binary.warnings);
+}
+
+#[test]
+fn delay_load_imports_surface_as_names_and_slots() {
+    let binary = Binary::open(malformed("delay.exe")).unwrap();
+    // The delay-load directory names api-ms-win-crt-heap's allocator functions; they reach the Binary's
+    // imports (object surfaces delay-load names) and must not be lost.
+    for name in ["_set_new_mode", "calloc", "free", "malloc"] {
+        assert!(binary.imports.iter().any(|import| import.name == name), "{name} missing from imports");
+    }
+    // The delay import address table is a second IAT the regular import table does not cover; its slots carry
+    // the delay DLL as their library. The fixture lays this descriptor's four slots out contiguously.
+    let slot = binary.import_slot(0x1_4003_2770).expect("delay IAT slot for _set_new_mode");
+    assert_eq!(slot.name, "_set_new_mode");
+    assert_eq!(slot.library.as_deref(), Some("api-ms-win-crt-heap-l1-1-0.dll"));
+    assert!(binary.segment_containing(slot.address).is_some(), "delay slot not inside a segment");
+    assert!(binary.import_slots.windows(2).all(|pair| pair[0].address < pair[1].address), "unsorted slots");
+    assert!(binary.warnings.is_empty(), "{:?}", binary.warnings);
+}
+
+#[test]
 fn elf_dynamic_data_survives_missing_section_headers() {
     let binary = Binary::open(malformed("sstrip.elf")).unwrap();
     let rampage_loaders::Details::Elf(details) = &binary.details else { panic!("{:?}", binary.details) };

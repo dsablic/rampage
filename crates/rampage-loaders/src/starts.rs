@@ -76,6 +76,60 @@ pub(crate) fn pe_exception_directory(parsed: &object::File) -> Option<ExceptionD
     Some(ExceptionDirectory { image_base, address, size: directory.size.get(LE).into() })
 }
 
+/// Where a PE's thread-local-storage directory lies: its absolute address and the image's pointer width.
+pub(crate) struct TlsDirectory {
+    address: u64,
+    pointer_size: u8,
+}
+
+pub(crate) fn pe_tls_directory(parsed: &object::File) -> Option<TlsDirectory> {
+    let directory = match parsed {
+        object::File::Pe64(file) => file.data_directory(pe::IMAGE_DIRECTORY_ENTRY_TLS),
+        object::File::Pe32(file) => file.data_directory(pe::IMAGE_DIRECTORY_ENTRY_TLS),
+        _ => None,
+    }?;
+    let rva = directory.virtual_address.get(LE);
+    if rva == 0 {
+        return None;
+    }
+    let address = parsed.relative_address_base().checked_add(rva.into())?;
+    Some(TlsDirectory { address, pointer_size: if parsed.is_64() { 8 } else { 4 } })
+}
+
+/// A hostile image cannot register more initializers than this; a benign one registers a handful.
+const MAX_TLS_CALLBACKS: usize = 4096;
+
+/// Reads the TLS callback array into function starts. The TLS directory's `AddressOfCallBacks` field (the
+/// fourth pointer, after the two raw-data bounds and the index address) is the virtual address of a
+/// NUL-terminated array of callback VAs. Each callback runs before `main` on thread creation and teardown, so
+/// static discovery from the entry point misses it; init code is commonly hidden here. Bounded and
+/// bounds-checked against mapped image bytes; non-code addresses are dropped by the caller's `is_code` filter.
+pub(crate) fn pe_tls(binary: &Binary, directory: &TlsDirectory) -> Vec<u64> {
+    let TlsDirectory { address, pointer_size } = *directory;
+    let stride = u64::from(pointer_size);
+    let Some(callbacks_field) = address.checked_add(stride.saturating_mul(3)) else { return Vec::new() };
+    let Some(array) = read_le_pointer(binary, callbacks_field, pointer_size) else { return Vec::new() };
+    if array == 0 {
+        return Vec::new();
+    }
+    let mut starts = Vec::new();
+    for index in 0..MAX_TLS_CALLBACKS as u64 {
+        let Some(entry) = index.checked_mul(stride).and_then(|offset| array.checked_add(offset)) else { break };
+        match read_le_pointer(binary, entry, pointer_size) {
+            Some(0) | None => break,
+            Some(callback) => starts.push(callback),
+        }
+    }
+    starts
+}
+
+/// Reads a little-endian pointer (PE is always little-endian) from mapped image bytes, or `None` when the
+/// location is not file-backed.
+fn read_le_pointer(binary: &Binary, address: u64, size: u8) -> Option<u64> {
+    let bytes = binary.read(address, u64::from(size))?;
+    Some(bytes.iter().rev().fold(0u64, |value, &byte| value << 8 | u64::from(byte)))
+}
+
 const RUNTIME_FUNCTION_SIZE: usize = 12;
 const UNW_FLAG_CHAININFO: u8 = 0x4;
 

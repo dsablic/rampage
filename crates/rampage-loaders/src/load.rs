@@ -307,6 +307,7 @@ impl Binary {
         let be8 = arch == Arch::Arm && be8_flag(parsed.flags());
         let code_big_endian = big_endian && !be8;
         let exception_directory = starts::pe_exception_directory(&parsed);
+        let tls_directory = starts::pe_tls_directory(&parsed);
         let import_slots = crate::slots::collect(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
         let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64).unwrap_or_else(|warning| {
@@ -351,6 +352,9 @@ impl Binary {
             let (starts, warning) = starts::pe(&binary, &directory);
             function_starts.extend(starts);
             binary.warnings.extend(warning);
+        }
+        if let Some(directory) = tls_directory {
+            function_starts.extend(starts::pe_tls(&binary, &directory));
         }
         let (starts, warning) = starts::eh_frame(&binary);
         function_starts.extend(starts);
@@ -522,19 +526,40 @@ impl Binary {
     /// parses it against the image's text base, pointer width and byte order.
     fn read_gopclntab(&self) -> crate::gopclntab::GoReport {
         let mut report = crate::gopclntab::GoReport::default();
+        let text = self.sections.iter().find(|section| section.name == ".text" || section.name == "__text");
         let Some(section) = self.sections.iter().find(|section| is_gopclntab(&section.name)) else {
-            return report;
+            return text.map_or(report, |text| self.scan_gopclntab(text.address));
         };
         let Some(bytes) = self.read(section.address, section.size) else {
             report.warnings.push("gopclntab section bytes are not mapped".to_owned());
             return report;
         };
-        let Some(text) = self.sections.iter().find(|section| section.name == ".text" || section.name == "__text")
-        else {
+        let Some(text) = text else {
             report.warnings.push("gopclntab found but no text section to anchor addresses".to_owned());
             return report;
         };
         crate::gopclntab::parse(bytes, text.address, self.arch.pointer_size(), self.big_endian)
+    }
+
+    /// Fallback for a stripped or packed image whose pclntab keeps no recognizable section name: scans the
+    /// read-only data sections for the table. A candidate is accepted only once it parses cleanly and all of
+    /// its recovered addresses sit in code, so arbitrary data cannot masquerade as a table.
+    fn scan_gopclntab(&self, text_base: u64) -> crate::gopclntab::GoReport {
+        let pointer_size = self.arch.pointer_size();
+        for section in &self.sections {
+            if section.kind != SectionKind::ReadOnlyData || section.size == 0 {
+                continue;
+            }
+            let Some(bytes) = self.read(section.address, section.size) else { continue };
+            let Some(report) = crate::gopclntab::scan_blob(bytes, text_base, pointer_size, self.big_endian) else {
+                continue;
+            };
+            let sample: Vec<u64> = report.functions.iter().take(32).map(|function| function.address).collect();
+            if !sample.is_empty() && sample.iter().all(|&address| self.is_code(address)) {
+                return report;
+            }
+        }
+        crate::gopclntab::GoReport::default()
     }
 }
 

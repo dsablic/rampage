@@ -125,6 +125,51 @@ pub fn parse(pclntab: &[u8], text_base: u64, pointer_size: u8, big_endian: bool)
     report
 }
 
+/// A scanned candidate must yield at least this many functions to be trusted. A real Go program has thousands;
+/// this rejects stray bytes that merely begin with the magic.
+const MIN_SCANNED_FUNCTIONS: usize = 16;
+/// Caps the number of header-shaped positions fully parsed per blob, bounding scan cost on hostile data.
+const MAX_SCAN_CANDIDATES: usize = 64;
+
+/// Scans a read-only data blob for an embedded pclntab, for images whose table is in an unnamed or renamed
+/// section. Each pointer-aligned position whose bytes form a `pcHeader` prefix (a known magic, the two zero
+/// pad bytes, a plausible `minLC`, and a `ptrSize` matching the image) is parsed; the first candidate that
+/// yields at least [`MIN_SCANNED_FUNCTIONS`] functions with no warnings is returned. The number of positions
+/// fully parsed is capped, so a blob full of magic-shaped noise cannot make this run away. The caller still
+/// confirms the recovered addresses are code before trusting the result.
+pub fn scan_blob(blob: &[u8], text_base: u64, pointer_size: u8, big_endian: bool) -> Option<GoReport> {
+    let stride = usize::from(pointer_size);
+    let mut candidates = 0;
+    let mut offset = 0usize;
+    while offset.checked_add(8).is_some_and(|end| end <= blob.len()) {
+        if header_shaped(&blob[offset..], pointer_size, big_endian) {
+            let report = parse(&blob[offset..], text_base, pointer_size, big_endian);
+            if report.warnings.is_empty() && report.functions.len() >= MIN_SCANNED_FUNCTIONS {
+                return Some(report);
+            }
+            candidates += 1;
+            if candidates >= MAX_SCAN_CANDIDATES {
+                break;
+            }
+        }
+        offset += stride;
+    }
+    None
+}
+
+/// Whether the bytes begin with a `pcHeader` prefix: a known magic, two zero pad bytes, a `minLC` of 1, 2 or
+/// 4, and a `ptrSize` equal to the image's.
+fn header_shaped(bytes: &[u8], pointer_size: u8, big_endian: bool) -> bool {
+    let Some(magic) = read_uint(bytes, 0, 4, big_endian).map(|value| value as u32) else {
+        return false;
+    };
+    matches!(magic, MAGIC_GO12 | MAGIC_GO116 | MAGIC_GO118 | MAGIC_GO120)
+        && bytes.get(4) == Some(&0)
+        && bytes.get(5) == Some(&0)
+        && matches!(bytes.get(6), Some(1 | 2 | 4))
+        && bytes.get(7) == Some(&pointer_size)
+}
+
 /// Reads each functab entry into an `(address, name)` pair, skipping any entry whose offsets fall outside
 /// the blob rather than aborting the whole table.
 fn collect(blob: &[u8], text_base: u64, big_endian: bool, layout: &Layout, nfunc: usize, report: &mut GoReport) {
@@ -281,6 +326,78 @@ mod tests {
         put_u32(&mut blob, funcs_base + 8, 0x40);
         put_u32(&mut blob, funcs_base + 12, greet_off as u32);
         blob
+    }
+
+    /// Builds a little-endian go1.20 pclntab (ptrSize 8) with one function per name, each at PC `0x10 + i*0x10`.
+    fn synthetic_go120_named(names: &[&str]) -> Vec<u8> {
+        let ptr = 8usize;
+        let header_len = 8 + 8 * ptr;
+        let funcname_base = header_len;
+        let mut nametab = vec![0u8]; // reserved empty name at offset 0
+        let mut name_offs = Vec::new();
+        for name in names {
+            name_offs.push(nametab.len());
+            nametab.extend_from_slice(name.as_bytes());
+            nametab.push(0);
+        }
+        let functab_base = funcname_base + nametab.len();
+        let functab_len = (names.len() * 2 + 1) * 4;
+        let funcs_base = functab_base + functab_len;
+        let mut blob = vec![0u8; funcs_base + names.len() * 8];
+        blob[0..4].copy_from_slice(&MAGIC_GO120.to_le_bytes());
+        blob[6] = 1; // minLC
+        blob[7] = 8; // ptrSize
+        blob[8..16].copy_from_slice(&(names.len() as u64).to_le_bytes());
+        blob[32..40].copy_from_slice(&(funcname_base as u64).to_le_bytes());
+        blob[64..72].copy_from_slice(&(functab_base as u64).to_le_bytes());
+        blob[funcname_base..funcname_base + nametab.len()].copy_from_slice(&nametab);
+        let put = |blob: &mut [u8], at: usize, value: u32| blob[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        for (index, &name_off) in name_offs.iter().enumerate() {
+            let entry_pc = 0x10 + index as u32 * 0x10;
+            let func_off = (funcs_base - functab_base) + index * 8;
+            put(&mut blob, functab_base + index * 8, entry_pc);
+            put(&mut blob, functab_base + index * 8 + 4, func_off as u32);
+            put(&mut blob, funcs_base + index * 8, entry_pc);
+            put(&mut blob, funcs_base + index * 8 + 4, name_off as u32);
+        }
+        put(&mut blob, functab_base + names.len() * 8, 0x10 + names.len() as u32 * 0x10); // sentinel
+        blob
+    }
+
+    #[test]
+    fn scan_finds_an_embedded_table_amid_noise() {
+        let names: Vec<String> = (0..20).map(|index| format!("pkg.fn{index}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let table = synthetic_go120_named(&refs);
+        // Pointer-aligned noise before and after; neither looks like a header.
+        let mut blob = vec![0xAAu8; 32];
+        blob.extend_from_slice(&table);
+        blob.extend_from_slice(&[0x55u8; 40]);
+        let report = scan_blob(&blob, 0x401000, 8, false).expect("scan finds the table");
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        assert_eq!(report.functions.len(), 20);
+        assert_eq!(report.functions[0].name, "pkg.fn0");
+        assert_eq!(report.functions[0].address, 0x401000 + 0x10);
+    }
+
+    #[test]
+    fn scan_declines_magic_shaped_noise_and_too_small_tables() {
+        // A valid header prefix over garbage parses to nothing useful, so it is declined.
+        let mut blob = vec![0u8; 256];
+        blob[0..4].copy_from_slice(&MAGIC_GO120.to_le_bytes());
+        blob[6] = 1;
+        blob[7] = 8;
+        blob[8] = 5;
+        assert!(scan_blob(&blob, 0x401000, 8, false).is_none());
+        // A clean table with too few functions is below the scan's trust threshold.
+        let small = synthetic_go120_named(&["main.main", "main.greet"]);
+        assert!(scan_blob(&small, 0x401000, 8, false).is_none());
+        // No header anywhere: nothing found, no panic on any truncation.
+        let plain = b"not a go table, just some read-only strings and data".to_vec();
+        assert!(scan_blob(&plain, 0x401000, 8, false).is_none());
+        for end in 0..small.len() {
+            let _ = scan_blob(&small[..end], 0x401000, 8, false);
+        }
     }
 
     #[test]
