@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -84,6 +85,14 @@ class Process:
     def GetSelectedThread(self) -> Any:
         return SimpleNamespace(IsValid=lambda: False)
 
+    def GetThreadByID(self, identity: int) -> Any:
+        thread = self.GetSelectedThread()
+        return (
+            thread
+            if thread.IsValid() and thread.GetThreadID() == identity
+            else SimpleNamespace(IsValid=lambda: False)
+        )
+
     def GetMemoryRegionInfo(self, address: int, region: MemoryRegion) -> ReadError:
         return ReadError()
 
@@ -97,6 +106,7 @@ def debugger(process: Process) -> Any:
         GetProcess=lambda: process,
         GetTriple=lambda: "arm64-apple-macosx",
         GetByteOrder=lambda: 0,
+        GetAddressByteSize=lambda: 8,
         GetNumModules=lambda: 0,
     )
     return SimpleNamespace(GetSelectedTarget=lambda: target)
@@ -114,6 +124,7 @@ def test_export_reads_only_requested_ranges_and_never_overwrites(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -147,6 +158,7 @@ def test_export_rejects_running_process_without_reading_memory(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -175,12 +187,16 @@ def test_export_records_module_slides_and_register_provenance(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
             LLDB_INVALID_ADDRESS=2**64 - 1,
         ),
     )
     process = Process()
     frame = SimpleNamespace(
         IsValid=lambda: True,
+        GetFrameID=lambda: 0,
+        GetPC=lambda: 0x1000,
+        GetSP=lambda: 0x8000,
         FindRegister=lambda name: SimpleNamespace(
             IsValid=lambda: name == "sp",
             GetValueAsUnsigned=lambda error: 0x8000,
@@ -190,6 +206,8 @@ def test_export_records_module_slides_and_register_provenance(
         IsValid=lambda: True,
         GetFrameAtIndex=lambda index: frame,
         GetThreadID=lambda: 1,
+        IsStopped=lambda: True,
+        GetStopReason=lambda: 3,
     )
     filespec = SimpleNamespace(GetFilename=lambda: "fixture")
     module = SimpleNamespace(
@@ -208,9 +226,11 @@ def test_export_records_module_slides_and_register_provenance(
             GetProcessID=process.GetProcessID,
             GetStopID=process.GetStopID,
             GetSelectedThread=lambda: thread,
+            GetThreadByID=lambda identity: thread,
         ),
         GetTriple=lambda: "arm64-apple-macosx",
         GetByteOrder=lambda: 0,
+        GetAddressByteSize=lambda: 8,
         GetNumModules=lambda: 1,
         GetModuleAtIndex=lambda index: module,
     )
@@ -272,6 +292,7 @@ def test_export_validation_fails_before_any_memory_read_or_output(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -295,6 +316,7 @@ def test_explicit_compiler_is_recorded_without_executing_target_code(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -328,6 +350,7 @@ def test_mislabelled_permissions_are_rejected_before_reading(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -359,6 +382,7 @@ def test_every_mapping_in_a_requested_range_is_validated(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -376,7 +400,7 @@ def test_every_mapping_in_a_requested_range_is_validated(
     load_exporter().export_snapshot(
         debugger(process), f"{output} --region 0x1000:4:r-x", result, {}
     )
-    assert queries == [0x1000, 0x1002]
+    assert queries == [0x1000, 0x1002] * (1 if gap else 2)
     if gap:
         assert result.error is not None
         assert process.reads == []
@@ -397,6 +421,7 @@ def test_changed_stop_identity_never_publishes_a_capture(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -426,6 +451,7 @@ def test_expression_only_stop_changes_are_observed(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -458,6 +484,7 @@ def test_nonprogressing_or_malformed_mapping_bounds_are_refused(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -483,7 +510,9 @@ def test_missing_mapping_api_is_refused_without_reading(
     monkeypatch.setitem(
         sys.modules,
         "lldb",
-        SimpleNamespace(SBError=ReadError, eStateStopped=1, eByteOrderBig=1),
+        SimpleNamespace(
+            SBError=ReadError, eStateStopped=1, eByteOrderBig=1, eByteOrderLittle=0
+        ),
     )
     process = Process()
     result = Result()
@@ -560,6 +589,7 @@ def test_failed_mapping_query_is_reported_before_reads(
             SBMemoryRegionInfo=MemoryRegion,
             eStateStopped=1,
             eByteOrderBig=1,
+            eByteOrderLittle=0,
         ),
     )
     process = Process()
@@ -625,6 +655,14 @@ def test_interrupted_serialization_preserves_interrupt_and_removes_sensitive_tem
     assert list(tmp_path.iterdir()) == []
 
 
+class FileSpec:
+    def GetFilename(self) -> str:
+        return "fixture"
+
+    def __str__(self) -> str:
+        return "fixture"
+
+
 def loaded_module(
     runtime: int = 0x1000, machine: str = "arm64", hole: bool = False
 ) -> Any:
@@ -651,8 +689,10 @@ def loaded_module(
             GetFileAddress=lambda: 0x100000000, GetLoadAddress=lambda target: runtime
         ),
         GetUUIDString=lambda: "01234567-89ab-cdef-0123-456789abcdef",
-        GetFileSpec=lambda: SimpleNamespace(GetFilename=lambda: "fixture"),
+        GetFileSpec=FileSpec,
         GetTriple=lambda: f"{machine}-apple-macosx",
+        GetByteOrder=lambda: 0,
+        GetAddressByteSize=lambda: 8,
         GetNumSections=lambda: 1,
         GetSectionAtIndex=lambda index: parent,
     )
@@ -667,6 +707,7 @@ def test_module_selection_uses_checked_header_slide_and_loaded_section_coverage(
         SBMemoryRegionInfo=MemoryRegion,
         eStateStopped=1,
         eByteOrderBig=1,
+        eByteOrderLittle=0,
         LLDB_INVALID_ADDRESS=2**64 - 1,
     )
     monkeypatch.setitem(sys.modules, "lldb", api)
@@ -707,6 +748,7 @@ def test_invalid_module_selections_fail_before_target_memory_reads(
         SBMemoryRegionInfo=MemoryRegion,
         eStateStopped=1,
         eByteOrderBig=1,
+        eByteOrderLittle=0,
         LLDB_INVALID_ADDRESS=2**64 - 1,
     )
     monkeypatch.setitem(sys.modules, "lldb", api)
@@ -740,6 +782,7 @@ def test_opaque_module_identifiers_do_not_prevent_explicit_runtime_range_capture
         SBMemoryRegionInfo=MemoryRegion,
         eStateStopped=1,
         eByteOrderBig=1,
+        eByteOrderLittle=0,
         LLDB_INVALID_ADDRESS=2**64 - 1,
     )
     monkeypatch.setitem(sys.modules, "lldb", api)
@@ -764,7 +807,11 @@ def test_opaque_module_identifiers_do_not_prevent_explicit_runtime_range_capture
 
 def test_contained_overlapping_section_cannot_hide_a_contradictory_slide() -> None:
     exporter = load_exporter()
-    target = SimpleNamespace(GetTriple=lambda: "arm64-apple-macosx")
+    target = SimpleNamespace(
+        GetTriple=lambda: "arm64-apple-macosx",
+        GetByteOrder=lambda: 0,
+        GetAddressByteSize=lambda: 8,
+    )
     module = loaded_module()
     metadata = {
         "uuid": "0123456789abcdef0123456789abcdef",
@@ -785,7 +832,11 @@ def test_contained_overlapping_section_cannot_hide_a_contradictory_slide() -> No
 
 def test_runtime_aliases_of_unselected_sections_are_rejected() -> None:
     exporter = load_exporter()
-    target = SimpleNamespace(GetTriple=lambda: "arm64-apple-macosx")
+    target = SimpleNamespace(
+        GetTriple=lambda: "arm64-apple-macosx",
+        GetByteOrder=lambda: 0,
+        GetAddressByteSize=lambda: 8,
+    )
     metadata = {
         "uuid": "0123456789abcdef0123456789abcdef",
         "image_base": "0x100000000",
@@ -814,3 +865,1013 @@ def test_section_inspection_budget_is_shared_across_selected_modules() -> None:
     assert budget == [0]
     with pytest.raises(ValueError, match="inspection limit"):
         exporter.module_ranges(loaded_module(), SimpleNamespace(), api, budget)
+
+
+class CaptureThread:
+    valid: bool = True
+    stopped: bool = True
+    reason: int = 3
+    frame_valid: bool = True
+    identity: int
+    registers: dict[str, int]
+    register_queries: list[str]
+
+    def __init__(self, identity: int) -> None:
+        self.identity = identity
+        self.registers = {"pc": 0x1100, "sp": 0x8000 + identity * 0x100, "x0": identity}
+        self.register_queries = []
+
+    def IsValid(self) -> bool:
+        return self.valid
+
+    def IsStopped(self) -> bool:
+        return self.stopped
+
+    def GetThreadID(self) -> int:
+        return self.identity
+
+    def GetStopReason(self) -> int:
+        return self.reason
+
+    def GetFrameAtIndex(self, index: int) -> Any:
+        assert index == 0
+        return SimpleNamespace(
+            IsValid=lambda: self.frame_valid,
+            FindRegister=self.find_register,
+            GetFrameID=lambda: 0,
+            GetPC=lambda: self.registers.get("pc", self.registers.get("rip", 0x1100)),
+            GetSP=lambda: self.registers.get("sp", self.registers.get("rsp", 0x8000)),
+        )
+
+    def find_register(self, name: str) -> Any:
+        self.register_queries.append(name)
+        return SimpleNamespace(
+            IsValid=lambda: name in self.registers,
+            GetValueAsUnsigned=lambda error: self.registers[name],
+        )
+
+
+class ThreadProcess(Process):
+    threads: list[CaptureThread]
+    thread_lookups: list[int]
+    thread_indices: list[int]
+    count_queries: int
+
+    def __init__(self, threads: list[CaptureThread]) -> None:
+        super().__init__()
+        self.threads = threads
+        self.thread_lookups = []
+        self.thread_indices = []
+        self.count_queries = 0
+
+    def GetSelectedThread(self) -> Any:
+        return self.threads[0] if self.threads else super().GetSelectedThread()
+
+    def GetNumThreads(self) -> int:
+        self.count_queries += 1
+        return len(self.threads)
+
+    def GetThreadAtIndex(self, index: int) -> CaptureThread:
+        self.thread_indices.append(index)
+        return self.threads[index]
+
+    def GetThreadByID(self, identity: int) -> Any:
+        self.thread_lookups.append(identity)
+        return next(
+            (thread for thread in self.threads if thread.identity == identity),
+            SimpleNamespace(IsValid=lambda: False),
+        )
+
+
+@pytest.fixture
+def capture_api(monkeypatch: pytest.MonkeyPatch) -> Any:
+    api = SimpleNamespace(
+        SBError=ReadError,
+        SBMemoryRegionInfo=MemoryRegion,
+        eStateStopped=1,
+        eByteOrderBig=1,
+        eByteOrderLittle=0,
+        LLDB_INVALID_ADDRESS=2**64 - 1,
+    )
+    monkeypatch.setitem(sys.modules, "lldb", api)
+    return api
+
+
+@pytest.mark.parametrize("selection", ["", "--thread 0x2 --thread 1", "--all-threads"])
+def test_thread_selection_preserves_default_and_flattened_register_provenance(
+    tmp_path: Path, capture_api: Any, selection: str
+) -> None:
+    threads = [CaptureThread(1), CaptureThread(2)]
+    threads[1].reason = 0
+    threads[1].stopped = False
+    process = ThreadProcess(threads)
+    output = tmp_path / "threads.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x {selection}", result, {}
+    )
+    assert result.error is None
+    snapshot = json.loads(output.read_text())
+    wanted = (
+        [threads[1], threads[0]]
+        if selection.startswith("--thread")
+        else threads
+        if selection
+        else threads[:1]
+    )
+    assert snapshot["registers"] == [
+        {
+            "thread_id": hex(thread.identity),
+            "name": name,
+            "value": hex(thread.registers[name]),
+        }
+        for thread in wanted
+        for name in ("x0", "sp", "pc")
+    ]
+    for thread in wanted:
+        assert (
+            f"{thread.identity:#x} (stop reason {thread.reason})"
+            in snapshot["provenance"]
+        )
+    if not selection:
+        assert threads[1].register_queries == []
+    assert process.thread_lookups == (
+        [2, 1] * 2 if selection.startswith("--thread") else [] if selection else [1]
+    )
+    assert process.thread_indices == (
+        [0, 1] * 2 if selection == "--all-threads" else []
+    )
+    assert process.count_queries == (2 if selection == "--all-threads" else 0)
+    assert process.reads == [(0x1000, 4)]
+
+
+@pytest.mark.parametrize(
+    "selection,expected",
+    [
+        ("--thread 1 --thread 0x1", "duplicate requested"),
+        ("--thread 0", "invalid requested"),
+        ("--thread -1", "invalid requested"),
+        ("--thread 0xffffffffffffffff", "invalid requested"),
+        ("--thread invalid", "invalid literal"),
+        ("--thread 9", "not valid"),
+        ("--all-threads --thread 1", "not allowed"),
+    ],
+)
+def test_invalid_thread_selection_is_rejected_before_memory_reads(
+    tmp_path: Path, capture_api: Any, selection: str, expected: str
+) -> None:
+    process = ThreadProcess([CaptureThread(1)])
+    output = tmp_path / "invalid-thread.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x {selection}", result, {}
+    )
+    assert expected in (result.error or "")
+    assert process.reads == []
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("all_threads", [False, True])
+def test_thread_budget_refuses_excess_without_enumeration_or_partial_capture(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, all_threads: bool
+) -> None:
+    exporter = load_exporter()
+    monkeypatch.setattr(exporter, "MAX_CAPTURE_THREADS", 2)
+    process = ThreadProcess([CaptureThread(index) for index in (1, 2, 3)])
+    selection = "--all-threads" if all_threads else "--thread 1 --thread 2 --thread 3"
+    output = tmp_path / "bounded.json"
+    result = Result()
+    exporter.export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x {selection}", result, {}
+    )
+    assert "thread limit" in (result.error or "")
+    assert process.thread_indices == process.thread_lookups == process.reads == []
+    assert not output.exists()
+    process.threads.pop()
+    result = Result()
+    exporter.export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x --all-threads", result, {}
+    )
+    assert result.error is None
+    assert {
+        row["thread_id"] for row in json.loads(output.read_text())["registers"]
+    } == {"0x1", "0x2"}
+
+
+@pytest.mark.parametrize("selection", ["", "--all-threads"])
+def test_no_selected_thread_preserves_default_but_all_requires_threads(
+    tmp_path: Path, capture_api: Any, selection: str
+) -> None:
+    process = ThreadProcess([])
+    output = tmp_path / "no-threads.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x {selection}", result, {}
+    )
+    if selection:
+        assert "thread count is empty" in (result.error or "")
+        assert process.reads == []
+        assert not output.exists()
+    else:
+        assert result.error is None
+        assert json.loads(output.read_text())["registers"] == []
+        assert process.count_queries == 0
+
+
+def test_default_without_a_valid_selected_top_frame_still_captures_memory(
+    tmp_path: Path, capture_api: Any
+) -> None:
+    thread = CaptureThread(1)
+    thread.frame_valid = False
+    process = ThreadProcess([thread])
+    output = tmp_path / "no-selected-frame.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x", result, {}
+    )
+    assert result.error is None
+    assert process.reads == [(0x1000, 4)]
+    assert json.loads(output.read_text())["registers"] == []
+    assert thread.register_queries == []
+
+
+@pytest.mark.parametrize(
+    "issue",
+    ["invalid", "frame", "identity", "reason", "duplicate", "wrong-id"],
+)
+def test_thread_context_validation_cannot_silently_omit_requested_threads(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, issue: str
+) -> None:
+    threads = [CaptureThread(1), CaptureThread(2)]
+    process = ThreadProcess(threads)
+    if issue == "invalid":
+        threads[1].valid = False
+    elif issue == "frame":
+        threads[1].frame_valid = False
+    elif issue == "identity":
+        threads[1].identity = 0
+    elif issue == "reason":
+        threads[1].reason = -1
+    elif issue == "duplicate":
+        threads[1].identity = 1
+    else:
+        monkeypatch.setattr(process, "GetThreadByID", lambda identity: threads[0])
+    selection = "--thread 2" if issue == "wrong-id" else "--all-threads"
+    output = tmp_path / "bad-context.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x {selection}", result, {}
+    )
+    assert result.error is not None
+    assert process.reads == []
+    assert not output.exists()
+    assert all(not thread.register_queries for thread in threads)
+
+
+@pytest.mark.parametrize("stage", ["memory", "registers", "publication"])
+@pytest.mark.parametrize("change", ["reason", "identity", "stopped", "frame"])
+def test_thread_context_changes_never_publish_partial_or_mislabelled_registers(
+    tmp_path: Path,
+    capture_api: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    change: str,
+) -> None:
+    exporter = load_exporter()
+    thread = CaptureThread(1)
+    process = ThreadProcess([thread])
+
+    def mutate() -> None:
+        if change == "reason":
+            thread.reason += 1
+        elif change == "identity":
+            thread.identity += 1
+        elif change == "stopped":
+            thread.stopped = False
+        else:
+            thread.frame_valid = False
+
+    if stage == "memory":
+
+        def read(address: int, size: int, error: ReadError) -> bytes:
+            mutate()
+            return b"\x00" * size
+
+        monkeypatch.setattr(process, "ReadMemory", read)
+    elif stage == "registers":
+        original_register = thread.find_register
+
+        def register(name: str) -> Any:
+            value = original_register(name)
+            mutate()
+            return value
+
+        monkeypatch.setattr(thread, "find_register", register)
+    else:
+        original_dump = exporter.json.dump
+
+        def dump(snapshot: dict[str, Any], stream: Any) -> None:
+            original_dump(snapshot, stream)
+            mutate()
+
+        monkeypatch.setattr(exporter.json, "dump", dump)
+    result = Result()
+    output = tmp_path / "changed-thread.json"
+    exporter.export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x --thread 1", result, {}
+    )
+    assert result.error is not None
+    assert not output.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "byte_order,address_size,machine",
+    [
+        (2, 8, "arm64"),
+        (0, 4, "arm64"),
+        (1, 4, "arm"),
+        (1, 8, "arm64"),
+        (1, 8, "x86_64"),
+    ],
+)
+def test_unrepresentable_target_context_is_rejected_before_memory_reads(
+    tmp_path: Path, capture_api: Any, byte_order: int, address_size: int, machine: str
+) -> None:
+    process = Process()
+    target = debugger(process).GetSelectedTarget()
+    target.GetByteOrder = lambda: byte_order
+    target.GetAddressByteSize = lambda: address_size
+    target.GetTriple = lambda: f"{machine}-unknown-linux"
+    result = Result()
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{tmp_path / 'invalid-target.json'} --region 0x1000:4:r-x",
+        result,
+        {},
+    )
+    assert result.error is not None
+    assert process.reads == []
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("change", ["byte-order", "address-size", "triple"])
+def test_target_context_change_during_capture_is_not_published(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    process = Process()
+    target = debugger(process).GetSelectedTarget()
+
+    def read(address: int, size: int, error: ReadError) -> bytes:
+        if change == "byte-order":
+            target.GetByteOrder = lambda: 1
+        elif change == "address-size":
+            target.GetAddressByteSize = lambda: 4
+        else:
+            target.GetTriple = lambda: "arm64-unknown-linux"
+        return b"\x00" * size
+
+    monkeypatch.setattr(process, "ReadMemory", read)
+    result = Result()
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{tmp_path / 'changed-target.json'} --region 0x1000:4:r-x",
+        result,
+        {},
+    )
+    assert "target context changed" in (result.error or "")
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "issue", [None, "byte-order", "address-size", "architecture", "permissions"]
+)
+def test_multiple_modules_and_threads_keep_uuid_slides_and_context_separate(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, issue: str | None
+) -> None:
+    process = ThreadProcess([CaptureThread(1), CaptureThread(2)])
+    modules = [loaded_module(0x1000), loaded_module(0x3000, "arm64e")]
+    uuids = ["0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"]
+    modules[1].GetUUIDString = lambda: uuids[1]
+    if issue == "byte-order":
+        modules[1].GetByteOrder = lambda: 1
+    elif issue == "address-size":
+        modules[1].GetAddressByteSize = lambda: 4
+    elif issue == "architecture":
+        modules[1].GetTriple = lambda: "x86_64-apple-macosx"
+
+    def mapping(address: int, region: MemoryRegion) -> ReadError:
+        region.base = address & ~0xFFF
+        region.end = region.base + 0x1000
+        if issue == "permissions" and address >= 0x3000:
+            region.permissions = "rw-"
+        return ReadError()
+
+    monkeypatch.setattr(process, "GetMemoryRegionInfo", mapping)
+    target = debugger(process).GetSelectedTarget()
+    target.GetNumModules = lambda: len(modules)
+    target.GetModuleAtIndex = lambda index: modules[index]
+    selections = " ".join(
+        f"--module-region {uuid}:0x100000100:4:r-x --module-seed {uuid}:0x100000100"
+        for uuid in uuids
+    )
+    output = tmp_path / "multi-module.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} {selections} --all-threads",
+        result,
+        {},
+    )
+    if issue is not None:
+        assert result.error is not None
+        assert process.reads == []
+        assert not output.exists()
+        return
+    assert result.error is None
+    assert process.reads == [(0x1100, 4), (0x3100, 4)]
+    snapshot = json.loads(output.read_text())
+    assert snapshot["seeds"] == ["0x1100", "0x3100"]
+    assert [metadata["runtime_base"] for metadata in snapshot["modules"]] == [
+        "0x1000",
+        "0x3000",
+    ]
+    assert [
+        load_exporter().module_identity(metadata["uuid"])
+        for metadata in snapshot["modules"]
+    ] == uuids
+    assert {row["thread_id"] for row in snapshot["registers"]} == {"0x1", "0x2"}
+    assert "byte_order" not in snapshot["modules"][0]
+
+
+@pytest.mark.parametrize("stage", ["memory", "publication"])
+@pytest.mark.parametrize(
+    "change", ["uuid", "slide", "byte-order", "address-size", "architecture"]
+)
+def test_changed_module_provenance_is_not_published(
+    tmp_path: Path,
+    capture_api: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    change: str,
+) -> None:
+    exporter = load_exporter()
+    process = Process()
+    target = debugger(process).GetSelectedTarget()
+    module = loaded_module()
+    target.GetNumModules = lambda: 1
+    target.GetModuleAtIndex = lambda index: module
+
+    def mutate() -> None:
+        if change == "uuid":
+            module.GetUUIDString = lambda: "fedcba9876543210fedcba9876543210"
+        elif change == "slide":
+            module.GetObjectFileHeaderAddress = lambda: SimpleNamespace(
+                GetFileAddress=lambda: 0x100000000, GetLoadAddress=lambda target: 0x2000
+            )
+        elif change == "byte-order":
+            module.GetByteOrder = lambda: 1
+        elif change == "address-size":
+            module.GetAddressByteSize = lambda: 4
+        else:
+            module.GetTriple = lambda: "x86_64-apple-macosx"
+
+    if stage == "memory":
+
+        def read(address: int, size: int, error: ReadError) -> bytes:
+            mutate()
+            return b"\x00" * size
+
+        monkeypatch.setattr(process, "ReadMemory", read)
+    else:
+        original_dump = exporter.json.dump
+
+        def dump(snapshot: dict[str, Any], stream: Any) -> None:
+            original_dump(snapshot, stream)
+            mutate()
+
+        monkeypatch.setattr(exporter.json, "dump", dump)
+    output = tmp_path / "changed-module.json"
+    result = Result()
+    exporter.export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} --module-region 0123456789abcdef0123456789abcdef:0x100000100:4:r-x",
+        result,
+        {},
+    )
+    assert "module" in (result.error or "")
+    assert not output.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("selection", ["--all-threads", "--thread 1"])
+def test_changed_thread_membership_is_not_published(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, selection: str
+) -> None:
+    process = ThreadProcess([CaptureThread(1)])
+
+    def read(address: int, size: int, error: ReadError) -> bytes:
+        if selection == "--all-threads":
+            process.threads.append(CaptureThread(2))
+        else:
+            process.threads.clear()
+        return b"\x00" * size
+
+    monkeypatch.setattr(process, "ReadMemory", read)
+    output = tmp_path / "changed-thread-set.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x {selection}", result, {}
+    )
+    assert "thread" in (result.error or "")
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("issue", ["missing", "failed", "overflow"])
+def test_bad_registers_in_a_later_thread_refuse_the_entire_capture(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, issue: str
+) -> None:
+    threads = [CaptureThread(1), CaptureThread(2)]
+    process = ThreadProcess(threads)
+    if issue == "missing":
+        threads[1].registers.clear()
+    elif issue == "overflow":
+        threads[1].registers["x0"] = 2**64
+    else:
+
+        def register(name: str) -> Any:
+            def value(error: Any) -> int:
+                error.Success = lambda: False
+                return 0
+
+            return SimpleNamespace(
+                IsValid=lambda: name == "sp", GetValueAsUnsigned=value
+            )
+
+        monkeypatch.setattr(threads[1], "find_register", register)
+    output = tmp_path / "failed-registers.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x --all-threads", result, {}
+    )
+    assert result.error is not None
+    assert threads[0].register_queries
+    assert not output.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "machine,registers",
+    [
+        ("arm", {"r0": 1, "sp": 0x8000, "pc": 0x1000, "cpsr": 0}),
+        ("x86_64", {"rax": 2, "rsp": 0x9000, "rip": 0x1000}),
+    ],
+)
+def test_other_supported_architectures_capture_bounded_named_registers(
+    tmp_path: Path, capture_api: Any, machine: str, registers: dict[str, int]
+) -> None:
+    thread = CaptureThread(1)
+    thread.registers = registers
+    process = ThreadProcess([thread])
+    target = debugger(process).GetSelectedTarget()
+    target.GetTriple = lambda: f"{machine}-unknown-linux"
+    target.GetAddressByteSize = lambda: 4 if machine == "arm" else 8
+    output = tmp_path / "other-registers.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} --region 0x1000:4:r-x --thread 1",
+        result,
+        {},
+    )
+    assert result.error is None
+    snapshot = json.loads(output.read_text())
+    assert {
+        row["name"]: int(row["value"], 16) for row in snapshot["registers"]
+    } == registers
+    assert all(row["thread_id"] == "0x1" for row in snapshot["registers"])
+    assert len(thread.register_queries) <= 34 + 5
+
+
+def test_multi_thread_export_never_launches_attaches_executes_or_changes_selection(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    threads = [CaptureThread(1), CaptureThread(2)]
+    process = ThreadProcess(threads)
+    selected_debugger = debugger(process)
+    target = selected_debugger.GetSelectedTarget()
+
+    def forbidden(*arguments: Any, **options: Any) -> None:
+        pytest.fail("exporter attempted an operation outside stopped read-only capture")
+
+    for receiver, names in [
+        (selected_debugger, ["HandleCommand", "SetAsync"]),
+        (
+            target,
+            [
+                "Launch",
+                "LaunchSimple",
+                "Attach",
+                "AttachToProcessWithID",
+                "EvaluateExpression",
+            ],
+        ),
+        (
+            process,
+            [
+                "Continue",
+                "Stop",
+                "Kill",
+                "Detach",
+                "SetSelectedThread",
+                "SetSelectedThreadByID",
+            ],
+        ),
+    ]:
+        for name in names:
+            monkeypatch.setattr(receiver, name, forbidden, raising=False)
+    for thread in threads:
+        for name in [
+            "StepInto",
+            "StepOver",
+            "StepInstruction",
+            "RunToAddress",
+            "Resume",
+            "Suspend",
+        ]:
+            monkeypatch.setattr(thread, name, forbidden, raising=False)
+        frame = thread.GetFrameAtIndex(0)
+        frame.EvaluateExpression = forbidden
+        frame.GetValueForVariablePath = forbidden
+        monkeypatch.setattr(thread, "GetFrameAtIndex", lambda index, frame=frame: frame)
+    output = tmp_path / "readonly.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        selected_debugger, f"{output} --region 0x1000:4:r-x --all-threads", result, {}
+    )
+    assert result.error is None
+    assert process.reads == [(0x1000, 4)]
+    assert len(
+        {row["thread_id"] for row in json.loads(output.read_text())["registers"]}
+    ) == len(threads)
+
+
+def change_during_publication(
+    exporter: Any, monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]
+) -> None:
+    original_dump = exporter.json.dump
+
+    def dump(snapshot: dict[str, Any], stream: Any) -> None:
+        original_dump(snapshot, stream)
+        change()
+
+    monkeypatch.setattr(exporter.json, "dump", dump)
+
+
+@pytest.mark.parametrize("selection", ["", "--thread 1", "--all-threads"])
+@pytest.mark.parametrize("status", [None, 1 << 9, 2**32])
+def test_arm32_unknown_or_big_endian_cpsr_refuses_capture_before_memory_reads(
+    tmp_path: Path, capture_api: Any, selection: str, status: int | None
+) -> None:
+    thread = CaptureThread(1)
+    if status is not None:
+        thread.registers["cpsr"] = status
+    process = ThreadProcess([thread])
+    target = debugger(process).GetSelectedTarget()
+    target.GetTriple = lambda: "arm-unknown-linux"
+    target.GetAddressByteSize = lambda: 4
+    result = Result()
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{tmp_path / 'endian.json'} --region 0x1000:4:r-x {selection}",
+        result,
+        {},
+    )
+    assert "CPSR" in (result.error or "")
+    assert process.reads == []
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("missing", ["thread", "frame", "unreadable"])
+def test_arm32_default_cannot_guess_data_byte_order_without_readable_status(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    thread = CaptureThread(1)
+    thread.registers["cpsr"] = 0
+    process = ThreadProcess([] if missing == "thread" else [thread])
+    if missing == "frame":
+        thread.frame_valid = False
+    elif missing == "unreadable":
+
+        def register(name: str) -> Any:
+            def value(error: Any) -> int:
+                error.Success = lambda: False
+                return 0
+
+            return SimpleNamespace(
+                IsValid=lambda: name == "cpsr", GetValueAsUnsigned=value
+            )
+
+        monkeypatch.setattr(thread, "find_register", register)
+    target = debugger(process).GetSelectedTarget()
+    target.GetTriple = lambda: "arm-unknown-linux"
+    target.GetAddressByteSize = lambda: 4
+    result = Result()
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{tmp_path / 'unknown-endian.json'} --region 0x1000:4:r-x",
+        result,
+        {},
+    )
+    assert "cpsr" in (result.error or "").lower()
+    assert process.reads == []
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("change", [None, 1 << 9, 1])
+def test_arm32_status_changes_at_publication_are_rejected_without_guessing_be8(
+    tmp_path: Path,
+    capture_api: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    change: int | None,
+) -> None:
+    exporter = load_exporter()
+    thread = CaptureThread(1)
+    thread.registers["cpsr"] = 0
+    process = ThreadProcess([thread])
+    target = debugger(process).GetSelectedTarget()
+    target.GetTriple = lambda: "arm-unknown-linux"
+    target.GetAddressByteSize = lambda: 4
+
+    def mutate() -> None:
+        if change is None:
+            thread.registers.pop("cpsr")
+        else:
+            thread.registers["cpsr"] = change
+
+    change_during_publication(exporter, monkeypatch, mutate)
+    result = Result()
+    exporter.export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{tmp_path / 'changed-endian.json'} --region 0x1000:4:r-x --thread 1",
+        result,
+        {},
+    )
+    assert result.error is not None
+    assert process.reads == [(0x1000, 4)]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("selection", ["--thread 1", "--all-threads"])
+@pytest.mark.parametrize("registers", [{"x0": 1}, {"pc": 0x1100}, {"sp": 0x8100}])
+def test_explicit_thread_capture_requires_pc_and_sp_not_any_single_register(
+    tmp_path: Path, capture_api: Any, selection: str, registers: dict[str, int]
+) -> None:
+    thread = CaptureThread(1)
+    thread.registers = registers
+    process = ThreadProcess([thread])
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process),
+        f"{tmp_path / 'partial.json'} --region 0x1000:4:r-x {selection}",
+        result,
+        {},
+    )
+    assert "missing required core registers" in (result.error or "")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_legacy_default_still_skips_unsupported_named_registers(
+    tmp_path: Path, capture_api: Any
+) -> None:
+    thread = CaptureThread(1)
+    thread.registers = {"x0": 1}
+    process = ThreadProcess([thread])
+    output = tmp_path / "partial-default.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        debugger(process), f"{output} --region 0x1000:4:r-x", result, {}
+    )
+    assert result.error is None
+    assert json.loads(output.read_text())["registers"] == [
+        {"thread_id": "0x1", "name": "x0", "value": "0x1"}
+    ]
+
+
+@pytest.mark.parametrize("selection", ["", "--thread 1", "--all-threads"])
+def test_arm32_sparse_default_requires_only_endian_status_but_explicit_capture_needs_core(
+    tmp_path: Path, capture_api: Any, selection: str
+) -> None:
+    thread = CaptureThread(1)
+    thread.registers = {"r0": 2, "cpsr": 0}
+    process = ThreadProcess([thread])
+    target = debugger(process).GetSelectedTarget()
+    target.GetTriple = lambda: "arm-unknown-linux"
+    target.GetAddressByteSize = lambda: 4
+    output = tmp_path / "arm-sparse.json"
+    result = Result()
+    load_exporter().export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} --region 0x1000:4:r-x {selection}",
+        result,
+        {},
+    )
+    if selection:
+        assert "missing required core registers" in (result.error or "")
+        assert list(tmp_path.iterdir()) == []
+    else:
+        assert result.error is None
+        snapshot = json.loads(output.read_text())
+        assert snapshot["big_endian"] is snapshot["data_big_endian"] is False
+        assert {row["name"] for row in snapshot["registers"]} == {"r0", "cpsr"}
+
+
+@pytest.mark.parametrize("change", ["load", "coverage", "image", "unloaded"])
+def test_publication_recrawls_selected_sections_even_when_uuid_header_and_stop_are_unchanged(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    exporter = load_exporter()
+    process = Process()
+    target = debugger(process).GetSelectedTarget()
+    module = loaded_module()
+    target.GetNumModules = lambda: 1
+    target.GetModuleAtIndex = lambda index: module
+    section = module.GetSectionAtIndex(0).GetSubSectionAtIndex(0)
+
+    def mutate() -> None:
+        if change == "load":
+            section.GetLoadAddress = lambda target: 0x9100
+        elif change == "coverage":
+            section.GetByteSize = lambda: 1
+        elif change == "image":
+            section.GetFileAddress = lambda: 0x100000200
+        else:
+            section.GetLoadAddress = lambda target: capture_api.LLDB_INVALID_ADDRESS
+
+    change_during_publication(exporter, monkeypatch, mutate)
+    result = Result()
+    exporter.export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{tmp_path / 'changed-sections.json'} --module-region 0123456789abcdef0123456789abcdef:0x100000100:4:r-x",
+        result,
+        {},
+    )
+    assert "section ranges changed" in (result.error or "")
+    assert process.stop_id == 1
+    assert process.reads == [(0x1100, 4)]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("budget,accepted", [(3, False), (6, True)])
+def test_initial_and_publication_section_inspection_share_one_budget(
+    tmp_path: Path,
+    capture_api: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: int,
+    accepted: bool,
+) -> None:
+    exporter = load_exporter()
+    monkeypatch.setattr(exporter, "MAX_MODULE_SECTIONS", budget)
+    process = Process()
+    target = debugger(process).GetSelectedTarget()
+    module = loaded_module()
+    target.GetNumModules = lambda: 1
+    target.GetModuleAtIndex = lambda index: module
+    output = tmp_path / "section-budget.json"
+    result = Result()
+    exporter.export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} --module-region 0123456789abcdef0123456789abcdef:0x100000100:4:r-x",
+        result,
+        {},
+    )
+    assert output.exists() == accepted
+    if not accepted:
+        assert "inspection limit" in (result.error or "")
+        assert list(tmp_path.iterdir()) == []
+    else:
+        assert result.error is None
+
+
+@pytest.mark.parametrize("selection", ["", "--thread 1", "--all-threads"])
+@pytest.mark.parametrize("change", ["pc", "sp", "frame-id", "invalid", "core-register"])
+def test_publication_uses_fresh_resolved_thread_top_frame_not_retained_valid_objects(
+    tmp_path: Path,
+    capture_api: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    selection: str,
+    change: str,
+) -> None:
+    exporter = load_exporter()
+    original = CaptureThread(1)
+    process = ThreadProcess([original])
+    original_frame = original.GetFrameAtIndex(0)
+
+    def mutate() -> None:
+        replacement = CaptureThread(1)
+        if change == "pc":
+            replacement.registers["pc"] = 0x9900
+        elif change == "sp":
+            replacement.registers["sp"] = 0xA000
+        elif change == "invalid":
+            replacement.frame_valid = False
+        else:
+            frame = replacement.GetFrameAtIndex(0)
+            if change == "frame-id":
+                frame.GetFrameID = lambda: 1
+            else:
+                frame.FindRegister = lambda name: SimpleNamespace(
+                    IsValid=lambda: True, GetValueAsUnsigned=lambda error: 0x9900
+                )
+            monkeypatch.setattr(replacement, "GetFrameAtIndex", lambda index: frame)
+        process.threads[0] = replacement
+
+    change_during_publication(exporter, monkeypatch, mutate)
+    result = Result()
+    exporter.export_snapshot(
+        debugger(process),
+        f"{tmp_path / 'fresh-frame.json'} --region 0x1000:4:r-x {selection}",
+        result,
+        {},
+    )
+    assert result.error is not None
+    assert original.IsValid() and original_frame.IsValid()
+    assert original.GetThreadID() == process.threads[0].GetThreadID() == 1
+    assert original.GetStopReason() == process.threads[0].GetStopReason()
+    assert process.stop_id == 1
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("change", ["permissions", "unmapped", "unavailable", "bounds"])
+def test_publication_revalidates_every_actual_memory_mapping_without_a_stop_change(
+    tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    exporter = load_exporter()
+    process = Process()
+    final_queries: list[int] = []
+
+    def mutate() -> None:
+        def mapping(address: int, region: MemoryRegion) -> Any:
+            final_queries.append(address)
+            if address == 0x1008:
+                if change == "permissions":
+                    region.permissions = "r--"
+                elif change == "unmapped":
+                    region.mapped = False
+                elif change == "bounds":
+                    region.end = address
+                else:
+                    return SimpleNamespace(Success=lambda: False)
+            return ReadError()
+
+        monkeypatch.setattr(process, "GetMemoryRegionInfo", mapping)
+
+    change_during_publication(exporter, monkeypatch, mutate)
+    result = Result()
+    exporter.export_snapshot(
+        debugger(process),
+        f"{tmp_path / 'late-permissions.json'} --region 0x1000:4:r-x --region 0x1008:4:r-x",
+        result,
+        {},
+    )
+    assert result.error is not None
+    assert process.reads == [(0x1000, 4), (0x1008, 4)]
+    assert final_queries == [0x1000, 0x1008]
+    assert process.stop_id == 1
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("budget,accepted", [(3, False), (4, True)])
+def test_initial_and_publication_mapping_queries_share_one_capture_budget(
+    tmp_path: Path,
+    capture_api: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: int,
+    accepted: bool,
+) -> None:
+    exporter = load_exporter()
+    monkeypatch.setattr(exporter, "MAX_MEMORY_MAPPING_QUERIES", budget)
+    process = Process()
+    queries: list[int] = []
+
+    def mapping(address: int, region: MemoryRegion) -> ReadError:
+        queries.append(address)
+        return ReadError()
+
+    monkeypatch.setattr(process, "GetMemoryRegionInfo", mapping)
+    output = tmp_path / "mapping-budget.json"
+    result = Result()
+    exporter.export_snapshot(
+        debugger(process),
+        f"{output} --region 0x1000:4:r-x --region 0x1008:4:r-x",
+        result,
+        {},
+    )
+    assert len(queries) == budget
+    assert queries[:2] == [0x1000, 0x1008]
+    assert output.exists() == accepted
+    if not accepted:
+        assert "mapping query limit" in (result.error or "")
+        assert list(tmp_path.iterdir()) == []
+    else:
+        assert result.error is None
