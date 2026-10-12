@@ -144,7 +144,9 @@ impl Project {
         }
         if !problems.is_empty() {
             problems.sort_by_key(|(index, _)| *index);
-            let mut message = format!("nothing applied: {} of {} entries are invalid", problems.len(), entries.len());
+            let mut invalid: Vec<usize> = problems.iter().map(|(index, _)| *index).collect();
+            invalid.dedup();
+            let mut message = format!("nothing applied: {} of {} entries are invalid", invalid.len(), entries.len());
             for (index, reason) in &problems {
                 message.push_str(&format!("\nentry {index} ({:?}): {reason}", entries[*index].at));
             }

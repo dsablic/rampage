@@ -72,6 +72,16 @@ fn names_must_be_unique_within_the_batch() {
 }
 
 #[test]
+fn an_entry_with_several_problems_counts_once() {
+    let path = scratch_copy("count");
+    let project = Session::default().open(&path, None).unwrap();
+    let error = project.annotate_batch(&[entry("_main", Some("two words"), Some("  "))]).unwrap_err().to_string();
+    assert!(error.starts_with("nothing applied: 1 of 1 entries are invalid"), "{error}");
+    assert_eq!(error.matches("\nentry 0 (").count(), 2, "{error}");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn a_batch_undoes_and_redoes_as_one_step_and_persists() {
     let path = scratch_copy("undo");
     let project = Session::default().open(&path, None).unwrap();
