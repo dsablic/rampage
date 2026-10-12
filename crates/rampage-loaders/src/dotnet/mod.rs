@@ -392,8 +392,8 @@ fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<Dot
     let stream_count = read_u16(root, flags_offset + 2).ok_or_else(|| malformed("is truncated"))?;
 
     let mut streams = Vec::new();
-    let mut heaps = Heaps::default();
     let mut table_stream: Option<&[u8]> = None;
+    let [mut strings, mut user_strings, mut guids, mut blobs] = [None; 4];
     let mut cursor = flags_offset + 4;
     for _ in 0..usize::from(stream_count).min(MAX_STREAMS) {
         let (Some(offset), Some(size)) = (read_u32(root, cursor), read_u32(root, cursor + 4)) else {
@@ -419,29 +419,28 @@ fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<Dot
             continue;
         };
         let slot = match name.as_str() {
-            "#~" | "#-" => {
-                if table_stream.is_none() {
-                    table_stream = Some(data);
-                    continue;
-                }
-                None
-            }
-            "#Strings" => Some(&mut heaps.strings),
-            "#US" => Some(&mut heaps.user_strings),
-            "#GUID" => Some(&mut heaps.guids),
-            "#Blob" => Some(&mut heaps.blobs),
+            "#~" | "#-" => &mut table_stream,
+            "#Strings" => &mut strings,
+            "#US" => &mut user_strings,
+            "#GUID" => &mut guids,
+            "#Blob" => &mut blobs,
             _ => continue,
         };
-        // The first of duplicate streams wins; later copies are a known obfuscation trick, so say so.
-        match slot {
-            Some(slot) if slot.is_empty() => *slot = data,
-            _ => warnings.push(format!("duplicate stream {name} ignored")),
+        // The CLR, and dnlib after it, reads the last of duplicate streams; obfuscators plant decoy earlier copies.
+        if slot.replace(data).is_some() {
+            warnings.push(format!("duplicate stream {name}; the last one is used"));
         }
     }
     if usize::from(stream_count) > MAX_STREAMS {
         warnings.push(format!("{stream_count} streams declared; only the first {MAX_STREAMS} are read"));
     }
 
+    let heaps = Heaps {
+        strings: strings.unwrap_or_default(),
+        user_strings: user_strings.unwrap_or_default(),
+        guids: guids.unwrap_or_default(),
+        blobs: blobs.unwrap_or_default(),
+    };
     let (user_strings, complete) = heaps.user_string_literals();
     if !complete {
         warnings.push(format!("#US heap is malformed or exceeds {} literals; truncated", heaps::MAX_USER_STRINGS));

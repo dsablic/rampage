@@ -26,6 +26,8 @@ struct Spec {
     metadata_rva: Option<u32>,
     /// Replaces the MethodList column of the three TypeDef rows.
     method_lists: Option<[u32; 3]>,
+    /// Puts an empty `#~` and a junk `#Strings` before the real streams, the decoys obfuscators plant.
+    decoy_streams: bool,
 }
 
 const SECTION_RVA: u32 = 0x2000;
@@ -181,13 +183,16 @@ fn build(spec: &Spec) -> Vec<u8> {
     pad4(&mut user_strings);
 
     let version = b"v4.0.30319\0\0";
-    let streams: [(&str, &[u8]); 5] = [
-        ("#~", &table_stream),
+    let empty_tables = [0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let decoys: [(&str, &[u8]); 2] = [("#~", &empty_tables), ("#Strings", b"\0Decoy\0\0")];
+    let mut streams: Vec<(&str, &[u8])> = if spec.decoy_streams { decoys.to_vec() } else { Vec::new() };
+    streams.extend([
+        ("#~", table_stream.as_slice()),
         ("#Strings", &strings.bytes),
         ("#US", &user_strings),
         ("#GUID", &guids),
         ("#Blob", &blobs.bytes),
-    ];
+    ]);
     let header_len = 16
         + version.len()
         + 4
@@ -201,7 +206,8 @@ fn build(spec: &Spec) -> Vec<u8> {
     root.extend_from_slice(&(streams.len() as u16).to_le_bytes());
     let mut offset = header_len;
     for (name, data) in &streams {
-        let size = if *name == "#~" { data.len() as u32 - spec.table_stream_cut } else { data.len() as u32 };
+        let cut = if data.as_ptr() == table_stream.as_ptr() { spec.table_stream_cut } else { 0 };
+        let size = data.len() as u32 - cut;
         root.extend_from_slice(&(offset as u32).to_le_bytes());
         root.extend_from_slice(&size.to_le_bytes());
         root.extend_from_slice(name.as_bytes());
@@ -450,6 +456,18 @@ fn out_of_order_member_lists_hand_out_each_member_once() {
     let methods: Vec<u32> = metadata.types.iter().flat_map(|ty| &ty.methods).map(|method| method.token).collect();
     assert_eq!(methods, [0x0600_0001, 0x0600_0002, 0x0600_0003, 0x0600_0004]);
     assert!(metadata.warnings.iter().any(|warning| warning.contains("out of order")), "{:?}", metadata.warnings);
+}
+
+#[test]
+fn the_last_of_duplicate_streams_wins_as_in_the_clr() {
+    let normal = parse(&Spec::default()).unwrap().unwrap();
+    let decoyed = parse(&Spec { decoy_streams: true, ..Spec::default() }).unwrap().unwrap();
+    assert_eq!(decoyed.types, normal.types);
+    assert_eq!(decoyed.module, normal.module);
+    assert_eq!(decoyed.streams.len(), 7);
+    let duplicates: Vec<&String> = decoyed.warnings.iter().filter(|warning| warning.contains("duplicate")).collect();
+    assert_eq!(duplicates.len(), 2, "{:?}", decoyed.warnings);
+    assert_eq!(decoyed.warnings.len(), 2, "{:?}", decoyed.warnings);
 }
 
 #[test]
