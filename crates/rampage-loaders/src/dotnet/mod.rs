@@ -40,6 +40,7 @@ const MAX_STREAMS: usize = 64;
 /// II.24.2.1: the version string length is at most 255 bytes, rounded up to a multiple of four.
 const MAX_VERSION_BYTES: usize = 256;
 const METADATA_SIGNATURE: u32 = 0x424A_5342;
+const BUDGET_EXHAUSTED: &str = "signature text budget exhausted; remaining signatures not rendered";
 
 /// CLI header flags (II.25.3.3.1).
 const COMIMAGE_FLAGS_NATIVE_ENTRYPOINT: u32 = 0x10;
@@ -543,6 +544,8 @@ struct Decoder<'t, 'a> {
     generic_params: HashMap<(u8, u32), Vec<(u32, String)>>,
     /// Signature work (text rendered, blob bytes read) left for this image.
     budget: Cell<usize>,
+    /// Whether the warning that the budget ran out has been given; it is given once, not per signature.
+    budget_reported: bool,
 }
 
 /// `Namespace.Type::member` for each method and field token.
@@ -569,7 +572,8 @@ impl<'t, 'a> Decoder<'t, 'a> {
                 generic_params.entry(owner).or_default().push((number, name));
             }
         }
-        Self { tables, heaps, warnings, generic_params, budget: Cell::new(signatures::TOTAL_BUDGET) }
+        let budget = Cell::new(signatures::TOTAL_BUDGET);
+        Self { tables, heaps, warnings, generic_params, budget, budget_reported: false }
     }
 }
 
@@ -814,11 +818,19 @@ impl Decoder<'_, '_> {
     }
 
     fn signature(&mut self, table: u8, row: u32, name: &str, owner: Option<u32>) -> String {
-        self.render_signature(table, row, name, owner).unwrap_or_else(|| {
+        if let Some(text) = self.render_signature(table, row, name, owner) {
+            return text;
+        }
+        // A spent budget fails every later signature too: one warning says so instead of one per row.
+        if self.budget.get() == 0 {
+            if !std::mem::replace(&mut self.budget_reported, true) {
+                self.warnings.push(BUDGET_EXHAUSTED.to_owned());
+            }
+        } else {
             let table = tables::TABLE_NAMES[usize::from(table)];
             self.warnings.push(format!("{table} row {row}: signature blob is malformed or exceeds the rendering caps"));
-            UNREADABLE.to_owned()
-        })
+        }
+        UNREADABLE.to_owned()
     }
 
     /// ImplMap rows (II.22.22), each naming the DLL export a P/Invoke method binds to.
@@ -985,6 +997,45 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A table stream with one TypeDef owning a MethodDef per blob, every index 2 bytes wide.
+    fn method_tables(signatures: &[&[u8]]) -> (Vec<u8>, Vec<u8>) {
+        let mut blobs = vec![0u8];
+        let mut stream = vec![0, 0, 0, 0, 2, 0, 0, 1];
+        stream.extend_from_slice(&((1u64 << tables::TYPE_DEF) | (1 << tables::METHOD_DEF)).to_le_bytes());
+        stream.extend_from_slice(&0u64.to_le_bytes());
+        stream.extend_from_slice(&1u32.to_le_bytes());
+        stream.extend_from_slice(&(signatures.len() as u32).to_le_bytes());
+        // TypeDef: flags, name "M", no namespace or base, field list 1, method list 1.
+        for (value, width) in [(0u32, 4), (1, 2), (0, 2), (0, 2), (1, 2), (1, 2)] {
+            stream.extend_from_slice(&value.to_le_bytes()[..width]);
+        }
+        for signature in signatures {
+            let offset = blobs.len() as u32;
+            blobs.push(signature.len() as u8);
+            blobs.extend_from_slice(signature);
+            for (value, width) in [(0u32, 4), (0, 2), (0, 2), (1, 2), (offset, 2), (1, 2)] {
+                stream.extend_from_slice(&value.to_le_bytes()[..width]);
+            }
+        }
+        (stream, blobs)
+    }
+
+    #[test]
+    fn a_spent_signature_budget_is_reported_once() {
+        let int32 = [0x00, 0, 0x08];
+        let (stream, blobs) = method_tables(&[&int32, &int32, &int32, &[0x00, 0, 0x99]]);
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: b"\0M\0", blobs: &blobs, ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        // `int32` and the 3 bytes read: room for one signature only.
+        decoder.budget.set(10);
+        let types = decoder.types();
+        let signatures: Vec<&str> = types[0].methods.iter().map(|method| method.signature.as_str()).collect();
+        assert_eq!(signatures, ["int32 M()", UNREADABLE, UNREADABLE, UNREADABLE]);
+        assert_eq!(warnings.0, [BUDGET_EXHAUSTED]);
+    }
 
     #[test]
     fn decodes_tiny_and_fat_headers() {
