@@ -66,12 +66,20 @@ pub enum Pattern {
     U32(Vec<u32>),
     U64(Vec<u64>),
     BigInt(Vec<u8>),
+    /// Text that code keeps either as a string or as 32-bit words loaded little-endian, such as ChaCha's
+    /// "expand 32-byte k". The string itself has no byte order; the words stored big-endian (each 4-byte group
+    /// reversed) report [`Endian::Big`]. The length must be a multiple of 4.
+    Text(Vec<u8>),
 }
 
 impl Pattern {
     fn forms(&self) -> Vec<(Vec<u8>, Option<Endian>)> {
         let (little, big): (Vec<u8>, Vec<u8>) = match self {
             Self::Bytes(bytes) => return vec![(bytes.clone(), None)],
+            Self::Text(text) => {
+                let swapped = text.chunks(4).flat_map(|word| word.iter().rev().copied()).collect();
+                return vec![(text.clone(), None), (swapped, Some(Endian::Big))];
+            }
             Self::U16(values) => (
                 values.iter().flat_map(|value| value.to_le_bytes()).collect(),
                 values.iter().flat_map(|value| value.to_be_bytes()).collect(),
@@ -94,7 +102,7 @@ impl Pattern {
 
     pub fn byte_len(&self) -> usize {
         match self {
-            Self::Bytes(bytes) | Self::BigInt(bytes) => bytes.len(),
+            Self::Bytes(bytes) | Self::BigInt(bytes) | Self::Text(bytes) => bytes.len(),
             Self::U16(values) => 2 * values.len(),
             Self::U32(values) => 4 * values.len(),
             Self::U64(values) => 8 * values.len(),
@@ -182,6 +190,9 @@ fn validate(signature: &ConstantSignature, layouts: &[(Vec<u8>, Option<Endian>)]
     }
     if signature.min_len > len {
         return fail(format!("min_len {} exceeds the pattern's {len} bytes", signature.min_len));
+    }
+    if matches!(signature.pattern, Pattern::Text(_)) && !len.is_multiple_of(4) {
+        return fail(format!("text pattern of {len} bytes does not split into 32-bit words"));
     }
     for (bytes, _) in layouts {
         let prefix = &bytes[..signature.min_len];
@@ -492,7 +503,20 @@ mod tests {
         let json = serde_json::to_value(&hits).unwrap();
         assert_eq!(json[0]["address"], "0x1002");
         assert_eq!(json[0]["kind"], "stream_cipher");
-        assert_eq!(json[0]["endian"], "little");
+        assert_eq!(json[0]["endian"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn chacha_text_has_no_byte_order_but_its_big_endian_words_do() {
+        let db = ConstantDb::bundled();
+        let mut buffer = noise(128, 6);
+        buffer[8..24].copy_from_slice(b"expand 32-byte k");
+        buffer[64..80].copy_from_slice(b"apxe3 dnyb-2k et");
+        let what = "\"expand 32-byte k\" constant";
+        assert_eq!(
+            summary(&scan(&buffer, 0, db)),
+            [(8, what, None, 16, true), (64, what, Some(Endian::Big), 16, true)]
+        );
     }
 
     #[test]
