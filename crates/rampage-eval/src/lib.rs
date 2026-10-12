@@ -140,14 +140,18 @@ impl Report {
 pub struct Gate {
     /// Spurious answers are tolerated. Function discovery sets this: a binary legitimately contains code with no
     /// sized symbol (assembly entry points such as `_start` have no `.size`), so a start the truth lacks is not
-    /// necessarily wrong. Spurious starts still lower precision and are listed for review; failing on them would
-    /// make the gate fire on correct discoveries. Recall, which the truth does pin down, is what is gated.
+    /// necessarily wrong. Spurious starts still lower precision and are listed for review; failing on each one
+    /// would make the gate fire on correct discoveries, so [`Gate::min_precision`] bounds them instead.
     #[serde(default)]
     pub allow_spurious: bool,
     /// The committed recall baseline; a measured recall below it fails. Raise it only when a measured
     /// improvement lands.
     #[serde(default)]
     pub min_recall: f64,
+    /// The committed precision baseline, for slices that allow spurious answers (with none allowed, precision is
+    /// already 1 or there is no answer at all).
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub min_precision: f64,
 }
 
 impl Gate {
@@ -163,6 +167,9 @@ impl Gate {
         // Tolerates the float noise of a baseline written with a few decimals.
         if report.recall + 1e-9 < self.min_recall {
             failures.push(format!("recall {:.4} below baseline {:.4}", report.recall, self.min_recall));
+        }
+        if report.precision + 1e-9 < self.min_precision {
+            failures.push(format!("precision {:.4} below baseline {:.4}", report.precision, self.min_precision));
         }
         failures
     }
@@ -348,6 +355,10 @@ fn is_zero(count: &usize) -> bool {
     *count == 0
 }
 
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
+}
+
 fn ratio(numerator: usize, denominator: usize) -> f64 {
     if denominator == 0 { 0.0 } else { numerator as f64 / denominator as f64 }
 }
@@ -465,10 +476,14 @@ mod tests {
         let truth = truth(&[(0x10, "a"), (0x20, "b")]);
         let discovery = score_discovery([0x10, 0x15], &truth);
         assert_eq!(Gate::default().check(&discovery), ["1 spurious"]);
-        let tolerant = Gate { allow_spurious: true, min_recall: 0.5 };
+        let tolerant = Gate { allow_spurious: true, min_recall: 0.5, min_precision: 0.5 };
         assert!(tolerant.check(&discovery).is_empty());
-        let raised = Gate { allow_spurious: true, min_recall: 0.75 };
-        assert_eq!(raised.check(&discovery), ["recall 0.5000 below baseline 0.7500"]);
+        let raised = Gate { allow_spurious: true, min_recall: 0.75, min_precision: 0.6 };
+        assert_eq!(
+            raised.check(&discovery),
+            ["recall 0.5000 below baseline 0.7500", "precision 0.5000 below baseline 0.6000"]
+        );
+        let tolerant = Gate { min_precision: 0.0, ..tolerant };
         let wrong = score(vec![named(0x10, "z")], &truth);
         assert_eq!(tolerant.check(&wrong), ["1 wrong", "recall 0.0000 below baseline 0.5000"]);
 

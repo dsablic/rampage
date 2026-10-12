@@ -49,35 +49,50 @@ fn run_x86_64(truth: &std::path::Path, target: &str, extra: &[&str]) -> std::pro
         .unwrap()
 }
 
-#[test]
-fn run_prints_the_report_and_a_summary_and_passes_the_gate() {
-    let output = run_x86_64(&data("eval-truth-cross-x86_64.json"), "eval-target-x86_64.elf", &[]);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    assert!(stderr.contains("libid-x86_64: correct=58 wrong=0 missed=5 spurious=0"), "{stderr}");
-    let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
-    let report = &evaluation.slices["libid-x86_64"];
-    assert_eq!((report.correct, report.wrong, report.spurious), (58, 0, 0));
+/// The cross-program x86-64 slice, run alone: its report and the number of truth functions.
+fn cross_x86_64(extra: &[&str]) -> (std::process::Output, usize) {
+    let truth = data("eval-truth-cross-x86_64.json");
+    let size = committed("eval-truth-cross-x86_64.json").0.len();
+    (run_x86_64(&truth, "eval-target-x86_64.elf", extra), size)
 }
 
-/// The committed manifest names every slice; the gate reads each slice on its own, so a change that helps one
-/// architecture or target and regresses another is visible.
 #[test]
-fn run_manifest_reports_every_slice() {
+fn run_prints_the_report_and_a_summary_and_passes_the_gate() {
+    let (output, size) = cross_x86_64(&[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
+    let report = &evaluation.slices["libid-x86_64"];
+    assert!(stderr.contains(&format!("libid-x86_64: {}", report.summary())), "{stderr}");
+    assert!(report.correct > 0 && report.correct + report.missed == size, "{}", report.summary());
+    assert_eq!((report.wrong, report.spurious), (0, 0));
+}
+
+/// The committed manifest is the one place eval baselines live: each slice's recall floor (and, for discovery,
+/// whose spurious starts are tolerated, its precision floor). Every slice must meet its floors, and a floor must
+/// be ratcheted when a measured improvement lands, so the committed numbers stay the measured ones. Slices are
+/// gated on their own, so a change that helps one architecture or target and regresses another is visible.
+///
+/// libid-twin identifies the corpus reference's own stripped twin: identical bytes, the best case. libid-cross
+/// identifies a different program linking the same static musl, scored only on functions the reference defines;
+/// it is what identifying a real binary looks like, and functions whose masked hash still encodes a
+/// layout-dependent value are its misses. discovery finds the twin's function starts; its spurious starts include
+/// unsized assembly (`_start`, `__set_thread_area`) and, on AArch64, interior blocks of large functions.
+#[test]
+fn run_manifest_reports_every_slice_at_its_baseline() {
     let output = eval().arg("run").arg("--manifest").arg(data("eval-manifest.json")).output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    for line in [
-        "libid-twin-x86_64: correct=160 wrong=0 missed=14 spurious=0",
-        "libid-cross-x86_64: correct=58 wrong=0 missed=5 spurious=0",
-        "libid-twin-aarch64: correct=168 wrong=0 missed=25 spurious=0",
-        "libid-cross-aarch64: correct=66 wrong=0 missed=13 spurious=0",
-        "discovery-x86_64: correct=174 wrong=0 missed=0 spurious=2",
-        "discovery-aarch64: correct=193 wrong=0 missed=0 spurious=69",
-    ] {
-        assert!(stderr.contains(line), "{line} not in {stderr}");
-    }
     let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
+    for (name, report) in &evaluation.slices {
+        let gate = evaluation.gates[name];
+        let stale = |measured: f64, floor: f64| measured >= floor + 1e-4;
+        assert!(!stale(report.recall, gate.min_recall), "{name}: recall rose to {:.4}; ratchet it", report.recall);
+        if gate.allow_spurious {
+            let precision = report.precision;
+            assert!(!stale(precision, gate.min_precision), "{name}: precision rose to {precision:.4}; ratchet it");
+        }
+    }
     let names: Vec<&str> = evaluation.slices.keys().map(String::as_str).collect();
     let expected = [
         "discovery-aarch64",
@@ -95,33 +110,39 @@ fn run_manifest_reports_every_slice() {
     assert!(evaluation.passes_gate());
 }
 
-/// Discovery needs no database, and its spurious starts do not fail the run; a recall drop does.
+/// Discovery needs no database, and its spurious starts do not fail the run; a recall or precision drop does.
 #[test]
-fn run_discovery_gates_recall_not_spurious_starts() {
-    let discovery = |truth: &std::path::Path, min_recall: &str| {
+fn run_discovery_gates_recall_and_precision_not_each_spurious_start() {
+    let discovery = |truth: &std::path::Path, extra: &[&str]| {
         eval()
-            .args(["run", "--family", "discovery", "--min-recall", min_recall, "--target"])
+            .args(["run", "--family", "discovery", "--target"])
             .arg(fixture("eval-twin-aarch64.elf"))
             .arg("--truth")
             .arg(truth)
+            .args(extra)
             .output()
             .unwrap()
     };
-    let output = discovery(&data("eval-truth-twin-aarch64.json"), "1.0");
+    let output = discovery(&data("eval-truth-twin-aarch64.json"), &["--min-recall", "1.0"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    assert!(stderr.contains("discovery-aarch64: correct=193 wrong=0 missed=0 spurious=69"), "{stderr}");
     let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
     let report = &evaluation.slices["discovery-aarch64"];
+    assert!(report.spurious > 0, "{}", report.summary());
     let spurious = report.disagreements.iter().filter(|entry| entry.outcome == rampage_eval::Outcome::Spurious);
     assert!(spurious.clone().all(|entry| entry.proposed.is_none() && entry.truth.is_none()));
-    assert_eq!(spurious.count(), 69);
+    assert_eq!(spurious.count(), report.spurious);
+
+    let output = discovery(&data("eval-truth-twin-aarch64.json"), &["--min-precision", "1.0"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("below baseline 1.0000") && stderr.contains("FAIL precision "), "{stderr}");
 
     let scratch = std::env::temp_dir().join(format!("rampage-eval-discovery-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).unwrap();
     let unreachable = scratch.join("truth.json");
     std::fs::write(&unreachable, "{\"0x10\": \"nowhere\"}").unwrap();
-    let output = discovery(&unreachable, "0.5");
+    let output = discovery(&unreachable, &["--min-recall", "0.5"]);
     std::fs::remove_dir_all(&scratch).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
@@ -189,7 +210,10 @@ fn run_exits_one_when_a_name_is_spurious() {
     std::fs::remove_dir_all(&scratch).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("spurious=58"), "{stderr}");
+    // Every name the real truth scores correct is now a library name where the truth has none.
+    let (scored, _) = cross_x86_64(&[]);
+    let correct = serde_json::from_slice::<Evaluation>(&scored.stdout).unwrap().slices["libid-x86_64"].correct;
+    assert!(stderr.contains(&format!("spurious={correct} ")), "{stderr}");
 }
 
 #[test]
@@ -234,21 +258,22 @@ fn run_refuses_an_unknown_hash_scheme() {
 
 #[test]
 fn run_fails_a_slice_below_its_recall_baseline() {
-    let output = run_x86_64(&data("eval-truth-cross-x86_64.json"), "eval-target-x86_64.elf", &["--min-recall", "0.95"]);
+    let (output, _) = cross_x86_64(&["--min-recall", "1.0"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("libid-x86_64: FAIL recall 0.9206 below baseline 0.9500"), "{stderr}");
     let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(evaluation.gates["libid-x86_64"].min_recall, 0.95);
+    let recall = evaluation.slices["libid-x86_64"].recall;
+    assert!(stderr.contains(&format!("libid-x86_64: FAIL recall {recall:.4} below baseline 1.0000")), "{stderr}");
+    assert_eq!(evaluation.gates["libid-x86_64"].min_recall, 1.0);
 }
 
 /// The counts keep covering every disagreement when the list itself is bounded.
 #[test]
 fn run_bounds_the_disagreement_list() {
-    let output =
-        run_x86_64(&data("eval-truth-cross-x86_64.json"), "eval-target-x86_64.elf", &["--max-disagreements", "3"]);
+    let (output, _) = cross_x86_64(&["--max-disagreements", "1"]);
     assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
     let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
     let report = &evaluation.slices["libid-x86_64"];
-    assert_eq!((report.disagreements.len(), report.omitted, report.missed), (3, 2, 5));
+    assert!(report.missed > 1, "{}", report.summary());
+    assert_eq!((report.disagreements.len(), report.omitted), (1, report.missed - 1));
 }

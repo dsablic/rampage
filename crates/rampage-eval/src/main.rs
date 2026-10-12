@@ -43,7 +43,8 @@ enum Command {
     },
     /// Score a heuristic family on stripped targets against their truth, per slice. Prints
     /// {"slices": {"<name>": report}, "gates": {..}} as JSON and a one-line summary per slice on stderr; exits 1
-    /// when any slice fails its gate (any wrong answer; for libid any spurious name; recall below --min-recall).
+    /// when any slice fails its gate (any wrong answer; for libid any spurious name; recall or precision below
+    /// --min-recall or --min-precision).
     Run(RunArgs),
 }
 
@@ -67,8 +68,8 @@ impl Family {
     }
 
     /// Discovery tolerates spurious starts: code without a sized symbol is still code.
-    fn gate(self, min_recall: f64) -> Gate {
-        Gate { allow_spurious: matches!(self, Family::Discovery), min_recall }
+    fn gate(self, min_recall: f64, min_precision: f64) -> Gate {
+        Gate { allow_spurious: matches!(self, Family::Discovery), min_recall, min_precision }
     }
 }
 
@@ -92,9 +93,12 @@ struct RunArgs {
     /// The recall baseline; a lower measured recall fails the gate.
     #[arg(long, default_value_t = 0.0, conflicts_with = "manifest")]
     min_recall: f64,
+    /// The precision baseline; a lower measured precision fails the gate.
+    #[arg(long, default_value_t = 0.0, conflicts_with = "manifest")]
+    min_precision: f64,
     /// Evaluate every slice of a manifest instead: {"slices": {"<name>": {"family": "libid"|"discovery",
-    /// "refs": [..], "dbs": [..], "target": "..", "truth": "..", "min_recall": 0.0}}}, paths relative to the
-    /// manifest; refs and dbs apply to libid only.
+    /// "refs": [..], "dbs": [..], "target": "..", "truth": "..", "min_recall": 0.0, "min_precision": 0.0}}},
+    /// paths relative to the manifest; refs and dbs apply to libid only.
     #[arg(long, conflicts_with_all = ["databases", "references"])]
     manifest: Option<PathBuf>,
     /// Keep at most this many disagreements per slice in the JSON (the counts still cover all of them).
@@ -182,6 +186,8 @@ struct Slice {
     family: Family,
     #[serde(default)]
     min_recall: f64,
+    #[serde(default)]
+    min_precision: f64,
     #[serde(default)]
     refs: Vec<PathBuf>,
     #[serde(default)]
@@ -271,6 +277,7 @@ fn manifest(path: &Path) -> Result<Vec<(Option<String>, Slice)>, String> {
             let slice = Slice {
                 family: slice.family,
                 min_recall: slice.min_recall,
+                min_precision: slice.min_precision,
                 refs: resolve(slice.refs),
                 dbs: resolve(slice.dbs),
                 target: base.join(slice.target),
@@ -291,6 +298,7 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
             let slice = Slice {
                 family: args.family,
                 min_recall: args.min_recall,
+                min_precision: args.min_precision,
                 refs: args.references,
                 dbs: args.databases,
                 target,
@@ -305,7 +313,7 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
         let name = name.unwrap_or_else(|| format!("{}-{arch}", slice.family.tag()));
         eprintln!("{name}: {}", report.summary());
         report.truncate_disagreements(args.max_disagreements);
-        evaluation.insert(name, report, slice.family.gate(slice.min_recall));
+        evaluation.insert(name, report, slice.family.gate(slice.min_recall, slice.min_precision));
     }
     for (name, failures) in evaluation.failures() {
         eprintln!("{name}: FAIL {}", failures.join(", "));
