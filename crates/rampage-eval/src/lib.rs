@@ -1,15 +1,20 @@
-//! Self-supervised evaluation of library-function identification.
+//! Self-supervised evaluation of rampage heuristics against strip-and-compare ground truth.
 //!
-//! Strip-and-compare: a symbolized build and a stripped twin come from the same source and toolchain, so the
-//! symbolized twin's symbol table is ground truth ([`Truth`]) for the stripped one. [`evaluate`] discovers the
-//! stripped target's functions, asks a [`SignatureDb`] to name each, and scores every proposal against the truth
-//! into a [`Report`]: precision/recall plus a machine-readable disagreement set. `Report` and [`Disagreement`]
-//! are deliberately family-agnostic so other heuristics (discovery, type recovery) can share one gate.
+//! A symbolized build and a stripped twin come from the same source and toolchain, so the symbolized twin's
+//! symbol table is ground truth ([`Truth`]) for the stripped one. Each heuristic family scores into the same
+//! family-agnostic [`Report`]: precision/recall plus a machine-readable disagreement set.
+//!
+//! - Library identification ([`evaluate`]): discover the stripped target's functions, ask a [`SignatureDb`] to
+//!   name each, and compare every proposed name with the truth.
+//! - Function discovery ([`evaluate_discovery`]): compare the discovered function starts with the truth's
+//!   addresses; names only label the disagreements.
+//!
+//! Whether a report is acceptable depends on the family, so the pass/fail rule is a separate [`Gate`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rampage_arch::UnsupportedArch;
-use rampage_loaders::{Binary, SymbolKind};
+use rampage_loaders::{Binary, Symbol, SymbolKind};
 use rampage_signatures::{SignatureDb, alias_rank};
 use serde::{Deserialize, Serialize};
 
@@ -23,17 +28,23 @@ impl Truth {
     /// then alphabetical, so the choice is deterministic.
     pub fn from_binary(binary: &Binary) -> Truth {
         let mut names: BTreeMap<u64, &str> = BTreeMap::new();
-        let functions = binary
-            .symbols
-            .iter()
-            .filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty());
-        for symbol in functions {
+        for symbol in sized_functions(binary) {
             let slot = names.entry(symbol.address).or_insert(&symbol.name);
             if alias_rank(&symbol.name) < alias_rank(slot) {
                 *slot = &symbol.name;
             }
         }
         Truth(names.into_iter().map(|(address, name)| (address, name.to_owned())).collect())
+    }
+
+    /// Only what a signature database built from library references could name: entries whose name is in
+    /// `library` (see [`function_names`]) and not in `program`. A cross-program target also contains its own
+    /// code that no library signature describes; counting it as missed would measure the program, not the
+    /// heuristic. A name match alone is not enough to exclude it, since every program defines `main`, so the
+    /// programs' own functions (taken from their compiled objects) are dropped explicitly.
+    pub fn identifiable(&self, library: &BTreeSet<String>, program: &BTreeSet<String>) -> Truth {
+        let keep = |name: &String| library.contains(name) && !program.contains(name);
+        Truth(self.0.iter().filter(|(_, name)| keep(name)).map(|(address, name)| (*address, name.clone())).collect())
     }
 
     /// Parses `{ "0x<address>": "<name>" }`.
@@ -60,6 +71,20 @@ impl Truth {
             .collect();
         if lines.is_empty() { "{}\n".to_owned() } else { format!("{{\n{}\n}}\n", lines.join(",\n")) }
     }
+}
+
+/// Every sized function symbol's name in `binary`, aliases included. Unlike [`Truth::from_binary`] this keeps
+/// every spelling and is not keyed by address, so it also works on a relocatable object, where functions in
+/// different sections share address zero.
+pub fn function_names(binary: &Binary) -> BTreeSet<String> {
+    sized_functions(binary).map(|symbol| symbol.name.clone()).collect()
+}
+
+fn sized_functions(binary: &Binary) -> impl Iterator<Item = &Symbol> {
+    binary
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty())
 }
 
 /// How one scored address came out.
@@ -93,15 +118,31 @@ pub struct Report {
     pub wrong: usize,
     pub missed: usize,
     pub spurious: usize,
-    /// Every non-correct address, sorted by address.
+    /// Every non-correct address, sorted by address, unless bounded by [`Report::truncate_disagreements`].
     pub disagreements: Vec<Disagreement>,
+    /// How many disagreements were dropped from the end of `disagreements`; the counts above still cover them.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted: usize,
 }
 
 impl Report {
-    /// The hard gate: no wrong name and no library name where there is none. Missed names lower recall but
-    /// never fail, since a heuristic declining to answer is safe.
+    /// The strict gate ([`Gate::default`]): no wrong name and no library name where there is none.
     pub fn passes_gate(&self) -> bool {
-        self.wrong == 0 && self.spurious == 0
+        Gate::default().check(self).is_empty()
+    }
+
+    /// Keeps at most `limit` disagreements, preferring wrong, then missed, then spurious ones (the order a
+    /// reviewer acts on them), each kind in address order.
+    pub fn truncate_disagreements(&mut self, limit: usize) {
+        if self.disagreements.len() <= limit {
+            return;
+        }
+        let severity =
+            |outcome: Outcome| [Outcome::Wrong, Outcome::Missed, Outcome::Spurious].iter().position(|o| *o == outcome);
+        self.disagreements.sort_by_key(|entry| (severity(entry.outcome), entry.address));
+        self.omitted += self.disagreements.len() - limit;
+        self.disagreements.truncate(limit);
+        self.disagreements.sort_by_key(|entry| entry.address);
     }
 
     pub fn summary(&self) -> String {
@@ -112,17 +153,68 @@ impl Report {
     }
 }
 
-/// Reports keyed by slice (an architecture, a compiler, an optimization level). Kept per slice rather than
-/// pooled so a change that helps one slice cannot hide a regression in another.
+/// What a slice's [`Report`] must satisfy. `wrong` must always be zero: a confidently wrong answer misleads.
+/// The default is the library-identification gate: no spurious names either, and no recall floor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Gate {
+    /// Spurious answers are tolerated. Function discovery sets this: a binary legitimately contains code with no
+    /// sized symbol (assembly entry points such as `_start` have no `.size`), so a start the truth lacks is not
+    /// necessarily wrong. Spurious starts still lower precision and are listed for review; failing on them would
+    /// make the gate fire on correct discoveries. Recall, which the truth does pin down, is what is gated.
+    #[serde(default)]
+    pub allow_spurious: bool,
+    /// The committed recall baseline; a measured recall below it fails. Raise it only when a measured
+    /// improvement lands.
+    #[serde(default)]
+    pub min_recall: f64,
+}
+
+impl Gate {
+    /// Why `report` fails this gate; empty when it passes.
+    pub fn check(&self, report: &Report) -> Vec<String> {
+        let mut failures = Vec::new();
+        if report.wrong > 0 {
+            failures.push(format!("{} wrong", report.wrong));
+        }
+        if report.spurious > 0 && !self.allow_spurious {
+            failures.push(format!("{} spurious", report.spurious));
+        }
+        // Tolerates the float noise of a baseline written with a few decimals.
+        if report.recall + 1e-9 < self.min_recall {
+            failures.push(format!("recall {:.4} below baseline {:.4}", report.recall, self.min_recall));
+        }
+        failures
+    }
+}
+
+/// Reports keyed by slice (a heuristic family on an architecture, a compiler, an optimization level). Kept per
+/// slice rather than pooled so a change that helps one slice cannot hide a regression in another.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Evaluation {
     pub slices: BTreeMap<String, Report>,
+    /// Each slice's gate; a slice without one is held to [`Gate::default`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub gates: BTreeMap<String, Gate>,
 }
 
 impl Evaluation {
-    /// Every slice passes [`Report::passes_gate`].
+    pub fn insert(&mut self, slice: String, report: Report, gate: Gate) {
+        self.gates.insert(slice.clone(), gate);
+        self.slices.insert(slice, report);
+    }
+
+    /// Each failing slice with the reasons it fails its gate.
+    pub fn failures(&self) -> BTreeMap<&str, Vec<String>> {
+        self.slices
+            .iter()
+            .map(|(name, report)| (name.as_str(), self.gates.get(name).copied().unwrap_or_default().check(report)))
+            .filter(|(_, failures)| !failures.is_empty())
+            .collect()
+    }
+
+    /// Every slice passes its gate.
     pub fn passes_gate(&self) -> bool {
-        self.slices.values().all(Report::passes_gate)
+        self.failures().is_empty()
     }
 }
 
@@ -170,7 +262,56 @@ pub fn score(proposals: impl IntoIterator<Item = (u64, Option<String>)>, truth: 
         missed,
         spurious,
         disagreements,
+        omitted: 0,
     }
+}
+
+/// Scores discovered function starts against `truth`'s addresses: a discovered truth address is correct, an
+/// undiscovered one missed, and a discovered start the truth lacks spurious (with no name on either side). A
+/// discovery answer cannot be wrong, only absent or extra.
+pub fn score_discovery(starts: impl IntoIterator<Item = u64>, truth: &Truth) -> Report {
+    let starts: BTreeSet<u64> = starts.into_iter().collect();
+    let mut disagreements: Vec<Disagreement> = truth
+        .0
+        .iter()
+        .filter(|(address, _)| !starts.contains(address))
+        .map(|(&address, name)| Disagreement {
+            address,
+            proposed: None,
+            truth: Some(name.clone()),
+            outcome: Outcome::Missed,
+        })
+        .collect();
+    let missed = disagreements.len();
+    disagreements.extend(starts.iter().filter(|address| !truth.0.contains_key(address)).map(|&address| Disagreement {
+        address,
+        proposed: None,
+        truth: None,
+        outcome: Outcome::Spurious,
+    }));
+    let spurious = disagreements.len() - missed;
+    disagreements.sort_by_key(|entry| entry.address);
+    let correct = truth.0.len() - missed;
+    Report {
+        precision: ratio(correct, correct + spurious),
+        recall: ratio(correct, correct + missed),
+        correct,
+        wrong: 0,
+        missed,
+        spurious,
+        disagreements,
+        omitted: 0,
+    }
+}
+
+/// Every function start discovery finds in `target`, the same analysis the API and the eval's proposals use.
+pub fn discovered_starts(target: &Binary) -> Result<Vec<u64>, UnsupportedArch> {
+    Ok(rampage_analysis::functions::analyze(target)?.functions.iter().map(|function| function.address).collect())
+}
+
+/// Discovers `target`'s functions and scores their starts against `truth`.
+pub fn evaluate_discovery(target: &Binary, truth: &Truth) -> Result<Report, UnsupportedArch> {
+    Ok(score_discovery(discovered_starts(target)?, truth))
 }
 
 /// The name `db` proposes for each function discovered in `target`, in address order.
@@ -219,6 +360,10 @@ pub fn strip(elf: &[u8], keep_symbols: bool) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     builder.write(&mut output).map_err(|error| error.to_string())?;
     Ok(output)
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 fn ratio(numerator: usize, denominator: usize) -> f64 {
@@ -284,6 +429,72 @@ mod tests {
         assert!(evaluation.passes_gate());
         evaluation.slices.insert("aarch64".to_owned(), spurious);
         assert!(!evaluation.passes_gate());
+    }
+
+    #[test]
+    fn identifiable_keeps_library_names_the_program_does_not_define() {
+        let names = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<BTreeSet<String>>();
+        let target = truth(&[(0x10, "memcpy"), (0x20, "main"), (0x30, "strchrnul"), (0x40, "helper")]);
+        let library = names(&["memcpy", "main", "__strchrnul", "strchrnul", "malloc"]);
+        let program = names(&["main", "helper"]);
+        assert_eq!(target.identifiable(&library, &program), truth(&[(0x10, "memcpy"), (0x30, "strchrnul")]));
+        assert_eq!(target.identifiable(&library, &BTreeSet::new()).0.len(), 3);
+        assert_eq!(target.identifiable(&BTreeSet::new(), &program), Truth::default());
+    }
+
+    #[test]
+    fn score_discovery_counts_found_missed_and_extra_starts() {
+        let truth = truth(&[(0x10, "main"), (0x20, "helper"), (0x30, "memcpy")]);
+        let report = score_discovery([0x30, 0x10, 0x15, 0x40], &truth);
+        assert_eq!((report.correct, report.wrong, report.missed, report.spurious), (2, 0, 1, 2));
+        assert!((report.precision - 0.5).abs() < 1e-12);
+        assert!((report.recall - 2.0 / 3.0).abs() < 1e-12);
+        let entries: Vec<(u64, Outcome, Option<&str>)> =
+            report.disagreements.iter().map(|entry| (entry.address, entry.outcome, entry.truth.as_deref())).collect();
+        assert_eq!(
+            entries,
+            [(0x15, Outcome::Spurious, None), (0x20, Outcome::Missed, Some("helper")), (0x40, Outcome::Spurious, None)]
+        );
+        assert!(report.disagreements.iter().all(|entry| entry.proposed.is_none()));
+        assert_eq!(score_discovery([], &Truth::default()).recall, 0.0);
+    }
+
+    #[test]
+    fn truncation_keeps_the_most_actionable_disagreements_and_counts_the_rest() {
+        let truth = truth(&[(0x10, "a"), (0x20, "b"), (0x30, "c")]);
+        let mut report = score(vec![named(0x05, "x"), named(0x10, "z"), (0x20, None), named(0x40, "y")], &truth);
+        assert_eq!(report.disagreements.len(), 5);
+        report.truncate_disagreements(5);
+        assert_eq!(report.omitted, 0);
+        report.truncate_disagreements(2);
+        let kept: Vec<(u64, Outcome)> =
+            report.disagreements.iter().map(|entry| (entry.address, entry.outcome)).collect();
+        assert_eq!(kept, [(0x10, Outcome::Wrong), (0x20, Outcome::Missed)]);
+        assert_eq!((report.omitted, report.spurious, report.missed), (3, 2, 2));
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"omitted\":3"), "{json}");
+        assert_eq!(serde_json::from_str::<Report>(&json).unwrap(), report);
+    }
+
+    #[test]
+    fn gate_rules_follow_the_family() {
+        let truth = truth(&[(0x10, "a"), (0x20, "b")]);
+        let discovery = score_discovery([0x10, 0x15], &truth);
+        assert_eq!(Gate::default().check(&discovery), ["1 spurious"]);
+        let tolerant = Gate { allow_spurious: true, min_recall: 0.5 };
+        assert!(tolerant.check(&discovery).is_empty());
+        let raised = Gate { allow_spurious: true, min_recall: 0.75 };
+        assert_eq!(raised.check(&discovery), ["recall 0.5000 below baseline 0.7500"]);
+        let wrong = score(vec![named(0x10, "z")], &truth);
+        assert_eq!(tolerant.check(&wrong), ["1 wrong", "recall 0.0000 below baseline 0.5000"]);
+
+        let mut evaluation = Evaluation::default();
+        evaluation.insert("discovery-x".to_owned(), discovery.clone(), tolerant);
+        assert!(evaluation.passes_gate());
+        evaluation.insert("libid-x".to_owned(), discovery, Gate::default());
+        assert_eq!(evaluation.failures().keys().collect::<Vec<_>>(), [&"libid-x"]);
+        let json = serde_json::to_string(&evaluation).unwrap();
+        assert_eq!(serde_json::from_str::<Evaluation>(&json).unwrap(), evaluation);
     }
 
     #[test]

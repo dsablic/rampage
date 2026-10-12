@@ -1,14 +1,40 @@
 {
   "slices": {
-    "x86_64": {
+    "libid-twin-x86_64": {
+      "refs": ["../bin/eval-ref-x86_64.elf"],
+      "target": "../bin/eval-twin-x86_64.elf",
+      "truth": "eval-truth-twin-x86_64.json",
+      "min_recall": 0.9195
+    },
+    "libid-cross-x86_64": {
       "refs": ["../bin/eval-ref-x86_64.elf"],
       "target": "../bin/eval-target-x86_64.elf",
-      "truth": "eval-truth-x86_64.json"
+      "truth": "eval-truth-cross-x86_64.json",
+      "min_recall": 0.746
     },
-    "aarch64": {
+    "libid-twin-aarch64": {
+      "refs": ["../bin/eval-ref-aarch64.elf"],
+      "target": "../bin/eval-twin-aarch64.elf",
+      "truth": "eval-truth-twin-aarch64.json",
+      "min_recall": 0.8704
+    },
+    "libid-cross-aarch64": {
       "refs": ["../bin/eval-ref-aarch64.elf"],
       "target": "../bin/eval-target-aarch64.elf",
-      "truth": "eval-truth-aarch64.json"
+      "truth": "eval-truth-cross-aarch64.json",
+      "min_recall": 0.5949
+    },
+    "discovery-x86_64": {
+      "family": "discovery",
+      "target": "../bin/eval-twin-x86_64.elf",
+      "truth": "eval-truth-twin-x86_64.json",
+      "min_recall": 1.0
+    },
+    "discovery-aarch64": {
+      "family": "discovery",
+      "target": "../bin/eval-twin-aarch64.elf",
+      "truth": "eval-truth-twin-aarch64.json",
+      "min_recall": 1.0
     }
   }
 }

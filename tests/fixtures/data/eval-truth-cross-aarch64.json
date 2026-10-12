@@ -1,6 +1,5 @@
 {
   "0x1012310": "_start_c",
-  "0x1012338": "main",
   "0x1012440": "dummy",
   "0x1012444": "dummy1",
   "0x1012448": "__init_libc",
@@ -14,7 +13,6 @@
   "0x1012994": "libc_exit_fini",
   "0x10129dc": "exit",
   "0x1012a00": "_Exit",
-  "0x1012a20": "printf",
   "0x1012aa8": "dummy",
   "0x1012aac": "__stdio_close",
   "0x1012ad4": "__syscall_ret",
