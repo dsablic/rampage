@@ -24,6 +24,8 @@ struct Spec {
     signature: Option<u32>,
     /// Replaces the metadata RVA in the CLI header.
     metadata_rva: Option<u32>,
+    /// Replaces the MethodList column of the three TypeDef rows.
+    method_lists: Option<[u32; 3]>,
 }
 
 const SECTION_RVA: u32 = 0x2000;
@@ -117,9 +119,10 @@ fn build(spec: &Spec) -> Vec<u8> {
     // TypeDef: <Module>, Demo.Program extends TypeRef 1 (TypeDefOrRef tag 1), and Inner nested in Program.
     let (module_type, program, demo, inner) =
         (strings.string("<Module>"), strings.string("Program"), strings.string("Demo"), strings.string("Inner"));
-    tables.put(0, 4).put(module_type, s).put(0, s).put(0, tdor).put(1, 2).put(1, 2);
-    tables.put(0x0010_0001, 4).put(program, s).put(demo, s).put((1 << 2) | 1, tdor).put(1, 2).put(1, 2);
-    tables.put(0x0010_0002, 4).put(inner, s).put(0, s).put((1 << 2) | 1, tdor).put(2, 2).put(5, 2);
+    let method_lists = spec.method_lists.unwrap_or([1, 1, 5]);
+    tables.put(0, 4).put(module_type, s).put(0, s).put(0, tdor).put(1, 2).put(method_lists[0], 2);
+    tables.put(0x0010_0001, 4).put(program, s).put(demo, s).put((1 << 2) | 1, tdor).put(1, 2).put(method_lists[1], 2);
+    tables.put(0x0010_0002, 4).put(inner, s).put(0, s).put((1 << 2) | 1, tdor).put(2, 2).put(method_lists[2], 2);
     // Field
     let counter = strings.string("counter");
     tables.put(0x0001, 2).put(counter, s).put(signature, b);
@@ -437,6 +440,16 @@ fn malformed_variants_degrade_without_panicking() {
     assert!(matches!(signature, Err(LoadError::Malformed(_))));
     let unmapped = parse(&Spec { metadata_rva: Some(0x7000_0000), ..Spec::default() });
     assert!(matches!(unmapped, Err(LoadError::Malformed(_))));
+}
+
+#[test]
+fn out_of_order_member_lists_hand_out_each_member_once() {
+    // A naive reader gives <Module> rows 1..5, Program nothing (5 > 1), then Inner rows 1..5 again: repeated
+    // across many TypeDefs, the output grows as types times methods from a tiny file.
+    let metadata = parse(&Spec { method_lists: Some([1, 5, 1]), ..Spec::default() }).unwrap().unwrap();
+    let methods: Vec<u32> = metadata.types.iter().flat_map(|ty| &ty.methods).map(|method| method.token).collect();
+    assert_eq!(methods, [0x0600_0001, 0x0600_0002, 0x0600_0003, 0x0600_0004]);
+    assert!(metadata.warnings.iter().any(|warning| warning.contains("out of order")), "{:?}", metadata.warnings);
 }
 
 #[test]

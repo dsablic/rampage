@@ -595,28 +595,41 @@ impl Decoder<'_, '_> {
         }
     }
 
-    /// The target rows of a TypeDef or MethodDef list column (II.22.37, II.22.26): from this row's start to the
-    /// next row's start, through the Ptr table when an unoptimized `#-` stream has one.
-    fn member_rows(&mut self, owner: u8, row: u32, column: usize, target: u8, ptr: u8) -> Vec<u32> {
+    /// The target rows of every owner row's list column (II.22.37, II.22.26): from a row's start to the next
+    /// row's start, through the Ptr table when an unoptimized `#-` stream has one. A start below an earlier
+    /// row's is raised to it and a target row already handed out is skipped, so each target row lands in at
+    /// most one list: out-of-order or duplicated lists in a hostile file cannot multiply the output.
+    fn member_lists(&mut self, owner: u8, column: usize, target: u8, ptr: u8) -> Vec<Vec<u32>> {
         let ptr_rows = self.tables.rows(ptr);
-        let count = if ptr_rows > 0 { ptr_rows } else { self.tables.rows(target) };
-        let start = self.cell(owner, row, column).unwrap_or(0).max(1);
-        let end = match self.cell(owner, row + 1, column) {
-            Some(next) => next.max(1),
-            None => count.saturating_add(1),
-        };
-        let end = end.min(count.saturating_add(1));
-        if start > end {
-            self.warnings.push(format!(
-                "{} row {row}: {} list is out of order",
-                tables::TABLE_NAMES[usize::from(owner)],
-                tables::TABLE_NAMES[usize::from(target)]
-            ));
-            return Vec::new();
+        let target_rows = self.tables.rows(target);
+        let count = if ptr_rows > 0 { ptr_rows } else { target_rows };
+        let limit = count.saturating_add(1);
+        let owners = self.tables.rows(owner);
+        let mut starts = Vec::with_capacity(owners as usize);
+        let mut floor = 1;
+        for row in 1..=owners {
+            let start = self.cell(owner, row, column).unwrap_or(0).clamp(1, limit);
+            if start < floor {
+                self.warnings.push(format!(
+                    "{} row {row}: {} list is out of order",
+                    tables::TABLE_NAMES[usize::from(owner)],
+                    tables::TABLE_NAMES[usize::from(target)]
+                ));
+            }
+            floor = floor.max(start);
+            starts.push(floor);
         }
-        (start..end)
-            .filter_map(|index| if ptr_rows > 0 { self.cell(ptr, index, 0) } else { Some(index) })
-            .filter(|&index| index != 0 && index <= self.tables.rows(target))
+        let mut assigned = vec![false; target_rows as usize + 1];
+        (0..starts.len())
+            .map(|index| {
+                let end = starts.get(index + 1).copied().unwrap_or(limit);
+                (starts[index]..end)
+                    .filter_map(|index| if ptr_rows > 0 { self.cell(ptr, index, 0) } else { Some(index) })
+                    .filter(|&row| {
+                        row != 0 && row <= target_rows && !std::mem::replace(&mut assigned[row as usize], true)
+                    })
+                    .collect()
+            })
             .collect()
     }
 
@@ -629,19 +642,18 @@ impl Decoder<'_, '_> {
                 enclosing.insert(nested, token(tables::TYPE_DEF, outer));
             }
         }
-        (1..=self.tables.rows(tables::TYPE_DEF))
-            .map(|row| {
-                let table = tables::TYPE_DEF;
-                let fields = self
-                    .member_rows(table, row, 4, tables::FIELD, tables::FIELD_PTR)
-                    .into_iter()
-                    .map(|field| self.string(tables::FIELD, field, 1))
-                    .collect();
-                let methods = self
-                    .member_rows(table, row, 5, tables::METHOD_DEF, tables::METHOD_PTR)
-                    .into_iter()
-                    .map(|method| self.method(method))
-                    .collect();
+        let table = tables::TYPE_DEF;
+        let field_lists = self.member_lists(table, 4, tables::FIELD, tables::FIELD_PTR);
+        let method_lists = self.member_lists(table, 5, tables::METHOD_DEF, tables::METHOD_PTR);
+        let param_lists = self.member_lists(tables::METHOD_DEF, 5, tables::PARAM, tables::PARAM_PTR);
+        field_lists
+            .into_iter()
+            .zip(method_lists)
+            .zip(1..)
+            .map(|((fields, methods), row)| {
+                let fields = fields.into_iter().map(|field| self.string(tables::FIELD, field, 1)).collect();
+                let methods =
+                    methods.into_iter().map(|method| self.method(method, &param_lists[method as usize - 1])).collect();
                 TypeDef {
                     token: token(table, row),
                     namespace: self.string(table, row, 2),
@@ -656,7 +668,7 @@ impl Decoder<'_, '_> {
             .collect()
     }
 
-    fn method(&mut self, row: u32) -> MethodDef {
+    fn method(&mut self, row: u32, params: &[u32]) -> MethodDef {
         let table = tables::METHOD_DEF;
         let rva = self.cell(table, row, 0).unwrap_or(0);
         let impl_flags = self.cell(table, row, 1).unwrap_or(0) as u16;
@@ -667,10 +679,9 @@ impl Decoder<'_, '_> {
             // IL and OPTIL (code type 2) both store CIL.
             _ => BodyKind::Il,
         };
-        let mut params: Vec<(u32, String)> = self
-            .member_rows(table, row, 5, tables::PARAM, tables::PARAM_PTR)
-            .into_iter()
-            .filter_map(|param| {
+        let mut params: Vec<(u32, String)> = params
+            .iter()
+            .filter_map(|&param| {
                 let sequence = self.cell(tables::PARAM, param, 1)?;
                 (sequence > 0).then(|| (sequence, self.string(tables::PARAM, param, 2)))
             })
