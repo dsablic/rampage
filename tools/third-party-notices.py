@@ -180,21 +180,35 @@ def options(expression):
             if o.strip()]
 
 
-def fallback_files(package, siblings, repo):
+def fallback_files(package, siblings, same_license, repo):
     """License texts for a package that ships none, and how they were obtained. Preference: the upstream file,
-    then the file of a package from the same repository under the identical license expression, then the
-    standard text of the elected license with holders from the package metadata."""
+    then the file of a package from the same repository under the identical license expression, then (for
+    Apache-family licenses only) any shipped package's file under the identical expression, then the standard text
+    of the elected license with holders from the package metadata. Expressions combining licenses with AND get no
+    fallback: one text cannot stand in for several."""
     upstream = UPSTREAM_LICENSES.get(package["name"])
     if upstream:
         return [upstream], "upstream repository file"
-    sibling = siblings.get((package.get("repository"), package.get("license")))
+    expression = package.get("license") or ""
+    sibling = siblings.get((package.get("repository"), expression))
     if sibling:
         other, files = sibling
         return files, "file from " + other["name"] + " " + other["version"] + " (same repository and license)"
-    choices = options(package.get("license"))
+    if re.search(r"\bAND\b", expression):
+        return [], None
+    choices = options(expression)
     holders = "; ".join(package.get("authors") or []) or (
         "the " + package["name"] + " authors (" + (package.get("repository") or "no repository listed") + ")")
-    if any(choice.split()[0] == "Apache-2.0" for choice in choices):
+    apache = [choice for choice in choices if choice.split()[0] == "Apache-2.0"]
+    if apache:
+        # Apache texts carry no per-package copyright line, so another package's file under the identical
+        # expression is exact, including a WITH exception such as LLVM-exception.
+        identical = same_license.get(expression)
+        if identical:
+            other, files = identical
+            return files, "file from " + other["name"] + " " + other["version"] + " (identical license expression)"
+        if "Apache-2.0" not in apache:
+            return [], None  # only offered WITH an exception whose text is not at hand
         text = read_text(os.path.join(repo, APACHE_TEXT_PATH))
         return [("standard Apache-2.0 text (elected; package ships none)", text)], "standard Apache-2.0 text"
     if "MIT" in choices:
@@ -233,16 +247,20 @@ def main():
 
     shipped = {package["id"]: license_files(package) for package in crates}
     siblings = {}
+    same_license = {}
     for package in crates:
-        if shipped[package["id"]]:
-            siblings.setdefault((package.get("repository"), package.get("license")), (package, shipped[package["id"]]))
+        files = shipped[package["id"]]
+        if files:
+            expression = package.get("license") or ""
+            siblings.setdefault((package.get("repository"), expression), (package, files))
+            same_license.setdefault(expression, (package, files))
     groups = defaultdict(list)
     no_files = []
     fallbacks = []
     for package in crates:
         files = shipped[package["id"]]
         if not files:
-            files, source = fallback_files(package, siblings, repo)
+            files, source = fallback_files(package, siblings, same_license, repo)
             if source:
                 fallbacks.append((package, source))
             else:
