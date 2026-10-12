@@ -90,6 +90,8 @@ fn compilers() -> Vec<Signature> {
         // .NET assemblies run through the CLR shim; native code and a CLI header both betray them.
         Signature::new(".NET", Kind::Compiler, vec![Condition::ImportFunction("_CorExeMain".to_owned())])
             .with_note("mscoree _CorExeMain import"),
+        Signature::new(".NET", Kind::Compiler, vec![Condition::ImportFunction("_CorDllMain".to_owned())])
+            .with_note("mscoree _CorDllMain import (managed DLL)"),
         Signature::new(".NET", Kind::Compiler, vec![Condition::ImportLibrary("mscoree".to_owned())])
             .with_note("mscoree.dll import"),
         Signature::new(".NET", Kind::Compiler, vec![section(".cormeta")]).with_note(".cormeta CLR metadata"),
