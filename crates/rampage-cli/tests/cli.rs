@@ -120,6 +120,9 @@ fn carve_lists_universal_slices_in_text_and_json() {
     assert_eq!(carving["candidates"][1]["offset"], 0x1000);
     assert_eq!(carving["truncated"], true);
     assert!(carving["limitations"][0].as_str().unwrap().contains("candidate cap (2) at offset 0x4000"));
+    for out_of_range in ["0", "4097"] {
+        rampage(&["carve", "--max-candidates", out_of_range], "hello-universal.macho").failure();
+    }
 }
 
 #[test]
