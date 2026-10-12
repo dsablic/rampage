@@ -47,6 +47,9 @@ pub enum Condition {
     SectionContains { section: Option<String>, needle: Vec<u8> },
     /// An import from a library whose name contains this text (case-insensitive) is present.
     ImportLibrary(String),
+    /// An import from a library named this prefix and then a version number (case-insensitive), such as
+    /// `msvcr` matching `MSVCR120.dll` but not the unversioned system `msvcrt.dll` that MinGW also links.
+    VersionedImportLibrary(String),
     /// An imported function with this exact name (case-insensitive) is present.
     ImportFunction(String),
     /// The image has an overlay (data appended past everything its structures describe).

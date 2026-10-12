@@ -47,6 +47,10 @@ fn section_contains(name: &str, needle: &str) -> Condition {
     Condition::SectionContains { section: Some(name.to_owned()), needle: needle.as_bytes().to_vec() }
 }
 
+fn versioned_import(prefix: &str) -> Condition {
+    Condition::VersionedImportLibrary(prefix.to_owned())
+}
+
 fn packers() -> Vec<Signature> {
     vec![
         // UPX renames the first two sections UPX0 (unpacked) and UPX1 (packed); both present is a reliable tell.
@@ -93,11 +97,11 @@ fn compilers() -> Vec<Signature> {
         Signature::new(".NET", Kind::Compiler, vec![Condition::ImportLibrary("mscoree".to_owned())])
             .with_note("mscoree.dll import"),
         Signature::new(".NET", Kind::Compiler, vec![section(".cormeta")]).with_note(".cormeta CLR metadata"),
-        // MSVC links against a versioned C/C++ runtime import library.
-        Signature::new("MSVC", Kind::Compiler, vec![Condition::ImportLibrary("vcruntime".to_owned())])
-            .with_note("VCRUNTIME import"),
-        Signature::new("MSVC", Kind::Compiler, vec![Condition::ImportLibrary("msvcr".to_owned())])
-            .with_note("MSVCR runtime import"),
+        // MSVC links against a versioned C/C++ runtime. The unversioned msvcrt.dll is the system runtime that
+        // MinGW and Rust's gnu targets use, so it says nothing about MSVC.
+        Signature::new("MSVC", Kind::Compiler, vec![versioned_import("vcruntime")]).with_note("VCRUNTIME import"),
+        Signature::new("MSVC", Kind::Compiler, vec![versioned_import("msvcr")]).with_note("MSVCR runtime import"),
+        Signature::new("MSVC", Kind::Compiler, vec![versioned_import("msvcp")]).with_note("MSVCP C++ runtime import"),
         // MinGW embeds its runtime-failure banner in read-only data.
         Signature::new("MinGW/GCC", Kind::Compiler, vec![contains("Mingw-w64")]).with_note("Mingw-w64 banner"),
         // GCC and Clang stamp a producer string into .comment.

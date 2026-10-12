@@ -18,8 +18,8 @@ pub(crate) trait Image {
     fn image_bytes(&self) -> &[u8];
     /// Every section in file order: its name and its file-backed bytes (`None` for zero-fill sections).
     fn sections(&self) -> Vec<(&str, Option<&[u8]>)>;
-    /// Whether any imported library's name contains `needle_lowercase` (compared case-insensitively).
-    fn imports_library(&self, needle_lowercase: &str) -> bool;
+    /// The names of the libraries imported from.
+    fn import_libraries(&self) -> Vec<&str>;
     /// Whether any imported function matches `name` (compared case-insensitively).
     fn imports_function(&self, name: &str) -> bool;
     /// The overlay's size in bytes, when the image has one.
@@ -86,9 +86,18 @@ fn check(image: &impl Image, condition: &Condition) -> Option<String> {
             }
             None => contains(image.image_bytes(), needle).then(|| format!("image contains {:?}", preview(needle))),
         },
-        Condition::ImportLibrary(library) => image
-            .imports_library(&library.to_ascii_lowercase())
-            .then(|| format!("imports from a library matching {library:?}")),
+        Condition::ImportLibrary(library) => {
+            let wanted = library.to_ascii_lowercase();
+            imported_library(image, |name| name.contains(&wanted))
+                .map(|name| format!("imports from {name} (matching {library:?})"))
+        }
+        Condition::VersionedImportLibrary(prefix) => {
+            let prefix = prefix.to_ascii_lowercase();
+            let versioned = |name: &str| {
+                name.strip_prefix(&prefix).is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+            };
+            imported_library(image, versioned).map(|name| format!("imports from versioned runtime {name}"))
+        }
         Condition::ImportFunction(name) => image.imports_function(name).then(|| format!("imports function {name}")),
         Condition::OverlayPresent => image.overlay_size().map(|size| format!("{size} bytes of overlay")),
         Condition::MinImageEntropy(min) => {
@@ -104,6 +113,11 @@ fn check(image: &impl Image, condition: &Condition) -> Option<String> {
 /// The first section named `name`: `None` when absent, `Some(None)` when present but not file-backed.
 fn find_section<'a>(image: &'a impl Image, name: &str) -> Option<Option<&'a [u8]>> {
     image.sections().into_iter().find(|(present, _)| *present == name).map(|(_, bytes)| bytes)
+}
+
+/// The first imported library whose lower-cased name satisfies `test`.
+fn imported_library(image: &impl Image, test: impl Fn(&str) -> bool) -> Option<&str> {
+    image.import_libraries().into_iter().find(|name| test(&name.to_ascii_lowercase()))
 }
 
 /// Naive substring search; needles are short and images are bounded, so this stays cheap.
@@ -183,11 +197,8 @@ impl Image for Binary {
         self.sections.iter().map(|section| (section.name.as_str(), section_file_bytes(image, section))).collect()
     }
 
-    fn imports_library(&self, needle_lowercase: &str) -> bool {
-        self.imports
-            .iter()
-            .filter_map(|import| import.library.as_deref())
-            .any(|library| library.to_ascii_lowercase().contains(needle_lowercase))
+    fn import_libraries(&self) -> Vec<&str> {
+        self.imports.iter().filter_map(|import| import.library.as_deref()).collect()
     }
 
     fn imports_function(&self, name: &str) -> bool {
@@ -241,8 +252,8 @@ mod tests {
         fn sections(&self) -> Vec<(&str, Option<&[u8]>)> {
             self.sections.iter().map(|(name, bytes)| (name.as_str(), Some(bytes.as_slice()))).collect()
         }
-        fn imports_library(&self, needle_lowercase: &str) -> bool {
-            self.libraries.iter().any(|library| library.to_ascii_lowercase().contains(needle_lowercase))
+        fn import_libraries(&self) -> Vec<&str> {
+            self.libraries.iter().map(String::as_str).collect()
         }
         fn imports_function(&self, name: &str) -> bool {
             self.functions.iter().any(|f| f.eq_ignore_ascii_case(name))
@@ -315,6 +326,19 @@ mod tests {
         assert!(super::evaluate(&image, &lib).is_some());
         assert!(super::evaluate(&image, &func).is_some());
         assert!(super::evaluate(&Fake::default(), &lib).is_none());
+    }
+
+    #[test]
+    fn only_versioned_runtimes_mean_msvc() {
+        let db = SignatureDb::bundled();
+        let msvc = |library: &str| {
+            let image = Fake { libraries: vec![library.to_owned(), "KERNEL32.dll".to_owned()], ..Fake::default() };
+            identify_image(&image, &db).iter().any(|detection| detection.name == "MSVC")
+        };
+        assert!(!msvc("msvcrt.dll"), "MinGW and Rust gnu targets import msvcrt.dll");
+        assert!(msvc("MSVCR120.dll"));
+        assert!(msvc("msvcp140.dll"));
+        assert!(msvc("VCRUNTIME140_1.dll"));
     }
 
     #[test]
