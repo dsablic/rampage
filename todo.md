@@ -39,6 +39,9 @@
 - [ ] MIPS signatures: mask `lui`/`addiu` HI/LO address pairs. Needs relocation/dataflow to avoid false matches
   (without it, a masked constant could collide two different functions); do it relocation-gated, not heuristic.
 - [ ] Verify the MSVC RTTI path against a real PE (no MSVC toolchain locally; synthetic-tested only).
+- [ ] Signature confidence: reject non-discriminating branch-only fingerprints or require validated target/context
+  evidence before claiming library identity or applying names. Add malformed/truncated/alignment regressions;
+  raw normalized hash matches are proposals, not verified recovery.
 - [x] PE enrichment: TLS callbacks seed function starts and delay-load imports surface as slots (bounded,
   panic-free on malformed PEs).
 - [x] Go pclntab: bounded full-image magic-scan fallback when the section is absent or renamed.
@@ -390,6 +393,12 @@ arbitrary debugger control and multi-module runtime resolution must not be infer
    show semantic gaps and must not present unsupported paths as recovered source.
 6. **Containers/workspaces:** safe archive indexing/extraction budgets, module-qualified names/addresses,
    dependencies, cross-module references and UI/MCP navigation; never execute installer scripts.
+7. **CLI batch workflow:** first-class multi-architecture analysis reports with bounded function selection,
+   per-command timeouts, recovery diagnostics and comparison summaries; avoid external orchestration for routine
+   static/runtime retests. Keep candidate counts, weak signature proposals and recovered code distinct.
+8. **Debugger integration:** plan an LLDB-first read-only bridge after static acceptance, with explicit session/
+   stop identities, module/thread navigation, quiescent capture manifests and agent/UI queries. Attach, resume,
+   breakpoint insertion and target writes require separately reviewed controls; no automatic host or plugin launch.
 
 Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,
 CLI/API/MCP regressions, malformed-input bounds, native/compiled fixtures, exporter tests, the opt-in live
