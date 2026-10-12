@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use rampage_ui::App;
 
 fn fixture(name: &str) -> PathBuf {
@@ -191,4 +192,28 @@ fn assistant_panel() {
     assistant.transcript.push(Entry::Answer("main passes the greeting to puts and returns 5.".to_owned()));
     harness.run();
     harness.snapshot("assistant");
+}
+
+#[test]
+fn about_window() {
+    let mut app = App::blocking();
+    app.show_about();
+    let mut harness = harness(app);
+    harness.run();
+    harness.get_by_label("NOTICE");
+    harness.get_by_label("Ubuntu Light (Ubuntu Font Licence 1.0)");
+    harness.snapshot("about");
+}
+
+#[test]
+fn clicking_the_brand_opens_about() {
+    let mut harness = harness(App::blocking());
+    harness.run();
+    let ctx = harness.ctx.clone();
+    harness.state_mut().open(&ctx, fixture("hello-x64-dyn.elf"), None);
+    harness.run();
+    assert!(harness.query_by_label("Third-party notices").is_none());
+    harness.get_by_label("rampage").click();
+    harness.run();
+    harness.get_by_label("Third-party notices");
 }

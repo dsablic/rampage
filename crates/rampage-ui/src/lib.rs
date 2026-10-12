@@ -1,5 +1,6 @@
 //! The rampage desktop UI: an egui front end over the same API the CLI and MCP server use.
 
+mod about;
 pub mod assistant;
 mod band;
 mod graph;
@@ -28,6 +29,7 @@ pub struct App {
     /// Whether a text field had keyboard focus last frame. Escape takes focus away before shortcuts run, so this
     /// keeps Escape in a text field from also going back.
     typing: bool,
+    about: bool,
 }
 
 fn default_layout() -> DockState<Tab> {
@@ -41,7 +43,15 @@ fn default_layout() -> DockState<Tab> {
 
 impl Default for App {
     fn default() -> Self {
-        Self { workspace: None, error: None, dock: default_layout(), blocking: false, themed: false, typing: false }
+        Self {
+            workspace: None,
+            error: None,
+            dock: default_layout(),
+            blocking: false,
+            themed: false,
+            typing: false,
+            about: false,
+        }
     }
 }
 
@@ -59,6 +69,11 @@ impl App {
             }
             Err(error) => self.error = Some(error),
         }
+    }
+
+    /// Opens the About window with the version, licence and third-party notices.
+    pub fn show_about(&mut self) {
+        self.about = true;
     }
 
     pub fn workspace_mut(&mut self) -> Option<&mut Workspace> {
@@ -91,6 +106,9 @@ impl App {
 
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status").exact_size(22.0).show(ui, |ui| self.status_bar(ui));
+        if self.about {
+            about::show(&ui.ctx().clone(), &mut self.about);
+        }
         let Some(workspace) = &mut self.workspace else {
             egui::CentralPanel::default().show(ui, |ui| self.empty(ui));
             return;
@@ -213,7 +231,12 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("rampage").strong().color(theme::LINK));
+            let brand = ui.add(
+                egui::Label::new(RichText::new("rampage").strong().color(theme::LINK)).sense(egui::Sense::click()),
+            );
+            if brand.on_hover_text("About rampage").clicked() {
+                self.about = true;
+            }
             let Some(workspace) = &mut self.workspace else { return };
             ui.separator();
             let name = workspace.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
