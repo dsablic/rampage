@@ -166,8 +166,8 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("vsprintf", "int4 vsprintf(char *str, char *fmt, void *ap)"),
     ("fileno", "int4 fileno(void *stream)"),
     ("ungetc", "int4 ungetc(int4 c, void *stream)"),
-    ("fseeko", "int4 fseeko(void *stream, {long} off, int4 whence)"),
-    ("ftello", "{long} ftello(void *stream)"),
+    ("fseeko", "int4 fseeko(void *stream, {off_t} off, int4 whence)"),
+    ("ftello", "{off_t} ftello(void *stream)"),
     ("getline", "{ssize_t} getline(char **line, {size_t} *n, void *stream)"),
     ("getdelim", "{ssize_t} getdelim(char **line, {size_t} *n, int4 delim, void *stream)"),
     // string / memory (more)
@@ -206,6 +206,19 @@ const C_PROTOTYPES: &[(&str, &str)] = &[
     ("connect", "int4 connect(int4 fd, void *addr, uint4 addrlen)"),
     ("send", "{ssize_t} send(int4 fd, void *buf, {size_t} n, int4 flags)"),
     ("recv", "{ssize_t} recv(int4 fd, void *buf, {size_t} n, int4 flags)"),
+    // POSIX typedef-sized I/O and time (off_t/time_t/mode_t/pid_t widths via placeholders)
+    ("lseek", "{off_t} lseek(int4 fd, {off_t} offset, int4 whence)"),
+    ("pread", "{ssize_t} pread(int4 fd, void *buf, {size_t} n, {off_t} offset)"),
+    ("pwrite", "{ssize_t} pwrite(int4 fd, void *buf, {size_t} n, {off_t} offset)"),
+    ("time", "{time_t} time({time_t} *tloc)"),
+    ("mktime", "{time_t} mktime(void *tm)"),
+    ("difftime", "float8 difftime({time_t} end, {time_t} start)"),
+    ("getppid", "{pid_t} getppid(void)"),
+    ("openat", "int4 openat(int4 dirfd, char *path, int4 flags, ...)"),
+    ("creat", "int4 creat(char *path, {mode_t} mode)"),
+    ("umask", "{mode_t} umask({mode_t} mask)"),
+    ("chmod", "int4 chmod(char *path, {mode_t} mode)"),
+    ("fchmod", "int4 fchmod(int4 fd, {mode_t} mode)"),
     // C++ runtime (Itanium ABI)
     ("_Znwm", "void * _Znwm({size_t} size)"),
     ("_Znam", "void * _Znam({size_t} size)"),
@@ -257,7 +270,16 @@ fn render_prototype(name: &str, sizes: DataOrganization, cdecl: bool) -> Option<
         .replace("{size_t}", &format!("uint{}", sizes.pointer))
         .replace("{ssize_t}", &format!("int{}", sizes.pointer))
         .replace("{long}", &format!("int{}", sizes.long))
-        .replace("{ulong}", &format!("uint{}", sizes.long));
+        .replace("{ulong}", &format!("uint{}", sizes.long))
+        // off_t is 64-bit signed on every target we care about: all 64-bit Linux/Darwin, and 32-bit Darwin.
+        // Limitation: 32-bit Linux without _FILE_OFFSET_BITS=64 uses a 32-bit off_t, which this mis-sizes.
+        .replace("{off_t}", "int8")
+        // time_t is long-sized on Linux (64-bit on 64-bit, `long` on 32-bit), which int{long} tracks.
+        // Limitation: 32-bit Darwin uses a 64-bit time_t even though `long` is 32-bit there.
+        .replace("{time_t}", &format!("int{}", sizes.long))
+        // mode_t and pid_t are fixed-width: a 32-bit unsigned mode and a 32-bit signed pid on every target.
+        .replace("{mode_t}", "uint4")
+        .replace("{pid_t}", "int4");
     let convention = if cdecl { "__cdecl " } else { "" };
     Some(format!("extern {convention}{decl};"))
 }
@@ -596,7 +618,8 @@ impl Decompiler {
     }
 
     /// Renders a common runtime prototype with this handle's compiler-specific widths and calling convention.
-    /// OS/library-dependent typedefs (`off_t`, `time_t`, `clock_t`, `pthread_t`) are intentionally not guessed.
+    /// `off_t`/`time_t`/`mode_t`/`pid_t` are sized by placeholders (see `render_prototype`); other
+    /// OS/library-dependent typedefs (`clock_t`, `pthread_t`) are intentionally not guessed.
     pub fn c_prototype(&self, name: &str) -> Option<String> {
         let compiler = self.language_id.rsplit(':').next()?;
         if !abi::has_c_runtime(compiler) {
@@ -799,6 +822,33 @@ mod tests {
         // Non-identifier spellings cannot be parsed, so they get no prototype.
         assert!(c_prototype("puts@plt").is_none());
         assert!(c_prototype("malloc").unwrap().contains("malloc"));
+    }
+
+    #[test]
+    fn posix_typedef_placeholders_resolve_to_correct_widths() {
+        let lp64 = DataOrganization { pointer: 8, int: 4, long: 8 };
+        // off_t is a fixed 8-byte signed type regardless of `long`.
+        let lseek = render_prototype("lseek", lp64, false).expect("lseek prototype");
+        assert!(lseek.contains("int8 lseek(int4 fd, int8 offset, int4 whence)"), "{lseek}");
+        // ssize_t tracks the pointer width; mode/off placeholders size the remaining arguments.
+        let pwrite = render_prototype("pwrite", lp64, false).expect("pwrite prototype");
+        assert!(pwrite.contains("int8 pwrite(int4 fd, void *buf, uint8 n, int8 offset)"), "{pwrite}");
+        let read = render_prototype("read", lp64, false).expect("read prototype");
+        assert!(read.contains("int8 read(int4 fd, void *buf, uint8 n)"), "{read}");
+        // time_t follows the `long` width (8 under LP64).
+        let time = render_prototype("time", lp64, false).expect("time prototype");
+        assert!(time.contains("int8 time(int8 *tloc)"), "{time}");
+        // mode_t is a fixed 4-byte unsigned type, pid_t a fixed 4-byte signed type.
+        let chmod = render_prototype("chmod", lp64, false).expect("chmod prototype");
+        assert!(chmod.contains("int4 chmod(char *path, uint4 mode)"), "{chmod}");
+        let getppid = render_prototype("getppid", lp64, false).expect("getppid prototype");
+        assert!(getppid.contains("int4 getppid(void)"), "{getppid}");
+        // On an ILP32 target off_t stays 8 bytes while time_t shrinks to the 4-byte `long`.
+        let ilp32 = DataOrganization { pointer: 4, int: 4, long: 4 };
+        let lseek32 = render_prototype("lseek", ilp32, false).expect("lseek prototype");
+        assert!(lseek32.contains("int8 lseek(int4 fd, int8 offset, int4 whence)"), "{lseek32}");
+        let time32 = render_prototype("time", ilp32, false).expect("time prototype");
+        assert!(time32.contains("int4 time(int4 *tloc)"), "{time32}");
     }
 
     #[test]
