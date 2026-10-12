@@ -12,7 +12,6 @@
 
 use std::collections::BTreeMap;
 
-use rampage_arch::Arch;
 use rampage_loaders::{Binary, Format, SectionKind};
 use serde::Serialize;
 
@@ -410,11 +409,7 @@ pub fn recover(binary: &Binary) -> Vec<RttiClass> {
     if !matches!(binary.arch.pointer_size(), 4 | 8) {
         return Vec::new();
     }
-    // Mirror the symbol path: a MIPS64 ELFCLASS32/N32 image has 32-bit ABI pointers the arch width misstates.
-    if binary.format == Format::Elf
-        && binary.arch == Arch::Mips64
-        && binary.image_bytes().get(..5) == Some(b"\x7fELF\x01".as_slice())
-    {
+    if crate::classes::is_mips64_n32(binary) {
         return Vec::new();
     }
     let image = build_image(binary);
