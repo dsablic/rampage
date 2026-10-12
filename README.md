@@ -73,6 +73,7 @@ rampage jump-table <file> --at <addr> --count N # explicit immutable ARM64 table
 rampage correlate <snapshot> --original <file> --module <uuid> --at <addr> # runtime/image correlation
 rampage compare-runtime <snapshot> --original <file> --module <uuid> --range <addr>:<size>
 rampage observe-pointer <snapshot> --at <slot> # raw captured value, not a proven call edge
+rampage compare-pointers <before> --other <after> --at <slot> --other-at <slot>
 rampage observe-indirect-branch <snapshot> --start <addr> --at <branch> # bounded ARM64 slot-load link
 rampage info    <file>                       # format, arch, entry, segments, sections
 rampage imports <file> [--contains TEXT]     # imported functions, libraries and import slots
@@ -94,11 +95,14 @@ rampage mcp                                  # MCP server on stdin/stdout
 Addresses accept `0x` hex, decimal, symbol and export names, or `sub_<hex>`. In JSON output every address is
 a `"0x…"` string, because JSON numbers lose precision above 2^53 in common consumers.
 
-Names, comments and typed annotations are saved beside the binary in `<file>.rampage`
+Names, comments and typed annotations are saved beside ordinary binaries in `<file>.rampage`
 (`<file>.<arch>.rampage` for a slice of a
 universal binary): an append-only JSON Lines log of edits, each recording the value it replaced, so undo is just
 another edit and the file is a full history. Several clients can share it: the UI picks up names an agent saves
 through MCP within a second.
+Snapshot annotations use a capture-identity log instead, sharing edits only across equal analysis identities
+in the same directory by default. Legacy unscoped snapshot logs are not automatically loaded or migrated;
+see [runtime snapshots](docs/runtime-snapshots.md) for persistence and explicit cross-directory reuse.
 
 ## Desktop UI
 
@@ -124,7 +128,8 @@ are sent to Anthropic's API.
 `rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the tools
 `triage`, `binary_info`, `list_functions`, `disassemble`, `list_strings`, `list_imports`, `list_exports`, `xrefs`,
 `decompile`, `rename`, `set_comment`, `set_signature`, `set_types`, `set_global`, `import_debug_signatures`,
-`class_evidence`, `observe_pointer`, `observe_indirect_branch`, `compare_runtime_bytes`, `undo`, `redo`
+`class_evidence`, `observe_pointer`, `observe_indirect_branch`, `compare_runtime_bytes`,
+`compare_pointer_observations`, `undo`, `redo`
 and `list_annotations`.
 Agents' annotations land in the same log the
 UI and CLI use, and the UI shows them as they arrive. Analysis runs once per binary and is cached for the session.

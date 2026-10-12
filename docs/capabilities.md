@@ -1,7 +1,7 @@
 # Capability indicators
 
 `rampage capabilities image.exe --json` and the `capabilities` agent/MCP tool report static metadata matches.
-Each result includes an ID, name, category and the original imports/strings that matched. Indicators describe
+Each result includes an ID, name, category and matched import/string evidence. Indicators describe
 available building blocks, not execution, call ordering, argument values or malicious intent. Legitimate software
 can implement every behavior listed here.
 
@@ -9,6 +9,7 @@ can implement every behavior listed here.
 
 The following rules require a match in **every** independent indicator group. Alternative API spellings and
 duplicate inputs cannot replace a missing group. Evidence retains original spelling and removes exact duplicates.
+Legacy rules instead retain their canonical term evidence, such as `import:ptrace` and `string:https://`.
 
 | Rule ID | Required groups |
 | --- | --- |

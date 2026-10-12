@@ -15,11 +15,27 @@ rampage-snapshot capture.json --region 0x1000:0x100:r-x --region 0x3000:0x20:rw-
 Select ranges explicitly. The exporter reads those ranges, refuses partial reads and existing output files,
 and limits captured bytes to 64 MiB. Requested permissions must exactly match every underlying readable mapped
 range reported by LLDB; writable memory cannot be labelled immutable and non-executable memory cannot be
-labelled code. Mapping inspection is limited to 16,384 queries. Captures are published atomically without
+labelled code. Initial and publication-time mapping inspections share a 16,384-query budget.
+Captures are published atomically without
 overwriting existing files, and failed writes leave no partial destination. The stop identity includes
 expression-evaluation stops and is checked during capture and before publication.
 It does not resume, launch or attach. Use `--thumb` for Thumb code.
 Preserve the actual runtime addresses: they already include ASLR.
+
+Top-frame registers default to the selected thread. Repeat `--thread ID` to select specific thread IDs, or
+use `--all-threads` to capture the stopped process's complete thread set; these options are mutually exclusive
+and bounded to 64 threads. Explicit selections require valid top frames and core registers: `pc/sp` on ARM64,
+`pc/sp/cpsr` on ARM32, and `rip/rsp` on x86-64. Other named registers remain optional.
+Thread IDs/stop context, target context and module UUID/header mappings are checked before publication.
+Selecting threads does not change debugger selection or process execution state.
+
+The exporter accepts little-endian ARM64, ARM32 and x86-64 targets with matching address widths. Selected
+module architecture, byte order and address width must agree with the target. Unknown and big-endian target
+byte orders are rejected rather than guessing separate code/data order; ARM BE8 and heterogeneous module
+endian context remain unsupported by this exporter. The snapshot loader retains its explicit endian fields.
+ARM32 requires readable CPSR with its data-endian bit clear, even for the default selected-thread capture.
+Current top frames, core registers and selected section mappings are rechecked at publication. These checks
+detect observed changes, not process-wide atomicity: keep debugger operations and external writers quiescent.
 
 For an explicitly selected loaded module, use a UUID and original-image address instead of calculating ASLR
 addresses manually:
@@ -30,9 +46,11 @@ rampage-snapshot capture.json --module-region 01234567-89ab-cdef-0123-456789abcd
 
 `--module-region UUID:IMAGE_ADDRESS:SIZE:PERMS` and `--module-seed UUID:IMAGE_ADDRESS` may be repeated and mixed
 with explicit runtime ranges/seeds. Module selection requires an unambiguous compact or standard dashed UUID,
-matching architecture, checked header slide and coverage by loaded section leaves. Every intersecting leaf
+matching architecture/byte order/address width, checked header slide and coverage by loaded section leaves.
+Every intersecting leaf
 must agree with that slide; mapping holes and contradictory section mappings are rejected. Enumeration is
-limited to 4,096 modules and section traversal to 16,384 combined items across selected modules. Opaque identifiers
+limited to 4,096 modules. Initial and publication-time section traversal share a 16,384-item budget across
+selected modules. Opaque identifiers
 remain available as provenance for explicit runtime captures but cannot be used as UUID selectors. No module
 file is loaded or debugger expression evaluated, and no unselected section bytes are captured.
 
@@ -204,3 +222,34 @@ incomplete/non-indirect ending instruction is rejected. No discovery, target exe
 are performed; MCP/CLI do not load sidecars. This is conditional evidence for the selected straight-line
 window, not proof the path executed or the branch consumed the currently captured slot value. Module ownership
 is not inferred from header proximity.
+
+## Compare pointer observations across captures
+
+```sh
+rampage compare-pointers before.json --other after.json --at 0x3000 --other-at 0x7000 --json
+```
+
+API/MCP `compare_pointer_observations` accepts an explicit second capture `other` and hexadecimal `at`/`other_at`
+slot addresses. Captures must agree on architecture and data byte order. CLI/MCP open both explicit captures
+without annotation sidecars; metadata paths are not opened. Results retain both complete observations and capture
+identities, plus `raw_value_change`, `slot_permissions_changed` and `target_assessment_changed`. Missing words
+produce `before_unavailable`, `after_unavailable` or `both_unavailable`, never an equality claim or invented zero.
+
+Before/after is analyst-supplied ordering, not verified chronology or same-process provenance. Slot correspondence
+is also supplied explicitly: this operation does not infer ASLR slides or module ownership, normalize pointer tags,
+establish a branch's loaded value or insert a discovery edge. Equal raw values can still have different permission
+or target assessments, which remain separate evidence.
+
+## Persist snapshot annotations by capture identity
+
+Sessions use `.rampage-capture-identity-v1-<sha256>.jsonl` logs in the canonical snapshot directory.
+Identical analysis identities share annotations within that directory even when file names, producer labels,
+register observations or metadata paths differ. Projects retain each file's own provenance and registers; they
+are not merged solely because analysis identities match. Changed capture bytes, mappings, permissions, modes,
+target/compiler context, entry, seeds or module identities select a different annotation log.
+
+`Session::with_capture_annotations(directory)` selects an explicit existing directory for cross-directory reuse.
+No global cache or recorded module path is searched. Ordinary binaries retain per-file/per-slice annotation logs.
+Legacy snapshot `<file>.rampage` logs are left untouched and reported as ignored: their edits lack a capture
+identity and are not silently migrated. Persistence covers annotations, not serialized analysis, decompiler
+configuration or proof of capture authenticity.

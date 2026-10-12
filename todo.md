@@ -44,23 +44,27 @@
 - [x] Go pclntab: bounded full-image magic-scan fallback when the section is absent or renamed.
 - [ ] C++ class LAYOUT reconstruction (fields/sizes), building on the RTTI name/hierarchy recovery now in place.
 
-### Deferred capability-detection rules (capa-style, defensive triage)
+### Capability-detection rules (capa-style, defensive triage)
 
-The agent that would have added these was stopped by the real-time cyber safeguard (its prompt was framed around
-offensive techniques). These are standard defensive triage signals for `rampage-capabilities`; implement directly
-and conservatively, each gated behind concrete, low-false-positive indicators (use a multi-indicator threshold
-where a single import is weak), and each covered by a test including a benign negative case:
+These are static metadata indicators, not proof of execution or malicious intent. New rules require independent
+corroborating groups; aliases and duplicate inputs cannot replace missing groups. Each has positive and benign
+negative regressions. Existing rules retain their detection thresholds and canonical evidence contract.
 
-- [ ] Persistence (registry Run keys, scheduled tasks, service install).
-- [ ] Process discovery / enumeration (snapshot + process-walk APIs).
+- [x] Bounded persistence indicators: anchored registry Run/RunOnce keys, string-corroborated task registration,
+  and service installation APIs.
+- [x] Process discovery / enumeration (snapshot + first/next-process walk APIs).
 - [ ] Code-injection refinements (extend the existing process-injection rule; section-map + remote-thread APIs).
-- [ ] Token / privilege manipulation (token-open + privilege-adjust APIs, SeDebugPrivilege).
+- [x] Token / privilege indicators (token-open + privilege lookup/adjust APIs, corroborated SeDebugPrivilege).
 - [ ] Anti-VM / sandbox evasion (hypervisor-vendor strings, cpuid probing).
-- [ ] Screen capture (GDI bitblt path), clipboard access, and input capture refinements.
-- [ ] Credential access indicators (LSA/secrets/SAM strings) -- conservative, multi-indicator only.
+- [x] Bounded GDI capture, clipboard read and registered raw-input indicators with independent API groups.
+- [x] Credential-access indicators: marker-corroborated LSA private-data access and protected-registry
+  open/query/path groups with optional recognized machine-hive prefixes; no extraction or execution attribution.
 - [ ] Service control, named-pipe/IPC, DNS resolution / C2-comms refinements.
-- [ ] Ransomware indicators (encrypt + file-enumeration + ransom-note strings) -- threshold-gated.
+  - [x] Corroborated service control, named-pipe client/server and DNS-plus-network indicators; no C2 attribution.
+- [x] Narrow ransomware indicators requiring encryption, enumeration start/walk, file writes and two ransom-note
+  string groups; ordinary encryption/file access is insufficient.
 - [ ] Shutdown/reboot and environment/system-info gathering.
+  - [x] Corroborated system-information/host-name/environment indicators; shutdown/reboot remains open.
 
 ### Licensing
 
@@ -191,6 +195,8 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [ ] Actual IDA/Ghidra comparisons for rampage's own analysis (discovery/CFG/xrefs). Ghidra is now installed
   locally (used by the decompiler), so this is unblocked; IDA is still absent. No comparative claim yet.
 - [ ] Resolve the local `rust-objcopy` missing-`libLLVM.dylib` stripping warning; release tests still execute.
+  - Command-local `DYLD_LIBRARY_PATH=<rustc-sysroot>/lib` resolves the installed tool's library lookup;
+    permanent managed-toolchain repair remains open rather than patching rustup-owned executables.
 
 ## Deep ARM64 track and remaining work
 
@@ -202,7 +208,8 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Literal/register/unsigned/unscaled/pre/post addressing; 32/64-bit pairs and signed LDPSW.
 - [ ] Remaining common integer families: carry arithmetic, conditional compares, wrapping bitfields,
   long/high multiply, extracts and other scalar operations. Add native boundary regressions per family.
-- [ ] Valid no-writeback pair loads with base/destination overlap; preserve original addresses before assignments.
+- [x] Valid no-writeback pair loads with base/destination overlap; capture both original addresses before
+  assignments for LDP X/W and LDPSW. Writeback overlaps and duplicate destinations remain barriers.
 - [ ] FP/SIMD, atomic/exclusive and selected system semantics, with effects and memory ordering explicit.
 - [ ] PAC/authenticated flow, exceptions and platform-specific behavior; unsupported forms must remain barriers.
 
@@ -255,14 +262,15 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 
 ### Next execution order
 
-1. Investigate the full-debug timeout and complete the remaining workspace-validation gate.
+1. [x] Resolve the earlier full-debug timeout and complete debug/release workspace validation.
 2. Extend common integer semantics and nonconstant spill recovery, keeping alias boundaries conservative.
 3. Recover bounded dispatch tables and integrate proven targets into CFG/discovery with regression fixtures.
 4. Broaden structuring and type/signature propagation; keep SSA diagnostics separate from recovered source.
 5. Build the versioned accuracy corpus/CI gates and complete persistence/cross-module runtime work.
 
-Ghidra's architecture is a reference, not a wholesale decompiler port. No Ghidra implementation or specifications
-have been incorporated; any future copied/ported components require their applicable license and attribution.
+Native IR/SSA remains complementary to the embedded Ghidra decompiler above. Vendored Ghidra implementation
+and specifications retain their Apache-2.0 license and attribution; any additional copied/ported components
+require their applicable license and attribution.
 
 ## General-purpose reverse-engineering roadmap
 
@@ -289,12 +297,16 @@ Work in this order, with synthetic regressions and fresh-context review for each
    - [x] Explicit UUID/original-address range and seed selection with checked slides, section coverage and
      conflicting-mapping rejection; controlled live fixture validation.
    - [ ] Broader multi-thread/module capture acceptance and module-specific byte-order context.
+   - [x] Explicit bounded thread selectors/all-thread register capture, stop-context and module-provenance
+     revalidation; controlled live acceptance covers two owned modules and two threads.
 4. [ ] Runtime target identity: persist platform/compiler context, mapping-aware capture identity and module/
    thread provenance so an ARM64 macOS capture does not silently use generic AAPCS64 decompilation defaults.
    - [x] Validated optional platform/compiler context, exported by LLDB and used by native/worker defaults.
    - [x] Canonical mapping-aware triage identity and normalized UUID-duplicate validation.
    - [ ] Broader thread/module provenance consistency checks, module-specific code/data endian validation
      (including ARM BE8), and persisted session reuse by capture identity.
+   - [x] Identity-scoped annotation persistence and snapshot revalidation; equal captures can share logs without
+     conflating per-file provenance/register observations. Legacy unscoped logs are reported, not migrated.
 5. [ ] UUID-validated static/runtime comparison: compare explicit matching captured ranges, retain byte-change
    and unavailable-range evidence, transfer only justified symbol/type information with checked ASLR slides.
    - [x] Bounded API/CLI byte comparison with equal/changed/unavailable spans and capture/original identities;
@@ -309,6 +321,8 @@ Work in this order, with synthetic regressions and fresh-context review for each
    - [ ] Link observations to decoded branch sites, module-qualified targets and before/after capture evidence.
    - [x] Bounded explicit ARM64 branch-window links to decoded slot loads, retaining indirect flow and
      raw observations; unsupported/control-flow/authenticated/incomplete cases remain explicit.
+   - [x] Explicit API/CLI/MCP paired-slot comparisons across captures with raw equal/changed/unavailable outcomes,
+     independent mapping/target assessments and capture identities; no inferred chronology or module ownership.
 7. [ ] Authorized runtime acceptance: user supplies an already-loaded/stopped instance in a legitimate host;
    capture selected code and referenced data, correlate the original UUID, rerun diagnostics/decompilation and
    report before/after warning/coverage metrics. This is blocked on an authorized host capture, not static parsing.
@@ -359,8 +373,8 @@ read-only triage inputs, never bypass or patch fixtures. Runtime tests use progr
   Minimal phi placement, alias analysis and decompilation remain open; bounded dominance queries are available.
 
 Full instruction semantics, production decompilation, arbitrary debugger control and multi-module runtime
-resolution are separate substantial deliverables; keep their acceptance cases explicit rather than calling
-an initial foundation complete.
+resolution have separate acceptance cases. The embedded decompiler is implemented above; full native semantics,
+arbitrary debugger control and multi-module runtime resolution must not be inferred from those foundations.
 
 ### Next acceptance-driven milestones
 
@@ -378,9 +392,9 @@ an initial foundation complete.
    dependencies, cross-module references and UI/MCP navigation; never execute installer scripts.
 
 Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,
-CLI/API/MCP regressions, malformed-input bounds, native/compiled fixtures, seven exporter tests, the opt-in live
-capture test, two debugger-cleanup regressions, Ruff/ty and fresh-context reviews. The latest increment's
-full-debug timeout is tracked separately above; it is not represented as a passing suite.
+CLI/API/MCP regressions, malformed-input bounds, native/compiled fixtures, exporter tests, the opt-in live
+capture test, debugger-cleanup regressions, Ruff/ty and fresh-context reviews. The earlier full-debug timeout
+was the one-time vendored C++ build; subsequent debug/release workspace suites passed.
 
 Checklist from the second code-review round. Most of it is in `crates/rampage-arch/src/aarch32/flow.rs`.
 After each group: `cargo fmt`, `cargo clippy --all-targets`, `cargo test`, and the AArch32 golden tests
