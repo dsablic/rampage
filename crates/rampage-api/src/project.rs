@@ -131,7 +131,11 @@ impl Project {
             if !valid {
                 return Err(ApiError::Invalid(format!("{name:?} is not a valid name: use letters, digits and _.$@?:")));
             }
-            if name.starts_with("sub_") || name.starts_with("0x") {
+            // `resolve` reads `sub_<hex>` and `0x...` as addresses, so such a name could never be looked up by name;
+            // other names that merely start with `sub_` (`sub_menu_init`) are fine.
+            let address_like = name.starts_with("0x")
+                || name.strip_prefix("sub_").is_some_and(|hex| u64::from_str_radix(hex, 16).is_ok());
+            if address_like {
                 return Err(ApiError::Invalid(format!("{name:?} looks like an address; choose another name")));
             }
         }

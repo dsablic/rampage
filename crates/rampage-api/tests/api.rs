@@ -187,6 +187,18 @@ fn renames_and_comments_show_everywhere_and_persist() {
 }
 
 #[test]
+fn only_address_shaped_names_are_refused() {
+    let path = scratch_copy("hello-arm64.macho", "address-names");
+    let project = Session::default().open(&path, None).unwrap();
+    let main = project.resolve("_main").unwrap();
+    assert!(project.rename(main, Some("0x1000")).is_err());
+    assert!(project.rename(main, Some("sub_401000")).is_err());
+    assert!(project.rename(main, Some("sub_menu_init")).unwrap().changed);
+    assert_eq!(project.resolve("sub_menu_init").unwrap(), main);
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn a_slice_opens_once_however_it_is_asked_for() {
     let path = scratch_copy("hello-universal.macho", "session");
     let session = Session::default();
