@@ -125,6 +125,25 @@ struct IdentifyArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct DetectToolsArgs {
+    /// Optional file path of a user-supplied PeID `userdb.txt`, overlaid on the bundled starter database.
+    #[serde(default)]
+    peid: Option<String>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct YaraArgs {
+    /// YARA rule source text to compile and run against the binary's image bytes.
+    rules: String,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct CapaArgs {
+    /// Path to a directory of Mandiant capa rule YAML files (only the file-scope feature subset is evaluated).
+    rules_dir: String,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 struct DiagnosticsArgs {
     /// Explicitly run whole-program discovery; otherwise reuse cached discovery or sample bytes only.
     #[serde(default)]
@@ -355,6 +374,35 @@ pub fn tools() -> Vec<Tool> {
              filesystem/registry, input capture) inferred from imports and strings. Triage evidence, not proof \
              the behavior executes.",
             |project, _: Nothing| Ok(project.capabilities()),
+        ),
+        tool(
+            "detect_tools",
+            "Identify the tools that likely produced the binary (packer, compiler, protector, installer, linker) \
+             from a bundled heuristic database of entry-point, section, import, overlay and entropy signatures. \
+             Optionally overlay a user-supplied PeID userdb.txt. Confidence is a signal, not proof.",
+            |project, args: DetectToolsArgs| {
+                let peid = match &args.peid {
+                    Some(path) => Some(
+                        std::fs::read_to_string(path)
+                            .map_err(|error| ApiError::Invalid(format!("cannot read {path}: {error}")))?,
+                    ),
+                    None => None,
+                };
+                project.detect_tools(peid.as_deref())
+            },
+        ),
+        tool(
+            "yara_scan",
+            "Compile the given YARA rule source and scan the binary's image bytes, returning matching rules with \
+             their tags, metadata and bounded matched-string offsets. Rules are user-supplied.",
+            |project, args: YaraArgs| project.yara_scan(&args.rules),
+        ),
+        tool(
+            "capa_detect",
+            "Evaluate a directory of Mandiant capa rules against the binary's imports and strings, returning the \
+             behaviors whose file-scope features match. A partial capa evaluator (no disassembly features); \
+             triage evidence, not proof.",
+            |project, args: CapaArgs| project.detect_capa(std::path::Path::new(&args.rules_dir)),
         ),
         tool(
             "observe_pointer",

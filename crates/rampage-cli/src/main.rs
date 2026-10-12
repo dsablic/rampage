@@ -61,6 +61,25 @@ enum Command {
     Triage { file: PathBuf },
     /// Likely behaviors inferred from imports and strings (triage evidence, not proof)
     Capabilities { file: PathBuf },
+    /// Identify the producing tool (packer/compiler/protector/installer) from heuristic signatures
+    Detect {
+        file: PathBuf,
+        /// A user-supplied PeID userdb.txt, overlaid on the bundled database
+        #[arg(long)]
+        peid: Option<PathBuf>,
+    },
+    /// Scan with user-supplied YARA rules (a .yar/.yara file or a directory of them)
+    Yara {
+        file: PathBuf,
+        #[arg(long)]
+        rules: PathBuf,
+    },
+    /// Detect behaviors with a directory of Mandiant capa rules (file-scope feature subset)
+    Capa {
+        file: PathBuf,
+        #[arg(long)]
+        rules: PathBuf,
+    },
     /// Decode coverage and evidence that static disassembly may be unreliable
     Audit {
         file: PathBuf,
@@ -271,6 +290,9 @@ fn main() -> ExitCode {
         }
         Command::Triage { file } => commands::triage(&mut out, &file, &options),
         Command::Capabilities { file } => commands::capabilities(&mut out, &file, &options),
+        Command::Detect { file, peid } => commands::detect(&mut out, &file, peid.as_deref(), &options),
+        Command::Yara { file, rules } => commands::yara(&mut out, &file, &rules, &options),
+        Command::Capa { file, rules } => commands::capa(&mut out, &file, &rules, &options),
         Command::Audit { file, include_discovery } => commands::audit(&mut out, &file, include_discovery, &options),
         Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
         Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),

@@ -52,11 +52,13 @@ async fn lists_all_tools_with_instructions() {
         "analysis_diagnostics",
         "binary_info",
         "build_signatures",
+        "capa_detect",
         "capabilities",
         "class_evidence",
         "compare_pointer_observations",
         "compare_runtime_bytes",
         "decompile",
+        "detect_tools",
         "disassemble",
         "function_graph",
         "function_summary",
@@ -80,6 +82,7 @@ async fn lists_all_tools_with_instructions() {
         "triage",
         "undo",
         "xrefs",
+        "yara_scan",
     ];
     assert_eq!(names, expected);
     let info = client.peer_info().unwrap();

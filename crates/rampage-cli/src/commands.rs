@@ -737,3 +737,52 @@ pub fn capabilities(out: &mut impl Write, path: &Path, options: &Options) -> Res
     }
     Ok(())
 }
+
+pub fn detect(out: &mut impl Write, path: &Path, peid: Option<&Path>, options: &Options) -> Result<()> {
+    let peid_text = match peid {
+        Some(peid) => Some(std::fs::read_to_string(peid)?),
+        None => None,
+    };
+    let detections = open(path, options)?.detect_tools(peid_text.as_deref())?;
+    if options.json {
+        return write_json(out, &detections);
+    }
+    if detections.is_empty() {
+        writeln!(out, "no tool signatures matched")?;
+    }
+    for detection in detections {
+        let kind = format!("{:?}", detection.kind).to_lowercase();
+        let confidence = format!("{:?}", detection.confidence).to_lowercase();
+        writeln!(out, "[{kind}] {} ({confidence}): {}", detection.name, detection.evidence.join(", "))?;
+    }
+    Ok(())
+}
+
+pub fn yara(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) -> Result<()> {
+    let matches = open(path, options)?.yara_scan_path(rules)?;
+    if options.json {
+        return write_json(out, &matches);
+    }
+    if matches.is_empty() {
+        writeln!(out, "no rules matched")?;
+    }
+    for hit in matches {
+        let tags = if hit.tags.is_empty() { String::new() } else { format!(" [{}]", hit.tags.join(", ")) };
+        writeln!(out, "{}{tags} ({} string matches)", hit.identifier, hit.matched_strings.len())?;
+    }
+    Ok(())
+}
+
+pub fn capa(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) -> Result<()> {
+    let capabilities = open(path, options)?.detect_capa(rules)?;
+    if options.json {
+        return write_json(out, &capabilities);
+    }
+    if capabilities.is_empty() {
+        writeln!(out, "no capa rules matched")?;
+    }
+    for capability in capabilities {
+        writeln!(out, "[{}] {} ({})", capability.category, capability.name, capability.evidence.join(", "))?;
+    }
+    Ok(())
+}
