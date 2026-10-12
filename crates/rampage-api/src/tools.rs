@@ -526,9 +526,8 @@ pub fn tools() -> Vec<Tool> {
                 };
                 let before_slot = address(&args.at)?;
                 let after_slot = address(&args.other_at)?;
-                let after = rampage_loaders::Binary::open_with(&args.other, Some(project.binary.arch))
-                    .map_err(|source| ApiError::Load { path: args.other, source })?;
-                project.compare_pointer_observations(before_slot, &Project::new(after), after_slot)
+                let after = project.open_peer(&args.other)?;
+                project.compare_pointer_observations(before_slot, &after, after_slot)
             },
         )
         .without_annotations(),

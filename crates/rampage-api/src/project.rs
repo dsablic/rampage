@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
 use rampage_analysis::discover::Program;
@@ -6,7 +7,7 @@ use rampage_analysis::functions::{self, Names};
 use rampage_analysis::strings::{self, FoundString};
 use rampage_analysis::triage::{self, Triage};
 use rampage_arch::UnsupportedArch;
-use rampage_loaders::{Binary, Export};
+use rampage_loaders::{Binary, Export, LoadError};
 
 use crate::ApiError;
 use crate::annotations::{Annotations, Edit, Field};
@@ -54,6 +55,19 @@ impl Project {
     /// A project whose annotations live in memory only.
     pub fn new(binary: Binary) -> Self {
         Self::with_annotations(binary, Annotations::in_memory())
+    }
+
+    /// The binary at `path` as a peer to compare this one with: the slice of this binary's architecture, with its
+    /// annotations in memory only. A file that loads, but not in this architecture, is reported as a mismatch.
+    pub fn open_peer(&self, path: &Path) -> Result<Project, ApiError> {
+        let arch = self.binary.arch;
+        match Binary::open_with(path, Some(arch)) {
+            Ok(binary) => Ok(Project::new(binary)),
+            Err(source @ LoadError::Unsupported(_)) if Binary::open_with(path, None).is_ok() => Err(ApiError::Invalid(
+                format!("{}: {source}; a comparison needs both binaries in {arch}", path.display()),
+            )),
+            Err(source) => Err(ApiError::Load { path: path.to_owned(), source }),
+        }
     }
 
     pub fn with_annotations(binary: Binary, annotations: Annotations) -> Self {

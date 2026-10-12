@@ -294,7 +294,7 @@ pub fn compare_pointers(
     options: &Options,
 ) -> Result<()> {
     let before = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
-    let after = Project::new(rampage_loaders::Binary::open_with(other, Some(before.binary.arch))?);
+    let after = before.open_peer(other)?;
     let result = before.compare_pointer_observations(
         rampage_loaders::snapshot::address(at)?,
         &after,

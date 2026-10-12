@@ -95,13 +95,7 @@ impl Project {
     /// Compares this binary (the base) with the build at `other_path` (the new one): "added" means present only
     /// in the other build, "removed" only in this one.
     pub fn diff_builds(&self, other_path: &Path, limits: ReportLimits) -> Result<WorkflowReport, ApiError> {
-        let other = Binary::open_with(other_path, Some(self.binary.arch)).map_err(|source| match source {
-            rampage_loaders::LoadError::Unsupported(text) => {
-                ApiError::Invalid(format!("diff_builds compares builds of one architecture: {text}"))
-            }
-            source => ApiError::Load { path: other_path.to_owned(), source },
-        })?;
-        let other = Project::new(other);
+        let other = self.open_peer(other_path)?;
         let other_label = other_path.display().to_string();
         let mut report = WorkflowReport::new("diff_builds", self);
         let other_target = ReportTarget::of(&other);
