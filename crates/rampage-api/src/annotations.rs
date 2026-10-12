@@ -42,6 +42,40 @@ impl Edit {
     }
 }
 
+/// The line logged before a batch's edits, saying how many follow. Each of them carries the batch's id, so a reader
+/// applies the batch only once all are there, and never takes edits written after an interrupted batch for the
+/// rest of it. Readers that predate batches skip this line, which is not an edit, and apply the edits one by one.
+#[derive(Serialize, Deserialize)]
+struct BatchHeader {
+    batch: String,
+    edits: usize,
+}
+
+/// One of a batch's edits, as logged.
+#[derive(Serialize)]
+struct BatchMember<'a> {
+    #[serde(flatten)]
+    edit: &'a Edit,
+    batch: &'a str,
+}
+
+/// Enough of a log line to tell a batch header (both), a batch's edit (`batch` only) and a lone edit (neither).
+#[derive(Deserialize)]
+struct LineKind {
+    #[serde(default)]
+    batch: Option<String>,
+    #[serde(default)]
+    edits: Option<usize>,
+}
+
+/// An id no other batch in the log is likely to share: this process's, the time's, and a count.
+fn batch_id() -> String {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_nanos());
+    format!("{:x}-{nanos:x}-{count:x}", std::process::id())
+}
+
 #[derive(Default)]
 pub struct Annotations {
     names: BTreeMap<u64, String>,
@@ -152,9 +186,10 @@ impl Annotations {
         }
     }
 
-    /// Appends `edits` to the log in one write, so a batch reaches other readers whole. The appended lines are
-    /// read back, harmlessly, by the next `refresh`. A file left ending mid-line (by an interrupted write) gets a
-    /// newline first, so the fragment becomes a line of its own, which reading skips.
+    /// Appends `edits` to the log in one write. Several are written as a batch (see `BatchHeader`), which readers
+    /// apply whole or not at all, even if the write is cut short. The appended lines are read back, harmlessly, by
+    /// the next `refresh`. A file left ending mid-line (by an interrupted write) gets a newline first, so the
+    /// fragment becomes a line of its own, which reading skips.
     fn record(&mut self, edits: &[Edit]) -> Result<(), String> {
         let Some(log) = &mut self.log else { return Ok(()) };
         let error = |error: std::io::Error| format!("{}: {error}", log.path.display());
@@ -166,9 +201,19 @@ impl Annotations {
             file.read_exact(&mut last).map_err(error)?;
         }
         let mut lines = if last[0] == b'\n' { String::new() } else { "\n".to_owned() };
-        for edit in edits {
-            lines.push_str(&serde_json::to_string(edit).map_err(|error| error.to_string())?);
+        let mut push = |line: Result<String, serde_json::Error>| -> Result<(), String> {
+            lines.push_str(&line.map_err(|error| error.to_string())?);
             lines.push('\n');
+            Ok(())
+        };
+        if let [edit] = edits {
+            push(serde_json::to_string(edit))?;
+        } else {
+            let batch = batch_id();
+            push(serde_json::to_string(&BatchHeader { batch: batch.clone(), edits: edits.len() }))?;
+            for edit in edits {
+                push(serde_json::to_string(&BatchMember { edit, batch: &batch }))?;
+            }
         }
         file.write_all(lines.as_bytes()).map_err(error)
     }
@@ -432,7 +477,8 @@ impl Annotations {
 
 /// Reads the complete lines appended to `log` since it was last read. Returns their edits, and whether the file
 /// was replaced (it shrank or is another file), in which case they are its whole contents and earlier state must be
-/// dropped. Lines that do not parse, such as a fragment an interrupted write left behind, are skipped.
+/// dropped. Lines that do not parse, such as a fragment an interrupted write left behind, are skipped, as are the
+/// edits of a batch cut short. A batch still incomplete at the end is left to be read again with what follows.
 fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
     let path = log.path.clone();
     let error = |error: std::io::Error| format!("{}: {error}", path.display());
@@ -456,12 +502,44 @@ fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
     file.read_to_end(&mut bytes).map_err(error)?;
     // Only complete lines: the rest may still be being written.
     let complete = bytes.iter().rposition(|&byte| byte == b'\n').map_or(0, |end| end + 1);
-    let edits = bytes[..complete]
-        .split(|&byte| byte == b'\n')
-        .filter_map(|line| serde_json::from_slice::<Edit>(line).ok())
-        .collect();
-    log.read += complete as u64;
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for line in bytes[..complete].split_inclusive(|&byte| byte == b'\n') {
+        lines.push((start, line));
+        start += line.len();
+    }
+    let mut edits = Vec::new();
+    let mut read = complete;
+    let mut index = 0;
+    while let Some(&(start, line)) = lines.get(index) {
+        index += 1;
+        match serde_json::from_slice::<LineKind>(line) {
+            Ok(LineKind { batch: Some(batch), edits: Some(count) }) => {
+                let members: Vec<Edit> =
+                    lines[index..].iter().take(count).map_while(|(_, line)| batch_member(line, &batch)).collect();
+                index += members.len();
+                if members.len() == count {
+                    edits.extend(members);
+                } else if index == lines.len() {
+                    read = start;
+                    break;
+                }
+            }
+            Ok(LineKind { batch: Some(_), edits: None }) => {}
+            _ => edits.extend(serde_json::from_slice::<Edit>(line).ok()),
+        }
+    }
+    log.read += read as u64;
     Ok((restart, edits))
+}
+
+/// The edit `line` holds if it belongs to `batch`.
+fn batch_member(line: &[u8], batch: &str) -> Option<Edit> {
+    let kind: LineKind = serde_json::from_slice(line).ok()?;
+    if kind.edits.is_some() || kind.batch.as_deref() != Some(batch) {
+        return None;
+    }
+    serde_json::from_slice(line).ok()
 }
 
 /// The most addresses an error lists before counting the rest.
@@ -674,6 +752,98 @@ mod tests {
         ui.set(Field::Name, 0x20, Some("c".into())).unwrap();
         assert!(agent.undo().is_err());
         assert_eq!((agent.name(0x10), agent.name(0x20)), (Some("a"), Some("c")));
+        cleanup(path);
+    }
+
+    fn name_edit(address: u64, value: &str) -> Edit {
+        Edit { field: Field::Name, address, value: Some(value.into()), previous: None }
+    }
+
+    fn append(path: &PathBuf, text: &str) {
+        OpenOptions::new().create(true).append(true).open(path).unwrap().write_all(text.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn a_batch_is_logged_under_a_header_and_replays_whole() {
+        let path = temporary_log("batch-header");
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        let changes = vec![(Field::Name, 0x10, Some("a".to_owned())), (Field::Name, 0x20, Some("b".to_owned()))];
+        annotations.set_batch_validated(&changes, |_| Ok(())).unwrap();
+        let log = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = log.lines().collect();
+        let header: BatchHeader = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!((header.edits, lines.len()), (2, 3));
+        assert!(lines[1..].iter().all(|line| line.contains(&format!("\"batch\":\"{}\"", header.batch))));
+        let replayed = Annotations::open(path.clone()).unwrap();
+        assert_eq!((replayed.name(0x10), replayed.name(0x20)), (Some("a"), Some("b")));
+        cleanup(path);
+    }
+
+    #[test]
+    fn a_batch_cut_short_is_never_applied() {
+        let path = temporary_log("batch-truncated");
+        let header = serde_json::to_string(&BatchHeader { batch: "cut".into(), edits: 3 }).unwrap();
+        let member = |address, value| {
+            serde_json::to_string(&BatchMember { edit: &name_edit(address, value), batch: "cut" }).unwrap()
+        };
+        append(&path, &format!("{header}\n{}\n{}\n", member(0x10, "a"), member(0x20, "b")));
+        let mut reader = Annotations::open(path.clone()).unwrap();
+        assert!(reader.names().is_empty());
+
+        // The interrupted write is followed by another client's edits, which are not taken for the rest of it.
+        let mut writer = Annotations::open(path.clone()).unwrap();
+        writer.set(Field::Name, 0x30, Some("c".into())).unwrap();
+        writer
+            .set_batch_validated(
+                &[(Field::Name, 0x40, Some("d".into())), (Field::Name, 0x50, Some("e".into()))],
+                |_| Ok(()),
+            )
+            .unwrap();
+        reader.refresh().unwrap();
+        let replayed = Annotations::open(path.clone()).unwrap();
+        for annotations in [&reader, &replayed] {
+            assert_eq!(annotations.names().keys().copied().collect::<Vec<_>>(), [0x30, 0x40, 0x50]);
+        }
+        cleanup(path);
+    }
+
+    #[test]
+    fn a_batch_read_while_being_written_is_applied_once_complete() {
+        let path = temporary_log("batch-in-progress");
+        let header = serde_json::to_string(&BatchHeader { batch: "late".into(), edits: 2 }).unwrap();
+        let member = |address, value| {
+            serde_json::to_string(&BatchMember { edit: &name_edit(address, value), batch: "late" }).unwrap()
+        };
+        append(&path, &format!("{header}\n{}\n", member(0x10, "a")));
+        let mut reader = Annotations::open(path.clone()).unwrap();
+        assert!(reader.names().is_empty());
+        append(&path, &format!("{}\n", member(0x20, "b")));
+        assert!(reader.refresh().unwrap());
+        assert_eq!((reader.name(0x10), reader.name(0x20)), (Some("a"), Some("b")));
+        cleanup(path);
+    }
+
+    #[test]
+    fn logs_written_before_batch_headers_replay_unchanged() {
+        let path = temporary_log("old-format");
+        let lines: Vec<String> = [name_edit(0x10, "a"), name_edit(0x20, "b")]
+            .iter()
+            .map(|edit| serde_json::to_string(edit).unwrap() + "\n")
+            .collect();
+        append(&path, &lines.concat());
+        let replayed = Annotations::open(path.clone()).unwrap();
+        assert_eq!((replayed.name(0x10), replayed.name(0x20)), (Some("a"), Some("b")));
+        // What a reader that predates batches makes of one: the header is no edit, the edits are.
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        annotations
+            .set_batch_validated(
+                &[(Field::Name, 0x30, Some("c".into())), (Field::Name, 0x40, Some("d".into()))],
+                |_| Ok(()),
+            )
+            .unwrap();
+        let log = std::fs::read_to_string(&path).unwrap();
+        let old: Vec<Edit> = log.lines().filter_map(|line| serde_json::from_str(line).ok()).collect();
+        assert_eq!(old.iter().map(|edit| edit.address).collect::<Vec<_>>(), [0x10, 0x20, 0x30, 0x40]);
         cleanup(path);
     }
 
