@@ -221,6 +221,66 @@ fn network_surface_reports_truncation() {
 }
 
 #[test]
+fn diff_builds_matches_add_across_static_and_dynamic_builds() {
+    let report =
+        open(fixture("hello-x64.elf")).diff_builds(&fixture("hello-x64-dyn.elf"), ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    assert!(report.other.is_some());
+    let identical = section(&report, "Identical functions");
+    let add = identical.findings.iter().find(|finding| finding.observation.contains("`add`")).unwrap();
+    assert_eq!(add.confidence, FindingConfidence::High);
+    assert_eq!(add.address, Some(0x1001900));
+    assert!(add.evidence[0].ends_with("0x1001510"), "{add:#?}");
+    let imports = section(&report, "Import differences");
+    assert!(has_observation(imports, "added: `puts` from libc.so.6"), "{:?}", observations(imports));
+    assert!(has_observation(section(&report, "Removed functions"), "`__libc_start_main`"));
+    assert!(report.limitations.iter().any(|text| text.contains("not proven semantic equivalence")));
+}
+
+#[test]
+fn diff_builds_pairs_stripped_functions_by_hash() {
+    let report = open(local_fixture("net-client-x64.elf"))
+        .diff_builds(&local_fixture("net-client-x64-stripped.elf"), ReportLimits::default())
+        .unwrap();
+    assert_well_formed(&report);
+    let matched = section(&report, "Functions matched by hash");
+    assert!(has_observation(matched, "`main` and `sub_10016d0`"), "{:?}", observations(matched));
+    assert!(has_observation(matched, "`open_connection` and `sub_1001730`"), "{:?}", observations(matched));
+    assert!(section(&report, "Changed functions").findings.is_empty());
+    assert!(section(&report, "Import differences").findings.is_empty());
+}
+
+#[test]
+fn diff_builds_of_one_file_finds_no_changes() {
+    let report =
+        open(fixture("hello-x64.elf")).diff_builds(&fixture("hello-x64.elf"), ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    assert!(report.summary[0].contains("byte-identical"), "{:?}", report.summary);
+    for title in
+        ["Changed functions", "Added functions", "Removed functions", "Import differences", "String differences"]
+    {
+        assert!(section(&report, title).findings.is_empty(), "{title}: {report:#?}");
+    }
+}
+
+#[test]
+fn diff_builds_refuses_another_architecture() {
+    let error =
+        open(fixture("hello-x64.elf")).diff_builds(&fixture("hello-arm64.elf"), ReportLimits::default()).unwrap_err();
+    assert!(error.to_string().contains("one architecture"), "{error}");
+}
+
+#[test]
+fn diff_builds_reports_truncation() {
+    let report =
+        open(fixture("hello-x64.elf")).diff_builds(&fixture("hello-x64-dyn.elf"), ReportLimits::new(Some(4))).unwrap();
+    assert_well_formed(&report);
+    let removed = section(&report, "Removed functions");
+    assert_eq!(removed.findings.len(), 4);
+    assert!(removed.truncated && removed.total > 4, "{removed:#?}");
+}
+
+#[test]
 fn find_main_bounds_the_candidate_profile() {
     let report = open(fixture("musl-static-x86_64.elf")).find_main(ReportLimits::new(Some(3)), false).unwrap();
     assert_well_formed(&report);

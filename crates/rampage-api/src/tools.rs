@@ -158,6 +158,14 @@ struct FindMainArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct DiffBuildsArgs {
+    /// File path of the other build to compare with (same architecture); "added" means only in that build.
+    other: String,
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut.
+    max_per_section: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 struct DiagnosticsArgs {
     /// Explicitly run whole-program discovery; otherwise reuse cached discovery or sample bytes only.
     #[serde(default)]
@@ -400,6 +408,15 @@ pub fn tools() -> Vec<Tool> {
              strings, the functions that reference them (via xrefs), and networking capability tags. An empty \
              report says nothing was observed, not that the binary cannot communicate.",
             |project, args: ReportArgs| project.network_surface(ReportLimits::new(args.max_per_section)),
+        ),
+        tool(
+            "diff_builds",
+            "Compare this binary with another build of the same architecture: functions paired by unique name and \
+             by masked signature hash into identical, changed, hash-matched, added and removed, plus import and \
+             string differences. Hash equality is signature-level, not semantic equivalence.",
+            |project, args: DiffBuildsArgs| {
+                project.diff_builds(std::path::Path::new(&args.other), ReportLimits::new(args.max_per_section))
+            },
         ),
         tool(
             "analysis_diagnostics",

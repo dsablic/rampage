@@ -58,6 +58,16 @@ fn network_surface_renders_an_empty_report_honestly() {
 }
 
 #[test]
+fn diff_builds_needs_and_uses_other() {
+    let elf = path("hello-x64.elf");
+    report(&["diff-builds", &elf]).failure().stderr(predicates::str::contains("--other"));
+    report(&["diff-builds", &elf, "--other", &path("hello-x64-dyn.elf")])
+        .success()
+        .stdout(predicates::str::contains("compared with: Elf x86_64"))
+        .stdout(predicates::str::contains("`add` has the same masked hash"));
+}
+
+#[test]
 fn other_is_rejected_outside_diff_builds() {
     let exe = path("hello-x64.exe");
     report(&["triage-report", &exe, "--other", &exe]).failure();

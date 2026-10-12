@@ -16,6 +16,8 @@ pub enum Workflow {
     FindMain,
     /// Networking imports, network-like strings and the functions referencing them
     NetworkSurface,
+    /// Compare with another build (--other): matched, changed, added and removed functions
+    DiffBuilds,
 }
 
 pub struct ReportOptions {
@@ -33,13 +35,17 @@ pub fn report(
 ) -> Result<()> {
     let project = open(path, options)?;
     let limits = ReportLimits::new(report_options.limit);
-    if report_options.other.is_some() {
+    if report_options.other.is_some() && !matches!(workflow, Workflow::DiffBuilds) {
         bail!("--other only applies to diff-builds");
     }
     let report = match workflow {
         Workflow::TriageReport => project.triage_report(limits)?,
         Workflow::FindMain => project.find_main(limits, !report_options.no_decompile)?,
         Workflow::NetworkSurface => project.network_surface(limits)?,
+        Workflow::DiffBuilds => match &report_options.other {
+            Some(other) => project.diff_builds(other, limits)?,
+            None => bail!("diff-builds needs --other <file>"),
+        },
     };
     if options.json {
         return write_json(out, &report);

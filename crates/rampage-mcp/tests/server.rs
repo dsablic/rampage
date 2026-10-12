@@ -59,6 +59,7 @@ async fn lists_all_tools_with_instructions() {
         "compare_runtime_bytes",
         "decompile",
         "detect_tools",
+        "diff_builds",
         "disassemble",
         "find_main",
         "function_graph",
