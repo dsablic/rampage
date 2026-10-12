@@ -150,6 +150,18 @@ pub struct TypeDef {
     pub methods: Vec<MethodDef>,
 }
 
+impl TypeDef {
+    /// `Namespace.Name`, or just `Name` for a type in the global namespace.
+    pub fn full_name(&self) -> String {
+        qualified_name(&self.namespace, &self.name)
+    }
+}
+
+/// `namespace.name`, or `name` when the namespace is empty.
+fn qualified_name(namespace: &str, name: &str) -> String {
+    if namespace.is_empty() { name.to_owned() } else { format!("{namespace}.{name}") }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MethodDef {
     pub token: u32,
@@ -570,11 +582,7 @@ impl Decoder<'_, '_> {
         }
         let string = |column| self.heaps.string(self.cell(table, row, column)?);
         let qualified = |name: Option<String>, namespace: Option<String>| {
-            let name = name?;
-            Some(match namespace.filter(|namespace| !namespace.is_empty()) {
-                Some(namespace) => format!("{namespace}.{name}"),
-                None => name,
-            })
+            Some(qualified_name(namespace.as_deref().unwrap_or(""), &name?))
         };
         match table {
             tables::TYPE_DEF => qualified(string(1), string(2)),
@@ -692,9 +700,7 @@ impl Decoder<'_, '_> {
             tables::METHOD_DEF => {
                 let method = metadata.types.iter().find_map(|ty| {
                     let method = ty.methods.iter().find(|method| method.token == value)?;
-                    let owner =
-                        if ty.namespace.is_empty() { ty.name.clone() } else { format!("{}.{}", ty.namespace, ty.name) };
-                    Some(format!("{owner}::{}", method.name))
+                    Some(format!("{}::{}", ty.full_name(), method.name))
                 });
                 if method.is_none() {
                     self.warnings.push(format!("entry point token {value:#010x} does not resolve"));
