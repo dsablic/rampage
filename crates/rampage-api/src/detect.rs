@@ -11,11 +11,14 @@ use serde::Serialize;
 
 use crate::{ApiError, Project};
 
+/// PeID warnings reported individually; the rest are counted, so a huge broken database cannot flood the output.
+const MAX_PEID_WARNINGS: usize = 20;
+
 #[derive(Debug, Serialize)]
 pub struct ToolDetections {
     pub detections: Vec<Detection>,
     /// PeID database entries and lines that were skipped, so that a partly broken database is not silently
-    /// treated as complete.
+    /// treated as complete. At most [`MAX_PEID_WARNINGS`] are listed, followed by a count of the rest.
     pub warnings: Vec<String>,
 }
 
@@ -27,7 +30,11 @@ impl Project {
         let mut warnings = Vec::new();
         if let Some(text) = peid {
             let skipped = db.load_peid(text).map_err(|error| ApiError::Invalid(format!("PeID database: {error}")))?;
-            warnings.extend(skipped.iter().map(|warning| format!("PeID database: {warning}")));
+            warnings.extend(skipped.iter().take(MAX_PEID_WARNINGS).map(|warning| format!("PeID database: {warning}")));
+            if skipped.len() > MAX_PEID_WARNINGS {
+                let more = skipped.len() - MAX_PEID_WARNINGS;
+                warnings.push(format!("PeID database: ... and {more} more problems skipped"));
+            }
         }
         Ok(ToolDetections { detections: identify(&self.binary, &db), warnings })
     }

@@ -30,6 +30,13 @@ fn detect_tools_reports_a_malformed_peid_database() {
     let found = project.detect_tools(Some(partial)).unwrap();
     assert_eq!(found.warnings.len(), 1, "{:?}", found.warnings);
     assert!(found.warnings[0].contains("[Broken]"), "{:?}", found.warnings);
+
+    // A database with many broken entries reports the first few and counts the rest.
+    let many =
+        "[Broken]\nsignature = ZZ ZZ\nep_only = true\n".repeat(1000) + "[Fine]\nsignature = 4D 5A\nep_only = false\n";
+    let found = project.detect_tools(Some(&many)).unwrap();
+    assert_eq!(found.warnings.len(), 21, "{:?}", found.warnings);
+    assert_eq!(found.warnings[20], "PeID database: ... and 980 more problems skipped");
 }
 
 #[test]
