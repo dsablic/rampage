@@ -98,7 +98,10 @@ async fn lists_all_tools_with_instructions() {
     assert_eq!(names, expected);
     let info = client.peer_info().unwrap();
     assert_eq!(info.server_info.as_ref().unwrap().name, "rampage");
-    assert!(info.instructions.as_deref().unwrap().contains("list_functions"));
+    let instructions = info.instructions.as_deref().unwrap();
+    for tool in ["list_functions", "annotate_batch", "check_names"] {
+        assert!(instructions.contains(tool), "{tool}");
+    }
     client.cancel().await.unwrap();
 }
 

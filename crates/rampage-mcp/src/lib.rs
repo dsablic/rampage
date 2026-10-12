@@ -36,8 +36,10 @@ list_functions (filter with name_contains, page with offset/limit), then decompi
 it (the best starting point; falls back to function_summary where no decompiler specification is available), or \
 disassemble or function_graph it, and follow references with xrefs. list_imports and list_strings are good \
 starting points for finding behavior. Record \
-findings with rename and set_comment: they persist beside the binary and every client of the same binary, \
-including the rampage UI, picks them up. Memory snapshots and bundle directories use the same tools. \
+findings with rename and set_comment, or many at once with annotate_batch (all or nothing; check_names \
+pre-flights candidate names): they persist beside the binary and every client of the same binary, including the \
+rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch. \
+Memory snapshots and bundle directories use the same tools. \
 analysis_diagnostics reports decode confidence limits; language_metadata exposes demangled names and bounded \
 metadata; function_summary returns a structural CFG/reference summary, not decompiled source. \
 compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal runtime ranges, returning paginated \

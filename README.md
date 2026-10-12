@@ -112,6 +112,8 @@ rampage funcs   <file> [--name TEXT]         # recursive-descent function discov
 rampage xrefs   <file> --to|--from <addr|name>
 rampage rename  <file> <addr|name> <new name|--clear>
 rampage comment <file> <addr|name> <text|--clear>
+rampage annotate-batch <file> <entries.json> # many names and comments, all or nothing, as one undo step
+rampage check-names <file> <name>...         # pre-flight: valid, address-shaped, or already used
 rampage annotations <file>                   # names, comments, signatures, types and globals
 rampage mcp                                  # MCP server on stdin/stdout
 
@@ -155,10 +157,11 @@ are sent to Anthropic's API.
 
 `rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the tools
 `triage`, `binary_info`, `list_functions`, `disassemble`, `list_strings`, `list_imports`, `list_exports`, `xrefs`,
-`decompile`, `rename`, `set_comment`, `set_signature`, `set_types`, `set_global`, `import_debug_signatures`,
+`decompile`, `rename`, `set_comment`, `annotate_batch` (bulk naming), `check_names` (pre-flight),
+`set_signature`, `set_types`, `set_global`, `import_debug_signatures`,
 `class_evidence`, `observe_pointer`, `observe_indirect_branch`, `compare_runtime_bytes`,
 `compare_pointer_observations`, `undo`, `redo`
-and `list_annotations`.
+and `list_annotations`. `undo` and `redo` revert or reapply one step, which may be a whole batch.
 Agents' annotations land in the same log the
 UI and CLI use, and the UI shows them as they arrive. Analysis runs once per binary and is cached for the session.
 `observe_pointer` exposes captured slot evidence without modifying discovery.
