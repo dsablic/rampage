@@ -68,6 +68,16 @@ fn unreadable_rule_file_error_names_the_cause() {
 }
 
 #[test]
+fn a_directory_without_rule_files_is_an_error() {
+    let dir = std::env::temp_dir().join(format!("rampage-yara-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("notes.txt"), "not a rule").unwrap();
+    let result = rampage_yara::compile_dir(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(matches!(result, Err(rampage_yara::YaraError::NoRuleFiles(_))));
+}
+
+#[test]
 fn scan_binary_matches_mz_header_of_pe_fixture() {
     let binary = Binary::open(fixture("hello-x64.exe")).unwrap();
     let rules = compile("rule dos_header { strings: $mz = \"MZ\" condition: $mz at 0 }").unwrap();

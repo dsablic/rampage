@@ -20,6 +20,8 @@ pub const MAX_MATCHED_STRINGS_PER_RULE: usize = 64;
 pub enum YaraError {
     #[error("cannot read {path}: {source}")]
     Io { path: PathBuf, source: std::io::Error },
+    #[error("no .yar or .yara rule files in {0}")]
+    NoRuleFiles(PathBuf),
     #[error("rule compilation failed: {0}")]
     Compile(String),
     #[error("scan failed: {0}")]
@@ -79,7 +81,8 @@ pub fn compile_files<P: AsRef<Path>>(paths: &[P]) -> Result<Rules, YaraError> {
     Ok(Rules { inner: compiler.build() })
 }
 
-/// Compile every `.yar`/`.yara` file in a directory (non-recursive), in sorted path order for stable results.
+/// Compile every `.yar`/`.yara` file in a directory (non-recursive), in sorted path order for stable results. A
+/// directory with no such file is an error rather than an empty rule set that silently matches nothing.
 pub fn compile_dir<P: AsRef<Path>>(dir: P) -> Result<Rules, YaraError> {
     let dir = dir.as_ref();
     let mut paths: Vec<PathBuf> = Vec::new();
@@ -90,6 +93,9 @@ pub fn compile_dir<P: AsRef<Path>>(dir: P) -> Result<Rules, YaraError> {
         if matches!(path.extension().and_then(|e| e.to_str()), Some("yar" | "yara")) {
             paths.push(path);
         }
+    }
+    if paths.is_empty() {
+        return Err(YaraError::NoRuleFiles(dir.to_path_buf()));
     }
     paths.sort();
     compile_files(&paths)
