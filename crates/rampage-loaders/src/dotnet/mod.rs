@@ -26,7 +26,7 @@ use serde::Serialize;
 use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 use heaps::Heaps;
-use tables::{Coded, Tables};
+use tables::{Coded as C, Tables};
 
 const WARNINGS: CappedWarnings = CappedWarnings::new(256, ".NET metadata");
 const MAX_STREAMS: usize = 64;
@@ -498,7 +498,7 @@ impl Decoder<'_, '_> {
 
         metadata.module = (self.tables.rows(tables::MODULE) > 0).then(|| Module {
             name: self.string(tables::MODULE, 1, 1),
-            mvid: self.cell(tables::MODULE, 1, 2).and_then(|index| self.heaps.guid(index)),
+            mvid: self.tables.cell(tables::MODULE, 1, 2).and_then(|index| self.heaps.guid(index)),
         });
         metadata.assembly = (self.tables.rows(tables::ASSEMBLY) > 0).then(|| self.assembly());
         metadata.assembly_refs =
@@ -508,6 +508,7 @@ impl Decoder<'_, '_> {
             .map(|row| MemberRef {
                 token: token(tables::MEMBER_REF, row),
                 parent: self
+                    .tables
                     .cell(tables::MEMBER_REF, row, 0)
                     .and_then(|value| self.coded_label(C::MemberRefParent, value)),
                 name: self.string(tables::MEMBER_REF, row, 1),
@@ -517,12 +518,8 @@ impl Decoder<'_, '_> {
         metadata.entry_point = self.entry_point(metadata);
     }
 
-    fn cell(&self, table: u8, row: u32, column: usize) -> Option<u32> {
-        self.tables.cell(table, row, column)
-    }
-
     fn string(&mut self, table: u8, row: u32, column: usize) -> String {
-        let offset = self.cell(table, row, column).unwrap_or(0);
+        let offset = self.tables.cell(table, row, column).unwrap_or(0);
         self.heaps.string(offset).unwrap_or_else(|| {
             self.warnings.push(format!(
                 "{} row {row}: string offset {offset:#x} is outside #Strings",
@@ -533,7 +530,8 @@ impl Decoder<'_, '_> {
     }
 
     fn blob_hex(&self, table: u8, row: u32, column: usize) -> Option<String> {
-        self.cell(table, row, column)
+        self.tables
+            .cell(table, row, column)
             .filter(|&offset| offset != 0)
             .and_then(|offset| self.heaps.blob(offset))
             .filter(|blob| !blob.is_empty())
@@ -541,7 +539,7 @@ impl Decoder<'_, '_> {
     }
 
     fn version(&self, table: u8, row: u32, first_column: usize) -> String {
-        let part = |index| self.cell(table, row, first_column + index).unwrap_or(0);
+        let part = |index| self.tables.cell(table, row, first_column + index).unwrap_or(0);
         format!("{}.{}.{}.{}", part(0), part(1), part(2), part(3))
     }
 
@@ -551,15 +549,15 @@ impl Decoder<'_, '_> {
             name: self.string(table, 1, 7),
             version: self.version(table, 1, 1),
             culture: self.string(table, 1, 8),
-            flags: self.cell(table, 1, 5).unwrap_or(0),
-            hash_algorithm: self.cell(table, 1, 0).unwrap_or(0),
+            flags: self.tables.cell(table, 1, 5).unwrap_or(0),
+            hash_algorithm: self.tables.cell(table, 1, 0).unwrap_or(0),
             public_key: self.blob_hex(table, 1, 6),
         }
     }
 
     fn assembly_ref(&mut self, row: u32) -> AssemblyRef {
         let table = tables::ASSEMBLY_REF;
-        let flags = self.cell(table, row, 4).unwrap_or(0);
+        let flags = self.tables.cell(table, row, 4).unwrap_or(0);
         AssemblyRef {
             name: self.string(table, row, 6),
             version: self.version(table, row, 0),
@@ -576,25 +574,25 @@ impl Decoder<'_, '_> {
             token: token(table, row),
             namespace: self.string(table, row, 2),
             name: self.string(table, row, 1),
-            scope: self.cell(table, row, 0).and_then(|value| self.coded_label(C::ResolutionScope, value)),
+            scope: self.tables.cell(table, row, 0).and_then(|value| self.coded_label(C::ResolutionScope, value)),
         }
     }
 
     /// A readable name for the row a coded index selects, for display only: `None` for a null or dangling index.
-    fn coded_label(&self, coded: Coded, value: u32) -> Option<String> {
+    fn coded_label(&self, coded: C, value: u32) -> Option<String> {
         let (table, row) = coded.decode(value)?;
         if row == 0 || row > self.tables.rows(table) {
             return None;
         }
-        let string = |column| self.heaps.string(self.cell(table, row, column)?);
+        let string = |column| self.heaps.string(self.tables.cell(table, row, column)?);
         let qualified = |name: Option<String>, namespace: Option<String>| {
             Some(qualified_name(namespace.as_deref().unwrap_or(""), &name?))
         };
         match table {
-            tables::TYPE_DEF => qualified(string(1), string(2)),
-            tables::TYPE_REF => qualified(string(1), string(2)),
+            tables::TYPE_DEF | tables::TYPE_REF => qualified(string(1), string(2)),
             tables::TYPE_SPEC => Some(format!("TypeSpec#{row}")),
-            tables::MODULE | tables::MODULE_REF => string(if table == tables::MODULE { 1 } else { 0 }),
+            tables::MODULE => string(1),
+            tables::MODULE_REF => string(0),
             tables::ASSEMBLY_REF => string(6),
             tables::METHOD_DEF => string(3),
             _ => Some(format!("{}#{row}", tables::TABLE_NAMES[usize::from(table)])),
@@ -614,7 +612,7 @@ impl Decoder<'_, '_> {
         let mut starts = Vec::with_capacity(owners as usize);
         let mut floor = 1;
         for row in 1..=owners {
-            let start = self.cell(owner, row, column).unwrap_or(0).clamp(1, limit);
+            let start = self.tables.cell(owner, row, column).unwrap_or(0).clamp(1, limit);
             if start < floor {
                 self.warnings.push(format!(
                     "{} row {row}: {} list is out of order",
@@ -630,7 +628,7 @@ impl Decoder<'_, '_> {
             .map(|index| {
                 let end = starts.get(index + 1).copied().unwrap_or(limit);
                 (starts[index]..end)
-                    .filter_map(|index| if ptr_rows > 0 { self.cell(ptr, index, 0) } else { Some(index) })
+                    .filter_map(|index| if ptr_rows > 0 { self.tables.cell(ptr, index, 0) } else { Some(index) })
                     .filter(|&row| {
                         row != 0 && row <= target_rows && !std::mem::replace(&mut assigned[row as usize], true)
                     })
@@ -643,7 +641,7 @@ impl Decoder<'_, '_> {
         let mut enclosing = std::collections::HashMap::new();
         for row in 1..=self.tables.rows(tables::NESTED_CLASS) {
             if let (Some(nested), Some(outer)) =
-                (self.cell(tables::NESTED_CLASS, row, 0), self.cell(tables::NESTED_CLASS, row, 1))
+                (self.tables.cell(tables::NESTED_CLASS, row, 0), self.tables.cell(tables::NESTED_CLASS, row, 1))
             {
                 enclosing.insert(nested, token(tables::TYPE_DEF, outer));
             }
@@ -664,8 +662,8 @@ impl Decoder<'_, '_> {
                     token: token(table, row),
                     namespace: self.string(table, row, 2),
                     name: self.string(table, row, 1),
-                    flags: self.cell(table, row, 0).unwrap_or(0),
-                    extends: self.cell(table, row, 3).and_then(|value| self.coded_label(C::TypeDefOrRef, value)),
+                    flags: self.tables.cell(table, row, 0).unwrap_or(0),
+                    extends: self.tables.cell(table, row, 3).and_then(|value| self.coded_label(C::TypeDefOrRef, value)),
                     enclosing: enclosing.get(&row).copied(),
                     fields,
                     methods,
@@ -676,8 +674,8 @@ impl Decoder<'_, '_> {
 
     fn method(&mut self, row: u32, params: &[u32]) -> MethodDef {
         let table = tables::METHOD_DEF;
-        let rva = self.cell(table, row, 0).unwrap_or(0);
-        let impl_flags = self.cell(table, row, 1).unwrap_or(0) as u16;
+        let rva = self.tables.cell(table, row, 0).unwrap_or(0);
+        let impl_flags = self.tables.cell(table, row, 1).unwrap_or(0) as u16;
         let body = match (rva, impl_flags & CODE_TYPE_MASK) {
             (0, _) => BodyKind::None,
             (_, CODE_TYPE_NATIVE) => BodyKind::Native,
@@ -688,7 +686,7 @@ impl Decoder<'_, '_> {
         let mut params: Vec<(u32, String)> = params
             .iter()
             .filter_map(|&param| {
-                let sequence = self.cell(tables::PARAM, param, 1)?;
+                let sequence = self.tables.cell(tables::PARAM, param, 1)?;
                 (sequence > 0).then(|| (sequence, self.string(tables::PARAM, param, 2)))
             })
             .collect();
@@ -697,7 +695,7 @@ impl Decoder<'_, '_> {
             token: token(table, row),
             name: self.string(table, row, 3),
             rva,
-            flags: self.cell(table, row, 2).unwrap_or(0) as u16,
+            flags: self.tables.cell(table, row, 2).unwrap_or(0) as u16,
             impl_flags,
             body,
             il: None,
@@ -724,7 +722,7 @@ impl Decoder<'_, '_> {
                 }
                 Some(EntryPoint::Method { token: value, method })
             }
-            0x26 => Some(EntryPoint::File { token: value }),
+            tables::FILE => Some(EntryPoint::File { token: value }),
             _ => {
                 self.warnings.push(format!("entry point token {value:#010x} is not a MethodDef or File"));
                 None
@@ -732,8 +730,6 @@ impl Decoder<'_, '_> {
         }
     }
 }
-
-use Coded as C;
 
 fn token(table: u8, row: u32) -> u32 {
     (u32::from(table) << 24) | (row & tables::MAX_ROWS)

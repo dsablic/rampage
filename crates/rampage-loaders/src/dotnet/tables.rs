@@ -21,11 +21,15 @@ pub(super) const METHOD_DEF: u8 = 0x06;
 pub(super) const PARAM_PTR: u8 = 0x07;
 pub(super) const PARAM: u8 = 0x08;
 pub(super) const MEMBER_REF: u8 = 0x0A;
+const EVENT: u8 = 0x14;
+const PROPERTY: u8 = 0x17;
 pub(super) const MODULE_REF: u8 = 0x1A;
 pub(super) const TYPE_SPEC: u8 = 0x1B;
 pub(super) const ASSEMBLY: u8 = 0x20;
 pub(super) const ASSEMBLY_REF: u8 = 0x23;
+pub(super) const FILE: u8 = 0x26;
 pub(super) const NESTED_CLASS: u8 = 0x29;
+const GENERIC_PARAM: u8 = 0x2A;
 
 pub(super) const TABLE_NAMES: [&str; TABLE_COUNT] = [
     "Module",
@@ -187,11 +191,11 @@ const SCHEMA: [&[Col]; TABLE_COUNT] = [
     /* ClassLayout */ &[U16, U32, Index(TYPE_DEF)],
     /* FieldLayout */ &[U32, Index(FIELD)],
     /* StandAloneSig */ &[Blob],
-    /* EventMap */ &[Index(TYPE_DEF), Index(0x14)],
-    /* EventPtr */ &[Index(0x14)],
+    /* EventMap */ &[Index(TYPE_DEF), Index(EVENT)],
+    /* EventPtr */ &[Index(EVENT)],
     /* Event */ &[U16, Str, Col::Coded(C::TypeDefOrRef)],
-    /* PropertyMap */ &[Index(TYPE_DEF), Index(0x17)],
-    /* PropertyPtr */ &[Index(0x17)],
+    /* PropertyMap */ &[Index(TYPE_DEF), Index(PROPERTY)],
+    /* PropertyPtr */ &[Index(PROPERTY)],
     /* Property */ &[U16, Str, Blob],
     /* MethodSemantics */ &[U16, Index(METHOD_DEF), Col::Coded(C::HasSemantics)],
     /* MethodImpl */ &[Index(TYPE_DEF), Col::Coded(C::MethodDefOrRef), Col::Coded(C::MethodDefOrRef)],
@@ -213,7 +217,7 @@ const SCHEMA: [&[Col]; TABLE_COUNT] = [
     /* NestedClass */ &[Index(TYPE_DEF), Index(TYPE_DEF)],
     /* GenericParam */ &[U16, U16, Col::Coded(C::TypeOrMethodDef), Str],
     /* MethodSpec */ &[Col::Coded(C::MethodDefOrRef), Blob],
-    /* GenericParamConstraint */ &[Index(0x2A), Col::Coded(C::TypeDefOrRef)],
+    /* GenericParamConstraint */ &[Index(GENERIC_PARAM), Col::Coded(C::TypeDefOrRef)],
 ];
 
 /// Where one table lives within the stream, and the byte offset and width of each of its columns.
