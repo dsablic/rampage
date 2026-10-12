@@ -54,6 +54,7 @@ async fn lists_all_tools_with_instructions() {
         "build_signatures",
         "capabilities",
         "class_evidence",
+        "compare_pointer_observations",
         "compare_runtime_bytes",
         "decompile",
         "disassemble",
@@ -197,6 +198,31 @@ async fn branch_observation_decodes_explicit_window_without_resolving_captured_f
 }
 
 #[tokio::test]
+async fn pointer_comparison_reports_unavailable_words_instead_of_zero() {
+    let client = connect().await;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64.snapshot.json");
+    let result = json_of(
+        &call(
+            &client,
+            "compare_pointer_observations",
+            json!({"path": path, "other": path, "at": "0x3000", "other_at": "0x4000"}),
+        )
+        .await,
+    );
+    assert_eq!(result["raw_value_change"], "after_unavailable");
+    assert_eq!(result["before"]["raw_value"], "0x1010");
+    assert!(result["after"]["raw_value"].is_null());
+    let error = call(
+        &client,
+        "compare_pointer_observations",
+        json!({"path": path, "other": path, "at": "sub_3000", "other_at": "0x3000"}),
+    )
+    .await;
+    assert_eq!(error.is_error, Some(true));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn runtime_comparison_ignores_sidecars_and_requires_explicit_matching_originals() {
     struct Directory(PathBuf);
     impl Drop for Directory {
@@ -232,6 +258,15 @@ async fn runtime_comparison_ignores_sidecars_and_requires_explicit_matching_orig
     let second = json_of(&call(&client, "compare_runtime_bytes", arguments.clone()).await);
     assert_eq!(second["spans"][0]["status"], "capture_unavailable");
     assert_eq!(second["capture_identity"], first["capture_identity"]);
+    let pointers = json_of(
+        &call(
+            &client,
+            "compare_pointer_observations",
+            json!({"path": path, "other": path, "at": "0x1000", "other_at": "0x1000"}),
+        )
+        .await,
+    );
+    assert_eq!(pointers["raw_value_change"], "both_unavailable");
     arguments["module"] = json!("00000000000000000000000000000000");
     assert_eq!(call(&client, "compare_runtime_bytes", arguments.clone()).await.is_error, Some(true));
     arguments["original"] = json!("/nonexistent/explicit-original");

@@ -290,6 +290,40 @@ pub fn observe_pointer(out: &mut impl Write, path: &Path, at: &str, options: &Op
     Ok(())
 }
 
+pub fn compare_pointers(
+    out: &mut impl Write,
+    path: &Path,
+    other: &Path,
+    at: &str,
+    other_at: &str,
+    options: &Options,
+) -> Result<()> {
+    let before = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
+    let after = Project::new(rampage_loaders::Binary::open_with(other, Some(before.binary.arch))?);
+    let result = before.compare_pointer_observations(
+        rampage_loaders::snapshot::address(at)?,
+        &after,
+        rampage_loaders::snapshot::address(other_at)?,
+    )?;
+    if options.json {
+        return write_json(out, &result);
+    }
+    writeln!(
+        out,
+        "slots {:#x} -> {:#x}: {:?} raw values",
+        result.before.slot, result.after.slot, result.raw_value_change
+    )?;
+    writeln!(
+        out,
+        "slot permissions changed: {}; target assessment changed: {}",
+        result.slot_permissions_changed, result.target_assessment_changed
+    )?;
+    for limitation in result.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
 pub fn observe_indirect_branch(
     out: &mut impl Write,
     path: &Path,

@@ -160,6 +160,16 @@ enum Command {
         #[arg(long)]
         at: String,
     },
+    /// Compare explicit slots in two captures without asserting chronology, correspondence or flow
+    ComparePointers {
+        file: PathBuf,
+        #[arg(long)]
+        other: PathBuf,
+        #[arg(long)]
+        at: String,
+        #[arg(long)]
+        other_at: String,
+    },
     /// Link one captured ARM64 indirect branch to a slot load in an explicit bounded window
     ObserveIndirectBranch {
         file: PathBuf,
@@ -182,7 +192,7 @@ enum Command {
         #[arg(long)]
         contains: Option<String>,
     },
-    /// Name an address; the name is saved beside the binary in <file>.rampage
+    /// Name an address; saved beside ordinary binaries, or in a capture-identity log for snapshots
     Rename {
         file: PathBuf,
         /// Address or current name
@@ -194,7 +204,7 @@ enum Command {
         #[arg(long)]
         clear: bool,
     },
-    /// Comment an address; saved beside the binary in <file>.rampage
+    /// Comment an address; saved beside ordinary binaries, or in a capture-identity log for snapshots
     Comment {
         file: PathBuf,
         /// Address or name
@@ -286,6 +296,9 @@ fn main() -> ExitCode {
             commands::compare_runtime(&mut out, &file, &original, &module, &range, &options)
         }
         Command::ObservePointer { file, at } => commands::observe_pointer(&mut out, &file, &at, &options),
+        Command::ComparePointers { file, other, at, other_at } => {
+            commands::compare_pointers(&mut out, &file, &other, &at, &other_at, &options)
+        }
         Command::ObserveIndirectBranch { file, start, at } => {
             commands::observe_indirect_branch(&mut out, &file, &start, &at, &options)
         }

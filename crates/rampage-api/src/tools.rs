@@ -161,6 +161,16 @@ struct BranchObservationArgs {
     at: String,
 }
 
+#[derive(serde::Deserialize, JsonSchema)]
+struct PointerComparisonArgs {
+    /// Explicit second capture path, opened fresh without an annotation sidecar.
+    other: std::path::PathBuf,
+    /// Explicit hexadecimal slot address in the current capture (analyst's "before").
+    at: String,
+    /// Explicit hexadecimal slot address in the second capture (analyst's "after").
+    other_at: String,
+}
+
 #[derive(Serialize)]
 struct RuntimeComparisonPage {
     #[serde(flatten)]
@@ -351,6 +361,22 @@ pub fn tools() -> Vec<Tool> {
             "Observe one captured pointer slot, including writable memory; never inserts a call or discovery edge.",
             |project, args: At| project.observe_pointer(project.resolve(&args.at)?),
         ),
+        tool(
+            "compare_pointer_observations",
+            "Compare raw pointer words at explicitly paired slots in two captures. Analyst-ordered before/after \
+             observations, not verified chronology, process identity or proven flow; opens no sidecars.",
+            |project, args: PointerComparisonArgs| {
+                let address = |text: &str| {
+                    rampage_loaders::snapshot::address(text).map_err(|error| ApiError::Invalid(error.to_string()))
+                };
+                let before_slot = address(&args.at)?;
+                let after_slot = address(&args.other_at)?;
+                let after = rampage_loaders::Binary::open_with(&args.other, Some(project.binary.arch))
+                    .map_err(|source| ApiError::Load { path: args.other, source })?;
+                project.compare_pointer_observations(before_slot, &Project::new(after), after_slot)
+            },
+        )
+        .without_annotations(),
         tool(
             "compare_runtime_bytes",
             "Compare explicit captured ranges with a UUID-matched original Mach-O. Paginated spans, full-range totals; \

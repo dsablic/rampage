@@ -51,3 +51,24 @@ fn indirect_branch_reports_a_slot_link_without_converting_it_to_direct_flow() {
         .success()
         .stdout(predicates::str::contains("not a proven edge"));
 }
+
+#[test]
+fn pointer_comparison_preserves_identity_and_explicit_slot_correspondence() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64.snapshot.json");
+    let output = Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["--json", "compare-pointers", "--at", "0x3000", "--other-at", "0x1000"])
+        .arg(&path)
+        .arg("--other")
+        .arg(&path)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let result: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(result["raw_value_change"], "changed");
+    assert_eq!(result["before"]["slot"], "0x3000");
+    assert_eq!(result["after"]["slot"], "0x1000");
+    assert_eq!(result["before"]["capture_identity"], result["after"]["capture_identity"]);
+}
