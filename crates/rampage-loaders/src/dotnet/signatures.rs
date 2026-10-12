@@ -17,7 +17,7 @@ const MAX_DEPTH: u32 = 32;
 const MAX_NODES: u32 = 512;
 const MAX_TEXT: usize = 8192;
 /// Array ranks and generic parameter counts above this are treated as corrupt rather than rendered.
-const MAX_ARITY: u32 = 64;
+pub(super) const MAX_ARITY: u32 = 64;
 /// Text rendered plus blob bytes read across every signature of one image, so a file full of expanding or
 /// re-referenced signatures stays cheap.
 pub(super) const TOTAL_BUDGET: usize = 64 << 20;
@@ -39,16 +39,20 @@ pub(super) trait Resolve {
     fn type_spec(&self, row: u32) -> Option<&[u8]>;
 }
 
-/// Generic parameter names, `(number, name)`, of the type and method a signature belongs to. A `VAR` or `MVAR`
-/// without a name renders as ILAsm's `!n` or `!!n`.
+/// Generic parameter names, `(number, name)` sorted by number, of the type and method a signature belongs to. A
+/// `VAR` or `MVAR` without a name renders as ILAsm's `!n` or `!!n`.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct Generics<'g> {
     pub(super) type_params: &'g [(u32, String)],
     pub(super) method_params: &'g [(u32, String)],
 }
 
+/// The name of generic parameter `number` from `params`, which is sorted by number.
 fn generic_name(params: &[(u32, String)], number: u32, prefix: &str) -> String {
-    params.iter().find(|(n, _)| *n == number).map_or_else(|| format!("{prefix}{number}"), |(_, name)| name.clone())
+    match params.binary_search_by_key(&number, |&(number, _)| number) {
+        Ok(index) => params[index].1.clone(),
+        Err(_) => format!("{prefix}{number}"),
+    }
 }
 
 /// What a custom attribute value can hold for a parameter of this type.

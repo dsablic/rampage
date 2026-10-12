@@ -540,7 +540,8 @@ struct Decoder<'t, 'a> {
     tables: &'t Tables<'a>,
     heaps: Heaps<'a>,
     warnings: &'t mut Warnings,
-    /// GenericParam `(number, name)` rows by owning TypeDef or MethodDef.
+    /// GenericParam `(number, name)` rows by owning TypeDef or MethodDef, sorted by number: the first row of
+    /// each number below the arity cap, so a hostile table cannot make a lookup scan its rows.
     generic_params: HashMap<(u8, u32), Vec<(u32, String)>>,
     /// Signature work (text rendered, blob bytes read) left for this image.
     budget: Cell<usize>,
@@ -567,10 +568,16 @@ impl<'t, 'a> Decoder<'t, 'a> {
         let table = tables::GENERIC_PARAM;
         for row in 1..=tables.rows(table) {
             let owner = tables.cell(table, row, 2).and_then(|value| C::TypeOrMethodDef.decode(value));
-            if let (Some(number), Some(owner)) = (tables.cell(table, row, 0), owner) {
+            let number = tables.cell(table, row, 0).filter(|&number| number < signatures::MAX_ARITY);
+            let (Some(number), Some(owner)) = (number, owner) else { continue };
+            let params: &mut Vec<_> = generic_params.entry(owner).or_default();
+            if params.iter().all(|&(seen, _)| seen != number) {
                 let name = tables.cell(table, row, 3).and_then(|offset| heaps.string(offset)).unwrap_or_default();
-                generic_params.entry(owner).or_default().push((number, name));
+                params.push((number, name));
             }
+        }
+        for params in generic_params.values_mut() {
+            params.sort_unstable_by_key(|&(number, _)| number);
         }
         let budget = Cell::new(signatures::TOTAL_BUDGET);
         Self { tables, heaps, warnings, generic_params, budget, budget_reported: false }
@@ -998,14 +1005,22 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
 mod tests {
     use super::*;
 
+    /// A table stream header declaring `present` `(table, rows)` in table order, with narrow heap indexes.
+    fn table_stream(present: &[(u8, u32)]) -> Vec<u8> {
+        let mut stream = vec![0, 0, 0, 0, 2, 0, 0, 1];
+        let valid = present.iter().fold(0u64, |valid, &(table, _)| valid | (1 << table));
+        stream.extend_from_slice(&valid.to_le_bytes());
+        stream.extend_from_slice(&0u64.to_le_bytes());
+        for &(_, rows) in present {
+            stream.extend_from_slice(&rows.to_le_bytes());
+        }
+        stream
+    }
+
     /// A table stream with one TypeDef owning a MethodDef per blob, every index 2 bytes wide.
     fn method_tables(signatures: &[&[u8]]) -> (Vec<u8>, Vec<u8>) {
         let mut blobs = vec![0u8];
-        let mut stream = vec![0, 0, 0, 0, 2, 0, 0, 1];
-        stream.extend_from_slice(&((1u64 << tables::TYPE_DEF) | (1 << tables::METHOD_DEF)).to_le_bytes());
-        stream.extend_from_slice(&0u64.to_le_bytes());
-        stream.extend_from_slice(&1u32.to_le_bytes());
-        stream.extend_from_slice(&(signatures.len() as u32).to_le_bytes());
+        let mut stream = table_stream(&[(tables::TYPE_DEF, 1), (tables::METHOD_DEF, signatures.len() as u32)]);
         // TypeDef: flags, name "M", no namespace or base, field list 1, method list 1.
         for (value, width) in [(0u32, 4), (1, 2), (0, 2), (0, 2), (1, 2), (1, 2)] {
             stream.extend_from_slice(&value.to_le_bytes()[..width]);
@@ -1049,5 +1064,27 @@ mod tests {
         assert_eq!(il_body(&[0x03, 0x10]), None);
         assert_eq!(il_body(&[0x13, 0x30, 0x01]), None);
         assert_eq!(il_body(&[0x00]), None);
+    }
+
+    #[test]
+    fn generic_parameters_are_indexed_by_number_within_the_arity_cap() {
+        // 200,000 GenericParam rows on TypeDef 1 numbered 0..1000 over and over: only one row per number below
+        // the cap is kept, so every VAR lookup searches at most MAX_ARITY sorted entries.
+        let rows = 200_000u32;
+        let mut stream = table_stream(&[(tables::GENERIC_PARAM, rows)]);
+        for row in 0..rows {
+            let number = (rows - row) % 1000;
+            for (value, width) in [(number, 2), (0, 2), (1 << 1, 2), (u32::from(number == 3), 2)] {
+                stream.extend_from_slice(&value.to_le_bytes()[..width]);
+            }
+        }
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: b"\0T\0", ..Heaps::default() };
+        let decoder = Decoder::new(&tables, heaps, &mut warnings);
+        let params = decoder.generics(tables::TYPE_DEF, 1);
+        let numbers: Vec<u32> = params.iter().map(|&(number, _)| number).collect();
+        assert_eq!(numbers, (0..signatures::MAX_ARITY).collect::<Vec<_>>());
+        assert_eq!(params[3].1, "T");
     }
 }
