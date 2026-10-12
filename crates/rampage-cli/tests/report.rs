@@ -84,3 +84,12 @@ fn other_is_rejected_outside_diff_builds() {
     let exe = path("hello-x64.exe");
     report(&["triage-report", &exe, "--other", &exe]).failure();
 }
+
+#[test]
+fn arguments_are_checked_before_the_binary_is_opened() {
+    let missing = "/nonexistent/rampage-binary";
+    report(&["triage-report", missing, "--other", missing])
+        .failure()
+        .stderr(predicates::str::contains("--other only applies to diff-builds"));
+    report(&["diff-builds", missing]).failure().stderr(predicates::str::contains("diff-builds needs --other"));
+}

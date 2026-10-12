@@ -35,20 +35,20 @@ pub fn report(
     report_options: &ReportOptions,
     options: &Options,
 ) -> Result<()> {
+    match (workflow, &report_options.other) {
+        (Workflow::DiffBuilds, None) => bail!("diff-builds needs --other <file>"),
+        (Workflow::DiffBuilds, Some(_)) | (_, None) => {}
+        (_, Some(_)) => bail!("--other only applies to diff-builds"),
+    }
     let project = open(path, options)?;
     let limits = ReportLimits::new(report_options.limit);
-    if report_options.other.is_some() && !matches!(workflow, Workflow::DiffBuilds) {
-        bail!("--other only applies to diff-builds");
-    }
-    let report = match workflow {
-        Workflow::TriageReport => project.triage_report(limits)?,
-        Workflow::FindMain => project.find_main(limits, !report_options.no_decompile)?,
-        Workflow::NetworkSurface => project.network_surface(limits)?,
-        Workflow::FindCrypto => project.find_crypto(limits)?,
-        Workflow::DiffBuilds => match &report_options.other {
-            Some(other) => project.diff_builds(other, limits)?,
-            None => bail!("diff-builds needs --other <file>"),
-        },
+    let report = match (workflow, &report_options.other) {
+        (Workflow::TriageReport, _) => project.triage_report(limits)?,
+        (Workflow::FindMain, _) => project.find_main(limits, !report_options.no_decompile)?,
+        (Workflow::NetworkSurface, _) => project.network_surface(limits)?,
+        (Workflow::FindCrypto, _) => project.find_crypto(limits)?,
+        (Workflow::DiffBuilds, Some(other)) => project.diff_builds(other, limits)?,
+        (Workflow::DiffBuilds, None) => unreachable!("checked before opening the binary"),
     };
     if options.json {
         return write_json(out, &report);
