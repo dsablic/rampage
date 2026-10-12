@@ -85,6 +85,40 @@ negative regressions. Existing rules retain their detection thresholds and canon
   for binary distributions, and surface the bundled UI font's license (OFL-1.1/Ubuntu-font) in the UI about path.
 
 
+## Heuristic-database layer (pluggable detection DBs)
+
+One pluggable detection layer: each database is a data file, permissive defaults bundled in-tree, everything
+else user-supplied at runtime; every hit is a tagged finding (kind, name, confidence, evidence), not proof.
+Licensing discipline: bundle only permissive, author our own starter sets, load the rest at runtime.
+
+- [ ] Packer/compiler/protector/installer identification (`rampage-detect`): EP byte-pattern + section + import
+  + overlay/entropy signatures, an authored Apache-clean starter DB, and a user-supplied PEiD `userdb.txt`
+  loader. (In progress.)
+- [ ] YARA engine (`rampage-yara`): embed `yara-x` (BSD-3-Clause, pure Rust) to run user-supplied YARA rule
+  sets (signature-base DRL-1.1, ReversingLabs MIT, etc. are user-supplied, not bundled). (In progress.)
+- [ ] capa-rules import (`rampage-capabilities::capa`): evaluate the file-scope import/string/section/export
+  feature subset of Mandiant capa-rules (Apache-2.0); full use needs disasm feature extraction. (In progress.)
+- [ ] Integrate the above behind a unified `detect`/`scan` surface (API + CLI + MCP), author the bundled DBs,
+  and add attribution to NOTICE where a bundled set derives from a permissive upstream.
+- [ ] Later DB kinds: Ghidra FidDb import (Apache, library-function ID, format conversion); ClamAV `.ndb/.ldb`
+  as a user-supplied runtime input (GPL data -- never bundled); richer capa features once disasm extraction lands.
+
+## Ideas from adjacent projects (REA, Ghidra-MCP)
+
+REA ("Reverse Engineer Anything") is an open CLI+MCP orchestrator over external engines (Ghidra/Hopper/IDA) with
+multi-format front-ends and guided workflows. rampage builds its own engine and embeds Ghidra, so the value is
+in UX/workflow ideas, not the multi-engine dispatch:
+
+- [ ] Guided investigation workflows as first-class MCP tools (compose existing primitives): e.g. triage, locate
+  and summarize entry/main, map the network/attack surface, find crypto, diff two builds. Highest-leverage and
+  on-brand for AI-first clients.
+- [ ] Broader input front-ends (user-invoked): firmware/archive carving to enumerate embedded binaries (extend
+  the existing bundle inventory), and .NET/ECMA-335 metadata parsing (natural extension of the PE loader).
+  APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
+- [ ] Agent-efficiency operations: batch rename/annotate and naming-convention helpers; keep the MCP tool
+  surface structured as it grows (lazy/grouped tool exposure).
+
+
 ## Decompiler: embedded Ghidra (the decompilation path)
 
 Decompilation is provided by `rampage-decompiler`, which embeds Ghidra's decompiler (Apache-2.0) in process and
