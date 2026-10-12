@@ -1,12 +1,12 @@
 //! `diff_builds`: compares this binary with another build of the same architecture. Functions are paired by symbol
-//! name and by masked signature hash (`rampage_signatures::function_hash`), then imports and strings are diffed.
+//! name and by masked signature hash (`rampage_signatures::function_hash_in`), then imports and strings are diffed.
 //! Hash equality is signature-level (same instructions after masking addresses), not semantic equivalence.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use rampage_loaders::Binary;
-use rampage_signatures::{FunctionHash, function_hash};
+use rampage_signatures::{FunctionHash, MaskContext, function_hash_in};
 use serde_json::json;
 
 use super::{
@@ -36,6 +36,7 @@ impl Function {
 fn inventory(project: &Project) -> Result<Vec<Function>, ApiError> {
     let analysis = project.analysis()?;
     let target = project.binary.target();
+    let image = MaskContext::from_binary(&project.binary);
     Ok(analysis
         .program
         .functions
@@ -47,7 +48,7 @@ fn inventory(project: &Project) -> Result<Vec<Function>, ApiError> {
                 .binary
                 .read(function.address, size)
                 .filter(|_| size > 0)
-                .and_then(|bytes| function_hash(&target, bytes, function.address));
+                .and_then(|bytes| function_hash_in(&target, &image, bytes, function.address));
             Function { address: function.address, name: project.function_name(function.address), hash, size }
         })
         .collect())

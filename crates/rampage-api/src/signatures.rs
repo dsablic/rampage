@@ -1,7 +1,7 @@
 //! Library-function identification: build a signature database from a binary whose functions are named, and
 //! apply one to name the matching functions of another binary (see `rampage-signatures`).
 
-use rampage_signatures::SignatureDb;
+use rampage_signatures::{MaskContext, SignatureDb};
 use serde::Serialize;
 
 use crate::{ApiError, Project};
@@ -32,14 +32,30 @@ impl Project {
     /// Identifies discovered functions against `database`. When `apply` is set, matches for functions that are
     /// still unnamed are saved as user names (existing names and user edits are never overwritten).
     pub fn apply_signatures(&self, database: &SignatureDb, apply: bool) -> Result<SignatureApplication, ApiError> {
+        self.apply_layered_signatures(&[database], apply)
+    }
+
+    /// Identifies discovered functions against each database in order; the first that names a function wins.
+    /// Layering instead of merging lets databases built with different hash schemes coexist.
+    fn apply_layered_signatures(
+        &self,
+        databases: &[&SignatureDb],
+        apply: bool,
+    ) -> Result<SignatureApplication, ApiError> {
+        if databases.is_empty() {
+            return Ok(SignatureApplication { matched: 0, applied: 0, matches: Vec::new() });
+        }
         let analysis = self.analysis()?;
         let target = self.binary.target();
+        let image = MaskContext::from_binary(&self.binary);
         let mut matches = Vec::new();
         for function in &analysis.program.functions {
             let end = function.blocks.iter().map(|block| block.end).max().unwrap_or(function.address);
             let Some(length) = end.checked_sub(function.address).filter(|&length| length > 0) else { continue };
             let Some(bytes) = self.binary.read(function.address, length) else { continue };
-            let Some(name) = database.identify(&target, bytes, function.address) else { continue };
+            let identified =
+                databases.iter().find_map(|database| database.identify_in(&target, &image, bytes, function.address));
+            let Some(name) = identified else { continue };
             let current = self.function_name(function.address);
             matches.push(SignatureMatch {
                 address: function.address,
@@ -65,25 +81,15 @@ impl Project {
         rampage_signatures::bundled(self.binary.arch)
     }
 
-    /// Identifies functions against the bundled starter database for this architecture, with an optional `user`
-    /// database overlaid on top (user names win on a shared hash). With no bundled database and no `user`
-    /// database, nothing matches.
+    /// Identifies functions against an optional `user` database first, then the bundled starter database for this
+    /// architecture (so user names win). With neither database, nothing matches.
     pub fn apply_signatures_default(
         &self,
         user: Option<&SignatureDb>,
         apply: bool,
     ) -> Result<SignatureApplication, ApiError> {
-        match self.bundled_signatures() {
-            Some(mut base) => {
-                if let Some(user) = user {
-                    base.merge(user);
-                }
-                self.apply_signatures(&base, apply)
-            }
-            None => match user {
-                Some(user) => self.apply_signatures(user, apply),
-                None => Ok(SignatureApplication { matched: 0, applied: 0, matches: Vec::new() }),
-            },
-        }
+        let bundled = self.bundled_signatures();
+        let databases: Vec<&SignatureDb> = user.into_iter().chain(bundled.as_ref()).collect();
+        self.apply_layered_signatures(&databases, apply)
     }
 }

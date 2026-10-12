@@ -209,6 +209,17 @@ impl Slice {
         for path in &self.dbs {
             let db = SignatureDb::from_json(&read(path)?).map_err(|error| format!("{}: {error}", path.display()))?;
             match &mut combined {
+                // merge() ignores an incompatible database; an eval must not drop an input silently.
+                Some(existing) if !existing.can_merge(&db) => {
+                    return Err(format!(
+                        "{}: a {} scheme-{} database cannot be combined with a {} scheme-{} one",
+                        path.display(),
+                        db.arch,
+                        db.scheme(),
+                        existing.arch,
+                        existing.scheme()
+                    ));
+                }
                 Some(existing) => existing.merge(&db),
                 None => combined = Some(db),
             }

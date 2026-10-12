@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::{Binary, Symbol, SymbolKind};
-use rampage_signatures::{SignatureDb, alias_rank};
+use rampage_signatures::{MaskContext, SignatureDb, alias_rank};
 use serde::{Deserialize, Serialize};
 
 /// Known function names by address, taken from a symbolized twin of the evaluated binary.
@@ -318,6 +318,7 @@ pub fn evaluate_discovery(target: &Binary, truth: &Truth) -> Result<Report, Unsu
 pub fn proposals(db: &SignatureDb, target: &Binary) -> Result<Vec<(u64, Option<String>)>, UnsupportedArch> {
     let program = rampage_analysis::functions::analyze(target)?;
     let arch = target.target();
+    let image = MaskContext::from_binary(target);
     Ok(program
         .functions
         .iter()
@@ -328,7 +329,7 @@ pub fn proposals(db: &SignatureDb, target: &Binary) -> Result<Vec<(u64, Option<S
                 .checked_sub(function.address)
                 .filter(|&length| length > 0)
                 .and_then(|length| target.read(function.address, length))
-                .and_then(|bytes| db.identify(&arch, bytes, function.address))
+                .and_then(|bytes| db.identify_in(&arch, &image, bytes, function.address))
                 .map(str::to_owned);
             (function.address, name)
         })
