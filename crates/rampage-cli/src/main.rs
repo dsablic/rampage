@@ -254,6 +254,9 @@ enum Command {
         /// Findings kept per section (default 25, at most 200)
         #[arg(long)]
         limit: Option<usize>,
+        /// find-main: skip the decompilation preview
+        #[arg(long)]
+        no_decompile: bool,
     },
     /// Serve the Model Context Protocol over stdin/stdout for AI agents
     Mcp,
@@ -346,8 +349,8 @@ fn main() -> ExitCode {
         Command::Comment { file, at, text, .. } => commands::comment(&mut out, &file, &at, text.as_deref(), &options),
         Command::Annotations { file } => commands::annotations(&mut out, &file, &options),
         Command::DebugTypes { file, apply } => commands::debug_types(&mut out, &file, apply, &options),
-        Command::Report { workflow, file, other, limit } => {
-            let report_options = report::ReportOptions { other, limit };
+        Command::Report { workflow, file, other, limit, no_decompile } => {
+            let report_options = report::ReportOptions { other, limit, no_decompile };
             report::report(&mut out, workflow, &file, &report_options, &options)
         }
         Command::Mcp => unreachable!("handled before opening stdout"),

@@ -12,11 +12,14 @@ use crate::commands::{Options, open, write_json};
 pub enum Workflow {
     /// One-shot overview with suggested next steps
     TriageReport,
+    /// Locate the program's own entry logic past the runtime startup code
+    FindMain,
 }
 
 pub struct ReportOptions {
     pub other: Option<PathBuf>,
     pub limit: Option<usize>,
+    pub no_decompile: bool,
 }
 
 pub fn report(
@@ -28,13 +31,12 @@ pub fn report(
 ) -> Result<()> {
     let project = open(path, options)?;
     let limits = ReportLimits::new(report_options.limit);
+    if report_options.other.is_some() {
+        bail!("--other only applies to diff-builds");
+    }
     let report = match workflow {
-        Workflow::TriageReport => {
-            if report_options.other.is_some() {
-                bail!("--other only applies to diff-builds");
-            }
-            project.triage_report(limits)?
-        }
+        Workflow::TriageReport => project.triage_report(limits)?,
+        Workflow::FindMain => project.find_main(limits, !report_options.no_decompile)?,
     };
     if options.json {
         return write_json(out, &report);
@@ -55,11 +57,13 @@ fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
     }
     for section in &report.sections {
         let shown = if section.truncated {
-            format!("{} of {}", section.findings.len(), section.total)
+            format!(" ({} of {})", section.findings.len(), section.total)
+        } else if section.excerpt.is_some() && section.total == 0 {
+            String::new()
         } else {
-            section.total.to_string()
+            format!(" ({})", section.total)
         };
-        writeln!(out, "\n== {} ({shown})", section.title)?;
+        writeln!(out, "\n== {}{shown}", section.title)?;
         if section.findings.is_empty() && section.excerpt.is_none() {
             writeln!(out, "  (nothing observed)")?;
         }

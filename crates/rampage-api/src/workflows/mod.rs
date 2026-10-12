@@ -2,6 +2,7 @@
 //! agent can act on. Every finding names the primitive and the evidence behind it, every list is capped (and says
 //! when it was cut), and every report states its limitations. Reports describe what was observed, never a verdict.
 
+mod find_main;
 mod indicators;
 mod triage_report;
 

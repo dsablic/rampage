@@ -60,6 +60,7 @@ async fn lists_all_tools_with_instructions() {
         "decompile",
         "detect_tools",
         "disassemble",
+        "find_main",
         "function_graph",
         "function_summary",
         "identify_functions",

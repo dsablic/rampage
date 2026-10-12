@@ -91,3 +91,101 @@ fn triage_report_reports_truncated_sections() {
     assert_eq!(imports.findings.len(), 1);
     assert!(imports.truncated && imports.total > 1, "{imports:#?}");
 }
+
+fn best_candidate(report: &WorkflowReport) -> &rampage_api::Finding {
+    section(report, "Candidates").findings.first().unwrap_or_else(|| panic!("no candidate in {report:#?}"))
+}
+
+#[test]
+fn find_main_trusts_the_main_symbol_and_corroborates_it_from_the_startup_code() {
+    let report = open(fixture("hello-x64.elf")).find_main(ReportLimits::default(), true).unwrap();
+    assert_well_formed(&report);
+    let best = best_candidate(&report);
+    assert_eq!(best.address, Some(0x1001910));
+    assert_eq!(best.confidence, FindingConfidence::High);
+    assert!(best.evidence.iter().any(|line| line.contains("corroborated by disassemble")), "{best:#?}");
+    assert!(has_observation(section(&report, "Candidate calls"), "`puts`"));
+    assert!(has_observation(section(&report, "Candidate strings"), "rampage fixture greeting"));
+    let preview = section(&report, "Decompilation preview").excerpt.as_ref().expect("a decompilation preview");
+    assert!(preview.text.contains("puts("), "{}", preview.text);
+    assert!(report.next_steps.iter().any(|step| step.tool == "decompile"));
+    // A named candidate needs no rename suggestion.
+    assert!(report.next_steps.iter().all(|step| step.tool != "rename"));
+}
+
+#[test]
+fn find_main_follows_the_libc_start_main_argument_in_a_stripped_binary() {
+    let symbols = open(local_fixture("net-client-x64.elf"));
+    let main = symbols.resolve("main").unwrap();
+    let report = open(local_fixture("net-client-x64-stripped.elf")).find_main(ReportLimits::default(), false).unwrap();
+    assert_well_formed(&report);
+    let best = best_candidate(&report);
+    assert_eq!(best.address, Some(main));
+    assert_eq!(best.confidence, FindingConfidence::Medium);
+    assert!(best.observation.contains("heuristic"));
+    assert!(best.evidence.iter().any(|line| line.contains("lea rdi")), "{best:#?}");
+    assert!(has_observation(section(&report, "Candidate calls"), "`send@plt`"));
+    assert!(report.section("Decompilation preview").is_none());
+    assert!(report.next_steps.iter().any(|step| step.tool == "rename"));
+}
+
+#[test]
+fn find_main_marks_an_unnamed_startup_target_as_low_confidence() {
+    let report = open(fixture("musl-static-x86_64.elf")).find_main(ReportLimits::default(), false).unwrap();
+    assert_well_formed(&report);
+    let best = best_candidate(&report);
+    assert_eq!(best.address, Some(0x1002b50));
+    assert_eq!(best.confidence, FindingConfidence::Low);
+    assert!(has_observation(section(&report, "Candidate strings"), "another-program-entirely"));
+    // Low confidence never earns a rename suggestion.
+    assert!(report.next_steps.iter().all(|step| step.tool != "rename"));
+}
+
+#[test]
+fn find_main_follows_the_mingw_crt_to_main() {
+    let report = open(fixture("hello-x64.exe")).find_main(ReportLimits::default(), false).unwrap();
+    assert_well_formed(&report);
+    let candidates = section(&report, "Candidates");
+    assert_eq!(candidates.total, 1, "{candidates:#?}");
+    let best = best_candidate(&report);
+    assert_eq!(best.address, Some(0x140001010));
+    assert_eq!(best.confidence, FindingConfidence::Low);
+    assert!(best.evidence.iter().any(|line| line.contains("_cexit")), "{best:#?}");
+    assert!(has_observation(section(&report, "Candidate calls"), "import `puts`"));
+}
+
+#[test]
+fn find_main_uses_the_mach_o_entry_convention() {
+    let report = open(fixture("hello-x64-stripped.macho")).find_main(ReportLimits::default(), false).unwrap();
+    assert_well_formed(&report);
+    let best = best_candidate(&report);
+    assert_eq!(best.address, Some(0x100000480));
+    assert_eq!(best.confidence, FindingConfidence::Medium);
+    assert!(best.observation.contains("LC_MAIN"));
+}
+
+#[test]
+fn find_main_finds_go_main_main() {
+    let report = open(fixture("hello-go-x64.elf")).find_main(ReportLimits::default(), false).unwrap();
+    assert!(best_candidate(&report).observation.contains("`main.main`"));
+    assert!(has_observation(section(&report, "Candidate calls"), "`main.greet`"));
+}
+
+#[test]
+fn find_main_reports_an_honest_not_found() {
+    let report = open(fixture("libhelper-x64.so")).find_main(ReportLimits::default(), true).unwrap();
+    assert_well_formed(&report);
+    assert!(section(&report, "Candidates").findings.is_empty());
+    assert!(report.summary[0].contains("No main candidate found"), "{:?}", report.summary);
+    assert!(report.section("Decompilation preview").is_none());
+    assert!(report.next_steps.iter().any(|step| step.tool == "list_functions"));
+}
+
+#[test]
+fn find_main_bounds_the_candidate_profile() {
+    let report = open(fixture("musl-static-x86_64.elf")).find_main(ReportLimits::new(Some(3)), false).unwrap();
+    assert_well_formed(&report);
+    let calls = section(&report, "Candidate calls");
+    assert_eq!(calls.findings.len(), 3);
+    assert!(calls.truncated && calls.total > 3, "{calls:#?}");
+}

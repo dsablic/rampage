@@ -150,6 +150,14 @@ struct ReportArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct FindMainArgs {
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut.
+    max_per_section: Option<usize>,
+    /// Include a bounded decompilation preview of the best candidate (default true).
+    decompile: Option<bool>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 struct DiagnosticsArgs {
     /// Explicitly run whole-program discovery; otherwise reuse cached discovery or sample bytes only.
     #[serde(default)]
@@ -375,6 +383,16 @@ pub fn tools() -> Vec<Tool> {
              function count and bundled-signature matches, with suggested next tool calls. Every finding names its \
              source primitive and confidence; evidence, not verdicts.",
             |project, args: ReportArgs| project.triage_report(ReportLimits::new(args.max_per_section)),
+        ),
+        tool(
+            "find_main",
+            "Locate the program's own entry logic past the runtime startup: entry symbols (main, WinMain, \
+             main.main) when present, else stated heuristics (the __libc_start_main first argument, the MinGW CRT \
+             call before exit, the Mach-O LC_MAIN entry) with confidence and the instructions they rest on. \
+             Profiles the best candidate's calls and strings with a bounded decompilation preview.",
+            |project, args: FindMainArgs| {
+                project.find_main(ReportLimits::new(args.max_per_section), args.decompile.unwrap_or(true))
+            },
         ),
         tool(
             "analysis_diagnostics",

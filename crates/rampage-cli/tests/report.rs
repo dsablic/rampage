@@ -37,6 +37,18 @@ fn triage_report_renders_text_and_json() {
 }
 
 #[test]
+fn find_main_renders_candidates_and_the_decompilation_preview() {
+    report(&["find-main", &path("hello-x64.elf")])
+        .success()
+        .stdout(predicates::str::contains("[high] the binary names this function `main` @0x1001910"))
+        .stdout(predicates::str::contains("== Decompilation preview"))
+        .stdout(predicates::str::contains("puts("));
+    let value = json(&["find-main", &path("hello-x64.elf"), "--no-decompile"]);
+    assert_eq!(value["workflow"], "find_main");
+    assert!(value["sections"].as_array().unwrap().iter().all(|s| s["title"] != "Decompilation preview"));
+}
+
+#[test]
 fn other_is_rejected_outside_diff_builds() {
     let exe = path("hello-x64.exe");
     report(&["triage-report", &exe, "--other", &exe]).failure();
