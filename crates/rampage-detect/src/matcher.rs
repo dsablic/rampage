@@ -165,15 +165,18 @@ pub(crate) fn shannon_entropy(bytes: &[u8]) -> f64 {
         .sum()
 }
 
-/// Folds a new detection into the list, merging it with an existing one for the same tool.
+/// Folds a new detection into the list, merging it with an existing one for the same tool. A second signature
+/// that adds new evidence corroborates the first, so the merged detection is strong even when each alone was
+/// tentative.
 fn merge(detections: &mut Vec<Detection>, detection: Detection) {
     if let Some(existing) = detections.iter_mut().find(|d| d.name == detection.name) {
+        let known = existing.evidence.len();
         for line in detection.evidence {
             if !existing.evidence.contains(&line) {
                 existing.evidence.push(line);
             }
         }
-        if matches!(detection.confidence, Confidence::Strong) {
+        if detection.confidence == Confidence::Strong || existing.evidence.len() > known {
             existing.confidence = Confidence::Strong;
         }
         return;
@@ -384,6 +387,18 @@ mod tests {
         assert_eq!(detections.len(), 1);
         assert_eq!(detections[0].evidence.len(), 2);
         assert_eq!(detections[0].confidence, Confidence::Strong);
+    }
+
+    #[test]
+    fn two_independent_tentative_signals_for_one_tool_merge_strong() {
+        let image = Fake { overlay: Some(64), ..Fake::default() }.with_section("pec1", &[0u8; 8]);
+        let section = Signature::new("PECompact", Kind::Packer, vec![Condition::SectionName("pec1".to_owned())]);
+        let overlay = Signature::new("PECompact", Kind::Packer, vec![Condition::OverlayPresent]);
+        let merged = identify_image(&image, &SignatureDb::from_signatures(vec![section.clone(), overlay]));
+        assert_eq!(merged[0].confidence, Confidence::Strong);
+        // A repeat of the same signal is not independent corroboration.
+        let repeated = identify_image(&image, &SignatureDb::from_signatures(vec![section.clone(), section]));
+        assert_eq!(repeated[0].confidence, Confidence::Tentative);
     }
 
     #[test]
