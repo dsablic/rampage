@@ -51,11 +51,12 @@ pub struct Indicator {
 
 const URL_SCHEMES: [&str; 5] = ["http://", "https://", "ftp://", "ws://", "wss://"];
 
-/// Top-level domains accepted for domain-like names. Kept short and free of common file extensions (`so`, `py`,
-/// `sh`, `pl`, `in`, `rs`, `md`...) so that file names do not read as hosts.
-const TLDS: [&str; 26] = [
-    "com", "net", "org", "info", "biz", "io", "xyz", "top", "onion", "ru", "cn", "su", "tk", "cc", "ws", "de", "uk",
-    "fr", "jp", "kr", "br", "nl", "ir", "us", "eu", "gov",
+/// Top-level domains accepted for domain-like names. Kept short and free of names that double as file extensions
+/// or module paths (`so`, `py`, `sh`, `pl`, `in`, `rs`, `md`, `cc`, `io`, `ws`, `info`...) so that file names such
+/// as `str_cat.cc` or `std.io` do not read as hosts; such hosts are still found inside URLs.
+const TLDS: [&str; 22] = [
+    "com", "net", "org", "biz", "xyz", "top", "onion", "ru", "cn", "su", "tk", "de", "uk", "fr", "jp", "kr", "br",
+    "nl", "ir", "us", "eu", "gov",
 ];
 
 const UNIX_ROOTS: [&str; 19] = [
@@ -96,11 +97,12 @@ pub fn classify(text: &str) -> Option<Indicator> {
     if REGISTRY_PREFIXES.iter().any(|prefix| lower.starts_with(prefix)) || lower.contains("\\software\\") {
         return indicator(IndicatorKind::RegistryKey, text);
     }
-    let tokens = || text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':'));
+    // `_` stays inside tokens so that `str_cat.cc` is one token, which no host name can be.
+    let tokens = || text.split(|c: char| !(c.is_ascii_alphanumeric() || "._-:".contains(c)));
     if let Some(address) = tokens().find(|token| is_ipv4(token)) {
         return indicator(IndicatorKind::Ipv4, address);
     }
-    if let Some(domain) = tokens().find(|token| is_domain(token)) {
+    if let Some(domain) = tokens().find(|token| is_domain(token) && !in_path(text, token)) {
         return indicator(IndicatorKind::Domain, domain);
     }
     if is_path(text, &lower) {
@@ -149,6 +151,12 @@ fn is_domain(token: &str) -> bool {
         && labels[..labels.len() - 1].iter().any(|label| label.chars().any(|c| c.is_ascii_alphabetic()))
 }
 
+/// Whether `token`, a subslice of `text`, follows a path separator, as a file name in `src/foo.cc` does.
+fn in_path(text: &str, token: &str) -> bool {
+    let start = token.as_ptr() as usize - text.as_ptr() as usize;
+    text[..start].ends_with(['/', '\\'])
+}
+
 fn is_path(text: &str, lower: &str) -> bool {
     let bytes = text.as_bytes();
     let drive = bytes.len() > 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\';
@@ -183,6 +191,20 @@ mod tests {
         assert_eq!(kind("http://"), None);
         assert_eq!(kind("Connection refused"), None);
         assert_eq!(kind("/ not a path"), None);
+        assert_eq!(kind("src/foo.cc"), None);
+        assert_eq!(kind("absl/strings/str_cat.cc"), None);
+        assert_eq!(kind("Assertion failed at third_party/net/session.com"), None);
+        assert_eq!(kind("src\\net\\client.de"), None);
+        assert_eq!(kind("std.io"), None);
+        assert_eq!(kind("config.info"), None);
+        assert_eq!(kind("my_host.example.com"), None);
+    }
+
+    #[test]
+    fn hosts_survive_next_to_paths() {
+        assert_eq!(classify("evil.ru/gate.php").unwrap().value, "evil.ru");
+        assert_eq!(classify("connect to evil.de:443").unwrap().value, "evil.de:443");
+        assert_eq!(kind("https://tunnel.ngrok.io/x"), Some(IndicatorKind::Url));
     }
 
     #[test]
