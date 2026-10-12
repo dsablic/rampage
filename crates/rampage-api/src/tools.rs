@@ -179,14 +179,21 @@ struct IdentifyArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct DotNetArgs {
-    /// Case-insensitive filter: types whose full name (Namespace.Name) or a method name contains this text,
-    /// P/Invoke imports by method, DLL or import name, and custom attributes by attribute type or target.
+    /// The list to page: `types` (default), `pinvokes` or `attributes`.
+    #[serde(default)]
+    list: crate::DotNetList,
+    /// Case-insensitive filter on the selected list: types whose full name (Namespace.Name) or a method name
+    /// contains this text, P/Invoke imports by method, DLL or import name, attributes by attribute type or target.
     #[serde(default)]
     contains: Option<String>,
-    /// Entries to skip in each list (types, P/Invoke imports, attributes), for paging.
+    /// With `list: attributes`, only the attributes applied to this metadata token (e.g. 0x06000001 for
+    /// MethodDef row 1, 0x20000001 for the assembly).
+    #[serde(default)]
+    parent_token: Option<u32>,
+    /// Entries of the selected list to skip, for paging.
     #[serde(default)]
     offset: Option<usize>,
-    /// Entries per page of each list (default 100, at most 1000).
+    /// Entries per page (default 100, at most 1000).
     #[serde(default)]
     limit: Option<usize>,
 }
@@ -553,15 +560,21 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             "dotnet_metadata",
-            "For a managed (.NET) assembly: CLI header, assembly identity, referenced assemblies, entry point, a \
-             page of types with their fields and methods (decoded signatures such as `int32 Combine<T1>(T1)`, \
-             method RVAs, IL body sizes and flags), P/Invoke imports (DLL and export per method) and custom \
-             attributes (type, target, primitive/string constructor arguments). Filter with `contains`, page \
-             each list with offset/limit. Method bodies are CIL bytecode, not native code: disassemble and \
-             decompile do not apply to them. Returns null for a native image.",
+            "For a managed (.NET) assembly: CLI header, assembly identity, referenced assemblies, entry point, \
+             the size of each list, and one page of the list chosen by `list`: `types` (default; fields and \
+             methods with decoded signatures such as `int32 Combine<T1>(T1)`, method RVAs, IL body sizes and \
+             flags), `pinvokes` (DLL and export per P/Invoke method) or `attributes` (custom attribute type, \
+             target, primitive/string/type constructor arguments; `parent_token` keeps one target's). Filter \
+             with `contains`, page with offset/limit. Method bodies are CIL bytecode, not native code: \
+             disassemble and decompile do not apply to them. Returns null for a native image.",
             |project, args: DotNetArgs| {
-                let query =
-                    crate::DotNetQuery { contains: args.contains, offset: args.offset, limit: page_limit(args.limit) };
+                let query = crate::DotNetQuery {
+                    list: args.list,
+                    contains: args.contains,
+                    parent_token: args.parent_token,
+                    offset: args.offset,
+                    limit: page_limit(args.limit),
+                };
                 project.dotnet_metadata(&query)
             },
         ),

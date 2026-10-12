@@ -119,7 +119,9 @@ fn dotnet_pages_types_and_shows_the_module_and_entry_point() {
         .stdout(contains("assembly   Microsoft.Bcl.HashCode 1.0.0.0"))
         .stdout(contains("module     Microsoft.Bcl.HashCode.dll (mvid "))
         .stdout(contains("entry      none"))
-        .stdout(contains("... 9 more types (page with --offset 2, or filter with --contains)"));
+        .stdout(contains("11 types, 48 methods (48 IL, 0 native), 0 P/Invoke imports, 76 attributes"))
+        .stdout(contains("... 9 more types (page with --list types --offset 2, or filter with --contains)"))
+        .stdout(contains("attribute  ").not());
     rampage(&["dotnet", "--limit", "0"], ASSEMBLY).failure().stderr(contains("--limit"));
 
     let first = json(&["--json", "dotnet", "--limit", "2"], ASSEMBLY);
@@ -136,12 +138,25 @@ fn dotnet_pages_types_and_shows_the_module_and_entry_point() {
 fn dotnet_shows_signatures_and_attributes() {
     rampage(&["dotnet", "--contains", "hashcode"], ASSEMBLY)
         .success()
-        .stdout(contains("  int32 Combine<T1>(T1)  [value1]  "))
+        .stdout(contains("  int32 Combine<T1>(T1)  [value1]  "));
+    rampage(&["dotnet", "--list", "attributes", "--contains", "hashcode"], ASSEMBLY)
+        .success()
         .stdout(contains("attribute  [System.Reflection.AssemblyTitleAttribute(\"Microsoft.Bcl.HashCode\")] on "))
-        .stdout(contains("[System.Diagnostics.DebuggableAttribute (8 byte value, not decoded)]"));
-    let json = json(&["--json", "dotnet", "--contains", "Obsolete"], ASSEMBLY);
-    assert_eq!(json["custom_attributes"]["total"], 2);
-    assert_eq!(json["pinvokes"]["total"], 0);
+        .stdout(contains("[System.Diagnostics.DebuggableAttribute (8 byte value, not decoded)]"))
+        .stdout(contains("  int32 Combine").not());
+    rampage(&["dotnet", "--list", "attributes", "--limit", "5"], ASSEMBLY)
+        .success()
+        .stdout(contains("... 71 more attributes (page with --list attributes --offset 5, or filter with --contains)"));
+    let obsolete = json(&["--json", "dotnet", "--list", "attributes", "--contains", "Obsolete"], ASSEMBLY);
+    assert_eq!(obsolete["custom_attributes"]["total"], 2);
+    assert!(obsolete.get("types").is_none());
+    let token = obsolete["custom_attributes"]["items"][0]["parent_token"].as_u64().unwrap();
+    let on_parent =
+        json(&["--json", "dotnet", "--list", "attributes", "--parent-token", &format!("{token:#x}")], ASSEMBLY);
+    let items = on_parent["custom_attributes"]["items"].as_array().unwrap();
+    assert!(!items.is_empty() && items.iter().all(|item| item["parent_token"] == token));
+    rampage(&["dotnet", "--list", "pinvokes"], ASSEMBLY).success().stdout(contains("no P/Invoke imports match"));
+    rampage(&["dotnet", "--list", "fields"], ASSEMBLY).failure().stderr(contains("unknown list"));
 }
 
 #[test]

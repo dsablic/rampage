@@ -3,7 +3,8 @@
 //!
 //! Signatures are hostile input that can nest (a TypeSpec naming a TypeSpec) and fan out (generic arguments), so a
 //! tiny blob could expand without bound. Every decode is capped in depth, nodes and text, and all decodes of one
-//! image share a byte budget; past any cap the signature is unreadable rather than partial.
+//! image share a work budget charged for both the text rendered and the blob bytes read; past any cap the
+//! signature is unreadable rather than partial.
 
 use std::cell::Cell;
 
@@ -11,14 +12,15 @@ use super::heaps::compressed_length;
 use super::tables::{self, Coded};
 
 /// What a signature that cannot be decoded, or that exceeds a cap, renders as.
-pub(super) const UNREADABLE: &str = "<unreadable>";
+pub const UNREADABLE: &str = "<unreadable>";
 const MAX_DEPTH: u32 = 32;
 const MAX_NODES: u32 = 512;
 const MAX_TEXT: usize = 8192;
 /// Array ranks and generic parameter counts above this are treated as corrupt rather than rendered.
-const MAX_ARITY: u32 = 64;
-/// Text rendered across every signature of one image, so a file full of expanding signatures stays cheap.
-pub(super) const TOTAL_TEXT_BUDGET: usize = 64 << 20;
+pub(super) const MAX_ARITY: u32 = 64;
+/// Text rendered plus blob bytes read across every signature of one image, so a file full of expanding or
+/// re-referenced signatures stays cheap.
+pub(super) const TOTAL_BUDGET: usize = 64 << 20;
 /// Longest string or type-name argument kept from a custom attribute value.
 const MAX_ARGUMENT_BYTES: usize = 1024;
 
@@ -37,16 +39,20 @@ pub(super) trait Resolve {
     fn type_spec(&self, row: u32) -> Option<&[u8]>;
 }
 
-/// Generic parameter names, `(number, name)`, of the type and method a signature belongs to. A `VAR` or `MVAR`
-/// without a name renders as ILAsm's `!n` or `!!n`.
+/// Generic parameter names, `(number, name)` sorted by number, of the type and method a signature belongs to. A
+/// `VAR` or `MVAR` without a name renders as ILAsm's `!n` or `!!n`.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct Generics<'g> {
     pub(super) type_params: &'g [(u32, String)],
     pub(super) method_params: &'g [(u32, String)],
 }
 
+/// The name of generic parameter `number` from `params`, which is sorted by number.
 fn generic_name(params: &[(u32, String)], number: u32, prefix: &str) -> String {
-    params.iter().find(|(n, _)| *n == number).map_or_else(|| format!("{prefix}{number}"), |(_, name)| name.clone())
+    match params.binary_search_by_key(&number, |&(number, _)| number) {
+        Ok(index) => params[index].1.clone(),
+        Err(_) => format!("{prefix}{number}"),
+    }
 }
 
 /// What a custom attribute value can hold for a parameter of this type.
@@ -160,7 +166,7 @@ impl<'b> Cursor<'b> {
     }
 }
 
-/// One signature decode: its generic context, its own caps, and the image-wide text budget.
+/// One signature decode: its generic context, its own caps, and the image-wide work budget.
 pub(super) struct Reader<'r> {
     resolve: &'r dyn Resolve,
     generics: Generics<'r>,
@@ -176,16 +182,17 @@ impl<'r> Reader<'r> {
 
     /// A MethodDefSig or MethodRefSig (II.23.2.1, II.23.2.2).
     pub(super) fn method(&mut self, blob: &[u8]) -> Option<MethodSig> {
-        self.method_at(&mut Cursor::new(blob), 0)
+        self.read(blob, |reader, cursor| reader.method_at(cursor, 0))
     }
 
     /// A field's type from a FieldSig (II.23.2.4).
     pub(super) fn field(&mut self, blob: &[u8]) -> Option<Ty> {
-        let mut cursor = Cursor::new(blob);
-        if cursor.byte()? != FIELD_SIGNATURE {
-            return None;
-        }
-        self.ty(&mut cursor, 0)
+        self.read(blob, |reader, cursor| {
+            if cursor.byte()? != FIELD_SIGNATURE {
+                return None;
+            }
+            reader.ty(cursor, 0)
+        })
     }
 
     /// A MemberRef signature, which is either a field or a method signature.
@@ -199,7 +206,27 @@ impl<'r> Reader<'r> {
 
     /// A TypeSpec blob (II.23.2.14), which is a single type.
     pub(super) fn type_spec(&mut self, blob: &[u8]) -> Option<Ty> {
-        self.ty(&mut Cursor::new(blob), 0)
+        self.read(blob, |reader, cursor| reader.ty(cursor, 0))
+    }
+
+    /// Runs `decode` over `blob` and charges the bytes it read to the image-wide budget, whether or not it
+    /// succeeded: a TypeSpec is re-read at every reference, so bytes that render no text are still work.
+    fn read<T>(
+        &mut self,
+        blob: &[u8],
+        decode: impl for<'c> FnOnce(&mut Self, &mut Cursor<'c>) -> Option<T>,
+    ) -> Option<T> {
+        let mut cursor = Cursor::new(blob);
+        let decoded = decode(self, &mut cursor);
+        self.spend(cursor.at)?;
+        decoded
+    }
+
+    /// Takes `amount` from the image-wide budget; once it cannot, the budget is spent for every later decode.
+    fn spend(&mut self, amount: usize) -> Option<()> {
+        let left = self.budget.get().checked_sub(amount);
+        self.budget.set(left.unwrap_or(0));
+        left.map(drop)
     }
 
     fn method_at(&mut self, cursor: &mut Cursor, depth: u32) -> Option<MethodSig> {
@@ -237,19 +264,15 @@ impl<'r> Reader<'r> {
     /// Charges rendered text against this signature's cap and the image-wide budget.
     fn charge(&mut self, text: String, kind: Kind) -> Option<Ty> {
         self.text = self.text.saturating_add(text.len());
-        let left = self.budget.get().checked_sub(text.len())?;
-        if self.text > MAX_TEXT {
-            return None;
-        }
-        self.budget.set(left);
-        Some(Ty { text, kind })
+        self.spend(text.len())?;
+        (self.text <= MAX_TEXT).then_some(Ty { text, kind })
     }
 
     /// One Type (II.23.2.12), including the BYREF, TYPEDBYREF, VOID and custom-modifier prefixes that RetType,
     /// Param and FieldSig allow around it.
     fn ty(&mut self, cursor: &mut Cursor, depth: u32) -> Option<Ty> {
         self.nodes += 1;
-        if depth > MAX_DEPTH || self.nodes > MAX_NODES {
+        if depth > MAX_DEPTH || self.nodes > MAX_NODES || self.budget.get() == 0 {
             return None;
         }
         let element = cursor.byte()?;
@@ -293,12 +316,16 @@ impl<'r> Reader<'r> {
                 if rank == 0 || rank > MAX_ARITY {
                     return None;
                 }
-                // ArrayShape: sizes then lower bounds, which the text does not show.
-                for _ in 0..cursor.compressed()? {
-                    cursor.compressed()?;
-                }
-                for _ in 0..cursor.compressed()? {
-                    cursor.compressed()?;
+                // ArrayShape (II.23.2.13): at most `rank` sizes, then at most `rank` lower bounds, which the text
+                // does not show.
+                for _ in 0..2 {
+                    let count = cursor.compressed()?;
+                    if count > rank {
+                        return None;
+                    }
+                    for _ in 0..count {
+                        cursor.compressed()?;
+                    }
                 }
                 let commas = if rank == 1 { "*".to_owned() } else { ",".repeat(rank as usize - 1) };
                 format!("{}[{commas}]", element.text)
@@ -340,7 +367,7 @@ impl<'r> Reader<'r> {
         let (table, row) = Coded::TypeDefOrRef.decode(cursor.compressed()?)?;
         if table == tables::TYPE_SPEC {
             let blob = self.resolve.type_spec(row)?;
-            return Some(self.ty(&mut Cursor::new(blob), depth + 1)?.text);
+            return Some(self.read(blob, |reader, cursor| reader.ty(cursor, depth + 1))?.text);
         }
         self.resolve.type_name(table, row)
     }
@@ -368,7 +395,7 @@ fn fixed_argument(cursor: &mut Cursor, kind: Kind) -> Option<String> {
     let Kind::Element(element) = kind else {
         return (kind == Kind::SystemType)
             .then(|| ser_string(cursor))?
-            .map(|name| name.map_or_else(|| "null".to_owned(), |name| format!("typeof({name})")));
+            .map(|name| name.map_or_else(|| "null".to_owned(), |name| format!("typeof({}){}", name.text, name.cut())));
     };
     Some(match element {
         0x02 => (cursor.byte()? != 0).to_string(),
@@ -386,20 +413,46 @@ fn fixed_argument(cursor: &mut Cursor, kind: Kind) -> Option<String> {
         0x0B => u64::from_le_bytes(cursor.array()?).to_string(),
         0x0C => f32::from_le_bytes(cursor.array()?).to_string(),
         0x0D => f64::from_le_bytes(cursor.array()?).to_string(),
-        ELEMENT_STRING => ser_string(cursor)?.map_or_else(|| "null".to_owned(), |text| format!("{text:?}")),
+        ELEMENT_STRING => {
+            ser_string(cursor)?.map_or_else(|| "null".to_owned(), |text| format!("{:?}{}", text.text, text.cut()))
+        }
         _ => return None,
     })
 }
 
-/// A SerString: 0xFF for null, else a compressed length and UTF-8 bytes. Kept text is capped.
-fn ser_string(cursor: &mut Cursor) -> Option<Option<String>> {
+/// The kept text of a SerString, and its full length in bytes when the text was cut.
+struct SerString {
+    text: String,
+    cut_from: Option<usize>,
+}
+
+impl SerString {
+    /// The truncation mark to append after the rendered text: empty when nothing was cut.
+    fn cut(&self) -> String {
+        self.cut_from.map_or_else(String::new, |length| format!("... ({length} bytes)"))
+    }
+}
+
+/// A SerString: 0xFF for null, else a compressed length and UTF-8 bytes. Kept text is capped, and cut on a
+/// character boundary so the cap never invents a replacement character.
+fn ser_string(cursor: &mut Cursor) -> Option<Option<SerString>> {
     if cursor.peek()? == 0xFF {
         cursor.byte();
         return Some(None);
     }
     let length = usize::try_from(cursor.compressed()?).ok()?;
     let bytes = cursor.take(length)?;
-    Some(Some(String::from_utf8_lossy(&bytes[..length.min(MAX_ARGUMENT_BYTES)]).into_owned()))
+    if length <= MAX_ARGUMENT_BYTES {
+        return Some(Some(SerString { text: String::from_utf8_lossy(bytes).into_owned(), cut_from: None }));
+    }
+    let mut kept = &bytes[..MAX_ARGUMENT_BYTES];
+    // A character split by the cap is incomplete rather than invalid: drop its leading bytes.
+    if let Err(error) = std::str::from_utf8(kept)
+        && error.error_len().is_none()
+    {
+        kept = &kept[..error.valid_up_to()];
+    }
+    Some(Some(SerString { text: String::from_utf8_lossy(kept).into_owned(), cut_from: Some(length) }))
 }
 
 #[cfg(test)]
@@ -431,7 +484,7 @@ mod tests {
     }
 
     fn method_with(fake: &Fake, generics: Generics, blob: &[u8], name: &str) -> String {
-        let budget = Cell::new(TOTAL_TEXT_BUDGET);
+        let budget = Cell::new(TOTAL_BUDGET);
         let mut reader = Reader::new(fake, generics, &budget);
         reader.method(blob).map_or_else(|| UNREADABLE.to_owned(), |sig| sig.render(name, &generics))
     }
@@ -466,7 +519,7 @@ mod tests {
         let fake = Fake(vec![vec![0x15, 0x12, LIST, 1, 0x13, 0]]);
         let names = [(0, "T".to_owned())];
         let generics = Generics { type_params: &names, method_params: &[] };
-        let budget = Cell::new(TOTAL_TEXT_BUDGET);
+        let budget = Cell::new(TOTAL_BUDGET);
         let field = Reader::new(&fake, generics, &budget).field(&[0x06, 0x12, SPEC1]).unwrap();
         assert_eq!(field.text, "System.Collections.Generic.List<T>");
         let nested = [0x00, 0, 0x15, 0x12, LIST, 1, 0x15, 0x12, LIST, 1, 0x0E];
@@ -504,7 +557,7 @@ mod tests {
         for blob in cases {
             assert_eq!(method(blob, "m"), UNREADABLE, "{blob:02x?}");
         }
-        let budget = Cell::new(TOTAL_TEXT_BUDGET);
+        let budget = Cell::new(TOTAL_BUDGET);
         assert_eq!(Reader::new(&Fake(Vec::new()), Generics::default(), &budget).field(&[0x00, 0x08]), None);
     }
 
@@ -528,10 +581,37 @@ mod tests {
         deep.extend([0x0F; 40]);
         deep.push(0x08);
         assert_eq!(method(&deep, "p"), UNREADABLE);
-        let budget = Cell::new(5);
+        // `void` and the 3 bytes read leave 1 of 8.
+        let budget = Cell::new(8);
         let mut reader = Reader::new(&fake, Generics::default(), &budget);
         assert!(reader.method(&[0x00, 0, 0x01]).is_some());
         assert!(reader.method(&[0x00, 0, 0x0E]).is_none(), "the shared budget is spent");
+    }
+
+    #[test]
+    fn array_shapes_are_bounded_by_rank_and_bytes_read_are_charged() {
+        // A rank-1 array declaring 1,000,000 sizes, all present: II.23.2.13 allows at most `rank`.
+        let mut hostile = vec![0x00, 0, 0x14, 0x08, 1, 0xC0, 0x0F, 0x42, 0x40];
+        hostile.resize(hostile.len() + 1_000_001, 0);
+        let budget = Cell::new(TOTAL_BUDGET);
+        assert!(Reader::new(&Fake(Vec::new()), Generics::default(), &budget).method(&hostile).is_none());
+        let spent = TOTAL_BUDGET - budget.get();
+        assert!(spent <= 16, "{spent} units of work for a rejected shape");
+
+        // Rank 64 with every size and lower bound in 4-byte form: 70 bytes of text from 518 bytes of blob.
+        let mut shape = vec![0x06, 0x14, 0x08, 64];
+        for _ in 0..2 {
+            shape.push(64);
+            shape.extend([0xC0, 0, 0, 1].repeat(64));
+        }
+        let fake = Fake(Vec::new());
+        let budget = Cell::new(TOTAL_BUDGET);
+        let array = Reader::new(&fake, Generics::default(), &budget).field(&shape).unwrap();
+        assert_eq!(array.text, format!("int32[{}]", ",".repeat(63)));
+        // The element's own `int32` is charged as it renders, then the array's text and the blob's bytes.
+        assert_eq!(TOTAL_BUDGET - budget.get(), "int32".len() + array.text.len() + shape.len());
+        let budget = Cell::new(300);
+        assert!(Reader::new(&fake, Generics::default(), &budget).field(&shape).is_none(), "bytes count as work");
     }
 
     #[test]
@@ -549,6 +629,16 @@ mod tests {
         let arguments = attribute_arguments(&params, &value).unwrap();
         assert_eq!(arguments, ["\"hi\"", "-2", "true", "typeof(Int)", "null", "'x'"]);
         assert_eq!(attribute_arguments(&[], &[1, 0, 0, 0]), Some(vec![]));
+        // 1023 ASCII bytes then a 2-byte character straddling the 1024-byte cap, in a 1500-byte string.
+        let mut long = vec![1, 0, 0x80 | (1500 >> 8) as u8, (1500 & 0xFF) as u8];
+        long.extend([b'a'; 1023]);
+        long.extend("é".as_bytes());
+        long.extend([b'b'; 1500 - 1025]);
+        let cut = attribute_arguments(&params[..1], &long).unwrap();
+        assert_eq!(cut, [format!("\"{}\"... (1500 bytes)", "a".repeat(1023))]);
+        long[4..].copy_from_slice(&[b'c'; 1500]);
+        let cut = attribute_arguments(&params[3..4], &long).unwrap();
+        assert_eq!(cut, [format!("typeof({})... (1500 bytes)", "c".repeat(1024))]);
         assert_eq!(attribute_arguments(&[], &[0, 1]), None, "no prolog");
         assert_eq!(attribute_arguments(&params[1..2], &[1, 0, 1, 2]), None, "truncated int32");
         assert_eq!(attribute_arguments(&params[..1], &[1, 0, 9, b'a']), None, "string past the blob");

@@ -829,10 +829,38 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
     let counts = &summary.counts;
     writeln!(
         out,
-        "{} types, {} methods ({} IL, {} native)",
-        counts.types, counts.methods, counts.il_methods, counts.native_methods
+        "{} types, {} methods ({} IL, {} native), {} P/Invoke imports, {} attributes",
+        counts.types,
+        counts.methods,
+        counts.il_methods,
+        counts.native_methods,
+        counts.pinvokes,
+        counts.custom_attributes
     )?;
-    for ty in &summary.types.items {
+    let list = label(&summary.list);
+    if let Some(types) = &summary.types {
+        dotnet_types(out, types)?;
+        more_hint(out, types, "types", &list)?;
+    }
+    if let Some(pinvokes) = &summary.pinvokes {
+        dotnet_pinvokes(out, pinvokes)?;
+        more_hint(out, pinvokes, "P/Invoke imports", &list)?;
+    }
+    if let Some(attributes) = &summary.custom_attributes {
+        dotnet_attributes(out, attributes)?;
+        more_hint(out, attributes, "attributes", &list)?;
+    }
+    for warning in &summary.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    Ok(())
+}
+
+fn dotnet_types(out: &mut impl Write, types: &rampage_api::Page<rampage_loaders::dotnet::TypeDef>) -> Result<()> {
+    if types.items.is_empty() {
+        writeln!(out, "\nno types match")?;
+    }
+    for ty in &types.items {
         let base = ty.extends.as_deref().map(|base| format!(" : {base}")).unwrap_or_default();
         writeln!(out, "\n{}{base}", ty.full_name())?;
         for method in &ty.methods {
@@ -842,23 +870,43 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
             };
             let names =
                 if method.params.is_empty() { String::new() } else { format!("  [{}]", method.params.join(", ")) };
-            writeln!(out, "  {}{names}  {body}", method.signature)?;
+            writeln!(out, "  {}{names}  {body}", method_text(method))?;
         }
     }
-    more_hint(out, &summary.types, "types")?;
-    if !summary.pinvokes.items.is_empty() {
-        writeln!(out)?;
+    Ok(())
+}
+
+/// A method's rendered signature, or its name when the signature blob could not be decoded.
+fn method_text(method: &rampage_loaders::dotnet::MethodDef) -> String {
+    if method.signature == rampage_loaders::dotnet::UNREADABLE {
+        format!("{}(...) <unreadable signature>", method.name)
+    } else {
+        method.signature.clone()
     }
-    for pinvoke in &summary.pinvokes.items {
+}
+
+fn dotnet_pinvokes(out: &mut impl Write, pinvokes: &rampage_api::Page<rampage_loaders::dotnet::PInvoke>) -> Result<()> {
+    writeln!(out)?;
+    if pinvokes.items.is_empty() {
+        writeln!(out, "no P/Invoke imports match")?;
+    }
+    for pinvoke in &pinvokes.items {
         let module = pinvoke.module.as_deref().unwrap_or("?");
         let method = pinvoke.method.as_deref().unwrap_or("unresolved method");
         writeln!(out, "pinvoke    {module}!{} <- {method}", pinvoke.import_name)?;
     }
-    more_hint(out, &summary.pinvokes, "P/Invoke imports")?;
-    if !summary.custom_attributes.items.is_empty() {
-        writeln!(out)?;
+    Ok(())
+}
+
+fn dotnet_attributes(
+    out: &mut impl Write,
+    attributes: &rampage_api::Page<rampage_loaders::dotnet::CustomAttribute>,
+) -> Result<()> {
+    writeln!(out)?;
+    if attributes.items.is_empty() {
+        writeln!(out, "no attributes match")?;
     }
-    for attribute in &summary.custom_attributes.items {
+    for attribute in &attributes.items {
         let arguments = match &attribute.arguments {
             Some(arguments) => format!("({})", arguments.join(", ")),
             None => format!(" ({} byte value, not decoded)", attribute.blob_length),
@@ -867,19 +915,18 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
         let parent = attribute.parent.as_deref().unwrap_or("unresolved target");
         writeln!(out, "attribute  [{attribute_type}{arguments}] on {parent}")?;
     }
-    more_hint(out, &summary.custom_attributes, "attributes")?;
-    for warning in &summary.warnings {
-        writeln!(out, "warning: {warning}")?;
-    }
     Ok(())
 }
 
-/// The `... N more` line for a page that does not reach the end of its list.
-fn more_hint<T>(out: &mut impl Write, page: &rampage_api::Page<T>, what: &str) -> Result<()> {
+/// The `... N more` line for a page of `--list {list}` that does not reach the end of its list.
+fn more_hint<T>(out: &mut impl Write, page: &rampage_api::Page<T>, what: &str, list: &str) -> Result<()> {
     let shown = page.offset + page.items.len();
     if shown < page.total {
         let more = page.total - shown;
-        writeln!(out, "\n... {more} more {what} (page with --offset {shown}, or filter with --contains)")?;
+        writeln!(
+            out,
+            "\n... {more} more {what} (page with --list {list} --offset {shown}, or filter with --contains)"
+        )?;
     }
     Ok(())
 }
@@ -924,4 +971,27 @@ pub fn yara(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) 
 pub fn capa(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) -> Result<()> {
     let capabilities = open(path, options)?.detect_capa(rules)?;
     render_capabilities(out, &capabilities, "no capa rules matched", options)
+}
+
+#[cfg(test)]
+mod tests {
+    use rampage_loaders::dotnet::{BodyKind, MethodDef, UNREADABLE};
+
+    #[test]
+    fn an_unreadable_method_signature_keeps_the_method_name() {
+        let mut method = MethodDef {
+            token: 0x0600_0001,
+            name: "Run".to_owned(),
+            signature: "void Run()".to_owned(),
+            rva: 0,
+            flags: 0,
+            impl_flags: 0,
+            body: BodyKind::None,
+            il: None,
+            params: Vec::new(),
+        };
+        assert_eq!(super::method_text(&method), "void Run()");
+        method.signature = UNREADABLE.to_owned();
+        assert_eq!(super::method_text(&method), "Run(...) <unreadable signature>");
+    }
 }

@@ -34,6 +34,12 @@ struct Spec {
     main_signature: Option<Vec<u8>>,
     /// Replaces the custom attribute's value blob.
     attribute_value: Option<Vec<u8>>,
+    /// HasCustomAttribute values, one attribute row each; empty means one attribute on the Module.
+    attribute_parents: Vec<u32>,
+    /// Replaces the ResolutionScope of the extra TypeRef rows (AssemblyRef 1).
+    pad_scope: Option<u32>,
+    /// Replaces the base type of Inner (TypeRef 1).
+    inner_extends: Option<u32>,
 }
 
 const SECTION_RVA: u32 = 0x2000;
@@ -130,7 +136,7 @@ fn build(spec: &Spec) -> Vec<u8> {
     tables.put((1 << 2) | 2, scope).put(object_name, s).put(system, s);
     let pad_name = strings.string("Pad");
     for _ in 0..spec.extra_type_refs {
-        tables.put((1 << 2) | 2, scope).put(pad_name, s).put(system, s);
+        tables.put(spec.pad_scope.unwrap_or((1 << 2) | 2), scope).put(pad_name, s).put(system, s);
     }
     // TypeDef: <Module>, Demo.Program extends TypeRef 1 (TypeDefOrRef tag 1), and Inner nested in Program.
     let (module_type, program, demo, inner) =
@@ -138,7 +144,8 @@ fn build(spec: &Spec) -> Vec<u8> {
     let method_lists = spec.method_lists.unwrap_or([1, 1, 5]);
     tables.put(0, 4).put(module_type, s).put(0, s).put(0, tdor).put(1, i).put(method_lists[0], i);
     tables.put(0x0010_0001, 4).put(program, s).put(demo, s).put((1 << 2) | 1, tdor).put(1, i).put(method_lists[1], i);
-    tables.put(0x0010_0002, 4).put(inner, s).put(0, s).put((1 << 2) | 1, tdor).put(2, i).put(method_lists[2], i);
+    let inner_extends = spec.inner_extends.unwrap_or((1 << 2) | 1);
+    tables.put(0x0010_0002, 4).put(inner, s).put(0, s).put(inner_extends, tdor).put(2, i).put(method_lists[2], i);
     // Field
     let counter = strings.string("counter");
     tables.put(0x0001, 2).put(counter, s).put(field_signature, b);
@@ -159,8 +166,18 @@ fn build(spec: &Spec) -> Vec<u8> {
     // MemberRef: Object::.ctor (MemberRefParent tag 1 = TypeRef).
     let ctor = strings.string(".ctor");
     tables.put((1 << 3) | 1, mrp).put(ctor, s).put(ctor_signature, b);
-    // CustomAttribute on the Module (HasCustomAttribute tag 7), constructed by MemberRef 1 (tag 3).
-    tables.put((1 << 5) | 7, hca).put((1 << 3) | 3, i).put(attribute_value, b);
+    // CustomAttribute on the Module (HasCustomAttribute tag 7) by default, constructed by MemberRef 1 (tag 3).
+    let attribute_parents =
+        if spec.attribute_parents.is_empty() { vec![(1 << 5) | 7] } else { spec.attribute_parents.clone() };
+    for &parent in &attribute_parents {
+        tables.put(parent, hca).put((1 << 3) | 3, i).put(attribute_value, b);
+    }
+    // EventMap and PropertyMap give Program (TypeDef 2) the event Changed (of type Object) and the property Count.
+    let (changed, count) = (strings.string("Changed"), strings.string("Count"));
+    tables.put(2, i).put(1, i);
+    tables.put(0, 2).put(changed, s).put((1 << 2) | 1, tdor);
+    tables.put(2, i).put(1, i);
+    tables.put(0, 2).put(count, s).put(field_signature, b);
     // ModuleRef, and ImplMap binding Run (MemberForwarded tag 1 = MethodDef) to native.dll!RunNative.
     let (native_dll, run_native) = (strings.string("native.dll"), strings.string("RunNative"));
     tables.put(native_dll, s);
@@ -177,7 +194,7 @@ fn build(spec: &Spec) -> Vec<u8> {
     let t = strings.string("T");
     tables.put(0, 2).put(0, 2).put((2 << 1) | 1, i).put(t, s);
 
-    let present: [(u8, u32); 14] = [
+    let present: [(u8, u32); 18] = [
         (0x00, 1),
         (0x01, type_refs),
         (0x02, spec.declared_type_defs.unwrap_or(3)),
@@ -185,7 +202,11 @@ fn build(spec: &Spec) -> Vec<u8> {
         (0x06, 4),
         (0x08, 4),
         (0x0A, 1),
-        (0x0C, 1),
+        (0x0C, attribute_parents.len() as u32),
+        (0x12, 1),
+        (0x14, 1),
+        (0x15, 1),
+        (0x17, 1),
         (0x1A, 1),
         (0x1C, 1),
         (0x20, 1),
@@ -433,6 +454,44 @@ fn reads_a_synthetic_assembly() {
     let rows: Vec<(&str, u32)> = metadata.tables.iter().map(|table| (table.table.as_str(), table.rows)).collect();
     assert!(rows.contains(&("CustomAttribute", 1)) && rows.contains(&("NestedClass", 1)));
     serde_json::to_string(&metadata).unwrap();
+}
+
+#[test]
+fn attribute_targets_and_nested_types_name_their_owners() {
+    // TypeDef 3, Param 1 and 2, GenericParam 1, Property 1, Event 1 (HasCustomAttribute tags 3, 4, 19, 9, 10).
+    let attribute_parents = vec![(3 << 5) | 3, (1 << 5) | 4, (2 << 5) | 4, (1 << 5) | 19, (1 << 5) | 9, (1 << 5) | 10];
+    let metadata = parse(&Spec { attribute_parents, ..Spec::default() }).unwrap().unwrap();
+    assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+    let parents: Vec<&str> =
+        metadata.custom_attributes.iter().filter_map(|attribute| attribute.parent.as_deref()).collect();
+    assert_eq!(
+        parents,
+        [
+            "Demo.Program/Inner",
+            "Demo.Program::Main/args",
+            "Demo.Program::Compute/return",
+            "Demo.Program::Compute<T>",
+            "Demo.Program::Count",
+            "Demo.Program::Changed",
+        ]
+    );
+
+    // The extra TypeRef is nested in TypeRef 1 (ResolutionScope tag 3), and Inner derives from it.
+    let nested = Spec {
+        extra_type_refs: 1,
+        pad_scope: Some((1 << 2) | 3),
+        inner_extends: Some((2 << 2) | 1),
+        ..Spec::default()
+    };
+    let metadata = parse(&nested).unwrap().unwrap();
+    assert_eq!(metadata.type_refs[1].scope.as_deref(), Some("System.Object"));
+    let inner = metadata.types.iter().find(|ty| ty.name == "Inner").unwrap();
+    assert_eq!(inner.extends.as_deref(), Some("System.Object/System.Pad"));
+    // A TypeRef scoped to itself stops at the nesting cap.
+    let cyclic = Spec { pad_scope: Some((2 << 2) | 3), ..nested };
+    let metadata = parse(&cyclic).unwrap().unwrap();
+    let inner = metadata.types.iter().find(|ty| ty.name == "Inner").unwrap();
+    assert_eq!(inner.extends.as_deref().unwrap().matches("System.Pad").count(), 17);
 }
 
 #[test]
