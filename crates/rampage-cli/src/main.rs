@@ -62,6 +62,16 @@ enum Command {
     Triage { file: PathBuf },
     /// Likely behaviors inferred from imports and strings (triage evidence, not proof)
     Capabilities { file: PathBuf },
+    /// .NET assembly metadata: identity, references, entry point, and types with their methods
+    Dotnet {
+        file: PathBuf,
+        /// Only types whose full name or a method name contains this text (case-insensitive)
+        #[arg(long)]
+        contains: Option<String>,
+        /// Types per page
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
     /// Identify the producing tool (packer/compiler/protector/installer) from heuristic signatures
     Detect {
         file: PathBuf,
@@ -305,6 +315,7 @@ fn main() -> ExitCode {
         }
         Command::Triage { file } => commands::triage(&mut out, &file, &options),
         Command::Capabilities { file } => commands::capabilities(&mut out, &file, &options),
+        Command::Dotnet { file, contains, limit } => commands::dotnet(&mut out, &file, contains, limit, &options),
         Command::Detect { file, peid } => commands::detect(&mut out, &file, peid.as_deref(), &options),
         Command::Yara { file, rules } => commands::yara(&mut out, &file, &rules, &options),
         Command::Capa { file, rules } => commands::capa(&mut out, &file, &rules, &options),

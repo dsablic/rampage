@@ -7,7 +7,7 @@ use rampage_detect::{Confidence as DetectConfidence, Kind};
 use serde_json::json;
 
 use super::{Confidence, Finding, ReportLimits, Section, WorkflowReport, classify, is_default_name, quote};
-use crate::{ApiError, FunctionsQuery, Project};
+use crate::{ApiError, DotNetQuery, FunctionsQuery, Project};
 
 /// Import names listed per library before the rest are counted.
 const NAMES_PER_LIBRARY: usize = 12;
@@ -54,6 +54,31 @@ impl Project {
             toolchain.push(
                 Finding::new("detect_tools", confidence, format!("{kind} signature matched: {}", detection.name))
                     .evidence(detection.evidence.iter().cloned()),
+            );
+        }
+        // A page of zero types still carries the identity and counts.
+        let managed = self.dotnet_metadata(&DotNetQuery { limit: Some(0), ..DotNetQuery::default() }).ok().flatten();
+        if let Some(summary) = &managed {
+            let identity = summary
+                .assembly
+                .as_ref()
+                .map_or_else(|| "an unnamed module".to_owned(), |assembly| {
+                    format!("{} {}", assembly.name, assembly.version)
+                });
+            let counts = &summary.counts;
+            toolchain.push(
+                Finding::new(
+                    "dotnet_metadata",
+                    Confidence::Observed,
+                    format!(".NET assembly {identity}, metadata version {}", summary.runtime_version),
+                )
+                .evidence([format!(
+                    "{} types, {} methods ({} IL, {} native)",
+                    counts.types, counts.methods, counts.il_methods, counts.native_methods
+                )])
+                .evidence(summary.assembly_refs.iter().map(|reference| {
+                    format!("references {} {}", reference.name, reference.version)
+                })),
             );
         }
         report.sections.push(toolchain);
@@ -206,7 +231,19 @@ impl Project {
             format!("{packing} (heuristic signals, not a determination)."),
         ];
 
-        report.step("find_main", json!({}), "Locate the program's own entry logic past the runtime startup code.");
+        if managed.is_some() {
+            report.step(
+                "dotnet_metadata",
+                json!({}),
+                "This is a managed assembly: list its types and methods (CIL bodies) from the .NET metadata.",
+            );
+            report.limitation(
+                "This is a .NET assembly: its methods are CIL bytecode, so native function discovery, disassembly and \
+                 decompilation do not describe its logic; the .NET metadata does.",
+            );
+        } else {
+            report.step("find_main", json!({}), "Locate the program's own entry logic past the runtime startup code.");
+        }
         if networking || network_strings {
             report.step(
                 "network_surface",

@@ -125,6 +125,19 @@ struct IdentifyArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct DotNetArgs {
+    /// Only types whose full name (Namespace.Name) or a method name contains this text (case-insensitive).
+    #[serde(default)]
+    contains: Option<String>,
+    /// Types to skip, for paging.
+    #[serde(default)]
+    offset: Option<usize>,
+    /// Types per page (default 100, at most 1000).
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 struct DetectToolsArgs {
     /// Optional file path of a user-supplied PeID `userdb.txt`, overlaid on the bundled starter database.
     #[serde(default)]
@@ -438,6 +451,18 @@ pub fn tools() -> Vec<Tool> {
              filesystem/registry, input capture) inferred from imports and strings. Triage evidence, not proof \
              the behavior executes.",
             |project, _: Nothing| Ok(project.capabilities()),
+        ),
+        tool(
+            "dotnet_metadata",
+            "For a managed (.NET) assembly: CLI header, assembly identity, referenced assemblies, entry point and a \
+             page of types with their fields and methods (method RVAs, IL body sizes and flags). Filter with \
+             `contains`, page with offset/limit. Method bodies are CIL bytecode, not native code: disassemble and \
+             decompile do not apply to them. Returns null for a native image.",
+            |project, args: DotNetArgs| {
+                let query =
+                    crate::DotNetQuery { contains: args.contains, offset: args.offset, limit: page_limit(args.limit) };
+                project.dotnet_metadata(&query)
+            },
         ),
         tool(
             "detect_tools",

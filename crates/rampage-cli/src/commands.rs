@@ -738,6 +738,59 @@ pub fn capabilities(out: &mut impl Write, path: &Path, options: &Options) -> Res
     Ok(())
 }
 
+pub fn dotnet(
+    out: &mut impl Write,
+    path: &Path,
+    contains: Option<String>,
+    limit: usize,
+    options: &Options,
+) -> Result<()> {
+    let query = rampage_api::DotNetQuery { contains, offset: None, limit: Some(limit) };
+    let Some(summary) = open(path, options)?.dotnet_metadata(&query)? else {
+        if options.json {
+            return write_json(out, &serde_json::Value::Null);
+        }
+        writeln!(out, "not a .NET assembly (no CLI header)")?;
+        return Ok(());
+    };
+    if options.json {
+        return write_json(out, &summary);
+    }
+    if let Some(assembly) = &summary.assembly {
+        writeln!(out, "assembly   {} {}", assembly.name, assembly.version)?;
+    }
+    let cli = &summary.cli;
+    writeln!(out, "runtime    {} (CLI {}.{})", summary.runtime_version, cli.runtime_major, cli.runtime_minor)?;
+    for reference in &summary.assembly_refs {
+        writeln!(out, "references {} {}", reference.name, reference.version)?;
+    }
+    let counts = &summary.counts;
+    writeln!(
+        out,
+        "{} types, {} methods ({} IL, {} native)",
+        counts.types, counts.methods, counts.il_methods, counts.native_methods
+    )?;
+    for ty in &summary.types.items {
+        let base = ty.extends.as_deref().map(|base| format!(" : {base}")).unwrap_or_default();
+        writeln!(out, "\n{}{base}", ty.full_name())?;
+        for method in &ty.methods {
+            let body = match &method.il {
+                Some(il) => format!("{} bytes of IL at {:#x}", il.code_size, method.rva),
+                None => format!("{:?}", method.body).to_lowercase(),
+            };
+            writeln!(out, "  {}({})  {body}", method.name, method.params.join(", "))?;
+        }
+    }
+    let shown = summary.types.offset + summary.types.items.len();
+    if shown < summary.types.total {
+        writeln!(out, "\n... {} more types (use --contains or --json)", summary.types.total - shown)?;
+    }
+    for warning in &summary.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    Ok(())
+}
+
 pub fn detect(out: &mut impl Write, path: &Path, peid: Option<&Path>, options: &Options) -> Result<()> {
     let peid_text = match peid {
         Some(peid) => Some(std::fs::read_to_string(peid)?),
