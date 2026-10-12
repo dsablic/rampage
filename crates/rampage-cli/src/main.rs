@@ -65,14 +65,20 @@ enum Command {
     /// .NET assembly metadata: identity, references, entry point, types with method signatures, P/Invoke, attributes
     Dotnet {
         file: PathBuf,
-        /// Only types whose full name or a method name, P/Invoke imports whose method, DLL or import name, and
+        /// The list to page: types, pinvokes or attributes
+        #[arg(long, default_value = "types", value_parser = parse_dotnet_list)]
+        list: rampage_api::DotNetList,
+        /// Only types whose full name or a method name, P/Invoke imports whose method, DLL or import name, or
         /// attributes whose type or target contains this text (case-insensitive)
         #[arg(long)]
         contains: Option<String>,
-        /// Entries to skip in each list (types, P/Invoke imports, attributes), for paging
+        /// With --list attributes, only those applied to this metadata token (hex with 0x, or decimal)
+        #[arg(long, value_parser = parse_token)]
+        parent_token: Option<u32>,
+        /// Entries of the list to skip, for paging
         #[arg(long, default_value_t = 0)]
         offset: usize,
-        /// Entries per page of each list
+        /// Entries per page
         #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
         limit: u64,
     },
@@ -310,6 +316,18 @@ fn parse_arch(text: &str) -> Result<Arch, String> {
     text.parse()
 }
 
+fn parse_dotnet_list(text: &str) -> Result<rampage_api::DotNetList, String> {
+    text.parse()
+}
+
+fn parse_token(text: &str) -> Result<u32, String> {
+    let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        Some(hex) => u32::from_str_radix(hex, 16),
+        None => text.parse(),
+    };
+    parsed.map_err(|error| format!("not a metadata token: {error}"))
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Command::Mcp = cli.command {
@@ -338,9 +356,11 @@ fn main() -> ExitCode {
         }
         Command::Triage { file } => commands::triage(&mut out, &file, &options),
         Command::Capabilities { file } => commands::capabilities(&mut out, &file, &options),
-        Command::Dotnet { file, contains, offset, limit } => {
+        Command::Dotnet { file, list, contains, parent_token, offset, limit } => {
             let query = rampage_api::DotNetQuery {
+                list,
                 contains,
+                parent_token,
                 offset: Some(offset),
                 limit: Some(usize::try_from(limit).unwrap_or(usize::MAX)),
             };

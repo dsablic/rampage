@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rampage_api::{DetectionConfidence, DotNetQuery, ReportLimits, Session};
+use rampage_api::{ApiError, DetectionConfidence, DotNetList, DotNetQuery, ReportLimits, Session};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -15,16 +15,25 @@ fn dotnet_metadata_reports_identity_and_filters_types() {
     assert_eq!(all.assembly.as_ref().unwrap().name, "Microsoft.Bcl.HashCode");
     assert_eq!(all.counts.methods, 48);
     assert_eq!(all.counts.il_methods, 48);
-    assert_eq!(all.types.total, all.counts.types);
+    assert_eq!(all.types.unwrap().total, all.counts.types);
 
     let query = DotNetQuery { contains: Some("combine".to_owned()), ..DotNetQuery::default() };
     let filtered = project.dotnet_metadata(&query).unwrap().unwrap();
-    let names: Vec<String> = filtered.types.items.iter().map(|ty| ty.full_name()).collect();
+    let names: Vec<String> = filtered.types.unwrap().items.iter().map(|ty| ty.full_name()).collect();
     assert_eq!(names, ["System.HashCode"], "a method-name match selects its type");
 
     let page = project.dotnet_metadata(&DotNetQuery { limit: Some(1), ..DotNetQuery::default() }).unwrap().unwrap();
-    assert_eq!((page.types.items.len(), page.types.total), (1, all.counts.types));
-    assert_eq!((page.custom_attributes.items.len(), page.custom_attributes.total), (1, 76));
+    let types = page.types.unwrap();
+    assert_eq!((types.items.len(), types.total), (1, all.counts.types));
+    assert!(page.pinvokes.is_none() && page.custom_attributes.is_none(), "only the selected list is paged");
+    assert_eq!((page.counts.custom_attributes, page.counts.pinvokes), (76, 0));
+
+    // Each list pages on its own: the second attribute is not the second type's neighbour.
+    let query = DotNetQuery { list: DotNetList::Attributes, offset: Some(1), limit: Some(1), ..DotNetQuery::default() };
+    let page = project.dotnet_metadata(&query).unwrap().unwrap();
+    assert!(page.types.is_none());
+    let attributes = page.custom_attributes.unwrap();
+    assert_eq!((attributes.offset, attributes.items.len(), attributes.total), (1, 1, 76));
 }
 
 #[test]
@@ -32,17 +41,29 @@ fn dotnet_metadata_reports_signatures_and_filters_attributes() {
     let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();
     let query = DotNetQuery { contains: Some("combine".to_owned()), ..DotNetQuery::default() };
     let summary = project.dotnet_metadata(&query).unwrap().unwrap();
-    let combine = summary.types.items[0].methods.iter().find(|method| method.name == "Combine").unwrap();
+    let hash_code = &summary.types.unwrap().items[0];
+    let combine = hash_code.methods.iter().find(|method| method.name == "Combine").unwrap();
     assert_eq!(combine.signature, "int32 Combine<T1>(T1)");
-    assert_eq!((summary.counts.pinvokes, summary.pinvokes.total), (0, 0));
+    let equals = hash_code.methods.iter().find(|method| method.name == "Equals").unwrap().token;
+    let query = DotNetQuery { list: DotNetList::Pinvokes, ..DotNetQuery::default() };
+    assert_eq!(project.dotnet_metadata(&query).unwrap().unwrap().pinvokes.unwrap().total, 0);
 
-    let query = DotNetQuery { contains: Some("obsolete".to_owned()), ..DotNetQuery::default() };
-    let obsolete = project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes;
+    let attributes = |contains: &str| {
+        let query =
+            DotNetQuery { list: DotNetList::Attributes, contains: Some(contains.to_owned()), ..DotNetQuery::default() };
+        project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes.unwrap()
+    };
+    let obsolete = attributes("obsolete");
     let parents: Vec<Option<&str>> = obsolete.items.iter().map(|attribute| attribute.parent.as_deref()).collect();
     assert_eq!(parents, [Some("System.HashCode::GetHashCode"), Some("System.HashCode::Equals")]);
-    let query = DotNetQuery { contains: Some("HashCode::Equals".to_owned()), ..DotNetQuery::default() };
-    let on_equals = project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes;
-    assert_eq!(on_equals.total, 3, "attributes match by their target too");
+    assert_eq!(attributes("HashCode::Equals").total, 3, "attributes match by their target too");
+
+    let query = DotNetQuery { list: DotNetList::Attributes, parent_token: Some(equals), ..DotNetQuery::default() };
+    let on_equals = project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes.unwrap();
+    assert!(on_equals.total > 0);
+    assert!(on_equals.items.iter().all(|attribute| attribute.parent_token == equals));
+    let query = DotNetQuery { parent_token: Some(equals), ..DotNetQuery::default() };
+    assert!(matches!(project.dotnet_metadata(&query), Err(ApiError::Invalid(_))), "parent_token needs attributes");
 }
 
 #[test]
