@@ -71,7 +71,7 @@ fn run_manifest_reports_every_slice() {
         "libid-twin-x86_64: correct=160 wrong=0 missed=14 spurious=0",
         "libid-cross-x86_64: correct=58 wrong=0 missed=5 spurious=0",
         "libid-twin-aarch64: correct=168 wrong=0 missed=25 spurious=0",
-        "libid-cross-aarch64: correct=65 wrong=0 missed=14 spurious=0",
+        "libid-cross-aarch64: correct=66 wrong=0 missed=13 spurious=0",
         "discovery-x86_64: correct=174 wrong=0 missed=0 spurious=2",
         "discovery-aarch64: correct=193 wrong=0 missed=0 spurious=69",
     ] {

@@ -22,7 +22,7 @@
       "refs": ["../bin/eval-ref-aarch64.elf"],
       "target": "../bin/eval-target-aarch64.elf",
       "truth": "eval-truth-cross-aarch64.json",
-      "min_recall": 0.8227
+      "min_recall": 0.8354
     },
     "discovery-x86_64": {
       "family": "discovery",

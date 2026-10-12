@@ -65,7 +65,7 @@ fn aarch64_twin_baseline_holds() {
 
 #[test]
 fn aarch64_cross_baseline_holds() {
-    assert_libid("cross", "aarch64", 65);
+    assert_libid("cross", "aarch64", 66);
 }
 
 /// Discovery on the stripped twin against its sized function symbols. Only recall is gated: spurious starts

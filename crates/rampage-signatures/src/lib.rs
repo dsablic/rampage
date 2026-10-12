@@ -227,15 +227,77 @@ impl AdrpPages {
         let add_unshifted = word & 0x7fc0_0000 == 0x1100_0000;
         let load_store_unsigned = word & 0x3b00_0000 == 0x3900_0000;
         let completes = (add_unshifted || load_store_unsigned) && self.registers & (1 << source) != 0;
-        let call = word & 0xfc00_0000 == 0x9400_0000 || word & 0xffff_fc1f == 0xd63f_0000;
-        if call {
-            // A call clobbers the caller-saved x0..x18.
-            self.registers &= !0x7_ffff;
-        } else {
-            self.registers &= !(1 << destination);
-        }
+        self.registers &= !written_registers(word);
         if completes { masked & !(0xfff << 10) } else { masked }
     }
+}
+
+/// The general registers, as a bitset, that an AArch64 instruction may write. Branches, stores and other
+/// instructions whose bits 4:0 are not a destination write none. Where the encoding does not say cheaply (SIMD&FP
+/// moves to a general register, exclusives, unusual load/store forms) every candidate field counts as written:
+/// forgetting a page register only leaves a low half unmasked.
+fn written_registers(word: u32) -> u32 {
+    let rt = 1u32 << (word & 0x1f);
+    match (word >> 25) & 0xf {
+        0b1000 | 0b1001 => rt, // data processing, immediate
+        0b0101 | 0b1101 => rt, // data processing, register
+        0b0111 | 0b1111 => rt, // SIMD and floating point
+        0b1010 | 0b1011 => {
+            let call = word & 0xfc00_0000 == 0x9400_0000 || word & 0xffff_fc1f == 0xd63f_0000;
+            let system_read = word & 0xffe0_0000 == 0xd520_0000; // MRS, SYSL
+            if call {
+                // x0..x18 are caller-saved and the link register x30 takes the return address.
+                0x7_ffff | 1 << 30
+            } else if system_read {
+                rt
+            } else {
+                0
+            }
+        }
+        0b0100 | 0b0110 | 0b1100 | 0b1110 => load_store_writes(word),
+        _ => 0,
+    }
+}
+
+/// [`written_registers`] for the load/store class: a general-register load writes Rt (and Rt2 for a pair), and a
+/// pre- or post-indexed access writes its base Rn back.
+fn load_store_writes(word: u32) -> u32 {
+    let rt = 1u32 << (word & 0x1f);
+    let rn = 1u32 << ((word >> 5) & 0x1f);
+    let rt2 = 1u32 << ((word >> 10) & 0x1f);
+    let rs = 1u32 << ((word >> 16) & 0x1f);
+    let only = |condition: bool, registers: u32| if condition { registers } else { 0 };
+    let vector = word & 0x0400_0000 != 0;
+    let opc = (word >> 22) & 0b11;
+    if word & 0x3800_0000 == 0x2800_0000 {
+        // Pair: L is bit 22; bits 24:23 are 01 (post-index) or 11 (pre-index) with write-back.
+        let load = word & 0x0040_0000 != 0 && !vector;
+        return only(load, rt | rt2) | only(word & 0x0080_0000 != 0, rn);
+    }
+    if word & 0x3b00_0000 == 0x1800_0000 {
+        // Literal: opc (bits 31:30) 0b11 is PRFM, which writes nothing.
+        return only(!vector && word >> 30 != 0b11, rt);
+    }
+    if word & 0x3800_0000 == 0x3800_0000 {
+        let unsigned_offset = word & 0x0100_0000 != 0;
+        let register_form = word & 0x0020_0000 != 0;
+        let low = (word >> 10) & 0b11;
+        if !unsigned_offset && register_form && low != 0b10 {
+            // Atomic memory operations (bits 11:10 == 00) and pointer-authenticated loads, which may write back.
+            return rt | only(low == 0b11, rn);
+        }
+        let prefetch = word >> 30 == 0b11 && opc == 0b10;
+        let load = !vector && opc != 0 && !prefetch;
+        // Pre- and post-indexed immediates (bit 10 set) write the base back.
+        let write_back = !unsigned_offset && !register_form && low & 1 == 1;
+        return only(load, rt) | only(write_back, rn);
+    }
+    if word & 0xbe00_0000 == 0x0c00_0000 {
+        // SIMD structure loads and stores touch only vector registers, plus the base when post-indexed.
+        return only(word & 0x0080_0000 != 0, rn);
+    }
+    // Exclusive, ordered, compare-and-swap, memory tagging and other forms.
+    rt | rt2 | rs
 }
 
 /// Hashes a stream of fixed 4-byte instruction words, reading each in `big_endian` order and applying `mask` to
@@ -1288,6 +1350,32 @@ mod tests {
             function_hash_in(&a64, &image, &body(0x123, 8), 0),
             function_hash_in(&a64, &image, &body(0x123, 12), 0)
         );
+    }
+
+    #[test]
+    fn adrp_tracking_survives_instructions_that_write_no_register() {
+        let a64 = target(Arch::Aarch64, false);
+        // adrp x8, page; b.hi +8; ldr w0, [x8, #lo12]; ret. B.cond's bits 4:0 are its condition (hi = 8).
+        let body =
+            |lo12: u32| words_to_bytes(&[0x9000_0008, 0x5400_0048, 0xb940_0100 | (lo12 / 4) << 10, 0xd65f_03c0], false);
+        let image = MaskContext::default();
+        assert_eq!(function_hash_in(&a64, &image, &body(0x10), 0), function_hash_in(&a64, &image, &body(0x24), 0));
+        // str w0, [x8, #lo12] in place of the branch: a store reads its bits 4:0, so x8 still holds the page.
+        let store =
+            |lo12: u32| words_to_bytes(&[0x9000_0008, 0xb900_0100 | (lo12 / 4) << 10, 0xb940_0100, 0xd65f_03c0], false);
+        assert_eq!(function_hash_in(&a64, &image, &store(0x10), 0), function_hash_in(&a64, &image, &store(0x24), 0));
+    }
+
+    #[test]
+    fn adrp_tracking_forgets_registers_written_as_a_second_destination() {
+        let a64 = target(Arch::Aarch64, false);
+        let image = MaskContext::default();
+        // adrp x1, page; ldp x0, x1, [sp]; add x2, x1, #imm; ret. The LDP overwrites x1 through Rt2.
+        let pair = |imm: u32| words_to_bytes(&[0x9000_0001, 0xa940_07e0, 0x9100_0022 | imm << 10, 0xd65f_03c0], false);
+        assert_ne!(function_hash_in(&a64, &image, &pair(0x10), 0), function_hash_in(&a64, &image, &pair(0x20), 0));
+        // adrp x1, page; ldr x0, [x1], #8; add x2, x1, #imm; ret. The post-index writes x1 back.
+        let post = |imm: u32| words_to_bytes(&[0x9000_0001, 0xf840_8420, 0x9100_0022 | imm << 10, 0xd65f_03c0], false);
+        assert_ne!(function_hash_in(&a64, &image, &post(0x10), 0), function_hash_in(&a64, &image, &post(0x20), 0));
     }
 
     #[test]
