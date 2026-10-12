@@ -7,6 +7,8 @@ mod find_crypto;
 mod find_main;
 mod indicators;
 mod network_surface;
+mod persistence_surface;
+mod string_decoding;
 mod triage_report;
 
 use std::collections::{BTreeMap, BTreeSet};

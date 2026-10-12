@@ -1,0 +1,597 @@
+//! `string_decoding`: candidate string-decoding routines found statically -- functions with a short loop that
+//! loads a byte, transforms it (XOR, rotate, or byte ADD/SUB) and stores a byte, ranked by how many call sites
+//! pass them pointers to non-printable or high-entropy data blobs. Nothing is emulated or executed: a candidate is
+//! a loop shape plus its call sites, not a decoded string.
+
+use std::collections::BTreeMap;
+
+use rampage_analysis::discover::{DiscoveredFunction, XrefKind};
+use rampage_arch::{Arch, Disassembler, Flow, Insn};
+use rampage_loaders::shannon_entropy;
+use serde_json::json;
+
+use super::{Confidence, Finding, ReportLimits, Section, Tracer, WorkflowReport};
+use crate::{ApiError, Project, XrefQuery};
+
+/// Instructions in a loop body (from a backward branch's target to the branch) for it to count as a byte loop.
+/// Decoding loops are tight; larger loops are left out rather than guessed about.
+const MAX_LOOP_INSTRUCTIONS: usize = 64;
+/// Functions with more instructions are not scanned for loops.
+const MAX_FUNCTION_INSTRUCTIONS: usize = 4_000;
+/// Instructions decoded over the whole scan before it stops.
+const MAX_SCANNED_INSTRUCTIONS: usize = 2_000_000;
+/// Direct call sites read per candidate.
+const MAX_CALL_SITES: usize = 200;
+/// Instructions before a call searched for data pointers passed as arguments.
+const ARGUMENT_WINDOW: usize = 8;
+/// Blobs kept per candidate.
+const MAX_BLOBS: usize = 32;
+/// Bytes read from a blob for its length estimate and entropy.
+const MAX_BLOB_BYTES: usize = 256;
+/// Blobs shorter than this are too short to judge.
+const MIN_BLOB_BYTES: usize = 4;
+/// Share of non-printable bytes above which a blob does not read as text.
+const NON_PRINTABLE_SHARE: f64 = 0.25;
+/// Entropy (bits per byte) and length from which a printable blob still reads as encoded (base64-like).
+const HIGH_ENTROPY: f64 = 5.5;
+const HIGH_ENTROPY_MIN_BYTES: usize = 48;
+/// Loop instructions quoted per candidate.
+const QUOTED_INSTRUCTIONS: usize = 4;
+/// Functions suggested for decompilation in next steps.
+const SUGGESTED_FUNCTIONS: usize = 3;
+
+const X86_BYTE_REGISTERS: [&str; 20] = [
+    "al", "bl", "cl", "dl", "ah", "bh", "ch", "dh", "sil", "dil", "bpl", "spl", "r8b", "r9b", "r10b", "r11b", "r12b",
+    "r13b", "r14b", "r15b",
+];
+/// Byte loads, byte stores, XORs and rotates on the fixed-width architectures, by mnemonic.
+const BYTE_LOADS: [&str; 10] = ["ldrb", "ldrsb", "ldurb", "ldursb", "lb", "lbu", "lbz", "lbzx", "lbzu", "lbzux"];
+const BYTE_STORES: [&str; 7] = ["strb", "sturb", "sb", "stb", "stbx", "stbu", "stbux"];
+const XORS: [&str; 5] = ["eor", "eors", "xor", "xori", "xoris"];
+const ROTATES: [&str; 6] = ["ror", "rors", "rol", "rori", "rotlwi", "rotrwi"];
+
+/// What one loop instruction does to bytes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ByteOps {
+    load: bool,
+    store: bool,
+    xor: bool,
+    rotate: bool,
+    add_sub: bool,
+}
+
+impl ByteOps {
+    fn merge(&mut self, other: Self) {
+        self.load |= other.load;
+        self.store |= other.store;
+        self.xor |= other.xor;
+        self.rotate |= other.rotate;
+        self.add_sub |= other.add_sub;
+    }
+
+    fn transforms(self) -> bool {
+        self.xor || self.rotate || self.add_sub
+    }
+
+    /// The transforms seen, as words for a report.
+    fn transform_names(self) -> Vec<&'static str> {
+        [(self.xor, "XOR"), (self.rotate, "rotate"), (self.add_sub, "byte ADD/SUB")]
+            .into_iter()
+            .filter_map(|(seen, name)| seen.then_some(name))
+            .collect()
+    }
+}
+
+/// Splits assembly text into its mnemonic and operands, keeping commas inside brackets and braces.
+fn parse(text: &str) -> (String, Vec<String>) {
+    let text = text.trim();
+    let (mnemonic, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    let mut operands = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    for c in rest.chars() {
+        match c {
+            '[' | '{' | '(' => depth += 1,
+            ']' | '}' | ')' => depth -= 1,
+            ',' if depth == 0 => {
+                operands.push(current.trim().to_owned());
+                current.clear();
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+    }
+    if !current.trim().is_empty() {
+        operands.push(current.trim().to_owned());
+    }
+    (mnemonic.to_ascii_lowercase(), operands)
+}
+
+/// What `text`, one instruction on `arch`, does to bytes.
+fn classify(arch: Arch, text: &str) -> ByteOps {
+    let (mnemonic, operands) = parse(text);
+    if matches!(arch, Arch::X86 | Arch::X86_64) {
+        return classify_x86(&mnemonic, &operands);
+    }
+    let base = mnemonic.split('.').next().unwrap_or(&mnemonic);
+    ByteOps {
+        load: BYTE_LOADS.contains(&base),
+        store: BYTE_STORES.contains(&base),
+        xor: XORS.contains(&base) && !same_operands(&operands),
+        rotate: ROTATES.contains(&base),
+        add_sub: false,
+    }
+}
+
+/// x86 has no byte-specific mnemonics: an operand's size comes from a `byte ptr` or an 8-bit register.
+fn classify_x86(mnemonic: &str, operands: &[String]) -> ByteOps {
+    let memory = |operand: &String| operand.contains('[');
+    let byte_register = |operand: &String| X86_BYTE_REGISTERS.contains(&operand.as_str());
+    let sized = operands.iter().any(|operand| operand.starts_with("byte ptr") || byte_register(operand));
+    let first_memory = operands.first().is_some_and(memory);
+    let later_memory = operands.iter().skip(1).any(memory);
+    let mut ops = ByteOps::default();
+    match mnemonic {
+        "mov" => {
+            ops.store = sized && first_memory;
+            ops.load = sized && later_memory;
+        }
+        "movzx" | "movsx" => ops.load = operands.iter().skip(1).any(|operand| operand.starts_with("byte ptr")),
+        "xor" | "add" | "sub" | "adc" | "sbb" | "rol" | "ror" => {
+            // A memory destination is read, transformed and written back.
+            ops.load = sized && (first_memory || later_memory);
+            ops.store = sized && first_memory;
+            ops.xor = mnemonic == "xor" && !same_operands(operands);
+            ops.rotate = matches!(mnemonic, "rol" | "ror");
+            ops.add_sub = sized && matches!(mnemonic, "add" | "sub" | "adc" | "sbb");
+        }
+        _ => {}
+    }
+    ops
+}
+
+/// Whether an instruction names one register twice (`xor eax, eax`, `eor w0, w0, w0`), which zeroes or copies
+/// rather than mixes data.
+fn same_operands(operands: &[String]) -> bool {
+    (operands.len() >= 2 && operands.iter().all(|operand| *operand == operands[0]))
+        || (operands.len() == 3 && operands[1] == operands[2])
+}
+
+/// A function holding a byte loop.
+struct Candidate {
+    address: u64,
+    name: String,
+    loop_start: u64,
+    ops: ByteOps,
+    /// `address: text` of the loop's byte-moving and transforming instructions.
+    quoted: Vec<String>,
+    call_sites: Vec<CallSite>,
+    /// Whether some call sites were left unread.
+    call_sites_cut: bool,
+    blobs: BTreeMap<u64, Blob>,
+}
+
+impl Candidate {
+    /// XOR or rotate in the loop plus at least one encoded-looking argument is the shape worth a Medium; anything
+    /// less (byte ADD/SUB alone, or no such argument) is common in ordinary string handling.
+    fn confidence(&self) -> Confidence {
+        if (self.ops.xor || self.ops.rotate) && !self.blobs.is_empty() { Confidence::Medium } else { Confidence::Low }
+    }
+}
+
+struct CallSite {
+    at: u64,
+    caller: Option<(u64, String)>,
+    blobs: Vec<u64>,
+}
+
+#[derive(Clone)]
+struct Blob {
+    length: usize,
+    /// Whether the length ran into `MAX_BLOB_BYTES` rather than a NUL, the segment end or the next referenced
+    /// address.
+    capped: bool,
+    entropy: f64,
+    non_printable: f64,
+    preview: String,
+    /// Call sites passing it.
+    passed_from: Vec<u64>,
+}
+
+impl Blob {
+    fn reads_as_encoded(&self) -> bool {
+        self.non_printable > NON_PRINTABLE_SHARE
+            || self.length >= HIGH_ENTROPY_MIN_BYTES && self.entropy >= HIGH_ENTROPY
+    }
+}
+
+/// Decodes the instructions of `function`'s blocks, in address order, with each one's bytes.
+fn function_instructions<'b>(
+    project: &'b Project,
+    decoder: &mut dyn Disassembler,
+    function: &DiscoveredFunction,
+) -> Vec<(Insn, &'b [u8])> {
+    let mut instructions = Vec::with_capacity(function.instruction_count);
+    for block in &function.blocks {
+        instructions.extend(block_instructions(project, decoder, block.start, block.end));
+    }
+    instructions.sort_by_key(|(insn, _)| insn.address);
+    instructions.dedup_by_key(|(insn, _)| insn.address);
+    instructions
+}
+
+/// Decodes from `start` up to (not including) `end`.
+fn block_instructions<'b>(
+    project: &'b Project,
+    decoder: &mut dyn Disassembler,
+    start: u64,
+    end: u64,
+) -> Vec<(Insn, &'b [u8])> {
+    let binary = &project.binary;
+    let Some(code) = binary.read_to_segment_end(start) else { return Vec::new() };
+    let limit = usize::try_from(end.saturating_sub(start)).unwrap_or(usize::MAX).min(code.len());
+    decoder.reset();
+    let mut instructions = Vec::new();
+    let mut offset = 0;
+    while offset < limit {
+        let address = start + offset as u64;
+        let insn = decoder.decode_with_memory(&code[offset..], address, &|at, size| binary.read_pointer(at, size));
+        let length = usize::from(insn.len.max(1));
+        instructions.push((insn, &code[offset..(offset + length).min(code.len())]));
+        offset += length;
+    }
+    instructions
+}
+
+impl Project {
+    /// Candidate string-decoding routines: byte loops that load, transform and store bytes, with the call sites
+    /// and encoded-looking data blobs that reach them. Static and bounded: nothing is emulated or executed.
+    pub fn string_decoding(&self, limits: ReportLimits) -> Result<WorkflowReport, ApiError> {
+        let mut report = WorkflowReport::new("string_decoding", self);
+        let mut tracer = Tracer::new(self, &mut report);
+        let mut candidates = Vec::new();
+        let mut scan_stopped = false;
+        let mut skipped_large = 0;
+        let decoder = self.binary.decoder();
+        if let Err(error) = &decoder {
+            report.limitation(format!("Instructions cannot be decoded ({error}); no loops were looked for."));
+        }
+        if let (Ok(analysis), Ok(mut decoder)) = (self.analysis(), decoder) {
+            if self.binary.arch == Arch::Arm {
+                decoder.set_code_modes(&analysis.program.code_modes);
+            }
+            let mut scanned = 0;
+            for function in &analysis.program.functions {
+                if function.instruction_count > MAX_FUNCTION_INSTRUCTIONS {
+                    skipped_large += 1;
+                    continue;
+                }
+                if scanned >= MAX_SCANNED_INSTRUCTIONS {
+                    scan_stopped = true;
+                    break;
+                }
+                let instructions = function_instructions(self, decoder.as_mut(), function);
+                scanned += instructions.len();
+                if let Some(candidate) = self.byte_loop(decoder.as_mut(), function, &instructions) {
+                    candidates.push(candidate);
+                }
+            }
+            for candidate in &mut candidates {
+                self.trace_call_sites(decoder.as_mut(), candidate, &analysis.program.xrefs);
+            }
+        }
+        candidates.sort_by(|a, b| {
+            b.confidence()
+                .cmp(&a.confidence())
+                .then(b.blobs.len().cmp(&a.blobs.len()))
+                .then(b.call_sites.len().cmp(&a.call_sites.len()))
+                .then(a.address.cmp(&b.address))
+        });
+
+        let mut routines = Section::new("Candidate decoding routines", limits);
+        let mut sites = Section::new("Call sites", limits);
+        let mut blobs = Section::new("Referenced data blobs", limits);
+        for candidate in &candidates {
+            let transforms = candidate.ops.transform_names().join(", ");
+            let mut evidence = vec![format!(
+                "loop at {:#x} loads a byte, applies {transforms} and stores a byte",
+                candidate.loop_start
+            )];
+            evidence.extend(candidate.quoted.iter().cloned());
+            let site_count = if candidate.call_sites_cut {
+                format!("at least {} direct call sites (read up to {MAX_CALL_SITES})", candidate.call_sites.len())
+            } else {
+                format!("{} direct call sites", candidate.call_sites.len())
+            };
+            evidence.push(site_count.clone());
+            routines.push(
+                Finding::new(
+                    "disassemble",
+                    candidate.confidence(),
+                    format!(
+                        "`{}` has a byte loop applying {transforms}; {site_count}, {} passing non-printable or \
+                         high-entropy data",
+                        candidate.name,
+                        candidate.call_sites.iter().filter(|site| !site.blobs.is_empty()).count()
+                    ),
+                )
+                .at(candidate.address)
+                .evidence(evidence),
+            );
+
+            let callers = tracer.users(&[candidate.address]);
+            tracer.record(&callers, &format!("calls candidate decoding routine `{}`", candidate.name));
+            for site in &candidate.call_sites {
+                let caller = site.caller.as_ref().map_or_else(
+                    || "code outside any function".to_owned(),
+                    |(address, name)| format!("`{name}` ({address:#x})"),
+                );
+                let mut evidence = vec![format!("direct call at {:#x} from {caller}", site.at)];
+                evidence.extend(site.blobs.iter().map(|blob| format!("passes the data blob at {blob:#x}")));
+                if site.blobs.is_empty() {
+                    evidence.push(format!(
+                        "no data pointer to a non-printable or high-entropy blob in the {ARGUMENT_WINDOW} \
+                         instructions before the call"
+                    ));
+                }
+                sites.push(
+                    Finding::new("xrefs", Confidence::High, format!("call to `{}` at {:#x}", candidate.name, site.at))
+                        .at(site.at)
+                        .evidence(evidence),
+                );
+            }
+            for (&address, blob) in &candidate.blobs {
+                let referenced = tracer.users(&[address]);
+                let size = if blob.capped {
+                    format!("at least {} bytes (read up to {MAX_BLOB_BYTES})", blob.length)
+                } else {
+                    format!("about {} bytes", blob.length)
+                };
+                let mut evidence = vec![
+                    format!("{size}, to the first NUL, the next referenced address or the segment end"),
+                    format!("entropy {:.2} bits/byte, {:.0}% non-printable", blob.entropy, blob.non_printable * 100.0),
+                    format!("leading bytes {}", blob.preview),
+                ];
+                evidence.extend(blob.passed_from.iter().map(|at| format!("passed to `{}` at {at:#x}", candidate.name)));
+                evidence.extend(referenced.evidence());
+                blobs.push(
+                    Finding::new(
+                        "xrefs",
+                        candidate.confidence(),
+                        format!("possibly encoded data at {address:#x} passed to `{}`", candidate.name),
+                    )
+                    .at(address)
+                    .evidence(evidence),
+                );
+                tracer.record(&referenced, &format!("references the data blob at {address:#x}"));
+            }
+        }
+        let (functions, ranked) = tracer.finish(
+            &mut report,
+            "Functions calling candidates or referencing their blobs",
+            "string-decoding evidence",
+            limits,
+        );
+
+        report.summary.push(if candidates.is_empty() {
+            "No byte loop that loads, transforms and stores bytes was found.".to_owned()
+        } else {
+            let medium = candidates.iter().filter(|candidate| candidate.confidence() == Confidence::Medium).count();
+            format!(
+                "{} candidate decoding routines ({medium} with XOR or rotate and an encoded-looking argument), {} \
+                 direct call sites and {} referenced data blobs; candidates are loop shapes, not confirmed decoders.",
+                routines.total, sites.total, blobs.total
+            )
+        });
+        for candidate in candidates.iter().take(SUGGESTED_FUNCTIONS) {
+            report.step(
+                "decompile",
+                json!({ "at": format!("{:#x}", candidate.address) }),
+                format!("`{}` is a candidate decoding routine; read what its loop does to each byte.", candidate.name),
+            );
+        }
+        if let Some(candidate) = candidates.first() {
+            report.step(
+                "xrefs",
+                json!({ "to": format!("{:#x}", candidate.address) }),
+                format!("List every reference to `{}`, including indirect ones the call sites miss.", candidate.name),
+            );
+        }
+        for (address, name) in ranked.iter().take(SUGGESTED_FUNCTIONS) {
+            report.step(
+                "decompile",
+                json!({ "at": format!("{address:#x}") }),
+                format!("`{name}` calls a candidate or references its data; read how the result is used."),
+            );
+        }
+        report.sections.extend([routines, sites, blobs, functions]);
+
+        if scan_stopped {
+            report.limitation(format!(
+                "The loop scan stopped after {MAX_SCANNED_INSTRUCTIONS} instructions; later functions were not \
+                 looked at."
+            ));
+        }
+        if skipped_large > 0 {
+            report.limitation(format!(
+                "{skipped_large} functions over {MAX_FUNCTION_INSTRUCTIONS} instructions were not scanned for loops."
+            ));
+        }
+        report.limitation(format!(
+            "Loops are found from backward branches within one function, at most {MAX_LOOP_INSTRUCTIONS} \
+             instructions long, and read by mnemonic: vectorized, table-driven, multi-byte or unrolled-without-branch \
+             decoders, decoders split across functions, and inlined decoders without a call site are missed. Byte \
+             ADD/SUB is recognized only on x86, where operand sizes are visible."
+        ));
+        report.limitation(format!(
+            "Arguments are data pointers in the {ARGUMENT_WINDOW} instructions before a direct call; pointers built \
+             at run time, passed through the stack or through other functions, and indirect calls are not followed. \
+             Blob lengths are estimates."
+        ));
+        report.limitation(
+            "Nothing is emulated or executed: a candidate is a loop shape that byte-wise copying, case conversion, \
+             checksums and ciphers also have, and no string is decoded. Absence of evidence is not evidence of \
+             absence.",
+        );
+        Ok(report)
+    }
+
+    /// The first loop in `function` that loads, transforms and stores bytes.
+    fn byte_loop(
+        &self,
+        decoder: &mut dyn Disassembler,
+        function: &DiscoveredFunction,
+        instructions: &[(Insn, &[u8])],
+    ) -> Option<Candidate> {
+        for (insn, _) in instructions {
+            let (Flow::ConditionalJump(target) | Flow::Jump(target)) = insn.flow else { continue };
+            if target > insn.address || !function.contains(target) {
+                continue;
+            }
+            let first = instructions.partition_point(|(other, _)| other.address < target);
+            let last = instructions.partition_point(|(other, _)| other.address <= insn.address);
+            if last - first > MAX_LOOP_INSTRUCTIONS {
+                continue;
+            }
+            let mut ops = ByteOps::default();
+            let mut quoted = Vec::new();
+            for (other, bytes) in &instructions[first..last] {
+                let text = decoder.format(bytes, other.address);
+                let found = classify(self.binary.arch, &text);
+                if found != ByteOps::default() && quoted.len() < QUOTED_INSTRUCTIONS {
+                    quoted.push(format!("{:#x}: {text}", other.address));
+                }
+                ops.merge(found);
+            }
+            if ops.load && ops.store && ops.transforms() {
+                return Some(Candidate {
+                    address: function.address,
+                    name: self.function_name(function.address),
+                    loop_start: target,
+                    ops,
+                    quoted,
+                    call_sites: Vec::new(),
+                    call_sites_cut: false,
+                    blobs: BTreeMap::new(),
+                });
+            }
+        }
+        None
+    }
+
+    /// Fills `candidate`'s direct call sites and the encoded-looking data blobs their arguments point at.
+    fn trace_call_sites(
+        &self,
+        decoder: &mut dyn Disassembler,
+        candidate: &mut Candidate,
+        xrefs: &[rampage_analysis::discover::Xref],
+    ) {
+        let Ok(page) = self.xrefs(XrefQuery::To(candidate.address), None, Some(MAX_CALL_SITES)) else { return };
+        candidate.call_sites_cut = page.total > page.items.len();
+        // In an image based at zero, small constants (lengths, keys) would read as addresses.
+        let immediates_are_addresses = self.binary.segments.iter().all(|segment| segment.address > 0);
+        for row in page.items.iter().filter(|row| row.kind == XrefKind::Call) {
+            let caller = self.function_containing(row.from).ok().flatten();
+            let mut site =
+                CallSite { at: row.from, caller: caller.map(|at| (at, self.function_name(at))), blobs: vec![] };
+            let block_start = caller.and_then(|caller| self.block_start(caller, row.from));
+            if let Some(start) = block_start {
+                let before = block_instructions(self, decoder, start, row.from);
+                let window = &before[before.len().saturating_sub(ARGUMENT_WINDOW)..];
+                for (insn, _) in window {
+                    let immediate = insn.immediate.filter(|_| immediates_are_addresses);
+                    let Some(address) = insn.data_ref.or(immediate) else { continue };
+                    if candidate.blobs.contains_key(&address) {
+                        site.blobs.push(address);
+                        candidate.blobs.get_mut(&address).expect("checked").passed_from.push(row.from);
+                        continue;
+                    }
+                    if candidate.blobs.len() >= MAX_BLOBS || site.blobs.contains(&address) {
+                        continue;
+                    }
+                    if let Some(mut blob) = self.blob_at(address, xrefs).filter(Blob::reads_as_encoded) {
+                        blob.passed_from.push(row.from);
+                        candidate.blobs.insert(address, blob);
+                        site.blobs.push(address);
+                    }
+                }
+            }
+            candidate.call_sites.push(site);
+        }
+    }
+
+    /// The start of the block of `function` that contains `address`.
+    fn block_start(&self, function: u64, address: u64) -> Option<u64> {
+        let function = self.analysis().ok()?.program.function_at(function)?;
+        function.blocks.iter().find(|block| (block.start..block.end).contains(&address)).map(|block| block.start)
+    }
+
+    /// The data at `address` if it is file-backed and not code, measured to the first NUL, the next referenced
+    /// address (`xrefs` is sorted by target) or `MAX_BLOB_BYTES`.
+    fn blob_at(&self, address: u64, xrefs: &[rampage_analysis::discover::Xref]) -> Option<Blob> {
+        if self.binary.is_code(address) {
+            return None;
+        }
+        let bytes = self.binary.read_to_segment_end(address)?;
+        let next = xrefs.partition_point(|xref| xref.to <= address);
+        let to_next =
+            xrefs.get(next).map_or(usize::MAX, |xref| usize::try_from(xref.to - address).unwrap_or(usize::MAX));
+        let read = bytes.len().min(MAX_BLOB_BYTES).min(to_next);
+        let length = bytes[..read].iter().position(|&byte| byte == 0).unwrap_or(read);
+        if length < MIN_BLOB_BYTES {
+            return None;
+        }
+        let data = &bytes[..length];
+        let printable = |byte: &&u8| byte.is_ascii_graphic() || **byte == b' ';
+        let non_printable = 1.0 - data.iter().filter(printable).count() as f64 / length as f64;
+        Some(Blob {
+            length,
+            capped: length == MAX_BLOB_BYTES,
+            entropy: shannon_entropy(data),
+            non_printable,
+            preview: rampage_arch::hex::bytes(&data[..length.min(16)]),
+            passed_from: Vec::new(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x86_byte_operations_need_a_byte_operand() {
+        let ops = |text: &str| classify(Arch::X86_64, text);
+        assert!(ops("movzx r8d, byte ptr [rsi+rdx]").load);
+        assert!(ops("mov [rdi+rdx], r8b").store);
+        assert!(ops("mov byte ptr [rdi+rax], 0").store);
+        assert!(!ops("mov [rdi+rdx], r8").store);
+        assert!(ops("xor r8b, cl").xor);
+        assert!(!ops("xor eax, eax").xor);
+        let rmw = ops("xor byte ptr [rax], 0x5a");
+        assert!(rmw.load && rmw.store && rmw.xor);
+        assert!(ops("rol cl, 1").rotate);
+        assert!(ops("add cl, 0x3d").add_sub);
+        assert!(!ops("add rdx, 2").add_sub);
+        assert!(ops("xor cl, [rsi+rdx]").load);
+    }
+
+    #[test]
+    fn fixed_width_byte_operations_are_read_by_mnemonic() {
+        let ops = |text: &str| classify(Arch::Aarch64, text);
+        assert!(ops("ldrb w13, [x1], #1").load);
+        assert!(ops("strb w11, [x10], #1").store);
+        assert!(ops("eor w11, w13, w11").xor);
+        assert!(!ops("eor w0, w1, w1").xor);
+        assert!(!ops("add w11, w12, #61").add_sub);
+        assert!(classify(Arch::Mips, "lbu $v0, 0($a1)").load);
+        assert!(classify(Arch::Riscv64, "sb a5, 0(a0)").store);
+    }
+
+    #[test]
+    fn operands_keep_bracketed_commas() {
+        assert_eq!(parse("strb wzr, [x0, x8]"), ("strb".to_owned(), vec!["wzr".to_owned(), "[x0, x8]".to_owned()]));
+        assert_eq!(parse("ret"), ("ret".to_owned(), vec![]));
+    }
+}
