@@ -1,6 +1,7 @@
 //! `find_main`: locates the program's own entry logic past the runtime startup code, from symbols when present
 //! and otherwise from startup-code heuristics that are stated as heuristics, then profiles the best candidate.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashMap};
 
 use rampage_arch::{Arch, Flow};
@@ -13,9 +14,10 @@ use super::{
 };
 use crate::{ApiError, DisassemblyLine, Project, XrefQuery};
 
-/// Symbol names that conventionally mark a program's entry logic, most specific first.
+/// Symbol names that conventionally mark a program's entry logic, most specific first: in a cgo binary `main` is
+/// the Go runtime's C entry stub and `main.main` the program's own logic.
 const ENTRY_SYMBOLS: [&str; 8] =
-    ["main", "_main", "wmain", "_wmain", "WinMain", "wWinMain", "_WinMain@16", "main.main"];
+    ["main.main", "main", "_main", "wmain", "_wmain", "WinMain", "wWinMain", "_WinMain@16"];
 /// Calls through which a C runtime ends the process with main's return value (patterns, see `api_matches`;
 /// `_exit` and `_cexit` normalize to these).
 const EXIT_NAMES: [&str; 2] = ["exit", "cexit"];
@@ -183,11 +185,12 @@ impl Project {
         candidates
     }
 
-    /// Names a startup stub's call target: by symbol, import or stub name, or else by bundled signature.
-    fn transfer_name(&self, target: u64, signatures: &HashMap<u64, String>) -> Option<(String, bool)> {
+    /// Names a startup stub's call target: by symbol, import or stub name, or else by bundled signature (matched
+    /// once, on first need, since that hashes every function).
+    fn transfer_name(&self, target: u64, signatures: &OnceCell<HashMap<u64, String>>) -> Option<(String, bool)> {
         self.name_at(target)
             .map(|name| (name, false))
-            .or_else(|| signatures.get(&target).map(|name| (name.clone(), true)))
+            .or_else(|| signatures.get_or_init(|| self.signature_names()).get(&target).map(|name| (name.clone(), true)))
     }
 
     fn signature_names(&self) -> HashMap<u64, String> {
@@ -201,7 +204,7 @@ impl Project {
     /// transfer that ends the stub.
     fn libc_start_candidate(&self, registers: &[&str]) -> Result<Option<Candidate>, ApiError> {
         let Some(mut at) = self.binary.entry else { return Ok(None) };
-        let signatures = self.signature_names();
+        let signatures = OnceCell::new();
         let mut loaded: Option<(u64, String)> = None;
         let mut trail = Vec::new();
         for _ in 0..STUB_DEPTH {
@@ -426,7 +429,7 @@ impl Project {
 }
 
 /// Folds candidates for one address into the most confident one, recording the others as corroboration, and
-/// orders the result by confidence.
+/// orders the result by confidence, keeping the proposal order (`ENTRY_SYMBOLS` order first) among equals.
 fn merge(candidates: Vec<Candidate>) -> Vec<Candidate> {
     let mut merged: Vec<Candidate> = Vec::new();
     for candidate in candidates {
@@ -444,6 +447,28 @@ fn merge(candidates: Vec<Candidate>) -> Vec<Candidate> {
             None => merged.push(candidate),
         }
     }
-    merged.sort_by(|a, b| b.confidence.cmp(&a.confidence).then(a.address.cmp(&b.address)));
+    merged.sort_by_key(|candidate| std::cmp::Reverse(candidate.confidence));
     merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(address: u64, confidence: Confidence, observation: &str) -> Candidate {
+        Candidate { address, confidence, source: "test", observation: observation.to_owned(), evidence: Vec::new() }
+    }
+
+    #[test]
+    fn merge_keeps_proposal_order_among_equal_confidence() {
+        let merged = merge(vec![
+            candidate(0x2000, Confidence::High, "main.main"),
+            candidate(0x1000, Confidence::High, "main"),
+            candidate(0x500, Confidence::Low, "heuristic"),
+            candidate(0x1000, Confidence::Medium, "startup"),
+        ]);
+        let order: Vec<u64> = merged.iter().map(|candidate| candidate.address).collect();
+        assert_eq!(order, [0x2000, 0x1000, 0x500]);
+        assert!(merged[1].evidence[0].contains("corroborated by test: startup"));
+    }
 }
