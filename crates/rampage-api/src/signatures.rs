@@ -33,13 +33,13 @@ impl Project {
     /// still unnamed are saved as user names (existing names and user edits are never overwritten).
     pub fn apply_signatures(&self, database: &SignatureDb, apply: bool) -> Result<SignatureApplication, ApiError> {
         let analysis = self.analysis()?;
-        let arch = self.binary.arch;
+        let target = self.binary.target();
         let mut matches = Vec::new();
         for function in &analysis.program.functions {
             let end = function.blocks.iter().map(|block| block.end).max().unwrap_or(function.address);
             let Some(length) = end.checked_sub(function.address).filter(|&length| length > 0) else { continue };
             let Some(bytes) = self.binary.read(function.address, length) else { continue };
-            let Some(name) = database.identify(arch, bytes, function.address) else { continue };
+            let Some(name) = database.identify(&target, bytes, function.address) else { continue };
             let current = self.function_name(function.address);
             matches.push(SignatureMatch {
                 address: function.address,
