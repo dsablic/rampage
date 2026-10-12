@@ -107,7 +107,7 @@ async fn carve_scans_any_file_by_path_with_pages() {
     let client = connect().await;
     let path = fixture("hello-universal.macho");
     let carving = json_of(&call(&client, "carve", json!({ "path": path, "offset": 1, "limit": 1 })).await);
-    assert_eq!(carving["candidates_total"], 3);
+    assert_eq!(carving["more"], true);
     assert_eq!(carving["offset"], 1);
     let candidates = carving["candidates"].as_array().unwrap();
     assert_eq!(candidates.len(), 1);
@@ -116,9 +116,12 @@ async fn carve_scans_any_file_by_path_with_pages() {
     assert_eq!(candidates[0]["confidence"], "validated");
     assert_eq!(candidates[0]["arch"], "x86_64");
     assert_eq!(carving["truncated"], false);
+    let last = json_of(&call(&client, "carve", json!({ "path": path, "offset": 2 })).await);
+    assert_eq!((last["candidates"].as_array().unwrap().len(), &last["more"]), (1, &json!(false)));
 
     let license = fixture("Microsoft.Bcl.HashCode.dll.LICENSE.txt");
-    assert_eq!(json_of(&call(&client, "carve", json!({ "path": license })).await)["candidates_total"], 0);
+    let none = json_of(&call(&client, "carve", json!({ "path": license })).await);
+    assert_eq!((none["candidates"].as_array().unwrap().len(), &none["more"]), (0, &json!(false)));
     let failed = call(&client, "carve", json!({ "path": "/dev/zero" })).await;
     assert_eq!(failed.is_error, Some(true));
     assert!(text(&failed).contains("not a regular file"), "{}", text(&failed));

@@ -189,6 +189,23 @@ pub struct Carving {
     /// Whether a limit cut the scan short; `limitations` says which.
     pub truncated: bool,
     pub limitations: Vec<String>,
+    /// Whether a candidate past `Limits::max_candidates` stopped the scan; its limitation comes first.
+    #[serde(skip)]
+    candidate_cap_reached: bool,
+    /// Whether a limit other than the candidate cap cut the scan short.
+    #[serde(skip)]
+    otherwise_truncated: bool,
+}
+
+impl Carving {
+    /// For a caller that set the candidate cap to end a page rather than to limit the scan: drops the cap's
+    /// limitation, keeping `truncated` only for the other limits.
+    pub fn treat_candidate_cap_as_page_end(&mut self) {
+        if std::mem::take(&mut self.candidate_cap_reached) {
+            self.limitations.remove(0);
+            self.truncated = self.otherwise_truncated;
+        }
+    }
 }
 
 /// Carves the regular file at `path`, mapping it read-only.
@@ -213,7 +230,8 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     let scanned = data.len().min(usize::try_from(limits.max_scan_bytes).unwrap_or(usize::MAX));
     let mut candidates = Vec::new();
     let mut limitations = Vec::new();
-    let mut truncated = false;
+    let mut otherwise_truncated = false;
+    let mut candidate_cap_reached = false;
     // Archive member headers inside an archive already reported are part of it, not new archives.
     let mut zip_members_until = 0;
     let mut cpio_members_until = 0;
@@ -251,7 +269,7 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
         };
         let Some(mut candidate) = found else { continue };
         if candidates.len() >= limits.max_candidates {
-            truncated = true;
+            candidate_cap_reached = true;
             limitations.push(format!(
                 "stopped at the candidate cap ({}) at offset {offset:#x}; later offsets were not scanned",
                 limits.max_candidates
@@ -272,11 +290,11 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
         candidates.push(candidate);
     }
     if scanned < data.len() {
-        truncated = true;
+        otherwise_truncated = true;
         limitations.push(format!("scanned only the first {scanned:#x} of {:#x} bytes", data.len()));
     }
     if let Some(offset) = probe_exhausted_at {
-        truncated = true;
+        otherwise_truncated = true;
         limitations.push(format!(
             "the search for gzip header name and comment ends ran out of its {:#x}-byte budget at offset \
              {offset:#x}; gzip streams carrying those fields from there on were not reported",
@@ -293,7 +311,15 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
          as its members: an archive stored inside another archive's members is not reported separately"
             .to_owned(),
     );
-    Carving { file_size: data.len() as u64, scanned_bytes: scanned as u64, candidates, truncated, limitations }
+    Carving {
+        file_size: data.len() as u64,
+        scanned_bytes: scanned as u64,
+        candidates,
+        truncated: candidate_cap_reached || otherwise_truncated,
+        limitations,
+        candidate_cap_reached,
+        otherwise_truncated,
+    }
 }
 
 fn end_of(offset: u64, size: u64) -> Option<u64> {
