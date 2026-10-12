@@ -128,6 +128,12 @@ impl<'a> Image<'a> {
     }
 }
 
+/// A virtual address `delta` bytes past `base`, or `None` on overflow. Record offsets are applied to
+/// cross-referenced addresses read out of the image, so a crafted binary must not be able to wrap them.
+fn va_at(base: u64, delta: u64) -> Option<u64> {
+    base.checked_add(delta)
+}
+
 #[derive(Clone)]
 struct ItaniumCandidate {
     vtable: u64,
@@ -157,8 +163,10 @@ fn itanium_candidates(image: &Image) -> BTreeMap<u64, ItaniumCandidate> {
         if candidates.len() >= MAX_RECORDS {
             return;
         }
-        let (Some(vtable), Some(name_raw)) = (image.read_pointer(address), image.read_pointer(address + width))
-        else {
+        let Some(name_slot) = va_at(address, width) else {
+            return;
+        };
+        let (Some(vtable), Some(name_raw)) = (image.read_pointer(address), image.read_pointer(name_slot)) else {
             return;
         };
         // Darwin sets the high bit of the typeinfo name pointer to flag a non-unique type name; clear it
@@ -194,11 +202,11 @@ fn accept_itanium(image: &Image, candidates: BTreeMap<u64, ItaniumCandidate>) ->
 /// Base edges from a `__vmi_class_type_info` record, or `None` when the layout does not fully validate.
 fn itanium_vmi_bases(image: &Image, address: u64, accepted: &BTreeMap<u64, ItaniumCandidate>) -> Option<Vec<String>> {
     let width = image.pointer_width();
-    let count = image.read_u32(address + 2 * width + 4)?;
+    let count = image.read_u32(va_at(address, 2 * width + 4)?)?;
     if count == 0 || count as usize > MAX_BASES {
         return None;
     }
-    let array = address + 2 * width + 8;
+    let array = va_at(address, 2 * width + 8)?;
     let mut bases = Vec::with_capacity(count as usize);
     for index in 0..u64::from(count) {
         let entry = array.checked_add(index.checked_mul(2 * width)?)?;
@@ -211,7 +219,8 @@ fn itanium_vmi_bases(image: &Image, address: u64, accepted: &BTreeMap<u64, Itani
 /// Direct base-class names for an Itanium record, from its `__si`/`__vmi` inheritance variant.
 fn itanium_bases(image: &Image, address: u64, accepted: &BTreeMap<u64, ItaniumCandidate>, own: &str) -> Vec<String> {
     let width = image.pointer_width();
-    if let Some(single) = image.read_pointer(address + 2 * width).and_then(|base| accepted.get(&base)) {
+    let single = va_at(address, 2 * width).and_then(|va| image.read_pointer(va)).and_then(|base| accepted.get(&base));
+    if let Some(single) = single {
         return dedup_bases(vec![single.name.clone()], own);
     }
     match itanium_vmi_bases(image, address, accepted) {
@@ -244,7 +253,8 @@ pub fn recover_itanium(image: &Image) -> Vec<RttiClass> {
 /// Resolves an MSVC RTTI cross-reference: a full pointer for 32-bit (signature 0), an image-relative RVA for
 /// 64-bit (signature 1).
 fn msvc_resolve(signature: u32, image_base: u64, field: u32) -> u64 {
-    if signature == 1 { image_base + u64::from(field) } else { u64::from(field) }
+    // A wrapped address lands outside every mapped range, so the later read fails cleanly; never panics.
+    if signature == 1 { image_base.saturating_add(u64::from(field)) } else { u64::from(field) }
 }
 
 /// Reads an MSVC `TypeDescriptor` and returns its raw `.?A...` name and the demangled class name.
@@ -253,7 +263,7 @@ fn msvc_type_descriptor(image: &Image, address: u64) -> Option<(String, String)>
     if vftable == 0 || !image.mapped(vftable) {
         return None;
     }
-    let name_va = address + 2 * image.pointer_width();
+    let name_va = va_at(address, 2 * image.pointer_width())?;
     let raw = image.read_cstr(name_va, MAX_NAME_BYTES)?;
     let raw = std::str::from_utf8(raw).ok()?;
     if !raw.starts_with(".?A") || !raw.bytes().all(|byte| byte.is_ascii_graphic()) {
@@ -277,11 +287,11 @@ fn strip_msvc_keyword(name: &str) -> &str {
 
 /// Base-class names from an MSVC `ClassHierarchyDescriptor`, or `None` when the hierarchy does not validate.
 fn msvc_bases(image: &Image, chd: u64, signature: u32, image_base: u64, own: &str) -> Option<Vec<String>> {
-    let count = image.read_u32(chd + 8)?;
+    let count = image.read_u32(va_at(chd, 8)?)?;
     if count == 0 || count as usize > MAX_BASES {
         return None;
     }
-    let array = msvc_resolve(signature, image_base, image.read_u32(chd + 12)?);
+    let array = msvc_resolve(signature, image_base, image.read_u32(va_at(chd, 12)?)?);
     let mut bases = Vec::new();
     for index in 0..u64::from(count) {
         let slot = array.checked_add(index.checked_mul(4)?)?;
@@ -301,12 +311,12 @@ fn msvc_complete_object_locator(image: &Image, address: u64) -> Option<RttiClass
     }
     let image_base = if signature == 1 {
         // The self RVA in a 64-bit locator recovers the image base without any external knowledge.
-        address.checked_sub(u64::from(image.read_u32(address + 20)?))?
+        address.checked_sub(u64::from(image.read_u32(va_at(address, 20)?)?))?
     } else {
         0
     };
-    let type_descriptor = msvc_resolve(signature, image_base, image.read_u32(address + 12)?);
-    let hierarchy = msvc_resolve(signature, image_base, image.read_u32(address + 16)?);
+    let type_descriptor = msvc_resolve(signature, image_base, image.read_u32(va_at(address, 12)?)?);
+    let hierarchy = msvc_resolve(signature, image_base, image.read_u32(va_at(address, 16)?)?);
     let (mangled, name) = msvc_type_descriptor(image, type_descriptor)?;
     let bases = msvc_bases(image, hierarchy, signature, image_base, &name)?;
     Some(RttiClass { name, mangled, abi: "msvc", type_info: type_descriptor, bases, source: "rtti_scan" })
@@ -343,7 +353,7 @@ fn build_image(binary: &Binary) -> Image<'_> {
             continue;
         }
         let len = section.file_size.min(section.size).min(MAX_SECTION_BYTES);
-        if len == 0 {
+        if len == 0 || section.address.checked_add(len).is_none() {
             continue;
         }
         if let Some(bytes) = binary.read(section.address, len) {
