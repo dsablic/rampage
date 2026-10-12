@@ -37,7 +37,7 @@ mod peid;
 pub use matcher::identify;
 pub use model::{Condition, Confidence, Detection, Kind, Signature, SignatureDb};
 pub use pattern::{BytePattern, MAX_PATTERN_BYTES, MIN_DISTINCTIVE_NIBBLES, PatternError};
-pub use peid::PeidError;
+pub use peid::{PeidError, PeidWarning};
 
 impl SignatureDb {
     /// The bundled starter database (see the [crate] docs for coverage).
@@ -45,9 +45,14 @@ impl SignatureDb {
         bundled::bundled()
     }
 
-    /// Adds every signature parsed from PeID `userdb.txt` text to this database.
-    pub fn load_peid(&mut self, text: &str) -> Result<(), PeidError> {
-        self.signatures.extend(peid::parse(text)?);
-        Ok(())
+    /// Adds every usable signature parsed from PeID `userdb.txt` text to this database, returning the entries
+    /// and lines it skipped. Fails, adding nothing, only when there were problems and not one usable signature.
+    pub fn load_peid(&mut self, text: &str) -> Result<Vec<PeidWarning>, PeidError> {
+        let parsed = peid::parse(text);
+        if parsed.signatures.is_empty() && !parsed.warnings.is_empty() {
+            return Err(PeidError::NoUsableSignatures { warnings: parsed.warnings });
+        }
+        self.signatures.extend(parsed.signatures);
+        Ok(parsed.warnings)
     }
 }

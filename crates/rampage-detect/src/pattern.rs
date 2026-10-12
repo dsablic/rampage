@@ -6,8 +6,9 @@
 //! the same. Every pattern is at most [`MAX_PATTERN_BYTES`] long, checked before anything is allocated, so a
 //! malformed signature cannot allocate wildly.
 
-/// Upper bound on a pattern's length in bytes; real entry-point stubs are far shorter.
-pub const MAX_PATTERN_BYTES: usize = 256;
+/// Upper bound on a pattern's length in bytes. Real entry-point stubs are far shorter, but hand-made PeID
+/// databases carry signatures of several hundred bytes.
+pub const MAX_PATTERN_BYTES: usize = 4096;
 
 /// One byte of a pattern: `value` holds the fixed bits and `mask` marks which bits are fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
