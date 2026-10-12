@@ -394,6 +394,7 @@ fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<Dot
     let mut streams = Vec::new();
     let mut table_stream: Option<&[u8]> = None;
     let [mut strings, mut user_strings, mut guids, mut blobs] = [None; 4];
+    let (mut uncompressed, mut jtd) = (false, false);
     let mut cursor = flags_offset + 4;
     for _ in 0..usize::from(stream_count).min(MAX_STREAMS) {
         let (Some(offset), Some(size)) = (read_u32(root, cursor), read_u32(root, cursor + 4)) else {
@@ -419,7 +420,15 @@ fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<Dot
             continue;
         };
         let slot = match name.as_str() {
-            "#~" | "#-" => &mut table_stream,
+            "#~" | "#-" => {
+                uncompressed = name == "#-";
+                &mut table_stream
+            }
+            // dnlib, following the CLR's minimal-delta handling, makes every index 4 bytes when it is present.
+            "#JTD" => {
+                jtd = true;
+                continue;
+            }
             "#Strings" => &mut strings,
             "#US" => &mut user_strings,
             "#GUID" => &mut guids,
@@ -461,7 +470,7 @@ fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<Dot
         warnings: Vec::new(),
     };
     match table_stream {
-        Some(stream) => match Tables::parse(stream, &mut warnings) {
+        Some(stream) => match Tables::parse(stream, uncompressed && jtd, &mut warnings) {
             Some(tables) => Decoder { tables: &tables, heaps, warnings: &mut warnings }.decode(&mut metadata),
             None => warnings.push("table stream header is unreadable".to_owned()),
         },

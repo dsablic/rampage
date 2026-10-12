@@ -28,6 +28,8 @@ struct Spec {
     method_lists: Option<[u32; 3]>,
     /// Puts an empty `#~` and a junk `#Strings` before the real streams, the decoys obfuscators plant.
     decoy_streams: bool,
+    /// An uncompressed `#-` table stream beside a `#JTD` stream, which makes every index 4 bytes wide.
+    jtd: bool,
 }
 
 const SECTION_RVA: u32 = 0x2000;
@@ -91,12 +93,11 @@ fn build(spec: &Spec) -> Vec<u8> {
     }
     user_strings.push(0);
 
-    let s = if spec.wide_strings { 4 } else { 2 };
-    let g = if spec.wide_guids { 4 } else { 2 };
-    let b = if spec.wide_blobs { 4 } else { 2 };
+    let wide = |set: bool| if set || spec.jtd { 4 } else { 2 };
+    let (s, g, b, i) = (wide(spec.wide_strings), wide(spec.wide_guids), wide(spec.wide_blobs), wide(false));
     let type_refs = 1 + spec.extra_type_refs;
     // TypeDefOrRef and ResolutionScope have 2 tag bits, MemberRefParent 3, HasCustomAttribute 5.
-    let coded = |tag_bits: u32| if type_refs < (1 << (16 - tag_bits)) { 2 } else { 4 };
+    let coded = |tag_bits: u32| wide(type_refs >= (1 << (16 - tag_bits)));
     let (tdor, scope, mrp, hca) = (coded(2), coded(2), coded(3), coded(5));
 
     // Bodies live after the 72-byte CLI header.
@@ -122,19 +123,19 @@ fn build(spec: &Spec) -> Vec<u8> {
     let (module_type, program, demo, inner) =
         (strings.string("<Module>"), strings.string("Program"), strings.string("Demo"), strings.string("Inner"));
     let method_lists = spec.method_lists.unwrap_or([1, 1, 5]);
-    tables.put(0, 4).put(module_type, s).put(0, s).put(0, tdor).put(1, 2).put(method_lists[0], 2);
-    tables.put(0x0010_0001, 4).put(program, s).put(demo, s).put((1 << 2) | 1, tdor).put(1, 2).put(method_lists[1], 2);
-    tables.put(0x0010_0002, 4).put(inner, s).put(0, s).put((1 << 2) | 1, tdor).put(2, 2).put(method_lists[2], 2);
+    tables.put(0, 4).put(module_type, s).put(0, s).put(0, tdor).put(1, i).put(method_lists[0], i);
+    tables.put(0x0010_0001, 4).put(program, s).put(demo, s).put((1 << 2) | 1, tdor).put(1, i).put(method_lists[1], i);
+    tables.put(0x0010_0002, 4).put(inner, s).put(0, s).put((1 << 2) | 1, tdor).put(2, i).put(method_lists[2], i);
     // Field
     let counter = strings.string("counter");
     tables.put(0x0001, 2).put(counter, s).put(signature, b);
     // MethodDef: Main (tiny IL), Compute (fat IL), Helper (native), Run (abstract, no body).
     let main = if spec.bad_method_name { 0xFFFF } else { strings.string("Main") };
     let (compute, helper, run) = (strings.string("Compute"), strings.string("Helper"), strings.string("Run"));
-    tables.put(tiny_rva, 4).put(0, 2).put(0x0016, 2).put(main, s).put(signature, b).put(1, 2);
-    tables.put(fat_rva, 4).put(0, 2).put(0x0006, 2).put(compute, s).put(signature, b).put(2, 2);
-    tables.put(native_rva, 4).put(0x0001, 2).put(0x0016, 2).put(helper, s).put(signature, b).put(5, 2);
-    tables.put(0, 4).put(0, 2).put(0x0446, 2).put(run, s).put(signature, b).put(5, 2);
+    tables.put(tiny_rva, 4).put(0, 2).put(0x0016, 2).put(main, s).put(signature, b).put(1, i);
+    tables.put(fat_rva, 4).put(0, 2).put(0x0006, 2).put(compute, s).put(signature, b).put(2, i);
+    tables.put(native_rva, 4).put(0x0001, 2).put(0x0016, 2).put(helper, s).put(signature, b).put(5, i);
+    tables.put(0, 4).put(0, 2).put(0x0446, 2).put(run, s).put(signature, b).put(5, i);
     // Param: Main(args); Compute's return row (sequence 0) and its parameters stored out of order.
     let (args, x, y) = (strings.string("args"), strings.string("x"), strings.string("y"));
     tables.put(0, 2).put(1, 2).put(args, s);
@@ -145,7 +146,7 @@ fn build(spec: &Spec) -> Vec<u8> {
     let ctor = strings.string(".ctor");
     tables.put((1 << 3) | 1, mrp).put(ctor, s).put(signature, b);
     // CustomAttribute: never decoded, but its width depends on HasCustomAttribute and must be skipped right.
-    tables.put((1 << 5) | 7, hca).put((1 << 3) | 3, 2).put(0, b);
+    tables.put((1 << 5) | 7, hca).put((1 << 3) | 3, i).put(0, b);
     // Assembly
     let demo_assembly = strings.string("Demo");
     tables.put(0x8004, 4).put(1, 2).put(2, 2).put(3, 2).put(4, 2).put(0, 4).put(0, b).put(demo_assembly, s).put(0, s);
@@ -153,7 +154,7 @@ fn build(spec: &Spec) -> Vec<u8> {
     let mscorlib = strings.string("mscorlib");
     tables.put(4, 2).put(0, 2).put(0, 2).put(0, 2).put(0, 4).put(token_blob, b).put(mscorlib, s).put(0, s).put(0, b);
     // NestedClass: Inner (TypeDef 3) inside Program (TypeDef 2).
-    tables.put(3, 2).put(2, 2);
+    tables.put(3, i).put(2, i);
 
     let present: [(u8, u32); 11] = [
         (0x00, 1),
@@ -186,8 +187,11 @@ fn build(spec: &Spec) -> Vec<u8> {
     let empty_tables = [0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let decoys: [(&str, &[u8]); 2] = [("#~", &empty_tables), ("#Strings", b"\0Decoy\0\0")];
     let mut streams: Vec<(&str, &[u8])> = if spec.decoy_streams { decoys.to_vec() } else { Vec::new() };
+    if spec.jtd {
+        streams.push(("#JTD", &[]));
+    }
     streams.extend([
-        ("#~", table_stream.as_slice()),
+        (if spec.jtd { "#-" } else { "#~" }, table_stream.as_slice()),
         ("#Strings", &strings.bytes),
         ("#US", &user_strings),
         ("#GUID", &guids),
@@ -468,6 +472,17 @@ fn the_last_of_duplicate_streams_wins_as_in_the_clr() {
     let duplicates: Vec<&String> = decoyed.warnings.iter().filter(|warning| warning.contains("duplicate")).collect();
     assert_eq!(duplicates.len(), 2, "{:?}", decoyed.warnings);
     assert_eq!(decoyed.warnings.len(), 2, "{:?}", decoyed.warnings);
+}
+
+#[test]
+fn a_jtd_stream_widens_every_index_of_an_uncompressed_table_stream() {
+    let normal = parse(&Spec::default()).unwrap().unwrap();
+    let jtd = parse(&Spec { jtd: true, ..Spec::default() }).unwrap().unwrap();
+    assert!(jtd.warnings.is_empty(), "{:?}", jtd.warnings);
+    assert_eq!(jtd.types, normal.types);
+    assert_eq!(jtd.assembly_refs, normal.assembly_refs);
+    assert_eq!(jtd.member_refs, normal.member_refs);
+    assert_eq!(jtd.module, normal.module);
 }
 
 #[test]

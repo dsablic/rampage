@@ -241,8 +241,9 @@ const EXTRA_DATA: u8 = 0x40;
 
 impl<'a> Tables<'a> {
     /// Parses the table stream header and lays out every standard table. Problems become warnings: a table
-    /// that does not fit is truncated to its readable rows and nothing after it is located.
-    pub(super) fn parse(stream: &'a [u8], warnings: &mut Warnings) -> Option<Self> {
+    /// that does not fit is truncated to its readable rows and nothing after it is located. `all_wide` makes
+    /// every heap, table and coded index 4 bytes, as a `#JTD` stream does for an uncompressed `#-` stream.
+    pub(super) fn parse(stream: &'a [u8], all_wide: bool, warnings: &mut Warnings) -> Option<Self> {
         let Some(heap_sizes) = stream.get(6).copied() else {
             warnings.push("table stream too small for its header".to_owned());
             return None;
@@ -268,12 +269,12 @@ impl<'a> Tables<'a> {
             warnings.push(format!("table stream marks non-standard tables present (valid {valid:#018x})"));
         }
 
-        let heap_width = |bit: u8| if heap_sizes & bit != 0 { 4 } else { 2 };
-        let index_width = |table: u8| if declared[usize::from(table)] > 0xFFFF { 4 } else { 2 };
+        let heap_width = |bit: u8| if all_wide || heap_sizes & bit != 0 { 4 } else { 2 };
+        let index_width = |table: u8| if all_wide || declared[usize::from(table)] > 0xFFFF { 4 } else { 2 };
         let coded_width = |coded: Coded| {
             let limit = 1u32 << (16 - coded.tag_bits());
             let largest = coded.tables().iter().flatten().map(|&table| declared[usize::from(table)]).max();
-            if largest.unwrap_or(0) < limit { 2 } else { 4 }
+            if all_wide || largest.unwrap_or(0) >= limit { 4 } else { 2 }
         };
 
         let mut layouts = vec![Layout::default(); TABLE_COUNT];
