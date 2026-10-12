@@ -12,7 +12,9 @@ mod capa;
 mod corroborated;
 pub mod names;
 
-pub use capa::{CapaError, CapaRule, CapaRuleSet, detect_capa, load_capa_rules, load_capa_rules_from_str};
+pub use capa::{
+    CapaError, CapaRule, CapaRuleSet, detect_capa, detect_capa_with_exports, load_capa_rules, load_capa_rules_from_str,
+};
 
 /// A detected capability and the evidence that triggered it.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
