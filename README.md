@@ -126,10 +126,10 @@ Addresses accept `0x` hex, decimal, symbol and export names, or `sub_<hex>`. In 
 a `"0x…"` string, because JSON numbers lose precision above 2^53 in common consumers.
 
 Names, comments and typed annotations are saved beside ordinary binaries in `<file>.rampage`
-(`<file>.<arch>.rampage` for a slice of a
-universal binary): an append-only JSON Lines log of edits, each recording the value it replaced, so undo is just
-another edit and the file is a full history. Several clients can share it: the UI picks up names an agent saves
-through MCP within a second.
+(`<file>.<arch>.rampage` for a slice of a universal binary): an append-only JSON Lines log of edits, each
+recording the value it replaced, so undo is just another edit and the file is a full history. A batch is written
+under a header line and replayed only once all of its edits are present. Several clients can share it: the UI
+picks up names an agent saves through MCP within a second.
 Snapshot annotations use a capture-identity log instead, sharing edits only across equal analysis identities
 in the same directory by default. Legacy unscoped snapshot logs are not automatically loaded or migrated;
 see [runtime snapshots](docs/runtime-snapshots.md) for persistence and explicit cross-directory reuse.
