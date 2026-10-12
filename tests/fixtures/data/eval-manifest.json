@@ -1,0 +1,14 @@
+{
+  "slices": {
+    "x86_64": {
+      "refs": ["../bin/eval-ref-x86_64.elf"],
+      "target": "../bin/eval-target-x86_64.elf",
+      "truth": "eval-truth-x86_64.json"
+    },
+    "aarch64": {
+      "refs": ["../bin/eval-ref-aarch64.elf"],
+      "target": "../bin/eval-target-aarch64.elf",
+      "truth": "eval-truth-aarch64.json"
+    }
+  }
+}

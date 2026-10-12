@@ -1,0 +1,18 @@
+[package]
+name = "rampage-eval"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+
+[dependencies]
+clap.workspace = true
+object = { workspace = true, features = ["build"] }
+rampage-analysis.workspace = true
+rampage-arch.workspace = true
+rampage-loaders.workspace = true
+rampage-signatures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
