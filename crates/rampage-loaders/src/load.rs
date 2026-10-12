@@ -542,12 +542,14 @@ impl Binary {
     }
 
     /// Fallback for a stripped or packed image whose pclntab keeps no recognizable section name: scans the
-    /// read-only data sections for the table. A candidate is accepted only once it parses cleanly and all of
-    /// its recovered addresses sit in code, so arbitrary data cannot masquerade as a table.
+    /// read-only and relro data sections for the table (an externally linked PIE merges it into a writable
+    /// `.data.rel.ro`). A candidate is accepted only once it parses cleanly and all of its recovered addresses
+    /// sit in code, so arbitrary data cannot masquerade as a table.
     fn scan_gopclntab(&self, text_base: u64) -> crate::gopclntab::GoReport {
         let pointer_size = self.arch.pointer_size();
         for section in &self.sections {
-            if section.kind != SectionKind::ReadOnlyData || section.size == 0 {
+            let relro = section.kind == SectionKind::Data && section.name.starts_with(".data.rel.ro");
+            if !(section.kind == SectionKind::ReadOnlyData || relro) || section.size == 0 {
                 continue;
             }
             let Some(bytes) = self.read(section.address, section.size) else { continue };
@@ -563,9 +565,10 @@ impl Binary {
     }
 }
 
-/// Whether a section name is the Go pclntab under either platform's spelling.
+/// Whether a section name is the Go pclntab under any of its spellings. Go's linker names a PIE's relro copy
+/// `.data.rel.ro.gopclntab`, which Go's own objfile reader falls back to.
 fn is_gopclntab(name: &str) -> bool {
-    name == ".gopclntab" || name == "__gopclntab"
+    matches!(name, ".gopclntab" | ".data.rel.ro.gopclntab" | "__gopclntab")
 }
 
 /// Sorted, merged address ranges holding code.
@@ -799,5 +802,18 @@ fn symbol_kind_of(kind: object::SymbolKind) -> SymbolKind {
         object::SymbolKind::Text => SymbolKind::Function,
         object::SymbolKind::Data => SymbolKind::Data,
         _ => SymbolKind::Other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pclntab_section_names_include_the_relro_spelling() {
+        for name in [".gopclntab", ".data.rel.ro.gopclntab", "__gopclntab"] {
+            assert!(is_gopclntab(name), "{name}");
+        }
+        assert!(!is_gopclntab(".data.rel.ro"));
     }
 }
