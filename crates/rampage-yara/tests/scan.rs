@@ -106,4 +106,20 @@ fn matched_string_capture_is_bounded() {
     let hits = scan(&rules, &data).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].matched_strings.len(), MAX_MATCHED_STRINGS_PER_RULE);
+    assert_eq!(hits[0].total_matched_strings, data.len());
+}
+
+#[test]
+fn a_prolific_pattern_does_not_crowd_out_the_others() {
+    let rules = compile("rule two { strings: $a = \"A\" $b = \"needle\" condition: $a and $b }").unwrap();
+    let mut data = vec![b'A'; MAX_MATCHED_STRINGS_PER_RULE * 4];
+    data.extend_from_slice(b"needle");
+    let hits = scan(&rules, &data).unwrap();
+    let strings = &hits[0].matched_strings;
+    assert_eq!(strings.len(), MAX_MATCHED_STRINGS_PER_RULE);
+    assert_eq!(
+        strings.last(),
+        Some(&MatchedString { identifier: "$b".to_string(), offset: data.len() - 6, length: 6 })
+    );
+    assert_eq!(hits[0].total_matched_strings, MAX_MATCHED_STRINGS_PER_RULE * 4 + 1);
 }

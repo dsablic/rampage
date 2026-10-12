@@ -4,6 +4,7 @@
 //! back owned, `serde`-serializable results that a later API/MCP layer can hand out directly.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use serde::Serialize;
 
 /// Cap on matched-string instances recorded per rule. A pathological pattern (e.g. a single byte with many hits)
 /// can match thousands of times; we keep the result bounded so callers never face unbounded output. The cap is
-/// per rule, across all of its patterns.
+/// per rule, shared fairly across its patterns: each matching pattern keeps some instances when there is room.
 pub const MAX_MATCHED_STRINGS_PER_RULE: usize = 64;
 
 /// Errors from compiling or scanning. Wraps `yara-x`'s own errors as rendered strings so they cross the API
@@ -73,8 +74,10 @@ pub struct YaraMatch {
     pub tags: Vec<String>,
     /// Rule metadata as `name -> value`, each value rendered to a string.
     pub metadata: BTreeMap<String, String>,
-    /// Matched pattern instances, capped at [`MAX_MATCHED_STRINGS_PER_RULE`].
+    /// Matched pattern instances, capped at [`MAX_MATCHED_STRINGS_PER_RULE`] and grouped by pattern in rule order.
     pub matched_strings: Vec<MatchedString>,
+    /// How many instances matched in all, so a list shorter than this was truncated.
+    pub total_matched_strings: usize,
 }
 
 /// Compile one or more YARA rules from a single source string.
@@ -144,18 +147,40 @@ fn to_match(rule: yara_x::Rule) -> YaraMatch {
     let tags = rule.tags().map(|t| t.identifier().to_string()).collect();
     let metadata = rule.metadata().map(|(name, value)| (name.to_string(), meta_to_string(value))).collect();
 
-    let mut matched_strings = Vec::new();
-    'patterns: for pattern in rule.patterns() {
-        let identifier = pattern.identifier().to_string();
-        for m in pattern.matches() {
-            if matched_strings.len() >= MAX_MATCHED_STRINGS_PER_RULE {
-                break 'patterns;
+    let total_matched_strings = rule.patterns().map(|pattern| pattern.matches().len()).sum();
+    let patterns: Vec<(String, Vec<Range<usize>>)> = rule
+        .patterns()
+        .map(|pattern| {
+            let ranges = pattern.matches().take(MAX_MATCHED_STRINGS_PER_RULE).map(|m| m.range()).collect();
+            (pattern.identifier().to_string(), ranges)
+        })
+        .collect();
+    // Hand out the budget one match per pattern per round, so one prolific pattern cannot crowd out the rest.
+    let mut taken = vec![0; patterns.len()];
+    let mut budget = MAX_MATCHED_STRINGS_PER_RULE;
+    while budget > 0 {
+        let before = budget;
+        for (count, (_, ranges)) in taken.iter_mut().zip(&patterns) {
+            if budget > 0 && *count < ranges.len() {
+                *count += 1;
+                budget -= 1;
             }
-            let range = m.range();
-            let identifier = identifier.clone();
-            matched_strings.push(MatchedString { identifier, offset: range.start, length: range.len() });
+        }
+        if budget == before {
+            break;
         }
     }
+    let matched_strings = patterns
+        .iter()
+        .zip(&taken)
+        .flat_map(|((identifier, ranges), &count)| {
+            ranges[..count].iter().map(|range| MatchedString {
+                identifier: identifier.clone(),
+                offset: range.start,
+                length: range.len(),
+            })
+        })
+        .collect();
 
     YaraMatch {
         identifier: rule.identifier().to_string(),
@@ -163,6 +188,7 @@ fn to_match(rule: yara_x::Rule) -> YaraMatch {
         tags,
         metadata,
         matched_strings,
+        total_matched_strings,
     }
 }
 
