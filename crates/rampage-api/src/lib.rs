@@ -54,7 +54,7 @@ pub use rampage_signatures::SignatureDb;
 pub use rampage_yara::{MatchedString, YaraMatch};
 pub use rows::{
     Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page, StringsQuery,
-    Summary,
+    Summary, label,
 };
 pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, RuntimeRange};
 pub use session::Session;

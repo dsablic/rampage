@@ -5,8 +5,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use rampage_analysis::functions;
 use rampage_analysis::strings::Encoding;
-use rampage_api::annotations::Field;
-use rampage_api::{EditResult, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery};
+use rampage_api::{
+    Capability, EditResult, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery, label,
+};
 use rampage_arch::Arch;
 use rampage_loaders::Details;
 use rampage_loaders::dotnet::EntryPoint;
@@ -610,13 +611,7 @@ fn write_edit(out: &mut impl Write, result: &EditResult, options: &Options) -> R
     if options.json {
         return write_json(out, result);
     }
-    let field = match result.field {
-        Field::Name => "name",
-        Field::Comment => "comment",
-        Field::Signature => "signature",
-        Field::Types => "types",
-        Field::Global => "global",
-    };
+    let field = label(&result.field);
     let state = if result.changed { "" } else { " (unchanged)" };
     match &result.value {
         Some(value) => writeln!(out, "{:#018x} {field} {value}{state}", result.address)?,
@@ -706,11 +701,21 @@ pub fn identify(
 
 pub fn capabilities(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
     let capabilities = open(path, options)?.capabilities();
+    render_capabilities(out, &capabilities, "no capabilities detected", options)
+}
+
+/// Capabilities as JSON, or one `[category] name (evidence)` line each, or `empty` when there are none.
+fn render_capabilities(
+    out: &mut impl Write,
+    capabilities: &[Capability],
+    empty: &str,
+    options: &Options,
+) -> Result<()> {
     if options.json {
         return write_json(out, &capabilities);
     }
     if capabilities.is_empty() {
-        writeln!(out, "no capabilities detected")?;
+        writeln!(out, "{empty}")?;
     }
     for capability in capabilities {
         writeln!(out, "[{}] {} ({})", capability.category, capability.name, capability.evidence.join(", "))?;
@@ -761,7 +766,7 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
         for method in &ty.methods {
             let body = match &method.il {
                 Some(il) => format!("{} bytes of IL at {:#x}", il.code_size, method.rva),
-                None => format!("{:?}", method.body).to_lowercase(),
+                None => label(&method.body),
             };
             writeln!(out, "  {}({})  {body}", method.name, method.params.join(", "))?;
         }
@@ -790,8 +795,7 @@ pub fn detect(out: &mut impl Write, path: &Path, peid: Option<&Path>, options: &
         writeln!(out, "no tool signatures matched")?;
     }
     for detection in detections {
-        let kind = format!("{:?}", detection.kind).to_lowercase();
-        let confidence = format!("{:?}", detection.confidence).to_lowercase();
+        let (kind, confidence) = (label(&detection.kind), label(&detection.confidence));
         writeln!(out, "[{kind}] {} ({confidence}): {}", detection.name, detection.evidence.join(", "))?;
     }
     Ok(())
@@ -814,14 +818,5 @@ pub fn yara(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) 
 
 pub fn capa(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) -> Result<()> {
     let capabilities = open(path, options)?.detect_capa(rules)?;
-    if options.json {
-        return write_json(out, &capabilities);
-    }
-    if capabilities.is_empty() {
-        writeln!(out, "no capa rules matched")?;
-    }
-    for capability in capabilities {
-        writeln!(out, "[{}] {} ({})", capability.category, capability.name, capability.evidence.join(", "))?;
-    }
-    Ok(())
+    render_capabilities(out, &capabilities, "no capa rules matched", options)
 }

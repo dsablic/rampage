@@ -30,6 +30,70 @@ fn json(args: &[&str], file: &str) -> serde_json::Value {
     serde_json::from_slice(&output).unwrap()
 }
 
+/// A scratch directory removed on drop.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("rampage-cli-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+
+    fn arg(&self) -> &str {
+        self.0.to_str().unwrap()
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn detect_labels_kind_and_confidence_as_the_json_does() {
+    rampage(&["detect"], "hello-x64.exe").success().stdout(contains("[compiler] MinGW/GCC (strong): "));
+    let detections = json(&["--json", "detect"], "hello-x64.exe");
+    let mingw = detections.as_array().unwrap().iter().find(|detection| detection["name"] == "MinGW/GCC").unwrap();
+    assert_eq!((mingw["kind"].as_str(), mingw["confidence"].as_str()), (Some("compiler"), Some("strong")));
+}
+
+#[test]
+fn yara_scans_a_rule_file_and_a_rule_directory() {
+    let rules = Scratch::new("yara");
+    std::fs::write(rules.0.join("pe.yar"), "rule pe_header : format { strings: $mz = \"MZ\" condition: $mz at 0 }")
+        .unwrap();
+    let file = rules.0.join("pe.yar");
+    rampage(&["yara", "--rules", file.to_str().unwrap()], "hello-x64.exe")
+        .success()
+        .stdout(contains("pe_header [format] (1 string matches)"));
+    rampage(&["yara", "--rules", rules.arg()], "hello-x64.elf").success().stdout(contains("no rules matched"));
+    std::fs::write(rules.0.join("broken.yar"), "rule broken {").unwrap();
+    rampage(&["yara", "--rules", rules.arg()], "hello-x64.exe").failure().stderr(contains("YARA rules"));
+}
+
+#[test]
+fn capa_and_capabilities_render_alike() {
+    let rules = Scratch::new("capa");
+    std::fs::write(
+        rules.0.join("console.yml"),
+        "rule:\n  meta:\n    name: write output to console\n    namespace: host-interaction/console\n    \
+         scopes:\n      static: file\n  features:\n    - or:\n      - import: puts\n      - import: printf\n",
+    )
+    .unwrap();
+    rampage(&["capa", "--rules", rules.arg()], "hello-x64.exe")
+        .success()
+        .stdout(contains("[host-interaction] write output to console ("));
+    rampage(&["capa", "--rules", rules.arg()], "musl-static-x86_64.elf")
+        .success()
+        .stdout(contains("no capa rules matched"));
+    let capabilities = json(&["--json", "capabilities"], "hello-x64.exe");
+    let first = &capabilities[0];
+    let line = format!("[{}] {} (", first["category"].as_str().unwrap(), first["name"].as_str().unwrap());
+    rampage(&["capabilities"], "hello-x64.exe").success().stdout(contains(line));
+}
+
 const ASSEMBLY: &str = "Microsoft.Bcl.HashCode.dll";
 
 #[test]

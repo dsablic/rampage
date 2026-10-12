@@ -52,7 +52,7 @@ impl Project {
                 DetectConfidence::Strong => Confidence::High,
                 DetectConfidence::Tentative => Confidence::Low,
             };
-            let kind = format!("{:?}", detection.kind).to_lowercase();
+            let kind = crate::label(&detection.kind);
             toolchain.push(
                 Finding::new("detect_tools", confidence, format!("{kind} signature matched: {}", detection.name))
                     .evidence(detection.evidence.iter().cloned()),
