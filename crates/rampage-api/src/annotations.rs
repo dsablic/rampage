@@ -49,9 +49,10 @@ pub struct Annotations {
     signatures: BTreeMap<u64, String>,
     types: BTreeMap<u64, String>,
     globals: BTreeMap<u64, String>,
-    /// Edits applied in this session, for undo; and undone ones, for redo.
-    done: Vec<Edit>,
-    undone: Vec<Edit>,
+    /// Steps applied in this session, for undo; and undone ones, for redo. A step is the edits one call made,
+    /// in order: a single edit, or a whole batch, which undoes and redoes together.
+    done: Vec<Vec<Edit>>,
+    undone: Vec<Vec<Edit>>,
     /// Where edits are appended; `None` keeps them in memory only.
     log: Option<Log>,
 }
@@ -147,10 +148,10 @@ impl Annotations {
         }
     }
 
-    /// Appends `edit` to the log. The appended line is read back, harmlessly, by the next `refresh`. A file left
-    /// ending mid-line (by an interrupted write) gets a newline first, so the fragment becomes a line of its own,
-    /// which reading skips.
-    fn record(&mut self, edit: &Edit) -> Result<(), String> {
+    /// Appends `edits` to the log in one write, so a batch reaches other readers whole. The appended lines are
+    /// read back, harmlessly, by the next `refresh`. A file left ending mid-line (by an interrupted write) gets a
+    /// newline first, so the fragment becomes a line of its own, which reading skips.
+    fn record(&mut self, edits: &[Edit]) -> Result<(), String> {
         let Some(log) = &mut self.log else { return Ok(()) };
         let error = |error: std::io::Error| format!("{}: {error}", log.path.display());
         let mut file = OpenOptions::new().read(true).create(true).append(true).open(&log.path).map_err(error)?;
@@ -160,15 +161,19 @@ impl Annotations {
             file.seek(SeekFrom::Start(len - 1)).map_err(error)?;
             file.read_exact(&mut last).map_err(error)?;
         }
-        let mut line = if last[0] == b'\n' { String::new() } else { "\n".to_owned() };
-        line.push_str(&serde_json::to_string(edit).map_err(|error| error.to_string())?);
-        line.push('\n');
-        file.write_all(line.as_bytes()).map_err(error)
+        let mut lines = if last[0] == b'\n' { String::new() } else { "\n".to_owned() };
+        for edit in edits {
+            lines.push_str(&serde_json::to_string(edit).map_err(|error| error.to_string())?);
+            lines.push('\n');
+        }
+        file.write_all(lines.as_bytes()).map_err(error)
     }
 
-    fn commit(&mut self, edit: &Edit) -> Result<(), String> {
-        self.record(edit)?;
-        self.apply(edit);
+    fn commit(&mut self, edits: &[Edit]) -> Result<(), String> {
+        self.record(edits)?;
+        for edit in edits {
+            self.apply(edit);
+        }
         Ok(())
     }
 
@@ -209,10 +214,41 @@ impl Annotations {
         let mut candidate = self.snapshot();
         candidate.apply(&edit);
         validate(&candidate)?;
-        self.commit(&edit)?;
-        self.done.push(edit);
+        self.commit(std::slice::from_ref(&edit))?;
+        self.done.push(vec![edit]);
         self.undone.clear();
         Ok(true)
+    }
+
+    /// Sets each `(field, address, value)` in order as one undo step, after `validate` accepts the state they
+    /// leave; all are recorded or none. Returns, for each, whether it changed anything.
+    pub(crate) fn set_batch_validated(
+        &mut self,
+        changes: &[(Field, u64, Option<String>)],
+        validate: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<Vec<bool>, String> {
+        let _lock = self.log_lock()?;
+        self.refresh()?;
+        let mut candidate = self.snapshot();
+        let mut edits = Vec::new();
+        let mut changed = Vec::with_capacity(changes.len());
+        for (field, address, value) in changes {
+            let previous = candidate.field_map(*field).get(address).cloned();
+            changed.push(previous != *value);
+            if previous != *value {
+                let edit = Edit { field: *field, address: *address, value: value.clone(), previous };
+                candidate.apply(&edit);
+                edits.push(edit);
+            }
+        }
+        if edits.is_empty() {
+            return Ok(changed);
+        }
+        validate(&candidate)?;
+        self.commit(&edits)?;
+        self.done.push(edits);
+        self.undone.clear();
+        Ok(changed)
     }
 
     pub(crate) fn import_signatures(
@@ -241,76 +277,80 @@ impl Annotations {
         validate(&candidate)?;
         let mut applied = Vec::new();
         for edit in edits {
-            self.commit(&edit)?;
+            self.commit(std::slice::from_ref(&edit))?;
             self.undone.clear();
             applied.push(edit.address);
-            self.done.push(edit);
+            self.done.push(vec![edit]);
         }
         Ok(applied)
     }
 
-    /// Reverts the last edit made through this instance. Returns the edit undone.
-    pub fn undo(&mut self) -> Result<Option<Edit>, String> {
+    /// Reverts the last step made through this instance: one edit, or a whole batch. Returns its edits, in the
+    /// order they were made; empty when there is nothing to undo.
+    pub fn undo(&mut self) -> Result<Vec<Edit>, String> {
         self.undo_validated(|_| Ok(()))
     }
 
     pub(crate) fn undo_validated(
         &mut self,
         validate: impl FnOnce(&Self) -> Result<(), String>,
-    ) -> Result<Option<Edit>, String> {
+    ) -> Result<Vec<Edit>, String> {
         if self.done.is_empty() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         let _lock = self.log_lock()?;
         self.refresh()?;
-        let Some(edit) = self.done.last().cloned() else { return Ok(None) };
-        self.check_unchanged(&edit, &edit.value)?;
-        let mut candidate = self.snapshot();
-        candidate.apply(&edit.inverse());
-        if matches!(edit.field, Field::Signature | Field::Types | Field::Global)
-            || (edit.field == Field::Name && !candidate.globals().is_empty())
-        {
-            validate(&candidate)?;
-        }
-        self.commit(&edit.inverse())?;
+        let Some(step) = self.done.last().cloned() else { return Ok(Vec::new()) };
+        let inverses: Vec<Edit> = step.iter().rev().map(Edit::inverse).collect();
+        self.replay(&inverses, validate)?;
         self.done.pop();
-        self.undone.push(edit.clone());
-        Ok(Some(edit))
+        self.undone.push(step.clone());
+        Ok(step)
     }
 
-    /// Reapplies the last undone edit. Returns it.
-    pub fn redo(&mut self) -> Result<Option<Edit>, String> {
+    /// Reapplies the last undone step. Returns its edits; empty when there is nothing to redo.
+    pub fn redo(&mut self) -> Result<Vec<Edit>, String> {
         self.redo_validated(|_| Ok(()))
     }
 
     pub(crate) fn redo_validated(
         &mut self,
         validate: impl FnOnce(&Self) -> Result<(), String>,
-    ) -> Result<Option<Edit>, String> {
+    ) -> Result<Vec<Edit>, String> {
         if self.undone.is_empty() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         let _lock = self.log_lock()?;
         self.refresh()?;
-        let Some(edit) = self.undone.last().cloned() else { return Ok(None) };
-        self.check_unchanged(&edit, &edit.previous)?;
-        let mut candidate = self.snapshot();
-        candidate.apply(&edit);
-        if matches!(edit.field, Field::Signature | Field::Types | Field::Global)
-            || (edit.field == Field::Name && !candidate.globals().is_empty())
-        {
-            validate(&candidate)?;
-        }
-        self.commit(&edit)?;
+        let Some(step) = self.undone.last().cloned() else { return Ok(Vec::new()) };
+        self.replay(&step, validate)?;
         self.undone.pop();
-        self.done.push(edit.clone());
-        Ok(Some(edit))
+        self.done.push(step.clone());
+        Ok(step)
     }
 
-    /// Fails when another client changed `edit`'s field since `expected` was set there: undoing or redoing over
-    /// that change would silently discard it.
-    fn check_unchanged(&self, edit: &Edit, expected: &Option<String>) -> Result<(), String> {
-        if self.field_map(edit.field).get(&edit.address) == expected.as_ref() {
+    /// Commits `edits` in order, each only over the value it replaces, and only once `validate` accepts the result
+    /// when the step touches what the decompiler checks.
+    fn replay(&mut self, edits: &[Edit], validate: impl FnOnce(&Self) -> Result<(), String>) -> Result<(), String> {
+        let mut candidate = self.snapshot();
+        for edit in edits {
+            candidate.check_unchanged(edit)?;
+            candidate.apply(edit);
+        }
+        let checked = edits.iter().any(|edit| {
+            matches!(edit.field, Field::Signature | Field::Types | Field::Global)
+                || (edit.field == Field::Name && !candidate.globals().is_empty())
+        });
+        if checked {
+            validate(&candidate)?;
+        }
+        self.commit(edits)
+    }
+
+    /// Fails when another client changed `edit`'s field since `edit.previous` was set there: undoing or redoing
+    /// over that change would silently discard it.
+    fn check_unchanged(&self, edit: &Edit) -> Result<(), String> {
+        if self.field_map(edit.field).get(&edit.address) == edit.previous.as_ref() {
             return Ok(());
         }
         Err(format!("{:#x} was edited by another client since; not changed", edit.address))
@@ -416,6 +456,10 @@ mod tests {
 
     fn cleanup(path: PathBuf) {
         std::fs::remove_file(&path).unwrap();
+        cleanup_lock(path);
+    }
+
+    fn cleanup_lock(path: PathBuf) {
         let mut lock = path.as_os_str().to_owned();
         lock.push(".lock");
         let _ = std::fs::remove_file(PathBuf::from(lock));
@@ -429,7 +473,7 @@ mod tests {
         assert!(!annotations.set(Field::Name, 0x1000, Some("parse".into())).unwrap());
         annotations.set(Field::Comment, 0x1004, Some("length check".into())).unwrap();
         annotations.set(Field::Name, 0x1000, Some("parse_header".into())).unwrap();
-        assert_eq!(annotations.undo().unwrap().map(|edit| edit.value), Some(Some("parse_header".into())));
+        assert_eq!(annotations.undo().unwrap()[0].value, Some("parse_header".into()));
         assert_eq!(annotations.name(0x1000), Some("parse"));
         assert_eq!(annotations.address_of("parse_header"), None);
         annotations.redo().unwrap();
@@ -537,5 +581,56 @@ mod tests {
         assert!(!annotations.signatures().contains_key(&0x20));
         annotations.redo().unwrap();
         assert_eq!(annotations.signatures()[&0x20], "int4 first(void);");
+    }
+
+    #[test]
+    fn a_batch_is_one_undo_step_written_in_one_append() {
+        let path = temporary_log("batch");
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        annotations.set(Field::Comment, 0x10, Some("before".into())).unwrap();
+        let changes = vec![
+            (Field::Name, 0x10, Some("first".to_owned())),
+            (Field::Comment, 0x10, Some("before".to_owned())),
+            (Field::Name, 0x20, Some("second".to_owned())),
+            (Field::Comment, 0x20, Some("note".to_owned())),
+        ];
+        assert_eq!(annotations.set_batch_validated(&changes, |_| Ok(())).unwrap(), [true, false, true, true]);
+        assert_eq!(annotations.undo().unwrap().len(), 3);
+        assert_eq!((annotations.name(0x10), annotations.name(0x20), annotations.comment(0x20)), (None, None, None));
+        assert_eq!(annotations.comment(0x10), Some("before"));
+        annotations.redo().unwrap();
+        let replayed = Annotations::open(path.clone()).unwrap();
+        assert_eq!((replayed.name(0x10), replayed.name(0x20)), (Some("first"), Some("second")));
+        assert_eq!(replayed.comment(0x20), Some("note"));
+        assert_eq!(annotations.undo().unwrap().len(), 3);
+        assert_eq!(annotations.undo().unwrap()[0].value.as_deref(), Some("before"));
+        assert!(annotations.undo().unwrap().is_empty());
+        cleanup(path);
+    }
+
+    #[test]
+    fn a_refused_batch_records_nothing() {
+        let path = temporary_log("refused-batch");
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        let changes = vec![(Field::Name, 0x10, Some("a".to_owned())), (Field::Name, 0x20, Some("b".to_owned()))];
+        assert!(annotations.set_batch_validated(&changes, |_| Err("no".to_owned())).is_err());
+        assert!(annotations.names().is_empty());
+        assert!(annotations.undo().unwrap().is_empty());
+        assert!(Annotations::open(path.clone()).unwrap().names().is_empty());
+        let _ = std::fs::remove_file(&path);
+        cleanup_lock(path);
+    }
+
+    #[test]
+    fn undoing_a_batch_refuses_when_another_client_changed_any_of_it() {
+        let path = temporary_log("batch-conflict");
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        let mut ui = Annotations::open(path.clone()).unwrap();
+        let changes = vec![(Field::Name, 0x10, Some("a".to_owned())), (Field::Name, 0x20, Some("b".to_owned()))];
+        agent.set_batch_validated(&changes, |_| Ok(())).unwrap();
+        ui.set(Field::Name, 0x20, Some("c".into())).unwrap();
+        assert!(agent.undo().is_err());
+        assert_eq!((agent.name(0x10), agent.name(0x20)), (Some("a"), Some("c")));
+        cleanup(path);
     }
 }

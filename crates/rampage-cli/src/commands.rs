@@ -607,6 +607,44 @@ pub fn comment(out: &mut impl Write, path: &Path, at: &str, text: Option<&str>, 
     write_edit(out, &result, options)
 }
 
+/// The largest batch file (JSON) `annotate-batch` reads: room for the most entries with long comments.
+const MAX_BATCH_BYTES: u64 = 8 * 1024 * 1024;
+
+pub fn annotate_batch(out: &mut impl Write, path: &Path, entries: &Path, options: &Options) -> Result<()> {
+    let text = rampage_api::read_bounded(entries, MAX_BATCH_BYTES, "batch file")?;
+    let entries: Vec<rampage_api::BatchEntry> = serde_json::from_str(&text).map_err(|error| {
+        anyhow::anyhow!("{}: expected a JSON array of {{at, name?, comment?}}: {error}", entries.display())
+    })?;
+    let result = open(path, options)?.annotate_batch(&entries)?;
+    if options.json {
+        return write_json(out, &result);
+    }
+    for entry in &result.entries {
+        let state = if entry.changed { "" } else { " (unchanged)" };
+        let name = entry.name.as_deref().map(|name| format!(" name {name}")).unwrap_or_default();
+        let comment = entry.comment.as_deref().map(|comment| format!(" comment {comment}")).unwrap_or_default();
+        writeln!(out, "{:#018x}{name}{comment}{state}", entry.address)?;
+    }
+    writeln!(out, "{} of {} entries changed", result.changed, result.entries.len())?;
+    Ok(())
+}
+
+pub fn check_names(out: &mut impl Write, path: &Path, names: &[String], options: &Options) -> Result<()> {
+    let checks = open(path, options)?.check_names(names)?;
+    if options.json {
+        return write_json(out, &checks);
+    }
+    for check in &checks {
+        let verdict = match (&check.problem, check.used_at) {
+            (Some(problem), _) => format!("invalid: {problem}"),
+            (None, Some(at)) => format!("used by {} at {at:#x}", check.used_by.unwrap_or("symbol")),
+            (None, None) => "free".to_owned(),
+        };
+        writeln!(out, "{}  {verdict}", check.name)?;
+    }
+    Ok(())
+}
+
 fn write_edit(out: &mut impl Write, result: &EditResult, options: &Options) -> Result<()> {
     if options.json {
         return write_json(out, result);

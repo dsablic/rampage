@@ -313,6 +313,18 @@ pub struct CommentArgs {
     pub clear: bool,
 }
 
+#[derive(serde::Deserialize, JsonSchema)]
+struct AnnotateBatchArgs {
+    /// At most 1000 entries, each `at` plus `name`, `comment` or both.
+    entries: Vec<crate::BatchEntry>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct CheckNamesArgs {
+    /// At most 1000 candidate names.
+    names: Vec<String>,
+}
+
 /// The value an edit sets: `value`, or nothing with `clear`; exactly one must be given, so that a forgotten
 /// argument never erases a name.
 fn edit_value(value: Option<String>, clear: bool, what: &str) -> Result<Option<String>, ApiError> {
@@ -675,6 +687,18 @@ pub fn tools() -> Vec<Tool> {
             },
         )
         .annotates(),
+        tool(
+            "annotate_batch",
+            "Set many names and comments in one call, as one undo step. All entries are checked first; if any is \
+             invalid nothing is applied and each problem is listed by entry index.",
+            |project, arguments: AnnotateBatchArgs| project.annotate_batch(&arguments.entries),
+        )
+        .annotates(),
+        tool(
+            "check_names",
+            "Pre-flight candidate names: whether each is a valid identifier, address-shaped, or already used (where).",
+            |project, arguments: CheckNamesArgs| project.check_names(&arguments.names),
+        ),
         tool("list_annotations", "Every user name and comment, by address.", |project, _: Nothing| {
             Ok(project.annotation_list())
         }),
@@ -688,13 +712,15 @@ pub fn tools() -> Vec<Tool> {
         .interactive(),
         tool(
             "undo",
-            "Undo the last rename or comment made in this session. Returns the edit, or null.",
+            "Undo the last edit or batch made in this session. Returns its edits; empty if there was none.",
             |project, _: Nothing| project.undo(),
         )
         .annotates(),
-        tool("redo", "Redo the last edit undone in this session. Returns the edit, or null.", |project, _: Nothing| {
-            project.redo()
-        })
+        tool(
+            "redo",
+            "Redo the last edit or batch undone. Returns its edits; empty if there was none.",
+            |project, _: Nothing| project.redo(),
+        )
         .annotates(),
     ]
 }
