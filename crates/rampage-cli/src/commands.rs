@@ -9,6 +9,7 @@ use rampage_api::annotations::Field;
 use rampage_api::{EditResult, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery};
 use rampage_arch::Arch;
 use rampage_loaders::Details;
+use rampage_loaders::dotnet::EntryPoint;
 use serde::Serialize;
 
 pub struct Options {
@@ -717,15 +718,8 @@ pub fn capabilities(out: &mut impl Write, path: &Path, options: &Options) -> Res
     Ok(())
 }
 
-pub fn dotnet(
-    out: &mut impl Write,
-    path: &Path,
-    contains: Option<String>,
-    limit: usize,
-    options: &Options,
-) -> Result<()> {
-    let query = rampage_api::DotNetQuery { contains, offset: None, limit: Some(limit) };
-    let Some(summary) = open(path, options)?.dotnet_metadata(&query)? else {
+pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuery, options: &Options) -> Result<()> {
+    let Some(summary) = open(path, options)?.dotnet_metadata(query)? else {
         if options.json {
             return write_json(out, &serde_json::Value::Null);
         }
@@ -737,6 +731,18 @@ pub fn dotnet(
     }
     if let Some(assembly) = &summary.assembly {
         writeln!(out, "assembly   {} {}", assembly.name, assembly.version)?;
+    }
+    if let Some(module) = &summary.module {
+        let mvid = module.mvid.as_deref().map(|mvid| format!(" (mvid {mvid})")).unwrap_or_default();
+        writeln!(out, "module     {}{mvid}", module.name)?;
+    }
+    match &summary.entry_point {
+        Some(EntryPoint::Method { token, method }) => {
+            writeln!(out, "entry      {} (token {token:#x})", method.as_deref().unwrap_or("unresolved method"))?
+        }
+        Some(EntryPoint::File { token }) => writeln!(out, "entry      in another module (file token {token:#x})")?,
+        Some(EntryPoint::Native { rva }) => writeln!(out, "entry      native code at RVA {rva:#x}")?,
+        None => writeln!(out, "entry      none")?,
     }
     let cli = &summary.cli;
     writeln!(out, "runtime    {} (CLI {}.{})", summary.runtime_version, cli.runtime_major, cli.runtime_minor)?;
@@ -762,7 +768,8 @@ pub fn dotnet(
     }
     let shown = summary.types.offset + summary.types.items.len();
     if shown < summary.types.total {
-        writeln!(out, "\n... {} more types (use --contains or --json)", summary.types.total - shown)?;
+        let more = summary.types.total - shown;
+        writeln!(out, "\n... {more} more types (page with --offset {shown}, or filter with --contains)")?;
     }
     for warning in &summary.warnings {
         writeln!(out, "warning: {warning}")?;
