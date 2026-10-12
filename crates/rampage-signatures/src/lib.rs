@@ -35,7 +35,7 @@ use std::ops::Range;
 pub use bundled::bundled;
 use iced_x86::{ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
 use rampage_arch::{Arch, Target};
-use rampage_loaders::{Binary, SymbolKind};
+use rampage_loaders::{Binary, Symbol, SymbolKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -422,6 +422,27 @@ pub fn alias_rank(name: &str) -> (bool, usize, &str) {
     (name.starts_with('_'), name.len(), name)
 }
 
+/// Every named function symbol with a nonzero size, aliases included: the functions a symbol table delimits.
+pub fn named_functions(binary: &Binary) -> impl Iterator<Item = &Symbol> {
+    binary
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty())
+}
+
+/// One of [`named_functions`] per address, the spelling [`alias_rank`] prefers. Several names at one address are
+/// aliases of one function, not different functions.
+pub fn canonical_functions(binary: &Binary) -> BTreeMap<u64, &Symbol> {
+    let mut by_address: BTreeMap<u64, &Symbol> = BTreeMap::new();
+    for symbol in named_functions(binary) {
+        let best = by_address.entry(symbol.address).or_insert(symbol);
+        if alias_rank(&symbol.name) < alias_rank(&best.name) {
+            *best = symbol;
+        }
+    }
+    by_address
+}
+
 /// The masked content hash of the function whose bytes start at `address`, or `None` for an unsupported
 /// architecture or input with no decodable instructions. `target` supplies the architecture, the instruction
 /// byte order (used by the fixed-width paths), and, for 32-bit ARM, whether `address` holds Thumb code.
@@ -606,23 +627,8 @@ impl SignatureDb {
     fn add_binary(&mut self, binary: &Binary) {
         let target = binary.target();
         let image = MaskContext::from_binary(binary);
-        // Several names at one address are aliases of one function, not a collision: keep one spelling, or the
-        // hash would turn ambiguous and the function could never be identified.
-        let mut by_address = BTreeMap::new();
-        for symbol in &binary.symbols {
-            if symbol.kind != SymbolKind::Function || symbol.size == 0 || symbol.name.is_empty() {
-                continue;
-            }
-            by_address
-                .entry(symbol.address)
-                .and_modify(|best: &mut &rampage_loaders::Symbol| {
-                    if alias_rank(&symbol.name) < alias_rank(&best.name) {
-                        *best = symbol;
-                    }
-                })
-                .or_insert(symbol);
-        }
-        for symbol in by_address.into_values() {
+        // One spelling per address: aliases hashed under each name would make the hash ambiguous.
+        for symbol in canonical_functions(binary).into_values() {
             if let Some(bytes) = binary.read(symbol.address, symbol.size)
                 && let Some(hash) = function_hash_scheme(self.scheme, &target, &image, bytes, symbol.address)
             {
@@ -964,10 +970,7 @@ mod tests {
         let db = SignatureDb::from_binary(&binary);
         assert!(!db.is_empty(), "{name}: empty database");
         let target = binary.target();
-        let hits = binary
-            .symbols
-            .iter()
-            .filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty())
+        let hits = named_functions(&binary)
             .filter(|symbol| {
                 binary
                     .read(symbol.address, symbol.size)

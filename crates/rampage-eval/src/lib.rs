@@ -14,8 +14,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rampage_arch::UnsupportedArch;
-use rampage_loaders::{Binary, Symbol, SymbolKind};
-use rampage_signatures::{MaskContext, SignatureDb, alias_rank};
+use rampage_loaders::Binary;
+use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, named_functions};
 use serde::{Deserialize, Serialize};
 
 /// Known function names by address, taken from a symbolized twin of the evaluated binary.
@@ -27,14 +27,7 @@ impl Truth {
     /// wins (musl exports `strchrnul` as a weak alias of `__strchrnul`): no leading underscore, then shortest,
     /// then alphabetical, so the choice is deterministic.
     pub fn from_binary(binary: &Binary) -> Truth {
-        let mut names: BTreeMap<u64, &str> = BTreeMap::new();
-        for symbol in sized_functions(binary) {
-            let slot = names.entry(symbol.address).or_insert(&symbol.name);
-            if alias_rank(&symbol.name) < alias_rank(slot) {
-                *slot = &symbol.name;
-            }
-        }
-        Truth(names.into_iter().map(|(address, name)| (address, name.to_owned())).collect())
+        Truth(canonical_functions(binary).into_iter().map(|(address, symbol)| (address, symbol.name.clone())).collect())
     }
 
     /// Only what a signature database built from library references could name: entries whose name is in
@@ -77,14 +70,7 @@ impl Truth {
 /// every spelling and is not keyed by address, so it also works on a relocatable object, where functions in
 /// different sections share address zero.
 pub fn function_names(binary: &Binary) -> BTreeSet<String> {
-    sized_functions(binary).map(|symbol| symbol.name.clone()).collect()
-}
-
-fn sized_functions(binary: &Binary) -> impl Iterator<Item = &Symbol> {
-    binary
-        .symbols
-        .iter()
-        .filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty())
+    named_functions(binary).map(|symbol| symbol.name.clone()).collect()
 }
 
 /// How one scored address came out.
@@ -368,6 +354,8 @@ fn ratio(numerator: usize, denominator: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use rampage_signatures::alias_rank;
+
     use super::*;
 
     fn truth(entries: &[(u64, &str)]) -> Truth {

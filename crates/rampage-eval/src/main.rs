@@ -4,8 +4,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use rampage_eval::{Evaluation, Gate, Report, Truth};
-use rampage_loaders::{Binary, SymbolKind};
-use rampage_signatures::SignatureDb;
+use rampage_loaders::Binary;
+use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
 
 /// Self-supervised evaluation of rampage heuristics against strip-and-compare ground truth.
@@ -132,8 +132,7 @@ fn truth(
     let binary = open(symbolized)?;
     if let Some(stripped) = stripped {
         let twin = open(stripped)?;
-        let functions = binary.symbols.iter().filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0);
-        for symbol in functions {
+        for symbol in named_functions(&binary) {
             let ours = binary.read(symbol.address, symbol.size);
             if ours.is_none() || ours != twin.read(symbol.address, symbol.size) {
                 return Err(format!(
