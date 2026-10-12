@@ -42,6 +42,35 @@
 - [ ] Go pclntab: optional bounded full-image magic scan for binaries whose pclntab section was renamed/removed.
 - [ ] C++ class LAYOUT reconstruction (fields/sizes), building on the RTTI name/hierarchy recovery now in place.
 
+### Deferred capability-detection rules (capa-style, defensive triage)
+
+The agent that would have added these was stopped by the real-time cyber safeguard (its prompt was framed around
+offensive techniques). These are standard defensive triage signals for `rampage-capabilities`; implement directly
+and conservatively, each gated behind concrete, low-false-positive indicators (use a multi-indicator threshold
+where a single import is weak), and each covered by a test including a benign negative case:
+
+- [ ] Persistence (registry Run keys, scheduled tasks, service install).
+- [ ] Process discovery / enumeration (snapshot + process-walk APIs).
+- [ ] Code-injection refinements (extend the existing process-injection rule; section-map + remote-thread APIs).
+- [ ] Token / privilege manipulation (token-open + privilege-adjust APIs, SeDebugPrivilege).
+- [ ] Anti-VM / sandbox evasion (hypervisor-vendor strings, cpuid probing).
+- [ ] Screen capture (GDI bitblt path), clipboard access, and input capture refinements.
+- [ ] Credential access indicators (LSA/secrets/SAM strings) -- conservative, multi-indicator only.
+- [ ] Service control, named-pipe/IPC, DNS resolution / C2-comms refinements.
+- [ ] Ransomware indicators (encrypt + file-enumeration + ransom-note strings) -- threshold-gated.
+- [ ] Shutdown/reboot and environment/system-info gathering.
+
+### Licensing
+
+- [ ] Adopt a single license decision: the tree is already Apache-2.0-bound via the vendored Ghidra decompiler
+  (`rampage-decompiler` is Apache-2.0), while the other crates are `MIT OR Apache-2.0`. No dependency forces
+  copyleft: all are permissive except `colored` (MPL-2.0, dev-dependency only, not shipped) and a few
+  `... OR GPL/LGPL` multi-licenses where the permissive option is elected. Arm AARCHMRS decoder tables are
+  BSD-3-Clause (`LICENSE-ARM` present). If adopting Apache-2.0 project-wide, add a root `NOTICE` attributing
+  Ghidra (Apache-2.0) and Arm AARCHMRS (BSD-3), and consider a `THIRD-PARTY-NOTICES` for bundled assets
+  (the UI font under OFL-1.1/Ubuntu-font, Unicode data). Note: Apache-2.0-only is one-way incompatible with
+  GPLv2-only downstreams, which the current `MIT OR Apache-2.0` dual avoids.
+
 
 ## Decompiler: embedded Ghidra (the decompilation path)
 
