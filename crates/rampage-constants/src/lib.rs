@@ -145,8 +145,9 @@ impl ConstantDb {
     pub fn new(signatures: Vec<ConstantSignature>) -> Result<Self, InvalidSignature> {
         let mut forms = Vec::new();
         for (index, signature) in signatures.iter().enumerate() {
-            validate(signature)?;
-            for (bytes, endian) in signature.pattern.forms() {
+            let layouts = signature.pattern.forms();
+            validate(signature, &layouts)?;
+            for (bytes, endian) in layouts {
                 let anchor = best_anchor(&bytes[..signature.min_len]);
                 forms.push(Form { signature: index, bytes, endian, anchor });
             }
@@ -173,7 +174,7 @@ impl ConstantDb {
     }
 }
 
-fn validate(signature: &ConstantSignature) -> Result<(), InvalidSignature> {
+fn validate(signature: &ConstantSignature, layouts: &[(Vec<u8>, Option<Endian>)]) -> Result<(), InvalidSignature> {
     let fail = |reason: String| Err(InvalidSignature { what: signature.what.to_string(), reason });
     let len = signature.pattern.byte_len();
     if signature.min_len < MIN_PATTERN_LEN {
@@ -182,7 +183,7 @@ fn validate(signature: &ConstantSignature) -> Result<(), InvalidSignature> {
     if signature.min_len > len {
         return fail(format!("min_len {} exceeds the pattern's {len} bytes", signature.min_len));
     }
-    for (bytes, _) in signature.pattern.forms() {
+    for (bytes, _) in layouts {
         let prefix = &bytes[..signature.min_len];
         let mut seen = [false; 256];
         prefix.iter().for_each(|&byte| seen[usize::from(byte)] = true);
@@ -283,15 +284,14 @@ pub fn scan_report(bytes: &[u8], base: u64, db: &ConstantDb) -> ScanReport {
 }
 
 fn finish(mut hits: Vec<ConstantHit>, truncated: bool) -> ScanReport {
-    hits.sort_by(|a, b| (a.address, b.length, &a.what, a.endian).cmp(&(b.address, a.length, &b.what, b.endian)));
+    // Longest first within each start and byte order, so each group's first hit carries the length to keep.
+    hits.sort_by(|a, b| (a.address, a.endian, b.length, &a.what).cmp(&(b.address, b.endian, a.length, &b.what)));
     // Overlapping segments report the same hit twice.
     hits.dedup();
-    let longest: HashMap<(u64, Option<Endian>), usize> = hits.iter().fold(HashMap::new(), |mut longest, hit| {
-        let entry = longest.entry((hit.address, hit.endian)).or_insert(0);
-        *entry = (*entry).max(hit.length);
-        longest
-    });
-    hits.retain(|hit| longest[&(hit.address, hit.endian)] == hit.length);
+    let hits = hits
+        .chunk_by(|a, b| (a.address, a.endian) == (b.address, b.endian))
+        .flat_map(|group| group.iter().take_while(|hit| hit.length == group[0].length).cloned())
+        .collect();
     cap(hits, truncated)
 }
 
