@@ -123,8 +123,9 @@ guarantee identical output: memory mappings, ABI, mode context, symbols/types an
    ILP32/LP64/LLP64, Windows x86 cdecl, clangwindows aliases and all 13 bundled processor targets.
    - [x] ARM BE8 mixed instruction/data endian selection, preserved by compiler overrides.
    - [x] Darwin ARM64 fixed stack packing and explicit variadic slot allocator/compiler model.
-   - [ ] Remaining ABI-specific work: general Darwin ARM64 variadic call recovery and narrow caller extension,
-     and OS/library-specific typedefs such as off_t/time_t rather than guessed automatic declarations.
+   - [x] OS/library-specific typedefs: off_t/time_t/mode_t/pid_t prototypes sized by width placeholders, with the
+     POSIX I/O and time functions that use them (documented 32-bit Linux off_t and 32-bit Darwin time_t edges).
+   - [ ] Remaining ABI-specific work: general Darwin ARM64 variadic call recovery and narrow caller extension.
 4. [x] Symbol/type synchronization: address-bound prototypes, independent import slots, metadata identity
    separate from display spelling, reported failures, cached engine refresh on name/type edits and undo/redo.
 5. [x] Portable specification packaging and supervised resource/cancellation integration,
