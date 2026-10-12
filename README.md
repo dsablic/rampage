@@ -57,8 +57,9 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   rest supplied at runtime. `rampage detect` names the producing packer, compiler, protector, installer or linker
   from an authored signature database (and accepts your own PeID `userdb.txt`, warning about the entries it
   skips as malformed); `rampage yara` runs your YARA rules through the embedded yara-x engine; `rampage capa`
-  evaluates a Mandiant capa-rules directory against imports, exports and strings (file-scope features only); `rampage capabilities` applies the built-in corroborated rules. Every hit carries its evidence
-  and is a triage signal, not proof. Also exposed as the `detect_tools`, `yara_scan` and `capa_detect` tools. A
+  evaluates a Mandiant capa-rules directory against imports, exports and strings (file-scope features only);
+  `rampage capabilities` applies the built-in corroborated rules. Every hit carries its evidence and is a triage
+  signal, not proof. Also exposed as the `detect_tools`, `yara_scan` and `capa_detect` tools. A
   spec-derived constant database (AES, DES, Blowfish, SHA/MD5, ChaCha, CRC, Deflate, Base64, curve parameters)
   locates algorithm tables in the image.
 - Guided investigation workflows: `triage_report`, `find_main`, `network_surface`, `find_crypto` and `diff_builds`
