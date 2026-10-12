@@ -439,3 +439,17 @@ fn a_size_field_hiding_an_overlay_is_reported() {
     std::fs::remove_file(&path).unwrap();
     assert!(binary.warnings.iter().any(|warning| warning.contains("past the end")), "{:?}", binary.warnings);
 }
+
+#[test]
+fn section_file_bytes_are_what_the_file_stores() {
+    let binary = Binary::open(fixture("hello-x64.elf")).unwrap();
+    let section = |name: &str| binary.sections.iter().find(|section| section.name == name).unwrap();
+    let text = section(".text");
+    assert_eq!(binary.section_file_bytes(text), binary.read(text.address, text.size));
+    assert_eq!(binary.section_file_bytes(section(".bss")), None, "zero-fill has no file bytes");
+    // Unloaded sections have no segment, yet their file bytes are still readable.
+    let symtab = binary.section_file_bytes(section(".symtab")).unwrap();
+    assert_eq!(symtab.len() as u64, section(".symtab").file_size);
+    let past_end = rampage_loaders::Section { file_offset: Some(u64::MAX), ..text.clone() };
+    assert_eq!(binary.section_file_bytes(&past_end), None);
+}

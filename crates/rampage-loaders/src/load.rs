@@ -412,6 +412,15 @@ impl Binary {
         rampage_arch::decoder(&self.target())
     }
 
+    /// What the file stores for `section`, from its own file offset rather than through a segment, so it also
+    /// serves sections outside any segment (relocatable objects, unloaded ELF sections). `None` for a zero-fill
+    /// section or one whose file range lies outside the image.
+    pub fn section_file_bytes(&self, section: &Section) -> Option<&[u8]> {
+        let start = usize::try_from(section.file_offset?).ok()?;
+        let len = usize::try_from(section.file_size).ok()?;
+        self.image_bytes().get(start..start.checked_add(len)?)
+    }
+
     /// The bytes of this image: the whole file, or one slice of a universal binary.
     pub fn image_bytes(&self) -> &[u8] {
         &self.data[self.image.clone()]
