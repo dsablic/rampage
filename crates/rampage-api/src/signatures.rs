@@ -88,7 +88,21 @@ impl Project {
         user: Option<&SignatureDb>,
         apply: bool,
     ) -> Result<SignatureApplication, ApiError> {
-        let bundled = self.bundled_signatures();
+        self.identify_functions(user, true, apply)
+    }
+
+    /// Identifies functions against an optional `user` database first, then, with `bundled`, the bundled starter
+    /// database. Leaving out the bundled database needs a `user` one, so that the request is never silently empty.
+    pub fn identify_functions(
+        &self,
+        user: Option<&SignatureDb>,
+        bundled: bool,
+        apply: bool,
+    ) -> Result<SignatureApplication, ApiError> {
+        if !bundled && user.is_none() {
+            return Err(ApiError::Invalid("leaving out the bundled signatures needs a signature database".to_owned()));
+        }
+        let bundled = if bundled { self.bundled_signatures() } else { None };
         let databases: Vec<&SignatureDb> = user.into_iter().chain(bundled.as_ref()).collect();
         self.apply_layered_signatures(&databases, apply)
     }

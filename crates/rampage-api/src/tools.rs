@@ -120,6 +120,9 @@ struct IdentifyArgs {
     /// database. Omit it to match against the bundled database alone.
     #[serde(default)]
     database: Option<String>,
+    /// Match against `database` alone, without the bundled starter database (requires `database`).
+    #[serde(default)]
+    no_bundled: bool,
     /// Persist matched names for still-unnamed functions as user names (never overwriting existing names).
     #[serde(default)]
     apply: bool,
@@ -391,8 +394,8 @@ pub fn tools() -> Vec<Tool> {
             "identify_functions",
             "Name functions by matching signature databases (FLIRT/Function-ID style), so statically linked \
              library code in a stripped binary gets recognized. Applies the bundled starter database for the \
-             architecture; an optional database path is overlaid on top. apply=true saves names for unnamed \
-             functions.",
+             architecture; an optional database path is overlaid on top (or used alone with no_bundled=true). \
+             apply=true saves names for unnamed functions.",
             |project, arguments: IdentifyArgs| {
                 let user = match &arguments.database {
                     Some(path) => {
@@ -408,7 +411,7 @@ pub fn tools() -> Vec<Tool> {
                     }
                     None => None,
                 };
-                project.apply_signatures_default(user.as_ref(), arguments.apply)
+                project.identify_functions(user.as_ref(), !arguments.no_bundled, arguments.apply)
             },
         )
         .annotates(),

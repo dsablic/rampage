@@ -687,19 +687,11 @@ pub fn identify(
     apply: bool,
     options: &Options,
 ) -> Result<()> {
-    if no_bundled && db.is_none() {
-        anyhow::bail!("--no-bundled needs a --db to apply");
-    }
     let user = match db {
         Some(db) => Some(load_signature_database(db)?),
         None => None,
     };
-    let project = open(path, options)?;
-    let result = if no_bundled {
-        project.apply_signatures(user.as_ref().expect("checked above"), apply)?
-    } else {
-        project.apply_signatures_default(user.as_ref(), apply)?
-    };
+    let result = open(path, options)?.identify_functions(user.as_ref(), !no_bundled, apply)?;
     if options.json {
         return write_json(out, &result);
     }

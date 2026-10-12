@@ -148,7 +148,7 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
         /// Do not apply the bundled starter database (requires --db)
-        #[arg(long)]
+        #[arg(long, requires = "db")]
         no_bundled: bool,
         /// Save matched names for still-unnamed functions as user names
         #[arg(long)]

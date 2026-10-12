@@ -316,6 +316,26 @@ async fn agent_supplied_databases_must_be_bounded_regular_files() {
 }
 
 #[tokio::test]
+async fn identify_functions_can_leave_out_the_bundled_database() {
+    let client = connect().await;
+    let path = fixture("hello-x64.elf");
+    let bundled = json_of(&call(&client, "identify_functions", json!({ "path": path })).await);
+    assert!(bundled["matched"].as_u64().unwrap() > 0, "{bundled}");
+    let error = call(&client, "identify_functions", json!({ "path": path, "no_bundled": true })).await;
+    assert_eq!(error.is_error, Some(true));
+    assert!(text(&error).contains("needs a signature database"), "{}", text(&error));
+
+    let database = std::env::temp_dir().join(format!("rampage-mcp-empty-db-{}.json", std::process::id()));
+    std::fs::write(&database, rampage_api::SignatureDb::default().to_json()).unwrap();
+    let alone = json_of(
+        &call(&client, "identify_functions", json!({ "path": path, "database": database, "no_bundled": true })).await,
+    );
+    std::fs::remove_file(&database).unwrap();
+    assert_eq!(alone["matched"], 0, "{alone}");
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn triage_and_imports_describe_a_binary() {
     let client = connect().await;
     let path = fixture("hello-x64-dyn.elf");
