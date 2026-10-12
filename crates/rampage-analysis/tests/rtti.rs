@@ -270,10 +270,30 @@ fn msvc_single_inheritance_32bit_pointers() {
 }
 
 #[test]
-fn msvc_single_inheritance_64bit_image_relative() {
-    // Signature 1: cross-references are 32-bit RVAs, resolved against the image base recovered from the
-    // locator's self RVA. The type descriptor vftable stays a full 64-bit pointer.
-    let image_base = 0x1_4000_0000;
+fn msvc_locator_signature_must_match_pointer_width() {
+    // A signature-0 (absolute-pointer) locator is the x86 form; in a 64-bit image it is not a locator.
+    let mut blob = Blob::new(0x0040_1000, 8);
+    let vftable = blob.here();
+    blob.zeros(16);
+    let td = type_descriptor(&mut blob, vftable, ".?AVSolo@@");
+    let bcd = base_descriptor(&mut blob, td as u32, 0);
+    blob.align();
+    let array = blob.here();
+    blob.u32(bcd as u32);
+    let chd = blob.here();
+    blob.u32(0).u32(0).u32(1).u32(array as u32);
+    blob.u32(0).u32(0).u32(0).u32(td as u32).u32(chd as u32).u32(0);
+    assert!(recover_msvc(&blob.image()).is_empty());
+}
+
+#[test]
+fn msvc_64bit_image_base_must_be_64k_aligned() {
+    assert_eq!(msvc_64bit_derived(0x1_4000_0000).len(), 1);
+    assert!(msvc_64bit_derived(0x1_4000_8000).is_empty());
+}
+
+/// Recovers from a 64-bit Derived : Base hierarchy laid out against `image_base`.
+fn msvc_64bit_derived(image_base: u64) -> Vec<rampage_analysis::rtti::RttiClass> {
     let mut blob = Blob::new(image_base + 0x1000, 8);
     let rva = |address: u64| (address - image_base) as u32;
     let vftable = blob.here();
@@ -291,11 +311,18 @@ fn msvc_single_inheritance_64bit_image_relative() {
     blob.align();
     let col = blob.here();
     blob.u32(1).u32(0).u32(0).u32(rva(td_derived)).u32(rva(chd)).u32(rva(col)); // last field is the self RVA
+    recover_msvc(&blob.image())
+}
 
-    let classes = recover_msvc(&blob.image());
+#[test]
+fn msvc_single_inheritance_64bit_image_relative() {
+    // Signature 1: cross-references are 32-bit RVAs, resolved against the image base recovered from the
+    // locator's self RVA. The type descriptor vftable stays a full 64-bit pointer.
+    let classes = msvc_64bit_derived(0x1_4000_0000);
     assert_eq!(classes.len(), 1, "{classes:?}");
     assert_eq!(class(&classes, "Derived").bases, ["Base"]);
-    assert_eq!(class(&classes, "Derived").type_info, td_derived);
+    // After the 16-byte vftable stand-in and the 32-byte Base descriptor.
+    assert_eq!(class(&classes, "Derived").type_info, 0x1_4000_1000 + 16 + 32);
 }
 
 #[test]

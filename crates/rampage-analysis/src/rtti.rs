@@ -335,12 +335,18 @@ fn msvc_bases(image: &Image, chd: u64, signature: u32, image_base: u64, own: &st
 /// Parses a Complete Object Locator at `address`, returning the class it describes.
 fn msvc_complete_object_locator(image: &Image, address: u64) -> Option<RttiClass> {
     let signature = image.read_u32(address)?;
-    if signature > 1 {
+    // x86 locators hold absolute pointers (signature 0) and x64 ones image-relative RVAs (signature 1).
+    if signature != u32::from(image.pointer_size == 8) {
         return None;
     }
     let image_base = if signature == 1 {
-        // The self RVA in a 64-bit locator recovers the image base without any external knowledge.
-        address.checked_sub(u64::from(image.read_u32(va_at(address, 20)?)?))?
+        // The self RVA in a 64-bit locator recovers the image base without any external knowledge; a PE image
+        // base is always 64 KiB aligned, which rejects most chance matches.
+        let base = address.checked_sub(u64::from(image.read_u32(va_at(address, 20)?)?))?;
+        if !base.is_multiple_of(0x1_0000) {
+            return None;
+        }
+        base
     } else {
         0
     };
@@ -355,8 +361,9 @@ fn msvc_complete_object_locator(image: &Image, address: u64) -> Option<RttiClass
 pub fn recover_msvc(image: &Image) -> Vec<RttiClass> {
     let mut classes = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    // A 64-bit locator spans five dwords (signature..selfOffset); a 32-bit one needs four.
-    image.for_each_aligned(4, 20, |address| {
+    // A 32-bit locator spans five dwords (signature..pClassDescriptor); a 64-bit one adds the self RVA.
+    let locator_len = if image.pointer_size == 8 { 24 } else { 20 };
+    image.for_each_aligned(4, locator_len, |address| {
         if classes.len() >= MAX_RECORDS {
             return;
         }
