@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use rampage_eval::Truth;
 use rampage_loaders::{Binary, SymbolKind};
+use rampage_signatures::SignatureDb;
 
 /// Self-supervised evaluation of rampage heuristics against strip-and-compare ground truth.
 #[derive(Parser)]
@@ -30,12 +31,33 @@ enum Command {
         #[arg(long)]
         keep_symbols: bool,
     },
+    /// Identify a stripped target's functions and score them against its truth. Prints the report as JSON and
+    /// a one-line summary on stderr; exits 1 when any name is wrong or spurious.
+    Run(RunArgs),
+}
+
+#[derive(clap::Args)]
+struct RunArgs {
+    /// A signature database (JSON) to identify with; repeatable, later ones win on a shared hash.
+    #[arg(long = "db")]
+    databases: Vec<PathBuf>,
+    /// A symbolized reference binary to build signatures from; repeatable.
+    #[arg(long = "ref")]
+    references: Vec<PathBuf>,
+    #[arg(long)]
+    target: PathBuf,
+    #[arg(long)]
+    truth: PathBuf,
+    /// The slice name in the summary; defaults to the target's architecture.
+    #[arg(long)]
+    slice: Option<String>,
 }
 
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::Truth { symbolized, stripped } => truth(&symbolized, stripped.as_deref()),
         Command::Strip { input, output, keep_symbols } => strip(&input, &output, keep_symbols),
+        Command::Run(args) => run(&args),
     };
     match result {
         Ok(code) => code,
@@ -81,4 +103,43 @@ fn strip(input: &Path, output: &Path, keep_symbols: bool) -> Result<ExitCode, St
     let permissions = std::fs::metadata(input).map_err(written)?.permissions();
     std::fs::set_permissions(output, permissions).map_err(written)?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn read(path: &Path) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn database(args: &RunArgs) -> Result<SignatureDb, String> {
+    let mut combined: Option<SignatureDb> = None;
+    for path in &args.references {
+        let binary = open(path)?;
+        match &mut combined {
+            Some(db) => db.extend_from_binary(&binary),
+            None => combined = Some(SignatureDb::from_binary(&binary)),
+        }
+    }
+    for path in &args.databases {
+        let db = SignatureDb::from_json(&read(path)?).map_err(|error| format!("{}: {error}", path.display()))?;
+        match &mut combined {
+            Some(existing) => existing.merge(&db),
+            None => combined = Some(db),
+        }
+    }
+    combined.ok_or_else(|| "give at least one --db or --ref".to_owned())
+}
+
+fn run(args: &RunArgs) -> Result<ExitCode, String> {
+    let db = database(args)?;
+    let target = open(&args.target)?;
+    let arch = target.arch.to_string();
+    // A database for another architecture matches nothing, which would read as a clean (if useless) pass.
+    if db.arch != arch {
+        return Err(format!("database architecture {:?} does not match target architecture {arch:?}", db.arch));
+    }
+    let truth = Truth::from_json(&read(&args.truth)?).map_err(|error| format!("{}: {error}", args.truth.display()))?;
+    let report =
+        rampage_eval::evaluate(&db, &target, &truth).map_err(|_| format!("unsupported architecture {arch}"))?;
+    println!("{}", serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?);
+    eprintln!("{}: {}", args.slice.as_deref().unwrap_or(&arch), report.summary());
+    Ok(if report.passes_gate() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }

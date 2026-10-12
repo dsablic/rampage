@@ -31,3 +31,49 @@ fn truth_rejects_a_stripped_twin_with_different_code() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("not a twin"), "{output:?}");
 }
+
+fn data(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/data").join(name)
+}
+
+fn run_x86_64(truth: &std::path::Path, target: &str) -> std::process::Output {
+    eval()
+        .args(["run", "--ref"])
+        .arg(fixture("eval-ref-x86_64.elf"))
+        .arg("--target")
+        .arg(fixture(target))
+        .arg("--truth")
+        .arg(truth)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn run_prints_the_report_and_a_summary_and_passes_the_gate() {
+    let output = run_x86_64(&data("eval-truth-x86_64.json"), "eval-target-x86_64.elf");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("x86_64: correct=26 wrong=0 missed=39 spurious=0"), "{stderr}");
+    let report: rampage_eval::Report = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!((report.correct, report.wrong, report.spurious), (26, 0, 0));
+}
+
+#[test]
+fn run_exits_one_when_a_name_is_spurious() {
+    let scratch = std::env::temp_dir().join(format!("rampage-eval-cli-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let empty = scratch.join("empty-truth.json");
+    std::fs::write(&empty, "{}").unwrap();
+    let output = run_x86_64(&empty, "eval-target-x86_64.elf");
+    std::fs::remove_dir_all(&scratch).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("spurious=26"), "{stderr}");
+}
+
+#[test]
+fn run_refuses_a_database_for_another_architecture() {
+    let output = run_x86_64(&data("eval-truth-x86_64.json"), "musl-static-aarch64.elf");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("architecture"), "{output:?}");
+}

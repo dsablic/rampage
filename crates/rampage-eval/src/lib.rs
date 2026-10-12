@@ -97,6 +97,21 @@ pub struct Report {
     pub disagreements: Vec<Disagreement>,
 }
 
+impl Report {
+    /// The hard gate: no wrong name and no library name where there is none. Missed names lower recall but
+    /// never fail, since a heuristic declining to answer is safe.
+    pub fn passes_gate(&self) -> bool {
+        self.wrong == 0 && self.spurious == 0
+    }
+
+    pub fn summary(&self) -> String {
+        format!(
+            "correct={} wrong={} missed={} spurious={} precision={:.3} recall={:.3}",
+            self.correct, self.wrong, self.missed, self.spurious, self.precision, self.recall
+        )
+    }
+}
+
 /// Classifies one address, or `None` when neither side names it (nothing to score).
 pub fn classify(proposed: Option<&str>, truth: Option<&str>) -> Option<Outcome> {
     match (proposed, truth) {

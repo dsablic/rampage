@@ -25,10 +25,7 @@ fn measure(arch: &str) -> Report {
 fn assert_baseline(arch: &str, floor: usize) {
     let report = measure(arch);
     let detail = serde_json::to_string_pretty(&report).unwrap();
-    eprintln!(
-        "{arch}: correct={} wrong={} missed={} spurious={} precision={:.3} recall={:.3}",
-        report.correct, report.wrong, report.missed, report.spurious, report.precision, report.recall
-    );
+    eprintln!("{arch}: {}", report.summary());
     assert_eq!(report.wrong, 0, "{arch}: wrong names\n{detail}");
     assert_eq!(report.spurious, 0, "{arch}: library names where there is none\n{detail}");
     assert!(report.correct >= floor, "{arch}: correct {} below floor {floor}\n{detail}", report.correct);
