@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rampage_arch::{Disassembler, Flow};
+use rampage_loaders::Binary;
 use rayon::prelude::*;
 use serde::Serialize;
 
@@ -27,6 +28,18 @@ pub struct DiscoveredFunction {
 impl DiscoveredFunction {
     pub fn contains(&self, address: u64) -> bool {
         self.blocks.iter().any(|block| (block.start..block.end).contains(&address))
+    }
+
+    /// Exclusive end of the body extent: the largest block end, or the start when there are no blocks. The extent
+    /// `address..end()` also spans any gaps between blocks.
+    pub fn end(&self) -> u64 {
+        self.blocks.iter().map(|block| block.end).max().unwrap_or(self.address)
+    }
+
+    /// The image bytes of the body extent `address..end()`, or `None` when it is empty or not fully mapped.
+    pub fn body<'a>(&self, binary: &'a Binary) -> Option<&'a [u8]> {
+        let length = self.end().checked_sub(self.address).filter(|&length| length > 0)?;
+        binary.read(self.address, length)
     }
 }
 

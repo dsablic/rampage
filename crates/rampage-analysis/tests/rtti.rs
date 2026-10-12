@@ -126,6 +126,84 @@ fn itanium_shared_vtable_fallback_recovers_externally_bound_records() {
 }
 
 #[test]
+fn a_large_leading_range_does_not_starve_later_ranges() {
+    // More pointer-aligned positions than the probe budget precede the RTTI range; the budget is per range.
+    let filler = vec![0u8; 40 << 20];
+    let mut blob = Blob::new(0x0400_0000, 4);
+    let vtable = blob.here();
+    blob.zeros(8);
+    let name = blob.cstr("5Later");
+    blob.align();
+    blob.ptr(vtable).ptr(name);
+    let ranges =
+        vec![MappedRange { vaddr: 0x1000, bytes: &filler }, MappedRange { vaddr: blob.base, bytes: &blob.bytes }];
+    let classes = recover_itanium(&Image::new(ranges, 4, false));
+    assert_eq!(class(&classes, "Later").type_info, 0x0400_0000 + 16);
+}
+
+#[test]
+fn std_local_and_internal_linkage_names_are_recovered() {
+    let mut blob = Blob::new(0x9000, 8);
+    let vtable = blob.here();
+    blob.zeros(16);
+    let names: Vec<u64> =
+        ["St9exception", "Z4mainE5Local", "*N12_GLOBAL__N_16HiddenE"].iter().map(|name| blob.cstr(name)).collect();
+    blob.align();
+    for name in names {
+        blob.ptr(vtable).ptr(name);
+    }
+    let classes = recover_itanium(&blob.image());
+    let mut recovered: Vec<(&str, &str)> =
+        classes.iter().map(|class| (class.name.as_str(), class.mangled.as_str())).collect();
+    recovered.sort_unstable();
+    assert_eq!(
+        recovered,
+        [
+            ("(anonymous namespace)::Hidden", "N12_GLOBAL__N_16HiddenE"),
+            ("main::Local", "Z4mainE5Local"),
+            ("std::exception", "St9exception"),
+        ]
+    );
+}
+
+#[test]
+fn name_pointer_high_bit_is_an_address_bit_in_32bit_images() {
+    // A 32-bit image linked above 0x8000_0000: bit 31 of the name pointer is part of the address.
+    let mut blob = Blob::new(0x8000_1000, 4);
+    let vtable = blob.here();
+    blob.zeros(8);
+    let name = blob.cstr("4High");
+    blob.align();
+    blob.ptr(vtable).ptr(name);
+    assert_eq!(recover_itanium(&blob.image())[0].name, "High");
+
+    // 64-bit Darwin flags a non-unique name with bit 63, which is cleared before dereferencing.
+    let mut blob = Blob::new(0x1_0000_4000, 8);
+    let vtable = blob.here();
+    blob.zeros(16);
+    let name = blob.cstr("7Flagged");
+    blob.align();
+    blob.ptr(vtable).ptr(name | 1 << 63);
+    assert_eq!(recover_itanium(&blob.image())[0].name, "Flagged");
+}
+
+#[test]
+fn string_pointer_tables_are_not_typeinfo() {
+    // A cipher-name table pairs a long name with a short alias; the aliases happen to demangle as class names.
+    let mut blob = Blob::new(0x7000, 8);
+    let pairs: Vec<(u64, u64)> = [("des-ede3-cbc", "3des"), ("cast5-cbc", "4cast"), ("aes-128-cbc", "3aes")]
+        .iter()
+        .map(|(long, short)| (blob.cstr(long), blob.cstr(short)))
+        .collect();
+    blob.align();
+    for (long, short) in pairs {
+        blob.ptr(long).ptr(short);
+    }
+    let classes = recover_itanium(&blob.image());
+    assert!(classes.is_empty(), "{classes:?}");
+}
+
+#[test]
 fn itanium_lone_unbound_record_is_not_guessed() {
     // A single [vtable = 0, name] shape, with neither a mapped vtable nor shared support, stays unrecovered.
     let mut blob = Blob::new(0x6000, 8);
@@ -145,11 +223,11 @@ fn type_descriptor(blob: &mut Blob, vftable: u64, name: &str) -> u64 {
     address
 }
 
-/// Writes a `BaseClassDescriptor` whose only field this parser reads is its type descriptor cross-reference.
-fn base_descriptor(blob: &mut Blob, type_descriptor_ref: u32) -> u64 {
+/// Writes a `BaseClassDescriptor`; this parser reads its type descriptor cross-reference and contained-base count.
+fn base_descriptor(blob: &mut Blob, type_descriptor_ref: u32, contained: u32) -> u64 {
     blob.align();
     let address = blob.here();
-    blob.u32(type_descriptor_ref).u32(0).u32(0).u32(0).u32(0).u32(0); // pTD, numContained, PMD(3), attributes
+    blob.u32(type_descriptor_ref).u32(contained).u32(0).u32(0).u32(0).u32(0); // pTD, numContained, PMD(3), attributes
     address
 }
 
@@ -161,8 +239,8 @@ fn msvc_single_inheritance_32bit_pointers() {
     blob.zeros(8);
     let td_base = type_descriptor(&mut blob, vftable, ".?AVBase@@");
     let td_derived = type_descriptor(&mut blob, vftable, ".?AVDerived@@");
-    let bcd_derived = base_descriptor(&mut blob, td_derived as u32);
-    let bcd_base = base_descriptor(&mut blob, td_base as u32);
+    let bcd_derived = base_descriptor(&mut blob, td_derived as u32, 1);
+    let bcd_base = base_descriptor(&mut blob, td_base as u32, 0);
     blob.align();
     let array = blob.here();
     blob.u32(bcd_derived as u32).u32(bcd_base as u32); // first entry is the class itself
@@ -192,18 +270,38 @@ fn msvc_single_inheritance_32bit_pointers() {
 }
 
 #[test]
-fn msvc_single_inheritance_64bit_image_relative() {
-    // Signature 1: cross-references are 32-bit RVAs, resolved against the image base recovered from the
-    // locator's self RVA. The type descriptor vftable stays a full 64-bit pointer.
-    let image_base = 0x1_4000_0000;
+fn msvc_locator_signature_must_match_pointer_width() {
+    // A signature-0 (absolute-pointer) locator is the x86 form; in a 64-bit image it is not a locator.
+    let mut blob = Blob::new(0x0040_1000, 8);
+    let vftable = blob.here();
+    blob.zeros(16);
+    let td = type_descriptor(&mut blob, vftable, ".?AVSolo@@");
+    let bcd = base_descriptor(&mut blob, td as u32, 0);
+    blob.align();
+    let array = blob.here();
+    blob.u32(bcd as u32);
+    let chd = blob.here();
+    blob.u32(0).u32(0).u32(1).u32(array as u32);
+    blob.u32(0).u32(0).u32(0).u32(td as u32).u32(chd as u32).u32(0);
+    assert!(recover_msvc(&blob.image()).is_empty());
+}
+
+#[test]
+fn msvc_64bit_image_base_must_be_64k_aligned() {
+    assert_eq!(msvc_64bit_derived(0x1_4000_0000).len(), 1);
+    assert!(msvc_64bit_derived(0x1_4000_8000).is_empty());
+}
+
+/// Recovers from a 64-bit Derived : Base hierarchy laid out against `image_base`.
+fn msvc_64bit_derived(image_base: u64) -> Vec<rampage_analysis::rtti::RttiClass> {
     let mut blob = Blob::new(image_base + 0x1000, 8);
     let rva = |address: u64| (address - image_base) as u32;
     let vftable = blob.here();
     blob.zeros(16);
     let td_base = type_descriptor(&mut blob, vftable, ".?AUBase@@");
     let td_derived = type_descriptor(&mut blob, vftable, ".?AUDerived@@");
-    let bcd_derived = base_descriptor(&mut blob, rva(td_derived));
-    let bcd_base = base_descriptor(&mut blob, rva(td_base));
+    let bcd_derived = base_descriptor(&mut blob, rva(td_derived), 1);
+    let bcd_base = base_descriptor(&mut blob, rva(td_base), 0);
     blob.align();
     let array = blob.here();
     blob.u32(rva(bcd_derived)).u32(rva(bcd_base));
@@ -213,11 +311,48 @@ fn msvc_single_inheritance_64bit_image_relative() {
     blob.align();
     let col = blob.here();
     blob.u32(1).u32(0).u32(0).u32(rva(td_derived)).u32(rva(chd)).u32(rva(col)); // last field is the self RVA
+    recover_msvc(&blob.image())
+}
 
-    let classes = recover_msvc(&blob.image());
+#[test]
+fn msvc_single_inheritance_64bit_image_relative() {
+    // Signature 1: cross-references are 32-bit RVAs, resolved against the image base recovered from the
+    // locator's self RVA. The type descriptor vftable stays a full 64-bit pointer.
+    let classes = msvc_64bit_derived(0x1_4000_0000);
     assert_eq!(classes.len(), 1, "{classes:?}");
     assert_eq!(class(&classes, "Derived").bases, ["Base"]);
-    assert_eq!(class(&classes, "Derived").type_info, td_derived);
+    // After the 16-byte vftable stand-in and the 32-byte Base descriptor.
+    assert_eq!(class(&classes, "Derived").type_info, 0x1_4000_1000 + 16 + 32);
+}
+
+#[test]
+fn msvc_bases_are_direct_edges_not_the_flattened_hierarchy() {
+    // C : B : A, and D : B, X. The base class arrays list every ancestor in pre-order with subtree sizes.
+    let mut blob = Blob::new(0x0040_1000, 4);
+    let vftable = blob.here();
+    blob.zeros(8);
+    let [td_a, td_b, td_c, td_d, td_x] =
+        [".?AVA@@", ".?AVB@@", ".?AVC@@", ".?AVD@@", ".?AVX@@"].map(|name| type_descriptor(&mut blob, vftable, name));
+    let hierarchy = |blob: &mut Blob, entries: &[(u64, u32)]| {
+        let descriptors: Vec<u32> =
+            entries.iter().map(|&(td, contained)| base_descriptor(blob, td as u32, contained) as u32).collect();
+        blob.align();
+        let array = blob.here();
+        for descriptor in descriptors {
+            blob.u32(descriptor);
+        }
+        let chd = blob.here();
+        blob.u32(0).u32(0).u32(entries.len() as u32).u32(array as u32);
+        chd
+    };
+    let chd_c = hierarchy(&mut blob, &[(td_c, 2), (td_b, 1), (td_a, 0)]);
+    let chd_d = hierarchy(&mut blob, &[(td_d, 3), (td_b, 1), (td_a, 0), (td_x, 0)]);
+    blob.u32(0).u32(0).u32(0).u32(td_c as u32).u32(chd_c as u32);
+    blob.u32(0).u32(0).u32(0).u32(td_d as u32).u32(chd_d as u32);
+
+    let classes = recover_msvc(&blob.image());
+    assert_eq!(class(&classes, "C").bases, ["B"]);
+    assert_eq!(class(&classes, "D").bases, ["B", "X"]);
 }
 
 #[test]

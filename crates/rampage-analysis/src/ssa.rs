@@ -215,6 +215,31 @@ fn define(definitions: &mut Vec<Definition>, state: &mut [usize; VARIABLES], ind
     id
 }
 
+/// A `bits`-wide load from `address` in the current memory state.
+fn load(address: &Value, state: &[usize; VARIABLES], bits: u8) -> Result<Expression, String> {
+    Ok(Expression::Load { memory: state[MEMORY], address: Box::new(expression(address, state, 0)?), bits })
+}
+
+/// Records `load` into `target`: an observation for the zero register, otherwise a definition of `target` as the
+/// load extended from `bits` to `result_bits`.
+fn define_load(
+    statement: &mut Statement,
+    definitions: &mut Vec<Definition>,
+    state: &mut [usize; VARIABLES],
+    target: &Value,
+    load: Expression,
+    (bits, result_bits, signed): (u8, u8, bool),
+) -> Result<(), String> {
+    if matches!(target, Value::Constant { value: 0 }) {
+        statement.observations.push(load);
+    } else {
+        let index = destination(target).ok_or("memory load destination is not writable")?;
+        let value = Expression::Extend { value: Box::new(load), from_bits: bits, to_bits: result_bits, signed };
+        statement.definitions.push(define(definitions, state, index, value));
+    }
+    Ok(())
+}
+
 pub(crate) fn references(value: &Expression, out: &mut Vec<usize>) {
     match value {
         Expression::IndirectBranch { target } => references(target, out),
@@ -504,49 +529,16 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
                             .observations
                             .push(Expression::IndirectBranch { target: Box::new(expression(target, state, 0)?) }),
                         Effect::MemoryLoad { destination: target, address, bits, result_bits, signed } => {
-                            let load = Expression::Load {
-                                memory: state[MEMORY],
-                                address: Box::new(expression(address, state, 0)?),
-                                bits: *bits,
-                            };
-                            if matches!(target, Value::Constant { value: 0 }) {
-                                statement.observations.push(load);
-                            } else {
-                                let index = destination(target).ok_or("memory load destination is not writable")?;
-                                let value = Expression::Extend {
-                                    value: Box::new(load),
-                                    from_bits: *bits,
-                                    to_bits: *result_bits,
-                                    signed: *signed,
-                                };
-                                statement.definitions.push(define(&mut definitions, state, index, value));
-                            }
+                            let load = load(address, state, *bits)?;
+                            let widths = (*bits, *result_bits, *signed);
+                            define_load(&mut statement, &mut definitions, state, target, load, widths)?;
                         }
                         Effect::MemoryLoadPair { destinations, addresses, bits, result_bits, signed } => {
                             // Resolve both addresses before either destination changes the register state.
-                            let loads = addresses
-                                .iter()
-                                .map(|address| {
-                                    Ok(Expression::Load {
-                                        memory: state[MEMORY],
-                                        address: Box::new(expression(address, state, 0)?),
-                                        bits: *bits,
-                                    })
-                                })
-                                .collect::<Result<Vec<_>, String>>()?;
+                            let loads = [load(&addresses[0], state, *bits)?, load(&addresses[1], state, *bits)?];
+                            let widths = (*bits, *result_bits, *signed);
                             for (target, load) in destinations.iter().zip(loads) {
-                                if matches!(target, Value::Constant { value: 0 }) {
-                                    statement.observations.push(load);
-                                } else {
-                                    let index = destination(target).ok_or("memory load destination is not writable")?;
-                                    let value = Expression::Extend {
-                                        value: Box::new(load),
-                                        from_bits: *bits,
-                                        to_bits: *result_bits,
-                                        signed: *signed,
-                                    };
-                                    statement.definitions.push(define(&mut definitions, state, index, value));
-                                }
+                                define_load(&mut statement, &mut definitions, state, target, load, widths)?;
                             }
                         }
                         Effect::MemoryStore { address, value, bits } => {

@@ -12,7 +12,6 @@
 
 use std::collections::BTreeMap;
 
-use rampage_arch::Arch;
 use rampage_loaders::{Binary, Format, SectionKind};
 use serde::Serialize;
 
@@ -20,7 +19,8 @@ use serde::Serialize;
 const MAX_SECTION_BYTES: u64 = 64 * 1024 * 1024;
 /// Upper bound on emitted classes.
 const MAX_RECORDS: usize = 65_536;
-/// Upper bound on pointer-aligned positions probed across all ranges.
+/// Upper bound on pointer-aligned positions probed in one range. Per range, so a large leading range cannot starve
+/// the ones after it; the total stays bounded by the file-backed bytes.
 const MAX_SCAN_POSITIONS: usize = 8_000_000;
 /// Upper bound on base entries considered for one class.
 const MAX_BASES: usize = 1024;
@@ -52,26 +52,24 @@ pub struct MappedRange<'a> {
 
 /// A mapped image presented to the parsers: byte ranges plus the ABI's pointer width and endianness.
 pub struct Image<'a> {
-    pub ranges: Vec<MappedRange<'a>>,
-    pub pointer_size: u8,
-    pub big_endian: bool,
+    /// Sorted by start address.
+    ranges: Vec<MappedRange<'a>>,
+    pointer_size: u8,
+    big_endian: bool,
 }
 
 impl<'a> Image<'a> {
-    pub fn new(ranges: Vec<MappedRange<'a>>, pointer_size: u8, big_endian: bool) -> Self {
+    pub fn new(mut ranges: Vec<MappedRange<'a>>, pointer_size: u8, big_endian: bool) -> Self {
+        ranges.sort_by_key(|range| range.vaddr);
         Image { ranges, pointer_size, big_endian }
     }
 
+    /// The range holding `va` and the offset into it. With overlapping ranges, the latest-starting one wins.
     fn locate(&self, va: u64) -> Option<(&MappedRange<'a>, usize)> {
-        for range in &self.ranges {
-            if va >= range.vaddr {
-                let delta = va - range.vaddr;
-                if delta < range.bytes.len() as u64 {
-                    return Some((range, delta as usize));
-                }
-            }
-        }
-        None
+        let index = self.ranges.partition_point(|range| range.vaddr <= va).checked_sub(1)?;
+        let range = &self.ranges[index];
+        let delta = va - range.vaddr;
+        (delta < range.bytes.len() as u64).then_some((range, delta as usize))
     }
 
     fn read(&self, va: u64, len: usize) -> Option<&'a [u8]> {
@@ -106,9 +104,8 @@ impl<'a> Image<'a> {
         u64::from(self.pointer_size)
     }
 
-    /// Visits each pointer-aligned position in every range, honouring a shared probe budget.
+    /// Visits each pointer-aligned position in every range, honouring a per-range probe budget.
     fn for_each_aligned(&self, stride: u64, min_len: u64, mut visit: impl FnMut(u64)) {
-        let mut budget = MAX_SCAN_POSITIONS;
         for range in &self.ranges {
             let len = range.bytes.len() as u64;
             if len < min_len {
@@ -116,9 +113,10 @@ impl<'a> Image<'a> {
             }
             let start = (stride - range.vaddr % stride) % stride;
             let mut offset = start;
+            let mut budget = MAX_SCAN_POSITIONS;
             while offset + min_len <= len {
                 if budget == 0 {
-                    return;
+                    break;
                 }
                 budget -= 1;
                 visit(range.vaddr + offset);
@@ -145,9 +143,13 @@ struct ItaniumCandidate {
 fn itanium_name(image: &Image, name_va: u64) -> Option<(String, String)> {
     let raw = image.read_cstr(name_va, MAX_NAME_BYTES)?;
     let raw = std::str::from_utf8(raw).ok()?;
-    // Cheap pre-filter before demangling: a class typeinfo name is a length-prefixed or nested mangling.
-    let first = raw.as_bytes().first()?;
-    if !(first.is_ascii_digit() || *first == b'N') || !raw.bytes().all(|byte| byte.is_ascii_graphic()) {
+    // GCC prefixes an internal-linkage type's name with `*` (compare by address); it is not part of the mangling.
+    let raw = raw.strip_prefix('*').unwrap_or(raw);
+    // Cheap pre-filter before demangling: a class typeinfo name is a length-prefixed (`4Base`), nested (`N...E`),
+    // `std::` (`St9exception`) or local (`Z4mainE5Local`) mangling.
+    let first = *raw.as_bytes().first()?;
+    let shaped = first.is_ascii_digit() || first == b'N' || first == b'Z' || raw.starts_with("St");
+    if !shaped || !raw.bytes().all(|byte| byte.is_ascii_graphic()) {
         return None;
     }
     let demangled = crate::language::demangle(&format!("_ZTS{raw}"))?;
@@ -169,17 +171,31 @@ fn itanium_candidates(image: &Image) -> BTreeMap<u64, ItaniumCandidate> {
         let (Some(vtable), Some(name_raw)) = (image.read_pointer(address), image.read_pointer(name_slot)) else {
             return;
         };
-        // Darwin sets the high bit of the typeinfo name pointer to flag a non-unique type name; clear it
-        // before dereferencing. Real addresses never use that bit, so masking is safe on other platforms.
-        let name_va = name_raw & !(1u64 << (u32::from(image.pointer_size) * 8 - 1));
-        if let Some((mangled, name)) = itanium_name(image, name_va) {
+        // 64-bit Darwin sets bit 63 of the typeinfo name pointer to flag a non-unique type name. The flagged
+        // form is tried only after the plain one, since 32-bit images may genuinely live above 0x8000_0000.
+        let non_unique = 1u64 << 63;
+        let name = itanium_name(image, name_raw).or_else(|| {
+            (image.pointer_size == 8 && name_raw & non_unique != 0)
+                .then(|| itanium_name(image, name_raw & !non_unique))
+                .flatten()
+        });
+        if let Some((mangled, name)) = name {
             candidates.insert(address, ItaniumCandidate { vtable, mangled, name });
         }
     });
     candidates
 }
 
-/// Keeps candidates whose vtable pointer is mapped, or is shared by enough records to be a category vtable.
+/// Whether `va` holds C string data: at least four printable ASCII bytes before a NUL. A vtable address point holds
+/// code pointers, whose bytes never read that way (their high bytes are zero or non-printable).
+fn is_string_data(image: &Image, va: u64) -> bool {
+    image
+        .read_cstr(va, MAX_NAME_BYTES)
+        .is_some_and(|text| text.len() >= 4 && text.iter().all(|&byte| byte == b' ' || byte.is_ascii_graphic()))
+}
+
+/// Keeps candidates whose vtable pointer is an aligned, mapped address that is not string data, or is shared by
+/// enough records to be a category vtable.
 fn accept_itanium(image: &Image, candidates: BTreeMap<u64, ItaniumCandidate>) -> BTreeMap<u64, ItaniumCandidate> {
     let mut frequency: BTreeMap<u64, usize> = BTreeMap::new();
     for candidate in candidates.values() {
@@ -188,13 +204,14 @@ fn accept_itanium(image: &Image, candidates: BTreeMap<u64, ItaniumCandidate>) ->
     candidates
         .into_iter()
         .filter(|(_, candidate)| {
-            // A genuine typeinfo vtable pointer targets a vtable, never a mangled type-name string; rejecting
-            // the latter drops artifacts where a name-pointer slot is misread as a preceding vtable slot.
-            if candidate.vtable != 0 && itanium_name(image, candidate.vtable).is_some() {
+            let vtable = candidate.vtable;
+            // A genuine typeinfo vtable pointer targets a vtable, never string data: a table of string pointers
+            // (`{"des-ede3-cbc", "3des"}`) otherwise reads as `[vtable, name]` whenever the second name demangles.
+            if vtable != 0 && (itanium_name(image, vtable).is_some() || is_string_data(image, vtable)) {
                 return false;
             }
-            (candidate.vtable != 0 && image.mapped(candidate.vtable))
-                || frequency.get(&candidate.vtable).copied().unwrap_or(0) >= MIN_SHARED_VTABLE
+            (vtable != 0 && vtable.is_multiple_of(image.pointer_width()) && image.mapped(vtable))
+                || frequency.get(&vtable).copied().unwrap_or(0) >= MIN_SHARED_VTABLE
         })
         .collect()
 }
@@ -285,7 +302,12 @@ fn strip_msvc_keyword(name: &str) -> &str {
     name
 }
 
-/// Base-class names from an MSVC `ClassHierarchyDescriptor`, or `None` when the hierarchy does not validate.
+/// Direct base-class names from an MSVC `ClassHierarchyDescriptor`, or `None` when the hierarchy does not
+/// validate.
+///
+/// The base class array flattens the whole hierarchy in pre-order: entry 0 is the class itself and each
+/// `BaseClassDescriptor` is followed by its own `numContainedBases` bases. Direct bases are therefore the entries
+/// reached from index 1 by skipping each entry's contained subtree.
 fn msvc_bases(image: &Image, chd: u64, signature: u32, image_base: u64, own: &str) -> Option<Vec<String>> {
     let count = image.read_u32(va_at(chd, 8)?)?;
     if count == 0 || count as usize > MAX_BASES {
@@ -293,12 +315,18 @@ fn msvc_bases(image: &Image, chd: u64, signature: u32, image_base: u64, own: &st
     }
     let array = msvc_resolve(signature, image_base, image.read_u32(va_at(chd, 12)?)?);
     let mut bases = Vec::new();
-    for index in 0..u64::from(count) {
-        let slot = array.checked_add(index.checked_mul(4)?)?;
+    let mut index = 1;
+    while index < count {
+        let slot = array.checked_add(u64::from(index).checked_mul(4)?)?;
         let descriptor = msvc_resolve(signature, image_base, image.read_u32(slot)?);
         let type_descriptor = msvc_resolve(signature, image_base, image.read_u32(descriptor)?);
+        let contained = image.read_u32(va_at(descriptor, 4)?)?;
+        if contained >= count - index {
+            return None;
+        }
         let (_, name) = msvc_type_descriptor(image, type_descriptor)?;
         bases.push(name);
+        index += 1 + contained;
     }
     Some(dedup_bases(bases, own))
 }
@@ -306,12 +334,18 @@ fn msvc_bases(image: &Image, chd: u64, signature: u32, image_base: u64, own: &st
 /// Parses a Complete Object Locator at `address`, returning the class it describes.
 fn msvc_complete_object_locator(image: &Image, address: u64) -> Option<RttiClass> {
     let signature = image.read_u32(address)?;
-    if signature > 1 {
+    // x86 locators hold absolute pointers (signature 0) and x64 ones image-relative RVAs (signature 1).
+    if signature != u32::from(image.pointer_size == 8) {
         return None;
     }
     let image_base = if signature == 1 {
-        // The self RVA in a 64-bit locator recovers the image base without any external knowledge.
-        address.checked_sub(u64::from(image.read_u32(va_at(address, 20)?)?))?
+        // The self RVA in a 64-bit locator recovers the image base without any external knowledge; a PE image
+        // base is always 64 KiB aligned, which rejects most chance matches.
+        let base = address.checked_sub(u64::from(image.read_u32(va_at(address, 20)?)?))?;
+        if !base.is_multiple_of(0x1_0000) {
+            return None;
+        }
+        base
     } else {
         0
     };
@@ -326,8 +360,9 @@ fn msvc_complete_object_locator(image: &Image, address: u64) -> Option<RttiClass
 pub fn recover_msvc(image: &Image) -> Vec<RttiClass> {
     let mut classes = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    // A 64-bit locator spans five dwords (signature..selfOffset); a 32-bit one needs four.
-    image.for_each_aligned(4, 20, |address| {
+    // A 32-bit locator spans five dwords (signature..pClassDescriptor); a 64-bit one adds the self RVA.
+    let locator_len = if image.pointer_size == 8 { 24 } else { 20 };
+    image.for_each_aligned(4, locator_len, |address| {
         if classes.len() >= MAX_RECORDS {
             return;
         }
@@ -345,11 +380,13 @@ fn dedup_bases(bases: Vec<String>, own: &str) -> Vec<String> {
     bases.into_iter().filter(|base| base != own && seen.insert(base.clone())).collect()
 }
 
-/// Builds a mapped image from a binary's file-backed, non-zero-fill sections.
+/// Builds a mapped image from a binary's file-backed data sections. RTTI records, type names and the vtables they
+/// point to are data; code and other sections are left out, so they neither cost scan budget nor validate a
+/// pointer.
 fn build_image(binary: &Binary) -> Image<'_> {
     let mut ranges = Vec::new();
     for section in &binary.sections {
-        if section.kind == SectionKind::UninitializedData || section.file_offset.is_none() {
+        if !matches!(section.kind, SectionKind::Data | SectionKind::ReadOnlyData) || section.file_offset.is_none() {
             continue;
         }
         let len = section.file_size.min(section.size).min(MAX_SECTION_BYTES);
@@ -372,11 +409,7 @@ pub fn recover(binary: &Binary) -> Vec<RttiClass> {
     if !matches!(binary.arch.pointer_size(), 4 | 8) {
         return Vec::new();
     }
-    // Mirror the symbol path: a MIPS64 ELFCLASS32/N32 image has 32-bit ABI pointers the arch width misstates.
-    if binary.format == Format::Elf
-        && binary.arch == Arch::Mips64
-        && binary.image_bytes().get(..5) == Some(b"\x7fELF\x01".as_slice())
-    {
+    if crate::classes::is_mips64_n32(binary) {
         return Vec::new();
     }
     let image = build_image(binary);

@@ -63,6 +63,30 @@ fn analysis_of_stripped_macho_finds_add() {
     let program = functions::analyze(&stripped).unwrap();
     assert!(program.function_at(add).is_some());
     assert_eq!(functions::Names::new(&stripped).function_name(add), format!("sub_{add:x}"));
+    assert!(functions::is_default_name(&functions::default_name(add), add));
+}
+
+#[test]
+fn default_names_are_exact_not_prefixes() {
+    assert_eq!(functions::default_name(0x401000), "sub_401000");
+    assert!(functions::is_default_name("sub_401000", 0x401000));
+    assert!(!functions::is_default_name("sub_menu_init", 0x401000));
+    assert!(!functions::is_default_name("sub_401000", 0x402000));
+    assert!(!functions::is_default_name("sub_0401000", 0x401000));
+    assert!(!functions::is_default_name("sub_401000A", 0x401000));
+}
+
+#[test]
+fn function_body_spans_start_to_largest_block_end() {
+    let binary = open("hello-x64.elf");
+    let program = functions::analyze(&binary).unwrap();
+    let main = program.function_at(symbol_address(&binary, "main")).unwrap();
+    let end = main.blocks.iter().map(|block| block.end).max().unwrap();
+    assert_eq!(main.end(), end);
+    assert_eq!(main.body(&binary), binary.read(main.address, end - main.address));
+    let empty = rampage_analysis::discover::DiscoveredFunction { blocks: Vec::new(), ..main.clone() };
+    assert_eq!(empty.end(), main.address);
+    assert_eq!(empty.body(&binary), None);
 }
 
 #[test]

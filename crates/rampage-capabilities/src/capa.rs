@@ -4,32 +4,41 @@
 //! features rampage can assess from imports and strings alone, emitting the crate's `Capability` shape. It is a
 //! deliberately partial evaluator -- NOT a reimplementation of capa -- so matches remain triage-grade evidence.
 //!
-//! Supported statements: `and`, `or`, `not`, `optional`, and `N or more`. Supported leaf features:
-//! `import`/`api`/`export` (matched against import names), `string` (exact), `substring` (contains), `section`
-//! (matched against the provided strings, since rampage is not given a section list here), and the globals
-//! `os`/`arch`/`format` (accepted as always-satisfiable because no target context is supplied).
+//! Supported statements: `and`, `or`, `not`, `optional`, and `N or more`; `description:`/`comment:` items inside
+//! a statement list are annotations and are dropped. Supported leaf features:
+//! - `import`/`api`: compared with import names by [`names::stem_matches`] after [`names::import_stem`], on the
+//!   symbol after any module qualifier (`kernel32.CreateFile` is matched as `createfile`, from any DLL). A
+//!   charset-neutral name matches both `A` and `W` variants, as capa's own feature extractor does;
+//! - `export`: compared the same way with export names, when [`detect_capa_with_exports`] supplies them;
+//! - `string` (exact), `substring` (contains), and `section` (matched against the provided strings, since
+//!   rampage is not given a section list here);
+//! - the globals `os`/`arch`/`format`: satisfiable but evidence-free, because no target context is supplied.
 //!
-//! Skipped on purpose, each treated as an un-evaluable leaf that does NOT match (so an `and` containing one
-//! fails, an `or` ignores it):
-//!   - Non-file features we cannot assess from imports/strings: `bytes`, `number`, `offset`, `mnemonic`,
-//!     `characteristic`, `operand`, `property`, and any `count(...)` feature.
-//!   - `match:` references to other rules (we have no rule-match graph, so the reference never matches).
-//!   - `string:` written as a `/regex/` (we only do literal exact/substring matching).
-//!   - Sub-scope statements `function` / `basic block` / `instruction` / `call` / `process` / `thread` /
+//! Every other feature is UN-EVALUABLE, a third outcome next to matched and not matched: an `and` with an
+//! un-evaluable child cannot match, an `or` ignores it, `N or more` counts it as neither, and a `not` over an
+//! un-evaluable subtree is itself un-evaluable (absence of something we cannot see is not evidence). This covers:
+//!   - non-file features we cannot assess from imports/strings: `bytes`, `number`, `offset`, `mnemonic`,
+//!     `characteristic`, `operand`, `property`, and any `count(...)` feature;
+//!   - `match:` references to other rules (we have no rule-match graph);
+//!   - `string:` written as a `/regex/` or `/regex/i`: only literal matching is done;
+//!   - ordinal imports (`ws2_32.#23`): import names carry no ordinal or module here;
+//!   - `export` when no export list is supplied;
+//!   - sub-scope statements `function` / `basic block` / `instruction` / `call` / `process` / `thread` /
 //!     `span of calls` and their subtrees.
 //!
-//! Whole rules are skipped when their static scope is not `file` (function/basic-block/instruction/dynamic
-//! rules), and when the rule has no evaluable feature tree. A `not` wrapped around an un-evaluable leaf is
-//! therefore true (absence of something we cannot see); this is an accepted imprecision of a partial evaluator.
+//! Whole rules are skipped when their static scope is not `file` (a rule declaring no scope defaults to
+//! `function`, as in capa), and when no feature outside a `not` can supply evidence. A rule is reported only
+//! when it matches with at least one piece of evidence.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_yaml_ng::Value;
 
-use super::{Capability, normal};
+use super::{Capability, names};
 
 /// Hard caps keep loading and evaluation bounded and panic-free on adversarial input.
 const MAX_RULES: usize = 100_000;
@@ -74,8 +83,8 @@ pub struct CapaRule {
     pub authors: Vec<String>,
     pub attack: Vec<String>,
     pub mbc: Vec<String>,
-    /// Precomputed identifiers for the `Capability { id, name, category }` shape (owned, so a long-running loader
-    /// does not leak).
+    /// `capa/<namespace>/<name>` slugs, made unique within the rule set (owned, so a long-running loader does not
+    /// leak). The `capa/` prefix keeps them apart from the built-in rule ids.
     id: String,
     category: String,
     root: Node,
@@ -87,6 +96,20 @@ pub struct CapaRuleSet {
 }
 
 impl CapaRuleSet {
+    fn new(mut rules: Vec<CapaRule>) -> Self {
+        let mut taken = HashSet::new();
+        for rule in &mut rules {
+            let mut id = rule.id.clone();
+            let mut suffix = 1;
+            while !taken.insert(id.clone()) {
+                suffix += 1;
+                id = format!("{}-{suffix}", rule.id);
+            }
+            rule.id = id;
+        }
+        CapaRuleSet { rules }
+    }
+
     pub fn rules(&self) -> &[CapaRule] {
         &self.rules
     }
@@ -111,11 +134,11 @@ enum Node {
     /// `N or more` matches when at least N children match.
     NOrMore(usize, Vec<Node>),
     Feature(Feature),
-    /// A feature or sub-scope rampage cannot assess; never matches.
+    /// A feature or sub-scope rampage cannot assess.
     Unevaluable,
 }
 
-/// A leaf feature rampage can evaluate. Import/api/export all compare against import names but keep distinct
+/// A leaf feature rampage can evaluate. Import and api both compare against import names but keep distinct
 /// labels so the emitted evidence names the original feature kind.
 enum Feature {
     Import(String),
@@ -124,8 +147,15 @@ enum Feature {
     StringExact(String),
     Substring(String),
     Section(String),
-    /// `os`/`arch`/`format`: accepted as always true, contributing no evidence.
+    /// `os`/`arch`/`format`: satisfiable without contributing evidence.
     Global,
+}
+
+/// The three-valued result of evaluating a node.
+enum Outcome {
+    Matched(Vec<String>),
+    Missed,
+    Unknown,
 }
 
 /// Loads every `*.yml`/`*.yaml` rule under `dir` (recursively). Valid YAML that is not a usable file-scope rule
@@ -146,7 +176,7 @@ pub fn load_capa_rules(dir: &Path) -> Result<CapaRuleSet, CapaError> {
             rules.push(rule);
         }
     }
-    Ok(CapaRuleSet { rules })
+    Ok(CapaRuleSet::new(rules))
 }
 
 /// Parses one or more capa rules from a YAML string (documents may be separated by `---`). A malformed document
@@ -162,35 +192,65 @@ pub fn load_capa_rules_from_str(yaml: &str) -> Result<CapaRuleSet, CapaError> {
             rules.push(rule);
         }
     }
-    Ok(CapaRuleSet { rules })
+    Ok(CapaRuleSet::new(rules))
 }
 
 /// Evaluates every loaded rule against the imports and strings, returning a `Capability` per matching rule.
+/// `export` features are un-evaluable here; see [`detect_capa_with_exports`].
 pub fn detect_capa(rules: &CapaRuleSet, imports: &[String], strings: &[String]) -> Vec<Capability> {
-    let norm_imports: Vec<String> = imports.iter().map(|name| normal(name)).collect();
-    let ctx = Ctx { imports: &norm_imports, strings };
+    evaluate(rules, imports, None, strings)
+}
+
+/// [`detect_capa`] with the binary's export names, so `export` features are evaluated too.
+pub fn detect_capa_with_exports(
+    rules: &CapaRuleSet,
+    imports: &[String],
+    exports: &[String],
+    strings: &[String],
+) -> Vec<Capability> {
+    evaluate(rules, imports, Some(exports), strings)
+}
+
+fn evaluate(
+    rules: &CapaRuleSet,
+    imports: &[String],
+    exports: Option<&[String]>,
+    strings: &[String],
+) -> Vec<Capability> {
+    let stems = |names: &[String]| names.iter().map(|name| names::import_stem(name)).collect::<Vec<_>>();
+    let imports = stems(imports);
+    let exports = exports.map(stems);
+    let ctx = Ctx { imports: &imports, exports: exports.as_deref(), strings };
     let mut found = Vec::new();
     for rule in &rules.rules {
-        let (matched, mut evidence) = eval(&rule.root, &ctx);
-        if matched {
-            evidence.dedup();
-            found.push(Capability {
-                id: Cow::Owned(rule.id.clone()),
-                name: Cow::Owned(rule.name.clone()),
-                category: Cow::Owned(rule.category.clone()),
-                evidence,
-            });
+        let Outcome::Matched(evidence) = eval(&rule.root, &ctx) else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        let evidence: Vec<String> = evidence.into_iter().filter(|entry| seen.insert(entry.clone())).collect();
+        if evidence.is_empty() {
+            continue;
         }
+        found.push(Capability {
+            id: Cow::Owned(rule.id.clone()),
+            name: Cow::Owned(rule.name.clone()),
+            category: Cow::Owned(rule.category.clone()),
+            evidence,
+        });
     }
     found
 }
 
 struct Ctx<'a> {
+    /// [`names::import_stem`] of each import.
     imports: &'a [String],
+    /// [`names::import_stem`] of each export, when the caller supplied exports.
+    exports: Option<&'a [String]>,
     strings: &'a [String],
 }
 
-/// Recursively finds rule files; symbolic-link cycles are avoided by only descending real directories.
+/// Recursively finds rule files. Symbolic links (to files or directories) are not followed, which also rules out
+/// link cycles.
 fn collect_rule_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), CapaError> {
     let entries = fs::read_dir(dir).map_err(|source| CapaError::Io { path: dir.to_path_buf(), source })?;
     for entry in entries {
@@ -234,15 +294,14 @@ fn rule_from_value(value: &Value) -> Option<CapaRule> {
     if children.is_empty() {
         return None;
     }
-    let root = if children.len() == 1 {
-        children.into_iter().next().unwrap()
-    } else {
-        Node::And(children)
-    };
+    let root = if children.len() == 1 { children.into_iter().next().unwrap() } else { Node::And(children) };
+    if !can_supply_evidence(&root) {
+        return None;
+    }
 
     let category_src = namespace.split('/').next().filter(|s| !s.is_empty()).unwrap_or("capa");
     Some(CapaRule {
-        id: slug(&name),
+        id: rule_id(&namespace, &name),
         category: category_src.to_string(),
         name,
         namespace,
@@ -253,23 +312,36 @@ fn rule_from_value(value: &Value) -> Option<CapaRule> {
     })
 }
 
-/// A rule is file-scope when its static scope is `file`, or when no scope is declared (we default to file and
-/// document it). The new `scopes: {static, dynamic}` form is preferred; the legacy `scope:` string is a fallback.
-fn is_file_scope(meta: &serde_yaml_ng::Mapping) -> bool {
-    if let Some(scopes) = meta.get("scopes").and_then(Value::as_mapping) {
-        return match scopes.get("static").and_then(Value::as_str) {
-            Some(scope) => scope.eq_ignore_ascii_case("file"),
-            None => false,
-        };
-    }
-    match meta.get("scope").and_then(Value::as_str) {
-        Some(scope) => scope.eq_ignore_ascii_case("file"),
-        None => true,
+/// Whether some evaluable, evidence-bearing feature sits outside every `not`, so the rule can ever be reported.
+fn can_supply_evidence(node: &Node) -> bool {
+    match node {
+        Node::And(children) | Node::Or(children) | Node::Optional(children) | Node::NOrMore(_, children) => {
+            children.iter().any(can_supply_evidence)
+        }
+        Node::Not(_) | Node::Unevaluable | Node::Feature(Feature::Global) => false,
+        Node::Feature(_) => true,
     }
 }
 
+/// A rule is file-scope when its static scope is `file`. The `scopes: {static, dynamic}` form is preferred; the
+/// legacy `scope:` string is a fallback, and a rule declaring neither defaults to capa's `function` scope.
+fn is_file_scope(meta: &serde_yaml_ng::Mapping) -> bool {
+    if let Some(scopes) = meta.get("scopes").and_then(Value::as_mapping) {
+        return scopes.get("static").and_then(Value::as_str).is_some_and(|scope| scope.eq_ignore_ascii_case("file"));
+    }
+    meta.get("scope").and_then(Value::as_str).is_some_and(|scope| scope.eq_ignore_ascii_case("file"))
+}
+
+/// Parses statement children, dropping `description:`/`comment:`-only items, which annotate the list rather than
+/// add a condition to it.
 fn parse_children(seq: &[Value], depth: usize) -> Vec<Node> {
-    seq.iter().map(|child| parse_node(child, depth)).collect()
+    seq.iter().filter(|child| !is_annotation(child)).map(|child| parse_node(child, depth)).collect()
+}
+
+fn is_annotation(value: &Value) -> bool {
+    value.as_mapping().is_some_and(|mapping| {
+        !mapping.is_empty() && mapping.keys().all(|key| matches!(key.as_str(), Some("description" | "comment")))
+    })
 }
 
 fn parse_node(value: &Value, depth: usize) -> Node {
@@ -319,6 +391,7 @@ fn parse_leaf(key: &str, value: &Value) -> Node {
         return Node::Unevaluable;
     };
     match key {
+        "import" | "api" | "export" if symbol_part(&text).starts_with('#') => Node::Unevaluable,
         "import" => Node::Feature(Feature::Import(text)),
         "api" => Node::Feature(Feature::Api(text)),
         "export" => Node::Feature(Feature::Export(text)),
@@ -332,9 +405,10 @@ fn parse_leaf(key: &str, value: &Value) -> Node {
     }
 }
 
+/// Whether `text` is a capa regex: `/pattern/` or the case-insensitive `/pattern/i`.
 fn is_regex(text: &str) -> bool {
-    let trimmed = text.trim();
-    trimmed.len() >= 2 && trimmed.starts_with('/') && trimmed.ends_with('/')
+    // capa's own parser recognizes exactly these two shapes; `/usr/bin` stays a literal path.
+    text.trim().strip_prefix('/').is_some_and(|body| body.ends_with('/') || body.ends_with("/i"))
 }
 
 /// Returns the statement/feature key and its value, ignoring the `description`/`comment` annotations that may
@@ -366,69 +440,80 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
     }
 }
 
-/// Evaluates a node, returning whether it matched and the evidence from the branches that contributed.
-fn eval(node: &Node, ctx: &Ctx) -> (bool, Vec<String>) {
+/// Conjunction of `children`: missed if any child is missed, otherwise unknown if any child is unknown.
+fn eval_all(children: &[Node], ctx: &Ctx) -> Outcome {
+    let mut evidence = Vec::new();
+    let mut unknown = false;
+    for child in children {
+        match eval(child, ctx) {
+            Outcome::Matched(child_evidence) => evidence.extend(child_evidence),
+            Outcome::Missed => return Outcome::Missed,
+            Outcome::Unknown => unknown = true,
+        }
+    }
+    if unknown { Outcome::Unknown } else { Outcome::Matched(evidence) }
+}
+
+/// Evaluates a node, returning the evidence from the branches that contributed when it matched.
+fn eval(node: &Node, ctx: &Ctx) -> Outcome {
     match node {
-        Node::Unevaluable => (false, Vec::new()),
+        Node::Unevaluable => Outcome::Unknown,
         Node::Feature(feature) => eval_feature(feature, ctx),
-        Node::And(children) => {
-            let mut evidence = Vec::new();
-            for child in children {
-                let (matched, child_evidence) = eval(child, ctx);
-                if !matched {
-                    return (false, Vec::new());
-                }
-                evidence.extend(child_evidence);
-            }
-            (true, evidence)
-        }
+        Node::And(children) => eval_all(children, ctx),
         Node::Or(children) => {
-            let mut matched_any = false;
-            let mut evidence = Vec::new();
-            for child in children {
-                let (matched, child_evidence) = eval(child, ctx);
-                if matched {
-                    matched_any = true;
-                    evidence.extend(child_evidence);
-                }
+            let (evidence, matched, unknown) = tally(children, ctx);
+            if matched > 0 {
+                Outcome::Matched(evidence)
+            } else if unknown > 0 {
+                Outcome::Unknown
+            } else {
+                Outcome::Missed
             }
-            (matched_any, evidence)
         }
-        Node::Not(children) => {
-            // Matches when the (normally single) child statement does not; its inner matches are not evidence.
-            let matched_inner = children.iter().all(|child| eval(child, ctx).0);
-            (!matched_inner, Vec::new())
-        }
-        Node::Optional(children) => {
-            let mut evidence = Vec::new();
-            for child in children {
-                let (matched, child_evidence) = eval(child, ctx);
-                if matched {
-                    evidence.extend(child_evidence);
-                }
-            }
-            (true, evidence)
-        }
+        // Matches when the (normally single) child statement does not; its inner matches are not evidence.
+        Node::Not(children) => match eval_all(children, ctx) {
+            Outcome::Matched(_) => Outcome::Missed,
+            Outcome::Missed => Outcome::Matched(Vec::new()),
+            Outcome::Unknown => Outcome::Unknown,
+        },
+        Node::Optional(children) => Outcome::Matched(tally(children, ctx).0),
         Node::NOrMore(n, children) => {
-            let mut count = 0;
-            let mut evidence = Vec::new();
-            for child in children {
-                let (matched, child_evidence) = eval(child, ctx);
-                if matched {
-                    count += 1;
-                    evidence.extend(child_evidence);
-                }
+            let (evidence, matched, unknown) = tally(children, ctx);
+            if matched >= *n {
+                Outcome::Matched(evidence)
+            } else if matched + unknown >= *n {
+                Outcome::Unknown
+            } else {
+                Outcome::Missed
             }
-            (count >= *n, evidence)
         }
     }
 }
 
-fn eval_feature(feature: &Feature, ctx: &Ctx) -> (bool, Vec<String>) {
+/// Evaluates every child: the matched children's evidence and the matched and unknown counts.
+fn tally(children: &[Node], ctx: &Ctx) -> (Vec<String>, usize, usize) {
+    let (mut evidence, mut matched, mut unknown) = (Vec::new(), 0, 0);
+    for child in children {
+        match eval(child, ctx) {
+            Outcome::Matched(child_evidence) => {
+                matched += 1;
+                evidence.extend(child_evidence);
+            }
+            Outcome::Missed => {}
+            Outcome::Unknown => unknown += 1,
+        }
+    }
+    (evidence, matched, unknown)
+}
+
+fn eval_feature(feature: &Feature, ctx: &Ctx) -> Outcome {
     match feature {
-        Feature::Import(value) => symbol_match("import", value, ctx),
-        Feature::Api(value) => symbol_match("api", value, ctx),
-        Feature::Export(value) => symbol_match("export", value, ctx),
+        Feature::Import(value) => symbol_match("import", value, ctx.imports),
+        Feature::Api(value) => symbol_match("api", value, ctx.imports),
+        Feature::Export(value) => match ctx.exports {
+            Some(exports) => symbol_match("export", value, exports),
+            None => Outcome::Unknown,
+        },
         Feature::StringExact(value) => {
             let hit = ctx.strings.iter().any(|s| s == value);
             evidence_if(hit, "string", value)
@@ -442,25 +527,37 @@ fn eval_feature(feature: &Feature, ctx: &Ctx) -> (bool, Vec<String>) {
             let hit = ctx.strings.iter().any(|s| s.eq_ignore_ascii_case(value));
             evidence_if(hit, "section", value)
         }
-        Feature::Global => (true, Vec::new()),
+        Feature::Global => Outcome::Matched(Vec::new()),
     }
 }
 
-fn symbol_match(kind: &str, value: &str, ctx: &Ctx) -> (bool, Vec<String>) {
-    let needle = normalize_symbol(value);
-    let hit = ctx.imports.iter().any(|name| name == &needle);
+/// Matches a capa symbol against stems: the module qualifier (`kernel32.`) is dropped and the remaining name is
+/// a charset-neutral [`names::stem_matches`] pattern.
+fn symbol_match(kind: &str, value: &str, stems: &[String]) -> Outcome {
+    let pattern = names::import_stem(symbol_part(value));
+    let hit = stems.iter().any(|stem| names::stem_matches(&pattern, stem));
     evidence_if(hit, kind, value)
 }
 
-fn evidence_if(hit: bool, kind: &str, value: &str) -> (bool, Vec<String>) {
-    if hit { (true, vec![format!("{kind}:{value}")]) } else { (false, Vec::new()) }
+/// The symbol of a possibly module-qualified capa name (`kernel32.CreateFileW` -> `CreateFileW`).
+fn symbol_part(raw: &str) -> &str {
+    raw.rsplit('.').next().unwrap_or(raw)
 }
 
-/// Normalizes a capa api/import/export name to compare with normalized import names: the module prefix
-/// (`kernel32.CreateFileW`) is dropped and the crate's import normalization is applied.
-fn normalize_symbol(raw: &str) -> String {
-    let symbol = raw.rsplit('.').next().unwrap_or(raw);
-    normal(symbol)
+fn evidence_if(hit: bool, kind: &str, value: &str) -> Outcome {
+    if hit { Outcome::Matched(vec![format!("{kind}:{value}")]) } else { Outcome::Missed }
+}
+
+fn rule_id(namespace: &str, name: &str) -> String {
+    let mut id = String::from("capa");
+    for part in namespace.split('/').map(slug).filter(|part| !part.is_empty()) {
+        id.push('/');
+        id.push_str(&part);
+    }
+    id.push('/');
+    let name = slug(name);
+    id.push_str(if name.is_empty() { "rule" } else { &name });
+    id
 }
 
 fn slug(name: &str) -> String {
@@ -475,8 +572,7 @@ fn slug(name: &str) -> String {
             prev_dash = true;
         }
     }
-    let trimmed = out.trim_matches('-');
-    if trimmed.is_empty() { "capa-rule".to_string() } else { trimmed.to_string() }
+    out.trim_matches('-').to_string()
 }
 
 #[cfg(test)]

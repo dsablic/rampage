@@ -1,4 +1,5 @@
-//! Conservative class evidence from existing, named Itanium vtable symbols.
+//! Conservative class evidence from existing, named Itanium vtable symbols, alongside the symbol-independent
+//! RTTI recovery of [`crate::rtti`].
 
 use std::collections::BTreeMap;
 
@@ -17,8 +18,8 @@ const MAX_LOOKUP_WORK: usize = 8_000_000;
 #[derive(Debug, Serialize)]
 pub struct ClassRecovery {
     pub classes: Vec<ClassEvidence>,
-    /// Classes recovered from RTTI data when no named vtable/typeinfo symbols exist, de-duplicated against the
-    /// symbol-derived `classes` above.
+    /// Classes recovered from RTTI data, scanned for every ELF, Mach-O and PE image whether or not symbols
+    /// exist, minus any class already named in the symbol-derived `classes` above.
     pub rtti_classes: Vec<crate::rtti::RttiClass>,
     pub warnings: Vec<String>,
     pub limitations: Vec<String>,
@@ -254,6 +255,14 @@ fn evidence(
     })
 }
 
+/// Whether `binary` is a MIPS64 ELFCLASS32 (N32) image, whose 32-bit ABI pointers the architecture's pointer
+/// width misstates; class recovery is disabled for it.
+pub(crate) fn is_mips64_n32(binary: &Binary) -> bool {
+    binary.format == Format::Elf
+        && binary.arch == Arch::Mips64
+        && binary.image_bytes().get(..5) == Some(b"\x7fELF\x01".as_slice())
+}
+
 /// Reports class evidence without inserting types or asserting a class layout.
 pub fn recover(binary: &Binary) -> ClassRecovery {
     let mut result = ClassRecovery {
@@ -261,15 +270,17 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
         rtti_classes: crate::rtti::recover(binary),
         warnings: Vec::new(),
         limitations: vec![
-            "Named Itanium vtable evidence only; no anonymous scanning, automatic type insertion, inheritance, \
-             complete class layouts or proven virtual-call edges."
+            "`classes` is named Itanium vtable evidence only; no automatic type insertion, complete class \
+             layouts or proven virtual-call edges. Symbol-independent names and base edges come only from \
+             `rtti_classes`."
                 .to_owned(),
-            "`rtti_classes` recovers names and base edges from Itanium/MSVC RTTI data for stripped binaries; \
-             followed pointers must land in mapped sections and names must demangle. Chained-fixup or \
+            "`rtti_classes` recovers names and direct base edges from Itanium/MSVC RTTI in file-backed data \
+             sections; followed pointers must land in mapped data and names must demangle. Chained-fixup or \
              relocated pointers that are unresolved on disk are not followed, so classes whose RTTI pointers \
              are not image-backed are missed."
                 .to_owned(),
-            "Only static ELF and Mach-O read-only, image-backed tables are examined; snapshots are disabled."
+            "Named vtables are examined only in static ELF and Mach-O read-only, image-backed tables; snapshots \
+             are disabled."
                 .to_owned(),
             "At most 4096 vtable candidates, 4096 RTTI candidates, one million symbols, 32 MiB of symbol-name bytes \
              and 64 slots per table; \
@@ -280,7 +291,7 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
               instruction span, not proven function starts."
                 .to_owned(),
             "Relocations are not resolved. Null or foreign RTTI, relative/authenticated vtables, construction \
-             vtables, MSVC tables and function descriptors are not reconstructed."
+             vtables, MSVC vftable slots and function descriptors are not reconstructed."
                 .to_owned(),
             "Only a two-word prefix at the symbol address is read; virtual-base prefixes and secondary \
              address points are not reconstructed. Offset-to-top requires known RTTI with the same encoded \
@@ -299,15 +310,14 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
         ],
     };
     if !matches!(binary.format, Format::Elf | Format::MachO) {
-        result
-            .warnings
-            .push("Class evidence requires a static ELF or Mach-O image; this format is disabled.".to_owned());
+        result.warnings.push(
+            "Named vtable evidence requires a static ELF or Mach-O image; only `rtti_classes` is reported for \
+             this format."
+                .to_owned(),
+        );
         return result;
     }
-    if binary.format == Format::Elf
-        && binary.arch == Arch::Mips64
-        && binary.image_bytes().get(..5) == Some(b"\x7fELF\x01".as_slice())
-    {
+    if is_mips64_n32(binary) {
         result
             .warnings
             .push("Class evidence is disabled for unsupported MIPS64 ELFCLASS32/N32 pointer width.".to_owned());
