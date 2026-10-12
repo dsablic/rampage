@@ -49,11 +49,14 @@ pub struct Finding {
     pub confidence: Confidence,
     #[serde(skip_serializing_if = "Option::is_none", serialize_with = "rampage_arch::hex::optional_address")]
     pub address: Option<u64>,
+    /// Evidence items dropped past `MAX_EVIDENCE`, summed over every `evidence` call.
+    #[serde(skip)]
+    omitted: usize,
 }
 
 impl Finding {
     pub fn new(source: &'static str, confidence: Confidence, observation: impl Into<String>) -> Self {
-        Self { observation: observation.into(), evidence: Vec::new(), source, confidence, address: None }
+        Self { observation: observation.into(), evidence: Vec::new(), source, confidence, address: None, omitted: 0 }
     }
 
     pub fn at(mut self, address: u64) -> Self {
@@ -61,18 +64,20 @@ impl Finding {
         self
     }
 
-    /// Adds evidence, keeping at most `MAX_EVIDENCE` items and counting the rest.
+    /// Adds evidence, keeping at most `MAX_EVIDENCE` items and counting the rest in one final item.
     pub fn evidence<S: Into<String>>(mut self, items: impl IntoIterator<Item = S>) -> Self {
-        let mut extra = 0usize;
+        if self.omitted > 0 {
+            self.evidence.pop();
+        }
         for item in items {
             if self.evidence.len() < MAX_EVIDENCE {
                 self.evidence.push(item.into());
             } else {
-                extra += 1;
+                self.omitted += 1;
             }
         }
-        if extra > 0 {
-            self.evidence.push(format!("... and {extra} more"));
+        if self.omitted > 0 {
+            self.evidence.push(format!("... and {} more", self.omitted));
         }
         self
     }
@@ -256,6 +261,16 @@ mod tests {
         let finding = Finding::new("test", Confidence::Low, "x").evidence((0..20).map(|index| index.to_string()));
         assert_eq!(finding.evidence.len(), MAX_EVIDENCE + 1);
         assert_eq!(finding.evidence.last().unwrap(), "... and 12 more");
+    }
+
+    #[test]
+    fn evidence_overflow_is_counted_once_across_calls() {
+        let finding = Finding::new("test", Confidence::Low, "x")
+            .evidence((0..10).map(|index| index.to_string()))
+            .evidence(["a", "b", "c"]);
+        assert_eq!(finding.evidence.len(), MAX_EVIDENCE + 1);
+        assert_eq!(finding.evidence.iter().filter(|item| item.starts_with("... and")).count(), 1);
+        assert_eq!(finding.evidence.last().unwrap(), "... and 5 more");
     }
 
     #[test]
