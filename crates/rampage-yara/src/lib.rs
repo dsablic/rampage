@@ -18,7 +18,7 @@ pub const MAX_MATCHED_STRINGS_PER_RULE: usize = 64;
 /// boundary without leaking the dependency's types or ever panicking.
 #[derive(Debug, thiserror::Error)]
 pub enum YaraError {
-    #[error("cannot read {path}")]
+    #[error("cannot read {path}: {source}")]
     Io { path: PathBuf, source: std::io::Error },
     #[error("rule compilation failed: {0}")]
     Compile(String),
@@ -67,8 +67,8 @@ pub fn compile_files<P: AsRef<Path>>(paths: &[P]) -> Result<Rules, YaraError> {
     let mut sources: Vec<(String, String)> = Vec::with_capacity(paths.len());
     for path in paths {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path)
-            .map_err(|source| YaraError::Io { path: path.to_path_buf(), source })?;
+        let text =
+            std::fs::read_to_string(path).map_err(|source| YaraError::Io { path: path.to_path_buf(), source })?;
         sources.push((path.display().to_string(), text));
     }
     let mut compiler = yara_x::Compiler::new();

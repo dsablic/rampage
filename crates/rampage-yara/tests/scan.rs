@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use rampage_loaders::Binary;
-use rampage_yara::{compile, scan, scan_binary, MatchedString, MAX_MATCHED_STRINGS_PER_RULE};
+use rampage_yara::{MAX_MATCHED_STRINGS_PER_RULE, MatchedString, compile, scan, scan_binary};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -25,11 +25,7 @@ fn string_anywhere_matches_and_reports_offset() {
 
     let hits = scan(&rules, b"hay hay needle hay").unwrap();
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].matched_strings, vec![MatchedString {
-        identifier: "$s".to_string(),
-        offset: 8,
-        length: 6,
-    }]);
+    assert_eq!(hits[0].matched_strings, vec![MatchedString { identifier: "$s".to_string(), offset: 8, length: 6 }]);
 
     assert!(scan(&rules, b"only hay here").unwrap().is_empty());
 }
@@ -61,6 +57,14 @@ fn metadata_and_tags_round_trip() {
 fn malformed_rule_returns_compile_error_not_panic() {
     let result = compile("rule broken { condition: }");
     assert!(matches!(result, Err(rampage_yara::YaraError::Compile(_))));
+}
+
+#[test]
+fn unreadable_rule_file_error_names_the_cause() {
+    let missing = std::env::temp_dir().join(format!("rampage-yara-missing-{}.yar", std::process::id()));
+    let message = rampage_yara::compile_files(&[&missing]).err().expect("missing file fails").to_string();
+    let cause = std::fs::read(&missing).unwrap_err().to_string();
+    assert!(message.ends_with(&format!(": {cause}")), "{message}");
 }
 
 #[test]
