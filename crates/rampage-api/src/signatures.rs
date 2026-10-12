@@ -4,6 +4,7 @@
 use rampage_signatures::{MaskContext, SignatureDb};
 use serde::Serialize;
 
+use crate::workflows::is_default_name;
 use crate::{ApiError, Project};
 
 #[derive(Debug, Serialize)]
@@ -60,7 +61,7 @@ impl Project {
             matches.push(SignatureMatch {
                 address: function.address,
                 name: name.to_owned(),
-                unnamed: current.starts_with("sub_"),
+                unnamed: is_default_name(&current),
             });
         }
 

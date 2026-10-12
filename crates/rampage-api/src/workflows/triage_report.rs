@@ -160,15 +160,17 @@ impl Project {
                     .evidence(["recursive descent from the entry point, symbols, exports and unwind metadata"]),
                 );
                 let identified = self.apply_signatures_default(None, false)?;
-                let mut by_name: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
+                // Name to (address, whether that function is still unnamed) per match.
+                let mut by_name: BTreeMap<&str, Vec<(u64, bool)>> = BTreeMap::new();
                 for candidate in &identified.matches {
-                    by_name.entry(&candidate.name).or_default().push(candidate.address);
+                    by_name.entry(&candidate.name).or_default().push((candidate.address, candidate.unnamed));
                 }
-                for (name, addresses) in by_name {
-                    let shared = addresses.len() > 1;
-                    if !shared && identified.matches.iter().any(|m| m.address == addresses[0] && m.unnamed) {
+                for (name, matches) in by_name {
+                    let shared = matches.len() > 1;
+                    if !shared && matches[0].1 {
                         unnamed_matches += 1;
                     }
+                    let addresses: Vec<u64> = matches.iter().map(|&(address, _)| address).collect();
                     let (confidence, observation) = if shared {
                         (
                             Confidence::Low,
@@ -195,10 +197,13 @@ impl Project {
         report.sections.push(functions);
 
         let detected = |kind: Kind| detections.iter().any(|detection| detection.kind == kind);
+        // Triage hints are prose, so this matches their wording and breaks if it changes; a structured hint kind
+        // from rampage-analysis would make it exact.
         let packed_hint = triage.hints.iter().any(|hint| hint.contains("packed") || hint.contains("typical of"));
+        let packing_signal = packed_hint || detected(Kind::Packer) || detected(Kind::Protector);
         let networking = capabilities.iter().any(|capability| capability.category == "networking");
 
-        let packing = if packed_hint || detected(Kind::Packer) || detected(Kind::Protector) {
+        let packing = if packing_signal {
             "Packing or protection signals were seen"
         } else {
             "No packing or protection signal matched"
@@ -241,7 +246,7 @@ impl Project {
                 "Networking capability tags or network-like strings were seen; map them to the functions using them.",
             );
         }
-        if packed_hint || detected(Kind::Packer) || detected(Kind::Protector) {
+        if packing_signal {
             report.step(
                 "analysis_diagnostics",
                 json!({ "include_discovery": true }),
