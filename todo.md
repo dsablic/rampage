@@ -88,7 +88,8 @@ negative regressions. Existing rules retain their detection thresholds and canon
   upstream file (yara-x), a same-repository package under the identical licence, or the standard text of the
   elected licence with holders from package metadata -- each labelled with its source. No copyleft-only crate.
   Regenerate whenever Cargo.lock changes.
-- [ ] Surface the bundled UI fonts' licences (OFL-1.1/Ubuntu-font/UFL) in a UI about view.
+- [x] UI About window (click the brand label): version, Apache-2.0, NOTICE, the bundled egui fonts' licences
+  (UFL-1.0, OFL-1.1, MIT/Bitstream Vera, MIT) and THIRD-PARTY-NOTICES; snapshot `about.png`.
 
 
 ## Heuristic-database layer (pluggable detection DBs)
@@ -145,13 +146,21 @@ on held-out, per-slice improvement with provenance and rollback.
 - [x] Second turn: absolute-address masking (hash scheme 2). x86/x86-64 displacements and immediates pointing
   into the image, and AArch64 ADRP low-12-bit offsets, are masked; databases carry their scheme so legacy ones
   keep matching exactly; ambiguous masked hashes fall back to exact hashes (gmtime/localtime). Measured:
-  libid-cross recall 0.746 -> 0.921 (x86_64), 0.595 -> 0.823 (aarch64), precision 1.000, twins unchanged;
-  `rampage identify` on the stripped musl fixtures 26 -> 47 and 24 -> 47 names.
-- [ ] Discovery false positives on aarch64: precision 0.737 -- 67 of 69 spurious starts are interior blocks of
-  `printf_core` (45), `vfscanf` (19) and a few others treated as function starts. Fix in rampage-analysis
-  discovery, measured by the `discovery-aarch64` slice.
-- [ ] Remaining library-ID misses: musl's identical local `dummy` bodies (inherently ambiguous), and a few
-  functions missed even on the twin (`pop_arg`, `__errno_location`, `__lctrans`, `__addtf3`) -- not yet explained.
+  libid-cross recall 0.746 -> 0.921 (x86_64), 0.595 -> 0.823 (aarch64), precision 1.000, twins unchanged.
+  (An earlier note here claimed 47 names from `rampage identify` on each musl fixture; re-measured after the
+  review fixes it was 58 and 66, and is now 59 and 71 -- see below.)
+- [x] Discovery false positives on aarch64: in-body ADR jump-table bases no longer seed functions (they cascaded
+  into interior blocks of `printf_core`/`vfscanf`). Precision 0.737 -> 0.990; the two left (`_start`,
+  `__set_thread_area`) are real functions the truth omits (no symbol size).
+- [ ] Resolve AArch64 jump tables (adr/ldrb|ldrh/add/br bounded by cmp+b.hi) so case blocks are explored and
+  discovered extents match symbol sizes.
+- [x] Library-ID misses explained and mostly fixed: signatures also hash the extent discovery finds (it stops at
+  unresolved jump tables), and callee-name keys (`identify_program`, iterated) separate bodies that differ only in
+  their callee (`mbstowcs`/`wcstombs`, `fprintf`/`sscanf`) and small tail-call stubs. Recall: twin x86_64 0.920 ->
+  0.977, cross x86_64 0.921 -> 0.937, twin aarch64 0.876 -> 0.953, cross aarch64 0.848 -> 0.899; precision 1.000.
+  `rampage identify` on the stripped musl fixtures names 59 (x86_64) and 71 (aarch64) functions. Remaining: musl
+  `dummy` stubs (ambiguous), aarch64 `__errno_location`/`difftime` (3-instruction leaves under the gate),
+  `__lctrans` (lone branch to an unidentifiable callee). Rebuild the bundled DBs whenever discovery extents change.
 - [ ] Masking for 32-bit ARM literal pools and MIPS `lui`/`addiu` pairs, once a cross-program fixture exists.
 - [ ] Later phases: tool ID (known toolchains) and type recovery (DWARF/PDB) slices; the proposal/gate/promote
   loop on top.
@@ -174,12 +183,22 @@ in UX/workflow ideas, not the multi-engine dispatch:
   `triage_report` routes managed assemblies to it. Validated on Microsoft.Bcl.HashCode 1.1.1 (MIT, committed with
   its licence). Not decoded yet: signatures/generics, custom attributes, properties/events, resources, P/Invoke
   targets, exception sections; no IL disassembly.
-- [ ] Broader input front-ends (user-invoked): firmware/archive carving to enumerate embedded binaries (extend
-  the existing bundle inventory). APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
-- [ ] .NET follow-ups: decode method/field signatures and generics, custom attributes and P/Invoke (ImplMap)
-  targets; an IL disassembler so managed methods can be read.
-- [ ] Agent-efficiency operations: batch rename/annotate and naming-convention helpers; keep the MCP tool
-  surface structured as it grows (lazy/grouped tool exposure).
+- [x] Embedded-binary carving (`rampage carve`, MCP `carve`, `rampage_api::carve`): bounded scan for ELF, PE,
+  Mach-O (thin and universal) and zip/gzip/xz/zstd/LZMA/squashfs/cpio/uImage/Android boot, with validated header
+  facts, header-derived extents, validated or magic-only confidence and a 4096-candidate cap.
+- [ ] Open a carved executable at an offset (`Binary::open_at`), keying the session and annotation sidecar by
+  offset. APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
+- [x] .NET: ECMA-335 blob signatures (method/field/MemberRef, TypeSpec, GenericParam names) rendered ILAsm-style
+  with depth/node/text caps and an `<unreadable>` fallback; ImplMap P/Invoke (DLL + import per method);
+  CustomAttribute rows with type, target and primitive/string/Type fixed arguments. In dotnet_metadata/CLI/MCP.
+- [ ] .NET: an IL disassembler; named/enum/array attribute arguments; locals/MethodSpec signatures.
+- [x] Agent batch annotation: `annotate_batch` (all-or-nothing, at most 1000 entries, one undo step, per-entry
+  outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits.
+- [ ] Keep the MCP tool surface structured as it grows (lazy/grouped tool exposure).
+- [x] `persistence_surface` workflow: autostart-location strings (Windows Run/services/tasks/Startup, launchd,
+  systemd, cron, XDG autostart, rc/init), service/registry-write APIs, referencing functions, capability tags.
+- [x] `string_decoding` workflow: static candidate decoders (bounded byte load/transform/store loops), call sites
+  and the encoded-looking blobs passed to them; no emulation.
 
 ## Plugin system (later)
 
