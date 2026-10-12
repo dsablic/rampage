@@ -54,10 +54,7 @@ impl Blob {
 }
 
 /// Finds a recovered class by name, failing with the full set when it is missing.
-fn class<'a>(
-    classes: &'a [rampage_analysis::rtti::RttiClass],
-    name: &str,
-) -> &'a rampage_analysis::rtti::RttiClass {
+fn class<'a>(classes: &'a [rampage_analysis::rtti::RttiClass], name: &str) -> &'a rampage_analysis::rtti::RttiClass {
     classes
         .iter()
         .find(|class| class.name == name)

@@ -175,8 +175,7 @@ fn header_shaped(bytes: &[u8], pointer_size: u8, big_endian: bool) -> bool {
 fn collect(blob: &[u8], text_base: u64, big_endian: bool, layout: &Layout, nfunc: usize, report: &mut GoReport) {
     let stride = layout.functab_field * 2;
     for index in 0..nfunc {
-        let Some(entry) = index.checked_mul(stride).and_then(|offset| layout.functab_base.checked_add(offset))
-        else {
+        let Some(entry) = index.checked_mul(stride).and_then(|offset| layout.functab_base.checked_add(offset)) else {
             break;
         };
         let pc = read_uint(blob, entry, layout.functab_field, big_endian);

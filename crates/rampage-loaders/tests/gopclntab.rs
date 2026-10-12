@@ -12,9 +12,8 @@ fn recovers_function_names_from_a_stripped_go_binary() {
     // below is recovered from the pclntab, which `Binary::open` does automatically.
     let binary = Binary::open(fixture("hello-go-x64.elf")).unwrap();
 
-    let attached = |name: &str| {
-        binary.symbols.iter().find(|symbol| symbol.name == name && symbol.kind == SymbolKind::Function)
-    };
+    let attached =
+        |name: &str| binary.symbols.iter().find(|symbol| symbol.name == name && symbol.kind == SymbolKind::Function);
     let main = attached("main.main").expect("main.main recovered at load");
     let greet = attached("main.greet").expect("main.greet recovered at load");
     assert!(main.address > 0x400000, "main.main at implausible address {:#x}", main.address);

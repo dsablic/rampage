@@ -411,18 +411,12 @@ mod tests {
 
     /// Packs 32-bit instruction words into bytes in the given order.
     fn words_to_bytes(words: &[u32], big_endian: bool) -> Vec<u8> {
-        words
-            .iter()
-            .flat_map(|word| if big_endian { word.to_be_bytes() } else { word.to_le_bytes() })
-            .collect()
+        words.iter().flat_map(|word| if big_endian { word.to_be_bytes() } else { word.to_le_bytes() }).collect()
     }
 
     /// Packs 16-bit Thumb halfwords into bytes in the given order.
     fn halfwords_to_bytes(halfwords: &[u16], big_endian: bool) -> Vec<u8> {
-        halfwords
-            .iter()
-            .flat_map(|hw| if big_endian { hw.to_be_bytes() } else { hw.to_le_bytes() })
-            .collect()
+        halfwords.iter().flat_map(|hw| if big_endian { hw.to_be_bytes() } else { hw.to_le_bytes() }).collect()
     }
 
     #[test]
@@ -521,9 +515,9 @@ mod tests {
             .iter()
             .filter(|symbol| symbol.kind == SymbolKind::Function && symbol.size > 0 && !symbol.name.is_empty())
             .filter(|symbol| {
-                binary.read(symbol.address, symbol.size).is_some_and(|bytes| {
-                    db.identify(&target, bytes, symbol.address) == Some(symbol.name.as_str())
-                })
+                binary
+                    .read(symbol.address, symbol.size)
+                    .is_some_and(|bytes| db.identify(&target, bytes, symbol.address) == Some(symbol.name.as_str()))
             })
             .count();
         assert!(hits > 0, "{name}: no function identified back to its own name");

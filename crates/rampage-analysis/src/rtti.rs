@@ -383,9 +383,5 @@ pub fn recover(binary: &Binary) -> Vec<RttiClass> {
     if image.ranges.is_empty() {
         return Vec::new();
     }
-    if binary.format == Format::Pe {
-        recover_msvc(&image)
-    } else {
-        recover_itanium(&image)
-    }
+    if binary.format == Format::Pe { recover_msvc(&image) } else { recover_itanium(&image) }
 }

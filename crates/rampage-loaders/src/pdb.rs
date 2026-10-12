@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use ::pdb::{FallibleIterator, SymbolData, PDB};
+use ::pdb::{FallibleIterator, PDB, SymbolData};
 use serde::Serialize;
 
 use crate::LoadError;
@@ -118,8 +118,7 @@ fn read_pdb<'s, S: ::pdb::Source<'s> + 's>(source: S) -> Result<PdbReport, LoadE
         Err(error) => report.warn(format!("PDB global symbols unavailable: {error}")),
     }
 
-    report.functions =
-        functions.into_iter().map(|(address, name)| PdbFunction { address, name }).collect();
+    report.functions = functions.into_iter().map(|(address, name)| PdbFunction { address, name }).collect();
     Ok(report)
 }
 

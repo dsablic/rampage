@@ -37,10 +37,8 @@ pub fn demangle(name: &str) -> Option<String> {
 /// are dropped so the output reads like the Itanium demangler's (`Class::method(args)`).
 fn demangle_msvc(name: &str) -> Option<String> {
     use msvc_demangler::DemangleFlags as Flags;
-    let flags = Flags::NO_ACCESS_SPECIFIERS
-        | Flags::NO_FUNCTION_RETURNS
-        | Flags::NO_MS_KEYWORDS
-        | Flags::NO_MEMBER_TYPE;
+    let flags =
+        Flags::NO_ACCESS_SPECIFIERS | Flags::NO_FUNCTION_RETURNS | Flags::NO_MS_KEYWORDS | Flags::NO_MEMBER_TYPE;
     let demangled = msvc_demangler::demangle(name, flags).ok()?;
     (!demangled.is_empty() && demangled != name && demangled.len() <= 4096).then_some(demangled)
 }
