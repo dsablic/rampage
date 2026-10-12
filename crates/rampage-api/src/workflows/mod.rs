@@ -31,8 +31,9 @@ const MAX_NEXT_STEPS: usize = 10;
 /// Characters of quoted binary text (strings, names) kept in an observation.
 pub const MAX_QUOTE_CHARS: usize = 160;
 
-/// How far a finding can be trusted. `Observed` is read directly from the file's structure (a header field, an
-/// import entry, a string's presence); the other levels rate an inference drawn from such observations.
+/// How far a finding can be trusted. `Observed` is read directly from the file's bytes or structure (a header
+/// field, an import entry, a string's presence, bytes compared); the other levels rate an inference, including
+/// everything recovered by code analysis (references, calls, discovered functions), which is at most `High`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Confidence {

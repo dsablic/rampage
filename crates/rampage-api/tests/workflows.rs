@@ -117,6 +117,10 @@ fn find_main_trusts_the_main_symbol_and_corroborates_it_from_the_startup_code() 
     assert!(best.evidence.iter().any(|line| line.contains("corroborated by disassemble")), "{best:#?}");
     assert!(has_observation(section(&report, "Candidate calls"), "`puts`"));
     assert!(has_observation(section(&report, "Candidate strings"), "rampage fixture greeting"));
+    // References are recovered by analysis, an inference rather than a structural observation.
+    for title in ["Candidate calls", "Candidate strings"] {
+        assert!(section(&report, title).findings.iter().all(|finding| finding.confidence == FindingConfidence::High));
+    }
     let preview = section(&report, "Decompilation preview").excerpt.as_ref().expect("a decompilation preview");
     assert!(preview.text.contains("puts("), "{}", preview.text);
     assert!(report.next_steps.iter().any(|step| step.tool == "decompile"));

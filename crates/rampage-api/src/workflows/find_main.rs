@@ -371,7 +371,7 @@ impl Project {
         for reference in &references.items {
             if let Some(text) = strings.get(&reference.to) {
                 texts.push(
-                    Finding::new("xrefs", Confidence::Observed, format!("references string {}", quote(text)))
+                    Finding::new("xrefs", Confidence::High, format!("references string {}", quote(text)))
                         .at(reference.from)
                         .evidence([format!("{:#x} -> {:#x}", reference.from, reference.to)]),
                 );
@@ -386,7 +386,7 @@ impl Project {
                 || self.binary.imports.iter().any(|import| import.name == name);
             let kind = if import { "import" } else { "function" };
             calls.push(
-                Finding::new("xrefs", Confidence::Observed, format!("calls {kind} `{name}`"))
+                Finding::new("xrefs", Confidence::High, format!("calls {kind} `{name}`"))
                     .at(reference.from)
                     .evidence([format!("call at {:#x} -> {:#x}", reference.from, reference.to)]),
             );
@@ -420,7 +420,7 @@ impl Project {
             }
             Err(error) => section.push(Finding::new(
                 "decompile",
-                Confidence::Observed,
+                Confidence::High,
                 format!("decompilation failed (the rest of the report stands): {error}"),
             )),
         }

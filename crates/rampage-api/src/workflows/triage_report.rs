@@ -149,7 +149,7 @@ impl Project {
                 functions.push(
                     Finding::new(
                         "list_functions",
-                        Confidence::Observed,
+                        Confidence::High,
                         format!(
                             "{} functions discovered: {named} named by symbols, exports or the user, {} with default \
                              sub_ names",
