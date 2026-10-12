@@ -12,7 +12,7 @@ mod triage_report;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rampage_arch::Arch;
-use rampage_capabilities::Capability;
+use rampage_capabilities::{Capability, names};
 use rampage_loaders::{Format, SymbolKind};
 use serde::Serialize;
 use serde_json::Value;
@@ -293,25 +293,16 @@ pub fn quote(text: &str) -> String {
 
 /// An import or symbol name without the decorations loaders and toolchains add (`__imp_`, an `@plt`, `@16` or
 /// `@GLIBC_2.2.5` suffix, leading underscores), lowercased, for matching against the API tables.
-pub(crate) fn normalize_api(name: &str) -> String {
-    let name = name.strip_prefix("__imp_").unwrap_or(name);
-    let name = name.split('@').next().unwrap_or(name);
-    name.trim_start_matches('_').to_ascii_lowercase()
-}
-
-/// Whether `name` (decorated or not) is the API `pattern` names. A pattern is a lowercase stem that also matches
-/// with a Windows `A`/`W` suffix (`connect`, `loadlibrary`), or a prefix ending in `*` (`bcrypt*`).
+/// Whether `name` (decorated or not) is the API `pattern` names: the shared normalization of
+/// `rampage_capabilities::names` (a lowercase stem that also matches with a Windows `A`/`W` suffix, or a prefix
+/// ending in `*`).
 pub(crate) fn api_matches(pattern: &str, name: &str) -> bool {
-    let name = normalize_api(name);
-    match pattern.strip_suffix('*') {
-        Some(prefix) => name.starts_with(prefix),
-        None => name == pattern || name.strip_suffix(['a', 'w']) == Some(pattern),
-    }
+    names::stem_matches(pattern, &names::import_stem(name))
 }
 
 /// The value of the first `(pattern, value)` entry of `table` that `name` matches (see `api_matches`).
 pub(crate) fn match_api<T: Copy>(table: &[(&str, T)], name: &str) -> Option<T> {
-    table.iter().find(|(pattern, _)| api_matches(pattern, name)).map(|&(_, value)| value)
+    names::find_pattern(table, name).copied()
 }
 
 /// References read per traced item when looking for the functions that use it.
@@ -551,8 +542,8 @@ pub(crate) fn capability_section<'c>(
 }
 
 /// Whether `name` is a default name the analysis made up rather than one the binary or user supplied.
-pub fn is_default_name(name: &str) -> bool {
-    name.starts_with("sub_")
+pub fn is_default_name(name: &str, address: u64) -> bool {
+    rampage_analysis::functions::is_default_name(name, address)
 }
 
 #[cfg(test)]
@@ -596,9 +587,9 @@ mod tests {
 
     #[test]
     fn api_names_match_across_decorations() {
-        assert_eq!(normalize_api("__imp__exit"), "exit");
-        assert_eq!(normalize_api("getaddrinfo@plt"), "getaddrinfo");
-        assert_eq!(normalize_api("_WinMain@16"), "winmain");
+        assert_eq!(names::import_stem("__imp__exit"), "exit");
+        assert_eq!(names::import_stem("getaddrinfo@plt"), "getaddrinfo");
+        assert_eq!(names::import_stem("_WinMain@16"), "winmain");
         assert!(api_matches("getprocaddress", "__imp_GetProcAddress"));
         assert!(api_matches("loadlibraryex", "LoadLibraryExA"));
         assert!(api_matches("bcrypt*", "BCryptOpenAlgorithmProvider"));

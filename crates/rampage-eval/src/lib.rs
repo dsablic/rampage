@@ -311,12 +311,10 @@ pub fn proposals(db: &SignatureDb, target: &Binary) -> Result<Vec<(u64, Option<S
         .functions
         .iter()
         .map(|function| {
-            // Same body extent `rampage identify` hashes, so the eval measures what users get.
-            let end = function.blocks.iter().map(|block| block.end).max().unwrap_or(function.address);
-            let name = end
-                .checked_sub(function.address)
-                .filter(|&length| length > 0)
-                .and_then(|length| target.read(function.address, length))
+            // The same body `rampage identify` hashes (`DiscoveredFunction::body`), so the eval measures what users
+            // get.
+            let name = function
+                .body(target)
                 .and_then(|bytes| db.identify_in(&arch, &image, bytes, function.address))
                 .map(str::to_owned);
             (function.address, name)

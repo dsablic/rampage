@@ -51,9 +51,7 @@ impl Project {
         let image = MaskContext::from_binary(&self.binary);
         let mut matches = Vec::new();
         for function in &analysis.program.functions {
-            let end = function.blocks.iter().map(|block| block.end).max().unwrap_or(function.address);
-            let Some(length) = end.checked_sub(function.address).filter(|&length| length > 0) else { continue };
-            let Some(bytes) = self.binary.read(function.address, length) else { continue };
+            let Some(bytes) = function.body(&self.binary) else { continue };
             let identified =
                 databases.iter().find_map(|database| database.identify_in(&target, &image, bytes, function.address));
             let Some(name) = identified else { continue };
@@ -61,7 +59,7 @@ impl Project {
             matches.push(SignatureMatch {
                 address: function.address,
                 name: name.to_owned(),
-                unnamed: is_default_name(&current),
+                unnamed: is_default_name(&current, function.address),
             });
         }
 

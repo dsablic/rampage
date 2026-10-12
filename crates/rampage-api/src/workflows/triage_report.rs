@@ -145,7 +145,7 @@ impl Project {
         let mut unnamed_matches = 0;
         match self.functions(&FunctionsQuery::default()) {
             Ok(page) => {
-                let named = page.items.iter().filter(|row| !is_default_name(&row.name)).count();
+                let named = page.items.iter().filter(|row| !is_default_name(&row.name, row.address)).count();
                 functions.push(
                     Finding::new(
                         "list_functions",

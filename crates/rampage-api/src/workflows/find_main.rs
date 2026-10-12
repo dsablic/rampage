@@ -5,13 +5,11 @@ use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashMap};
 
 use rampage_arch::{Arch, Flow};
+use rampage_capabilities::names;
 use rampage_loaders::{Details, Format};
 use serde_json::json;
 
-use super::{
-    Confidence, Excerpt, Finding, ReportLimits, Section, WorkflowReport, api_matches, is_default_name, normalize_api,
-    quote,
-};
+use super::{Confidence, Excerpt, Finding, ReportLimits, Section, WorkflowReport, api_matches, is_default_name, quote};
 use crate::{ApiError, DisassemblyLine, Project, XrefQuery};
 
 /// Symbol names that conventionally mark a program's entry logic, most specific first: in a cgo binary `main` is
@@ -133,7 +131,7 @@ impl Project {
                 let at = format!("{:#x}", best.address);
                 report.step("decompile", json!({ "at": at }), "Read the candidate's logic in full.");
                 report.step("xrefs", json!({ "from": at }), "List everything the candidate references.");
-                if is_default_name(&name) && best.confidence >= Confidence::Medium {
+                if is_default_name(&name, best.address) && best.confidence >= Confidence::Medium {
                     report.step(
                         "rename",
                         json!({ "at": at, "name": "main" }),
@@ -274,10 +272,11 @@ impl Project {
     /// call before such a call, in the functions the entry point reaches, is proposed.
     fn mingw_candidates(&self) -> Result<Vec<Candidate>, ApiError> {
         let Some(entry) = self.binary.entry else { return Ok(Vec::new()) };
-        let imports: BTreeSet<String> = self.binary.imports.iter().map(|import| normalize_api(&import.name)).collect();
+        let imports: BTreeSet<String> =
+            self.binary.imports.iter().map(|import| names::import_stem(&import.name)).collect();
         let internal = |target: u64| {
             self.binary.is_code(target)
-                && self.name_at(target).is_none_or(|name| !imports.contains(&normalize_api(&name)))
+                && self.name_at(target).is_none_or(|name| !imports.contains(&names::import_stem(&name)))
                 && self.binary.import_slot(target).is_none()
         };
         let mut queue = vec![entry];

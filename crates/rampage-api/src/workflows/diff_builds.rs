@@ -29,7 +29,7 @@ struct Function {
 
 impl Function {
     fn named(&self) -> bool {
-        !is_default_name(&self.name)
+        !is_default_name(&self.name, self.address)
     }
 }
 
@@ -43,12 +43,9 @@ fn inventory(project: &Project) -> Result<Vec<Function>, ApiError> {
         .functions
         .iter()
         .map(|function| {
-            let end = function.blocks.iter().map(|block| block.end).max().unwrap_or(function.address);
-            let size = end.saturating_sub(function.address);
-            let hash = project
-                .binary
-                .read(function.address, size)
-                .filter(|_| size > 0)
+            let size = function.end().saturating_sub(function.address);
+            let hash = function
+                .body(&project.binary)
                 .and_then(|bytes| function_hash_in(&target, &image, bytes, function.address));
             Function { address: function.address, name: project.function_name(function.address), hash, size }
         })
