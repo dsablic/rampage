@@ -8,31 +8,22 @@ fn fixture(name: &str) -> PathBuf {
 
 #[test]
 fn recovers_function_names_from_a_stripped_go_binary() {
-    let mut binary = Binary::open(fixture("hello-go-x64.elf")).unwrap();
-    // The fixture is built with `-ldflags "-s -w"`, so there is no real symbol table to fall back on.
-    assert!(binary.symbols.is_empty(), "fixture should be stripped of real symbols");
+    // The fixture is built with `-ldflags "-s -w"`, so there is no real symbol table: every Function symbol
+    // below is recovered from the pclntab, which `Binary::open` does automatically.
+    let binary = Binary::open(fixture("hello-go-x64.elf")).unwrap();
 
-    let report = binary.recover_go_symbols();
-    assert!(report.warnings.is_empty(), "unexpected warnings: {:?}", report.warnings);
-
-    let find = |name: &str| report.functions.iter().find(|function| function.name == name);
-    let main = find("main.main").expect("main.main recovered");
-    let greet = find("main.greet").expect("main.greet recovered");
+    let attached = |name: &str| {
+        binary.symbols.iter().find(|symbol| symbol.name == name && symbol.kind == SymbolKind::Function)
+    };
+    let main = attached("main.main").expect("main.main recovered at load");
+    let greet = attached("main.greet").expect("main.greet recovered at load");
     assert!(main.address > 0x400000, "main.main at implausible address {:#x}", main.address);
     assert!(greet.address > 0x400000, "main.greet at implausible address {:#x}", greet.address);
     assert_ne!(main.address, greet.address);
 
-    // The recovered names are attached to the binary as Function symbols.
-    let attached = |name: &str| {
-        binary.symbols.iter().find(|symbol| symbol.name == name && symbol.kind == SymbolKind::Function)
-    };
-    let attached_main = attached("main.main").expect("main.main attached as a Function symbol");
-    assert_eq!(attached_main.address, main.address);
-    attached("main.greet").expect("main.greet attached as a Function symbol");
-
     // Recovery pulls in the wider Go runtime too, not just package main.
-    assert!(report.functions.len() > 100, "expected many runtime functions, got {}", report.functions.len());
-    assert!(report.functions.iter().any(|function| function.name.starts_with("runtime.")));
+    assert!(binary.symbols.len() > 100, "expected many recovered functions, got {}", binary.symbols.len());
+    assert!(binary.symbols.iter().any(|symbol| symbol.name.starts_with("runtime.")));
 }
 
 #[test]

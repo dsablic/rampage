@@ -359,6 +359,9 @@ impl Binary {
         function_starts.sort_unstable();
         function_starts.dedup();
         binary.function_starts = function_starts;
+        // Stripped Go binaries keep their function names only in the pclntab; recover them as symbols.
+        let go = binary.recover_go_symbols();
+        binary.warnings.extend(go.warnings);
         Ok(binary)
     }
 
