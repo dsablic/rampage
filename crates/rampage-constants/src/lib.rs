@@ -331,10 +331,7 @@ pub fn scan_binary_report(binary: &Binary, db: &ConstantDb) -> ScanReport {
         // Sections are finished one by one rather than pooled: they share address 0, so pooling would let a hit
         // in one section suppress, or deduplicate, a different hit in another.
         for section in &binary.sections {
-            let Some(offset) = section.file_offset else { continue };
-            let start = usize::try_from(offset).unwrap_or(usize::MAX);
-            let len = usize::try_from(section.file_size).unwrap_or(usize::MAX);
-            if let Some(bytes) = binary.image_bytes().get(start..start.saturating_add(len)) {
+            if let Some(bytes) = binary.section_file_bytes(section) {
                 let name = Some(section.name.clone());
                 let found = add(scan_report(bytes, 0, db));
                 hits.extend(found.into_iter().map(|hit| ConstantHit { section: name.clone(), ..hit }));

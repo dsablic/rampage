@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use aho_corasick::AhoCorasick;
-use rampage_loaders::Binary;
+use rampage_loaders::{Binary, shannon_entropy};
 
 use crate::model::{Condition, Confidence, Detection, Signature, SignatureDb};
 use crate::pattern::BytePattern;
@@ -227,26 +227,6 @@ fn section_entropy(image: &impl Image, section: Option<&str>) -> Option<(String,
     }
 }
 
-/// Shannon entropy in bits per byte (0-8). Reimplemented here to keep the crate free of an analysis dependency.
-pub(crate) fn shannon_entropy(bytes: &[u8]) -> f64 {
-    if bytes.is_empty() {
-        return 0.0;
-    }
-    let mut counts = [0u64; 256];
-    for &byte in bytes {
-        counts[byte as usize] += 1;
-    }
-    let total = bytes.len() as f64;
-    counts
-        .iter()
-        .filter(|&&count| count > 0)
-        .map(|&count| {
-            let p = count as f64 / total;
-            -p * p.log2()
-        })
-        .sum()
-}
-
 /// Folds a new detection into the list, merging it with an existing one for the same tool. A second signature
 /// that adds new evidence corroborates the first, so the merged detection is strong even when each alone was
 /// tentative.
@@ -278,8 +258,7 @@ impl Image for Binary {
     }
 
     fn sections(&self) -> Vec<(&str, Option<&[u8]>)> {
-        let image = Binary::image_bytes(self);
-        self.sections.iter().map(|section| (section.name.as_str(), section_file_bytes(image, section))).collect()
+        self.sections.iter().map(|section| (section.name.as_str(), self.section_file_bytes(section))).collect()
     }
 
     fn import_libraries(&self) -> Vec<&str> {
@@ -293,14 +272,6 @@ impl Image for Binary {
     fn overlay_size(&self) -> Option<u64> {
         self.overlay.map(|overlay| overlay.size)
     }
-}
-
-/// A section's file-backed bytes, sliced from the image by its file offset (not its virtual address), so that
-/// unloaded sections work too. `None` when the section is zero-fill or its range falls outside the image.
-fn section_file_bytes<'a>(image: &'a [u8], section: &rampage_loaders::Section) -> Option<&'a [u8]> {
-    let offset = usize::try_from(section.file_offset?).ok()?;
-    let size = usize::try_from(section.file_size).ok()?;
-    image.get(offset..offset.checked_add(size)?)
 }
 
 #[cfg(test)]

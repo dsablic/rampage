@@ -71,24 +71,8 @@ pub struct OverlayTriage {
 
 /// Shannon entropy in bits per byte, rounded to two decimals.
 pub fn entropy(bytes: &[u8]) -> f64 {
-    if bytes.is_empty() {
-        return 0.0;
-    }
-    let mut counts = [0u64; 256];
-    for &byte in bytes {
-        counts[byte as usize] += 1;
-    }
-    let total = bytes.len() as f64;
-    let bits: f64 = counts
-        .iter()
-        .filter(|&&count| count > 0)
-        .map(|&count| {
-            let p = count as f64 / total;
-            -p * p.log2()
-        })
-        .sum();
     // max(0.0) turns a rounded -0.0 into 0.0.
-    ((bits * 100.0).round() / 100.0).max(0.0)
+    ((rampage_loaders::shannon_entropy(bytes) * 100.0).round() / 100.0).max(0.0)
 }
 
 fn hashes(bytes: &[u8]) -> Hashes {
@@ -144,13 +128,7 @@ pub fn triage(binary: &Binary) -> Triage {
         .iter()
         .map(|section| {
             // Measure what the file stores for the section: nothing for zero-fill sections.
-            let bytes = section
-                .file_offset
-                .and_then(|offset| {
-                    let start = usize::try_from(offset).ok()?;
-                    image.get(start..start.checked_add(usize::try_from(section.file_size).ok()?)?)
-                })
-                .unwrap_or_default();
+            let bytes = binary.section_file_bytes(section).unwrap_or_default();
             // ELF sections that are not loaded (symbol and string tables) have address 0.
             let loaded = section.address != 0 || binary.format != Format::Elf;
             let perms = binary.segment_containing(section.address).filter(|_| loaded).map(|segment| segment.perms);
