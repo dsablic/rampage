@@ -19,7 +19,7 @@ pub enum Kind {
 
 /// How much weight the evidence carries. These are heuristics, never proof: a `Strong` detection rests on a
 /// distinctive pattern (an entry-point stub, an embedded toolchain string) or on several corroborating
-/// conditions, while a `Tentative` one rests on a single generic signal like a lone section name.
+/// conditions or signatures, while a `Tentative` one rests on a single generic signal like a lone section name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Confidence {

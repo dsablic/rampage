@@ -2,8 +2,8 @@
 //! layouts, embedded toolchain strings, import conventions). None of it is copied from PeID's `userdb.txt`.
 //!
 //! Each signature is deliberately conservative: it keys off fingerprints that are cheap to read and rarely
-//! collide, and it reports evidence rather than a verdict. The data lives as a `const` table of tuples that
-//! [`bundled`] turns into [`Signature`]s, so there is no file to parse and no runtime format to trust.
+//! collide, and it reports evidence rather than a verdict. The rules are plain [`Signature`] builder calls that
+//! [`bundled`] collects, so there is no file to parse and no runtime format to trust.
 
 use crate::model::{Condition, Kind, Signature, SignatureDb};
 use crate::pattern::BytePattern;
@@ -157,8 +157,12 @@ mod tests {
         for signature in &db.signatures {
             assert!(!signature.conditions.is_empty(), "{} has no conditions", signature.name);
             for condition in &signature.conditions {
-                if let Condition::Entry { pattern, .. } = condition {
-                    assert!(!pattern.is_empty());
+                if let Condition::Entry { .. } = condition {
+                    assert!(
+                        condition.is_distinctive(),
+                        "{}: entry pattern too short to be distinctive",
+                        signature.name
+                    );
                 }
             }
         }
