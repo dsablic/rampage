@@ -1,6 +1,19 @@
 # To do
 
-## IDA/Ghidra gap-closing wave (done this round)
+## IDA/Ghidra gap-closing wave 2 (done this round)
+
+- [x] Signatures extended to the fixed-width sets: 32-bit ARM (A32 and Thumb), MIPS/MIPS64 and PowerPC/PowerPC64,
+  masking PC-relative branch/call targets in the target's byte order (`function_hash`/`identify` take a `Target`).
+  Conservative: MIPS HI/LO address pairs are left unmasked (lowers match rate, never a false match).
+- [x] Stripped C++ RTTI recovery: `rampage_analysis::rtti` scans Itanium type_info chains and MSVC RTTI (COL /
+  TypeDescriptor / class hierarchy) to recover class names and base-class edges with no symbols, bounded and
+  image-backed, surfaced via `ClassRecovery.rtti_classes` (de-duplicated against the symbol path). Pointer
+  arithmetic is overflow-hardened. MSVC path is synthetic-tested only (no MSVC toolchain locally).
+- [x] Go binaries: `rampage_loaders::gopclntab` recovers function names from the pclntab
+  (go1.2/1.16/1.18/1.20+ magics, either endianness) and `Binary::open` attaches them automatically, so stripped
+  Go names surface everywhere. Section-based (`.gopclntab`/`__gopclntab`); no full-image magic scan yet.
+
+## IDA/Ghidra gap-closing wave 1 (done earlier)
 
 - [x] Library identification (FLIRT/Function-ID style): `rampage-signatures` masks position-dependent bytes
   (relative branch/call targets, x86 RIP-relative displacements, AArch64 PC-relative encodings) and matches a
@@ -21,8 +34,10 @@
   without a real `.pdb` fixture, and no `lld-link` locally to generate one. Wire + test once a PDB fixture exists.
 - [ ] Bundled starter signature databases for common runtimes (libc, libstdc++), so `identify` names library
   code out of the box. Needs a corpus-generation decision (which libs/versions; platform-specific).
-- [ ] Extend signatures to ARM32/Thumb (needs Thumb-range awareness) and MIPS/PowerPC (fixed-width masking).
-- [ ] C++ class LAYOUT / stripped RTTI type_info scanning (Agent deferred: large, false-positive risk).
+- [ ] MIPS signatures: mask `lui`/`addiu` HI/LO address pairs (needs relocation/dataflow) to raise the match rate.
+- [ ] Verify the MSVC RTTI path against a real PE (no MSVC toolchain locally; synthetic-tested only).
+- [ ] Go pclntab: optional bounded full-image magic scan for binaries whose pclntab section was renamed/removed.
+- [ ] C++ class LAYOUT reconstruction (fields/sizes), building on the RTTI name/hierarchy recovery now in place.
 
 
 ## Decompiler: embedded Ghidra (the decompilation path)
