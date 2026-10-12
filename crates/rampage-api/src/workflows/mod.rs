@@ -9,12 +9,15 @@ mod indicators;
 mod network_surface;
 mod triage_report;
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use rampage_arch::Arch;
-use rampage_loaders::Format;
+use rampage_capabilities::Capability;
+use rampage_loaders::{Format, SymbolKind};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::Project;
+use crate::{Project, XrefQuery};
 
 pub use indicators::{Indicator, IndicatorKind, classify};
 
@@ -271,6 +274,242 @@ pub(crate) fn match_api<T: Copy>(table: &[(&str, T)], name: &str) -> Option<T> {
     table.iter().find(|(pattern, _)| api_matches(pattern, name)).map(|&(_, value)| value)
 }
 
+/// References read per traced item when looking for the functions that use it.
+const REFERENCES_PER_ITEM: usize = 200;
+
+/// The functions referencing one traced item (an API, a string, a constant).
+pub(crate) struct Users {
+    /// Function start to name, for every referencing function found.
+    functions: BTreeMap<u64, String>,
+    references: usize,
+    /// Whether references were looked up at all (they are not when analysis is unavailable).
+    traced: bool,
+    /// Whether some target had more references than were read.
+    truncated: bool,
+}
+
+impl Users {
+    /// The reference count (stating when it is a lower bound) and each referencing function.
+    pub(crate) fn evidence(&self) -> Vec<String> {
+        if !self.traced {
+            return Vec::new();
+        }
+        let count = if self.truncated {
+            format!(
+                "at least {} references from discovered functions (read up to {REFERENCES_PER_ITEM} per target)",
+                self.references
+            )
+        } else {
+            format!("{} references from discovered functions", self.references)
+        };
+        let referencing =
+            self.functions.iter().map(|(address, name)| format!("referenced from `{name}` ({address:#x})"));
+        std::iter::once(count).chain(referencing).collect()
+    }
+}
+
+/// Traces items (APIs, strings, constants) to the functions that reference them, and gathers per-function evidence
+/// for a ranked "Functions referencing ..." section.
+pub(crate) struct Tracer<'p> {
+    project: &'p Project,
+    analyzed: bool,
+    /// Function start to (name, evidence), across every traced item.
+    users: BTreeMap<u64, (String, Vec<String>)>,
+    /// Items whose references were cut at `REFERENCES_PER_ITEM`.
+    truncated: usize,
+    /// Items whose references could not be read, with the first error.
+    failed: usize,
+    first_failure: Option<String>,
+}
+
+impl<'p> Tracer<'p> {
+    /// A tracer for `project`, stating in `report` when references are unavailable.
+    pub(crate) fn new(project: &'p Project, report: &mut WorkflowReport) -> Self {
+        let analysis_error = project.analysis().err().map(|error| error.to_string());
+        if let Some(error) = &analysis_error {
+            report.limitation(format!(
+                "Code references are unavailable ({error}); referencing functions are not listed."
+            ));
+        }
+        Self {
+            project,
+            analyzed: analysis_error.is_none(),
+            users: BTreeMap::new(),
+            truncated: 0,
+            failed: 0,
+            first_failure: None,
+        }
+    }
+
+    /// The functions referencing any of `targets`, other than the targets themselves.
+    pub(crate) fn users(&mut self, targets: &[u64]) -> Users {
+        let mut users = Users { functions: BTreeMap::new(), references: 0, traced: self.analyzed, truncated: false };
+        if !self.analyzed {
+            return users;
+        }
+        let mut targets = targets.to_vec();
+        targets.sort_unstable();
+        targets.dedup();
+        for &target in &targets {
+            let page = match self.project.xrefs(XrefQuery::To(target), None, Some(REFERENCES_PER_ITEM)) {
+                Ok(page) => page,
+                Err(error) => {
+                    self.failed += 1;
+                    self.first_failure.get_or_insert_with(|| format!("{target:#x}: {error}"));
+                    continue;
+                }
+            };
+            if page.total > page.items.len() {
+                users.truncated = true;
+            }
+            for row in page.items {
+                // A PLT stub or the API's own body referencing it is plumbing, not a user.
+                if let Ok(Some(function)) = self.project.function_containing(row.from)
+                    && targets.binary_search(&function).is_err()
+                {
+                    users.references += 1;
+                    users.functions.entry(function).or_insert_with(|| self.project.function_name(function));
+                }
+            }
+        }
+        if users.truncated {
+            self.truncated += 1;
+        }
+        users
+    }
+
+    /// Credits every function in `found` with `evidence`, for the ranked section.
+    pub(crate) fn record(&mut self, found: &Users, evidence: &str) {
+        for (&address, name) in &found.functions {
+            self.users.entry(address).or_insert_with(|| (name.clone(), Vec::new())).1.push(evidence.to_owned());
+        }
+    }
+
+    /// The imports and statically linked or local functions whose names `area` maps to an area, each with the
+    /// functions referencing it, recorded for the ranked section.
+    pub(crate) fn api_section(
+        &mut self,
+        title: &str,
+        limits: ReportLimits,
+        area: impl Fn(&str) -> Option<&'static str>,
+    ) -> Section {
+        let project = self.project;
+        let mut section = Section::new(title, limits);
+        let mut seen = BTreeSet::new();
+        for import in &project.binary.imports {
+            let Some(area) = area(&import.name) else { continue };
+            if !seen.insert(import.name.as_str()) {
+                continue;
+            }
+            let mut targets: Vec<u64> = project
+                .binary
+                .import_slots
+                .iter()
+                .filter(|slot| slot.name == import.name)
+                .map(|slot| slot.address)
+                .collect();
+            targets.extend(project.resolve(&import.name).ok());
+            let found = self.users(&targets);
+            let library = import.library.as_deref().unwrap_or("an unrecorded library");
+            let mut finding = Finding::new(
+                "list_imports",
+                Confidence::Observed,
+                format!("imports `{}` from {library} ({area})", import.name),
+            )
+            .evidence(found.evidence());
+            if let Some(&address) = targets.first() {
+                finding = finding.at(address);
+            }
+            section.push(finding);
+            self.record(&found, &format!("calls `{}` ({area})", import.name));
+        }
+        for symbol in &project.binary.symbols {
+            if symbol.kind != SymbolKind::Function
+                || !project.binary.is_code(symbol.address)
+                || seen.contains(symbol.name.as_str())
+            {
+                continue;
+            }
+            let Some(area) = area(&symbol.name) else { continue };
+            seen.insert(symbol.name.as_str());
+            let found = self.users(&[symbol.address]);
+            section.push(
+                Finding::new(
+                    "list_functions",
+                    Confidence::Observed,
+                    format!("contains function `{}` ({area}), statically linked or local", symbol.name),
+                )
+                .at(symbol.address)
+                .evidence(found.evidence()),
+            );
+            self.record(&found, &format!("calls `{}` ({area})", symbol.name));
+        }
+        section
+    }
+
+    /// The functions credited with evidence, most evidence first, as the section `title` (each finding says it
+    /// "references N items of {what}"), plus their (address, name) in rank order. States in `report` when some
+    /// references were cut or unreadable.
+    pub(crate) fn finish(
+        self,
+        report: &mut WorkflowReport,
+        title: &str,
+        what: &str,
+        limits: ReportLimits,
+    ) -> (Section, Vec<(u64, String)>) {
+        let mut ranked: Vec<(u64, (String, Vec<String>))> = self.users.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.1.len().cmp(&a.1.1.len()).then(a.0.cmp(&b.0)));
+        let mut section = Section::new(title, limits);
+        for (address, (name, evidence)) in &ranked {
+            let items = if evidence.len() == 1 { "1 item".to_owned() } else { format!("{} items", evidence.len()) };
+            section.push(
+                Finding::new("xrefs", Confidence::High, format!("`{name}` references {items} of {what}"))
+                    .at(*address)
+                    .evidence(evidence.iter().cloned()),
+            );
+        }
+        if self.truncated > 0 {
+            report.limitation(format!(
+                "References were read up to {REFERENCES_PER_ITEM} per target; {} items had more, so their \
+                 referencing functions and counts are incomplete.",
+                self.truncated
+            ));
+        }
+        if let Some(error) = self.first_failure {
+            report.limitation(format!(
+                "References to {} items could not be read (first: {error}); their referencing functions are not \
+                 listed.",
+                self.failed
+            ));
+        }
+        (section, ranked.into_iter().map(|(address, (name, _))| (address, name)).collect())
+    }
+}
+
+/// The capability tags `capabilities` holds, as findings that say the building blocks are present, not that the
+/// behavior runs.
+pub(crate) fn capability_section<'c>(
+    title: &str,
+    limits: ReportLimits,
+    capabilities: impl IntoIterator<Item = &'c Capability>,
+) -> Section {
+    let mut section = Section::new(title, limits);
+    for capability in capabilities {
+        section.push(
+            Finding::new(
+                "capabilities",
+                Confidence::Low,
+                format!(
+                    "building blocks of '{}' ({}) are present; this does not show the behavior executes",
+                    capability.name, capability.category
+                ),
+            )
+            .evidence(capability.evidence.iter().cloned()),
+        );
+    }
+    section
+}
+
 /// Whether `name` is a default name the analysis made up rather than one the binary or user supplied.
 pub fn is_default_name(name: &str) -> bool {
     name.starts_with("sub_")
@@ -327,6 +566,56 @@ mod tests {
         assert!(!api_matches("send", "sendfile"));
         assert_eq!(match_api(&[("puts", 1), ("put*", 2)], "putchar"), Some(2));
         assert_eq!(match_api(&[("puts", 1)], "printf"), None);
+    }
+
+    #[test]
+    fn tracing_counts_each_target_once_and_states_cut_references() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+        let project = Project::new(rampage_loaders::Binary::open(path).unwrap());
+        let mut report = WorkflowReport::new("test", &project);
+        let mut tracer = Tracer::new(&project, &mut report);
+        let puts = project.resolve("puts").unwrap();
+        let once = tracer.users(&[puts]);
+        assert!(once.references > 0);
+        assert_eq!(tracer.users(&[puts, puts]).references, once.references);
+        assert!(!once.truncated);
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-go-x64.elf");
+        let project = Project::new(rampage_loaders::Binary::open(path).unwrap());
+        let mut report = WorkflowReport::new("test", &project);
+        let mut tracer = Tracer::new(&project, &mut report);
+        let analysis = project.analysis().unwrap();
+        let busiest = analysis
+            .program
+            .xrefs
+            .iter()
+            .map(|xref| xref.to)
+            .max_by_key(|&to| project.xrefs(XrefQuery::To(to), None, Some(0)).unwrap().total)
+            .unwrap();
+        assert!(project.xrefs(XrefQuery::To(busiest), None, Some(0)).unwrap().total > REFERENCES_PER_ITEM);
+        let cut = tracer.users(&[busiest]);
+        assert!(cut.truncated);
+        assert!(cut.evidence()[0].starts_with("at least"), "{:?}", cut.evidence());
+        tracer.finish(&mut report, "Functions", "evidence", ReportLimits::default());
+        assert!(report.limitations.iter().any(|text| text.contains("1 items had more")), "{:?}", report.limitations);
+    }
+
+    #[test]
+    fn api_sections_name_the_primitive_and_count_references() {
+        let fixture = |name: &str| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name);
+            Project::new(rampage_loaders::Binary::open(path).unwrap())
+        };
+        let area = |name: &str| (name == "puts" || name == "add").then_some("test");
+        for (name, source) in [("hello-x64-dyn.elf", "list_imports"), ("hello-x64.elf", "list_functions")] {
+            let project = fixture(name);
+            let mut report = WorkflowReport::new("test", &project);
+            let mut tracer = Tracer::new(&project, &mut report);
+            let section = tracer.api_section("APIs", ReportLimits::default(), area);
+            let finding = section.findings.iter().find(|finding| finding.source == source);
+            let finding = finding.unwrap_or_else(|| panic!("{name}: {section:#?}"));
+            assert!(finding.evidence[0].ends_with("references from discovered functions"), "{finding:#?}");
+        }
     }
 
     #[test]

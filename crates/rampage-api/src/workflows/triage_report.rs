@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use rampage_detect::{Confidence as DetectConfidence, Kind};
 use serde_json::json;
 
-use super::{Confidence, Finding, ReportLimits, Section, WorkflowReport, classify, is_default_name, quote};
+use super::{
+    Confidence, Finding, ReportLimits, Section, WorkflowReport, capability_section, classify, is_default_name, quote,
+};
 use crate::{ApiError, DotNetQuery, FunctionsQuery, Project};
 
 /// Import names listed per library before the rest are counted.
@@ -85,20 +87,7 @@ impl Project {
         report.sections.push(toolchain);
 
         let capabilities = self.capabilities();
-        let mut tags = Section::new("Capabilities", limits);
-        for capability in &capabilities {
-            tags.push(
-                Finding::new(
-                    "capabilities",
-                    Confidence::Low,
-                    format!(
-                        "building blocks of '{}' ({}) are present; this does not show the behavior executes",
-                        capability.name, capability.category
-                    ),
-                )
-                .evidence(capability.evidence.iter().cloned()),
-            );
-        }
+        let tags = capability_section("Capabilities", limits, &capabilities);
         report.sections.push(tags);
 
         let mut by_library: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
