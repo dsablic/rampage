@@ -268,6 +268,11 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
          and compressed streams have no extent unless their header records one"
             .to_owned(),
     );
+    limitations.push(
+        "zip and cpio headers inside a reported archive, up to its end or its last member header read, are taken \
+         as its members: an archive stored inside another archive's members is not reported separately"
+            .to_owned(),
+    );
     Carving { file_size: data.len() as u64, scanned_bytes: scanned as u64, candidates, truncated, limitations }
 }
 
@@ -571,8 +576,11 @@ fn fat(bytes: &[u8]) -> Option<Candidate> {
 }
 
 const ZIP_METHODS: [u64; 13] = [0, 1, 6, 8, 9, 12, 14, 19, 93, 95, 96, 97, 98];
+/// The most records (local and central directory headers) one zip walk reads.
+const MAX_ZIP_RECORDS: usize = 2 * MAX_TABLE_ENTRIES;
 
-/// A zip archive at its first local file header, and how many bytes of member headers the walk covered.
+/// A zip archive at its first local file header, and how many bytes from it the scan takes as the archive's own:
+/// through its end when that is known, else through the last record header read whole.
 fn zip(bytes: &[u8]) -> Option<(Candidate, usize)> {
     if !bytes.starts_with(b"PK\x03\x04") {
         return None;
@@ -586,58 +594,91 @@ fn zip(bytes: &[u8]) -> Option<(Candidate, usize)> {
         return Some((Candidate::magic_only(Kind::Zip, "zip local header fields are inconsistent"), 4));
     }
     let mut candidate = Candidate::new(Kind::Zip).endian(false);
-    let (mut at, mut members) = (0usize, 0u64);
-    let mut stop = None;
-    for _ in 0..2 * MAX_TABLE_ENTRIES {
-        let Some(signature) = read(at, 4) else {
-            stop = Some("the archive runs past the end of the file");
-            break;
-        };
-        let next = match signature {
-            0x0403_4b50 => {
-                let fields = (|| Some([read(at + 6, 2)?, read(at + 18, 4)?, read(at + 26, 2)?, read(at + 28, 2)?]))();
-                let Some([flags, compressed, name, extra]) = fields else {
-                    stop = Some("the archive runs past the end of the file");
-                    break;
-                };
-                if flags & 8 != 0 || compressed == 0xffff_ffff {
-                    stop = Some("a member's size is recorded after its data (data descriptor or zip64)");
-                    break;
+    let past_end = "the archive runs past the end of the file";
+    // `covered` ends the last record header read whole: a declared member size is not trusted past it.
+    let (mut at, mut covered, mut members) = (0usize, 4usize, 0u64);
+    let walk = 'walk: {
+        for _ in 0..MAX_ZIP_RECORDS {
+            let Some(signature) = read(at, 4) else { break 'walk Walk::Stopped(past_end) };
+            let (header_end, data) = match signature {
+                0x0403_4b50 => {
+                    let fields =
+                        (|| Some([read(at + 6, 2)?, read(at + 18, 4)?, read(at + 26, 2)?, read(at + 28, 2)?]))();
+                    let Some([flags, compressed, name, extra]) = fields else { break 'walk Walk::Stopped(past_end) };
+                    if flags & 8 != 0 || compressed == 0xffff_ffff {
+                        break 'walk Walk::Stopped(
+                            "a member's size is recorded after its data (data descriptor or zip64)",
+                        );
+                    }
+                    (at + 30 + (name + extra) as usize, compressed as usize)
                 }
-                members += 1;
-                at.checked_add(30 + (name + extra + compressed) as usize)
+                0x0201_4b50 => {
+                    let fields = (|| Some([read(at + 28, 2)?, read(at + 30, 2)?, read(at + 32, 2)?]))();
+                    let Some([name, extra, comment]) = fields else { break 'walk Walk::Stopped(past_end) };
+                    (at + 46 + (name + extra + comment) as usize, 0)
+                }
+                0x0605_4b50 => {
+                    let Some(comment) = read(at + 20, 2) else { break 'walk Walk::Stopped(past_end) };
+                    let end = at + 22 + comment as usize;
+                    candidate = candidate.extent(end as u64, "zip member headers and end of central directory");
+                    covered = end.min(bytes.len());
+                    break 'walk Walk::Ended;
+                }
+                _ => break 'walk Walk::Stopped("an unrecognized record follows the members"),
+            };
+            if header_end > bytes.len() {
+                break 'walk Walk::Stopped(past_end);
             }
-            0x0201_4b50 => {
-                let fields = (|| Some([read(at + 28, 2)?, read(at + 30, 2)?, read(at + 32, 2)?]))();
-                let Some([name, extra, comment]) = fields else {
-                    stop = Some("the archive runs past the end of the file");
-                    break;
-                };
-                at.checked_add(46 + (name + extra + comment) as usize)
+            members += u64::from(signature == 0x0403_4b50);
+            covered = header_end;
+            at = header_end.saturating_add(data);
+        }
+        Walk::Capped
+    };
+    match walk {
+        Walk::Ended => {}
+        Walk::Stopped(reason) => candidate.notes.push(format!("no extent: {reason}")),
+        Walk::Capped => match zip_end(bytes, at.min(bytes.len())) {
+            Some(end) => {
+                candidate = candidate.extent(end as u64, "end of central directory found past the member walk's cap");
+                candidate.notes.push(format!("the member walk stopped at its cap ({MAX_ZIP_RECORDS} records)"));
+                covered = end.min(bytes.len());
             }
-            0x0605_4b50 => {
-                let Some(comment) = read(at + 20, 2) else {
-                    stop = Some("the archive runs past the end of the file");
-                    break;
-                };
-                candidate =
-                    candidate.extent(at as u64 + 22 + comment, "zip member headers and end of central directory");
-                at += 22;
-                break;
+            None => {
+                candidate.notes.push(format!(
+                    "no extent: the member walk stopped at its cap ({MAX_ZIP_RECORDS} records) and no end of central \
+                     directory follows; zip headers in the rest of the file are taken as its members"
+                ));
+                covered = bytes.len();
             }
-            _ => {
-                stop = Some("an unrecognized record follows the members");
-                break;
-            }
-        };
-        let Some(next) = next else { break };
-        at = next;
-    }
-    if candidate.extent.is_none() {
-        candidate.notes.push(format!("no extent: {}", stop.unwrap_or("the member walk hit its cap")));
+        },
     }
     candidate.notes.push(format!("{members} members walked"));
-    Some((candidate, at.max(4)))
+    Some((candidate, covered))
+}
+
+/// The end of the first end-of-central-directory record from `from` on whose central directory ends right
+/// before it, with offsets relative to the archive at the start of `bytes`.
+fn zip_end(bytes: &[u8], mut from: usize) -> Option<usize> {
+    while let Some(found) = bytes.get(from..)?.windows(4).position(|window| window == b"PK\x05\x06") {
+        let record = from + found;
+        let read = |at: usize, width: usize| read_uint(bytes, record + at, width, false);
+        if let (Some(size), Some(start), Some(comment)) = (read(12, 4), read(16, 4), read(20, 2))
+            && size + start == record as u64
+        {
+            return Some(record + 22 + comment as usize);
+        }
+        from = record + 1;
+    }
+    None
+}
+
+/// How an archive's member walk ended.
+enum Walk {
+    /// At the archive's terminating record, which gave the extent.
+    Ended,
+    Stopped(&'static str),
+    Capped,
 }
 
 /// The longest zero-terminated gzip header field (original name, comment) read.
@@ -783,7 +824,8 @@ fn squashfs(bytes: &[u8]) -> Option<Candidate> {
     Some(candidate.extent(used, "squashfs superblock bytes_used"))
 }
 
-/// A cpio (newc) archive at its first header, and how many bytes of member headers the walk covered.
+/// A cpio (newc) archive at its first header, and how many bytes from it the scan takes as the archive's own:
+/// through its end when that is known, else through the last member header read whole.
 fn cpio(bytes: &[u8]) -> Option<(Candidate, usize)> {
     if !(bytes.starts_with(b"070701") || bytes.starts_with(b"070702")) {
         return None;
@@ -806,26 +848,66 @@ fn cpio(bytes: &[u8]) -> Option<(Candidate, usize)> {
     // Six ASCII digits alone are too common to report.
     header(0)?;
     let align = |at: usize| at.checked_add(3).map(|at| at & !3);
-    let mut candidate = Candidate::new(Kind::Cpio);
-    let (mut at, mut members) = (0usize, 0u64);
-    for _ in 0..MAX_TABLE_ENTRIES {
-        let magic = bytes.get(at..at + 6);
-        let Some((size, name)) = header(at).filter(|_| magic == Some(b"070701") || magic == Some(b"070702")) else {
-            candidate.notes.push("no extent: a member header is missing or malformed".to_owned());
-            break;
-        };
+    // A member at `at`: its name, where its data starts and where the next member starts.
+    let member = |at: usize| -> Option<(&[u8], usize, usize)> {
+        let magic = bytes.get(at..at + 6)?;
+        let (size, name) = header(at).filter(|_| magic == b"070701" || magic == b"070702")?;
         let data = align(at + 110 + name.len() + 1)?;
-        let next = align(data.checked_add(usize::try_from(size).ok()?)?)?;
-        if name == b"TRAILER!!!" {
-            candidate = candidate.extent(next as u64, "cpio member headers through TRAILER!!!");
+        Some((name, data, align(data.checked_add(usize::try_from(size).ok()?)?)?))
+    };
+    let mut candidate = Candidate::new(Kind::Cpio);
+    // `covered` ends the last member header read whole: a declared member size is not trusted past it.
+    let (mut at, mut covered, mut members) = (0usize, 6usize, 0u64);
+    let walk = 'walk: {
+        for _ in 0..MAX_TABLE_ENTRIES {
+            let Some((name, data, next)) = member(at) else {
+                break 'walk Walk::Stopped("a member header is missing or malformed");
+            };
+            covered = data.min(bytes.len());
+            if name == b"TRAILER!!!" {
+                candidate = candidate.extent(next as u64, "cpio member headers through TRAILER!!!");
+                covered = next.min(bytes.len());
+                break 'walk Walk::Ended;
+            }
+            members += 1;
             at = next;
-            break;
         }
-        members += 1;
-        at = next;
+        Walk::Capped
+    };
+    match walk {
+        Walk::Ended => {}
+        Walk::Stopped(reason) => candidate.notes.push(format!("no extent: {reason}")),
+        Walk::Capped => {
+            // The trailer is the first member named TRAILER!!! after the cap, found by its name.
+            let mut from = at.min(bytes.len());
+            let trailer = loop {
+                let Some(found) = bytes[from..].windows(11).position(|window| window == b"TRAILER!!!\0") else {
+                    break None;
+                };
+                let name_at = from + found;
+                if let Some((b"TRAILER!!!", _, next)) = name_at.checked_sub(110).and_then(member) {
+                    break Some(next);
+                }
+                from = name_at + 1;
+            };
+            match trailer {
+                Some(end) => {
+                    candidate = candidate.extent(end as u64, "TRAILER!!! header found past the member walk's cap");
+                    candidate.notes.push(format!("the member walk stopped at its cap ({MAX_TABLE_ENTRIES} members)"));
+                    covered = end.min(bytes.len());
+                }
+                None => {
+                    candidate.notes.push(format!(
+                        "no extent: the member walk stopped at its cap ({MAX_TABLE_ENTRIES} members) and no \
+                         TRAILER!!! header follows; cpio headers in the rest of the file are taken as its members"
+                    ));
+                    covered = bytes.len();
+                }
+            }
+        }
     }
     candidate.notes.push(format!("{members} members walked"));
-    Some((candidate, at.max(6)))
+    Some((candidate, covered))
 }
 
 fn uimage(bytes: &[u8]) -> Option<Candidate> {

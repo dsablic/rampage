@@ -55,22 +55,66 @@ fn squashfs() -> Vec<u8> {
 }
 
 fn cpio() -> Vec<u8> {
+    cpio_of(&[(&b"hello"[..], &b"hi\n"[..]), (b"TRAILER!!!", b"")])
+}
+
+fn cpio_member(bytes: &mut Vec<u8>, name: &[u8], size: usize) {
+    bytes.extend(b"070701");
+    for index in 0..13 {
+        let value = match index {
+            6 => size,
+            11 => name.len() + 1,
+            _ => 0,
+        };
+        bytes.extend(format!("{value:08x}").bytes());
+    }
+    bytes.extend(name);
+    bytes.push(0);
+    bytes.resize(bytes.len().next_multiple_of(4), 0);
+}
+
+fn cpio_of(members: &[(&[u8], &[u8])]) -> Vec<u8> {
     let mut bytes = Vec::new();
-    for (name, data) in [(&b"hello"[..], &b"hi\n"[..]), (b"TRAILER!!!", b"")] {
-        bytes.extend(b"070701");
-        for (index, value) in [0usize; 13].iter().enumerate() {
-            let value = match index {
-                6 => data.len(),
-                11 => name.len() + 1,
-                _ => *value,
-            };
-            bytes.extend(format!("{value:08x}").bytes());
-        }
-        bytes.extend(name);
-        bytes.push(0);
+    for (name, data) in members {
+        cpio_member(&mut bytes, name, data.len());
+        bytes.extend(*data);
         bytes.resize(bytes.len().next_multiple_of(4), 0);
-        bytes.extend(data);
-        bytes.resize(bytes.len().next_multiple_of(4), 0);
+    }
+    bytes
+}
+
+/// A zip local file header for an empty stored member named `name`, recording `compressed` bytes of data.
+fn zip_local(bytes: &mut Vec<u8>, name: &[u8], compressed: u32) {
+    bytes.extend(b"PK\x03\x04");
+    bytes.extend([20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    bytes.extend(compressed.to_le_bytes());
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend((name.len() as u16).to_le_bytes());
+    bytes.extend(0u16.to_le_bytes());
+    bytes.extend(name);
+}
+
+/// A stored zip of `members` empty members, with its end of central directory when `terminated`.
+fn many_member_zip(members: usize, terminated: bool) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for _ in 0..members {
+        zip_local(&mut bytes, b"a", 0);
+    }
+    let central = bytes.len();
+    for _ in 0..members {
+        bytes.extend(b"PK\x01\x02");
+        bytes.extend([0u8; 24]);
+        bytes.extend(1u16.to_le_bytes());
+        bytes.extend([0u8; 16]);
+        bytes.push(b'a');
+    }
+    if terminated {
+        let central_size = bytes.len() - central;
+        bytes.extend(b"PK\x05\x06");
+        bytes.extend([0u8; 8]);
+        bytes.extend((central_size as u32).to_le_bytes());
+        bytes.extend((central as u32).to_le_bytes());
+        bytes.extend(0u16.to_le_bytes());
     }
     bytes
 }
@@ -315,7 +359,12 @@ fn macho_with_command(command: u32, command_size: u32, body: &[u8]) -> Vec<u8> {
 fn overflowing_or_truncated_tables_are_magic_only() {
     let at_zero = |bytes: &[u8]| {
         let carving = carve::scan(bytes, &Limits::default());
-        carving.candidates.iter().filter(|c| c.offset == 0).map(|c| (c.kind, c.confidence, c.extent)).collect::<Vec<_>>()
+        carving
+            .candidates
+            .iter()
+            .filter(|c| c.offset == 0)
+            .map(|c| (c.kind, c.confidence, c.extent))
+            .collect::<Vec<_>>()
     };
     let mut elf = fixture("hello-x64-dyn.elf");
     let phoff = u64::from_le_bytes(elf[32..40].try_into().unwrap()) as usize;
@@ -331,6 +380,51 @@ fn overflowing_or_truncated_tables_are_magic_only() {
     assert_eq!(at_zero(&truncated), [(Kind::MachO, Confidence::MagicOnly, None)], "segment fields past the file");
     let carving = carve::scan(&truncated, &Limits::default());
     assert!(carving.candidates[0].notes[0].contains("truncated"), "{:?}", carving.candidates);
+}
+
+fn kinds_and_extents(bytes: &[u8]) -> Vec<(u64, Kind, Option<u64>)> {
+    carve::scan(bytes, &Limits::default()).candidates.iter().map(|c| (c.offset, c.kind, c.extent)).collect()
+}
+
+#[test]
+fn an_archive_past_its_walk_cap_is_one_candidate_to_its_end() {
+    let archive = many_member_zip(9000, true);
+    let carving = carve::scan(&archive, &Limits::default());
+    assert_eq!(kinds_and_extents(&archive), [(0, Kind::Zip, Some(archive.len() as u64))]);
+    assert!(carving.candidates[0].notes.iter().any(|note| note.contains("cap (8192 records)")), "{carving:?}");
+
+    // Without an end of central directory the rest of the file is taken as the archive's.
+    let mut unterminated = many_member_zip(9000, false);
+    unterminated.extend(zip());
+    let carving = carve::scan(&unterminated, &Limits::default());
+    assert_eq!(kinds_and_extents(&unterminated), [(0, Kind::Zip, None)]);
+    assert!(carving.candidates[0].notes[0].starts_with("no extent: the member walk stopped at its cap"));
+
+    let mut members: Vec<(&[u8], &[u8])> = vec![(b"a", b""); 5000];
+    members.push((b"TRAILER!!!", b""));
+    let archive = cpio_of(&members);
+    let carving = carve::scan(&archive, &Limits::default());
+    assert_eq!(kinds_and_extents(&archive), [(0, Kind::Cpio, Some(archive.len() as u64))]);
+    assert!(carving.candidates[0].notes.iter().any(|note| note.contains("cap (4096 members)")), "{carving:?}");
+    let unterminated = &archive[..archive.len() - 120];
+    let carving = carve::scan(unterminated, &Limits::default());
+    assert_eq!(kinds_and_extents(unterminated), [(0, Kind::Cpio, None)]);
+    assert!(carving.candidates[0].notes[0].starts_with("no extent: the member walk stopped at its cap"));
+}
+
+#[test]
+fn a_declared_member_size_past_the_file_hides_no_later_archive() {
+    let mut bytes = Vec::new();
+    zip_local(&mut bytes, b"x", 0xffff_fff0);
+    let real = bytes.len() as u64;
+    bytes.extend(zip());
+    assert_eq!(kinds_and_extents(&bytes), [(0, Kind::Zip, None), (real, Kind::Zip, Some(zip().len() as u64))]);
+
+    let mut bytes = Vec::new();
+    cpio_member(&mut bytes, b"x", 0xffff_fff0);
+    let real = bytes.len() as u64;
+    bytes.extend(cpio());
+    assert_eq!(kinds_and_extents(&bytes), [(0, Kind::Cpio, None), (real, Kind::Cpio, Some(cpio().len() as u64))]);
 }
 
 #[test]
