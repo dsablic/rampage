@@ -178,7 +178,16 @@ fn itanium_candidates(image: &Image) -> BTreeMap<u64, ItaniumCandidate> {
     candidates
 }
 
-/// Keeps candidates whose vtable pointer is mapped, or is shared by enough records to be a category vtable.
+/// Whether `va` holds C string data: at least four printable ASCII bytes before a NUL. A vtable address point holds
+/// code pointers, whose bytes never read that way (their high bytes are zero or non-printable).
+fn is_string_data(image: &Image, va: u64) -> bool {
+    image
+        .read_cstr(va, MAX_NAME_BYTES)
+        .is_some_and(|text| text.len() >= 4 && text.iter().all(|&byte| byte == b' ' || byte.is_ascii_graphic()))
+}
+
+/// Keeps candidates whose vtable pointer is an aligned, mapped address that is not string data, or is shared by
+/// enough records to be a category vtable.
 fn accept_itanium(image: &Image, candidates: BTreeMap<u64, ItaniumCandidate>) -> BTreeMap<u64, ItaniumCandidate> {
     let mut frequency: BTreeMap<u64, usize> = BTreeMap::new();
     for candidate in candidates.values() {
@@ -187,13 +196,14 @@ fn accept_itanium(image: &Image, candidates: BTreeMap<u64, ItaniumCandidate>) ->
     candidates
         .into_iter()
         .filter(|(_, candidate)| {
-            // A genuine typeinfo vtable pointer targets a vtable, never a mangled type-name string; rejecting
-            // the latter drops artifacts where a name-pointer slot is misread as a preceding vtable slot.
-            if candidate.vtable != 0 && itanium_name(image, candidate.vtable).is_some() {
+            let vtable = candidate.vtable;
+            // A genuine typeinfo vtable pointer targets a vtable, never string data: a table of string pointers
+            // (`{"des-ede3-cbc", "3des"}`) otherwise reads as `[vtable, name]` whenever the second name demangles.
+            if vtable != 0 && (itanium_name(image, vtable).is_some() || is_string_data(image, vtable)) {
                 return false;
             }
-            (candidate.vtable != 0 && image.mapped(candidate.vtable))
-                || frequency.get(&candidate.vtable).copied().unwrap_or(0) >= MIN_SHARED_VTABLE
+            (vtable != 0 && vtable.is_multiple_of(image.pointer_width()) && image.mapped(vtable))
+                || frequency.get(&vtable).copied().unwrap_or(0) >= MIN_SHARED_VTABLE
         })
         .collect()
 }

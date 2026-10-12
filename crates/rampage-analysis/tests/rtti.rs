@@ -142,6 +142,22 @@ fn a_large_leading_range_does_not_starve_later_ranges() {
 }
 
 #[test]
+fn string_pointer_tables_are_not_typeinfo() {
+    // A cipher-name table pairs a long name with a short alias; the aliases happen to demangle as class names.
+    let mut blob = Blob::new(0x7000, 8);
+    let pairs: Vec<(u64, u64)> = [("des-ede3-cbc", "3des"), ("cast5-cbc", "4cast"), ("aes-128-cbc", "3aes")]
+        .iter()
+        .map(|(long, short)| (blob.cstr(long), blob.cstr(short)))
+        .collect();
+    blob.align();
+    for (long, short) in pairs {
+        blob.ptr(long).ptr(short);
+    }
+    let classes = recover_itanium(&blob.image());
+    assert!(classes.is_empty(), "{classes:?}");
+}
+
+#[test]
 fn itanium_lone_unbound_record_is_not_guessed() {
     // A single [vtable = 0, name] shape, with neither a mapped vtable nor shared support, stays unrecovered.
     let mut blob = Blob::new(0x6000, 8);
