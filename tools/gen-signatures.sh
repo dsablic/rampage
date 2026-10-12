@@ -9,12 +9,15 @@
 # Overwrites crates/rampage-signatures/data/musl-<arch>.json and the committed identify fixtures
 # tests/fixtures/bin/musl-static-<arch>.elf.
 #
-# Requires: zig (0.17.x) and a build of the rampage CLI: target/release/rampage by default, or any other build
-# (such as target/debug/rampage from `cargo build -p rampage-cli`) through RAMPAGE.
+# Requires: zig (0.17.x); a build of the rampage CLI: target/release/rampage by default, or any other build
+# (such as target/debug/rampage from `cargo build -p rampage-cli`) through RAMPAGE; and a build of rampage-eval,
+# target/debug/rampage-eval by default or RAMPAGE_EVAL.
 set -euo pipefail
 rampage=${RAMPAGE:-}
+eval_bin=${RAMPAGE_EVAL:-}
 # A relative RAMPAGE names a path from the caller's directory, which the cd below leaves.
 [[ -z "$rampage" || "$rampage" == /* ]] || rampage="$PWD/$rampage"
+[[ -z "$eval_bin" || "$eval_bin" == /* ]] || eval_bin="$PWD/$eval_bin"
 cd "$(dirname "$0")"
 repo=..
 
@@ -22,6 +25,11 @@ rampage=${rampage:-"$repo/target/release/rampage"}
 if [[ ! -x "$rampage" ]]; then
     echo "rampage CLI not found at $rampage; run: cargo build -p rampage-cli --release," \
         "or point RAMPAGE at another build (e.g. RAMPAGE=target/debug/rampage)" >&2
+    exit 1
+fi
+eval_bin=${eval_bin:-"$repo/target/debug/rampage-eval"}
+if [[ ! -x "$eval_bin" ]]; then
+    echo "rampage-eval not found at $eval_bin; run: cargo build -p rampage-eval, or point RAMPAGE_EVAL at it" >&2
     exit 1
 fi
 
@@ -43,8 +51,11 @@ for entry in "${targets[@]}"; do
     read -r triple tag <<<"$entry"
     # The reference is linked with symbols so the database records real function names; the fixture is a
     # different program, stripped, so the identify test proves cross-binary matching rather than self-identity.
+    # It is stripped in place rather than linked with --strip-all, with which zig builds its libc differently from
+    # the reference's.
     zig cc -target "$triple" -O1 -static -o "$work/corpus-$tag" signatures-corpus.c
-    zig cc -target "$triple" -O1 -static -Wl,--strip-all -o "$fixtures/musl-static-$tag.elf" signatures-target.c
+    zig cc -target "$triple" -O1 -static -o "$work/target-$tag" signatures-target.c
+    "$eval_bin" strip "$work/target-$tag" "$fixtures/musl-static-$tag.elf"
     "$rampage" signatures "$work/corpus-$tag" --output "$data/musl-$tag.json"
     echo "  -> data/musl-$tag.json, fixtures/bin/musl-static-$tag.elf"
 done
