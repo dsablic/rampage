@@ -4,6 +4,8 @@
 //! behavior is reached or malicious. Corroborated rules require independent metadata groups, but establish
 //! neither call ordering nor argument/data-flow relationships. No binary is executed by this detector.
 
+use std::borrow::Cow;
+
 use serde::Serialize;
 
 mod capa;
@@ -16,9 +18,10 @@ pub use capa::{
 /// A detected capability and the evidence that triggered it.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Capability {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub category: &'static str,
+    /// Borrowed for the built-in rules (static), owned for rules loaded at runtime (e.g. capa).
+    pub id: Cow<'static, str>,
+    pub name: Cow<'static, str>,
+    pub category: Cow<'static, str>,
     /// Evidence as `kind:value`: legacy rules emit canonical matched terms; corroborated rules emit original inputs.
     pub evidence: Vec<String>,
 }
@@ -318,7 +321,12 @@ pub fn detect(imports: &[String], strings: &[String]) -> Vec<Capability> {
             }
         }
         if evidence.len() >= rule.threshold {
-            found.push(Capability { id: rule.id, name: rule.name, category: rule.category, evidence });
+            found.push(Capability {
+                id: Cow::Borrowed(rule.id),
+                name: Cow::Borrowed(rule.name),
+                category: Cow::Borrowed(rule.category),
+                evidence,
+            });
         }
     }
     for rule in corroborated::RULES {
@@ -331,7 +339,12 @@ pub fn detect(imports: &[String], strings: &[String]) -> Vec<Capability> {
             matched_group
         });
         if matched {
-            found.push(Capability { id: rule.id, name: rule.name, category: rule.category, evidence });
+            found.push(Capability {
+                id: Cow::Borrowed(rule.id),
+                name: Cow::Borrowed(rule.name),
+                category: Cow::Borrowed(rule.category),
+                evidence,
+            });
         }
     }
     found

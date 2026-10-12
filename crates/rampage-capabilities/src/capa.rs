@@ -22,6 +22,7 @@
 //! rules), and when the rule has no evaluable feature tree. A `not` wrapped around an un-evaluable leaf is
 //! therefore true (absence of something we cannot see); this is an accepted imprecision of a partial evaluator.
 
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -73,11 +74,10 @@ pub struct CapaRule {
     pub authors: Vec<String>,
     pub attack: Vec<String>,
     pub mbc: Vec<String>,
-    /// Leaked, stable identifiers so matches fit the `Capability { id, name, category }` shape, which uses
-    /// `&'static str`. Rules are loaded once and bounded by `MAX_RULES`, so this one-time leak is intentional.
-    id: &'static str,
-    static_name: &'static str,
-    category: &'static str,
+    /// Precomputed identifiers for the `Capability { id, name, category }` shape (owned, so a long-running loader
+    /// does not leak).
+    id: String,
+    category: String,
     root: Node,
 }
 
@@ -175,9 +175,9 @@ pub fn detect_capa(rules: &CapaRuleSet, imports: &[String], strings: &[String]) 
         if matched {
             evidence.dedup();
             found.push(Capability {
-                id: rule.id,
-                name: rule.static_name,
-                category: rule.category,
+                id: Cow::Owned(rule.id.clone()),
+                name: Cow::Owned(rule.name.clone()),
+                category: Cow::Owned(rule.category.clone()),
                 evidence,
             });
         }
@@ -242,9 +242,8 @@ fn rule_from_value(value: &Value) -> Option<CapaRule> {
 
     let category_src = namespace.split('/').next().filter(|s| !s.is_empty()).unwrap_or("capa");
     Some(CapaRule {
-        id: leak(slug(&name)),
-        static_name: leak(name.clone()),
-        category: leak(category_src.to_string()),
+        id: slug(&name),
+        category: category_src.to_string(),
         name,
         namespace,
         authors,
@@ -478,10 +477,6 @@ fn slug(name: &str) -> String {
     }
     let trimmed = out.trim_matches('-');
     if trimmed.is_empty() { "capa-rule".to_string() } else { trimmed.to_string() }
-}
-
-fn leak(s: String) -> &'static str {
-    Box::leak(s.into_boxed_str())
 }
 
 #[cfg(test)]
