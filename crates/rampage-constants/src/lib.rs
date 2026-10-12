@@ -241,8 +241,8 @@ pub struct ConstantHit {
     pub complete: bool,
 }
 
-/// The hits of one scan, and whether [`MAX_HITS`] cut it short (so hits past the last one reported were not
-/// looked for).
+/// The hits of one scan, and whether [`MAX_HITS`] cut it short: a single buffer stops being searched at the cap,
+/// and of the hits pooled from several segments only the lowest-addressed [`MAX_HITS`] are kept.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ScanReport {
     pub hits: Vec<ConstantHit>,
