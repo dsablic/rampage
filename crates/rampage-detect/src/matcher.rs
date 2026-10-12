@@ -16,12 +16,8 @@ pub(crate) trait Image {
     fn entry_bytes(&self, len: usize) -> Option<&[u8]>;
     /// The whole image's bytes, scanned for un-anchored patterns and image-wide needles.
     fn image_bytes(&self) -> &[u8];
-    /// The names of all sections, in file order.
-    fn section_names(&self) -> Vec<&str>;
-    /// The file-backed bytes of a named section, or `None` when absent or not file-backed.
-    fn section_bytes(&self, name: &str) -> Option<&[u8]>;
-    /// Every section's name paired with its file-backed bytes, for the highest-entropy-section test.
-    fn sections(&self) -> Vec<(&str, &[u8])>;
+    /// Every section in file order: its name and its file-backed bytes (`None` for zero-fill sections).
+    fn sections(&self) -> Vec<(&str, Option<&[u8]>)>;
     /// Whether any imported library's name contains `needle_lowercase` (compared case-insensitively).
     fn imports_library(&self, needle_lowercase: &str) -> bool;
     /// Whether any imported function matches `name` (compared case-insensitively).
@@ -62,11 +58,8 @@ fn evaluate(image: &impl Image, signature: &Signature) -> Option<Detection> {
     }
     let distinctive = signature.conditions.iter().any(Condition::is_distinctive);
     // A single generic signal is tentative; a distinctive one, or several corroborating ones, is strong.
-    let confidence = if distinctive || signature.conditions.len() >= 2 {
-        Confidence::Strong
-    } else {
-        Confidence::Tentative
-    };
+    let confidence =
+        if distinctive || signature.conditions.len() >= 2 { Confidence::Strong } else { Confidence::Tentative };
     Some(Detection { name: signature.name.clone(), kind: signature.kind, confidence, evidence })
 }
 
@@ -82,16 +75,13 @@ fn check(image: &impl Image, condition: &Condition) -> Option<String> {
                 Some(format!("pattern found at image offset {at:#x}"))
             }
         }
-        Condition::SectionName(name) => {
-            image.section_names().contains(&name.as_str()).then(|| format!("section {name} present"))
-        }
+        Condition::SectionName(name) => find_section(image, name).is_some().then(|| format!("section {name} present")),
         Condition::AnySectionName(names) | Condition::UniqueSectionName(names) => {
-            let present = image.section_names();
-            names.iter().find(|name| present.contains(&name.as_str())).map(|name| format!("section {name} present"))
+            names.iter().find(|name| find_section(image, name).is_some()).map(|name| format!("section {name} present"))
         }
-        Condition::SectionContains { section, needle } => match section {
+        Condition::SectionContains { section: wanted, needle } => match wanted {
             Some(name) => {
-                let bytes = image.section_bytes(name)?;
+                let bytes = find_section(image, name).flatten()?;
                 contains(bytes, needle).then(|| format!("section {name} contains {:?}", preview(needle)))
             }
             None => contains(image.image_bytes(), needle).then(|| format!("image contains {:?}", preview(needle))),
@@ -99,9 +89,7 @@ fn check(image: &impl Image, condition: &Condition) -> Option<String> {
         Condition::ImportLibrary(library) => image
             .imports_library(&library.to_ascii_lowercase())
             .then(|| format!("imports from a library matching {library:?}")),
-        Condition::ImportFunction(name) => {
-            image.imports_function(name).then(|| format!("imports function {name}"))
-        }
+        Condition::ImportFunction(name) => image.imports_function(name).then(|| format!("imports function {name}")),
         Condition::OverlayPresent => image.overlay_size().map(|size| format!("{size} bytes of overlay")),
         Condition::MinImageEntropy(min) => {
             let entropy = shannon_entropy(image.image_bytes());
@@ -111,6 +99,11 @@ fn check(image: &impl Image, condition: &Condition) -> Option<String> {
             .filter(|&(_, entropy)| entropy >= *min)
             .map(|(name, entropy)| format!("section {name} entropy {entropy:.2} >= {min:.2}")),
     }
+}
+
+/// The first section named `name`: `None` when absent, `Some(None)` when present but not file-backed.
+fn find_section<'a>(image: &'a impl Image, name: &str) -> Option<Option<&'a [u8]>> {
+    image.sections().into_iter().find(|(present, _)| *present == name).map(|(_, bytes)| bytes)
 }
 
 /// Naive substring search; needles are short and images are bounded, so this stays cheap.
@@ -129,11 +122,11 @@ fn preview(needle: &[u8]) -> String {
 /// The entropy of a named section, or of the highest-entropy section when `section` is `None`.
 fn section_entropy(image: &impl Image, section: Option<&str>) -> Option<(String, f64)> {
     match section {
-        Some(name) => Some((name.to_owned(), shannon_entropy(image.section_bytes(name)?))),
+        Some(name) => Some((name.to_owned(), shannon_entropy(find_section(image, name).flatten()?))),
         None => image
             .sections()
             .into_iter()
-            .map(|(name, bytes)| (name.to_owned(), shannon_entropy(bytes)))
+            .filter_map(|(name, bytes)| Some((name.to_owned(), shannon_entropy(bytes?))))
             .max_by(|a, b| a.1.total_cmp(&b.1)),
     }
 }
@@ -185,21 +178,9 @@ impl Image for Binary {
         Binary::image_bytes(self)
     }
 
-    fn section_names(&self) -> Vec<&str> {
-        self.sections.iter().map(|section| section.name.as_str()).collect()
-    }
-
-    fn section_bytes(&self, name: &str) -> Option<&[u8]> {
-        let section = self.sections.iter().find(|section| section.name == name)?;
-        section_file_bytes(Binary::image_bytes(self), section)
-    }
-
-    fn sections(&self) -> Vec<(&str, &[u8])> {
+    fn sections(&self) -> Vec<(&str, Option<&[u8]>)> {
         let image = Binary::image_bytes(self);
-        self.sections
-            .iter()
-            .filter_map(|section| Some((section.name.as_str(), section_file_bytes(image, section)?)))
-            .collect()
+        self.sections.iter().map(|section| (section.name.as_str(), section_file_bytes(image, section))).collect()
     }
 
     fn imports_library(&self, needle_lowercase: &str) -> bool {
@@ -257,14 +238,8 @@ mod tests {
         fn image_bytes(&self) -> &[u8] {
             &self.image
         }
-        fn section_names(&self) -> Vec<&str> {
-            self.sections.iter().map(|(name, _)| name.as_str()).collect()
-        }
-        fn section_bytes(&self, name: &str) -> Option<&[u8]> {
-            self.sections.iter().find(|(n, _)| n == name).map(|(_, bytes)| bytes.as_slice())
-        }
-        fn sections(&self) -> Vec<(&str, &[u8])> {
-            self.sections.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect()
+        fn sections(&self) -> Vec<(&str, Option<&[u8]>)> {
+            self.sections.iter().map(|(name, bytes)| (name.as_str(), Some(bytes.as_slice()))).collect()
         }
         fn imports_library(&self, needle_lowercase: &str) -> bool {
             self.libraries.iter().any(|library| library.to_ascii_lowercase().contains(needle_lowercase))
@@ -292,10 +267,11 @@ mod tests {
 
     #[test]
     fn section_name_signature_fires_on_a_crafted_section_list() {
-        let sig = Signature::new("UPX", Kind::Packer, vec![
-            Condition::SectionName("UPX0".to_owned()),
-            Condition::SectionName("UPX1".to_owned()),
-        ]);
+        let sig = Signature::new(
+            "UPX",
+            Kind::Packer,
+            vec![Condition::SectionName("UPX0".to_owned()), Condition::SectionName("UPX1".to_owned())],
+        );
         let packed = Fake::default().with_section("UPX0", &[]).with_section("UPX1", &[0xff; 64]);
         let plain = Fake::default().with_section(".text", &[0x90; 64]);
         let detection = super::evaluate(&packed, &sig).expect("UPX section match");
@@ -305,10 +281,11 @@ mod tests {
 
     #[test]
     fn any_section_name_matches_either_alternative() {
-        let sig = Signature::new("MPRESS", Kind::Packer, vec![Condition::AnySectionName(vec![
-            ".MPRESS1".to_owned(),
-            ".MPRESS2".to_owned(),
-        ])]);
+        let sig = Signature::new(
+            "MPRESS",
+            Kind::Packer,
+            vec![Condition::AnySectionName(vec![".MPRESS1".to_owned(), ".MPRESS2".to_owned()])],
+        );
         let hit = Fake::default().with_section(".MPRESS2", &[0x00; 16]);
         assert!(super::evaluate(&hit, &sig).is_some());
         assert!(super::evaluate(&Fake::default(), &sig).is_none());
@@ -337,10 +314,11 @@ mod tests {
 
         // A uniform-random section reaches 8 bits/byte; a run of one value sits at 0.
         let high: Vec<u8> = (0..=255u8).cycle().take(4096).collect();
-        let entropy_sig = Signature::new("Packed", Kind::Packer, vec![Condition::MinSectionEntropy {
-            section: Some(".text".to_owned()),
-            min: 7.0,
-        }]);
+        let entropy_sig = Signature::new(
+            "Packed",
+            Kind::Packer,
+            vec![Condition::MinSectionEntropy { section: Some(".text".to_owned()), min: 7.0 }],
+        );
         let packed = Fake::default().with_section(".text", &high);
         let plain = Fake::default().with_section(".text", &[0x90; 4096]);
         assert!(super::evaluate(&packed, &entropy_sig).is_some());
@@ -349,10 +327,11 @@ mod tests {
 
     #[test]
     fn image_wide_needle_matches_anywhere_in_the_image() {
-        let sig = Signature::new("NSIS", Kind::Installer, vec![Condition::SectionContains {
-            section: None,
-            needle: b"NullsoftInst".to_vec(),
-        }]);
+        let sig = Signature::new(
+            "NSIS",
+            Kind::Installer,
+            vec![Condition::SectionContains { section: None, needle: b"NullsoftInst".to_vec() }],
+        );
         let image = Fake { image: b"....NullsoftInst0123".to_vec(), ..Fake::default() };
         assert!(super::evaluate(&image, &sig).is_some());
         assert!(super::evaluate(&Fake::default(), &sig).is_none());
@@ -363,11 +342,8 @@ mod tests {
         let mut db = SignatureDb::new();
         db.push(Signature::new("UPX", Kind::Packer, vec![Condition::SectionName("UPX0".to_owned())]));
         db.push(Signature::new("UPX", Kind::Packer, vec![entry("60 BE ?? ?? ?? ??")]));
-        let image = Fake {
-            entry: vec![0x60, 0xbe, 0x01, 0x02, 0x03, 0x04],
-            ..Fake::default()
-        }
-        .with_section("UPX0", &[]);
+        let image =
+            Fake { entry: vec![0x60, 0xbe, 0x01, 0x02, 0x03, 0x04], ..Fake::default() }.with_section("UPX0", &[]);
         let detections = identify_image(&image, &db);
         assert_eq!(detections.len(), 1);
         assert_eq!(detections[0].evidence.len(), 2);

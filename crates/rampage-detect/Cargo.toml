@@ -7,5 +7,4 @@ license = "Apache-2.0"
 [dependencies]
 rampage-loaders.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
+thiserror.workspace = true

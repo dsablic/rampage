@@ -21,12 +21,12 @@
 //! embedded producer strings, import conventions), never copied from PeID's `userdb.txt`. It covers UPX, ASPack,
 //! MPRESS, PECompact, Petite, NsPack and FSG (packers); VMProtect, Themida/WinLicense and Enigma (protectors);
 //! Go, .NET, MSVC, MinGW/GCC, GCC, Clang/LLVM, Rust, Zig and Delphi/Borland (compilers); LLD and GNU ld
-//! (linkers); and NSIS and Inno Setup (installers). See [`bundled`] for the exact rules.
+//! (linkers); and NSIS and Inno Setup (installers).
 //!
 //! # User-supplied databases
 //!
-//! [`parse_peid`] parses the public PeID `userdb.txt` format so users can bring their own signatures. We ship
-//! the parser, not a database.
+//! [`SignatureDb::load_peid`] parses the public PeID `userdb.txt` format so users can bring their own
+//! signatures. We ship the parser, not a database.
 
 mod bundled;
 mod matcher;
@@ -34,11 +34,10 @@ mod model;
 mod pattern;
 mod peid;
 
-pub use bundled::bundled;
 pub use matcher::identify;
 pub use model::{Condition, Confidence, Detection, Kind, Signature, SignatureDb};
-pub use pattern::{BytePattern, PatternError, MAX_PATTERN_BYTES};
-pub use peid::{parse as parse_peid, PeidError};
+pub use pattern::{BytePattern, MAX_PATTERN_BYTES, PatternError};
+pub use peid::PeidError;
 
 impl SignatureDb {
     /// The bundled starter database (see the [crate] docs for coverage).

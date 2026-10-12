@@ -22,30 +22,21 @@ pub struct BytePattern {
 }
 
 /// Why a hex pattern could not be parsed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PatternError {
     /// The pattern held no bytes (all whitespace).
+    #[error("pattern is empty")]
     Empty,
     /// The hex text had an odd number of nibbles, so a byte was left half-specified.
+    #[error("pattern has an odd number of nibbles")]
     OddNibbles,
     /// A character was neither a hex digit, a `?`, nor whitespace.
+    #[error("unexpected character {0:?} in pattern")]
     BadChar(char),
     /// The pattern was longer than [`MAX_PATTERN_BYTES`].
+    #[error("pattern exceeds {MAX_PATTERN_BYTES} bytes")]
     TooLong,
 }
-
-impl std::fmt::Display for PatternError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::Empty => write!(f, "pattern is empty"),
-            Self::OddNibbles => write!(f, "pattern has an odd number of nibbles"),
-            Self::BadChar(c) => write!(f, "unexpected character {c:?} in pattern"),
-            Self::TooLong => write!(f, "pattern exceeds {MAX_PATTERN_BYTES} bytes"),
-        }
-    }
-}
-
-impl std::error::Error for PatternError {}
 
 /// One nibble: its value and whether it is fixed (`Some`) or a wildcard (`None`).
 fn nibble(c: char) -> Result<Option<u8>, PatternError> {
@@ -97,8 +88,7 @@ impl BytePattern {
 
     /// Whether the pattern matches the start of `data`. A shorter `data` than the pattern never matches.
     pub fn matches_at(&self, data: &[u8]) -> bool {
-        data.len() >= self.bytes.len()
-            && self.bytes.iter().zip(data).all(|(p, &b)| b & p.mask == p.value)
+        data.len() >= self.bytes.len() && self.bytes.iter().zip(data).all(|(p, &b)| b & p.mask == p.value)
     }
 
     /// The first offset in `data` where the pattern matches, scanning left to right.

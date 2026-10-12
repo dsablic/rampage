@@ -10,7 +10,7 @@ use crate::pattern::BytePattern;
 
 /// Builds the bundled database. Any entry-point pattern here is a string constant validated by a unit test, so a
 /// typo cannot ship silently.
-pub fn bundled() -> SignatureDb {
+pub(crate) fn bundled() -> SignatureDb {
     let mut db = SignatureDb::new();
     db.extend(packers());
     db.extend(protectors());
@@ -50,8 +50,7 @@ fn section_contains(name: &str, needle: &str) -> Condition {
 fn packers() -> Vec<Signature> {
     vec![
         // UPX renames the first two sections UPX0 (unpacked) and UPX1 (packed); both present is a reliable tell.
-        Signature::new("UPX", Kind::Packer, vec![section("UPX0"), section("UPX1")])
-            .with_note("UPX0 and UPX1 sections"),
+        Signature::new("UPX", Kind::Packer, vec![section("UPX0"), section("UPX1")]).with_note("UPX0 and UPX1 sections"),
         // The classic 32-bit UPX stub: pushad, then a pointer load into esi/edi.
         Signature::new("UPX", Kind::Packer, vec![ep("60 BE ?? ?? ?? ?? 8D BE ?? ?? ?? ??")])
             .with_note("pushad + lea esi/edi entry stub"),
@@ -65,8 +64,7 @@ fn packers() -> Vec<Signature> {
         Signature::new("Petite", Kind::Packer, vec![unique_section(&[".petite"])]).with_note("Petite section name"),
         Signature::new("NsPack", Kind::Packer, vec![unique_section(&[".nsp0", ".nsp1", ".nsp2"])])
             .with_note("NsPack section names"),
-        Signature::new("FSG", Kind::Packer, vec![ep("87 25 ?? ?? ?? ?? 61 94")])
-            .with_note("FSG entry stub"),
+        Signature::new("FSG", Kind::Packer, vec![ep("87 25 ?? ?? ?? ?? 61 94")]).with_note("FSG entry stub"),
     ]
 }
 

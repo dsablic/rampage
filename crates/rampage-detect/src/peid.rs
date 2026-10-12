@@ -18,24 +18,15 @@ use crate::model::{Condition, Kind, Signature};
 use crate::pattern::{BytePattern, PatternError};
 
 /// Why a PeID database could not be parsed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PeidError {
     /// A `signature`/`ep_only` line appeared before any `[name]` header.
+    #[error("line {line}: field outside any [name] section")]
     OrphanField { line: usize },
     /// A `signature` value was not a valid hex pattern.
+    #[error("line {line}: bad signature: {source}")]
     BadSignature { line: usize, source: PatternError },
 }
-
-impl std::fmt::Display for PeidError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::OrphanField { line } => write!(f, "line {line}: field outside any [name] section"),
-            Self::BadSignature { line, source } => write!(f, "line {line}: bad signature: {source}"),
-        }
-    }
-}
-
-impl std::error::Error for PeidError {}
 
 /// An entry being assembled from consecutive lines.
 #[derive(Default)]
@@ -56,7 +47,7 @@ impl Pending {
 
 /// Parses PeID `userdb.txt` text into signatures. Unknown keys and comments are skipped; a malformed `signature`
 /// value fails the whole parse so a bad user file is reported rather than silently dropped.
-pub fn parse(text: &str) -> Result<Vec<Signature>, PeidError> {
+pub(crate) fn parse(text: &str) -> Result<Vec<Signature>, PeidError> {
     let mut signatures = Vec::new();
     let mut pending: Option<Pending> = None;
     for (index, raw) in text.lines().enumerate() {
