@@ -26,6 +26,9 @@ clang -arch arm64 -O1 -o bin/hello-arm64.macho "$src"
 lipo -create bin/hello-x64.macho bin/hello-arm64.macho -output bin/hello-universal.macho
 clang -arch x86_64 -O1 -dynamiclib -o bin/hello-x64.dylib "$src"
 strip -o bin/hello-x64-stripped.macho bin/hello-x64.macho
+# Stripped C++ fixture for RTTI class recovery: classic rebase (-no_fixup_chains) keeps on-disk pointers real.
+clang++ -arch arm64 -O1 -Wl,-no_fixup_chains -o bin/classes-arm64.macho src/classes.cpp
+strip bin/classes-arm64.macho
 clang -arch x86_64 -O1 -c -o bin/hello-x64.o "$src"
 zig cc -target x86_64-linux-gnu -O1 -g0 -c -o bin/hello-x64-elf.o "$src"
 # Stripped Go binaries keep their gopclntab, from which function names are recovered. Needs the Go toolchain.

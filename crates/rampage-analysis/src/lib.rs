@@ -9,6 +9,7 @@ pub mod language;
 pub mod memory;
 pub mod pseudocode;
 mod reaching_store;
+pub mod rtti;
 pub mod ssa;
 pub mod strings;
 pub mod structure;
