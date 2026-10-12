@@ -34,8 +34,7 @@ fn evaluate_scores_a_real_binary_against_a_constructed_truth() {
     let target = Binary::open(fixture("musl-static-x86_64.elf")).unwrap();
     let db = rampage_signatures::bundled(Arch::X86_64).unwrap();
     let all = proposals(&db, &target).unwrap();
-    let named: Vec<(u64, String)> =
-        all.iter().filter_map(|(address, name)| Some((*address, name.clone()?))).collect();
+    let named: Vec<(u64, String)> = all.iter().filter_map(|(address, name)| Some((*address, name.clone()?))).collect();
     let unnamed = all.iter().find(|(_, name)| name.is_none()).unwrap().0;
     assert!(named.len() >= 3, "only {} proposals", named.len());
 
@@ -53,4 +52,30 @@ fn evaluate_scores_a_real_binary_against_a_constructed_truth() {
     let wrong = report.disagreements.iter().find(|entry| entry.outcome == Outcome::Wrong).unwrap();
     assert_eq!(wrong.address, named[1].0);
     assert!(!report.disagreements.iter().any(|entry| entry.outcome == Outcome::Correct));
+}
+
+/// Stripping in place keeps every function at the same address with the same bytes, which is what makes the
+/// symbolized input valid ground truth for the stripped output.
+#[test]
+fn strip_removes_names_but_keeps_code_layout() {
+    let path = fixture("hello-x64.elf");
+    let original = Binary::open(&path).unwrap();
+    let truth = Truth::from_binary(&original);
+    let scratch = std::env::temp_dir().join(format!("rampage-eval-strip-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+
+    let stripped_path = scratch.join("stripped.elf");
+    std::fs::write(&stripped_path, rampage_eval::strip(&bytes, false).unwrap()).unwrap();
+    let stripped = Binary::open(&stripped_path).unwrap();
+    assert!(Truth::from_binary(&stripped).0.is_empty());
+    let functions = original.symbols.iter().filter(|symbol| symbol.size > 0 && truth.0.contains_key(&symbol.address));
+    for symbol in functions {
+        assert_eq!(original.read(symbol.address, symbol.size), stripped.read(symbol.address, symbol.size));
+    }
+
+    let debugless_path = scratch.join("debugless.elf");
+    std::fs::write(&debugless_path, rampage_eval::strip(&bytes, true).unwrap()).unwrap();
+    assert_eq!(Truth::from_binary(&Binary::open(&debugless_path).unwrap()), truth);
+    std::fs::remove_dir_all(&scratch).unwrap();
 }

@@ -75,7 +75,10 @@ pub enum Outcome {
 /// One address where the heuristic and the truth do not agree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Disagreement {
-    #[serde(serialize_with = "rampage_arch::hex::address", deserialize_with = "rampage_arch::hex::deserialize_address")]
+    #[serde(
+        serialize_with = "rampage_arch::hex::address",
+        deserialize_with = "rampage_arch::hex::deserialize_address"
+    )]
     pub address: u64,
     pub proposed: Option<String>,
     pub truth: Option<String>,
@@ -167,6 +170,28 @@ pub fn evaluate(db: &SignatureDb, target: &Binary, truth: &Truth) -> Result<Repo
     Ok(score(proposals(db, target)?, truth))
 }
 
+/// Rewrites an ELF without its debug sections and, unless `keep_symbols`, without its symbol table, leaving
+/// every loaded byte at its original address. Linking a second time with `--strip-all` is not equivalent: zig
+/// then builds libc without debug info and the code shifts, so the symbolized twin would no longer describe it.
+pub fn strip(elf: &[u8], keep_symbols: bool) -> Result<Vec<u8>, String> {
+    let mut builder = object::build::elf::Builder::read(elf).map_err(|error| error.to_string())?;
+    for section in builder.sections.iter_mut() {
+        let name: &[u8] = &section.name;
+        let symbols = matches!(name, b".symtab" | b".strtab" | b".symtab_shndx");
+        if name.starts_with(b".debug") || (symbols && !keep_symbols) {
+            section.delete = true;
+        }
+    }
+    if !keep_symbols {
+        for symbol in builder.symbols.iter_mut() {
+            symbol.delete = true;
+        }
+    }
+    let mut output = Vec::new();
+    builder.write(&mut output).map_err(|error| error.to_string())?;
+    Ok(output)
+}
+
 fn preference(name: &str) -> (bool, usize, &str) {
     (name.starts_with('_'), name.len(), name)
 }
@@ -199,13 +224,8 @@ mod tests {
     #[test]
     fn score_counts_each_category_and_computes_rates() {
         let truth = truth(&[(0x10, "memcpy"), (0x20, "strlen"), (0x30, "free"), (0x40, "main")]);
-        let proposals = vec![
-            named(0x10, "memcpy"),
-            named(0x20, "strnlen"),
-            (0x30, None),
-            named(0x50, "malloc"),
-            (0x60, None),
-        ];
+        let proposals =
+            vec![named(0x10, "memcpy"), named(0x20, "strnlen"), (0x30, None), named(0x50, "malloc"), (0x60, None)];
         let report = score(proposals, &truth);
         assert_eq!((report.correct, report.wrong, report.missed, report.spurious), (1, 1, 2, 1));
         assert!((report.precision - 1.0 / 3.0).abs() < 1e-12);
