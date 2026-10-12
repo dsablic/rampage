@@ -59,12 +59,10 @@ impl Project {
         // A page of zero types still carries the identity and counts.
         let managed = self.dotnet_metadata(&DotNetQuery { limit: Some(0), ..DotNetQuery::default() }).ok().flatten();
         if let Some(summary) = &managed {
-            let identity = summary
-                .assembly
-                .as_ref()
-                .map_or_else(|| "an unnamed module".to_owned(), |assembly| {
-                    format!("{} {}", assembly.name, assembly.version)
-                });
+            let identity = summary.assembly.as_ref().map_or_else(
+                || "an unnamed module".to_owned(),
+                |assembly| format!("{} {}", assembly.name, assembly.version),
+            );
             let counts = &summary.counts;
             toolchain.push(
                 Finding::new(
@@ -76,9 +74,12 @@ impl Project {
                     "{} types, {} methods ({} IL, {} native)",
                     counts.types, counts.methods, counts.il_methods, counts.native_methods
                 )])
-                .evidence(summary.assembly_refs.iter().map(|reference| {
-                    format!("references {} {}", reference.name, reference.version)
-                })),
+                .evidence(
+                    summary
+                        .assembly_refs
+                        .iter()
+                        .map(|reference| format!("references {} {}", reference.name, reference.version)),
+                ),
             );
         }
         report.sections.push(toolchain);
