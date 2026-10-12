@@ -229,12 +229,30 @@ pub struct ConstantHit {
     pub complete: bool,
 }
 
+/// The hits of one scan, and whether [`MAX_HITS`] cut it short (so hits past the last one reported were not
+/// looked for).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ScanReport {
+    pub hits: Vec<ConstantHit>,
+    pub truncated: bool,
+}
+
 /// Finds every signature in `bytes`, which are mapped at `base`. Returns at most [`MAX_HITS`] hits, ordered by
 /// address. When two hits start at the same place in the same byte order, only the longer is kept: the
 /// MD5 initial state is a prefix of SHA-1's, and naming both would hide the more specific answer.
 pub fn scan(bytes: &[u8], base: u64, db: &ConstantDb) -> Vec<ConstantHit> {
+    scan_report(bytes, base, db).hits
+}
+
+/// [`scan`], also reporting whether the hit cap was reached.
+pub fn scan_report(bytes: &[u8], base: u64, db: &ConstantDb) -> ScanReport {
     let mut hits = Vec::new();
     for position in 0..bytes.len().saturating_sub(ANCHOR_LEN - 1) {
+        // Checked only between positions: stopping among one position's candidates could keep a short prefix
+        // match and drop the longer one that would have suppressed it.
+        if hits.len() >= MAX_HITS {
+            return finish(hits, true);
+        }
         let pair = usize::from(u16::from_le_bytes([bytes[position], bytes[position + 1]]));
         if db.prefilter[pair >> 6] & 1 << (pair & 63) == 0 {
             continue;
@@ -259,15 +277,12 @@ pub fn scan(bytes: &[u8], base: u64, db: &ConstantDb) -> Vec<ConstantHit> {
                 length,
                 complete: length == form.bytes.len(),
             });
-            if hits.len() == MAX_HITS {
-                return finish(hits);
-            }
         }
     }
-    finish(hits)
+    finish(hits, false)
 }
 
-fn finish(mut hits: Vec<ConstantHit>) -> Vec<ConstantHit> {
+fn finish(mut hits: Vec<ConstantHit>, truncated: bool) -> ScanReport {
     hits.sort_by(|a, b| (a.address, b.length, &a.what, a.endian).cmp(&(b.address, a.length, &b.what, b.endian)));
     // Overlapping segments report the same hit twice.
     hits.dedup();
@@ -277,15 +292,30 @@ fn finish(mut hits: Vec<ConstantHit>) -> Vec<ConstantHit> {
         longest
     });
     hits.retain(|hit| longest[&(hit.address, hit.endian)] == hit.length);
+    cap(hits, truncated)
+}
+
+fn cap(mut hits: Vec<ConstantHit>, truncated: bool) -> ScanReport {
+    let truncated = truncated || hits.len() > MAX_HITS;
     hits.truncate(MAX_HITS);
-    hits
+    ScanReport { hits, truncated }
 }
 
 /// Scans the file-backed bytes of every readable segment at its virtual address. Images without segments
 /// (relocatable objects) are scanned section by section instead, in section order, each hit naming its section
 /// and giving its offset within it.
 pub fn scan_binary(binary: &Binary, db: &ConstantDb) -> Vec<ConstantHit> {
+    scan_binary_report(binary, db).hits
+}
+
+/// [`scan_binary`], also reporting whether the hit cap was reached.
+pub fn scan_binary_report(binary: &Binary, db: &ConstantDb) -> ScanReport {
     let mut hits = Vec::new();
+    let mut truncated = false;
+    let mut add = |report: ScanReport| {
+        truncated |= report.truncated;
+        report.hits
+    };
     if binary.segments.is_empty() {
         // Sections are finished one by one rather than pooled: they share address 0, so pooling would let a hit
         // in one section suppress, or deduplicate, a different hit in another.
@@ -295,18 +325,18 @@ pub fn scan_binary(binary: &Binary, db: &ConstantDb) -> Vec<ConstantHit> {
             let len = usize::try_from(section.file_size).unwrap_or(usize::MAX);
             if let Some(bytes) = binary.image_bytes().get(start..start.saturating_add(len)) {
                 let name = Some(section.name.clone());
-                hits.extend(scan(bytes, 0, db).into_iter().map(|hit| ConstantHit { section: name.clone(), ..hit }));
+                let found = add(scan_report(bytes, 0, db));
+                hits.extend(found.into_iter().map(|hit| ConstantHit { section: name.clone(), ..hit }));
             }
         }
-        hits.truncate(MAX_HITS);
-        return hits;
+        return cap(hits, truncated);
     }
     for segment in binary.segments.iter().filter(|segment| segment.perms.read && segment.file_size > 0) {
         if let Some(bytes) = binary.read_to_segment_end(segment.address) {
-            hits.extend(scan(bytes, segment.address, db));
+            hits.extend(add(scan_report(bytes, segment.address, db)));
         }
     }
-    finish(hits)
+    finish(hits, truncated)
 }
 
 #[cfg(test)]
@@ -416,6 +446,28 @@ mod tests {
     fn hits_are_capped() {
         let buffer = b"expand 32-byte k".repeat(MAX_HITS + 100);
         assert_eq!(scan(&buffer, 0, ConstantDb::bundled()).len(), MAX_HITS);
+    }
+
+    #[test]
+    fn the_cap_never_splits_one_position_s_candidates() {
+        // "short" is a prefix of "long" and is tried first. One lone "short" makes the raw count odd, so the cap
+        // lands between a position's "short" and "long" candidates.
+        let signature = |what: &'static str, len: u8| ConstantSignature {
+            algorithm: "test".into(),
+            kind: Kind::Hash,
+            what: what.into(),
+            source: "test".into(),
+            pattern: Pattern::Bytes((0..len).collect()),
+            min_len: usize::from(len),
+        };
+        let db = ConstantDb::new(vec![signature("short", 16), signature("long", 24)]).unwrap();
+        let mut buffer: Vec<u8> = (0..16).chain([0xee; 8]).collect();
+        buffer.extend((0..24).cycle().take(24 * MAX_HITS));
+        let report = scan_report(&buffer, 0, &db);
+        assert!(report.truncated);
+        assert_eq!(report.hits[0].what, "short");
+        assert!(report.hits[1..].iter().all(|hit| hit.what == "long"), "{:?}", report.hits.last());
+        assert!(!scan_report(&buffer[..100], 0, &db).truncated);
     }
 
     #[test]
