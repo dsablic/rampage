@@ -142,6 +142,31 @@ fn a_large_leading_range_does_not_starve_later_ranges() {
 }
 
 #[test]
+fn std_local_and_internal_linkage_names_are_recovered() {
+    let mut blob = Blob::new(0x9000, 8);
+    let vtable = blob.here();
+    blob.zeros(16);
+    let names: Vec<u64> =
+        ["St9exception", "Z4mainE5Local", "*N12_GLOBAL__N_16HiddenE"].iter().map(|name| blob.cstr(name)).collect();
+    blob.align();
+    for name in names {
+        blob.ptr(vtable).ptr(name);
+    }
+    let classes = recover_itanium(&blob.image());
+    let mut recovered: Vec<(&str, &str)> =
+        classes.iter().map(|class| (class.name.as_str(), class.mangled.as_str())).collect();
+    recovered.sort_unstable();
+    assert_eq!(
+        recovered,
+        [
+            ("(anonymous namespace)::Hidden", "N12_GLOBAL__N_16HiddenE"),
+            ("main::Local", "Z4mainE5Local"),
+            ("std::exception", "St9exception"),
+        ]
+    );
+}
+
+#[test]
 fn string_pointer_tables_are_not_typeinfo() {
     // A cipher-name table pairs a long name with a short alias; the aliases happen to demangle as class names.
     let mut blob = Blob::new(0x7000, 8);

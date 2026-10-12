@@ -144,9 +144,13 @@ struct ItaniumCandidate {
 fn itanium_name(image: &Image, name_va: u64) -> Option<(String, String)> {
     let raw = image.read_cstr(name_va, MAX_NAME_BYTES)?;
     let raw = std::str::from_utf8(raw).ok()?;
-    // Cheap pre-filter before demangling: a class typeinfo name is a length-prefixed or nested mangling.
-    let first = raw.as_bytes().first()?;
-    if !(first.is_ascii_digit() || *first == b'N') || !raw.bytes().all(|byte| byte.is_ascii_graphic()) {
+    // GCC prefixes an internal-linkage type's name with `*` (compare by address); it is not part of the mangling.
+    let raw = raw.strip_prefix('*').unwrap_or(raw);
+    // Cheap pre-filter before demangling: a class typeinfo name is a length-prefixed (`4Base`), nested (`N...E`),
+    // `std::` (`St9exception`) or local (`Z4mainE5Local`) mangling.
+    let first = *raw.as_bytes().first()?;
+    let shaped = first.is_ascii_digit() || first == b'N' || first == b'Z' || raw.starts_with("St");
+    if !shaped || !raw.bytes().all(|byte| byte.is_ascii_graphic()) {
         return None;
     }
     let demangled = crate::language::demangle(&format!("_ZTS{raw}"))?;
