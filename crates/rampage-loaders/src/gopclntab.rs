@@ -19,10 +19,12 @@
 use rampage_arch::bytes::read_uint;
 use serde::Serialize;
 
+use crate::warnings::CappedWarnings;
+
 /// Caps for an untrusted blob: generous for real programs, bounded against a hostile or corrupt table.
 const MAX_FUNCTIONS: usize = 1_000_000;
 const MAX_NAME_BYTES: usize = 4096;
-const MAX_WARNINGS: usize = 1024;
+const WARNINGS: CappedWarnings = CappedWarnings::new(1024, "gopclntab");
 
 const MAGIC_GO12: u32 = 0xFFFF_FFFB;
 const MAGIC_GO116: u32 = 0xFFFF_FFFA;
@@ -45,12 +47,8 @@ pub struct GoFunction {
 }
 
 impl GoReport {
-    fn warn(&mut self, warning: String) {
-        if self.warnings.len() < MAX_WARNINGS - 1 {
-            self.warnings.push(warning);
-        } else if self.warnings.len() == MAX_WARNINGS - 1 {
-            self.warnings.push("gopclntab warning limit reached; further diagnostics are truncated".to_owned());
-        }
+    pub(crate) fn warn(&mut self, warning: String) {
+        WARNINGS.push(&mut self.warnings, warning);
     }
 }
 

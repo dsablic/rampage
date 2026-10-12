@@ -524,11 +524,11 @@ impl Binary {
             return text.map_or(report, |text| self.scan_gopclntab(text.address));
         };
         let Some(bytes) = self.read(section.address, section.size) else {
-            report.warnings.push("gopclntab section bytes are not mapped".to_owned());
+            report.warn("gopclntab section bytes are not mapped".to_owned());
             return report;
         };
         let Some(text) = text else {
-            report.warnings.push("gopclntab found but no text section to anchor addresses".to_owned());
+            report.warn("gopclntab found but no text section to anchor addresses".to_owned());
             return report;
         };
         crate::gopclntab::parse(bytes, text.address, self.arch.pointer_size(), self.big_endian)

@@ -13,11 +13,12 @@ use ::pdb::{FallibleIterator, PDB, SymbolData};
 use serde::Serialize;
 
 use crate::LoadError;
+use crate::warnings::CappedWarnings;
 
 /// Caps for an untrusted file: enough for real programs, bounded against a hostile or corrupt PDB.
 const MAX_FUNCTIONS: usize = 2_000_000;
 const MAX_NAME_BYTES: usize = 4096;
-const MAX_WARNINGS: usize = 1024;
+const WARNINGS: CappedWarnings = CappedWarnings::new(1024, "PDB");
 
 #[derive(Debug, Default, Serialize)]
 pub struct PdbReport {
@@ -35,11 +36,7 @@ pub struct PdbFunction {
 
 impl PdbReport {
     fn warn(&mut self, warning: String) {
-        if self.warnings.len() < MAX_WARNINGS - 1 {
-            self.warnings.push(warning);
-        } else if self.warnings.len() == MAX_WARNINGS - 1 {
-            self.warnings.push("PDB warning limit reached; further diagnostics are truncated".to_owned());
-        }
+        WARNINGS.push(&mut self.warnings, warning);
     }
 }
 

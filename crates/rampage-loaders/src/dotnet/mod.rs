@@ -23,11 +23,12 @@ use object::read::pe::{ImageNtHeaders, PeFile};
 use rampage_arch::bytes::read_uint;
 use serde::Serialize;
 
+use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 use heaps::Heaps;
 use tables::{Coded, Tables};
 
-const MAX_WARNINGS: usize = 256;
+const WARNINGS: CappedWarnings = CappedWarnings::new(256, ".NET metadata");
 const MAX_STREAMS: usize = 64;
 /// II.24.2.1: the version string length is at most 255 bytes, rounded up to a multiple of four.
 const MAX_VERSION_BYTES: usize = 256;
@@ -242,11 +243,7 @@ struct Warnings(Vec<String>);
 
 impl Warnings {
     fn push(&mut self, warning: String) {
-        if self.0.len() < MAX_WARNINGS - 1 {
-            self.0.push(warning);
-        } else if self.0.len() == MAX_WARNINGS - 1 {
-            self.0.push(".NET metadata warning limit reached; further diagnostics are truncated".to_owned());
-        }
+        WARNINGS.push(&mut self.0, warning);
     }
 }
 
