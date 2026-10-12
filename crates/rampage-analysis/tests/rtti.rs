@@ -177,11 +177,11 @@ fn type_descriptor(blob: &mut Blob, vftable: u64, name: &str) -> u64 {
     address
 }
 
-/// Writes a `BaseClassDescriptor` whose only field this parser reads is its type descriptor cross-reference.
-fn base_descriptor(blob: &mut Blob, type_descriptor_ref: u32) -> u64 {
+/// Writes a `BaseClassDescriptor`; this parser reads its type descriptor cross-reference and contained-base count.
+fn base_descriptor(blob: &mut Blob, type_descriptor_ref: u32, contained: u32) -> u64 {
     blob.align();
     let address = blob.here();
-    blob.u32(type_descriptor_ref).u32(0).u32(0).u32(0).u32(0).u32(0); // pTD, numContained, PMD(3), attributes
+    blob.u32(type_descriptor_ref).u32(contained).u32(0).u32(0).u32(0).u32(0); // pTD, numContained, PMD(3), attributes
     address
 }
 
@@ -193,8 +193,8 @@ fn msvc_single_inheritance_32bit_pointers() {
     blob.zeros(8);
     let td_base = type_descriptor(&mut blob, vftable, ".?AVBase@@");
     let td_derived = type_descriptor(&mut blob, vftable, ".?AVDerived@@");
-    let bcd_derived = base_descriptor(&mut blob, td_derived as u32);
-    let bcd_base = base_descriptor(&mut blob, td_base as u32);
+    let bcd_derived = base_descriptor(&mut blob, td_derived as u32, 1);
+    let bcd_base = base_descriptor(&mut blob, td_base as u32, 0);
     blob.align();
     let array = blob.here();
     blob.u32(bcd_derived as u32).u32(bcd_base as u32); // first entry is the class itself
@@ -234,8 +234,8 @@ fn msvc_single_inheritance_64bit_image_relative() {
     blob.zeros(16);
     let td_base = type_descriptor(&mut blob, vftable, ".?AUBase@@");
     let td_derived = type_descriptor(&mut blob, vftable, ".?AUDerived@@");
-    let bcd_derived = base_descriptor(&mut blob, rva(td_derived));
-    let bcd_base = base_descriptor(&mut blob, rva(td_base));
+    let bcd_derived = base_descriptor(&mut blob, rva(td_derived), 1);
+    let bcd_base = base_descriptor(&mut blob, rva(td_base), 0);
     blob.align();
     let array = blob.here();
     blob.u32(rva(bcd_derived)).u32(rva(bcd_base));
@@ -250,6 +250,36 @@ fn msvc_single_inheritance_64bit_image_relative() {
     assert_eq!(classes.len(), 1, "{classes:?}");
     assert_eq!(class(&classes, "Derived").bases, ["Base"]);
     assert_eq!(class(&classes, "Derived").type_info, td_derived);
+}
+
+#[test]
+fn msvc_bases_are_direct_edges_not_the_flattened_hierarchy() {
+    // C : B : A, and D : B, X. The base class arrays list every ancestor in pre-order with subtree sizes.
+    let mut blob = Blob::new(0x0040_1000, 4);
+    let vftable = blob.here();
+    blob.zeros(8);
+    let [td_a, td_b, td_c, td_d, td_x] =
+        [".?AVA@@", ".?AVB@@", ".?AVC@@", ".?AVD@@", ".?AVX@@"].map(|name| type_descriptor(&mut blob, vftable, name));
+    let hierarchy = |blob: &mut Blob, entries: &[(u64, u32)]| {
+        let descriptors: Vec<u32> =
+            entries.iter().map(|&(td, contained)| base_descriptor(blob, td as u32, contained) as u32).collect();
+        blob.align();
+        let array = blob.here();
+        for descriptor in descriptors {
+            blob.u32(descriptor);
+        }
+        let chd = blob.here();
+        blob.u32(0).u32(0).u32(entries.len() as u32).u32(array as u32);
+        chd
+    };
+    let chd_c = hierarchy(&mut blob, &[(td_c, 2), (td_b, 1), (td_a, 0)]);
+    let chd_d = hierarchy(&mut blob, &[(td_d, 3), (td_b, 1), (td_a, 0), (td_x, 0)]);
+    blob.u32(0).u32(0).u32(0).u32(td_c as u32).u32(chd_c as u32);
+    blob.u32(0).u32(0).u32(0).u32(td_d as u32).u32(chd_d as u32);
+
+    let classes = recover_msvc(&blob.image());
+    assert_eq!(class(&classes, "C").bases, ["B"]);
+    assert_eq!(class(&classes, "D").bases, ["B", "X"]);
 }
 
 #[test]

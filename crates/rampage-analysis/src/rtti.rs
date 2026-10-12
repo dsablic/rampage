@@ -294,7 +294,12 @@ fn strip_msvc_keyword(name: &str) -> &str {
     name
 }
 
-/// Base-class names from an MSVC `ClassHierarchyDescriptor`, or `None` when the hierarchy does not validate.
+/// Direct base-class names from an MSVC `ClassHierarchyDescriptor`, or `None` when the hierarchy does not
+/// validate.
+///
+/// The base class array flattens the whole hierarchy in pre-order: entry 0 is the class itself and each
+/// `BaseClassDescriptor` is followed by its own `numContainedBases` bases. Direct bases are therefore the entries
+/// reached from index 1 by skipping each entry's contained subtree.
 fn msvc_bases(image: &Image, chd: u64, signature: u32, image_base: u64, own: &str) -> Option<Vec<String>> {
     let count = image.read_u32(va_at(chd, 8)?)?;
     if count == 0 || count as usize > MAX_BASES {
@@ -302,12 +307,18 @@ fn msvc_bases(image: &Image, chd: u64, signature: u32, image_base: u64, own: &st
     }
     let array = msvc_resolve(signature, image_base, image.read_u32(va_at(chd, 12)?)?);
     let mut bases = Vec::new();
-    for index in 0..u64::from(count) {
-        let slot = array.checked_add(index.checked_mul(4)?)?;
+    let mut index = 1;
+    while index < count {
+        let slot = array.checked_add(u64::from(index).checked_mul(4)?)?;
         let descriptor = msvc_resolve(signature, image_base, image.read_u32(slot)?);
         let type_descriptor = msvc_resolve(signature, image_base, image.read_u32(descriptor)?);
+        let contained = image.read_u32(va_at(descriptor, 4)?)?;
+        if contained >= count - index {
+            return None;
+        }
         let (_, name) = msvc_type_descriptor(image, type_descriptor)?;
         bases.push(name);
+        index += 1 + contained;
     }
     Some(dedup_bases(bases, own))
 }
