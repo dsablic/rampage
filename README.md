@@ -71,8 +71,11 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   harness behind the heuristic flywheel (`docs/plans/`). Current cross-program library-ID recall: 0.92 (x86-64),
   0.82 (AArch64) at precision 1.00.
 - .NET assemblies: `rampage dotnet` (and the `dotnet_metadata` tool) reads ECMA-335 metadata -- assembly
-  identity, references, entry point, types and methods with IL body sizes. CIL is reported, never treated as
-  native code.
+  identity, references, entry point, and one paged list chosen with `--list` / `list`: `types` (fields and
+  methods with ILAsm-style signatures such as `int32 Combine<T1>(T1)` and IL body sizes), `pinvokes` (the DLL
+  export each P/Invoke method binds to) or `attributes` (custom attributes with their targets and
+  primitive/string/type arguments, filterable by `--parent-token`). Decoding is bounded against hostile
+  metadata. CIL is reported, never treated as native code.
 
 ## Usage
 
@@ -82,7 +85,7 @@ cargo build --release
 rampage report triage-report <file>          # guided overview with evidence and next steps
 rampage report find-main|network-surface|find-crypto <file>
 rampage report diff-builds <file> --other <file>
-rampage dotnet  <file> [--contains TEXT]     # .NET assembly metadata (types, methods, IL)
+rampage dotnet  <file> [--list types|pinvokes|attributes] [--contains TEXT]  # .NET metadata, one list per page
 rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
 rampage detect  <file> [--peid <userdb.txt>]  # producing packer/compiler/...; warns on skipped PeID entries
 rampage yara    <file> --rules <file|dir>     # run user-supplied YARA rules (embedded yara-x)
