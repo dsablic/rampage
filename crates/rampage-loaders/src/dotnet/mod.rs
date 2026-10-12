@@ -20,6 +20,7 @@ mod tables;
 
 use object::LittleEndian as LE;
 use object::read::pe::{ImageNtHeaders, PeFile};
+use rampage_arch::bytes::read_uint;
 use serde::Serialize;
 
 use crate::{Binary, Format, LoadError};
@@ -741,26 +742,13 @@ fn token(table: u8, row: u32) -> u32 {
     (u32::from(table) << 24) | (row & tables::MAX_ROWS)
 }
 
+// CLI metadata is always little-endian (II.24.1).
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
-    let end = offset.checked_add(2)?;
-    bytes.get(offset..end).map(|b| u16::from_le_bytes([b[0], b[1]]))
+    read_uint(bytes, offset, 2, false).map(|value| value as u16)
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
-    let end = offset.checked_add(4)?;
-    bytes.get(offset..end).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
-    Some(u64::from(read_u32(bytes, offset)?) | (u64::from(read_u32(bytes, offset.checked_add(4)?)?) << 32))
-}
-
-fn read_uint(bytes: &[u8], offset: usize, width: usize) -> Option<u32> {
-    match width {
-        2 => read_u16(bytes, offset).map(u32::from),
-        4 => read_u32(bytes, offset),
-        _ => None,
-    }
+    read_uint(bytes, offset, 4, false).map(|value| value as u32)
 }
 
 #[cfg(test)]

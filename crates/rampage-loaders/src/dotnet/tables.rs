@@ -1,7 +1,9 @@
 //! The `#~` / `#-` table stream: its header, the variable column widths, and the row layout of every
 //! ECMA-335 table (II.22), so any table present can be located or skipped even when it is not decoded.
 
-use super::{Warnings, read_u32, read_u64, read_uint};
+use rampage_arch::bytes::read_uint;
+
+use super::{Warnings, read_u32};
 
 /// A metadata token's row index is 24 bits (II.22), so no real table can have more rows than this.
 pub(super) const MAX_ROWS: u32 = 0x00FF_FFFF;
@@ -248,7 +250,7 @@ impl<'a> Tables<'a> {
             warnings.push("table stream too small for its header".to_owned());
             return None;
         };
-        let valid = read_u64(stream, 8)?;
+        let valid = read_uint(stream, 8, 8, false)?;
         let mut declared = [0u32; 64];
         let mut cursor = 24usize;
         for (id, count) in declared.iter_mut().enumerate() {
@@ -329,7 +331,7 @@ impl<'a> Tables<'a> {
         }
         let &(column_offset, width) = layout.columns.get(column)?;
         let position = (row as usize - 1).checked_mul(layout.row_size)?.checked_add(layout.offset)?;
-        read_uint(self.stream, position.checked_add(column_offset)?, width)
+        read_uint(self.stream, position.checked_add(column_offset)?, width, false).map(|value| value as u32)
     }
 }
 

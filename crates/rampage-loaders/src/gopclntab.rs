@@ -16,6 +16,7 @@
 //! The functab yields each function's entry PC and the offset of its `_func`, whose name offset indexes the
 //! funcname table; the name is read NUL-terminated. Addresses are the image's virtual addresses.
 
+use rampage_arch::bytes::read_uint;
 use serde::Serialize;
 
 /// Caps for an untrusted blob: generous for real programs, bounded against a hostile or corrupt table.
@@ -263,13 +264,6 @@ fn resolve_layout(blob: &[u8], magic: u32, ptr: usize, big_endian: bool) -> Opti
         }
         _ => None,
     }
-}
-
-/// Reads a `size`-byte little- or big-endian unsigned integer at `offset`, or `None` when out of range.
-fn read_uint(bytes: &[u8], offset: usize, size: usize, big_endian: bool) -> Option<u64> {
-    let slice = bytes.get(offset..offset.checked_add(size)?)?;
-    let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
-    Some(if big_endian { slice.iter().fold(0, fold) } else { slice.iter().rev().fold(0, fold) })
 }
 
 /// Reads a NUL-terminated name at `offset`, bounded by `MAX_NAME_BYTES`. Returns `None` when `offset` is out

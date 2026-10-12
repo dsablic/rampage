@@ -6,6 +6,7 @@ use memmap2::Mmap;
 use object::read::macho::{FatArch, FatArch32, FatArch64, MachOFatFile};
 use object::{Object, ObjectSection, ObjectSegment, ObjectSymbol, SegmentFlags, SymbolFlags};
 use rampage_arch::Arch;
+use rampage_arch::bytes::read_uint;
 use serde::Serialize;
 use std::ops::Deref;
 
@@ -402,13 +403,7 @@ impl Binary {
         let section = self.sections.iter().find(|section| section.name == ".got")?;
         let bytes = self.read(section.address, section.size)?;
         let size = usize::from(self.arch.pointer_size());
-        let entries = bytes
-            .chunks_exact(size)
-            .map(|entry| {
-                let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
-                if self.big_endian { entry.iter().fold(0, fold) } else { entry.iter().rev().fold(0, fold) }
-            })
-            .collect();
+        let entries = bytes.chunks_exact(size).filter_map(|entry| read_uint(entry, 0, size, self.big_endian)).collect();
         Some(rampage_arch::Got { address: section.address, entries })
     }
 
@@ -479,9 +474,7 @@ impl Binary {
         if !matches!(size, 4 | 8) || !permissions.read || permissions.write {
             return None;
         }
-        let bytes = self.read(address, u64::from(size))?;
-        let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
-        Some(if self.big_endian { bytes.iter().fold(0, fold) } else { bytes.iter().rev().fold(0, fold) })
+        read_uint(self.read(address, u64::from(size))?, 0, usize::from(size), self.big_endian)
     }
 
     /// Returns the file-backed bytes from `address` to the end of its segment's file data.

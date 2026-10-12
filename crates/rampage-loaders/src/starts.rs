@@ -3,6 +3,7 @@
 use object::LittleEndian as LE;
 use object::read::macho::LoadCommandVariant;
 use object::{Object, macho, pe};
+use rampage_arch::bytes::read_uint;
 
 use crate::Binary;
 
@@ -126,8 +127,7 @@ pub(crate) fn pe_tls(binary: &Binary, directory: &TlsDirectory) -> Vec<u64> {
 /// Reads a little-endian pointer (PE is always little-endian) from mapped image bytes, or `None` when the
 /// location is not file-backed.
 fn read_le_pointer(binary: &Binary, address: u64, size: u8) -> Option<u64> {
-    let bytes = binary.read(address, u64::from(size))?;
-    Some(bytes.iter().rev().fold(0u64, |value, &byte| value << 8 | u64::from(byte)))
+    read_uint(binary.read(address, u64::from(size))?, 0, usize::from(size), false)
 }
 
 const RUNTIME_FUNCTION_SIZE: usize = 12;
@@ -280,9 +280,7 @@ impl<'a> Cursor<'a> {
 
     /// A `len`-byte unsigned integer in the data's byte order.
     fn unsigned(&mut self, len: usize) -> Option<u64> {
-        let bytes = self.take(len)?;
-        let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
-        Some(if self.big_endian { bytes.iter().fold(0, fold) } else { bytes.iter().rev().fold(0, fold) })
+        read_uint(self.take(len)?, 0, len, self.big_endian)
     }
 
     fn u8(&mut self) -> Option<u8> {
