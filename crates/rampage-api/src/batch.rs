@@ -16,7 +16,8 @@ pub const MAX_BATCH: usize = 1000;
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BatchEntry {
-    /// An address (`0x401000`) or a name: symbol, export, import, user name, or `sub_<hex>`.
+    /// An address (`0x401000`) or a name: symbol, export, import, user name, or `sub_<hex>`. Names resolve as they
+    /// were before the batch, not as earlier entries leave them.
     pub at: String,
     /// The new name: an identifier not used elsewhere.
     #[serde(default)]
@@ -104,7 +105,7 @@ impl Project {
                 problem("give `name`, `comment` or both".to_owned());
             }
             if entry.comment.as_deref().is_some_and(|comment| comment.trim().is_empty()) {
-                problem("the comment is blank; remove comments with set_comment".to_owned());
+                problem("the comment is blank; a batch cannot remove comments".to_owned());
             }
             if entry.comment.is_some()
                 && let Some(earlier) = commented.insert(address, index)

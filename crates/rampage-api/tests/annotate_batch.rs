@@ -78,6 +78,7 @@ fn an_entry_with_several_problems_counts_once() {
     let error = project.annotate_batch(&[entry("_main", Some("two words"), Some("  "))]).unwrap_err().to_string();
     assert!(error.starts_with("nothing applied: 1 of 1 entries are invalid"), "{error}");
     assert_eq!(error.matches("\nentry 0 (").count(), 2, "{error}");
+    assert!(error.contains("the comment is blank; a batch cannot remove comments"), "{error}");
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 

@@ -761,7 +761,8 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "annotate_batch",
             "Set many names and comments in one call, as one undo step. All entries are checked first; if any is \
-             invalid nothing is applied and each problem is listed by entry index.",
+             invalid nothing is applied and each problem is listed by entry index. Each `at` resolves against the names \
+             as they were before the batch, not as earlier entries leave them.",
             |project, arguments: AnnotateBatchArgs| project.annotate_batch(&arguments.entries),
         )
         .annotates(),
