@@ -449,6 +449,15 @@ pub fn tools() -> Vec<Tool> {
             |project, args: ReportArgs| fitted(project.find_crypto(ReportLimits::new(args.max_per_section))),
         ),
         tool(
+            "persistence_surface",
+            "Map persistence indicators as evidence: autostart locations in strings (registry Run/RunOnce and \
+             service keys, scheduled tasks, launchd LaunchAgents/LaunchDaemons, systemd units, cron, XDG autostart, \
+             shell startup files), service-installation and registry-write APIs (file-write and command APIs beside \
+             such strings), the functions that reference them (via xrefs), and persistence capability tags. \
+             Indicators, not intent.",
+            |project, args: ReportArgs| fitted(project.persistence_surface(ReportLimits::new(args.max_per_section))),
+        ),
+        tool(
             "diff_builds",
             "Compare this binary with another build of the same architecture: functions paired by unique name, by \
              masked signature hash and by identical bytes at an unchanged address into identical, changed, \

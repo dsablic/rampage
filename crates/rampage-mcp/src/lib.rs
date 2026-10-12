@@ -25,7 +25,8 @@ export or import name \
 name. Start with triage_report: one bounded overview (layout, triage hints, producing toolchain, capability \
 tags, imports, notable strings, library functions) that ends with concrete next tool calls. The other guided \
 workflows compose the primitives the same way: find_main (the program's own entry logic), network_surface, \
-find_crypto (algorithm constants and crypto APIs with the code that uses them) and diff_builds. Every workflow \
+find_crypto (algorithm constants and crypto APIs with the code that uses them), persistence_surface (autostart \
+locations, service and registry APIs) and diff_builds. Every workflow \
 finding carries its evidence, source tool and confidence, and every report states its limitations: treat findings \
 as evidence, not verdicts. Heuristic databases: detect_tools (packer/compiler/protector), identify_functions \
 (library code by signature, bundled databases applied), capabilities, yara_scan and capa_detect (user-supplied \

@@ -18,6 +18,8 @@ pub enum Workflow {
     NetworkSurface,
     /// Algorithm constants, crypto APIs and the functions referencing them
     FindCrypto,
+    /// Autostart locations, service/registry APIs and the functions referencing them (indicators, not intent)
+    PersistenceSurface,
     /// Compare with another build (--other): matched, changed, added and removed functions
     DiffBuilds,
 }
@@ -47,6 +49,7 @@ pub fn report(
         (Workflow::FindMain, _) => project.find_main(limits, !report_options.no_decompile)?,
         (Workflow::NetworkSurface, _) => project.network_surface(limits)?,
         (Workflow::FindCrypto, _) => project.find_crypto(limits)?,
+        (Workflow::PersistenceSurface, _) => project.persistence_surface(limits)?,
         (Workflow::DiffBuilds, Some(other)) => project.diff_builds(other, limits)?,
         (Workflow::DiffBuilds, None) => unreachable!("checked before opening the binary"),
     };

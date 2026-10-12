@@ -93,3 +93,14 @@ fn arguments_are_checked_before_the_binary_is_opened() {
         .stderr(predicates::str::contains("--other only applies to diff-builds"));
     report(&["diff-builds", missing]).failure().stderr(predicates::str::contains("diff-builds needs --other"));
 }
+
+#[test]
+fn persistence_surface_renders() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rampage-api/tests/fixtures");
+    let persist = fixtures.join("persist-x64.elf");
+    report(&["persistence-surface", persist.to_str().unwrap()])
+        .success()
+        .stdout(predicates::str::contains("== Autostart locations in strings"))
+        .stdout(predicates::str::contains("/etc/systemd/system/updater.service"))
+        .stdout(predicates::str::contains("limitations:"));
+}

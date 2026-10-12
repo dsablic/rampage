@@ -344,3 +344,65 @@ fn find_main_bounds_the_candidate_profile() {
     assert_eq!(calls.findings.len(), 3);
     assert!(calls.truncated && calls.total > 3, "{calls:#?}");
 }
+
+#[test]
+fn persistence_surface_maps_unix_autostart_paths_to_the_code_writing_them() {
+    let report = open(local_fixture("persist-x64.elf")).persistence_surface(ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    let locations = section(&report, "Autostart locations in strings");
+    for mechanism in [
+        "systemd unit location: \"/etc/systemd/system/updater.service\"",
+        "cron table location",
+        "XDG autostart entry location",
+        "macOS LaunchAgents plist location",
+        "shell startup file: \".bashrc\"",
+    ] {
+        assert!(has_observation(locations, mechanism), "{mechanism} missing from {:?}", observations(locations));
+    }
+    let unit = locations.findings.iter().find(|finding| finding.observation.contains("systemd unit location")).unwrap();
+    assert_eq!(unit.confidence, FindingConfidence::High);
+    assert!(unit.evidence.iter().any(|line| line.contains("referenced from `install_unit`")), "{unit:#?}");
+    // File-writing APIs count only because autostart strings are present.
+    let apis = section(&report, "Persistence-related APIs");
+    assert!(has_observation(apis, "`fopen` from libc.so.6 (file write)"), "{:?}", observations(apis));
+    let functions = observations(section(&report, "Functions referencing persistence indicators"));
+    for name in ["`main`", "`install_unit`", "`append_line`"] {
+        assert!(functions.iter().any(|observation| observation.starts_with(name)), "{name}: {functions:?}");
+    }
+    assert!(report.summary[0].contains("indicators, not evidence"), "{:?}", report.summary);
+    assert!(report.next_steps.iter().any(|step| step.tool == "decompile"), "{:?}", report.next_steps);
+    assert!(report.next_steps.iter().any(|step| step.tool == "xrefs"), "{:?}", report.next_steps);
+}
+
+#[test]
+fn persistence_surface_reports_windows_run_keys_services_and_tags() {
+    let report = open(local_fixture("persist-x64.exe")).persistence_surface(ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    let locations = section(&report, "Autostart locations in strings");
+    assert!(has_observation(locations, "Windows Run registry key"), "{:?}", observations(locations));
+    assert!(has_observation(locations, "Windows scheduled task command"), "{:?}", observations(locations));
+    let run = locations.findings.iter().find(|finding| finding.observation.contains("Run registry key")).unwrap();
+    assert!(run.evidence.iter().any(|line| line.starts_with("referenced from")), "{run:#?}");
+    let apis = section(&report, "Persistence-related APIs");
+    for api in ["`CreateServiceA`", "`OpenSCManagerA`", "`RegSetValueExA`"] {
+        assert!(has_observation(apis, api), "{api} missing from {:?}", observations(apis));
+    }
+    let create = apis.findings.iter().find(|finding| finding.observation.contains("`CreateServiceA`")).unwrap();
+    assert!(create.observation.ends_with("(service installation)"), "{create:#?}");
+    assert!(create.evidence.iter().any(|line| line.starts_with("referenced from")), "{create:#?}");
+    let tags = section(&report, "Persistence capability tags");
+    assert!(has_observation(tags, "Registry autorun modification indicators"), "{:?}", observations(tags));
+    assert!(has_observation(tags, "Service installation indicators"), "{:?}", observations(tags));
+    assert!(tags.findings.iter().all(|finding| finding.confidence == FindingConfidence::Low));
+    assert!(!section(&report, "Functions referencing persistence indicators").findings.is_empty());
+}
+
+#[test]
+fn persistence_surface_without_indicators_is_empty_but_honest() {
+    let report = open(fixture("hello-x64.elf")).persistence_surface(ReportLimits::default()).unwrap();
+    assert_well_formed(&report);
+    assert!(report.sections.iter().all(|section| section.findings.is_empty()), "{report:#?}");
+    assert!(report.summary[0].starts_with("No autostart location strings"), "{:?}", report.summary);
+    assert!(report.limitations.iter().any(|text| text.contains("listed only beside an autostart location")));
+    assert!(report.limitations.iter().any(|text| text.contains("Absence of evidence is not evidence of absence")));
+}

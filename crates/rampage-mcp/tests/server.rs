@@ -78,6 +78,7 @@ async fn lists_all_tools_with_instructions() {
         "network_surface",
         "observe_indirect_branch",
         "observe_pointer",
+        "persistence_surface",
         "redo",
         "rename",
         "set_comment",
