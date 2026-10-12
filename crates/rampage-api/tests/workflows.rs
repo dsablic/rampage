@@ -88,6 +88,9 @@ fn triage_report_on_a_static_binary_states_the_missing_imports() {
     assert!(report.limitations.iter().any(|text| text.contains("No dynamic imports")));
     let functions = section(&report, "Functions");
     assert!(has_observation(functions, "functions discovered"));
+    // The default cap can cut the bundled-signature matches short; look at all of them.
+    let full = open(fixture("musl-static-x86_64.elf")).triage_report(ReportLimits::new(Some(200))).unwrap();
+    let functions = section(&full, "Functions");
     assert!(has_observation(functions, "`exit`"), "{:?}", observations(functions));
 }
 

@@ -10,7 +10,7 @@
       "refs": ["../bin/eval-ref-x86_64.elf"],
       "target": "../bin/eval-target-x86_64.elf",
       "truth": "eval-truth-cross-x86_64.json",
-      "min_recall": 0.746
+      "min_recall": 0.9206
     },
     "libid-twin-aarch64": {
       "refs": ["../bin/eval-ref-aarch64.elf"],
@@ -22,7 +22,7 @@
       "refs": ["../bin/eval-ref-aarch64.elf"],
       "target": "../bin/eval-target-aarch64.elf",
       "truth": "eval-truth-cross-aarch64.json",
-      "min_recall": 0.5949
+      "min_recall": 0.8227
     },
     "discovery-x86_64": {
       "family": "discovery",

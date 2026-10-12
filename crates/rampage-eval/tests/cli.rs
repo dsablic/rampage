@@ -54,10 +54,10 @@ fn run_prints_the_report_and_a_summary_and_passes_the_gate() {
     let output = run_x86_64(&data("eval-truth-cross-x86_64.json"), "eval-target-x86_64.elf", &[]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    assert!(stderr.contains("libid-x86_64: correct=47 wrong=0 missed=16 spurious=0"), "{stderr}");
+    assert!(stderr.contains("libid-x86_64: correct=58 wrong=0 missed=5 spurious=0"), "{stderr}");
     let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
     let report = &evaluation.slices["libid-x86_64"];
-    assert_eq!((report.correct, report.wrong, report.spurious), (47, 0, 0));
+    assert_eq!((report.correct, report.wrong, report.spurious), (58, 0, 0));
 }
 
 /// The committed manifest names every slice; the gate reads each slice on its own, so a change that helps one
@@ -69,9 +69,9 @@ fn run_manifest_reports_every_slice() {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     for line in [
         "libid-twin-x86_64: correct=160 wrong=0 missed=14 spurious=0",
-        "libid-cross-x86_64: correct=47 wrong=0 missed=16 spurious=0",
+        "libid-cross-x86_64: correct=58 wrong=0 missed=5 spurious=0",
         "libid-twin-aarch64: correct=168 wrong=0 missed=25 spurious=0",
-        "libid-cross-aarch64: correct=47 wrong=0 missed=32 spurious=0",
+        "libid-cross-aarch64: correct=65 wrong=0 missed=14 spurious=0",
         "discovery-x86_64: correct=174 wrong=0 missed=0 spurious=2",
         "discovery-aarch64: correct=193 wrong=0 missed=0 spurious=69",
     ] {
@@ -189,7 +189,7 @@ fn run_exits_one_when_a_name_is_spurious() {
     std::fs::remove_dir_all(&scratch).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("spurious=47"), "{stderr}");
+    assert!(stderr.contains("spurious=58"), "{stderr}");
 }
 
 #[test]
@@ -201,12 +201,12 @@ fn run_refuses_a_database_for_another_architecture() {
 
 #[test]
 fn run_fails_a_slice_below_its_recall_baseline() {
-    let output = run_x86_64(&data("eval-truth-cross-x86_64.json"), "eval-target-x86_64.elf", &["--min-recall", "0.9"]);
+    let output = run_x86_64(&data("eval-truth-cross-x86_64.json"), "eval-target-x86_64.elf", &["--min-recall", "0.95"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("libid-x86_64: FAIL recall 0.7460 below baseline 0.9000"), "{stderr}");
+    assert!(stderr.contains("libid-x86_64: FAIL recall 0.9206 below baseline 0.9500"), "{stderr}");
     let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(evaluation.gates["libid-x86_64"].min_recall, 0.9);
+    assert_eq!(evaluation.gates["libid-x86_64"].min_recall, 0.95);
 }
 
 /// The counts keep covering every disagreement when the list itself is bounded.
@@ -217,5 +217,5 @@ fn run_bounds_the_disagreement_list() {
     assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
     let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
     let report = &evaluation.slices["libid-x86_64"];
-    assert_eq!((report.disagreements.len(), report.omitted, report.missed), (3, 13, 16));
+    assert_eq!((report.disagreements.len(), report.omitted, report.missed), (3, 2, 5));
 }
