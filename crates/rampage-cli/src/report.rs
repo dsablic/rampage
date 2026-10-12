@@ -35,20 +35,20 @@ pub fn report(
     report_options: &ReportOptions,
     options: &Options,
 ) -> Result<()> {
+    match (workflow, &report_options.other) {
+        (Workflow::DiffBuilds, None) => bail!("diff-builds needs --other <file>"),
+        (Workflow::DiffBuilds, Some(_)) | (_, None) => {}
+        (_, Some(_)) => bail!("--other only applies to diff-builds"),
+    }
     let project = open(path, options)?;
     let limits = ReportLimits::new(report_options.limit);
-    if report_options.other.is_some() && !matches!(workflow, Workflow::DiffBuilds) {
-        bail!("--other only applies to diff-builds");
-    }
-    let report = match workflow {
-        Workflow::TriageReport => project.triage_report(limits)?,
-        Workflow::FindMain => project.find_main(limits, !report_options.no_decompile)?,
-        Workflow::NetworkSurface => project.network_surface(limits)?,
-        Workflow::FindCrypto => project.find_crypto(limits)?,
-        Workflow::DiffBuilds => match &report_options.other {
-            Some(other) => project.diff_builds(other, limits)?,
-            None => bail!("diff-builds needs --other <file>"),
-        },
+    let report = match (workflow, &report_options.other) {
+        (Workflow::TriageReport, _) => project.triage_report(limits)?,
+        (Workflow::FindMain, _) => project.find_main(limits, !report_options.no_decompile)?,
+        (Workflow::NetworkSurface, _) => project.network_surface(limits)?,
+        (Workflow::FindCrypto, _) => project.find_crypto(limits)?,
+        (Workflow::DiffBuilds, Some(other)) => project.diff_builds(other, limits)?,
+        (Workflow::DiffBuilds, None) => unreachable!("checked before opening the binary"),
     };
     if options.json {
         return write_json(out, &report);
@@ -80,15 +80,8 @@ fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
             writeln!(out, "  (nothing observed)")?;
         }
         for finding in &section.findings {
-            let confidence = serde_json::to_value(finding.confidence)?;
             let at = finding.address.map(|address| format!(" @{address:#x}")).unwrap_or_default();
-            writeln!(
-                out,
-                "  [{}] {}{at}  ({})",
-                confidence.as_str().unwrap_or("?"),
-                finding.observation,
-                finding.source
-            )?;
+            writeln!(out, "  [{}] {}{at}  ({})", finding.confidence.as_str(), finding.observation, finding.source)?;
             for evidence in &finding.evidence {
                 writeln!(out, "      {evidence}")?;
             }
@@ -107,6 +100,9 @@ fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
         writeln!(out, "\nnext steps:")?;
         for step in &report.next_steps {
             writeln!(out, "  {} {}  -- {}", step.tool, step.arguments, step.reason)?;
+        }
+        if report.next_steps_omitted > 0 {
+            writeln!(out, "  ... and {} more not listed", report.next_steps_omitted)?;
         }
     }
     writeln!(out, "\nlimitations:")?;

@@ -1,5 +1,6 @@
 //! `diff_builds`: compares this binary with another build of the same architecture. Functions are paired by symbol
-//! name and by masked signature hash (`rampage_signatures::function_hash_in`), then imports and strings are diffed.
+//! name, by masked signature hash (`rampage_signatures::function_hash_in`) and by identical bytes at an unchanged
+//! address, then imports and strings are diffed.
 //! Hash equality is signature-level (same instructions after masking addresses), not semantic equivalence.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -74,6 +75,35 @@ fn unique_hashes(functions: &[Function], paired: &BTreeSet<usize>) -> HashMap<Fu
     counts.into_iter().filter(|(_, (count, _))| *count == 1).map(|(hash, (_, index))| (hash, index)).collect()
 }
 
+/// How often each name occurs.
+fn name_counts(functions: &[Function]) -> HashMap<&str, usize> {
+    let mut counts = HashMap::new();
+    for function in functions {
+        *counts.entry(function.name.as_str()).or_default() += 1;
+    }
+    counts
+}
+
+/// Why `function` stayed unpaired, given how often its name occurs on its own side (`here`) and the other (`there`).
+fn unpaired(function: &Function, here: usize, there: usize) -> (Confidence, String) {
+    let name = &function.name;
+    if !function.named() {
+        let observation = format!("unnamed `{name}` has no counterpart by unique hash; it may be a changed function");
+        return (Confidence::Low, observation);
+    }
+    if there == 0 {
+        return (Confidence::Medium, format!("`{name}` has no counterpart by name or hash"));
+    }
+    let times = |count: usize| if count == 1 { "once".to_owned() } else { format!("{count} times") };
+    let observation = format!(
+        "`{name}` occurs {} here and {} in the other build, so the name cannot pair it, and no unique hash or \
+         identical bytes did",
+        times(here),
+        times(there)
+    );
+    (Confidence::Low, observation)
+}
+
 fn imports(binary: &Binary) -> BTreeSet<(String, String)> {
     binary
         .imports
@@ -95,13 +125,7 @@ impl Project {
     /// Compares this binary (the base) with the build at `other_path` (the new one): "added" means present only
     /// in the other build, "removed" only in this one.
     pub fn diff_builds(&self, other_path: &Path, limits: ReportLimits) -> Result<WorkflowReport, ApiError> {
-        let other = Binary::open_with(other_path, Some(self.binary.arch)).map_err(|source| match source {
-            rampage_loaders::LoadError::Unsupported(text) => {
-                ApiError::Invalid(format!("diff_builds compares builds of one architecture: {text}"))
-            }
-            source => ApiError::Load { path: other_path.to_owned(), source },
-        })?;
-        let other = Project::new(other);
+        let other = self.open_peer(other_path)?;
         let other_label = other_path.display().to_string();
         let mut report = WorkflowReport::new("diff_builds", self);
         let other_target = ReportTarget::of(&other);
@@ -128,10 +152,10 @@ impl Project {
         let mut name_only = Section::new("Functions matched by name only", limits);
         let mut changed_names = Vec::new();
 
-        let new_names = unique_names(&new);
+        let new_unique_names = unique_names(&new);
         let mut by_name: Vec<(usize, usize)> = unique_names(&base)
             .into_iter()
-            .filter_map(|(name, index)| new_names.get(name).map(|&other| (index, other)))
+            .filter_map(|(name, index)| new_unique_names.get(name).map(|&other| (index, other)))
             .collect();
         by_name.sort_unstable();
         for (index, other_index) in by_name {
@@ -257,20 +281,16 @@ impl Project {
             );
         }
 
-        let leftover = |functions: &[Function], paired: &BTreeSet<usize>, label: &str, limits| {
+        let (base_names, new_names) = (name_counts(&base), name_counts(&new));
+        let leftover = |functions: &[Function],
+                        paired: &BTreeSet<usize>,
+                        names: &HashMap<&str, usize>,
+                        other_names: &HashMap<&str, usize>,
+                        label: &str| {
             let mut section = Section::new(label, limits);
             for (_, function) in functions.iter().enumerate().filter(|(index, _)| !paired.contains(index)) {
-                let (confidence, observation) = if function.named() {
-                    (Confidence::Medium, format!("`{}` has no counterpart by name or hash", function.name))
-                } else {
-                    (
-                        Confidence::Low,
-                        format!(
-                            "unnamed `{}` has no counterpart by unique hash; it may be a changed function",
-                            function.name
-                        ),
-                    )
-                };
+                let count = |counts: &HashMap<&str, usize>| counts.get(function.name.as_str()).copied().unwrap_or(0);
+                let (confidence, observation) = unpaired(function, count(names), count(other_names));
                 section.push(
                     Finding::new("list_functions", confidence, observation)
                         .at(function.address)
@@ -279,8 +299,8 @@ impl Project {
             }
             section
         };
-        let added = leftover(&new, &paired_new, "Added functions", limits);
-        let removed = leftover(&base, &paired_base, "Removed functions", limits);
+        let added = leftover(&new, &paired_new, &new_names, &base_names, "Added functions");
+        let removed = leftover(&base, &paired_base, &base_names, &new_names, "Removed functions");
 
         let (base_imports, new_imports) = (imports(&self.binary), imports(&other.binary));
         let mut import_changes = Section::new("Import differences", limits);
@@ -319,8 +339,9 @@ impl Project {
         }
 
         report.summary.push(format!(
-            "{} functions here, {} in the other build: {} identical by name and hash, {} changed, {} paired by \
-             hash, {} paired by name only, {} added, {} removed.",
+            "{} functions here, {} in the other build: {} identical (same masked hash under one name, or the same \
+             bytes at the same address), {} changed, {} paired by hash, {} paired by name only, {} added, {} \
+             removed.",
             base.len(),
             new.len(),
             identical.total,
@@ -369,13 +390,35 @@ impl Project {
         );
         report.limitation(
             "Pairing uses unique names first, then hashes that occur once per build, then a recurring hash at an \
-             unchanged address; other functions with duplicate names or shared hashes (such as small stubs) stay \
-             unpaired and show as added or removed.",
+             unchanged address, then identical bytes at an unchanged address; other functions with duplicate names \
+             or shared hashes (such as small stubs) stay unpaired and show as added or removed.",
+        );
+        report.limitation(
+            "Functions matched by name only were too small or undecodable to hash: their bodies were not compared, \
+             so they may differ.",
         );
         report.limitation(
             "Only discovered functions are compared; code that analysis did not reach, and data changes other than \
              readable strings, are not covered.",
         );
         Ok(report)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn function(name: &str) -> Function {
+        Function { address: 0x1000, name: name.to_owned(), hash: None, size: 4 }
+    }
+
+    #[test]
+    fn unpaired_functions_say_why() {
+        assert_eq!(unpaired(&function("gone"), 1, 0).1, "`gone` has no counterpart by name or hash");
+        let (confidence, observation) = unpaired(&function("dup"), 1, 2);
+        assert_eq!(confidence, Confidence::Low);
+        assert!(observation.contains("occurs once here and 2 times in the other build"), "{observation}");
+        assert!(unpaired(&function("sub_1000"), 1, 1).1.starts_with("unnamed"));
     }
 }

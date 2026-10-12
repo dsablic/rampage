@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use rampage_detect::{Confidence as DetectConfidence, Kind};
 use serde_json::json;
 
-use super::{Confidence, Finding, ReportLimits, Section, WorkflowReport, classify, is_default_name, quote};
+use super::{
+    Confidence, Finding, ReportLimits, Section, WorkflowReport, capability_section, classify, is_default_name, quote,
+};
 use crate::{ApiError, DotNetQuery, FunctionsQuery, Project};
 
 /// Import names listed per library before the rest are counted.
@@ -50,7 +52,7 @@ impl Project {
                 DetectConfidence::Strong => Confidence::High,
                 DetectConfidence::Tentative => Confidence::Low,
             };
-            let kind = format!("{:?}", detection.kind).to_lowercase();
+            let kind = crate::label(&detection.kind);
             toolchain.push(
                 Finding::new("detect_tools", confidence, format!("{kind} signature matched: {}", detection.name))
                     .evidence(detection.evidence.iter().cloned()),
@@ -59,12 +61,10 @@ impl Project {
         // A page of zero types still carries the identity and counts.
         let managed = self.dotnet_metadata(&DotNetQuery { limit: Some(0), ..DotNetQuery::default() }).ok().flatten();
         if let Some(summary) = &managed {
-            let identity = summary
-                .assembly
-                .as_ref()
-                .map_or_else(|| "an unnamed module".to_owned(), |assembly| {
-                    format!("{} {}", assembly.name, assembly.version)
-                });
+            let identity = summary.assembly.as_ref().map_or_else(
+                || "an unnamed module".to_owned(),
+                |assembly| format!("{} {}", assembly.name, assembly.version),
+            );
             let counts = &summary.counts;
             toolchain.push(
                 Finding::new(
@@ -76,28 +76,18 @@ impl Project {
                     "{} types, {} methods ({} IL, {} native)",
                     counts.types, counts.methods, counts.il_methods, counts.native_methods
                 )])
-                .evidence(summary.assembly_refs.iter().map(|reference| {
-                    format!("references {} {}", reference.name, reference.version)
-                })),
+                .evidence(
+                    summary
+                        .assembly_refs
+                        .iter()
+                        .map(|reference| format!("references {} {}", reference.name, reference.version)),
+                ),
             );
         }
         report.sections.push(toolchain);
 
         let capabilities = self.capabilities();
-        let mut tags = Section::new("Capabilities", limits);
-        for capability in &capabilities {
-            tags.push(
-                Finding::new(
-                    "capabilities",
-                    Confidence::Low,
-                    format!(
-                        "building blocks of '{}' ({}) are present; this does not show the behavior executes",
-                        capability.name, capability.category
-                    ),
-                )
-                .evidence(capability.evidence.iter().cloned()),
-            );
-        }
+        let tags = capability_section("Capabilities", limits, &capabilities);
         report.sections.push(tags);
 
         let mut by_library: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -159,7 +149,7 @@ impl Project {
                 functions.push(
                     Finding::new(
                         "list_functions",
-                        Confidence::Observed,
+                        Confidence::High,
                         format!(
                             "{} functions discovered: {named} named by symbols, exports or the user, {} with default \
                              sub_ names",
@@ -170,15 +160,17 @@ impl Project {
                     .evidence(["recursive descent from the entry point, symbols, exports and unwind metadata"]),
                 );
                 let identified = self.apply_signatures_default(None, false)?;
-                let mut by_name: BTreeMap<&str, Vec<u64>> = BTreeMap::new();
+                // Name to (address, whether that function is still unnamed) per match.
+                let mut by_name: BTreeMap<&str, Vec<(u64, bool)>> = BTreeMap::new();
                 for candidate in &identified.matches {
-                    by_name.entry(&candidate.name).or_default().push(candidate.address);
+                    by_name.entry(&candidate.name).or_default().push((candidate.address, candidate.unnamed));
                 }
-                for (name, addresses) in by_name {
-                    let shared = addresses.len() > 1;
-                    if !shared && identified.matches.iter().any(|m| m.address == addresses[0] && m.unnamed) {
+                for (name, matches) in by_name {
+                    let shared = matches.len() > 1;
+                    if !shared && matches[0].1 {
                         unnamed_matches += 1;
                     }
+                    let addresses: Vec<u64> = matches.iter().map(|&(address, _)| address).collect();
                     let (confidence, observation) = if shared {
                         (
                             Confidence::Low,
@@ -205,10 +197,13 @@ impl Project {
         report.sections.push(functions);
 
         let detected = |kind: Kind| detections.iter().any(|detection| detection.kind == kind);
+        // Triage hints are prose, so this matches their wording and breaks if it changes; a structured hint kind
+        // from rampage-analysis would make it exact.
         let packed_hint = triage.hints.iter().any(|hint| hint.contains("packed") || hint.contains("typical of"));
+        let packing_signal = packed_hint || detected(Kind::Packer) || detected(Kind::Protector);
         let networking = capabilities.iter().any(|capability| capability.category == "networking");
 
-        let packing = if packed_hint || detected(Kind::Packer) || detected(Kind::Protector) {
+        let packing = if packing_signal {
             "Packing or protection signals were seen"
         } else {
             "No packing or protection signal matched"
@@ -251,7 +246,7 @@ impl Project {
                 "Networking capability tags or network-like strings were seen; map them to the functions using them.",
             );
         }
-        if packed_hint || detected(Kind::Packer) || detected(Kind::Protector) {
+        if packing_signal {
             report.step(
                 "analysis_diagnostics",
                 json!({ "include_discovery": true }),

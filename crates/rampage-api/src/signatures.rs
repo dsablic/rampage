@@ -4,6 +4,7 @@
 use rampage_signatures::{MaskContext, SignatureDb};
 use serde::Serialize;
 
+use crate::workflows::is_default_name;
 use crate::{ApiError, Project};
 
 #[derive(Debug, Serialize)]
@@ -60,7 +61,7 @@ impl Project {
             matches.push(SignatureMatch {
                 address: function.address,
                 name: name.to_owned(),
-                unnamed: current.starts_with("sub_"),
+                unnamed: is_default_name(&current),
             });
         }
 
@@ -88,7 +89,21 @@ impl Project {
         user: Option<&SignatureDb>,
         apply: bool,
     ) -> Result<SignatureApplication, ApiError> {
-        let bundled = self.bundled_signatures();
+        self.identify_functions(user, true, apply)
+    }
+
+    /// Identifies functions against an optional `user` database first, then, with `bundled`, the bundled starter
+    /// database. Leaving out the bundled database needs a `user` one, so that the request is never silently empty.
+    pub fn identify_functions(
+        &self,
+        user: Option<&SignatureDb>,
+        bundled: bool,
+        apply: bool,
+    ) -> Result<SignatureApplication, ApiError> {
+        if !bundled && user.is_none() {
+            return Err(ApiError::Invalid("leaving out the bundled signatures needs a signature database".to_owned()));
+        }
+        let bundled = if bundled { self.bundled_signatures() } else { None };
         let databases: Vec<&SignatureDb> = user.into_iter().chain(bundled.as_ref()).collect();
         self.apply_layered_signatures(&databases, apply)
     }

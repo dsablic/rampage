@@ -32,12 +32,8 @@ impl Project {
 
     /// Scan this binary with YARA rules read from a path: a single `.yar`/`.yara` file, or a directory of them.
     pub fn yara_scan_path(&self, path: &Path) -> Result<Vec<YaraMatch>, ApiError> {
-        let rules = if path.is_dir() {
-            rampage_yara::compile_dir(path)
-        } else {
-            rampage_yara::compile_files(&[path])
-        }
-        .map_err(|error| ApiError::Invalid(format!("YARA rules: {error}")))?;
+        let rules = if path.is_dir() { rampage_yara::compile_dir(path) } else { rampage_yara::compile_files(&[path]) }
+            .map_err(|error| ApiError::Invalid(format!("YARA rules: {error}")))?;
         rampage_yara::scan_binary(&rules, &self.binary)
             .map_err(|error| ApiError::Invalid(format!("YARA scan: {error}")))
     }

@@ -66,6 +66,15 @@ impl<T> Page<T> {
     }
 }
 
+/// How a unit enum variant (a kind, a confidence) reads in JSON, so text output uses the same words.
+pub fn label(value: &impl Serialize) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(text)) => text,
+        Ok(other) => other.to_string(),
+        Err(_) => "?".to_owned(),
+    }
+}
+
 /// A case-insensitive substring filter; without a needle it matches everything.
 pub(crate) struct Matcher(Option<String>);
 
@@ -80,6 +89,16 @@ impl Matcher {
 
     pub(crate) fn matches(&self, text: &str) -> bool {
         self.0.as_deref().is_none_or(|needle| text.to_lowercase().contains(needle))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn labels_match_the_json() {
+        assert_eq!(super::label(&rampage_loaders::dotnet::BodyKind::Il), "il");
+        assert_eq!(super::label(&rampage_detect::Kind::Packer), "packer");
+        assert_eq!(super::label(&3), "3");
     }
 }
 

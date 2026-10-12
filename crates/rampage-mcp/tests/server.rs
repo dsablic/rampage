@@ -286,6 +286,56 @@ async fn runtime_comparison_ignores_sidecars_and_requires_explicit_matching_orig
 }
 
 #[tokio::test]
+async fn large_workflow_reports_stay_valid_json_with_their_limitations() {
+    let client = connect().await;
+    let arguments = json!({
+        "path": fixture("hello-x64.elf"),
+        "other": fixture("hello-go-x64.elf"),
+        "max_per_section": 200,
+    });
+    let result = call(&client, "diff_builds", arguments).await;
+    assert!(text(&result).len() <= 60_000, "{}", text(&result).len());
+    let report = json_of(&result);
+    let limitations = report["limitations"].as_array().unwrap();
+    assert!(limitations.iter().any(|text| text.as_str().unwrap().contains("Hash matching is signature-level")));
+    assert!(limitations.iter().any(|text| text.as_str().unwrap().contains("cut to fit")));
+    assert!(report["sections"].as_array().unwrap().iter().any(|section| section["truncated"] == true));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_supplied_databases_must_be_bounded_regular_files() {
+    let client = connect().await;
+    let path = fixture("hello-x64.elf");
+    for (tool, argument) in [("identify_functions", "database"), ("detect_tools", "peid")] {
+        let result = call(&client, tool, json!({ "path": path, argument: "/dev/zero" })).await;
+        assert_eq!(result.is_error, Some(true), "{tool}");
+        assert!(text(&result).ends_with("/dev/zero: not a regular file"), "{tool}: {}", text(&result));
+    }
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn identify_functions_can_leave_out_the_bundled_database() {
+    let client = connect().await;
+    let path = fixture("hello-x64.elf");
+    let bundled = json_of(&call(&client, "identify_functions", json!({ "path": path })).await);
+    assert!(bundled["matched"].as_u64().unwrap() > 0, "{bundled}");
+    let error = call(&client, "identify_functions", json!({ "path": path, "no_bundled": true })).await;
+    assert_eq!(error.is_error, Some(true));
+    assert!(text(&error).contains("needs a signature database"), "{}", text(&error));
+
+    let database = std::env::temp_dir().join(format!("rampage-mcp-empty-db-{}.json", std::process::id()));
+    std::fs::write(&database, rampage_api::SignatureDb::default().to_json()).unwrap();
+    let alone = json_of(
+        &call(&client, "identify_functions", json!({ "path": path, "database": database, "no_bundled": true })).await,
+    );
+    std::fs::remove_file(&database).unwrap();
+    assert_eq!(alone["matched"], 0, "{alone}");
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn triage_and_imports_describe_a_binary() {
     let client = connect().await;
     let path = fixture("hello-x64-dyn.elf");

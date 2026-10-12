@@ -5,10 +5,12 @@ use std::sync::Arc;
 use anyhow::Result;
 use rampage_analysis::functions;
 use rampage_analysis::strings::Encoding;
-use rampage_api::annotations::Field;
-use rampage_api::{EditResult, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery};
+use rampage_api::{
+    Capability, EditResult, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery, label,
+};
 use rampage_arch::Arch;
 use rampage_loaders::Details;
+use rampage_loaders::dotnet::EntryPoint;
 use serde::Serialize;
 
 pub struct Options {
@@ -148,17 +150,12 @@ pub fn pseudocode(out: &mut impl Write, path: &Path, at: &str, structured: bool,
     Ok(())
 }
 
+/// The largest comparison reference (JSON) `compare` reads.
+const MAX_REFERENCE_BYTES: u64 = 32 * 1024 * 1024;
+
 pub fn compare(out: &mut impl Write, path: &Path, reference: &Path, options: &Options) -> Result<()> {
-    if !std::fs::symlink_metadata(reference)?.is_file() {
-        anyhow::bail!("reference must be a regular JSON file");
-    }
-    let file = std::fs::File::open(reference)?;
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut std::io::Read::take(file, 32 * 1024 * 1024 + 1), &mut bytes)?;
-    if bytes.len() > 32 * 1024 * 1024 {
-        anyhow::bail!("comparison reference exceeds 32 MiB");
-    }
-    let reference: rampage_api::ReferenceAnalysis = serde_json::from_slice(&bytes)?;
+    let text = rampage_api::read_bounded(reference, MAX_REFERENCE_BYTES, "comparison reference")?;
+    let reference: rampage_api::ReferenceAnalysis = serde_json::from_str(&text)?;
     let result = open(path, options)?.compare_functions(&reference)?;
     if options.json {
         return write_json(out, &result);
@@ -299,7 +296,7 @@ pub fn compare_pointers(
     options: &Options,
 ) -> Result<()> {
     let before = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
-    let after = Project::new(rampage_loaders::Binary::open_with(other, Some(before.binary.arch))?);
+    let after = before.open_peer(other)?;
     let result = before.compare_pointer_observations(
         rampage_loaders::snapshot::address(at)?,
         &after,
@@ -614,13 +611,7 @@ fn write_edit(out: &mut impl Write, result: &EditResult, options: &Options) -> R
     if options.json {
         return write_json(out, result);
     }
-    let field = match result.field {
-        Field::Name => "name",
-        Field::Comment => "comment",
-        Field::Signature => "signature",
-        Field::Types => "types",
-        Field::Global => "global",
-    };
+    let field = label(&result.field);
     let state = if result.changed { "" } else { " (unchanged)" };
     match &result.value {
         Some(value) => writeln!(out, "{:#018x} {field} {value}{state}", result.address)?,
@@ -680,16 +671,8 @@ pub fn signatures(out: &mut impl Write, path: &Path, output: Option<&Path>, opti
 }
 
 fn load_signature_database(db: &Path) -> Result<rampage_api::SignatureDb> {
-    if !std::fs::symlink_metadata(db)?.is_file() {
-        anyhow::bail!("signature database must be a regular JSON file");
-    }
-    let file = std::fs::File::open(db)?;
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut std::io::Read::take(file, 256 * 1024 * 1024 + 1), &mut bytes)?;
-    if bytes.len() > 256 * 1024 * 1024 {
-        anyhow::bail!("signature database exceeds 256 MiB");
-    }
-    Ok(rampage_api::SignatureDb::from_json(std::str::from_utf8(&bytes)?)?)
+    let text = rampage_api::read_bounded(db, rampage_api::MAX_SIGNATURE_DB_BYTES, "signature database")?;
+    Ok(rampage_api::SignatureDb::from_json(&text)?)
 }
 
 pub fn identify(
@@ -700,19 +683,11 @@ pub fn identify(
     apply: bool,
     options: &Options,
 ) -> Result<()> {
-    if no_bundled && db.is_none() {
-        anyhow::bail!("--no-bundled needs a --db to apply");
-    }
     let user = match db {
         Some(db) => Some(load_signature_database(db)?),
         None => None,
     };
-    let project = open(path, options)?;
-    let result = if no_bundled {
-        project.apply_signatures(user.as_ref().expect("checked above"), apply)?
-    } else {
-        project.apply_signatures_default(user.as_ref(), apply)?
-    };
+    let result = open(path, options)?.identify_functions(user.as_ref(), !no_bundled, apply)?;
     if options.json {
         return write_json(out, &result);
     }
@@ -726,11 +701,21 @@ pub fn identify(
 
 pub fn capabilities(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
     let capabilities = open(path, options)?.capabilities();
+    render_capabilities(out, &capabilities, "no capabilities detected", options)
+}
+
+/// Capabilities as JSON, or one `[category] name (evidence)` line each, or `empty` when there are none.
+fn render_capabilities(
+    out: &mut impl Write,
+    capabilities: &[Capability],
+    empty: &str,
+    options: &Options,
+) -> Result<()> {
     if options.json {
         return write_json(out, &capabilities);
     }
     if capabilities.is_empty() {
-        writeln!(out, "no capabilities detected")?;
+        writeln!(out, "{empty}")?;
     }
     for capability in capabilities {
         writeln!(out, "[{}] {} ({})", capability.category, capability.name, capability.evidence.join(", "))?;
@@ -738,15 +723,8 @@ pub fn capabilities(out: &mut impl Write, path: &Path, options: &Options) -> Res
     Ok(())
 }
 
-pub fn dotnet(
-    out: &mut impl Write,
-    path: &Path,
-    contains: Option<String>,
-    limit: usize,
-    options: &Options,
-) -> Result<()> {
-    let query = rampage_api::DotNetQuery { contains, offset: None, limit: Some(limit) };
-    let Some(summary) = open(path, options)?.dotnet_metadata(&query)? else {
+pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuery, options: &Options) -> Result<()> {
+    let Some(summary) = open(path, options)?.dotnet_metadata(query)? else {
         if options.json {
             return write_json(out, &serde_json::Value::Null);
         }
@@ -758,6 +736,18 @@ pub fn dotnet(
     }
     if let Some(assembly) = &summary.assembly {
         writeln!(out, "assembly   {} {}", assembly.name, assembly.version)?;
+    }
+    if let Some(module) = &summary.module {
+        let mvid = module.mvid.as_deref().map(|mvid| format!(" (mvid {mvid})")).unwrap_or_default();
+        writeln!(out, "module     {}{mvid}", module.name)?;
+    }
+    match &summary.entry_point {
+        Some(EntryPoint::Method { token, method }) => {
+            writeln!(out, "entry      {} (token {token:#x})", method.as_deref().unwrap_or("unresolved method"))?
+        }
+        Some(EntryPoint::File { token }) => writeln!(out, "entry      in another module (file token {token:#x})")?,
+        Some(EntryPoint::Native { rva }) => writeln!(out, "entry      native code at RVA {rva:#x}")?,
+        None => writeln!(out, "entry      none")?,
     }
     let cli = &summary.cli;
     writeln!(out, "runtime    {} (CLI {}.{})", summary.runtime_version, cli.runtime_major, cli.runtime_minor)?;
@@ -776,14 +766,15 @@ pub fn dotnet(
         for method in &ty.methods {
             let body = match &method.il {
                 Some(il) => format!("{} bytes of IL at {:#x}", il.code_size, method.rva),
-                None => format!("{:?}", method.body).to_lowercase(),
+                None => label(&method.body),
             };
             writeln!(out, "  {}({})  {body}", method.name, method.params.join(", "))?;
         }
     }
     let shown = summary.types.offset + summary.types.items.len();
     if shown < summary.types.total {
-        writeln!(out, "\n... {} more types (use --contains or --json)", summary.types.total - shown)?;
+        let more = summary.types.total - shown;
+        writeln!(out, "\n... {more} more types (page with --offset {shown}, or filter with --contains)")?;
     }
     for warning in &summary.warnings {
         writeln!(out, "warning: {warning}")?;
@@ -793,7 +784,7 @@ pub fn dotnet(
 
 pub fn detect(out: &mut impl Write, path: &Path, peid: Option<&Path>, options: &Options) -> Result<()> {
     let peid_text = match peid {
-        Some(peid) => Some(std::fs::read_to_string(peid)?),
+        Some(peid) => Some(rampage_api::read_bounded(peid, rampage_api::MAX_PEID_BYTES, "PeID database")?),
         None => None,
     };
     let detections = open(path, options)?.detect_tools(peid_text.as_deref())?;
@@ -804,8 +795,7 @@ pub fn detect(out: &mut impl Write, path: &Path, peid: Option<&Path>, options: &
         writeln!(out, "no tool signatures matched")?;
     }
     for detection in detections {
-        let kind = format!("{:?}", detection.kind).to_lowercase();
-        let confidence = format!("{:?}", detection.confidence).to_lowercase();
+        let (kind, confidence) = (label(&detection.kind), label(&detection.confidence));
         writeln!(out, "[{kind}] {} ({confidence}): {}", detection.name, detection.evidence.join(", "))?;
     }
     Ok(())
@@ -828,14 +818,5 @@ pub fn yara(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) 
 
 pub fn capa(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) -> Result<()> {
     let capabilities = open(path, options)?.detect_capa(rules)?;
-    if options.json {
-        return write_json(out, &capabilities);
-    }
-    if capabilities.is_empty() {
-        writeln!(out, "no capa rules matched")?;
-    }
-    for capability in capabilities {
-        writeln!(out, "[{}] {} ({})", capability.category, capability.name, capability.evidence.join(", "))?;
-    }
-    Ok(())
+    render_capabilities(out, &capabilities, "no capa rules matched", options)
 }

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rampage_api::{FindingConfidence, Project, ReportLimits, Section, Session, WorkflowReport};
+use rampage_loaders::LoadError;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -117,6 +118,10 @@ fn find_main_trusts_the_main_symbol_and_corroborates_it_from_the_startup_code() 
     assert!(best.evidence.iter().any(|line| line.contains("corroborated by disassemble")), "{best:#?}");
     assert!(has_observation(section(&report, "Candidate calls"), "`puts`"));
     assert!(has_observation(section(&report, "Candidate strings"), "rampage fixture greeting"));
+    // References are recovered by analysis, an inference rather than a structural observation.
+    for title in ["Candidate calls", "Candidate strings"] {
+        assert!(section(&report, title).findings.iter().all(|finding| finding.confidence == FindingConfidence::High));
+    }
     let preview = section(&report, "Decompilation preview").excerpt.as_ref().expect("a decompilation preview");
     assert!(preview.text.contains("puts("), "{}", preview.text);
     assert!(report.next_steps.iter().any(|step| step.tool == "decompile"));
@@ -303,7 +308,22 @@ fn diff_builds_of_one_file_finds_no_changes() {
 fn diff_builds_refuses_another_architecture() {
     let error =
         open(fixture("hello-x64.elf")).diff_builds(&fixture("hello-arm64.elf"), ReportLimits::default()).unwrap_err();
-    assert!(error.to_string().contains("one architecture"), "{error}");
+    assert!(error.to_string().contains("needs both binaries in x86_64"), "{error}");
+}
+
+#[test]
+fn diff_builds_reports_load_failures_as_such() {
+    let directory = std::env::temp_dir().join(format!("rampage-diff-load-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let snapshot = directory.join("unknown-arch.json");
+    let text = r#"{"format": "rampage-snapshot-v1", "arch": "vax", "entry": null, "provenance": "test",
+        "regions": [{"name": "r", "address": "0x1000", "permissions": "r--", "bytes": "00"}]}"#;
+    std::fs::write(&snapshot, text).unwrap();
+    let error = open(fixture("hello-x64.elf")).diff_builds(&snapshot, ReportLimits::default()).unwrap_err();
+    std::fs::remove_dir_all(&directory).unwrap();
+    // Unsupported, but not an architecture mismatch: the file does not load in any architecture.
+    let unsupported = matches!(&error, rampage_api::ApiError::Load { source: LoadError::Unsupported(_), .. });
+    assert!(unsupported, "{error:?}");
 }
 
 #[test]

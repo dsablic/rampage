@@ -1,13 +1,14 @@
 //! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
-use crate::{ApiError, FunctionsQuery, ListQuery, Project, ReportLimits, StringsQuery, XrefQuery};
+use crate::{ApiError, FunctionsQuery, ListQuery, Project, ReportLimits, StringsQuery, WorkflowReport, XrefQuery};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-/// Results longer than this are cut, so that one large answer cannot crowd out the conversation.
+/// Results longer than this are cut, so that one large answer cannot crowd out the conversation. Workflow reports
+/// shrink themselves below it instead, so they stay valid JSON and keep their limitations.
 const MAX_RESULT_CHARS: usize = 60_000;
 const DEFAULT_PAGE: usize = 100;
 
@@ -119,6 +120,9 @@ struct IdentifyArgs {
     /// database. Omit it to match against the bundled database alone.
     #[serde(default)]
     database: Option<String>,
+    /// Match against `database` alone, without the bundled starter database (requires `database`).
+    #[serde(default)]
+    no_bundled: bool,
     /// Persist matched names for still-unnamed functions as user names (never overwriting existing names).
     #[serde(default)]
     apply: bool,
@@ -158,13 +162,15 @@ struct CapaArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct ReportArgs {
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut.
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
+    /// reports are cut further to fit one tool result.
     max_per_section: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct FindMainArgs {
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut.
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
+    /// reports are cut further to fit one tool result.
     max_per_section: Option<usize>,
     /// Include a bounded decompilation preview of the best candidate (default true).
     decompile: Option<bool>,
@@ -174,7 +180,8 @@ struct FindMainArgs {
 struct DiffBuildsArgs {
     /// File path of the other build to compare with (same architecture); "added" means only in that build.
     other: String,
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut.
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
+    /// reports are cut further to fit one tool result.
     max_per_section: Option<usize>,
 }
 
@@ -316,6 +323,14 @@ fn edit_value(value: Option<String>, clear: bool, what: &str) -> Result<Option<S
     }
 }
 
+/// A workflow report shrunk to fit a tool result.
+fn fitted(report: Result<WorkflowReport, ApiError>) -> Result<WorkflowReport, ApiError> {
+    report.map(|mut report| {
+        report.fit(MAX_RESULT_CHARS);
+        report
+    })
+}
+
 fn page_limit(limit: Option<usize>) -> Option<usize> {
     Some(limit.unwrap_or(DEFAULT_PAGE).min(1000))
 }
@@ -379,13 +394,16 @@ pub fn tools() -> Vec<Tool> {
             "identify_functions",
             "Name functions by matching signature databases (FLIRT/Function-ID style), so statically linked \
              library code in a stripped binary gets recognized. Applies the bundled starter database for the \
-             architecture; an optional database path is overlaid on top. apply=true saves names for unnamed \
-             functions.",
+             architecture; an optional database path is overlaid on top (or used alone with no_bundled=true). \
+             apply=true saves names for unnamed functions.",
             |project, arguments: IdentifyArgs| {
                 let user = match &arguments.database {
                     Some(path) => {
-                        let text = std::fs::read_to_string(path)
-                            .map_err(|error| ApiError::Invalid(format!("cannot read {path}: {error}")))?;
+                        let text = crate::read_bounded(
+                            std::path::Path::new(path),
+                            crate::MAX_SIGNATURE_DB_BYTES,
+                            "signature database",
+                        )?;
                         Some(
                             rampage_signatures::SignatureDb::from_json(&text)
                                 .map_err(|error| ApiError::Invalid(error.to_string()))?,
@@ -393,7 +411,7 @@ pub fn tools() -> Vec<Tool> {
                     }
                     None => None,
                 };
-                project.apply_signatures_default(user.as_ref(), arguments.apply)
+                project.identify_functions(user.as_ref(), !arguments.no_bundled, arguments.apply)
             },
         )
         .annotates(),
@@ -403,7 +421,7 @@ pub fn tools() -> Vec<Tool> {
              signatures, capability tags, imports by library, notable strings (URLs, IPs, paths, registry keys), \
              function count and bundled-signature matches, with suggested next tool calls. Every finding names its \
              source primitive and confidence; evidence, not verdicts.",
-            |project, args: ReportArgs| project.triage_report(ReportLimits::new(args.max_per_section)),
+            |project, args: ReportArgs| fitted(project.triage_report(ReportLimits::new(args.max_per_section))),
         ),
         tool(
             "find_main",
@@ -412,7 +430,7 @@ pub fn tools() -> Vec<Tool> {
              call before exit, the Mach-O LC_MAIN entry) with confidence and the instructions they rest on. \
              Profiles the best candidate's calls and strings with a bounded decompilation preview.",
             |project, args: FindMainArgs| {
-                project.find_main(ReportLimits::new(args.max_per_section), args.decompile.unwrap_or(true))
+                fitted(project.find_main(ReportLimits::new(args.max_per_section), args.decompile.unwrap_or(true)))
             },
         ),
         tool(
@@ -420,7 +438,7 @@ pub fn tools() -> Vec<Tool> {
             "Map the networking surface as evidence: socket/DNS/HTTP/TLS imports and symbols, URL/IP/domain-like \
              strings, the functions that reference them (via xrefs), and networking capability tags. An empty \
              report says nothing was observed, not that the binary cannot communicate.",
-            |project, args: ReportArgs| project.network_surface(ReportLimits::new(args.max_per_section)),
+            |project, args: ReportArgs| fitted(project.network_surface(ReportLimits::new(args.max_per_section))),
         ),
         tool(
             "find_crypto",
@@ -428,15 +446,17 @@ pub fn tools() -> Vec<Tool> {
              round constants, ChaCha, curve parameters; checksum/compression/encoding tables listed separately), \
              crypto library APIs, the functions that reference them (via xrefs), and crypto capability tags. A \
              constant shows a table is present, not that the algorithm runs.",
-            |project, args: ReportArgs| project.find_crypto(ReportLimits::new(args.max_per_section)),
+            |project, args: ReportArgs| fitted(project.find_crypto(ReportLimits::new(args.max_per_section))),
         ),
         tool(
             "diff_builds",
-            "Compare this binary with another build of the same architecture: functions paired by unique name and \
-             by masked signature hash into identical, changed, hash-matched, added and removed, plus import and \
-             string differences. Hash equality is signature-level, not semantic equivalence.",
+            "Compare this binary with another build of the same architecture: functions paired by unique name, by \
+             masked signature hash and by identical bytes at an unchanged address into identical, changed, \
+             hash-matched, name-only (too small to hash), added and removed, plus import and string differences. \
+             Hash equality is signature-level, not semantic equivalence.",
             |project, args: DiffBuildsArgs| {
-                project.diff_builds(std::path::Path::new(&args.other), ReportLimits::new(args.max_per_section))
+                let limits = ReportLimits::new(args.max_per_section);
+                fitted(project.diff_builds(std::path::Path::new(&args.other), limits))
             },
         ),
         tool(
@@ -471,10 +491,9 @@ pub fn tools() -> Vec<Tool> {
              Optionally overlay a user-supplied PeID userdb.txt. Confidence is a signal, not proof.",
             |project, args: DetectToolsArgs| {
                 let peid = match &args.peid {
-                    Some(path) => Some(
-                        std::fs::read_to_string(path)
-                            .map_err(|error| ApiError::Invalid(format!("cannot read {path}: {error}")))?,
-                    ),
+                    Some(path) => {
+                        Some(crate::read_bounded(std::path::Path::new(path), crate::MAX_PEID_BYTES, "PeID database")?)
+                    }
                     None => None,
                 };
                 project.detect_tools(peid.as_deref())
@@ -508,9 +527,8 @@ pub fn tools() -> Vec<Tool> {
                 };
                 let before_slot = address(&args.at)?;
                 let after_slot = address(&args.other_at)?;
-                let after = rampage_loaders::Binary::open_with(&args.other, Some(project.binary.arch))
-                    .map_err(|source| ApiError::Load { path: args.other, source })?;
-                project.compare_pointer_observations(before_slot, &Project::new(after), after_slot)
+                let after = project.open_peer(&args.other)?;
+                project.compare_pointer_observations(before_slot, &after, after_slot)
             },
         )
         .without_annotations(),

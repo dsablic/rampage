@@ -4,12 +4,13 @@ pub mod annotations;
 mod benchmark;
 mod branch_observation;
 mod capabilities;
-mod detect;
-mod dotnet;
 mod correlation;
 mod debug_import;
 mod decompile;
+mod detect;
 mod diagnostics;
+mod dotnet;
+mod files;
 mod graph;
 mod jumptable;
 mod listing;
@@ -35,6 +36,8 @@ pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use correlation::RuntimeCorrelation;
 pub use debug_import::DebugImport;
 pub use decompile::Decompilation;
+pub use dotnet::{DotNetCounts, DotNetQuery, DotNetSummary};
+pub use files::{MAX_PEID_BYTES, MAX_SIGNATURE_DB_BYTES, read_bounded};
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
 pub use jumptable::{JumpTable, JumpTableEntry};
 pub use listing::{DisassemblyLine, FunctionListing};
@@ -42,17 +45,16 @@ pub use pointer_compare::{PointerChange, PointerComparison};
 pub use pointer_observation::{PointerAssessment, PointerObservation};
 pub use project::Project;
 pub use rampage_analysis::triage::Triage;
-pub use dotnet::{DotNetCounts, DotNetQuery, DotNetSummary};
 pub use rampage_capabilities::Capability;
-pub use rampage_detect::{Confidence, Detection, Kind as DetectionKind};
-pub use rampage_yara::{MatchedString, YaraMatch};
 pub use rampage_decompiler::results::RecoveryStatus;
 pub use rampage_decompiler::worker::WorkerConfig as DecompilerWorkerConfig;
 pub use rampage_decompiler::{DecompilerOptions, Platform as DecompilerPlatform};
+pub use rampage_detect::{Confidence as DetectionConfidence, Detection, Kind as DetectionKind};
 pub use rampage_signatures::SignatureDb;
+pub use rampage_yara::{MatchedString, YaraMatch};
 pub use rows::{
     Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page, StringsQuery,
-    Summary,
+    Summary, label,
 };
 pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, RuntimeRange};
 pub use session::Session;

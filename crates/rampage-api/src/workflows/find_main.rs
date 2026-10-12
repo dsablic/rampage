@@ -1,20 +1,28 @@
 //! `find_main`: locates the program's own entry logic past the runtime startup code, from symbols when present
 //! and otherwise from startup-code heuristics that are stated as heuristics, then profiles the best candidate.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeSet, HashMap};
 
 use rampage_arch::{Arch, Flow};
 use rampage_loaders::{Details, Format};
 use serde_json::json;
 
-use super::{Confidence, Excerpt, Finding, ReportLimits, Section, WorkflowReport, is_default_name, quote};
+use super::{
+    Confidence, Excerpt, Finding, ReportLimits, Section, WorkflowReport, api_matches, is_default_name, normalize_api,
+    quote,
+};
 use crate::{ApiError, DisassemblyLine, Project, XrefQuery};
 
-/// Symbol names that conventionally mark a program's entry logic, most specific first.
+/// Symbol names that conventionally mark a program's entry logic, most specific first: in a cgo binary `main` is
+/// the Go runtime's C entry stub and `main.main` the program's own logic.
 const ENTRY_SYMBOLS: [&str; 8] =
-    ["main", "_main", "wmain", "_wmain", "WinMain", "wWinMain", "_WinMain@16", "main.main"];
-/// Calls through which a C runtime ends the process with main's return value.
-const EXIT_NAMES: [&str; 3] = ["exit", "_exit", "_cexit"];
+    ["main.main", "main", "_main", "wmain", "_wmain", "WinMain", "wWinMain", "_WinMain@16"];
+/// Calls through which a C runtime ends the process with main's return value (patterns, see `api_matches`;
+/// `_exit` and `_cexit` normalize to these).
+const EXIT_NAMES: [&str; 2] = ["exit", "cexit"];
+/// The C runtime functions whose first argument is main (patterns, see `api_matches`).
+const LIBC_START_MAIN: [&str; 2] = ["libc_start_main", "uclibc_main"];
 /// Instructions decoded per startup stub, and stubs followed from the entry point.
 const STUB_INSTRUCTIONS: usize = 64;
 const STUB_DEPTH: usize = 3;
@@ -34,15 +42,8 @@ struct Candidate {
     evidence: Vec<String>,
 }
 
-/// An import or symbol name without the decorations loaders add (`__imp_`, `@plt`, leading underscores).
-fn base_name(name: &str) -> &str {
-    let name = name.strip_prefix("__imp_").unwrap_or(name);
-    let name = name.split('@').next().unwrap_or(name);
-    name.trim_start_matches('_')
-}
-
 fn is_libc_start_main(name: &str) -> bool {
-    matches!(base_name(name), "libc_start_main" | "uClibc_main")
+    LIBC_START_MAIN.iter().any(|pattern| api_matches(pattern, name))
 }
 
 /// The register an instruction writes, read from its text (`mov rdi, ...` writes `rdi`).
@@ -116,11 +117,10 @@ impl Project {
         match candidates.first() {
             Some(best) => {
                 let name = self.function_name(best.address);
-                let confidence = serde_json::to_value(best.confidence).unwrap_or_default();
                 report.summary.push(format!(
                     "Most likely entry logic: `{name}` at {:#x} ({} confidence, from {}).",
                     best.address,
-                    confidence.as_str().unwrap_or("?"),
+                    best.confidence.as_str(),
                     best.source
                 ));
                 if candidates.len() > 1 {
@@ -185,11 +185,12 @@ impl Project {
         candidates
     }
 
-    /// Names a startup stub's call target: by symbol, import or stub name, or else by bundled signature.
-    fn transfer_name(&self, target: u64, signatures: &HashMap<u64, String>) -> Option<(String, bool)> {
+    /// Names a startup stub's call target: by symbol, import or stub name, or else by bundled signature (matched
+    /// once, on first need, since that hashes every function).
+    fn transfer_name(&self, target: u64, signatures: &OnceCell<HashMap<u64, String>>) -> Option<(String, bool)> {
         self.name_at(target)
             .map(|name| (name, false))
-            .or_else(|| signatures.get(&target).map(|name| (name.clone(), true)))
+            .or_else(|| signatures.get_or_init(|| self.signature_names()).get(&target).map(|name| (name.clone(), true)))
     }
 
     fn signature_names(&self) -> HashMap<u64, String> {
@@ -203,7 +204,7 @@ impl Project {
     /// transfer that ends the stub.
     fn libc_start_candidate(&self, registers: &[&str]) -> Result<Option<Candidate>, ApiError> {
         let Some(mut at) = self.binary.entry else { return Ok(None) };
-        let signatures = self.signature_names();
+        let signatures = OnceCell::new();
         let mut loaded: Option<(u64, String)> = None;
         let mut trail = Vec::new();
         for _ in 0..STUB_DEPTH {
@@ -273,10 +274,10 @@ impl Project {
     /// call before such a call, in the functions the entry point reaches, is proposed.
     fn mingw_candidates(&self) -> Result<Vec<Candidate>, ApiError> {
         let Some(entry) = self.binary.entry else { return Ok(Vec::new()) };
-        let imports: BTreeSet<&str> = self.binary.imports.iter().map(|import| base_name(&import.name)).collect();
+        let imports: BTreeSet<String> = self.binary.imports.iter().map(|import| normalize_api(&import.name)).collect();
         let internal = |target: u64| {
             self.binary.is_code(target)
-                && self.name_at(target).is_none_or(|name| !imports.contains(base_name(&name)))
+                && self.name_at(target).is_none_or(|name| !imports.contains(&normalize_api(&name)))
                 && self.binary.import_slot(target).is_none()
         };
         let mut queue = vec![entry];
@@ -295,10 +296,9 @@ impl Project {
                     Flow::IndirectCall => line.data_ref,
                     _ => None,
                 };
-                let exit = target.and_then(|target| self.name_at(target)).filter(|name| {
-                    let base = name.strip_prefix("__imp_").unwrap_or(name);
-                    EXIT_NAMES.contains(&base)
-                });
+                let exit = target
+                    .and_then(|target| self.name_at(target))
+                    .filter(|name| EXIT_NAMES.iter().any(|pattern| api_matches(pattern, name)));
                 if let Some(exit) = exit {
                     let start = index.saturating_sub(EXIT_LOOKBACK);
                     let call = (start..index).rev().find_map(|at| match lines[at].flow {
@@ -371,7 +371,7 @@ impl Project {
         for reference in &references.items {
             if let Some(text) = strings.get(&reference.to) {
                 texts.push(
-                    Finding::new("xrefs", Confidence::Observed, format!("references string {}", quote(text)))
+                    Finding::new("xrefs", Confidence::High, format!("references string {}", quote(text)))
                         .at(reference.from)
                         .evidence([format!("{:#x} -> {:#x}", reference.from, reference.to)]),
                 );
@@ -386,7 +386,7 @@ impl Project {
                 || self.binary.imports.iter().any(|import| import.name == name);
             let kind = if import { "import" } else { "function" };
             calls.push(
-                Finding::new("xrefs", Confidence::Observed, format!("calls {kind} `{name}`"))
+                Finding::new("xrefs", Confidence::High, format!("calls {kind} `{name}`"))
                     .at(reference.from)
                     .evidence([format!("call at {:#x} -> {:#x}", reference.from, reference.to)]),
             );
@@ -420,7 +420,7 @@ impl Project {
             }
             Err(error) => section.push(Finding::new(
                 "decompile",
-                Confidence::Observed,
+                Confidence::High,
                 format!("decompilation failed (the rest of the report stands): {error}"),
             )),
         }
@@ -429,7 +429,7 @@ impl Project {
 }
 
 /// Folds candidates for one address into the most confident one, recording the others as corroboration, and
-/// orders the result by confidence.
+/// orders the result by confidence, keeping the proposal order (`ENTRY_SYMBOLS` order first) among equals.
 fn merge(candidates: Vec<Candidate>) -> Vec<Candidate> {
     let mut merged: Vec<Candidate> = Vec::new();
     for candidate in candidates {
@@ -447,6 +447,28 @@ fn merge(candidates: Vec<Candidate>) -> Vec<Candidate> {
             None => merged.push(candidate),
         }
     }
-    merged.sort_by(|a, b| b.confidence.cmp(&a.confidence).then(a.address.cmp(&b.address)));
+    merged.sort_by_key(|candidate| std::cmp::Reverse(candidate.confidence));
     merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(address: u64, confidence: Confidence, observation: &str) -> Candidate {
+        Candidate { address, confidence, source: "test", observation: observation.to_owned(), evidence: Vec::new() }
+    }
+
+    #[test]
+    fn merge_keeps_proposal_order_among_equal_confidence() {
+        let merged = merge(vec![
+            candidate(0x2000, Confidence::High, "main.main"),
+            candidate(0x1000, Confidence::High, "main"),
+            candidate(0x500, Confidence::Low, "heuristic"),
+            candidate(0x1000, Confidence::Medium, "startup"),
+        ]);
+        let order: Vec<u64> = merged.iter().map(|candidate| candidate.address).collect();
+        assert_eq!(order, [0x2000, 0x1000, 0x500]);
+        assert!(merged[1].evidence[0].contains("corroborated by test: startup"));
+    }
 }
