@@ -22,6 +22,10 @@ const MAX_FUNCTION_INSTRUCTIONS: usize = 4_000;
 const MAX_SCANNED_INSTRUCTIONS: usize = 2_000_000;
 /// Direct call sites read per candidate.
 const MAX_CALL_SITES: usize = 200;
+/// Candidates whose call sites are traced, XOR and rotate loops first.
+const MAX_TRACED_CANDIDATES: usize = 64;
+/// Instructions decoded over all call-site tracing before it stops.
+const MAX_TRACED_INSTRUCTIONS: usize = 500_000;
 /// Instructions before a call searched for data pointers passed as arguments.
 const ARGUMENT_WINDOW: usize = 8;
 /// Blobs kept per candidate.
@@ -215,6 +219,8 @@ struct Candidate {
     ops: ByteOps,
     /// `address: text` of the loop's byte-moving and transforming instructions.
     quoted: Vec<String>,
+    /// Whether its call sites were looked up at all.
+    traced: bool,
     call_sites: Vec<CallSite>,
     /// Whether some call sites were left unread.
     call_sites_cut: bool,
@@ -233,6 +239,16 @@ struct CallSite {
     at: u64,
     caller: Option<(u64, String)>,
     blobs: Vec<u64>,
+    /// Why the arguments were not read, when they were not.
+    unread: Option<&'static str>,
+}
+
+/// What call-site tracing left out, for the report's limitations.
+#[derive(Default)]
+struct Tracing {
+    decoded: usize,
+    untraced_candidates: usize,
+    unread_sites: usize,
 }
 
 #[derive(Clone)]
@@ -302,6 +318,7 @@ impl Project {
         let mut candidates = Vec::new();
         let mut scan_stopped = false;
         let mut skipped_large = 0;
+        let mut tracing = Tracing::default();
         let decoder = self.binary.decoder();
         if let Err(error) = &decoder {
             report.limitation(format!("Instructions cannot be decoded ({error}); no loops were looked for."));
@@ -326,9 +343,8 @@ impl Project {
                     candidates.push(candidate);
                 }
             }
-            for candidate in &mut candidates {
-                self.trace_call_sites(decoder.as_mut(), candidate, &analysis.program.xrefs);
-            }
+            candidates.sort_by_key(|candidate| (!(candidate.ops.xor || candidate.ops.rotate), candidate.address));
+            tracing = self.trace_call_sites(decoder.as_mut(), &mut candidates, &analysis.program.xrefs);
         }
         candidates.sort_by(|a, b| {
             b.confidence()
@@ -348,7 +364,9 @@ impl Project {
                 candidate.loop_start
             )];
             evidence.extend(candidate.quoted.iter().cloned());
-            let site_count = if candidate.call_sites_cut {
+            let site_count = if !candidate.traced {
+                "call sites not traced".to_owned()
+            } else if candidate.call_sites_cut {
                 format!("at least {} direct call sites (read up to {MAX_CALL_SITES})", candidate.call_sites.len())
             } else {
                 format!("{} direct call sites", candidate.call_sites.len())
@@ -378,7 +396,9 @@ impl Project {
                 );
                 let mut evidence = vec![format!("direct call at {:#x} from {caller}", site.at)];
                 evidence.extend(site.blobs.iter().map(|blob| format!("passes the data blob at {blob:#x}")));
-                if site.blobs.is_empty() {
+                if let Some(unread) = site.unread {
+                    evidence.push(unread.to_owned());
+                } else if site.blobs.is_empty() {
                     evidence.push(format!(
                         "no data pointer to a non-printable or high-entropy blob in the {ARGUMENT_WINDOW} \
                          instructions before the call"
@@ -467,6 +487,20 @@ impl Project {
                 "{skipped_large} functions over {MAX_FUNCTION_INSTRUCTIONS} instructions were not scanned for loops."
             ));
         }
+        if tracing.untraced_candidates > 0 {
+            report.limitation(format!(
+                "Call sites were traced for the first {MAX_TRACED_CANDIDATES} candidates only (XOR and rotate loops \
+                 first); {} candidates were not traced and stay at low confidence.",
+                tracing.untraced_candidates
+            ));
+        }
+        if tracing.unread_sites > 0 {
+            report.limitation(format!(
+                "Call-site tracing stopped after decoding {MAX_TRACED_INSTRUCTIONS} instructions; the arguments of {} \
+                 call sites were not read.",
+                tracing.unread_sites
+            ));
+        }
         report.limitation(format!(
             "Loops are found from backward branches within one function, at most {MAX_LOOP_INSTRUCTIONS} \
              instructions long, and read by mnemonic: vectorized, table-driven, multi-byte or unrolled-without-branch \
@@ -494,6 +528,10 @@ impl Project {
         function: &DiscoveredFunction,
         instructions: &[(Insn, &[u8])],
     ) -> Option<Candidate> {
+        // Each instruction is formatted at most once, however many loops it lies in, so formatting costs no more
+        // than the decoding already counted against MAX_SCANNED_INSTRUCTIONS. The text is kept for quoting only
+        // when the instruction does something to bytes.
+        let mut classified: Vec<Option<(ByteOps, Option<String>)>> = vec![None; instructions.len()];
         for (insn, _) in instructions {
             let (Flow::ConditionalJump(target) | Flow::Jump(target)) = insn.flow else { continue };
             if target > insn.address || !function.contains(target) {
@@ -506,13 +544,19 @@ impl Project {
             }
             let mut ops = ByteOps::default();
             let mut quoted = Vec::new();
-            for (other, bytes) in &instructions[first..last] {
-                let text = decoder.format(bytes, other.address);
-                let found = classify(self.binary.arch, &text);
-                if found != ByteOps::default() && quoted.len() < QUOTED_INSTRUCTIONS {
+            for index in first..last {
+                let (other, bytes) = &instructions[index];
+                let (found, text) = classified[index].get_or_insert_with(|| {
+                    let text = decoder.format(bytes, other.address);
+                    let found = classify(self.binary.arch, &text);
+                    (found, (found != ByteOps::default()).then_some(text))
+                });
+                if let Some(text) = text
+                    && quoted.len() < QUOTED_INSTRUCTIONS
+                {
                     quoted.push(format!("{:#x}: {text}", other.address));
                 }
-                ops.merge(found);
+                ops.merge(*found);
             }
             if ops.load && ops.store && ops.transforms() {
                 return Some(Candidate {
@@ -521,6 +565,7 @@ impl Project {
                     loop_start: target,
                     ops,
                     quoted,
+                    traced: false,
                     call_sites: Vec::new(),
                     call_sites_cut: false,
                     blobs: BTreeMap::new(),
@@ -530,45 +575,89 @@ impl Project {
         None
     }
 
-    /// Fills `candidate`'s direct call sites and the encoded-looking data blobs their arguments point at.
+    /// Fills the direct call sites of the first `MAX_TRACED_CANDIDATES` candidates and the encoded-looking data
+    /// blobs their arguments point at. Each caller block is decoded once, up to its last traced call, and at most
+    /// `MAX_TRACED_INSTRUCTIONS` instructions are decoded in all.
     fn trace_call_sites(
         &self,
         decoder: &mut dyn Disassembler,
-        candidate: &mut Candidate,
+        candidates: &mut [Candidate],
         xrefs: &[rampage_analysis::discover::Xref],
-    ) {
-        let Ok(page) = self.xrefs(XrefQuery::To(candidate.address), None, Some(MAX_CALL_SITES)) else { return };
-        candidate.call_sites_cut = page.total > page.items.len();
+    ) -> Tracing {
+        let mut tracing = Tracing::default();
+        // (candidate index, call address, caller, start of the caller's block holding the call)
+        let mut sites = Vec::new();
+        for (index, candidate) in candidates.iter_mut().enumerate() {
+            if index >= MAX_TRACED_CANDIDATES {
+                tracing.untraced_candidates += 1;
+                continue;
+            }
+            let Ok(page) = self.xrefs(XrefQuery::To(candidate.address), None, Some(MAX_CALL_SITES)) else { continue };
+            candidate.traced = true;
+            candidate.call_sites_cut = page.total > page.items.len();
+            for row in page.items.iter().filter(|row| row.kind == XrefKind::Call) {
+                let caller = self.function_containing(row.from).ok().flatten();
+                let block = caller.and_then(|caller| self.block_start(caller, row.from));
+                sites.push((index, row.from, caller, block));
+            }
+        }
+
+        let mut by_block: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+        for (site, &(.., block)) in sites.iter().enumerate() {
+            if let Some(block) = block {
+                by_block.entry(block).or_default().push(site);
+            }
+        }
         // In an image based at zero, small constants (lengths, keys) would read as addresses.
         let immediates_are_addresses = self.binary.segments.iter().all(|segment| segment.address > 0);
-        for row in page.items.iter().filter(|row| row.kind == XrefKind::Call) {
-            let caller = self.function_containing(row.from).ok().flatten();
+        let mut arguments: Vec<Option<Vec<u64>>> = vec![None; sites.len()];
+        for (&start, members) in &by_block {
+            if tracing.decoded >= MAX_TRACED_INSTRUCTIONS {
+                tracing.unread_sites += members.len();
+                continue;
+            }
+            let end = members.iter().map(|&site| sites[site].1).max().unwrap_or(start);
+            let instructions = block_instructions(self, decoder, start, end);
+            tracing.decoded += instructions.len();
+            for &site in members {
+                let before = instructions.partition_point(|(insn, _)| insn.address < sites[site].1);
+                let window = &instructions[before.saturating_sub(ARGUMENT_WINDOW)..before];
+                let pointers = window
+                    .iter()
+                    .filter_map(|(insn, _)| insn.data_ref.or(insn.immediate.filter(|_| immediates_are_addresses)));
+                arguments[site] = Some(pointers.collect());
+            }
+        }
+
+        for ((index, at, caller, block), pointers) in sites.into_iter().zip(arguments) {
+            let candidate = &mut candidates[index];
+            let unread = match (block, &pointers) {
+                (None, _) => {
+                    Some("the call lies outside the caller's discovered blocks, so its arguments were not read")
+                }
+                (Some(_), None) => Some("its arguments were not read: call-site tracing ran out of its decode budget"),
+                (Some(_), Some(_)) => None,
+            };
             let mut site =
-                CallSite { at: row.from, caller: caller.map(|at| (at, self.function_name(at))), blobs: vec![] };
-            let block_start = caller.and_then(|caller| self.block_start(caller, row.from));
-            if let Some(start) = block_start {
-                let before = block_instructions(self, decoder, start, row.from);
-                let window = &before[before.len().saturating_sub(ARGUMENT_WINDOW)..];
-                for (insn, _) in window {
-                    let immediate = insn.immediate.filter(|_| immediates_are_addresses);
-                    let Some(address) = insn.data_ref.or(immediate) else { continue };
-                    if candidate.blobs.contains_key(&address) {
-                        site.blobs.push(address);
-                        candidate.blobs.get_mut(&address).expect("checked").passed_from.push(row.from);
-                        continue;
-                    }
-                    if candidate.blobs.len() >= MAX_BLOBS || site.blobs.contains(&address) {
-                        continue;
-                    }
-                    if let Some(mut blob) = self.blob_at(address, xrefs).filter(Blob::reads_as_encoded) {
-                        blob.passed_from.push(row.from);
-                        candidate.blobs.insert(address, blob);
-                        site.blobs.push(address);
-                    }
+                CallSite { at, caller: caller.map(|at| (at, self.function_name(at))), blobs: vec![], unread };
+            for address in pointers.unwrap_or_default() {
+                if let Some(blob) = candidate.blobs.get_mut(&address) {
+                    site.blobs.push(address);
+                    blob.passed_from.push(at);
+                    continue;
+                }
+                if candidate.blobs.len() >= MAX_BLOBS || site.blobs.contains(&address) {
+                    continue;
+                }
+                if let Some(mut blob) = self.blob_at(address, xrefs).filter(Blob::reads_as_encoded) {
+                    blob.passed_from.push(at);
+                    candidate.blobs.insert(address, blob);
+                    site.blobs.push(address);
                 }
             }
             candidate.call_sites.push(site);
         }
+        tracing
     }
 
     /// The start of the block of `function` that contains `address`.
@@ -680,6 +769,77 @@ mod tests {
             assert_eq!(formatted, text, "{arch:?} {bytes:02x?}");
             assert_eq!(classify(arch, &formatted), expected, "{arch:?} {formatted}");
         }
+    }
+
+    /// A decoder counting the instructions it decodes and formats.
+    struct Counting {
+        inner: Box<dyn Disassembler>,
+        decoded: usize,
+        formatted: usize,
+    }
+
+    impl Disassembler for Counting {
+        fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
+            self.decoded += 1;
+            self.inner.decode(bytes, address)
+        }
+        fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
+            self.decoded += 1;
+            self.inner.decode_with_memory(bytes, address, read)
+        }
+        fn reset(&mut self) {
+            self.inner.reset();
+        }
+        fn format(&mut self, bytes: &[u8], address: u64) -> String {
+            self.formatted += 1;
+            self.inner.format(bytes, address)
+        }
+    }
+
+    fn project(path: &str) -> Project {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        Project::new(rampage_loaders::Binary::open(path).unwrap())
+    }
+
+    #[test]
+    fn loops_format_each_instruction_at_most_once() {
+        let project = project("../../tests/fixtures/bin/hello-go-x64.elf");
+        let mut decoder = Counting { inner: project.binary.decoder().unwrap(), decoded: 0, formatted: 0 };
+        let analysis = project.analysis().unwrap();
+        for function in analysis.program.functions.iter().filter(|f| f.instruction_count <= MAX_FUNCTION_INSTRUCTIONS) {
+            let instructions = function_instructions(&project, &mut decoder, function);
+            decoder.formatted = 0;
+            project.byte_loop(&mut decoder, function, &instructions);
+            assert!(decoder.formatted <= instructions.len(), "{:#x}", function.address);
+        }
+    }
+
+    #[test]
+    fn call_sites_decode_each_caller_block_once_for_a_bounded_set_of_candidates() {
+        let project = project("tests/fixtures/decode-x64.elf");
+        let analysis = project.analysis().unwrap();
+        let decode = project.resolve("decode").unwrap();
+        let main = analysis.program.function_at(project.resolve("main").unwrap()).unwrap();
+        let function = analysis.program.function_at(decode).unwrap();
+        let mut decoder = Counting { inner: project.binary.decoder().unwrap(), decoded: 0, formatted: 0 };
+        let instructions = function_instructions(&project, &mut decoder, function);
+        let found = project.byte_loop(&mut decoder, function, &instructions).unwrap();
+        // The same routine many times over: every copy's three call sites sit in `main`'s one block.
+        let mut candidates: Vec<Candidate> = (0..MAX_TRACED_CANDIDATES + 6)
+            .map(|_| Candidate {
+                name: found.name.clone(),
+                quoted: found.quoted.clone(),
+                call_sites: Vec::new(),
+                blobs: BTreeMap::new(),
+                ..found
+            })
+            .collect();
+        decoder.decoded = 0;
+        let tracing = project.trace_call_sites(&mut decoder, &mut candidates, &analysis.program.xrefs);
+        assert!(decoder.decoded <= main.instruction_count, "{} > {}", decoder.decoded, main.instruction_count);
+        assert_eq!((tracing.decoded, tracing.untraced_candidates, tracing.unread_sites), (decoder.decoded, 6, 0));
+        assert!(candidates[..MAX_TRACED_CANDIDATES].iter().all(|candidate| candidate.blobs.len() == 3));
+        assert!(candidates[MAX_TRACED_CANDIDATES..].iter().all(|candidate| !candidate.traced));
     }
 
     #[test]
