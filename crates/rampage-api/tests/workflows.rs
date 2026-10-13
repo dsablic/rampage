@@ -493,6 +493,8 @@ fn string_decoding_without_byte_loops_is_empty_but_honest() {
     assert_well_formed(&report);
     assert!(report.sections.iter().all(|section| section.findings.is_empty()), "{report:#?}");
     assert!(report.summary[0].starts_with("No byte loop"), "{:?}", report.summary);
+    let covered = "recognized on x86, AArch64, 32-bit ARM, MIPS, PowerPC, RISC-V, SPARC, s390x and m68k";
+    assert!(report.limitations.iter().any(|text| text.contains(covered)), "{:?}", report.limitations);
 }
 
 #[test]

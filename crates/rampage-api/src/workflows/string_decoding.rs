@@ -44,11 +44,25 @@ const X86_BYTE_REGISTERS: [&str; 20] = [
     "al", "bl", "cl", "dl", "ah", "bh", "ch", "dh", "sil", "dil", "bpl", "spl", "r8b", "r9b", "r10b", "r11b", "r12b",
     "r13b", "r14b", "r15b",
 ];
-/// Byte loads, byte stores, XORs and rotates on the fixed-width architectures, by mnemonic.
-const BYTE_LOADS: [&str; 10] = ["ldrb", "ldrsb", "ldurb", "ldursb", "lb", "lbu", "lbz", "lbzx", "lbzu", "lbzux"];
-const BYTE_STORES: [&str; 7] = ["strb", "sturb", "sb", "stb", "stbx", "stbu", "stbux"];
-const XORS: [&str; 5] = ["eor", "eors", "xor", "xori", "xoris"];
-const ROTATES: [&str; 6] = ["ror", "rors", "rol", "rori", "rotlwi", "rotrwi"];
+/// Byte loads, byte stores, XORs and rotates on AArch64, ARM, MIPS, PowerPC, RISC-V, SPARC and s390x, by
+/// mnemonic (x86 and m68k carry operand sizes instead).
+const BYTE_LOADS: [&str; 19] = [
+    "ldrb", "ldrsb", "ldurb", "ldursb", "lb", "lbu", "lbz", "lbzx", "lbzu", "lbzux", "ldub", "ldsb", "lduba", "ldsba",
+    "llc", "llgc", "lgb", "ic", "icy",
+];
+const BYTE_STORES: [&str; 10] = ["strb", "sturb", "sb", "stb", "stbx", "stbu", "stbux", "stba", "stc", "stcy"];
+const XORS: [&str; 17] = [
+    "eor", "eors", "xor", "xori", "xoris", "xorcc", "xnor", "xnorcc", "x", "xr", "xg", "xgr", "xrk", "xgrk", "xy",
+    "xilf", "xihf",
+];
+const ROTATES: [&str; 8] = ["ror", "rors", "rol", "rori", "rotlwi", "rotrwi", "rll", "rllg"];
+/// s390x XORs of an immediate into a byte of memory, which load, transform and store at once.
+const BYTE_XORS_IN_MEMORY: [&str; 2] = ["xi", "xiy"];
+/// ARM condition codes, which A32 and T32 (in IT blocks) append to a mnemonic.
+const ARM_CONDITIONS: [&str; 16] =
+    ["eq", "ne", "cs", "hs", "cc", "lo", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le"];
+/// The architectures whose byte operations are recognized, for the report's limitations.
+const RECOGNIZED_ARCHITECTURES: &str = "x86, AArch64, 32-bit ARM, MIPS, PowerPC, RISC-V, SPARC, s390x and m68k";
 
 /// What one loop instruction does to bytes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -111,17 +125,52 @@ fn parse(text: &str) -> (String, Vec<String>) {
 /// What `text`, one instruction on `arch`, does to bytes.
 fn classify(arch: Arch, text: &str) -> ByteOps {
     let (mnemonic, operands) = parse(text);
-    if matches!(arch, Arch::X86 | Arch::X86_64) {
-        return classify_x86(&mnemonic, &operands);
+    match arch {
+        Arch::X86 | Arch::X86_64 => return classify_x86(&mnemonic, &operands),
+        Arch::M68k => return classify_m68k(&mnemonic, &operands),
+        _ => {}
     }
     let base = mnemonic.split('.').next().unwrap_or(&mnemonic);
+    // A conditional ARM form (`ldrbne`, `eorsne`) is its base mnemonic plus a condition; the suffix is only taken
+    // off when what remains is a known mnemonic, so `bls` or `teq` never read as one.
+    let unconditional =
+        (arch == Arch::Arm).then(|| ARM_CONDITIONS.iter().find_map(|condition| base.strip_suffix(condition))).flatten();
+    let is = |table: &[&str]| table.contains(&base) || unconditional.is_some_and(|stripped| table.contains(&stripped));
+    if is(&BYTE_XORS_IN_MEMORY) && arch == Arch::S390x {
+        return ByteOps { load: true, store: true, xor: true, ..ByteOps::default() };
+    }
     ByteOps {
-        load: BYTE_LOADS.contains(&base),
-        store: BYTE_STORES.contains(&base),
-        xor: XORS.contains(&base) && !same_operands(&operands),
-        rotate: ROTATES.contains(&base),
+        load: is(&BYTE_LOADS),
+        store: is(&BYTE_STORES),
+        xor: is(&XORS) && !same_operands(&operands),
+        rotate: is(&ROTATES),
         add_sub: false,
     }
+}
+
+/// m68k gives the operand size as a mnemonic suffix (`move.b`), and its operands run source first.
+fn classify_m68k(mnemonic: &str, operands: &[String]) -> ByteOps {
+    let (base, size) = mnemonic.split_once('.').unwrap_or((mnemonic, ""));
+    let byte = size == "b";
+    let memory = |operand: Option<&String>| operand.is_some_and(|operand| operand.contains('('));
+    let (source_memory, destination_memory) = (memory(operands.first()), memory(operands.last()));
+    let mut ops = ByteOps::default();
+    match base {
+        "move" => {
+            ops.load = byte && source_memory;
+            ops.store = byte && destination_memory;
+        }
+        "eor" | "eori" | "add" | "addi" | "addq" | "sub" | "subi" | "subq" => {
+            // A memory destination is read, transformed and written back.
+            ops.load = byte && (source_memory || destination_memory);
+            ops.store = byte && destination_memory;
+            ops.xor = base.starts_with("eor") && !same_operands(operands);
+            ops.add_sub = byte && !base.starts_with("eor");
+        }
+        "rol" | "ror" | "roxl" | "roxr" => ops.rotate = true,
+        _ => {}
+    }
+    ops
 }
 
 /// x86 has no byte-specific mnemonics: an operand's size comes from a `byte ptr` or an 8-bit register.
@@ -422,7 +471,8 @@ impl Project {
             "Loops are found from backward branches within one function, at most {MAX_LOOP_INSTRUCTIONS} \
              instructions long, and read by mnemonic: vectorized, table-driven, multi-byte or unrolled-without-branch \
              decoders, decoders split across functions, and inlined decoders without a call site are missed. Byte \
-             ADD/SUB is recognized only on x86, where operand sizes are visible."
+             operations are recognized on {RECOGNIZED_ARCHITECTURES}; byte ADD/SUB only on x86 and m68k, where \
+             operand sizes are visible."
         ));
         report.limitation(format!(
             "Arguments are data pointers in the {ARGUMENT_WINDOW} instructions before a direct call; pointers built \
@@ -593,5 +643,53 @@ mod tests {
     fn operands_keep_bracketed_commas() {
         assert_eq!(parse("strb wzr, [x0, x8]"), ("strb".to_owned(), vec!["wzr".to_owned(), "[x0, x8]".to_owned()]));
         assert_eq!(parse("ret"), ("ret".to_owned(), vec![]));
+    }
+
+    /// Decoded instructions, as each architecture's disassembler formats them, and what they do to bytes.
+    #[test]
+    fn byte_operations_are_read_from_decoded_instructions() {
+        let none = ByteOps::default();
+        let load = ByteOps { load: true, ..none };
+        let store = ByteOps { store: true, ..none };
+        let xor = ByteOps { xor: true, ..none };
+        let rotate = ByteOps { rotate: true, ..none };
+        let cases: &[(Arch, &[u8], &str, ByteOps)] = &[
+            (Arch::Arm, &[0x01, 0x30, 0xd1, 0xd4], "ldrble r3, [r1], #1", load),
+            (Arch::Arm, &[0x01, 0x30, 0xc0, 0x14], "strbne r3, [r0], #1", store),
+            (Arch::Arm, &[0x02, 0x30, 0x23, 0x10], "eorne r3, r3, r2", xor),
+            (Arch::Arm, &[0x02, 0x30, 0x33, 0x10], "eorsne r3, r3, r2", xor),
+            (Arch::Sparc, &[0xc2, 0x0a, 0x40, 0x00], "ldub [%o1], %g1", load),
+            (Arch::Sparc, &[0xc2, 0x4a, 0x40, 0x00], "ldsb [%o1], %g1", load),
+            (Arch::Sparc, &[0xc2, 0x2a, 0x00, 0x00], "stb %g1, [%o0]", store),
+            (Arch::Sparc, &[0x82, 0x18, 0x40, 0x02], "xor %g1, %g2, %g1", xor),
+            (Arch::S390x, &[0xe3, 0x10, 0x20, 0x00, 0x00, 0x94], "llc %r1, 0(%r2)", load),
+            (Arch::S390x, &[0x43, 0x10, 0x30, 0x00], "ic %r1, 0(%r3)", load),
+            (Arch::S390x, &[0x42, 0x10, 0x30, 0x00], "stc %r1, 0(%r3)", store),
+            (Arch::S390x, &[0x17, 0x12], "xr %r1, %r2", xor),
+            (Arch::S390x, &[0x97, 0x5a, 0x10, 0x00], "xi 0(%r1), 0x5a", ByteOps { load: true, store: true, ..xor }),
+            (Arch::S390x, &[0xeb, 0x12, 0x00, 0x03, 0x00, 0x1d], "rll %r1, %r2, 3", rotate),
+            (Arch::M68k, &[0x10, 0x18], "move.b (a0)+, d0", load),
+            (Arch::M68k, &[0x12, 0xc0], "move.b d0, (a1)+", store),
+            (Arch::M68k, &[0xb3, 0x00], "eor.b d1, d0", xor),
+            (Arch::M68k, &[0x0a, 0x00, 0x00, 0x5a], "eori.b #$5a, d0", xor),
+            (Arch::M68k, &[0xe3, 0x18], "rol.b #$1, d0", rotate),
+            (Arch::M68k, &[0xd0, 0x01], "add.b d1, d0", ByteOps { add_sub: true, ..none }),
+        ];
+        for &(arch, bytes, text, expected) in cases {
+            let formatted = rampage_arch::decoder_for(arch).unwrap().format(bytes, 0x1000);
+            assert_eq!(formatted, text, "{arch:?} {bytes:02x?}");
+            assert_eq!(classify(arch, &formatted), expected, "{arch:?} {formatted}");
+        }
+    }
+
+    #[test]
+    fn arm_conditions_come_off_only_known_mnemonics() {
+        for text in ["bls #0x40", "teq r0, r1", "blo #0x40", "movne r0, r1", "lsls r0, r0, #1"] {
+            assert_eq!(classify(Arch::Arm, text), ByteOps::default(), "{text}");
+        }
+        assert!(classify(Arch::Arm, "ldrbeq.w r3, [r1]").load);
+        assert!(!classify(Arch::Aarch64, "strbne w0, [x1]").store, "conditions are stripped only on ARM");
+        assert!(!classify(Arch::M68k, "move.l (a0)+, d0").load, "a long move is not a byte load");
+        assert!(!classify(Arch::S390x, "xr %r1, %r1").xor);
     }
 }
