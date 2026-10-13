@@ -198,6 +198,8 @@ fn manifests_are_validated_strictly() {
     let error =
         rejected("builtin", &manifest("rampage-builtin", "[[contents]]\nkind = \"peid\"\npath = \"db.json\"\n"));
     assert!(error.contains("already taken"), "{error}");
+    let error = rejected("default", &manifest("default", "[[contents]]\nkind = \"peid\"\npath = \"db.json\"\n"));
+    assert!(error.contains("\"default\" is reserved"), "{error}");
 
     let missing = Scratch::new("no-manifest");
     assert!(Packs::check(&missing.0).error.unwrap().contains("rampage-pack.toml"));

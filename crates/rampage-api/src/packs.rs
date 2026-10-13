@@ -19,6 +19,8 @@ pub const MANIFEST_FILE: &str = "rampage-pack.toml";
 pub const PACKS_VARIABLE: &str = "RAMPAGE_PACKS";
 /// The name the bundled databases are listed under; no pack may take it.
 pub const BUILTIN_PACK: &str = "rampage-builtin";
+/// The YARA namespace user-supplied rules match in; a pack named so would pass its matches off as the user's.
+const USER_RULES_NAMESPACE: &str = "default";
 
 const MAX_CONTENTS: usize = 256;
 /// Rule files gathered from one directory content.
@@ -309,6 +311,11 @@ fn open_manifest(directory: &Path, names: &mut HashSet<String>) -> Result<(PathB
     let text = read_bounded(&path, MAX_PACK_MANIFEST_BYTES, "pack manifest").map_err(|error| error.to_string())?;
     let manifest: Manifest = toml::from_str(&text).map_err(|error| format!("invalid {MANIFEST_FILE}: {error}"))?;
     validate(&manifest)?;
+    if manifest.name == USER_RULES_NAMESPACE {
+        return Err(format!(
+            "the pack name {USER_RULES_NAMESPACE:?} is reserved: user YARA rules match in that namespace"
+        ));
+    }
     if !names.insert(manifest.name.clone()) {
         return Err(format!("the pack name {:?} is already taken", manifest.name));
     }
