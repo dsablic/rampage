@@ -64,10 +64,11 @@ Speculative return candidates alone do not count as argument-use evidence.
 Function summaries expose immediate dominators and natural-loop membership/backedges/exits. This is structural
 evidence for later control-flow reconstruction, not a claim that irreducible cycles have structured source loops.
 Selected reducible shapes also expose `structured_control` regions referencing SSA blocks: sequences, branches
-with shared joins, and simple single-body loops. Loop-header effects/phis execute before the test on each
-iteration. Complex graphs, unknown dispatch and ambiguous/external successors retain the labeled fallback.
-`rampage pseudocode program --at ADDRESS --structured` prints those accepted regions as `if/else` and
-header-tested loops. Explicit predecessor tokens and parallel phi bindings preserve SSA edge selection.
+with shared joins, simple single-body loops and switch regions (below). Loop-header effects/phis execute before
+the test on each iteration. Complex graphs, unknown dispatch and ambiguous/external successors retain the
+labeled fallback. `rampage pseudocode program --at ADDRESS --structured` prints those accepted regions as
+`if/else`, header-tested loops and `switch` with a `break` after each case. Explicit predecessor tokens and
+parallel phi bindings preserve SSA edge selection.
 Unsupported shapes return an error for this opt-in mode; ordinary labeled pseudocode remains available.
 Phi simplification aliases only identical incoming definitions (ignoring the phi's own backedge). It does not
 inline expression trees or merge distinct predecessor values; changing loop-carried values retain their phis.
@@ -94,6 +95,20 @@ decodes. Discovery then explores each case, and `function_graph`, summaries, SSA
 edge from the dispatch block to it. Any instruction whose register writes the decoder does not fully model, such
 as an unallocated hint, forgets every bound. The inverse `b.ls`/`b.lo` form and a comparison scheduled away from
 its branch stay unresolved indirect jumps.
+
+A resolved switch keeps its entries in table order (`table`, entry `i` selected by index `i`) and the address of
+its bounding comparison (`guard`). Pseudocode prints the dispatch as `switch (index) { case N: goto bbX; ...
+default: goto bbD; }`, where the index is the comparison's operand, entries that select the same block share one
+line (runs of three or more as `case a ... b:`) and the default is the comparison's out-of-range branch.
+Structured control adds a `switch` region when every case is a region of its own (entered only from the dispatch
+and dominated by its first block) and all cases leave only for one follow block, or none leave at all. A case that
+goes straight to the follow block is an empty case. The bound check stays an ordinary `if`: its out-of-range arm
+holds the default and the other arm the dispatch block and the `switch`. Fall-through between cases, case code
+shared with other cases or the default (including compiler tail-merging), cases outside the function and tables
+that disagree with the CFG are rejected with a limitation, leaving the labeled `switch` form. On
+`musl-static-aarch64.elf` none of the three resolved switch functions structures yet: `printf_core` exceeds the SSA
+definition limit, `pop_arg` tail-merges its case stores, and `sysconf` has nested loops in a case and early returns
+joining a shared return block.
 
 The next gates are more scalar/FP/SIMD semantics, alias-aware memory analysis, broader control-flow structuring,
 typed arguments/returns, dispatch recovery beyond bounded switch tables and live runtime integration. PAC,
