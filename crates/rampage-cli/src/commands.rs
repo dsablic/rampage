@@ -542,13 +542,6 @@ pub fn export_cfg(out: &mut impl Write, path: &Path, options: &Options) -> Resul
     let hex = |address: u64| format!("{address:#x}");
     let mut functions = Vec::new();
     for row in project.functions(&FunctionsQuery::default())?.items {
-        // A start whose first instruction does not decode has no blocks, and so no graph.
-        if row.blocks == 0 {
-            functions.push(serde_json::json!({
-                "address": hex(row.address), "blocks": [], "edges": [], "references": [], "noreturn_calls": [],
-            }));
-            continue;
-        }
         let graph = project.function_graph(row.address)?;
         let blocks: Vec<_> = graph.blocks.iter().map(|block| hex(block.start)).collect();
         let edges: Vec<_> =
