@@ -80,7 +80,9 @@ PPC and RISC-V rows were re-measured the same way after the get-PC, import-thunk
 Adding noreturn analysis changed only the hello-x64.exe and hello-go-x64 rows (re-measured the same way). Every
 row below was last re-measured at `7c03e5c`, from the same cached exports, after switch resolution started
 forgetting facts at joins ahead of the comparison and stopped accepting 16-bit `movsxd` and non-contiguous masks;
-no row changed.
+no row changed. They were re-measured again at `41e1224`, from the same cached exports, after the noreturn review
+fixes (conditional calls and returns, resumable traps, incremental inference, case-sensitive names, more get-PC
+idioms); no row changed.
 
 | binary | funcs G/R/both | same blocks | block J | chain J | edge P / R | chain edge P / R | call P / R | callgraph P / R | G-only computed calls |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
@@ -143,10 +145,18 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   `runtime.panicunsafeslicelen` and the dead code after `runtime.fatalthrow` in `runtime.fatal` (`0x444054`).
   Ghidra lists most of these callees as non-returning itself but does not end every such block. Go's
   `runtime.mcall` and `runtime.morestack*` end every path in a trap or a noreturn call yet resume their caller
-  through a saved context, so they are never inferred noreturn.
+  through a saved context, so they are never inferred noreturn. A conditional call (`blne abort`, Thumb `it ne;
+  bl`) never ends its block, and a conditional return or register jump (`bxeq lr`, `popne {r7, pc}`, PowerPC
+  `beqlr`) counts as a way out, so neither makes its function look noreturn. Only traps that cannot resume (`ud2`,
+  `udf`, AArch64 `brk #1`/`#0x3e8`, RISC-V `unimp`, SPARC `illtrap`, PowerPC `trap`) count as evidence; debugger
+  and semihosting traps (`bkpt`, `hlt`, other `brk`s, MIPS `break`, RISC-V `ebreak`) fall through. Inference
+  re-explores only the callers of newly inferred functions, so hello-go-arm64 discovery takes 48 ms instead of
+  150 ms (hello-go-x64: 41 instead of 70 ms) with the same CFGs. `function_graph` and `export-cfg` mark each such
+  call `listed` or `inferred`.
 - **Get-PC idioms (resolved).** A call whose target is the instruction after it (after the delay slot on MIPS and
   SPARC) reads the PC only when the code there takes the return address: `bal 1f; nop; 1: ... addu $gp, $gp, $ra`
-  (hello-mips/mipsel `__start`), `bl 1f; 1: mflr r30`, `call 1f; 1: pop ebx`. rampage treats those as plain flow
+  (hello-mips/mipsel `__start`), `bl 1f; 1: mflr r30`, `bl 1f; 1: mov r0, lr` (ARM, Thumb, AArch64),
+  `call 1f; 1: pop ebx` or `mov ebx, [esp]`, a MIPS delay slot or `$ra`-based load. rampage treats those as plain flow
   and every other call to the next instruction as a call, so `bl _Exit` (hello-thumb `0x20800`) and `bl _start_c`
   (hello-ppc `0x2078c`) keep their call edges. Ghidra instead treats MIPS `bal 1f` as a branch and starts a block
   at `0x203fc`. That is the remaining MIPS block and edge difference; chain Jaccard and chain edges agree.
