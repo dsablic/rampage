@@ -344,7 +344,7 @@ pub fn image_method_il(image: &[u8], method: MethodSelector) -> Result<Option<Me
         (None, _) => Ok(None),
         (Some(_), Some(listing)) => listing.map(Some),
         (Some(metadata), None) => Err(IlError::Unreadable {
-            method: format!("{method:?}"),
+            method: method.to_string(),
             reason: format!("the metadata tables are unreadable: {}", metadata.warnings.join("; ")),
         }),
     }

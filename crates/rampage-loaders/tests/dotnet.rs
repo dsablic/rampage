@@ -871,6 +871,23 @@ fn resolves_method_specs_and_generic_locals() {
 }
 
 #[test]
+fn unreadable_tables_name_the_method_as_given() {
+    let mut image = build(&Spec::default());
+    let stream = image.windows(3).position(|name| name == b"#~\0").unwrap();
+    image[stream + 1] = b'X';
+    let selectors = [
+        (MethodSelector::Token(0x0600_0002), "0x06000002"),
+        (MethodSelector::Name("Demo.Program::Compute"), "Demo.Program::Compute"),
+    ];
+    for (selector, shown) in selectors {
+        let error = dotnet::image_method_il(&image, selector).unwrap_err();
+        let IlError::Unreadable { method, reason } = &error else { panic!("{error}") };
+        assert_eq!(method, shown);
+        assert!(reason.contains("no #~ table stream"), "{reason}");
+    }
+}
+
+#[test]
 fn decodes_crafted_operands_and_exception_sections() {
     let mut image = std::fs::read(fixture(HASH_CODE)).unwrap();
     let ldstr = listing(&image, MethodSelector::Name("get_UseNonRandomizedHashSeed")).instructions[0].token.unwrap();

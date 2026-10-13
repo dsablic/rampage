@@ -48,6 +48,16 @@ pub enum MethodSelector<'s> {
     Name(&'s str),
 }
 
+impl std::fmt::Display for MethodSelector<'_> {
+    /// The selector as a user writes it: a hex token or the name.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Token(token) => write!(formatter, "{token:#010x}"),
+            Self::Name(name) => formatter.write_str(name),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum IlError {
     #[error(transparent)]
@@ -663,7 +673,7 @@ fn select<'m>(
     let methods = metadata.types.iter().zip(1..).flat_map(|(ty, row)| ty.methods.iter().map(move |m| (m, row)));
     let (wanted, matched): (String, Vec<_>) = match selector {
         MethodSelector::Token(token) => {
-            (format!("{token:#010x}"), methods.filter(|(method, _)| method.token == token).collect())
+            (selector.to_string(), methods.filter(|(method, _)| method.token == token).collect())
         }
         MethodSelector::Name(name) if name.contains("::") => (
             name.to_owned(),
