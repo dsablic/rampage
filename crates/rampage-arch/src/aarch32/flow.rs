@@ -549,6 +549,10 @@ impl Disassembler for Aarch32Disassembler {
         self.sequential_mode = None;
     }
 
+    fn join(&mut self) {
+        self.registers = Registers::default();
+    }
+
     fn set_code_modes(&mut self, modes: &[(u64, bool)]) {
         self.modes = modes.iter().copied().collect();
         self.switches.clear();

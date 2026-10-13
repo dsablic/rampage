@@ -443,6 +443,7 @@ fn explore(
     let mut fall_through = None;
     let carries_state =
         |address: u64| all_branch_targets.is_some_and(|targets| targets.binary_search(&address).is_err());
+    let joins_run = |address: u64| all_branch_targets.is_some_and(|targets| targets.binary_search(&address).is_ok());
 
     loop {
         let block_start = match fall_through.take() {
@@ -481,6 +482,11 @@ fn explore(
                 exits.returns = true;
                 break;
             };
+            // Facts proven earlier in the run (a switch's table base, an index's zeroed upper half) do not hold on
+            // a path that branches in here.
+            if address != block_start && joins_run(address) {
+                decoder.join();
+            }
             let insn = decoder.decode_with_memory(bytes, address, &|at, size| memory.read_pointer(at, size));
             let resolved = decoder.resolved_flow();
             if let Some(flow) = resolved {
@@ -940,6 +946,24 @@ mod tests {
         // mov w0, w0 zeroes it.
         let zeroed = Switch { prefix: [0x2a00_03e0, NOP], ..switch };
         assert!(resolved(&zeroed.discover(entries, vec![])));
+    }
+
+    #[test]
+    fn addresses_formed_before_a_join_ahead_of_the_comparison_do_not_reach_the_jump() {
+        // 0: cbz w1, JOIN; 4: adr x9, table; 8: adr x10, 0x28; c: nop; 10: cmp w0, #3; 14: b.hi 0x38;
+        // 18: ldrb w11, [x9, w0, uxtw]; 1c: add x10, x10, w11, lsl #2; 20: br x10; 24: nop. Through a join at c,
+        // neither x9 nor x10 holds the address formed on the fall-through path.
+        let switch = |join: u32| {
+            let mut words = vec![0x3400_0001 | (join / 4) << 5, adr(9, 4, RODATA), adr(10, 8, CASES[0]), NOP];
+            words.extend([BOUND[0], 0x5400_0128, 0x3860_492b, 0x8b0b_094a, 0xd61f_0140, NOP]);
+            words.extend([RET; 5]);
+            let code = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            let image = Image { code, rodata: relative_entries(CASES[0], 2, 1), data: vec![] };
+            discover(&image, || decoder_for(Arch::Aarch64).unwrap(), &[0])
+        };
+        let cases = |join: u32| switch(join).function_at(0).unwrap().switch_cases(0x20).map(<[u64]>::to_vec);
+        assert_eq!(cases(0xc), None);
+        assert_eq!(cases(4), Some(CASES.to_vec()));
     }
 
     #[test]

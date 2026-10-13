@@ -259,6 +259,11 @@ pub trait Disassembler {
     }
     /// Forgets state carried between instructions, such as AArch64 ADRP pages.
     fn reset(&mut self) {}
+    /// Forgets what a straight-line run proved about registers where another path joins it, before decoding the
+    /// instruction there. How the run decodes (such as its instruction-set mode) carries on.
+    fn join(&mut self) {
+        self.reset();
+    }
     /// Starts an independent exploration, including restoring its initial memory assumptions.
     /// Block-level resets keep memory invalidation from stores/calls already observed within that exploration.
     fn begin_run(&mut self) {

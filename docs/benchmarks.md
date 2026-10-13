@@ -110,7 +110,8 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
 - **x86-64 jump tables (mostly resolved).** rampage resolves an x86 switch under the same bounded-switch rule as
   AArch64. The index needs an unsigned bound, from a `cmp` directly followed by `ja`/`jae` or from an
   `and r, mask`, covering the whole register (a 32-bit write or `mov e, e` zero-extends it). No branch may join
-  between the bound and the jump, and the table must be read-only data. This covers absolute
+  the straight-line run that proves the bound, the zero extension and the table base, and the table must be
+  read-only data. This covers absolute
   `jmp [rax*8+0x1001a68]` (eval-ref-x86_64 `0x100e148`) and relative
   `lea rcx,[table]; movsxd rax,[rcx+rax*4]; add rax,rcx; jmp rax` (hello-x64.exe `0x1400170f4`, bounded by
   `and eax, 3`). Ghidra-only blocks fell from 239 to 44 in hello-x64.exe, 328 to 8 in eval-ref-x86_64, 82 to 4 in

@@ -172,3 +172,34 @@ fn a_hostile_x86_switch_bound_is_capped() {
     let hostile = switch(0x1000).discover(entries, vec![]);
     assert!(!hostile.function_at(0).unwrap().contains(CASES[0]));
 }
+
+/// Discovers `code`, padded with `int3` up to the cases, which with the default after them are each a `ret`.
+fn discover_code(mut code: Vec<u8>, rodata: Vec<u8>) -> Program {
+    assert!(code.len() <= CASES[0] as usize);
+    code.resize(CASES[0] as usize, 0xcc);
+    code.extend([0xc3; 5]);
+    discover(&Image { code, rodata, data: vec![] }, || decoder_for(Arch::X86_64).unwrap(), &[0])
+}
+
+#[test]
+fn facts_established_before_a_join_ahead_of_the_comparison_do_not_reach_the_jump() {
+    // 0: test esi, esi; 2: jne JOIN; 4: mov edi, edi; 6: cmp edi, 3; c: ja 0x34; e: jmp [rdi*8 + table]. Through
+    // a join at 6, rdi's upper half is whatever it held on entry.
+    let zero_extended = |join: u8| {
+        let code = [&[0x85, 0xf6, 0x75, join - 4][..], &ZERO_EXTEND, &CMP, &[0x77, 0x26], &absolute(RODATA)].concat();
+        discover_code(code, absolute_entries())
+    };
+    assert!(!resolved(&zero_extended(6)));
+    assert!(resolved(&zero_extended(4)));
+
+    // 0: test esi, esi; 2: jne JOIN; 4: lea rcx, [rip + table]; b: mov eax, edi; d: cmp eax, 3; 10: ja 0x34;
+    // 12: movsxd rax, [rcx + rax*4]; 16: add rax, rcx; 19: jmp rax. Through a join at b, rcx is not the table.
+    let based = |join: u8| {
+        let lea = [&[0x48, 0x8d, 0x0d][..], &(RODATA.wrapping_sub(0xb) as u32).to_le_bytes()].concat();
+        let index = [0x89, 0xf8, 0x83, 0xf8, 3, 0x77, 0x22, 0x48, 0x63, 0x04, 0x81];
+        let code = [&[0x85, 0xf6, 0x75, join - 4][..], &lea, &index, &ADD_JMP].concat();
+        discover_code(code, relative_entries())
+    };
+    assert!(!resolved(&based(0xb)));
+    assert!(resolved(&based(4)));
+}
