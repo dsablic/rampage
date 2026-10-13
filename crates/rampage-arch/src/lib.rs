@@ -207,6 +207,46 @@ pub struct Insn {
     pub immediate: Option<u64>,
 }
 
+/// Most entries a switch jump table is read for; a larger proven bound leaves the jump unresolved.
+pub const MAX_JUMP_TABLE_ENTRIES: u64 = 4096;
+
+/// A switch jump table a register-indirect jump dispatches through, with the index bound that a comparison and
+/// conditional branch before it proved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JumpTable {
+    /// The bounding comparison. The bound holds only if no other path joins between it and the jump.
+    pub guard: u64,
+    pub table: u64,
+    pub entry_size: u8,
+    /// The bound plus one, at most [`MAX_JUMP_TABLE_ENTRIES`].
+    pub entries: u64,
+    /// Whether entries are sign-extended.
+    pub signed: bool,
+    /// Targets are `base + (entry << shift)`, or the entry itself when there is no base.
+    pub base: Option<u64>,
+    pub shift: u8,
+    /// Instruction alignment every target must have.
+    pub alignment: u64,
+}
+
+impl JumpTable {
+    /// The address of entry `index`.
+    pub fn slot(&self, index: u64) -> Option<u64> {
+        self.table.checked_add(index.checked_mul(u64::from(self.entry_size))?)
+    }
+
+    /// The target an entry whose raw, zero-extended value is `raw` selects, if it is aligned.
+    pub fn target(&self, raw: u64) -> Option<u64> {
+        let bits = u32::from(self.entry_size) * 8;
+        let value = if self.signed && bits < 64 { ((raw << (64 - bits)) as i64 >> (64 - bits)) as u64 } else { raw };
+        let target = match self.base {
+            Some(base) => base.wrapping_add(value.checked_shl(self.shift.into())?),
+            None => value,
+        };
+        target.is_multiple_of(self.alignment.max(1)).then_some(target)
+    }
+}
+
 pub trait Disassembler {
     /// Decodes one instruction. Undecodable bytes yield a `Flow::Invalid` instruction.
     ///
@@ -242,6 +282,11 @@ pub trait Disassembler {
     /// For the register-indirect jump just decoded, the code address its register was formed from: the target
     /// itself, or the base a switch adds its jump-table offset to.
     fn indirect_jump_base(&self) -> Option<u64> {
+        None
+    }
+    /// For the register-indirect jump just decoded, the bounded switch table its register was loaded from. Its
+    /// entries are not read or validated.
+    fn jump_table(&self) -> Option<JumpTable> {
         None
     }
     /// Instructions executed after a branch before it takes effect (MIPS and SPARC delay slots).

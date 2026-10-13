@@ -10,7 +10,7 @@ use super::Decoded;
 use super::helpers::{ones, pc_relative};
 use super::spec::ENCODINGS;
 use super::spec_types::Encoding;
-use crate::Flow;
+use crate::{Flow, JumpTable, MAX_JUMP_TABLE_ENTRIES};
 
 /// Addresses known to be held by general-purpose registers: ADRP pages, and the full addresses an ADD forms
 /// from them.
@@ -23,7 +23,46 @@ pub struct Addresses {
     /// Registers holding an unknown offset from a known full address (a switch's `add x9, x9, x10, lsl #2`).
     derived: u32,
     derived_base: [u64; 31],
+    /// Registers whose upper 32 bits a write to their W view zeroed.
+    upper_zero: u32,
+    /// The comparison of a register with an immediate that the previous instruction made.
+    compare: Option<Compare>,
+    /// Unsigned bounds that a `b.hi` or `b.hs` after a comparison proved on its fall-through path.
+    bounds: [Option<Bound>; 31],
+    /// Registers holding a switch-table entry, or a target formed from one.
+    entries: [Option<Entry>; 31],
     pub memory_changed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Compare {
+    register: u64,
+    limit: u64,
+    wide: bool,
+    address: u64,
+}
+
+#[derive(Clone, Copy)]
+struct Bound {
+    max: u64,
+    /// Whether the bound covers the whole X register rather than only its W view.
+    wide: bool,
+    guard: u64,
+}
+
+/// How a table load extends its entry into the 64-bit register.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Extension {
+    Zero,
+    Sign,
+    /// Sign-extended into the W view, whose write zeroes the upper half.
+    SignToW,
+}
+
+#[derive(Clone, Copy)]
+struct Entry {
+    table: JumpTable,
+    load: Extension,
 }
 
 impl Addresses {
@@ -35,11 +74,14 @@ impl Addresses {
         self.get(register).filter(|_| self.page & (1 << register) != 0)
     }
 
+    fn full(&self, register: u64) -> Option<u64> {
+        self.get(register).filter(|_| self.page & (1 << register) == 0)
+    }
+
     /// The full address `register` holds, or that it holds an unknown offset from.
     fn base(&self, register: u64) -> Option<u64> {
         let derived = register < 31 && self.derived & (1 << register) != 0;
-        let full = self.get(register).filter(|_| self.page & (1 << register) == 0);
-        full.or_else(|| derived.then(|| self.derived_base[register as usize]))
+        self.full(register).or_else(|| derived.then(|| self.derived_base[register as usize]))
     }
 
     fn set_derived(&mut self, register: u64, base: u64) {
@@ -61,13 +103,25 @@ impl Addresses {
         if register < 31 {
             self.valid &= !(1 << register);
             self.derived &= !(1 << register);
+            self.upper_zero &= !(1 << register);
+            self.bounds[register as usize] = None;
+            self.entries[register as usize] = None;
         }
     }
 
     /// A call may change x0-x18 and x30 (AAPCS64); x19-x28 are preserved.
     fn clobber_caller_saved(&mut self) {
-        self.valid &= !(0x7_ffff | (1 << 30));
-        self.derived &= !(0x7_ffff | (1 << 30));
+        for register in (0..19).chain([30]) {
+            self.clear(register);
+        }
+    }
+
+    fn bound(&self, register: u64) -> Option<Bound> {
+        self.bounds.get(usize::try_from(register).ok()?).copied().flatten()
+    }
+
+    fn entry(&self, register: u64) -> Option<Entry> {
+        self.entries.get(usize::try_from(register).ok()?).copied().flatten()
     }
 }
 
@@ -104,6 +158,8 @@ struct Written {
     start: u8,
     width: u8,
     plus: u8,
+    /// A W register, whose write zeroes the upper half of the X register.
+    narrow: bool,
 }
 
 struct Info {
@@ -167,7 +223,7 @@ fn info_for(encoding: &Encoding) -> Info {
         let &[index] = operand.fields else { continue };
         let register = &encoding.fields[index as usize];
         if register.name == "Rn" {
-            base = Some(Written { start: register.start, width: register.width, plus: 0 });
+            base = Some(Written { start: register.start, width: register.width, plus: 0, narrow: false });
         }
         // Only W and X operands are general-purpose registers; SIMD&FP destinations use the same field names.
         // SVE writes some as <R><d>, where <R> picks W or X.
@@ -176,7 +232,8 @@ fn info_for(encoding: &Encoding) -> Info {
             || matches!(operand.name, "<d>" | "<dn>") && encoding.syntax.operands.iter().any(|o| o.name == "<R>");
         if general && written_by(register.name) {
             let plus = u8::from(operand.name.contains("+1"));
-            written.push(Written { start: register.start, width: register.width, plus });
+            let narrow = operand.name.starts_with("<W");
+            written.push(Written { start: register.start, width: register.width, plus, narrow });
         }
     }
     // CPY* and SET* advance all three of their registers; LDRAA and LDRAB write back when W is set.
@@ -207,12 +264,92 @@ fn index_of(encoding: &'static Encoding) -> usize {
     (encoding as *const Encoding as usize - ENCODINGS.as_ptr() as usize) / size_of::<Encoding>()
 }
 
+/// How a register-offset load of a switch-table entry extends it, or `None` for any other instruction.
+fn table_load(name: &str) -> Option<Extension> {
+    match name {
+        "LDRB_32B_ldst_regoff"
+        | "LDRB_32BL_ldst_regoff"
+        | "LDRH_32_ldst_regoff"
+        | "LDR_32_ldst_regoff"
+        | "LDR_64_ldst_regoff" => Some(Extension::Zero),
+        "LDRSB_64B_ldst_regoff" | "LDRSB_64BL_ldst_regoff" | "LDRSH_64_ldst_regoff" | "LDRSW_64_ldst_regoff" => {
+            Some(Extension::Sign)
+        }
+        "LDRSB_32B_ldst_regoff" | "LDRSB_32BL_ldst_regoff" | "LDRSH_32_ldst_regoff" => Some(Extension::SignToW),
+        _ => None,
+    }
+}
+
+/// Whether an offset register holding an entry loaded with `load`, extended by `extend` (bits and signedness;
+/// `None` for the whole register), is the entry sign-extended (`true`) or zero-extended (`false`). `None` when it
+/// is neither, such as a sign-extended byte read back zero-extended from 16 bits.
+fn extended_sign(load: Extension, entry_size: u8, extend: Option<(u64, bool)>) -> Option<bool> {
+    let entry_bits = u64::from(entry_size) * 8;
+    match (extend, load) {
+        (None, Extension::Zero) => Some(false),
+        (None, Extension::Sign) => Some(true),
+        (Some((bits, signed)), _) if bits == entry_bits => Some(signed),
+        (Some((bits, _)), Extension::Zero) if bits > entry_bits => Some(false),
+        (Some((bits, true)), _) if bits > entry_bits => Some(true),
+        _ => None,
+    }
+}
+
+/// The register a switch-dispatch instruction writes and what it then holds: an entry a register-offset load read
+/// from a known table with an index a comparison bounded, or a target formed by adding such an entry, extended
+/// and shifted, to a known address.
+fn switch_entry(decoded: &Decoded, addresses: &Addresses) -> Option<(u64, Entry)> {
+    let name = decoded.encoding.name;
+    let field = |name: &str| decoded.field(name);
+    if let Some(load) = table_load(name) {
+        let size_log2 = field("size")?;
+        let size = 1u64 << size_log2;
+        let table = addresses.full(field("Rn")?)?;
+        let bound = addresses.bound(field("Rm")?)?;
+        let index_wide = match field("option")? {
+            0b011 | 0b111 => true,
+            0b010 | 0b110 => false,
+            _ => return None,
+        };
+        let shift = if field("S")? == 1 { size_log2 } else { 0 };
+        if index_wide && !bound.wide || 1 << shift != size || bound.max >= MAX_JUMP_TABLE_ENTRIES {
+            return None;
+        }
+        let table = JumpTable {
+            guard: bound.guard,
+            table,
+            entry_size: size as u8,
+            entries: bound.max + 1,
+            signed: load == Extension::Sign,
+            base: None,
+            shift: 0,
+            alignment: 4,
+        };
+        return Some((field("Rt")?, Entry { table, load }));
+    }
+    let (extend, shift) = match name {
+        "ADD_64_addsub_shift" if field("shift")? == 0 => (None, field("imm6")?),
+        "ADD_64_addsub_ext" => {
+            let option = field("option")?;
+            ((option & 3 != 3).then(|| (8 << (option & 3), option & 4 != 0)), field("imm3")?)
+        }
+        _ => return None,
+    };
+    let base = addresses.full(field("Rn")?)?;
+    let entry = addresses.entry(field("Rm")?).filter(|entry| entry.table.base.is_none())?;
+    let signed = extended_sign(entry.load, entry.table.entry_size, extend)?;
+    let table = JumpTable { signed, base: Some(base), shift: u8::try_from(shift).ok()?, ..entry.table };
+    Some((field("Rd")?, Entry { table, ..entry }))
+}
+
 /// What one instruction does to control flow and which address it references.
 pub struct Analysis {
     pub flow: Flow,
     pub data_ref: Option<u64>,
     /// For BR: the full address its register holds or was offset from, such as a switch's jump-table base.
     pub jump_base: Option<u64>,
+    /// For BR: the bounded switch table its register was loaded from.
+    pub jump_table: Option<JumpTable>,
 }
 
 pub fn analyze(
@@ -222,6 +359,7 @@ pub fn analyze(
     read: &dyn Fn(u64, u8) -> Option<u64>,
 ) -> Analysis {
     let info = &INFO[index_of(decoded.encoding)];
+    let compare = addresses.compare.take();
     let direct = |make: fn(u64) -> Flow| relative_target(decoded, address).map_or(Flow::Invalid, make);
     let mut flow = match info.flow {
         FlowClass::Next => Flow::Next,
@@ -254,6 +392,22 @@ pub fn analyze(
     }
     let jump_base =
         (name == "BR_64_branch_reg").then(|| decoded.field("Rn").and_then(|rn| addresses.base(rn))).flatten();
+    let jump_table = (name == "BR_64_branch_reg")
+        .then(|| decoded.field("Rn").and_then(|rn| addresses.entry(rn)))
+        .flatten()
+        .filter(|entry| entry.table.base.is_some() || entry.table.entry_size == 8)
+        .map(|entry| entry.table);
+    let switch = switch_entry(decoded, addresses);
+    // A `b.hi` or `b.hs` straight after `cmp xN, #limit` falls through only when xN is within the limit.
+    let bound = compare.filter(|_| name == "B_only_condbranch").and_then(|compare| {
+        let max = match decoded.field("cond")? {
+            0b1000 => compare.limit,
+            0b0010 => compare.limit.checked_sub(1)?,
+            _ => return None,
+        };
+        let wide = compare.wide || addresses.upper_zero & (1 << compare.register) != 0;
+        Some((compare.register, Bound { max, wide, guard: compare.address }))
+    });
     let offset_from = matches!(name, "ADD_64_addsub_shift" | "ADD_64_addsub_ext")
         .then(|| decoded.field("Rn").and_then(|rn| addresses.base(rn)))
         .flatten();
@@ -314,6 +468,12 @@ pub fn analyze(
     for &written in &info.written {
         addresses.clear(register(written));
     }
+    for &written in info.written.iter().filter(|written| written.narrow) {
+        let register = register(written);
+        if register < 31 {
+            addresses.upper_zero |= 1 << register;
+        }
+    }
     if let Some(base) = info.writeback {
         addresses.clear(register(base));
     }
@@ -327,5 +487,20 @@ pub fn analyze(
     if let (Some(base), Some(rd)) = (offset_from, destination) {
         addresses.set_derived(rd, base);
     }
-    Analysis { flow, data_ref, jump_base }
+    if let Some((register, entry)) = switch.filter(|&(register, _)| register < 31) {
+        addresses.entries[register as usize] = Some(entry);
+    }
+    if let Some((register, bound)) = bound {
+        addresses.bounds[register as usize] = Some(bound);
+    }
+    if matches!(name, "SUBS_32S_addsub_imm" | "SUBS_64S_addsub_imm")
+        && decoded.field("Rd") == Some(31)
+        && let Some(register) = decoded.field("Rn").filter(|&rn| rn < 31)
+    {
+        let shift = if decoded.field("sh") == Some(1) { 12 } else { 0 };
+        let limit = decoded.field("imm12").unwrap_or(0) << shift;
+        let wide = decoded.field("sf") == Some(1);
+        addresses.compare = Some(Compare { register, limit, wide, address });
+    }
+    Analysis { flow, data_ref, jump_base, jump_table }
 }
