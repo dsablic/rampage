@@ -21,6 +21,9 @@ use crate::LoadError;
 pub const MAX_INSTRUCTIONS: usize = 131_072;
 /// Targets kept from one `switch`; the rest are counted, not listed.
 const MAX_SWITCH_TARGETS: usize = 4096;
+/// Switch targets kept across one listing, which bounds its label text as [`MAX_OPERAND_TEXT`] bounds its
+/// token text; later switches are counted, not listed.
+const MAX_LISTING_SWITCH_TARGETS: usize = 1 << 18;
 /// UTF-16 units of an `ldstr` literal shown; a longer literal is cut and its length given.
 const MAX_LITERAL_UNITS: usize = 512;
 /// Rendered operand text of one listing; past it tokens show as hex, since every instruction naming a
@@ -732,6 +735,7 @@ type TokenText<'n> = &'n mut dyn FnMut(u32, &mut Warnings) -> String;
 fn decode(code: &[u8], token_text: TokenText, warnings: &mut Warnings) -> (Vec<Instruction>, bool) {
     let mut instructions = Vec::new();
     let mut at = 0usize;
+    let (mut switch_targets_left, mut switch_cap_reported) = (MAX_LISTING_SWITCH_TARGETS, false);
     while at < code.len() {
         if instructions.len() == MAX_INSTRUCTIONS {
             warnings.push(format!("listing stops at {MAX_INSTRUCTIONS} instructions"));
@@ -793,8 +797,16 @@ fn decode(code: &[u8], token_text: TokenText, warnings: &mut Warnings) -> (Vec<I
             }
             Operand::Switch => {
                 let count = bytes.len() / 4 - 1;
+                let kept = count.min(MAX_SWITCH_TARGETS);
+                if kept > switch_targets_left && !std::mem::replace(&mut switch_cap_reported, true) {
+                    warnings.push(format!(
+                        "listing keeps {MAX_LISTING_SWITCH_TARGETS} switch targets; later ones are counted, not listed"
+                    ));
+                }
+                let kept = kept.min(switch_targets_left);
+                switch_targets_left -= kept;
                 let mut labels = Vec::new();
-                for chunk in bytes[4..].as_chunks::<4>().0.iter().take(MAX_SWITCH_TARGETS) {
+                for chunk in bytes[4..].as_chunks::<4>().0.iter().take(kept) {
                     labels.push(branch.target(i64::from(i32::from_le_bytes(*chunk)), &mut instruction, warnings));
                 }
                 if count > labels.len() {
@@ -1131,6 +1143,28 @@ mod tests {
         assert_eq!(float64(0x8000_0000_0000_0000), "-0.0");
         let (texts, _, _) = listing(&[0x22, 0x01, 0x00, 0xC0, 0xFF]);
         assert_eq!(texts, ["IL_0000: ldc.r4 float32(0xffc00001)"]);
+    }
+
+    #[test]
+    fn switch_targets_are_capped_per_listing() {
+        let switches = MAX_LISTING_SWITCH_TARGETS / MAX_SWITCH_TARGETS + 6;
+        let mut code = Vec::new();
+        for _ in 0..switches {
+            code.push(0x45);
+            code.extend((MAX_SWITCH_TARGETS as u32).to_le_bytes());
+            code.extend(vec![0; MAX_SWITCH_TARGETS * 4]);
+        }
+        let mut warnings = Warnings::default();
+        let (instructions, cut) = decode(&code, &mut |_, _| String::new(), &mut warnings);
+        assert_eq!((instructions.len(), cut), (switches, false));
+        let targets: usize = instructions.iter().map(|instruction| instruction.targets.len()).sum();
+        assert_eq!(targets, MAX_LISTING_SWITCH_TARGETS);
+        let text: usize =
+            instructions.iter().filter_map(|instruction| instruction.operand.as_ref()).map(String::len).sum();
+        assert!(text < MAX_LISTING_SWITCH_TARGETS * 10, "{text} bytes of switch labels");
+        assert_eq!(instructions.last().unwrap().operand.as_deref(), Some("(... 4096 more)"));
+        let capped = warnings.0.iter().filter(|warning| warning.contains("switch targets")).count();
+        assert_eq!(capped, 1, "{:?}", warnings.0);
     }
 
     #[test]
