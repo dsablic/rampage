@@ -153,9 +153,12 @@ fn kind(decoded: &Decoded, address: u64) -> Kind {
     }
 }
 
-/// The instruction's flow, with conditions applied: a conditional return or indirect jump falls through.
-pub fn flow(decoded: &Decoded, address: u64) -> Flow {
-    kind(decoded, address).flow(conditional(decoded))
+/// The instruction's flow, with conditions applied: a conditional return or indirect jump falls through. The flag
+/// is [`Insn::conditional`].
+pub fn flow(decoded: &Decoded, address: u64) -> (Flow, bool) {
+    let kind = kind(decoded, address);
+    let conditional = conditional(decoded);
+    (kind.flow(conditional), kind.is_conditional_transfer(conditional))
 }
 
 /// Register values known within a straight-line run: addresses built from literal pools, MOVW/MOVT pairs and
@@ -471,7 +474,14 @@ fn is_non_canonical(decoded: &Decoded) -> bool {
 impl Disassembler for Aarch32Disassembler {
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
         self.switches.clear();
-        let invalid = Insn { address, len: self.unit(address), flow: Flow::Invalid, data_ref: None, immediate: None };
+        let invalid = Insn {
+            address,
+            len: self.unit(address),
+            flow: Flow::Invalid,
+            data_ref: None,
+            immediate: None,
+            conditional: false,
+        };
         let it = self.it_at(address);
         let thumb = self.is_thumb(address);
         let decoded = self.decode_at(bytes, address, it);
@@ -495,12 +505,13 @@ impl Disassembler for Aarch32Disassembler {
             advanced.in_block().then_some((next, advanced))
         };
         let found = self.track(&decoded, address, bytes);
-        let mut flow = flow(&decoded, address);
+        let (mut flow, mut conditional_transfer) = flow(&decoded, address);
         if decoded.mnemonic() == "LDR"
             && register(&decoded, "Rt") == Some(PC)
             && let Some(pointer) = found.immediate
         {
             flow = Kind::Jump(Some(pointer & !1)).flow(conditional(&decoded));
+            conditional_transfer = false;
             self.modes.entry(pointer & !1).or_insert(pointer & 1 != 0);
             self.switches.insert(pointer & !1, pointer & 1 != 0);
         }
@@ -526,7 +537,14 @@ impl Disassembler for Aarch32Disassembler {
         self.sequential_mode =
             matches!(flow, Flow::Next | Flow::Call(_) | Flow::IndirectCall | Flow::ConditionalJump(_))
                 .then_some((next, thumb));
-        Insn { address, len: decoded.size(), flow, data_ref: found.data_ref, immediate: found.immediate }
+        Insn {
+            address,
+            len: decoded.size(),
+            flow,
+            data_ref: found.data_ref,
+            immediate: found.immediate,
+            conditional: conditional_transfer,
+        }
     }
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {

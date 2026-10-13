@@ -39,7 +39,7 @@ impl Disassembler for X86Disassembler {
         let instruction = self.decode_raw(bytes, address);
         if instruction.is_invalid() {
             self.jump_table = None;
-            return Insn { address, len: 1, flow: Flow::Invalid, data_ref: None, immediate: None };
+            return Insn { address, len: 1, flow: Flow::Invalid, data_ref: None, immediate: None, conditional: false };
         }
         self.jump_table = self.registers.step(&instruction, self.bitness, &mut self.info);
         let mut flow = flow_of(&instruction);
@@ -56,6 +56,7 @@ impl Disassembler for X86Disassembler {
             flow,
             data_ref: memory_ref_of(&instruction),
             immediate: pointer_immediate_of(&instruction),
+            conditional: false,
         }
     }
 

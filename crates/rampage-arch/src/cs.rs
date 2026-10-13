@@ -68,7 +68,7 @@ impl CapstoneDisassembler {
             let Ok(instructions) = self.engine.disasm_count(code, at, 1) else { return false };
             let Some(insn) = instructions.iter().next() else { return false };
             let Ok(detail) = self.engine.insn_detail(insn) else { return false };
-            if classify(self.target.arch, insn, &detail) != Flow::Next {
+            if classify(self.target.arch, insn, &detail) != (Flow::Next, false) {
                 return false;
             }
             match link_use(self.target.arch, insn.mnemonic().unwrap_or(""), insn.op_str().unwrap_or("")) {
@@ -134,7 +134,9 @@ fn powerpc(mnemonic: &str, is_branch: bool) -> Option<Branch> {
     let kind = match mnemonic {
         "trap" => return branch(Kind::Halt, false),
         _ if !mnemonic.starts_with('b') || !is_branch => return None,
-        _ if mnemonic.ends_with("lrl") || mnemonic.ends_with("ctrl") => INDIRECT_CALL,
+        _ if mnemonic.ends_with("lrl") || mnemonic.ends_with("ctrl") => {
+            return branch(INDIRECT_CALL, !unconditional("blrl") && !unconditional("bctrl"));
+        }
         _ if mnemonic.ends_with("lr") => return branch(Kind::Return, !unconditional("blr")),
         _ if mnemonic.ends_with("ctr") => return branch(INDIRECT_JUMP, !unconditional("bctr")),
         "bl" | "bla" => CALL,
@@ -194,10 +196,17 @@ fn s390x(mnemonic: &str, operands: &str, is_branch: bool) -> Option<Branch> {
         "j" | "jg" => JUMP,
         "br" | "b" => INDIRECT_JUMP,
         "jnop" | "jgnop" | "nop" | "nopr" | "bc" | "bcr" => return None,
-        // Compare and branch to a register-based address (`cib`, `crb`); the relative forms end in `j` (`crj`).
-        _ if mnemonic.starts_with('c') && !mnemonic.contains('j') => return None,
-        // A conditional branch to a register or memory: a conditional return, or a computed branch.
-        _ if mnemonic.starts_with('b') && !mnemonic.starts_with("br") => return None,
+        // Compare and branch to a register-based address (`cib`, `crb`; the relative forms end in `j`, `crj`), and a
+        // conditional branch to a register or memory (`ber`, `be`): a conditional return through %r14, or a
+        // computed branch.
+        _ if mnemonic.starts_with('c') && !mnemonic.contains('j')
+            || mnemonic.starts_with('b') && !mnemonic.starts_with("br") =>
+        {
+            return is_branch.then(|| {
+                let returns = operands == "%r14" || operands.ends_with(" 0(%r14)");
+                Branch { kind: if returns { Kind::Return } else { INDIRECT_JUMP }, conditional: true }
+            });
+        }
         _ if is_branch => return branch(JUMP, true),
         _ => return None,
     };
@@ -221,8 +230,8 @@ fn m68k(mnemonic: &str) -> Option<Branch> {
     branch(kind, false)
 }
 
-/// Classifies `insn`'s control flow.
-fn classify(arch: Arch, insn: &Insn, detail: &capstone::InsnDetail) -> Flow {
+/// Classifies `insn`'s control flow, and whether it is a conditional transfer ([`Decoded::conditional`]).
+fn classify(arch: Arch, insn: &Insn, detail: &capstone::InsnDetail) -> (Flow, bool) {
     {
         let address = insn.address();
         let mnemonic = insn.mnemonic().unwrap_or("");
@@ -262,7 +271,7 @@ fn classify(arch: Arch, insn: &Insn, detail: &capstone::InsnDetail) -> Flow {
         });
 
         match branch {
-            None => Flow::Next,
+            None => (Flow::Next, false),
             Some(Branch { kind, conditional }) => {
                 let kind = match kind {
                     Kind::Halt => crate::flow::Kind::Halt,
@@ -270,7 +279,7 @@ fn classify(arch: Arch, insn: &Insn, detail: &capstone::InsnDetail) -> Flow {
                     Kind::Call { direct } => crate::flow::Kind::Call(target.filter(|_| direct)),
                     Kind::Jump { direct } => crate::flow::Kind::Jump(target.filter(|_| direct)),
                 };
-                kind.flow(conditional)
+                (kind.flow(conditional), kind.is_conditional_transfer(conditional))
             }
         }
     }
@@ -315,8 +324,14 @@ fn link_use(arch: Arch, mnemonic: &str, operands: &str) -> LinkUse {
 
 impl Disassembler for CapstoneDisassembler {
     fn decode(&mut self, bytes: &[u8], address: u64) -> Decoded {
-        let invalid =
-            Decoded { address, len: self.minimum_length(), flow: Flow::Invalid, data_ref: None, immediate: None };
+        let invalid = Decoded {
+            address,
+            len: self.minimum_length(),
+            flow: Flow::Invalid,
+            data_ref: None,
+            immediate: None,
+            conditional: false,
+        };
         let Ok(instructions) = self.engine.disasm_count(bytes, address, 1) else { return invalid };
         let Some(insn) = instructions.iter().next() else { return invalid };
         let Ok(detail) = self.engine.insn_detail(insn) else { return invalid };
@@ -324,7 +339,8 @@ impl Disassembler for CapstoneDisassembler {
         let mnemonic = insn.mnemonic().unwrap_or("");
         // Execution continues after the delay slot, whose instruction is as long as the branch's (MIPS, SPARC).
         let next = address.wrapping_add(insn.len() as u64 * (1 + u64::from(arch.delay_slots())));
-        let flow = match classify(arch, insn, &detail) {
+        let (classified, conditional) = classify(arch, insn, &detail);
+        let flow = match classified {
             // `bcl 20, 31, .+4` is the form the ISA reserves for reading the PC (Capstone may print it as a
             // conditional `bdnzl`); no call to a function is a conditional branch to the next instruction.
             Flow::Call(target)
@@ -344,7 +360,15 @@ impl Disassembler for CapstoneDisassembler {
             (Flow::IndirectJump, Some(target)) => Flow::Jump(target),
             (flow, _) => flow,
         };
-        Decoded { address, len: insn.len() as u8, flow, data_ref: found.data_ref, immediate: found.immediate }
+        Decoded {
+            address,
+            len: insn.len() as u8,
+            flow,
+            data_ref: found.data_ref,
+            immediate: found.immediate,
+            // A get-PC call is no call at all.
+            conditional: conditional && (classified == Flow::Next || flow != Flow::Next),
+        }
     }
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {
@@ -355,7 +379,7 @@ impl Disassembler for CapstoneDisassembler {
         // Capstone prints a RISC-V branch's target as its offset from the branch; show the address, as elsewhere.
         if matches!(self.target.arch, Arch::Riscv32 | Arch::Riscv64)
             && let Ok(detail) = self.engine.insn_detail(insn)
-            && let Flow::Call(target) | Flow::Jump(target) | Flow::ConditionalJump(target) =
+            && let (Flow::Call(target) | Flow::Jump(target) | Flow::ConditionalJump(target), _) =
                 classify(self.target.arch, insn, &detail)
         {
             let kept = operands.rfind(", ").map_or("", |at| &operands[..at + 2]);

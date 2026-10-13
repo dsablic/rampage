@@ -401,7 +401,9 @@ fn explore(
     let is_other_function = |address: u64| address != start && known.contains(&address);
     let mut exits = Exits::default();
     let mut noreturn_calls = Vec::new();
+    // A conditional call may be skipped, so only an unconditional one ends its block.
     let never_returns = |insn: &rampage_arch::Insn, resolved: Option<Flow>| match insn.flow {
+        _ if insn.conditional => false,
         Flow::Call(target) => noreturn.contains(&target),
         Flow::IndirectCall | Flow::IndirectJump => {
             let resolved = resolved.and_then(|flow| match flow {
@@ -524,7 +526,11 @@ fn explore(
             record_refs(&insn, &mut xrefs, &mut code_pointers);
             let stops = never_returns(&insn, resolved);
             match insn.flow {
-                Flow::Next => address = next,
+                Flow::Next => {
+                    // A conditional return or indirect jump may leave the function here.
+                    exits.returns |= insn.conditional;
+                    address = next;
+                }
                 Flow::Call(_) | Flow::IndirectCall => {
                     if let Flow::Call(target) = insn.flow {
                         xrefs.push(Xref { to: target, from: address, kind: XrefKind::Call });
@@ -1130,6 +1136,43 @@ mod tests {
         let program = run_noreturn(Arch::X86_64, bytes, &[0x10], &[]);
         assert!(program.noreturn.is_empty());
         assert!(program.function_at(0x10).unwrap().contains(0x19));
+    }
+
+    fn arm(words: &[(usize, u32)], size: usize) -> Vec<u8> {
+        let mut bytes = vec![0; size];
+        for &(at, word) in words {
+            bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn a_conditional_call_to_a_noreturn_callee_falls_through() {
+        // 0: cmp r0, #0; 4: blne 0x40 (abort); 8: mov r0, #1; c: bx lr. 40: bx lr
+        let words = [(0, 0xe350_0000), (4, 0x1b00_000d), (8, 0xe3a0_0001), (0xc, 0xe12f_ff1e), (0x40, 0xe12f_ff1e)];
+        let program = run_noreturn(Arch::Arm, arm(&words, 0x44), &[0], &[0x40]);
+        assert_eq!(blocks(&program, 0), [(0, 0x10)]);
+        assert!(program.noreturn_calls.is_empty());
+        assert_eq!(program.noreturn, [0x40]);
+    }
+
+    #[test]
+    fn a_conditional_return_is_a_way_out() {
+        // f at 0: cmp r0, #0; 4: bxeq lr; 8: bl 0x40 (abort). g at 0x20: bl 0; 24: mov r0, #1; 28: bx lr.
+        // 40: bx lr
+        let words = [
+            (0, 0xe350_0000),
+            (4, 0x012f_ff1e),
+            (8, 0xeb00_000c),
+            (0x20, 0xebff_fff6),
+            (0x24, 0xe3a0_0001),
+            (0x28, 0xe12f_ff1e),
+            (0x40, 0xe12f_ff1e),
+        ];
+        let program = run_noreturn(Arch::Arm, arm(&words, 0x44), &[0x20], &[0x40]);
+        assert_eq!(program.noreturn, [0x40]);
+        assert_eq!(program.noreturn_calls, [8]);
+        assert_eq!(blocks(&program, 0x20), [(0x20, 0x2c)]);
     }
 
     #[test]

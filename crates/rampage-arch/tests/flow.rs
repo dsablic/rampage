@@ -131,6 +131,51 @@ fn thumb_it_blocks_make_their_instructions_conditional() {
     assert_eq!(decoder.decode(&code[2..], AT + 0x10).flow, Flow::Return);
 }
 
+/// Calls, returns and register-indirect jumps that happen only under a condition say so: a conditional call may
+/// not be made, and a conditional return (its flow is `Next`) may leave the function.
+#[test]
+fn conditional_calls_returns_and_indirect_jumps_are_marked() {
+    use Flow::*;
+    let cases = [
+        (Target::new(Arch::Arm), "0d00001b", Call(0x103c), true), // blne
+        (Target::new(Arch::Arm), "0d0000eb", Call(0x103c), false), // bl
+        (Target::new(Arch::Arm), "1eff2f01", Next, true),         // bxeq lr
+        (Target::new(Arch::Arm), "1eff2fe1", Return, false),      // bx lr
+        (Target::new(Arch::Arm), "33ff2f11", IndirectCall, true), // blxne r3
+        (Target::new(Arch::Arm), "13ff2f11", Next, true),         // bxne r3
+        (Target::new(Arch::Arm), "000000ba", ConditionalJump(0x1008), false), // blt
+        (Target::new(Arch::Arm), "0000a013", Next, false),        // movne r0, #0
+        (thumb(), "18bf8047", Next, false),                       // it ne (the IT itself)
+        (big_endian(Arch::PowerPc), "4c820020", Next, true),      // bnelr
+        (big_endian(Arch::PowerPc), "4c820420", Next, true),      // bnectr
+        (big_endian(Arch::PowerPc), "4c820421", IndirectCall, true), // bnectrl
+        (big_endian(Arch::PowerPc), "4e800421", IndirectCall, false), // bctrl
+        (big_endian(Arch::PowerPc), "42400103", Call(0x100), true), // bdzla 0x100
+        (big_endian(Arch::PowerPc), "429f0005", Next, false),     // bcl 20, 31, .+4 (reads the PC)
+        (big_endian(Arch::Mips), "04910002", Call(0x100c), true), // bgezal $4
+        (big_endian(Arch::Mips), "04110002", Call(0x100c), false), // bal
+        (big_endian(Arch::S390x), "078e", Next, true),            // ber %r14
+        (big_endian(Arch::S390x), "ec18e00064fe", Next, true),    // cibe %r1, 100, 0(%r14)
+        (big_endian(Arch::S390x), "07fe", Return, false),         // br %r14
+        (big_endian(Arch::S390x), "0700", Next, false),           // bcr 0, %r0 (a nop)
+    ];
+    for (target, hex, flow, conditional) in cases {
+        let mut decoder = decoder(&target).unwrap();
+        let code = bytes(hex);
+        let insn = decoder.decode(&code, AT);
+        let text = decoder.format(&code, AT);
+        assert_eq!((insn.flow, insn.conditional), (flow, conditional), "{:?} {hex} ({text})", target.arch);
+    }
+    // Inside an IT block, Thumb's `bl` and `bx lr` are conditional too.
+    let mut decoder = decoder(&thumb()).unwrap();
+    let code = bytes("18bf00f002f87047"); // it ne; blne 0x100c; bx lr (outside the one-instruction block)
+    assert!(!decoder.decode(&code, AT).conditional);
+    let call = decoder.decode(&code[2..], AT + 2);
+    assert_eq!((call.flow, call.conditional), (Call(0x100a), true));
+    let after = decoder.decode(&code[6..], AT + 6);
+    assert_eq!((after.flow, after.conditional), (Return, false));
+}
+
 #[test]
 fn mips() {
     use Flow::*;

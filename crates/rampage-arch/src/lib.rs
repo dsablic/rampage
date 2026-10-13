@@ -205,6 +205,12 @@ pub struct Insn {
     /// know immediates are meaningful as addresses (images not based at zero) should treat it as one.
     #[serde(serialize_with = "crate::hex::optional_address")]
     pub immediate: Option<u64>,
+    /// The call, return or register-indirect jump the instruction makes happens only when a condition holds, so
+    /// execution may instead continue at the next instruction: `flow` is then the call, or [`Flow::Next`] for a
+    /// return or indirect jump, which may leave the function. Conditional direct jumps are
+    /// [`Flow::ConditionalJump`] and leave this unset.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub conditional: bool,
 }
 
 /// Most entries a switch jump table is read for; a larger proven bound leaves the jump unresolved.

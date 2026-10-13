@@ -47,6 +47,7 @@ impl Project {
                 flow: line.flow,
                 data_ref: line.data_ref,
                 immediate: line.immediate,
+                conditional: false,
             };
             ir.push(rampage_arch::ir::lift(self.binary.arch, &bytes, &insn));
         }

@@ -24,4 +24,10 @@ impl Kind {
             Self::Jump(None) => Flow::IndirectJump,
         }
     }
+
+    /// Whether this predicated kind is a call, return or register-indirect jump that [`crate::Insn::conditional`]
+    /// marks.
+    pub(crate) fn is_conditional_transfer(self, conditional: bool) -> bool {
+        conditional && matches!(self, Self::Call(_) | Self::Return | Self::Jump(None))
+    }
 }

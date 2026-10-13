@@ -107,6 +107,7 @@ impl Disassembler for A64Disassembler {
                 flow: Flow::Invalid,
                 data_ref: None,
                 immediate: None,
+                conditional: false,
             };
         };
         match decode_word(word) {
@@ -118,9 +119,9 @@ impl Disassembler for A64Disassembler {
                     self.resolved = Some(flow);
                 }
                 self.jump_base = jump_base;
-                Insn { address, len: 4, flow, data_ref, immediate: None }
+                Insn { address, len: 4, flow, data_ref, immediate: None, conditional: false }
             }
-            None => Insn { address, len: 4, flow: Flow::Invalid, data_ref: None, immediate: None },
+            None => Insn { address, len: 4, flow: Flow::Invalid, data_ref: None, immediate: None, conditional: false },
         }
     }
 
