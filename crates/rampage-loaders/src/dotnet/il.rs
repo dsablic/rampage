@@ -645,7 +645,9 @@ pub(super) fn disassemble<'a>(
     let mut names = Names::new(decoder, metadata);
     let (instructions, cut) = decode(code, &mut |token, warnings| names.operand(token, warnings), &mut warnings);
     let exception_clauses = if body.more_sections && code.len() == body.code_size as usize {
-        exception_clauses(bytes, method.rva, declared_end, &mut names, &mut warnings)
+        let clauses = exception_clauses(bytes, method.rva, declared_end, &mut names, &mut warnings);
+        check_clause_ranges(&clauses, body.code_size, &mut warnings);
+        clauses
     } else {
         Vec::new()
     };
@@ -914,6 +916,28 @@ fn exception_clauses(
     clauses
 }
 
+/// Warns of each clause range that leaves the `code_length` bytes of IL, as branch targets past the body are.
+fn check_clause_ranges(clauses: &[ExceptionClause], code_length: u32, warnings: &mut Warnings) {
+    for (clause, number) in clauses.iter().zip(1..) {
+        let ranges = [("try", clause.try_start, clause.try_end), ("handler", clause.handler_start, clause.handler_end)];
+        for (what, start, end) in ranges {
+            if start >= code_length || end > code_length {
+                warnings.push(format!(
+                    "exception clause {number} {what} {} to {} runs past the {code_length}-byte body",
+                    label(start),
+                    label(end)
+                ));
+            }
+        }
+        if let Some(filter) = clause.filter_start.filter(|&filter| filter >= code_length) {
+            warnings.push(format!(
+                "exception clause {number} filter {} lies past the {code_length}-byte body",
+                label(filter)
+            ));
+        }
+    }
+}
+
 fn exception_clause(clause: &[u8], fat: bool, names: &mut Names, warnings: &mut Warnings) -> ExceptionClause {
     // Small clauses (II.25.4.6) pack 2-byte offsets and 1-byte lengths; fat ones use 4 bytes for each.
     let fields: [u32; 6] = if fat {
@@ -1068,6 +1092,33 @@ mod tests {
         assert!(
             ambiguous("M".to_owned(), ["a".to_owned(), "b".to_owned()].into_iter()).to_string().ends_with(": a; b")
         );
+    }
+
+    #[test]
+    fn clause_ranges_past_the_body_are_reported() {
+        let inside = ExceptionClause {
+            kind: ClauseKind::Filter,
+            flags: 1,
+            try_start: 0,
+            try_end: 4,
+            handler_start: 6,
+            handler_end: 8,
+            filter_start: Some(4),
+            catch_token: None,
+            catch_type: None,
+        };
+        let past = ExceptionClause { try_start: 8, try_end: 8, filter_start: Some(9), ..inside.clone() };
+        let mut warnings = Warnings::default();
+        check_clause_ranges(&[inside.clone(), past], 8, &mut warnings);
+        assert_eq!(
+            warnings.0,
+            [
+                "exception clause 2 try IL_0008 to IL_0008 runs past the 8-byte body",
+                "exception clause 2 filter IL_0009 lies past the 8-byte body",
+            ]
+        );
+        check_clause_ranges(&[inside], 7, &mut warnings);
+        assert_eq!(warnings.0[2], "exception clause 1 handler IL_0006 to IL_0008 runs past the 7-byte body");
     }
 
     #[test]

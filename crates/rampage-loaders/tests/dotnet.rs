@@ -926,7 +926,14 @@ fn decodes_crafted_operands_and_exception_sections() {
             "IL_002a: br.s IL_00ab",
         ]
     );
-    assert_eq!(il.warnings, ["br.s at IL_002a targets IL_00ab past the body"]);
+    assert_eq!(
+        il.warnings,
+        [
+            "br.s at IL_002a targets IL_00ab past the body",
+            "exception clause 2 try IL_0020 to IL_0030 runs past the 44-byte body",
+            "exception clause 2 handler IL_0030 to IL_0038 runs past the 44-byte body",
+        ]
+    );
     let clauses: Vec<String> = il.exception_clauses.iter().map(dotnet::ExceptionClause::text).collect();
     assert_eq!(
         clauses,
