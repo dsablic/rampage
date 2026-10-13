@@ -76,9 +76,25 @@ fn batch_id() -> String {
     format!("{:x}-{nanos:x}-{count:x}", std::process::id())
 }
 
-/// Appended to an undo's refusal, which repeats until the step is undone or discarded.
+/// Appended to an undo's refusal over another client's edits, which repeats until the step is undone or discarded.
 const DISCARD_HINT: &str =
     "; discard_undo drops this step from the undo history (its edits stay in effect) so earlier ones can be undone";
+
+/// Why replaying a step changed nothing.
+enum Refusal {
+    /// Another client's edits since block it; trying again will not help until they change.
+    Blocked(String),
+    /// The result failed validation, or the log could not be written.
+    Failed(String),
+}
+
+impl Refusal {
+    fn message(self) -> String {
+        match self {
+            Self::Blocked(message) | Self::Failed(message) => message,
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Annotations {
@@ -366,7 +382,10 @@ impl Annotations {
         self.refresh()?;
         let Some(step) = self.done.last().cloned() else { return Ok(Vec::new()) };
         let inverses: Vec<Edit> = step.iter().rev().map(Edit::inverse).collect();
-        self.replay(&inverses, validate).map_err(|error| format!("{error}{DISCARD_HINT}"))?;
+        self.replay(&inverses, validate).map_err(|refusal| match refusal {
+            Refusal::Blocked(message) => format!("{message}{DISCARD_HINT}"),
+            Refusal::Failed(message) => message,
+        })?;
         self.done.pop();
         self.undone.push(step.clone());
         Ok(step)
@@ -394,7 +413,7 @@ impl Annotations {
         let _lock = self.log_lock()?;
         self.refresh()?;
         let Some(step) = self.undone.last().cloned() else { return Ok(Vec::new()) };
-        self.replay(&step, validate)?;
+        self.replay(&step, validate).map_err(Refusal::message)?;
         self.undone.pop();
         self.done.push(step.clone());
         Ok(step)
@@ -402,39 +421,46 @@ impl Annotations {
 
     /// Commits `edits` in order, each only over the value it replaces, and only once `validate` accepts the result
     /// when the step touches what the decompiler checks.
-    fn replay(&mut self, edits: &[Edit], validate: impl FnOnce(&Self) -> Result<(), String>) -> Result<(), String> {
+    fn replay(&mut self, edits: &[Edit], validate: impl FnOnce(&Self) -> Result<(), String>) -> Result<(), Refusal> {
         let mut candidate = self.snapshot();
-        let mut conflicts = Vec::new();
-        for edit in edits {
-            if !candidate.is_unchanged(edit) {
-                conflicts.push(edit.address);
-            }
-            candidate.apply(edit);
-        }
-        if !conflicts.is_empty() {
-            conflicts.sort_unstable();
-            conflicts.dedup();
-            let verb = if conflicts.len() == 1 { "was" } else { "were" };
-            return Err(format!("{} {verb} edited by another client since; not changed", address_list(&conflicts)));
-        }
-        let mut taken = Vec::new();
-        for edit in edits.iter().filter(|edit| edit.field == Field::Name) {
-            let Some(name) = &edit.value else { continue };
-            if candidate.names.iter().any(|(&address, other)| other == name && address != edit.address) {
-                taken.push(format!("{name:?}"));
-            }
-        }
-        if !taken.is_empty() {
-            return Err(format!("another client has since given {} to another address; not changed", taken.join(", ")));
+        if let Some(message) = candidate.blocked(edits) {
+            return Err(Refusal::Blocked(message));
         }
         let checked = edits.iter().any(|edit| {
             matches!(edit.field, Field::Signature | Field::Types | Field::Global)
                 || (edit.field == Field::Name && !candidate.globals().is_empty())
         });
         if checked {
-            validate(&candidate)?;
+            validate(&candidate).map_err(Refusal::Failed)?;
         }
-        self.commit(edits)
+        self.commit(edits).map_err(Refusal::Failed)
+    }
+
+    /// Applies `edits` to this state, saying why they cannot be replayed over other clients' edits: a field
+    /// changed since, or a name since given to another address. `None` when nothing blocks them.
+    fn blocked(&mut self, edits: &[Edit]) -> Option<String> {
+        let mut conflicts = Vec::new();
+        for edit in edits {
+            if !self.is_unchanged(edit) {
+                conflicts.push(edit.address);
+            }
+            self.apply(edit);
+        }
+        if !conflicts.is_empty() {
+            conflicts.sort_unstable();
+            conflicts.dedup();
+            let verb = if conflicts.len() == 1 { "was" } else { "were" };
+            return Some(format!("{} {verb} edited by another client since; not changed", address_list(&conflicts)));
+        }
+        let mut taken = Vec::new();
+        for edit in edits.iter().filter(|edit| edit.field == Field::Name) {
+            let Some(name) = &edit.value else { continue };
+            if self.names.iter().any(|(&address, other)| other == name && address != edit.address) {
+                taken.push(format!("{name:?}"));
+            }
+        }
+        (!taken.is_empty())
+            .then(|| format!("another client has since given {} to another address; not changed", taken.join(", ")))
     }
 
     /// Whether `edit`'s field still holds `edit.previous`: if another client changed it since, undoing or redoing
@@ -705,6 +731,30 @@ mod tests {
         assert_eq!(ui.undo().unwrap()[0].address, 0x20);
         assert_eq!(ui.comment(0x20), None);
         assert!(ui.discard_undo_step().is_empty());
+        cleanup(path);
+    }
+
+    #[test]
+    fn only_a_refusal_over_another_clients_edit_suggests_discarding() {
+        let mut annotations = Annotations::in_memory();
+        annotations.set(Field::Signature, 0x10, Some("int4 f(void);".into())).unwrap();
+        let error = annotations.undo_validated(|_| Err("the decompiler rejects it".to_owned())).unwrap_err();
+        assert_eq!(error, "the decompiler rejects it");
+
+        let path = temporary_log("undo-io");
+        let mut writer = Annotations::open(path.clone()).unwrap();
+        writer.set(Field::Comment, 0x10, Some("note".into())).unwrap();
+        let writable = std::fs::metadata(&path).unwrap().permissions();
+        let mut read_only = writable.clone();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(&path, read_only).unwrap();
+        let error = writer.undo().unwrap_err();
+        assert!(!error.contains("discard_undo"), "{error}");
+        std::fs::set_permissions(&path, writable).unwrap();
+
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        agent.set(Field::Comment, 0x10, Some("changed".into())).unwrap();
+        assert!(writer.undo().unwrap_err().contains("discard_undo"));
         cleanup(path);
     }
 
