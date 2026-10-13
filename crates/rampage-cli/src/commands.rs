@@ -857,6 +857,64 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
     Ok(())
 }
 
+pub fn dotnet_il(
+    out: &mut impl Write,
+    path: &Path,
+    query: &rampage_api::DotNetIlQuery,
+    options: &Options,
+) -> Result<()> {
+    let Some(il) = open(path, options)?.dotnet_il(query)? else {
+        if options.json {
+            return write_json(out, &serde_json::Value::Null);
+        }
+        writeln!(out, "not a .NET assembly (no CLI header)")?;
+        return Ok(());
+    };
+    if options.json {
+        return write_json(out, &il);
+    }
+    writeln!(out, "method     {} (token {:#010x})", il.method, il.token)?;
+    writeln!(out, "signature  {}", il.signature)?;
+    writeln!(
+        out,
+        "body       {} header, {} bytes of IL at RVA {:#x}, max stack {}",
+        label(&il.body.header),
+        il.body.code_size,
+        il.rva,
+        il.body.max_stack
+    )?;
+    if !il.locals.is_empty() {
+        let locals: Vec<String> =
+            il.locals.iter().enumerate().map(|(index, ty)| format!("[{index}] {ty} V_{index}")).collect();
+        let init = if il.init_locals { "init " } else { "" };
+        writeln!(out, ".locals {init}({})", locals.join(", "))?;
+    }
+    for clause in &il.exception_clauses {
+        writeln!(out, "{}", clause.text())?;
+    }
+    writeln!(out)?;
+    for instruction in &il.instructions.items {
+        writeln!(out, "{}", instruction.text())?;
+    }
+    let page = &il.instructions;
+    let shown = page.offset + page.items.len();
+    if shown < page.total {
+        writeln!(
+            out,
+            "\n... {} more instructions (page with --il {} --offset {shown})",
+            page.total - shown,
+            query.method
+        )?;
+    }
+    if il.truncated {
+        writeln!(out, "listing truncated before the end of the body")?;
+    }
+    for warning in &il.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    Ok(())
+}
+
 fn dotnet_types(out: &mut impl Write, types: &rampage_api::Page<rampage_loaders::dotnet::TypeDef>) -> Result<()> {
     if types.items.is_empty() {
         writeln!(out, "\nno types match")?;

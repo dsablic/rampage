@@ -135,6 +135,22 @@ fn dotnet_pages_types_and_shows_the_module_and_entry_point() {
 }
 
 #[test]
+fn dotnet_il_lists_a_method_a_page_at_a_time() {
+    rampage(&["dotnet", "--il", "System.SR::GetResourceString", "--limit", "3"], ASSEMBLY)
+        .success()
+        .stdout(contains("method     System.SR::GetResourceString (token 0x06"))
+        .stdout(contains(".locals init ([0] string V_0)"))
+        .stdout(contains(".try IL_0010 to IL_001e catch System.Resources.MissingManifestResourceException"))
+        .stdout(contains("IL_0000: call bool System.SR::UsingResourceKeys()\nIL_0005: brfalse.s IL_000e\n"))
+        .stdout(contains("more instructions (page with --il System.SR::GetResourceString --offset 3)"));
+    let page = json(&["--json", "dotnet", "--il", "0x0600000d", "--offset", "1", "--limit", "1"], ASSEMBLY);
+    assert_eq!(page["instructions"]["items"][0]["opcode"], "box");
+    assert_eq!(page["instructions"]["items"][0]["token"], 0x1B00_0001);
+    rampage(&["dotnet", "--il", "System.HashCode::Combine"], ASSEMBLY).failure().stderr(contains("0x0600000d"));
+    rampage(&["dotnet", "--il", "Main", "--contains", "x"], ASSEMBLY).failure().stderr(contains("cannot be used"));
+}
+
+#[test]
 fn dotnet_shows_signatures_and_attributes() {
     rampage(&["dotnet", "--contains", "hashcode"], ASSEMBLY)
         .success()
