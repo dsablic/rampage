@@ -4,6 +4,7 @@ mod about;
 pub mod assistant;
 mod band;
 mod carve;
+mod debugger;
 mod graph;
 mod listing;
 mod tabs;
@@ -39,6 +40,7 @@ pub struct App {
     /// keeps Escape in a text field from also going back.
     typing: bool,
     about: bool,
+    debugger: debugger::Debugger,
 }
 
 fn default_layout() -> DockState<Tab> {
@@ -63,6 +65,7 @@ impl Default for App {
             themed: false,
             typing: false,
             about: false,
+            debugger: debugger::Debugger::default(),
         }
     }
 }
@@ -126,6 +129,11 @@ impl App {
         self.about = true;
     }
 
+    /// Opens the local read-only debugger window without connecting or requiring a loaded binary.
+    pub fn show_debugger(&mut self) {
+        self.debugger.shown = true;
+    }
+
     pub fn workspace_mut(&mut self) -> Option<&mut Workspace> {
         self.workspace.as_mut()
     }
@@ -160,8 +168,10 @@ impl App {
             about::show(&ui.ctx().clone(), &mut self.about, &self.session.packs());
         }
         self.carve_window(&ui.ctx().clone());
+        self.debugger.show(ui.ctx());
         let Some(workspace) = &mut self.workspace else {
             egui::CentralPanel::default().show(ui, |ui| self.empty(ui));
+            self.shortcuts(ui.ctx());
             return;
         };
         egui::Panel::top("band").exact_size(18.0).show(ui, |ui| band::show(ui, workspace));
@@ -219,6 +229,9 @@ impl App {
             self.focus_tab(view);
         }
         let typing = std::mem::replace(&mut self.typing, ctx.egui_wants_keyboard_input());
+        if !typing && !self.typing && ctx.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::D)) {
+            self.show_debugger();
+        }
         let Some(workspace) = &mut self.workspace else { return };
         if typing || self.typing || workspace.editing.is_some() {
             return;
@@ -330,6 +343,12 @@ impl App {
             let brand = ui.add(
                 egui::Label::new(RichText::new("rampage").strong().color(theme::LINK)).sense(egui::Sense::click()),
             );
+            brand.context_menu(|ui| {
+                if ui.button("Read-only debugger (Cmd+D)").clicked() {
+                    self.show_debugger();
+                    ui.close();
+                }
+            });
             if brand.on_hover_text("About rampage").clicked() {
                 self.about = true;
             }
