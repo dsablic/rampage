@@ -1,7 +1,8 @@
 //! Data packs: directories that extend the heuristic databases (function signatures, PeID overlays, YARA rules,
 //! capa rules) and declare in a `rampage-pack.toml` manifest what they hold, under which licence and from where.
 //! A pack is data only: nothing is downloaded or executed. Every path stays inside the pack directory, every file
-//! is read with a size cap, and a content that fails to load is reported without keeping the others from loading.
+//! is read once, with a size cap and within running budgets per pack and for all packs together, and a content that
+//! fails to load is reported without keeping the others from loading.
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -12,7 +13,7 @@ use rampage_capabilities::CapaRuleSet;
 use serde::{Deserialize, Serialize};
 
 use crate::files::{MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MAX_SIGNATURE_DB_BYTES};
-use crate::files::read_open_bounded;
+use crate::files::{read_open_bounded, size_label};
 
 /// The manifest file at the root of every pack directory.
 pub const MANIFEST_FILE: &str = "rampage-pack.toml";
@@ -34,6 +35,9 @@ const MAX_SOURCE_CHARS: usize = 2048;
 const MAX_DESCRIPTION_CHARS: usize = 4096;
 /// PeID problems named in a content's detail; the rest are counted.
 const MAX_PEID_WARNINGS: usize = 3;
+const MIB: u64 = 1024 * 1024;
+/// Packs loaded in one process; directories past these are reported, not read.
+const MAX_PACKS: usize = 64;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -143,16 +147,34 @@ impl Packs {
     /// Loads the packs in `directories`, in order; a directory given again (by any path) is loaded once, where it
     /// first appears. Problems are recorded in each pack's info, never returned.
     pub fn load(directories: &[PathBuf]) -> Self {
+        Self::load_within(directories, PACK_BUDGET, TOTAL_BUDGET)
+    }
+
+    fn load_within(directories: &[PathBuf], pack: Budget, total: Budget) -> Self {
         let mut packs = Self::default();
         let mut names = HashSet::from([BUILTIN_PACK.to_owned()]);
         let mut seen = HashSet::new();
+        let mut loading = Loading { pack, total, read: HashSet::new() };
         for directory in directories {
             if let Ok(canonical) = directory.canonicalize()
                 && !seen.insert(canonical)
             {
                 continue;
             }
-            packs.add(directory, &mut names);
+            if packs.packs.len() >= MAX_PACKS {
+                let error = Some(format!("more than {MAX_PACKS} packs are given; this one was not loaded"));
+                let given = Some(directory.to_owned());
+                packs.packs.push(PackInfo {
+                    directory: given,
+                    builtin: false,
+                    manifest: None,
+                    error,
+                    contents: vec![],
+                });
+                continue;
+            }
+            loading.pack = pack;
+            packs.add(directory, &mut names, &mut loading);
         }
         packs
     }
@@ -213,14 +235,14 @@ impl Packs {
         &self.capa
     }
 
-    fn add(&mut self, directory: &Path, names: &mut HashSet<String>) {
+    fn add(&mut self, directory: &Path, names: &mut HashSet<String>, loading: &mut Loading) {
         let given = Some(directory.to_owned());
         let mut info = PackInfo { directory: given, builtin: false, manifest: None, error: None, contents: Vec::new() };
-        match open_manifest(directory, names) {
+        match open_manifest(directory, names, loading) {
             Err(error) => info.error = Some(error),
             Ok((root, manifest)) => {
                 for entry in &manifest.contents {
-                    let (status, detail) = match self.load_content(&root, &manifest.name, entry) {
+                    let (status, detail) = match self.load_content(&root, &manifest.name, entry, loading) {
                         Ok(detail) => (ContentStatus::Loaded, detail),
                         Err(problem) => problem,
                     };
@@ -240,13 +262,27 @@ impl Packs {
     }
 
     /// Loads one content, returning a summary of what it added, or its status and why it added nothing.
-    fn load_content(&mut self, root: &Path, pack: &str, entry: &Entry) -> Result<String, (ContentStatus, String)> {
+    fn load_content(
+        &mut self,
+        root: &Path,
+        pack: &str,
+        entry: &Entry,
+        loading: &mut Loading,
+    ) -> Result<String, (ContentStatus, String)> {
         let error = |text: String| (ContentStatus::Error, text);
+        if entry.kind == Kind::Constants {
+            return Err((
+                ContentStatus::Unsupported,
+                "constants packs are not supported in this version: the crypto-constant database takes no user \
+                 data yet"
+                    .to_owned(),
+            ));
+        }
         let path = contained(root, &entry.path).map_err(error)?;
         match entry.kind {
             Kind::Signatures => {
-                let text =
-                    read_contained(root, &path, MAX_SIGNATURE_DB_BYTES, "signature database").map_err(error)?;
+                let planned = loading.plan(path, MAX_SIGNATURE_DB_BYTES, "signature database").map_err(error)?;
+                let text = read_planned(root, &planned, "signature database").map_err(error)?;
                 let database = rampage_signatures::SignatureDb::from_json(&text)
                     .map_err(|problem| error(format!("invalid signature database: {problem}")))?;
                 let declared = entry.arch.as_deref().map(str::parse::<Arch>).transpose().map_err(error)?;
@@ -265,10 +301,12 @@ impl Packs {
                 Ok(detail)
             }
             Kind::Peid => {
-                let text = read_contained(root, &path, MAX_PEID_BYTES, "PeID database").map_err(error)?;
+                let planned = loading.plan(path, MAX_PEID_BYTES, "PeID database").map_err(error)?;
+                let text = read_planned(root, &planned, "PeID database").map_err(error)?;
                 let mut database = rampage_detect::SignatureDb::new();
                 let skipped =
                     database.load_peid(&text).map_err(|problem| error(format!("PeID database: {problem}")))?;
+                loading.keep_peid(database.signatures.len()).map_err(error)?;
                 let mut detail = format!("{} PeID signatures", database.signatures.len());
                 if !skipped.is_empty() {
                     let named: Vec<String> = skipped.iter().take(MAX_PEID_WARNINGS).map(ToString::to_string).collect();
@@ -278,8 +316,8 @@ impl Packs {
                 Ok(detail)
             }
             Kind::Yara => {
-                let files = rule_files(root, &path, &["yar", "yara"], false).map_err(error)?;
-                let sources = read_rule_files(root, &files, "YARA rules").map_err(error)?;
+                let files = rule_files(root, &path, &["yar", "yara"], false, loading).map_err(error)?;
+                let sources = read_rule_files(root, files, "YARA rules", loading).map_err(error)?;
                 let origins: Vec<(String, String)> =
                     sources.into_iter().map(|(file, text)| (file.display().to_string(), text)).collect();
                 let rules = rampage_yara::compile_sources(Some(pack), &origins)
@@ -288,34 +326,146 @@ impl Packs {
                 Ok(format!("{} YARA rule files", origins.len()))
             }
             Kind::Capa => {
-                let files = rule_files(root, &path, &["yml", "yaml"], true).map_err(error)?;
-                let sources = read_rule_files(root, &files, "capa rule").map_err(error)?;
+                let files = rule_files(root, &path, &["yml", "yaml"], true, loading).map_err(error)?;
+                let count = files.len();
+                let sources = read_rule_files(root, files, "capa rule", loading).map_err(error)?;
                 let rules = rampage_capabilities::load_capa_rule_texts(
                     sources.iter().map(|(file, text)| (file.as_path(), text.as_str())),
                 )
                 .map_err(|problem| error(format!("capa rules: {problem}")))?;
-                let detail = format!("{} usable file-scope capa rules from {} files", rules.len(), files.len());
+                let detail = format!("{} usable file-scope capa rules from {count} files", rules.len());
                 self.capa.push(rules);
                 Ok(detail)
             }
-            Kind::Constants => Err((
-                ContentStatus::Unsupported,
-                "constants packs are not supported in this version: the crypto-constant database takes no user \
-                 data yet"
-                    .to_owned(),
-            )),
+            Kind::Constants => unreachable!("handled above"),
         }
     }
 }
 
+/// What loading may still read and keep: bytes and files read, directories listed and PeID signatures kept. One
+/// budget covers each pack, another every pack together; both are running totals, charged before anything is read
+/// or kept.
+#[derive(Debug, Clone, Copy)]
+struct Budget {
+    scope: &'static str,
+    bytes: u64,
+    files: usize,
+    directories: usize,
+    peid: usize,
+}
+
+const PACK_BUDGET: Budget =
+    Budget { scope: "one pack", bytes: 512 * MIB, files: 10_000, directories: 4_096, peid: 100_000 };
+const TOTAL_BUDGET: Budget =
+    Budget { scope: "all packs together", bytes: 1024 * MIB, files: 50_000, directories: 16_384, peid: 100_000 };
+
+/// Identifies a file however it was reached, so that one file is read once.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FileKey {
+    #[cfg(unix)]
+    Inode(u64, u64),
+    #[cfg(not(unix))]
+    Path(PathBuf),
+}
+
+fn file_key(_path: &Path, metadata: &std::fs::Metadata) -> FileKey {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        FileKey::Inode(metadata.dev(), metadata.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        FileKey::Path(_path.to_owned())
+    }
+}
+
+/// A pack file checked and paid for, not yet read.
+struct Planned {
+    path: PathBuf,
+    length: u64,
+    key: FileKey,
+}
+
+/// The running budgets of one load and the files it has read.
+struct Loading {
+    pack: Budget,
+    total: Budget,
+    read: HashSet<FileKey>,
+}
+
+impl Loading {
+    /// Checks that the canonical `path` is a regular file of at most `max` bytes not read before, and charges it to
+    /// both budgets.
+    fn plan(&mut self, path: PathBuf, max: u64, what: &str) -> Result<Planned, String> {
+        let invalid = |reason: String| format!("cannot read {what} {}: {reason}", path.display());
+        let metadata = std::fs::metadata(&path).map_err(|error| invalid(error.to_string()))?;
+        if !metadata.is_file() {
+            return Err(invalid("not a regular file".to_owned()));
+        }
+        if metadata.len() > max {
+            return Err(invalid(format!("larger than {}", size_label(max))));
+        }
+        let key = file_key(&path, &metadata);
+        if self.read.contains(&key) {
+            return Err(format!("{} was already read: each file loads once", path.display()));
+        }
+        for budget in [&self.pack, &self.total] {
+            if budget.files == 0 || metadata.len() > budget.bytes {
+                return Err(format!("reading {} would exceed the read budget of {}", path.display(), budget.scope));
+            }
+        }
+        for budget in [&mut self.pack, &mut self.total] {
+            budget.files -= 1;
+            budget.bytes -= metadata.len();
+        }
+        self.read.insert(key.clone());
+        Ok(Planned { path, length: metadata.len(), key })
+    }
+
+    /// Charges listing one directory to both budgets.
+    fn keep_peid(&mut self, signatures: usize) -> Result<(), String> {
+        for budget in [&self.pack, &self.total] {
+            if signatures > budget.peid {
+                return Err(format!(
+                    "keeping {signatures} PeID signatures would exceed the budget of {}",
+                    budget.scope
+                ));
+            }
+        }
+        for budget in [&mut self.pack, &mut self.total] {
+            budget.peid -= signatures;
+        }
+        Ok(())
+    }
+
+    fn list(&mut self, directory: &Path) -> Result<(), String> {
+        for budget in [&self.pack, &self.total] {
+            if budget.directories == 0 {
+                let path = directory.display();
+                return Err(format!("listing {path} would exceed the directory budget of {}", budget.scope));
+            }
+        }
+        for budget in [&mut self.pack, &mut self.total] {
+            budget.directories -= 1;
+        }
+        Ok(())
+    }
+}
+
 /// The canonical pack directory and its validated manifest.
-fn open_manifest(directory: &Path, names: &mut HashSet<String>) -> Result<(PathBuf, Manifest), String> {
+fn open_manifest(
+    directory: &Path,
+    names: &mut HashSet<String>,
+    loading: &mut Loading,
+) -> Result<(PathBuf, Manifest), String> {
     let root = directory.canonicalize().map_err(|error| format!("cannot open pack directory: {error}"))?;
     if !root.is_dir() {
         return Err("not a directory".to_owned());
     }
-    let path = contained(&root, MANIFEST_FILE)?;
-    let text = read_contained(&root, &path, MAX_PACK_MANIFEST_BYTES, "pack manifest")?;
+    let planned = loading.plan(contained(&root, MANIFEST_FILE)?, MAX_PACK_MANIFEST_BYTES, "pack manifest")?;
+    let text = read_planned(&root, &planned, "pack manifest")?;
     let manifest: Manifest = toml::from_str(&text).map_err(|error| format!("invalid {MANIFEST_FILE}: {error}"))?;
     validate(&manifest)?;
     if manifest.name == USER_RULES_NAMESPACE {
@@ -424,17 +574,27 @@ fn open_beneath(root: &Path, relative: &Path) -> std::io::Result<File> {
     File::open(root.join(relative))
 }
 
-/// The UTF-8 text of the pack file at the checked `target`, up to `max` bytes.
-fn read_contained(root: &Path, target: &Path, max: u64, what: &str) -> Result<String, String> {
-    let file = open_contained(root, target)?;
-    read_open_bounded(file, target, max, what).map_err(|error| error.to_string())
+/// Reads a planned file through [`open_contained`], refusing one replaced or grown since it was planned.
+fn read_planned(root: &Path, planned: &Planned, what: &str) -> Result<String, String> {
+    let file = open_contained(root, &planned.path)?;
+    let metadata = file.metadata().map_err(|error| format!("cannot read {}: {error}", planned.path.display()))?;
+    if file_key(&planned.path, &metadata) != planned.key {
+        return Err(format!("{} changed while the pack was loading", planned.path.display()));
+    }
+    read_open_bounded(file, &planned.path, planned.length, what).map_err(|error| error.to_string())
 }
 
 /// The rule files a content names: the file itself, or the files with one of `extensions` in the directory (and,
-/// when `recursive`, its subdirectories), sorted, each as the canonical path checked to be inside the pack. Symbolic
-/// links to files are taken only when they stay inside the pack; linked directories are not followed, which also
-/// rules out cycles.
-fn rule_files(root: &Path, path: &Path, extensions: &[&str], recursive: bool) -> Result<Vec<PathBuf>, String> {
+/// when `recursive`, its subdirectories), sorted, each as the canonical path checked to be inside the pack and once
+/// however many links name it. Symbolic links to files are taken only when they stay inside the pack; linked
+/// directories are not followed, which also rules out cycles. Every directory listed is charged to `loading`.
+fn rule_files(
+    root: &Path,
+    path: &Path,
+    extensions: &[&str],
+    recursive: bool,
+    loading: &mut Loading,
+) -> Result<Vec<PathBuf>, String> {
     if path.is_file() {
         return Ok(vec![path.to_owned()]);
     }
@@ -449,6 +609,7 @@ fn rule_files(root: &Path, path: &Path, extensions: &[&str], recursive: bool) ->
     let mut files = Vec::new();
     let mut pending = vec![(path.to_owned(), 0)];
     while let Some((directory, depth)) = pending.pop() {
+        loading.list(&directory)?;
         for entry in std::fs::read_dir(&directory).map_err(|error| failure(&directory, error))? {
             let entry = entry.map_err(|error| failure(&directory, error))?;
             let file = entry.path();
@@ -480,11 +641,20 @@ fn rule_files(root: &Path, path: &Path, extensions: &[&str], recursive: bool) ->
         return Err(format!("no {} files in {}", names.join("/"), path.display()));
     }
     files.sort();
+    files.dedup();
     Ok(files)
 }
 
-fn read_rule_files(root: &Path, files: &[PathBuf], what: &str) -> Result<Vec<(PathBuf, String)>, String> {
-    files.iter().map(|file| Ok((file.clone(), read_contained(root, file, MAX_RULE_FILE_BYTES, what)?))).collect()
+/// Reads `files` once all of them are planned, so that a content over budget is refused before any is read.
+fn read_rule_files(
+    root: &Path,
+    files: Vec<PathBuf>,
+    what: &str,
+    loading: &mut Loading,
+) -> Result<Vec<(PathBuf, String)>, String> {
+    let planned: Vec<Planned> =
+        files.into_iter().map(|file| loading.plan(file, MAX_RULE_FILE_BYTES, what)).collect::<Result<_, _>>()?;
+    planned.into_iter().map(|file| Ok((file.path.clone(), read_planned(root, &file, what)?))).collect()
 }
 
 /// The databases bundled in rampage, described as a pack.
@@ -541,6 +711,25 @@ mod tests {
             std::fs::create_dir_all(&path).unwrap();
             Self(path.canonicalize().unwrap())
         }
+
+        fn write(&self, relative: &str, contents: &str) {
+            let path = self.0.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+
+        /// A pack named `name` with one content of `kind` at `path`.
+        fn pack(name: &str, kind: &str, path: &str) -> Self {
+            let pack = Self::new(name);
+            pack.write(
+                MANIFEST_FILE,
+                &format!(
+                    "name = \"{name}\"\nversion = \"1\"\nlicense = \"MIT\"\nsource = \"test\"\ndescription = \"test\"\n\
+                     [[contents]]\nkind = \"{kind}\"\npath = \"{path}\"\n"
+                ),
+            );
+            pack
+        }
     }
 
     impl Drop for Scratch {
@@ -549,37 +738,54 @@ mod tests {
         }
     }
 
+    const PEID: &str = "[Unit DOS Header]\nsignature = 4D 5A\nep_only = false\n";
+
+    fn detail(packs: &Packs, pack: usize) -> (ContentStatus, &str) {
+        let content = &packs.loaded()[pack].contents[0];
+        (content.status, content.detail.as_str())
+    }
+
     #[test]
     fn a_link_swapped_in_after_the_check_is_not_followed() {
         let outside = Scratch::new("swap-outside");
-        std::fs::create_dir_all(outside.0.join("rules")).unwrap();
-        std::fs::write(outside.0.join("rules/a.yar"), "outside").unwrap();
-        std::fs::write(outside.0.join("b.yar"), "outside").unwrap();
+        outside.write("rules/a.yar", "outside");
+        outside.write("b.yar", "outside");
         let pack = Scratch::new("swap");
-        std::fs::create_dir_all(pack.0.join("rules")).unwrap();
-        std::fs::write(pack.0.join("rules/a.yar"), "inside").unwrap();
-        std::fs::write(pack.0.join("b.yar"), "inside").unwrap();
+        pack.write("rules/a.yar", "inside");
+        pack.write("b.yar", "inside");
 
-        let directory = contained(&pack.0, "rules/a.yar").unwrap();
+        let nested = contained(&pack.0, "rules/a.yar").unwrap();
         let file = contained(&pack.0, "b.yar").unwrap();
-        assert_eq!(read_contained(&pack.0, &directory, 64, "rule").unwrap(), "inside");
+        assert!(open_contained(&pack.0, &nested).is_ok());
         // Between the check and the open, a directory and a file become links out of the pack.
         std::fs::rename(pack.0.join("rules"), pack.0.join("moved")).unwrap();
         std::os::unix::fs::symlink(outside.0.join("rules"), pack.0.join("rules")).unwrap();
         std::fs::remove_file(pack.0.join("b.yar")).unwrap();
         std::os::unix::fs::symlink(outside.0.join("b.yar"), pack.0.join("b.yar")).unwrap();
-        assert!(read_contained(&pack.0, &directory, 64, "rule").is_err());
-        assert!(read_contained(&pack.0, &file, 64, "rule").is_err());
+        assert!(open_contained(&pack.0, &nested).is_err());
+        assert!(open_contained(&pack.0, &file).is_err());
     }
 
     #[test]
-    fn rule_files_are_the_checked_link_targets() {
+    fn a_file_replaced_after_planning_is_not_read() {
+        let pack = Scratch::new("replaced");
+        pack.write("b.yar", "first");
+        let mut loading = Loading { pack: PACK_BUDGET, total: TOTAL_BUDGET, read: HashSet::new() };
+        let planned = loading.plan(contained(&pack.0, "b.yar").unwrap(), 64, "rule").unwrap();
+        std::fs::remove_file(pack.0.join("b.yar")).unwrap();
+        pack.write("b.yar", "a longer replacement");
+        let error = read_planned(&pack.0, &planned, "rule").unwrap_err();
+        assert!(error.contains("changed while the pack was loading") || error.contains("larger than"), "{error}");
+    }
+
+    #[test]
+    fn rule_files_are_the_checked_link_targets_once_each() {
         let pack = Scratch::new("targets");
-        std::fs::create_dir_all(pack.0.join("rules")).unwrap();
-        std::fs::write(pack.0.join("real.yar"), "rule").unwrap();
-        std::os::unix::fs::symlink(pack.0.join("real.yar"), pack.0.join("rules/alias.yar")).unwrap();
-        let files = rule_files(&pack.0, &pack.0.join("rules"), &["yar"], false).unwrap();
-        assert_eq!(files, [pack.0.join("real.yar")]);
+        pack.write("rules/real.yar", "rule");
+        std::os::unix::fs::symlink(pack.0.join("rules/real.yar"), pack.0.join("rules/alias.yar")).unwrap();
+        let mut loading = Loading { pack: PACK_BUDGET, total: TOTAL_BUDGET, read: HashSet::new() };
+        let files = rule_files(&pack.0, &pack.0.join("rules"), &["yar"], false, &mut loading).unwrap();
+        assert_eq!(files, [pack.0.join("rules/real.yar")]);
     }
 
     #[test]
@@ -587,7 +793,51 @@ mod tests {
         let pack = Scratch::new("fifo");
         let fifo = pack.0.join("rules.yar");
         assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
-        let error = read_contained(&pack.0, &fifo, 64, "rule").unwrap_err();
+        let error = open_contained(&pack.0, &fifo).unwrap_err();
         assert!(error.contains("not a regular file"), "{error}");
+    }
+
+    #[test]
+    fn directories_listed_are_charged_to_the_budget() {
+        let pack = Scratch::pack("deep", "capa", "rules");
+        for nested in ["rules/a/b/c", "rules/d", "rules/e"] {
+            std::fs::create_dir_all(pack.0.join(nested)).unwrap();
+        }
+        pack.write("rules/rule.yml", "rule: {}");
+        let budget = Budget { directories: 4, ..PACK_BUDGET };
+        let packs = Packs::load_within(std::slice::from_ref(&pack.0), budget, TOTAL_BUDGET);
+        let (status, text) = detail(&packs, 0);
+        assert_eq!(status, ContentStatus::Error);
+        assert!(text.contains("directory budget of one pack"), "{text}");
+    }
+
+    #[test]
+    fn the_budget_of_all_packs_is_a_running_total() {
+        let first = Scratch::pack("first", "peid", "userdb.txt");
+        let second = Scratch::pack("second", "peid", "userdb.txt");
+        for pack in [&first, &second] {
+            pack.write("userdb.txt", PEID);
+        }
+        let manifest = std::fs::metadata(first.0.join(MANIFEST_FILE)).unwrap().len();
+        let one_pack = manifest + PEID.len() as u64;
+        let total = Budget { bytes: one_pack * 2 - 1, ..TOTAL_BUDGET };
+        let directories = [first.0.clone(), second.0.clone()];
+        let packs = Packs::load_within(&directories, PACK_BUDGET, total);
+        assert_eq!(detail(&packs, 0).0, ContentStatus::Loaded);
+        let (status, text) = detail(&packs, 1);
+        assert_eq!(status, ContentStatus::Error);
+        assert!(text.contains("read budget of all packs together"), "{text}");
+
+        let files = Budget { files: 3, ..TOTAL_BUDGET };
+        let packs = Packs::load_within(&directories, PACK_BUDGET, files);
+        assert!(packs.loaded()[1].contents[0].detail.contains("all packs together"), "{:?}", packs.loaded());
+
+        let peid = Budget { peid: 1, ..TOTAL_BUDGET };
+        let packs = Packs::load_within(&directories, PACK_BUDGET, peid);
+        assert_eq!(detail(&packs, 0).0, ContentStatus::Loaded);
+        let (status, text) = detail(&packs, 1);
+        assert_eq!(status, ContentStatus::Error);
+        assert!(text.contains("PeID signatures would exceed the budget of all packs together"), "{text}");
+        assert_eq!(packs.peid().signatures.len(), 1);
     }
 }

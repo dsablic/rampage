@@ -293,6 +293,46 @@ fn oversized_files_are_rejected() {
 }
 
 #[test]
+fn a_file_named_by_several_contents_is_read_once() {
+    let pack = Scratch::new("duplicate");
+    pack.write("userdb.txt", PEID);
+    let content = "[[contents]]\nkind = \"peid\"\npath = \"userdb.txt\"\n";
+    pack.write("rampage-pack.toml", &manifest("duplicate", &content.repeat(3)));
+    let info = Packs::check(&pack.0);
+    assert_eq!(
+        statuses(&info),
+        [("peid", ContentStatus::Loaded), ("peid", ContentStatus::Error), ("peid", ContentStatus::Error)]
+    );
+    assert!(info.contents[1].detail.contains("already read"), "{info:?}");
+}
+
+#[test]
+fn rule_files_over_the_pack_budget_are_refused_before_any_is_read() {
+    let pack = Scratch::new("budget");
+    std::fs::create_dir_all(pack.0.join("yara")).unwrap();
+    // Sparse files just under the per-file cap, together over the per-pack read budget.
+    for index in 0..40 {
+        let file = std::fs::File::create(pack.0.join(format!("yara/{index:02}.yar"))).unwrap();
+        file.set_len(rampage_api::MAX_RULE_FILE_BYTES - 1).unwrap();
+    }
+    pack.write("rampage-pack.toml", &manifest("budget", "[[contents]]\nkind = \"yara\"\npath = \"yara\"\n"));
+    let started = std::time::Instant::now();
+    let info = Packs::check(&pack.0);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert_eq!(statuses(&info), [("yara", ContentStatus::Error)]);
+    assert!(info.contents[0].detail.contains("read budget of one pack"), "{info:?}");
+}
+
+#[test]
+fn packs_past_the_cap_are_reported_without_being_read() {
+    let directories: Vec<PathBuf> = (0..70).map(|index| PathBuf::from(format!("/nonexistent/pack-{index}"))).collect();
+    let packs = Packs::load(&directories);
+    assert_eq!(packs.loaded().len(), 70);
+    assert!(packs.loaded()[63].error.as_ref().unwrap().contains("cannot open pack directory"));
+    assert!(packs.loaded()[64].error.as_ref().unwrap().contains("more than 64 packs"));
+}
+
+#[test]
 fn a_broken_content_does_not_block_the_others() {
     let pack = Scratch::new("broken");
     pack.write("yara/broken.yar", "rule broken {");

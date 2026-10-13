@@ -49,7 +49,7 @@ pub(crate) fn read_open_bounded(file: File, path: &Path, max: u64, what: &str) -
     String::from_utf8(bytes).map_err(|_| invalid("not UTF-8 text".to_owned()))
 }
 
-fn size_label(bytes: u64) -> String {
+pub(crate) fn size_label(bytes: u64) -> String {
     if bytes >= MIB && bytes.is_multiple_of(MIB) { format!("{} MiB", bytes / MIB) } else { format!("{bytes} bytes") }
 }
 
