@@ -708,12 +708,12 @@ async fn list_packs_reports_loaded_packs_and_scans_use_their_rules() {
     let client = connect_to(RampageServer::with_groups(Group::ALL).with_packs(packs)).await;
 
     let listing = json_of(&call(&client, "list_packs", json!({})).await);
-    assert_eq!(listing[0]["name"], "rampage-builtin");
-    assert_eq!(listing[0]["license"], "Apache-2.0");
-    assert_eq!(listing[1]["name"], "mcp-pack");
-    assert_eq!(listing[1]["source"], "https://example.com/mcp-pack");
-    assert_eq!(listing[1]["contents"][0]["status"], "loaded");
-    assert_eq!(listing[1]["contents"][1]["status"], "unsupported");
+    assert_eq!(listing[1]["name"], "rampage-builtin");
+    assert_eq!(listing[1]["license"], "Apache-2.0");
+    assert_eq!(listing[0]["name"], "mcp-pack");
+    assert_eq!(listing[0]["source"], "https://example.com/mcp-pack");
+    assert_eq!(listing[0]["contents"][0]["status"], "loaded");
+    assert_eq!(listing[0]["contents"][1]["status"], "unsupported");
 
     let matches = json_of(&call(&client, "yara_scan", json!({ "path": fixture("hello-x64.exe") })).await);
     assert_eq!(matches[0]["identifier"], "mcp_pe", "{matches}");

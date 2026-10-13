@@ -30,8 +30,9 @@ notifications/tools/list_changed. Without `groups` nothing changes.";
 
 const LIST_PACKS: &str = "list_packs";
 const LIST_PACKS_DESCRIPTION: &str = "\
-List the heuristic-database packs in effect: the built-in one (bundled signatures, tool and crypto-constant \
-databases) and every data pack loaded with --pack or RAMPAGE_PACKS, in precedence order. Each has its name, \
+List the heuristic-database packs in effect, in precedence order: every data pack loaded with --pack or \
+RAMPAGE_PACKS (earlier ones first), then the built-in one (bundled signatures, tool and crypto-constant \
+databases), which applies last. Each has its name, \
 version, SPDX licence, source (provenance) and description, and each content its kind, path and status (loaded, \
 error or unsupported) with a detail saying what loaded or why not. Takes no arguments.";
 

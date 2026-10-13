@@ -89,12 +89,13 @@ fn a_valid_pack_takes_effect_in_identify_detect_yara_and_capa() {
     assert!(packs.problems().is_empty(), "{:?}", packs.problems());
     let listing = packs.listing();
     assert_eq!(listing.len(), 2);
-    let builtin = &listing[0];
+    // Precedence order: the packs, then the built-in databases they layer over.
+    let builtin = &listing[1];
     assert!(builtin.builtin);
     let manifest = builtin.manifest.as_ref().unwrap();
     assert_eq!((manifest.name.as_str(), manifest.license.as_str()), ("rampage-builtin", "Apache-2.0"));
     assert!(builtin.contents.iter().any(|content| content.kind == "signatures"));
-    let loaded = &listing[1];
+    let loaded = &listing[0];
     assert_eq!(loaded.manifest.as_ref().unwrap().license, "MIT OR Apache-2.0");
     assert_eq!(
         statuses(loaded),

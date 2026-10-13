@@ -34,7 +34,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum PacksCommand {
-    /// List the built-in pack and every pack loaded with --pack or RAMPAGE_PACKS, with each content's status
+    /// List every pack loaded with --pack or RAMPAGE_PACKS, then the built-in one (precedence order), with each
+    /// content's status
     List,
     /// Validate one pack directory and report each content's status; fails when anything does not load
     Check { directory: PathBuf },

@@ -198,9 +198,9 @@ impl Packs {
         &self.get().packs
     }
 
-    /// The built-in pack followed by every loaded pack.
+    /// Every loaded pack, then the built-in one: the order in which they are applied, the first taking precedence.
     pub fn listing(&self) -> Vec<PackInfo> {
-        std::iter::once(builtin()).chain(self.loaded().iter().cloned()).collect()
+        self.loaded().iter().cloned().chain(std::iter::once(builtin())).collect()
     }
 
     /// One line for each rejected pack and each content that failed or is unsupported.
