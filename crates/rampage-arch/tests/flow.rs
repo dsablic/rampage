@@ -85,6 +85,25 @@ fn thumb_branches() {
     );
 }
 
+/// A call whose target is the next instruction reads the PC only when the code there takes the return address
+/// from the link register; otherwise a function just happens to follow (hello-thumb `bl _Exit`, hello-ppc
+/// `bl _start_c`, whose prologue saves the link register through r0).
+#[test]
+fn a_call_to_the_next_instruction_is_a_call_unless_the_code_there_reads_the_link_register() {
+    let cases = [
+        (thumb(), "00f000f880b5", Flow::Call(0x1004)), // bl; push {r7, lr}
+        (Target::new(Arch::Arm), "ffffffeb", Flow::Call(0x1004)), // bl
+        (big_endian(Arch::PowerPc), "480000057c0802a6", Flow::Call(0x1004)), // bl; mflr r0
+        (big_endian(Arch::PowerPc), "480000057fc802a6", Flow::Next), // bl; mflr r30
+        (big_endian(Arch::PowerPc), "4800000560000000", Flow::Call(0x1004)), // bl; nop
+    ];
+    for (target, hex, expected) in cases {
+        let mut decoder = decoder(&target).unwrap();
+        let code = bytes(hex);
+        assert_eq!(decoder.decode(&code, AT).flow, expected, "{:?} {hex} ({})", target.arch, decoder.format(&code, AT));
+    }
+}
+
 #[test]
 fn thumb_it_blocks_make_their_instructions_conditional() {
     let mut decoder = decoder(&thumb()).unwrap();

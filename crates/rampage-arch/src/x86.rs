@@ -42,10 +42,18 @@ impl Disassembler for X86Disassembler {
             return Insn { address, len: 1, flow: Flow::Invalid, data_ref: None, immediate: None };
         }
         self.jump_table = self.registers.step(&instruction, self.bitness, &mut self.info);
+        let mut flow = flow_of(&instruction);
+        // `call 1f; 1: pop reg` reads the PC; a callee would not start by popping its own return address.
+        if flow == Flow::Call(instruction.next_ip())
+            && let Some(following) = bytes.get(instruction.len()..)
+            && self.decode_raw(following, instruction.next_ip()).mnemonic() == Mnemonic::Pop
+        {
+            flow = Flow::Next;
+        }
         Insn {
             address,
             len: instruction.len() as u8,
-            flow: flow_of(&instruction),
+            flow,
             data_ref: memory_ref_of(&instruction),
             immediate: pointer_immediate_of(&instruction),
         }
@@ -177,6 +185,15 @@ mod tests {
         assert_eq!(decode_all(&[0xe8, 0, 0, 0, 0], 0x1000)[0].flow, Flow::Call(0x1005));
         assert_eq!(decode_all(&[0x74, 0x02], 0x1000)[0].flow, Flow::ConditionalJump(0x1004));
         assert_eq!(decode_all(&[0xeb, 0xfe], 0x1000)[0].flow, Flow::Jump(0x1000));
+    }
+
+    #[test]
+    fn a_call_to_the_next_instruction_reads_the_pc_only_when_that_pops_it() {
+        let mut decoder = decoder_for(Arch::X86).unwrap();
+        // call 0x1005; pop ebx
+        assert_eq!(decoder.decode(&[0xe8, 0, 0, 0, 0, 0x5b], 0x1000).flow, Flow::Next);
+        // call 0x1005; push ebp: a function that happens to follow.
+        assert_eq!(decoder.decode(&[0xe8, 0, 0, 0, 0, 0x55], 0x1000).flow, Flow::Call(0x1005));
     }
 
     #[test]

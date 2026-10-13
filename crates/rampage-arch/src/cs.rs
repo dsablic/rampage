@@ -56,6 +56,29 @@ impl CapstoneDisassembler {
             _ => 4,
         }
     }
+
+    /// Whether the code at `target`, which a call at `address` (whose bytes start `bytes`) links to, takes the
+    /// return address as a value: the get-PC idioms `bal 1f; nop; 1: addu $gp, $gp, $ra`, `bl 1f; 1: mflr r30`
+    /// and `call 1f; nop; 1: add %o7, %l7, %l7`. A callee saves it instead, or returns through it.
+    fn reads_link(&self, bytes: &[u8], address: u64, target: u64) -> bool {
+        let mut at = target;
+        for _ in 0..LINK_READ_WINDOW {
+            let offset = at.checked_sub(address).and_then(|offset| usize::try_from(offset).ok());
+            let Some(code) = offset.and_then(|offset| bytes.get(offset..)) else { return false };
+            let Ok(instructions) = self.engine.disasm_count(code, at, 1) else { return false };
+            let Some(insn) = instructions.iter().next() else { return false };
+            let Ok(detail) = self.engine.insn_detail(insn) else { return false };
+            if classify(self.target.arch, insn, &detail) != Flow::Next {
+                return false;
+            }
+            match link_use(self.target.arch, insn.mnemonic().unwrap_or(""), insn.op_str().unwrap_or("")) {
+                LinkUse::Read => return true,
+                LinkUse::Clobber => return false,
+                LinkUse::Neither => at = at.wrapping_add(insn.len() as u64),
+            }
+        }
+        false
+    }
 }
 
 /// What a control-flow instruction does, before its target is known.
@@ -238,7 +261,6 @@ fn classify(arch: Arch, insn: &Insn, detail: &capstone::InsnDetail) -> Flow {
             _ => None,
         });
 
-        let next = address.wrapping_add(insn.len() as u64);
         match branch {
             None => Flow::Next,
             Some(Branch { kind, conditional }) => {
@@ -248,10 +270,47 @@ fn classify(arch: Arch, insn: &Insn, detail: &capstone::InsnDetail) -> Flow {
                     Kind::Call { direct } => crate::flow::Kind::Call(target.filter(|_| direct)),
                     Kind::Jump { direct } => crate::flow::Kind::Jump(target.filter(|_| direct)),
                 };
-                kind.flow(conditional, next)
+                kind.flow(conditional)
             }
         }
     }
+}
+
+/// How many instructions at a call's target are searched for a read of the return address.
+const LINK_READ_WINDOW: usize = 4;
+
+/// What one instruction does with the return address in the link register, judged by its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkUse {
+    /// Takes it as a value: the code is reading the PC.
+    Read,
+    /// Saves or overwrites it, as a callee's prologue does.
+    Clobber,
+    Neither,
+}
+
+fn link_use(arch: Arch, mnemonic: &str, operands: &str) -> LinkUse {
+    let operands: Vec<&str> = operands.split(", ").collect();
+    let (link, destination_last) = match arch {
+        Arch::Mips | Arch::Mips64 => ("$ra", false),
+        Arch::Sparc | Arch::Sparc64 => ("%o7", true),
+        Arch::PowerPc | Arch::PowerPc64 => {
+            // A prologue saves the link register through r0, which cannot serve as a base register.
+            return match mnemonic {
+                "mflr" if operands != ["r0"] => LinkUse::Read,
+                "mflr" | "mtlr" => LinkUse::Clobber,
+                _ => LinkUse::Neither,
+            };
+        }
+        _ => return LinkUse::Neither,
+    };
+    if mnemonic == "save" {
+        return LinkUse::Clobber;
+    }
+    let Some(position) = operands.iter().position(|operand| *operand == link) else { return LinkUse::Neither };
+    let is_store = mnemonic.starts_with('s') && operands.iter().any(|operand| operand.contains(['(', '[']));
+    let destination = if destination_last { operands.len() - 1 } else { 0 };
+    if is_store || position == destination { LinkUse::Clobber } else { LinkUse::Read }
 }
 
 impl Disassembler for CapstoneDisassembler {
@@ -262,8 +321,19 @@ impl Disassembler for CapstoneDisassembler {
         let Some(insn) = instructions.iter().next() else { return invalid };
         let Ok(detail) = self.engine.insn_detail(insn) else { return invalid };
         let arch = self.target.arch;
-        let flow = classify(arch, insn, &detail);
         let mnemonic = insn.mnemonic().unwrap_or("");
+        let next = address.wrapping_add(insn.len() as u64);
+        let flow = match classify(arch, insn, &detail) {
+            // `bcl 20, 31, .+4` is the form the ISA reserves for reading the PC (Capstone may print it as a
+            // conditional `bdnzl`); no call to a function is a conditional branch to the next instruction.
+            Flow::Call(target)
+                if target == next && matches!(arch, Arch::PowerPc | Arch::PowerPc64) && mnemonic != "bl" =>
+            {
+                Flow::Next
+            }
+            Flow::Call(target) if target == next && self.reads_link(bytes, address, target) => Flow::Next,
+            flow => flow,
+        };
         let operands = track::operands(&detail);
         let writes = track::written_registers(arch, mnemonic, &detail, &operands);
         let is_call = matches!(flow, Flow::Call(_) | Flow::IndirectCall);

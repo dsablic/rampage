@@ -155,13 +155,7 @@ fn kind(decoded: &Decoded, address: u64) -> Kind {
 
 /// The instruction's flow, with conditions applied: a conditional return or indirect jump falls through.
 pub fn flow(decoded: &Decoded, address: u64) -> Flow {
-    let kind = kind(decoded, address);
-    if decoded.mnemonic() == "BLX"
-        && let Kind::Call(Some(target)) = kind
-    {
-        return Flow::Call(target);
-    }
-    kind.flow(conditional(decoded), address.wrapping_add(u64::from(decoded.size())))
+    kind(decoded, address).flow(conditional(decoded))
 }
 
 /// Register values known within a straight-line run: addresses built from literal pools, MOVW/MOVT pairs and
@@ -506,7 +500,7 @@ impl Disassembler for Aarch32Disassembler {
             && register(&decoded, "Rt") == Some(PC)
             && let Some(pointer) = found.immediate
         {
-            flow = Kind::Jump(Some(pointer & !1)).flow(conditional(&decoded), next);
+            flow = Kind::Jump(Some(pointer & !1)).flow(conditional(&decoded));
             self.modes.entry(pointer & !1).or_insert(pointer & 1 != 0);
             self.switches.insert(pointer & !1, pointer & 1 != 0);
         }
