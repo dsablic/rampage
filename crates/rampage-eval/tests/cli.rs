@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use assert_cmd::Command;
-use rampage_eval::{Evaluation, Truth};
+use rampage_eval::{Evaluation, Outcome, ToolTruth, Truth};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -77,7 +77,8 @@ fn run_prints_the_report_and_a_summary_and_passes_the_gate() {
 /// identifies a different program linking the same static musl, scored only on functions the reference defines;
 /// it is what identifying a real binary looks like, and functions whose masked hash still encodes a
 /// layout-dependent value are its misses. discovery finds the twin's function starts; its spurious starts are
-/// unsized assembly the truth leaves out (`_start`, `__set_thread_area`).
+/// unsized assembly the truth leaves out (`_start`, `__set_thread_area`). toolid names the producing tools of
+/// every committed fixture with a recorded build; like discovery it tolerates spurious answers and gates precision.
 #[test]
 fn run_manifest_reports_every_slice_at_its_baseline() {
     let output = eval().arg("run").arg("--manifest").arg(data("eval-manifest.json")).output().unwrap();
@@ -101,11 +102,12 @@ fn run_manifest_reports_every_slice_at_its_baseline() {
         "libid-cross-x86_64",
         "libid-twin-aarch64",
         "libid-twin-x86_64",
+        "toolid",
     ];
     assert_eq!(names, expected);
     for (name, gate) in &evaluation.gates {
         assert!(gate.min_recall > 0.0, "{name} has no recall baseline");
-        assert_eq!(gate.allow_spurious, name.starts_with("discovery-"), "{name}");
+        assert_eq!(gate.allow_spurious, name.starts_with("discovery-") || name == "toolid", "{name}");
     }
     assert!(evaluation.passes_gate());
 }
@@ -276,4 +278,88 @@ fn run_bounds_the_disagreement_list() {
     let report = &evaluation.slices["libid-x86_64"];
     assert!(report.missed > 1, "{}", report.summary());
     assert_eq!((report.disagreements.len(), report.omitted), (1, report.missed - 1));
+}
+
+fn toolid(extra: &[&str]) -> std::process::Output {
+    eval()
+        .args(["run", "--family", "toolid", "--truth"])
+        .arg(data("eval-truth-toolid.json"))
+        .args(extra)
+        .output()
+        .unwrap()
+}
+
+fn tool_truth() -> ToolTruth {
+    ToolTruth::from_json(&std::fs::read_to_string(data("eval-truth-toolid.json")).unwrap()).unwrap()
+}
+
+/// The tool truth's binaries come from the truth file, so the slice needs no target; spurious detections are
+/// listed with the evidence that fired and fail the run only through the precision floor.
+#[test]
+fn run_toolid_scores_every_truth_binary_and_lists_disagreements() {
+    let output = toolid(&[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
+    let report = &evaluation.slices["toolid"];
+    assert!(stderr.contains(&format!("toolid: {}", report.summary())), "{stderr}");
+    assert!(report.disagreements.is_empty());
+    assert_eq!(report.tool_disagreements.len(), report.missed + report.spurious);
+    let truth = tool_truth();
+    let expected: usize =
+        truth.binaries.values().map(|binary| truth.toolchains[&binary.toolchain].expected.len()).sum();
+    assert_eq!(report.correct + report.missed, expected);
+    assert!(!report.tool_disagreements.iter().any(|entry| entry.binary.contains("hello-go-")), "Go is identified");
+    for entry in &report.tool_disagreements {
+        match entry.outcome {
+            Outcome::Spurious => assert!(!entry.evidence.is_empty(), "{entry:?}"),
+            Outcome::Missed => assert!(entry.why.is_some(), "{entry:?}"),
+            _ => panic!("{entry:?}"),
+        }
+    }
+
+    let output = toolid(&["--min-precision", "1.0"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("toolid: FAIL precision ") && !stderr.contains("spurious, "), "{stderr}");
+}
+
+#[test]
+fn run_toolid_refuses_a_target_and_other_families_need_one() {
+    let output = toolid(&["--target", fixture("hello-x64.elf").to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("takes its binaries from its truth"), "{output:?}");
+    let truth = data("eval-truth-twin-x86_64.json");
+    let output = eval().args(["run", "--family", "discovery", "--truth"]).arg(truth).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("a discovery slice needs a target"), "{output:?}");
+}
+
+/// Every committed fixture binary is either scored by the tool truth or excluded with a reason, so a new fixture
+/// cannot silently go unmeasured.
+#[test]
+fn tool_truth_covers_every_committed_fixture() {
+    let truth = tool_truth();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // Each fixture directory, and how the truth file (in tests/fixtures/data) spells it.
+    let directories = [
+        ("tests/fixtures/bin", "../bin"),
+        ("crates/rampage-api/tests/fixtures", "../../../crates/rampage-api/tests/fixtures"),
+    ];
+    let mut unknown = Vec::new();
+    for (directory, spelled) in directories {
+        for entry in std::fs::read_dir(root.join(directory)).unwrap() {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            // The API fixtures' sources and build script sit beside them.
+            let source = name.ends_with(".c") || name.ends_with(".sh");
+            let path = format!("{spelled}/{name}");
+            if !source && !truth.binaries.contains_key(&path) && !truth.excluded.contains_key(&path) {
+                unknown.push(path);
+            }
+        }
+    }
+    assert!(unknown.is_empty(), "add to eval-truth-toolid.json: {unknown:?}");
+    for path in truth.binaries.keys().chain(truth.excluded.keys()) {
+        assert!(data(path).exists(), "{path} does not exist");
+    }
 }

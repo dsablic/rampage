@@ -37,6 +37,12 @@
       "truth": "eval-truth-twin-aarch64.json",
       "min_recall": 1.0,
       "min_precision": 0.9897
+    },
+    "toolid": {
+      "family": "toolid",
+      "truth": "eval-truth-toolid.json",
+      "min_recall": 0.4397,
+      "min_precision": 0.9538
     }
   }
 }
