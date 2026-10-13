@@ -73,7 +73,8 @@ pub enum Condition {
     VersionedImportLibrary(String),
     /// An imported function with this exact name (case-insensitive) is present.
     ImportFunction(String),
-    /// A symbol (from the symbol table, so a stripped image has none) with exactly this name is present.
+    /// A symbol (from the symbol table, so a stripped image has none) with exactly this name is present. Names
+    /// are as the source spells them: a Mach-O symbol's one leading underscore is not part of the name.
     Symbol(String),
     /// A symbol whose name starts with this prefix (and goes on past it) is present.
     SymbolPrefix(String),

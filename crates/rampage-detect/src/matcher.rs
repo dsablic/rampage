@@ -225,11 +225,14 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
             .into_iter()
             .find(|(tool, _)| tool == wanted)
             .map(|(tool, version)| format!("LC_BUILD_VERSION records {tool} {version}")),
-        Condition::Symbol(name) => {
-            image.find_symbol(&|symbol| symbol == name).map(|_| format!("symbol {name} present"))
-        }
+        Condition::Symbol(name) => image
+            .find_symbol(&|symbol| source_name(image, symbol) == name)
+            .map(|symbol| format!("symbol {symbol} present")),
         Condition::SymbolPrefix(prefix) => image
-            .find_symbol(&|symbol| symbol.len() > prefix.len() && symbol.starts_with(prefix.as_str()))
+            .find_symbol(&|symbol| {
+                let symbol = source_name(image, symbol);
+                symbol.len() > prefix.len() && symbol.starts_with(prefix.as_str())
+            })
             .map(|symbol| format!("symbol {symbol} (prefix {prefix})")),
         Condition::OverlayPresent => image.overlay_size().map(|size| format!("{size} bytes of overlay")),
         Condition::MinImageEntropy(min) => {
@@ -239,6 +242,15 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
         Condition::MinSectionEntropy { section, min } => section_entropy(image, section.as_deref())
             .filter(|&(_, entropy)| entropy >= *min)
             .map(|(name, entropy)| format!("section {name} entropy {entropy:.2} >= {min:.2}")),
+    }
+}
+
+/// A symbol's name as the source spelled it: Mach-O prefixes every C-level name with one underscore
+/// (`__init_tp` is `___init_tp`, `compiler_rt.memcpy` is `_compiler_rt.memcpy`); other formats do not.
+fn source_name<'a>(image: &impl Image, symbol: &'a str) -> &'a str {
+    match image.format() {
+        Some(Format::MachO) => symbol.strip_prefix('_').unwrap_or(symbol),
+        _ => symbol,
     }
 }
 
@@ -770,6 +782,28 @@ mod tests {
         assert_eq!(musl(&dynamic).map(|d| d.kind), Some(Kind::Runtime));
         let glibc = Fake::default().with_section(".interp", b"/lib64/ld-linux-x86-64.so.2\0");
         assert!(musl(&glibc).is_none());
+    }
+
+    #[test]
+    fn mach_o_symbols_match_without_their_leading_underscore() {
+        let db = SignatureDb::bundled();
+        let found = |format, names: &[&str], tool: &str| {
+            let image = Fake {
+                format: Some(format),
+                symbols: names.iter().map(|&n| n.to_owned()).collect(),
+                ..Fake::default()
+            };
+            identify_image(&image, &db).into_iter().find(|d| d.name == tool)
+        };
+        let zig = found(Format::MachO, &["_main", "_compiler_rt.__negdf2"], "Zig").expect("Zig on Mach-O");
+        assert_eq!(zig.evidence, ["symbol _compiler_rt.__negdf2 (prefix compiler_rt.)"]);
+        let musl = found(Format::MachO, &["___init_tp", "___copy_tls"], "musl").expect("musl on Mach-O");
+        assert_eq!(musl.evidence, ["symbol ___init_tp present", "symbol ___copy_tls present"]);
+        // Only one underscore is the format's: Mach-O __init_tp is the C name _init_tp.
+        assert!(found(Format::MachO, &["__init_tp", "__copy_tls"], "musl").is_none());
+        // ELF and PE names are the source's own.
+        assert!(found(Format::Elf, &["_compiler_rt.__negdf2"], "Zig").is_none());
+        assert!(found(Format::Elf, &["compiler_rt.__negdf2"], "Zig").is_some());
     }
 
     #[test]
