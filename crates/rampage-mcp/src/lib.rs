@@ -62,20 +62,20 @@ another client's edit blocks undoing a step, discard_undo drops it from the undo
 steps can be undone; it refuses a step undo could still revert unless force is true, since the user's UI may share \
 that history. Memory snapshots and bundle directories use the same tools.
 
-Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code \
-by signature, bundled databases applied; build_signatures makes a database from a binary with symbols), \
-capabilities, yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are loaded with \
-their licence and provenance. Types: set_signature, set_types and set_global persist C declarations; \
+Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
+signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
+yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are \
+loaded with their licence and provenance. Types: set_signature, set_types and set_global persist C declarations; \
 language_metadata exposes demangled names and bounded metadata. Diagnostics: analysis_diagnostics reports decode \
-confidence limits. Runtime: compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal \
-runtime ranges, returning paginated byte evidence without sidecars or annotation transfer; verify identities when \
-combining pages. observe_indirect_branch takes explicit hexadecimal start/at addresses for a bounded ARM64 branch \
-window; slot links are conditional decoding evidence, not proof of execution or a call edge. \
-compare_pointer_observations takes another explicit capture path and hexadecimal at/other_at slots; before/after \
-ordering and slot correspondence are supplied by the analyst, not independently verified. Carve: carve scans any \
-file (firmware, installer, archive) for embedded executables and containers by validated header, with offsets and \
-header-estimated extents; it extracts and decompresses nothing. Pass an executable candidate's offset as \
-image_offset to any binary tool to analyze it in place, with annotations kept apart from the outer file's.";
+confidence limits. Runtime: compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal runtime \
+ranges, returning paginated byte evidence without sidecars or annotation transfer; verify identities when combining \
+pages. observe_indirect_branch takes explicit hexadecimal start/at addresses for a bounded ARM64 branch window; slot \
+links are conditional decoding evidence, not proof of execution or a call edge. compare_pointer_observations takes \
+another explicit capture path and hexadecimal at/other_at slots; before/after ordering and slot correspondence are \
+supplied by the analyst, not independently verified. Carve: carve scans any file (firmware, installer, archive) for \
+embedded executables and containers by validated header, with offsets and header-estimated extents; it extracts and \
+decompresses nothing. Pass an executable candidate's offset as image_offset to any binary tool to analyze it in place, \
+with annotations kept apart from the outer file's.";
 
 fn instructions(packs: &Packs) -> String {
     let groups: String =
