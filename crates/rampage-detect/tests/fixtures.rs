@@ -52,6 +52,18 @@ fn mingw_w64_crt_is_a_runtime_not_a_gcc_compiler() {
 }
 
 #[test]
+fn lld_link_is_named_by_its_codeview_build_id_record_when_one_is_present() {
+    let detections = detect("hello-x64.exe");
+    let lld = find(&detections, "LLD").expect("LLD from the debug directory");
+    assert_eq!((lld.kind, lld.confidence), (Kind::Linker, Confidence::Strong));
+    // Microsoft's link.exe writes an RSDS record too, without lld's brand.
+    assert!(!named(&detect("Microsoft.Bcl.HashCode.dll"), "LLD"));
+    // persist-x64.exe is linked with -s, which drops the debug directory: nothing is left to key on.
+    let stripped = Binary::open(fixture("../../../crates/rampage-api/tests/fixtures/persist-x64.exe")).unwrap();
+    assert!(!named(&identify(&stripped, &SignatureDb::bundled()), "LLD"));
+}
+
+#[test]
 fn mingw_w64_runtime_is_not_reported_on_msvc_elf_or_macho_fixtures() {
     for name in ["Microsoft.Bcl.HashCode.dll", "hello-x64.elf", "hello-x64-dyn.elf", "hello-x64.macho"] {
         let detections = detect(name);

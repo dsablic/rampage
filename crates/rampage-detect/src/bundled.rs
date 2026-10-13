@@ -27,6 +27,11 @@ fn ep(pattern: &str) -> Condition {
     Condition::Entry { pattern: BytePattern::parse(pattern).expect("bundled pattern parses"), ep_only: true }
 }
 
+/// A byte pattern that may sit anywhere in the image, also a crate constant.
+fn anywhere(pattern: &str) -> Condition {
+    Condition::Entry { pattern: BytePattern::parse(pattern).expect("bundled pattern parses"), ep_only: false }
+}
+
 fn section(name: &str) -> Condition {
     Condition::SectionName(name.to_owned())
 }
@@ -136,6 +141,14 @@ fn linkers() -> Vec<Signature> {
     vec![
         Signature::new("LLD", Kind::Linker, vec![section_contains(".comment", "LLD")])
             .with_note(".comment LLD linker tag"),
+        // lld-link brands the CodeView record of a build-id debug directory (RSDS, then a GUID whose second half
+        // is "LLD PDB."). An image linked without a debug directory (-s) has no such record.
+        Signature::new(
+            "LLD",
+            Kind::Linker,
+            vec![anywhere("52 53 44 53 ?? ?? ?? ?? ?? ?? ?? ?? 4C 4C 44 20 50 44 42 2E")],
+        )
+        .with_note("lld-link CodeView build-id record"),
         // GNU ld (BFD) writes no tag at all. mold's tag reads "mold x.y (...; compatible with GNU ld)", so it
         // must be matched by its own name, not by "GNU ld".
         Signature::new("mold", Kind::Linker, vec![section_contains(".comment", "mold ")])
