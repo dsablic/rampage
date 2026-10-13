@@ -1,4 +1,3 @@
-use rampage_arch::bytes::read_uint;
 use rampage_loaders::Binary;
 
 /// The view of a program's address space that analysis needs.
@@ -32,11 +31,7 @@ impl Memory for Binary {
     }
 
     fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
-        let permissions = self.segment_containing(address)?.perms;
-        if !permissions.read || permissions.write {
-            return None;
-        }
-        read_uint(self.read(address, u64::from(size))?, 0, usize::from(size), self.big_endian)
+        Binary::read_constant(self, address, size)
     }
 
     fn code_from(&self, address: u64) -> Option<&[u8]> {
