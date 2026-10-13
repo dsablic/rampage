@@ -107,6 +107,26 @@ fn go_arm64_functions_with_noreturn_calls_stay_structured() {
 }
 
 #[test]
+fn function_graphs_say_why_calls_never_return() {
+    use rampage_analysis::discover::NoreturnEvidence;
+    let project = Session::default().open(&fixture("hello-x64.exe"), None).unwrap();
+    let graph = project.function_graph(0x140001060).unwrap();
+    let lines: Vec<_> = graph.blocks.iter().flat_map(|block| &block.lines).collect();
+    let evidence = |address: u64| lines.iter().find(|line| line.address == address).unwrap().noreturn;
+    assert_eq!(evidence(0x1400013f7), Some(NoreturnEvidence::Listed)); // exit
+    assert_eq!(evidence(0x1400013e6), Some(NoreturnEvidence::Inferred)); // sub_1400017c0, ending in __fastfail
+    // A call that returns carries no mark, and no noreturn call has a fall-through edge.
+    assert!(lines.iter().filter(|line| line.noreturn.is_none()).any(|line| line.text.starts_with("call")));
+    for (index, block) in graph.blocks.iter().enumerate() {
+        if block.lines.last().unwrap().noreturn.is_some() {
+            assert!(graph.edges.iter().all(|edge| edge.from != index), "{:#x}", block.start);
+        }
+    }
+    let json = serde_json::to_value(&graph).unwrap().to_string();
+    assert!(json.contains(r#""noreturn":"listed""#) && json.contains(r#""noreturn":"inferred""#));
+}
+
+#[test]
 fn disassembly_comments_name_targets_and_strings() {
     let project = Session::default().open(&fixture("hello-arm64.macho"), None).unwrap();
     let lines = project.disassemble(Some("_main"), 5).unwrap();

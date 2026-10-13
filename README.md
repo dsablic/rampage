@@ -23,6 +23,10 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   Its output matches `llvm-mc` on every instruction sampled from Chrome's arm64 code and on 99.85% of words
   across all encodings. On AArch64, function
   discovery resolves ADRP+ADD and ADRP+LDR pairs into data references.
+- Calls that never return end their block with no fall-through: to functions documented never to return (`exit`,
+  `abort`, `__stack_chk_fail`, `ExitProcess`, C++ throw helpers, Rust and Go panics), and to functions discovery
+  infers never return because every path through them ends in such a call or a trap. `function_graph` and
+  `export-cfg` mark each such call `listed` or `inferred`, and the decompiler is told the same callees.
 - Triage: MD5/SHA-1/SHA-256, entropy per section and as a profile across the file, PE imphash (pefile's
   algorithm, without its ordinal-name tables), overlays, and format details: PE build time, mitigations, Rich
   header and signing; ELF interpreter, needed libraries, NX/RELRO/PIE and build ID; Mach-O dylibs, platform,

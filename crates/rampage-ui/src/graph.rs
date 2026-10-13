@@ -311,6 +311,7 @@ mod tests {
                     label: None,
                     comment: None,
                     note: None,
+                    noreturn: None,
                 }],
             })
             .collect();

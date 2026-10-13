@@ -535,7 +535,8 @@ pub fn xrefs(out: &mut impl Write, path: &Path, target: XrefTarget, options: &Op
     Ok(())
 }
 
-/// Every function's block starts, intra-function edges and outgoing call and jump references, as JSON.
+/// Every function's block starts, intra-function edges, outgoing call and jump references, and the calls that end
+/// their block because they never return (with why: `listed` or `inferred`), as JSON.
 pub fn export_cfg(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
     let project = open(path, options)?;
     let hex = |address: u64| format!("{address:#x}");
@@ -544,7 +545,7 @@ pub fn export_cfg(out: &mut impl Write, path: &Path, options: &Options) -> Resul
         // A start whose first instruction does not decode has no blocks, and so no graph.
         if row.blocks == 0 {
             functions.push(serde_json::json!({
-                "address": hex(row.address), "blocks": [], "edges": [], "references": [],
+                "address": hex(row.address), "blocks": [], "edges": [], "references": [], "noreturn_calls": [],
             }));
             continue;
         }
@@ -559,8 +560,15 @@ pub fn export_cfg(out: &mut impl Write, path: &Path, options: &Options) -> Resul
             .filter(|xref| xref.kind != rampage_analysis::discover::XrefKind::Data)
             .map(|xref| serde_json::json!([hex(xref.from), hex(xref.to), xref.kind]))
             .collect();
+        let noreturn_calls: Vec<_> = graph
+            .blocks
+            .iter()
+            .flat_map(|block| &block.lines)
+            .filter_map(|line| Some(serde_json::json!([hex(line.address), line.noreturn?])))
+            .collect();
         functions.push(serde_json::json!({
             "address": hex(row.address), "blocks": blocks, "edges": edges, "references": references,
+            "noreturn_calls": noreturn_calls,
         }));
     }
     write_json(out, &functions)

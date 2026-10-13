@@ -97,7 +97,7 @@ impl Project {
                     }
                 }
                 Flow::Return | Flow::Halt | Flow::Invalid => {}
-                Flow::Call(_) | Flow::IndirectCall if program.is_noreturn_call(branch.address) => {}
+                Flow::Call(_) | Flow::IndirectCall if branch.noreturn.is_some() => {}
                 // A block that ends without a branch runs into the next one.
                 Flow::Next | Flow::Call(_) | Flow::IndirectCall => add(index_of(end), EdgeKind::Unconditional),
             }

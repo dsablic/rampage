@@ -296,6 +296,18 @@ fn export_cfg_lists_blocks_edges_and_calls_of_every_function() {
 }
 
 #[test]
+fn export_cfg_says_why_calls_never_return() {
+    let functions = json(&["export-cfg"], "hello-x64.exe");
+    let functions = functions.as_array().unwrap();
+    let start = functions.iter().find(|function| function["address"] == "0x140001060").unwrap();
+    let calls = start["noreturn_calls"].as_array().unwrap();
+    // exit is listed by name; sub_1400017c0 is inferred (it ends in __fastfail).
+    assert!(calls.contains(&serde_json::json!(["0x1400013f7", "listed"])), "{calls:?}");
+    assert!(calls.contains(&serde_json::json!(["0x1400013e6", "inferred"])), "{calls:?}");
+    assert!(functions.iter().all(|function| function["noreturn_calls"].is_array()));
+}
+
+#[test]
 fn export_cfg_lists_no_function_whose_start_does_not_decode() {
     // 0x2036c is main's literal word `7cfffeff`, a data reference rather than code.
     let functions = json(&["export-cfg"], "hello-arm.elf");

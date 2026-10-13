@@ -1,5 +1,6 @@
 //! Disassembly with names, references and the user's comments.
 
+use rampage_analysis::discover::NoreturnEvidence;
 use rampage_arch::Flow;
 use rampage_loaders::Binary;
 use serde::Serialize;
@@ -29,6 +30,10 @@ pub struct DisassemblyLine {
     /// The user's comment on this instruction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// In a function's listing, a call that never returns ends its block, and this says why: its callee is
+    /// `listed` by name as never returning, or discovery `inferred` it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub noreturn: Option<NoreturnEvidence>,
 }
 
 /// A function's instructions grouped by basic block, in address order.
@@ -64,7 +69,8 @@ impl Project {
             .iter()
             .map(|block| self.decode_lines(block.start, block.end, usize::MAX))
             .collect::<Result<_, _>>()?;
-        let flows = &self.analysis()?.program.resolved_flows;
+        let program = &self.analysis()?.program;
+        let flows = &program.resolved_flows;
         for line in blocks.iter_mut().flatten() {
             if let Ok(index) = flows.binary_search_by_key(&(start, line.address), |flow| (flow.function, flow.address))
             {
@@ -77,6 +83,12 @@ impl Project {
                     line.comment = Some(name);
                 }
             }
+            let target = match line.flow {
+                Flow::Call(at) | Flow::Jump(at) => Some(at),
+                _ => None,
+            };
+            let callees: Vec<u64> = target.into_iter().chain(line.data_ref).collect();
+            line.noreturn = program.noreturn_evidence(line.address, &callees);
         }
         Ok(FunctionListing { address: start, name: self.function_name(start), blocks })
     }
@@ -110,6 +122,7 @@ impl Project {
                 label: self.name_at(address),
                 note: self.comment_at(address),
                 comment: self.describe_reference(&insn),
+                noreturn: None,
             });
             offset += usize::from(insn.len.max(1));
         }

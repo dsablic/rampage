@@ -102,9 +102,22 @@ pub struct Program {
     /// Functions, import stubs and import slots known by name or inferred never to return, sorted.
     #[serde(skip_serializing_if = "Vec::is_empty", serialize_with = "rampage_arch::hex::addresses")]
     pub noreturn: Vec<u64>,
+    /// The [`Program::noreturn`] functions that discovery inferred, rather than knew by name, sorted.
+    #[serde(skip_serializing_if = "Vec::is_empty", serialize_with = "rampage_arch::hex::addresses")]
+    pub inferred_noreturn: Vec<u64>,
     /// Calls to a [`Program::noreturn`] callee, sorted: each ends its block with no fall-through.
     #[serde(skip_serializing_if = "Vec::is_empty", serialize_with = "rampage_arch::hex::addresses")]
     pub noreturn_calls: Vec<u64>,
+}
+
+/// Why a call is taken never to return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NoreturnEvidence {
+    /// The callee's name is on the list of functions documented never to return.
+    Listed,
+    /// Discovery inferred it: no path through the callee returns, and one ends in a noreturn call or a trap.
+    Inferred,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +136,18 @@ impl Program {
     /// Whether the call at `address` never returns, so nothing falls through after it.
     pub fn is_noreturn_call(&self, address: u64) -> bool {
         self.noreturn_calls.binary_search(&address).is_ok()
+    }
+
+    /// Why the call at `address`, which may reach `callees` (its target, or the import slot it goes through), never
+    /// returns; `None` when it may.
+    pub fn noreturn_evidence(&self, address: u64, callees: &[u64]) -> Option<NoreturnEvidence> {
+        if !self.is_noreturn_call(address) {
+            return None;
+        }
+        let listed = callees.iter().any(|callee| {
+            self.noreturn.binary_search(callee).is_ok() && self.inferred_noreturn.binary_search(callee).is_err()
+        });
+        Some(if listed { NoreturnEvidence::Listed } else { NoreturnEvidence::Inferred })
     }
 
     pub fn xrefs_to(&self, address: u64) -> &[Xref] {
@@ -176,6 +201,7 @@ where
     loop {
         let (mut program, inferred) = discover_round(memory, &new_decoder, seeds, &noreturn, &facts.returns);
         if inferred.is_subset(&noreturn) {
+            program.inferred_noreturn = noreturn.difference(&facts.noreturn).copied().collect();
             program.noreturn = noreturn.into_iter().collect();
             return program;
         }
@@ -392,7 +418,8 @@ where
     noreturn_calls.sort_unstable();
     noreturn_calls.dedup();
     let code_modes = code_modes.into_iter().collect();
-    (Program { functions, xrefs, code_modes, resolved_flows, noreturn: Vec::new(), noreturn_calls }, noreturn)
+    let program = Program { functions, xrefs, code_modes, resolved_flows, noreturn_calls, ..Program::default() };
+    (program, noreturn)
 }
 
 struct Explored {

@@ -929,7 +929,9 @@ pub fn tools() -> Vec<Tool> {
             "function_graph",
             "The control-flow graph of the function containing an address or name: its basic blocks with \
              disassembly, and edges (unconditional, taken, not_taken, or switch from a register jump to each case \
-             of a bounded switch table) indexing into the blocks.",
+             of a bounded switch table) indexing into the blocks. A call that never returns ends its block with no \
+             fall-through edge; its line says why in `noreturn`: `listed` (the callee is documented never to \
+             return) or `inferred` (no path through the callee returns).",
             |project, arguments: At| project.function_graph(project.resolve(&arguments.at)?),
         ),
         tool(
