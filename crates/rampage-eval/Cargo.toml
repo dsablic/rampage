@@ -9,6 +9,7 @@ clap.workspace = true
 object = { workspace = true, features = ["build"] }
 rampage-analysis.workspace = true
 rampage-arch.workspace = true
+rampage-detect.workspace = true
 rampage-loaders.workspace = true
 rampage-signatures.workspace = true
 serde.workspace = true

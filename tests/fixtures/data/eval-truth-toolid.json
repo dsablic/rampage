@@ -1,0 +1,365 @@
+{
+  "toolchains": {
+    "zig-cc-linux-musl": {
+      "how": "zig cc -target <arch>-linux-musl* (zig 0.17.0, crates/rampage-signatures/data/zig-version), linked",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "Clang/LLVM",
+          "why": "zig cc compiles C with the clang it bundles; .comment carries its producer string"
+        },
+        {
+          "kind": "compiler",
+          "name": "Zig",
+          "why": "the zig toolchain drove the build and supplied libc, compiler_rt and the link"
+        },
+        {
+          "kind": "linker",
+          "name": "LLD",
+          "why": "zig links ELF executables with its bundled LLD"
+        },
+        {
+          "kind": "runtime",
+          "name": "musl",
+          "why": "a *-linux-musl target links zig's musl statically"
+        }
+      ],
+      "absent": [
+        "packer",
+        "protector",
+        "installer"
+      ]
+    },
+    "zig-cc-linux-gnu": {
+      "how": "zig cc -target <arch>-linux-gnu* (zig 0.17.0, crates/rampage-signatures/data/zig-version), linked",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "Clang/LLVM",
+          "why": "zig cc compiles C with the clang it bundles; .comment carries its producer string"
+        },
+        {
+          "kind": "compiler",
+          "name": "Zig",
+          "why": "the zig toolchain drove the build and supplied the libc stubs, compiler_rt and the link"
+        },
+        {
+          "kind": "linker",
+          "name": "LLD",
+          "why": "zig links ELF executables and shared objects with its bundled LLD"
+        },
+        {
+          "kind": "runtime",
+          "name": "glibc",
+          "why": "a *-linux-gnu target links dynamically against glibc"
+        }
+      ],
+      "absent": [
+        "packer",
+        "protector",
+        "installer"
+      ]
+    },
+    "zig-cc-windows-gnu": {
+      "how": "zig cc -target x86_64-windows-gnu (zig 0.17.0, crates/rampage-signatures/data/zig-version), linked",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "Clang/LLVM",
+          "why": "zig cc compiles C with the clang it bundles, not GCC"
+        },
+        {
+          "kind": "compiler",
+          "name": "Zig",
+          "why": "the zig toolchain drove the build and supplied the MinGW-w64 CRT, compiler_rt and the link"
+        },
+        {
+          "kind": "linker",
+          "name": "LLD",
+          "why": "zig links PE images with its bundled lld-link"
+        },
+        {
+          "kind": "runtime",
+          "name": "MinGW-w64",
+          "why": "a *-windows-gnu target links zig's MinGW-w64 C runtime"
+        }
+      ],
+      "absent": [
+        "packer",
+        "protector",
+        "installer"
+      ]
+    },
+    "zig-cc-object": {
+      "how": "zig cc -c (zig 0.17.0), not linked",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "Clang/LLVM",
+          "why": "zig cc compiles C with its bundled clang; an object holds only clang's output, no libc or link"
+        }
+      ],
+      "absent": [
+        "linker",
+        "runtime",
+        "packer",
+        "protector",
+        "installer"
+      ]
+    },
+    "apple-clang-macho": {
+      "how": "Apple clang / clang++ -arch <arch> (Xcode toolchain), linked by Apple ld",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "Clang/LLVM",
+          "why": "build.sh compiles every Mach-O fixture with Apple clang; Mach-O records no compiler (code shape only)"
+        },
+        {
+          "kind": "linker",
+          "name": "Apple ld",
+          "why": "Apple clang links with the system ld; LC_BUILD_VERSION records it as tool 3 (TOOL_LD)"
+        }
+      ],
+      "absent": [
+        "packer",
+        "protector",
+        "installer"
+      ]
+    },
+    "apple-clang-object": {
+      "how": "Apple clang -arch x86_64 -c, not linked",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "Clang/LLVM",
+          "why": "build.sh compiles it with Apple clang; a Mach-O object records no compiler (code shape only)"
+        }
+      ],
+      "absent": [
+        "linker",
+        "packer",
+        "protector",
+        "installer"
+      ]
+    },
+    "go": {
+      "how": "CGO_ENABLED=0 go build -ldflags \"-s -w\"",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "Go",
+          "why": "built by the Go toolchain, its own compiler and internal linker; -s -w keeps .gopclntab"
+        }
+      ],
+      "absent": [
+        "packer",
+        "protector",
+        "installer"
+      ]
+    },
+    "dotnet": {
+      "how": "Microsoft's release build of a C# library, unmodified from nuget.org",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": ".NET",
+          "why": "a netstandard2.0 managed assembly from the .NET C# compiler (provenance: its LICENSE.txt)"
+        }
+      ],
+      "absent": [
+        "packer",
+        "protector",
+        "installer"
+      ]
+    }
+  },
+  "binaries": {
+    "../bin/hello-x64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-thumb.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-ppc.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/musl-static-x86_64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/gen-signatures.sh, stripped by rampage-eval strip"
+    },
+    "../bin/musl-static-aarch64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/gen-signatures.sh, stripped by rampage-eval strip"
+    },
+    "../bin/eval-ref-x86_64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-ref-aarch64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-twin-x86_64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-twin-aarch64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-target-x86_64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-target-aarch64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-target-sym-x86_64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-target-sym-aarch64.elf": {
+      "toolchain": "zig-cc-linux-musl",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/hello-x64-dyn.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-arm64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-arm.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-mips.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-mipsel.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-ppc64le.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-riscv64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-s390x.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/libhelper-x64.so": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../../../crates/rampage-api/tests/fixtures/net-client-x64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh"
+    },
+    "../../../crates/rampage-api/tests/fixtures/net-client-x64-stripped.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh"
+    },
+    "../../../crates/rampage-api/tests/fixtures/persist-x64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh"
+    },
+    "../../../crates/rampage-api/tests/fixtures/decode-x64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh"
+    },
+    "../../../crates/rampage-api/tests/fixtures/decode-arm64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh"
+    },
+    "../bin/hello-x64.exe": {
+      "toolchain": "zig-cc-windows-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/tls-x64.exe": {
+      "toolchain": "zig-cc-windows-gnu",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../../../crates/rampage-api/tests/fixtures/persist-x64.exe": {
+      "toolchain": "zig-cc-windows-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh (-s)"
+    },
+    "../bin/hello-x64-elf.o": {
+      "toolchain": "zig-cc-object",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/eval-program-corpus-x86_64.o": {
+      "toolchain": "zig-cc-object",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-program-corpus-aarch64.o": {
+      "toolchain": "zig-cc-object",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-program-target-x86_64.o": {
+      "toolchain": "zig-cc-object",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-program-target-aarch64.o": {
+      "toolchain": "zig-cc-object",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/hello-x64.macho": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-arm64.macho": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-universal.macho": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh (lipo of the two above)"
+    },
+    "../bin/hello-x64.dylib": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-x64-stripped.macho": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh (strip)"
+    },
+    "../bin/classes-arm64.macho": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh (clang++, strip)"
+    },
+    "../bin/hello-x64.o": {
+      "toolchain": "apple-clang-object",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-go-x64.elf": {
+      "toolchain": "go",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/hello-go-arm64.elf": {
+      "toolchain": "go",
+      "built": "tests/fixtures/build.sh"
+    },
+    "../bin/Microsoft.Bcl.HashCode.dll": {
+      "toolchain": "dotnet",
+      "built": "nuget.org Microsoft.Bcl.HashCode 1.1.1"
+    }
+  },
+  "excluded": {
+    "../bin/debug-x64.elf": "no committed build script records its toolchain",
+    "../bin/debug-x64.macho": "no committed build script records its toolchain",
+    "../bin/hello.lib": "an import-library archive, which no loader opens",
+    "../bin/Microsoft.Bcl.HashCode.dll.LICENSE.txt": "not a binary"
+  }
+}

@@ -8,15 +8,24 @@
 //!   name each, and compare every proposed name with the truth.
 //! - Function discovery ([`evaluate_discovery`]): compare the discovered function starts with the truth's
 //!   addresses; names only label the disagreements.
+//! - Tool identification ([`score_tools`]): compare the compilers, linkers and packers `detect_tools` names for
+//!   each committed fixture with the toolchain its build script used ([`ToolTruth`]).
 //!
 //! Whether a report is acceptable depends on the family, so the pass/fail rule is a separate [`Gate`].
 
+mod toolid;
+
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::Binary;
 use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, identify_program, named_functions};
 use serde::{Deserialize, Serialize};
+pub use toolid::{
+    DetectedTool, ExpectedTool, TOOL_KINDS, ToolBinary, ToolDisagreement, ToolTruth, Toolchain, detected_tools,
+    kind_tag, score_tools,
+};
 
 /// Known function names by address, taken from a symbolized twin of the evaluated binary.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -106,24 +115,27 @@ pub struct Report {
     pub spurious: usize,
     /// Every non-correct address, sorted by address, unless bounded by [`Report::truncate_disagreements`].
     pub disagreements: Vec<Disagreement>,
-    /// How many disagreements were dropped from the end of `disagreements`; the counts above still cover them.
+    /// Tool identification's disagreements, which name a binary and a tool rather than an address; sorted by
+    /// binary, kind and name, and bounded like `disagreements`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_disagreements: Vec<ToolDisagreement>,
+    /// How many disagreements were dropped from the end of the lists; the counts above still cover them.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted: usize,
 }
 
 impl Report {
-    /// Keeps at most `limit` disagreements, preferring wrong, then missed, then spurious ones (the order a
-    /// reviewer acts on them), each kind in address order.
+    /// Keeps at most `limit` entries in each disagreement list, preferring wrong, then missed, then spurious ones
+    /// (the order a reviewer acts on them), each kind in the list's own order.
     pub fn truncate_disagreements(&mut self, limit: usize) {
-        if self.disagreements.len() <= limit {
-            return;
-        }
-        let severity =
-            |outcome: Outcome| [Outcome::Wrong, Outcome::Missed, Outcome::Spurious].iter().position(|o| *o == outcome);
-        self.disagreements.sort_by_key(|entry| (severity(entry.outcome), entry.address));
-        self.omitted += self.disagreements.len() - limit;
-        self.disagreements.truncate(limit);
-        self.disagreements.sort_by_key(|entry| entry.address);
+        self.omitted += keep_most_actionable(
+            &mut self.disagreements,
+            limit,
+            |entry| entry.outcome,
+            |a, b| a.address.cmp(&b.address),
+        );
+        self.omitted +=
+            keep_most_actionable(&mut self.tool_disagreements, limit, |entry| entry.outcome, ToolDisagreement::order);
     }
 
     pub fn summary(&self) -> String {
@@ -250,6 +262,7 @@ pub fn score(proposals: impl IntoIterator<Item = (u64, Option<String>)>, truth: 
         missed,
         spurious,
         disagreements,
+        tool_disagreements: Vec::new(),
         omitted: 0,
     }
 }
@@ -288,6 +301,7 @@ pub fn score_discovery(starts: impl IntoIterator<Item = u64>, truth: &Truth) -> 
         missed,
         spurious,
         disagreements,
+        tool_disagreements: Vec::new(),
         omitted: 0,
     }
 }
@@ -350,6 +364,25 @@ pub fn strip(elf: &[u8], keep_symbols: bool) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     builder.write(&mut output).map_err(|error| error.to_string())?;
     Ok(output)
+}
+
+/// Truncates `entries` to `limit`, dropping the least actionable first, and returns how many were dropped.
+fn keep_most_actionable<T>(
+    entries: &mut Vec<T>,
+    limit: usize,
+    outcome: impl Fn(&T) -> Outcome,
+    order: impl Fn(&T, &T) -> Ordering,
+) -> usize {
+    if entries.len() <= limit {
+        return 0;
+    }
+    let severity =
+        |entry: &T| [Outcome::Wrong, Outcome::Missed, Outcome::Spurious].iter().position(|o| *o == outcome(entry));
+    entries.sort_by(|a, b| severity(a).cmp(&severity(b)).then_with(|| order(a, b)));
+    let dropped = entries.len() - limit;
+    entries.truncate(limit);
+    entries.sort_by(order);
+    dropped
 }
 
 fn is_zero(count: &usize) -> bool {

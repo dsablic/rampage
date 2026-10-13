@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use rampage_eval::{Evaluation, Gate, Report, Truth};
+use rampage_eval::{Evaluation, Gate, Report, ToolTruth, Truth};
 use rampage_loaders::Binary;
 use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
@@ -44,7 +44,7 @@ enum Command {
     /// Score a heuristic family on stripped targets against their truth, per slice. Prints
     /// {"slices": {"<name>": report}, "gates": {..}} as JSON and a one-line summary per slice on stderr; exits 1
     /// when any slice fails its gate (any wrong answer; for libid any spurious name; recall or precision below
-    /// --min-recall or --min-precision).
+    /// --min-recall or --min-precision). A toolid slice takes no --target: its truth names the binaries.
     Run(RunArgs),
 }
 
@@ -57,6 +57,9 @@ enum Family {
     Libid,
     /// Function-start discovery: starts found by the analysis, no database.
     Discovery,
+    /// Producing-tool identification: the compilers, linkers and packers `detect_tools` names for each binary
+    /// of a tool truth, against the toolchain that built it.
+    Toolid,
 }
 
 impl Family {
@@ -64,12 +67,14 @@ impl Family {
         match self {
             Family::Libid => "libid",
             Family::Discovery => "discovery",
+            Family::Toolid => "toolid",
         }
     }
 
-    /// Discovery tolerates spurious starts: code without a sized symbol is still code.
+    /// Discovery tolerates spurious starts: code without a sized symbol is still code. Tool identification's
+    /// spurious detections are bounded by its precision floor, like discovery's.
     fn gate(self, min_recall: f64, min_precision: f64) -> Gate {
-        Gate { allow_spurious: matches!(self, Family::Discovery), min_recall, min_precision }
+        Gate { allow_spurious: matches!(self, Family::Discovery | Family::Toolid), min_recall, min_precision }
     }
 }
 
@@ -85,7 +90,7 @@ struct RunArgs {
     target: Option<PathBuf>,
     #[arg(long, conflicts_with = "manifest")]
     truth: Option<PathBuf>,
-    /// The slice name; defaults to <family>-<target architecture>.
+    /// The slice name; defaults to <family>-<target architecture> (toolid: toolid).
     #[arg(long, conflicts_with = "manifest")]
     slice: Option<String>,
     #[arg(long, value_enum, default_value_t = Family::Libid, conflicts_with = "manifest")]
@@ -96,9 +101,9 @@ struct RunArgs {
     /// The precision baseline; a lower measured precision fails the gate.
     #[arg(long, default_value_t = 0.0, conflicts_with = "manifest")]
     min_precision: f64,
-    /// Evaluate every slice of a manifest instead: {"slices": {"<name>": {"family": "libid"|"discovery",
+    /// Evaluate every slice of a manifest instead: {"slices": {"<name>": {"family": "libid"|"discovery"|"toolid",
     /// "refs": [..], "dbs": [..], "target": "..", "truth": "..", "min_recall": 0.0, "min_precision": 0.0}}},
-    /// paths relative to the manifest; refs and dbs apply to libid only.
+    /// paths relative to the manifest; refs and dbs apply to libid only, and toolid has no target.
     #[arg(long, conflicts_with_all = ["databases", "references"])]
     manifest: Option<PathBuf>,
     /// Keep at most this many disagreements per slice in the JSON (the counts still cover all of them).
@@ -196,7 +201,8 @@ struct Slice {
     refs: Vec<PathBuf>,
     #[serde(default)]
     dbs: Vec<PathBuf>,
-    target: PathBuf,
+    /// Required except for toolid, whose truth lists its binaries.
+    target: Option<PathBuf>,
     truth: PathBuf,
 }
 
@@ -206,7 +212,7 @@ struct Manifest {
 }
 
 impl Slice {
-    fn database(&self) -> Result<SignatureDb, String> {
+    fn database(&self, target: &Path) -> Result<SignatureDb, String> {
         let mut combined: Option<SignatureDb> = None;
         for path in &self.refs {
             let binary = open(path)?;
@@ -242,30 +248,52 @@ impl Slice {
                 None => combined = Some(db),
             }
         }
-        combined.ok_or_else(|| format!("{}: give at least one --db or --ref", self.target.display()))
+        combined.ok_or_else(|| format!("{}: give at least one --db or --ref", target.display()))
     }
 
-    /// The slice's report, and its target's architecture (part of the default slice name).
+    /// The slice's report, and its default name.
     fn evaluate(&self) -> Result<(Report, String), String> {
-        let target = open(&self.target)?;
+        match (self.family, &self.target) {
+            (Family::Toolid, None) => Ok((self.evaluate_tools()?, Family::Toolid.tag().to_owned())),
+            (Family::Toolid, Some(target)) => {
+                Err(format!("{}: a toolid slice takes its binaries from its truth", target.display()))
+            }
+            (family, None) => Err(format!("{}: a {} slice needs a target", self.truth.display(), family.tag())),
+            (family, Some(target)) => self.evaluate_target(family, target),
+        }
+    }
+
+    /// A libid or discovery slice, scored on its one target.
+    fn evaluate_target(&self, family: Family, target_path: &Path) -> Result<(Report, String), String> {
+        let target = open(target_path)?;
         let arch = target.arch;
         let truth =
             Truth::from_json(&read(&self.truth)?).map_err(|error| format!("{}: {error}", self.truth.display()))?;
         let unsupported = |_| format!("unsupported architecture {arch}");
-        let report = match self.family {
-            Family::Libid => {
-                let db = self.database()?;
-                // A database for another architecture matches nothing, which would read as a clean (if useless)
-                // pass.
-                if db.arch() != arch {
-                    let target = self.target.display();
-                    return Err(format!("{target}: database architecture {} is not the target's {arch}", db.arch()));
-                }
-                rampage_eval::evaluate(&db, &target, &truth).map_err(unsupported)?
+        let report = if let Family::Libid = family {
+            let db = self.database(target_path)?;
+            // A database for another architecture matches nothing, which would read as a clean (if useless) pass.
+            if db.arch() != arch {
+                let target = target_path.display();
+                return Err(format!("{target}: database architecture {} is not the target's {arch}", db.arch()));
             }
-            Family::Discovery => rampage_eval::evaluate_discovery(&target, &truth).map_err(unsupported)?,
+            rampage_eval::evaluate(&db, &target, &truth).map_err(unsupported)?
+        } else {
+            rampage_eval::evaluate_discovery(&target, &truth).map_err(unsupported)?
         };
-        Ok((report, arch.to_string()))
+        Ok((report, format!("{}-{arch}", family.tag())))
+    }
+
+    /// Detects the tools of every binary the truth scores, its paths relative to the truth file.
+    fn evaluate_tools(&self) -> Result<Report, String> {
+        let truth =
+            ToolTruth::from_json(&read(&self.truth)?).map_err(|error| format!("{}: {error}", self.truth.display()))?;
+        let base = self.truth.parent().unwrap_or(Path::new("."));
+        let mut detections = BTreeMap::new();
+        for path in truth.binaries.keys() {
+            detections.insert(path.clone(), rampage_eval::detected_tools(&open(&base.join(path))?));
+        }
+        Ok(rampage_eval::score_tools(&detections, &truth))
     }
 }
 
@@ -284,7 +312,7 @@ fn manifest(path: &Path) -> Result<Vec<(Option<String>, Slice)>, String> {
                 min_precision: slice.min_precision,
                 refs: resolve(slice.refs),
                 dbs: resolve(slice.dbs),
-                target: base.join(slice.target),
+                target: slice.target.map(|target| base.join(target)),
                 truth: base.join(slice.truth),
             };
             (Some(name), slice)
@@ -296,8 +324,8 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
     let slices = match args.manifest {
         Some(path) => manifest(&path)?,
         None => {
-            let (Some(target), Some(truth)) = (args.target, args.truth) else {
-                return Err("give --manifest, or --target and --truth".to_owned());
+            let Some(truth) = args.truth else {
+                return Err("give --manifest, or --truth (and --target unless --family toolid)".to_owned());
             };
             let slice = Slice {
                 family: args.family,
@@ -305,7 +333,7 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
                 min_precision: args.min_precision,
                 refs: args.references,
                 dbs: args.databases,
-                target,
+                target: args.target,
                 truth,
             };
             vec![(args.slice, slice)]
@@ -313,8 +341,8 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
     };
     let mut evaluation = Evaluation::default();
     for (name, slice) in slices {
-        let (mut report, arch) = slice.evaluate()?;
-        let name = name.unwrap_or_else(|| format!("{}-{arch}", slice.family.tag()));
+        let (mut report, default_name) = slice.evaluate()?;
+        let name = name.unwrap_or(default_name);
         eprintln!("{name}: {}", report.summary());
         report.truncate_disagreements(args.max_disagreements);
         evaluation.insert(name, report, slice.family.gate(slice.min_recall, slice.min_precision));
