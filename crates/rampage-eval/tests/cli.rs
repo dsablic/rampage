@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use assert_cmd::Command;
-use rampage_eval::{Evaluation, Outcome, ToolTruth, Truth};
+use rampage_eval::{Evaluation, Outcome, ToolTruth, Truth, TypeTruth};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -79,6 +79,9 @@ fn run_prints_the_report_and_a_summary_and_passes_the_gate() {
 /// layout-dependent value are its misses. discovery finds the twin's function starts; its spurious starts are
 /// unsized assembly the truth leaves out (`_start`, `__set_thread_area`). toolid names the producing tools of
 /// every committed fixture with a recorded build; like discovery it tolerates spurious answers and gates precision.
+/// types scores the signatures the decompiler infers for a stripped `-g` build against its DWARF; a recovered type
+/// is often wrong in ways a stripped binary cannot avoid, so it tolerates wrong and spurious answers and gates both
+/// floors.
 #[test]
 fn run_manifest_reports_every_slice_at_its_baseline() {
     let output = eval().arg("run").arg("--manifest").arg(data("eval-manifest.json")).output().unwrap();
@@ -103,11 +106,19 @@ fn run_manifest_reports_every_slice_at_its_baseline() {
         "libid-twin-aarch64",
         "libid-twin-x86_64",
         "toolid",
+        "types-classes-aarch64",
+        "types-classes-x86_64",
+        "types-params-aarch64",
+        "types-params-x86_64",
+        "types-return-aarch64",
+        "types-return-x86_64",
     ];
     assert_eq!(names, expected);
     for (name, gate) in &evaluation.gates {
         assert!(gate.min_recall > 0.0, "{name} has no recall baseline");
-        assert_eq!(gate.allow_spurious, name.starts_with("discovery-") || name == "toolid", "{name}");
+        let types = name.starts_with("types-");
+        assert_eq!(gate.allow_spurious, name.starts_with("discovery-") || name == "toolid" || types, "{name}");
+        assert_eq!(gate.allow_wrong, types, "{name}");
     }
     assert!(evaluation.passes_gate());
 }
@@ -363,4 +374,90 @@ fn tool_truth_covers_every_committed_fixture() {
     for path in truth.binaries.keys().chain(truth.excluded.keys()) {
         assert!(data(path).exists(), "{path} does not exist");
     }
+}
+
+fn types(extra: &[&str]) -> std::process::Output {
+    eval()
+        .args(["run", "--family", "types", "--target"])
+        .arg(fixture("eval-types-x86_64.elf"))
+        .arg("--truth")
+        .arg(data("eval-truth-types-x86_64.json"))
+        .args(extra)
+        .output()
+        .unwrap()
+}
+
+fn committed_types(name: &str) -> TypeTruth {
+    TypeTruth::from_json(&std::fs::read_to_string(data(name)).unwrap()).unwrap()
+}
+
+/// A types slice decompiles each truth function of the stripped twin; its wrong classes are listed and counted by
+/// kind but fail the run only through the floors.
+#[test]
+fn run_types_scores_each_parameter_and_counts_disagreement_classes() {
+    let output = types(&["--metric", "classes"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let evaluation: Evaluation = serde_json::from_slice(&output.stdout).unwrap();
+    let report = &evaluation.slices["types-classes-x86_64"];
+    let truth = committed_types("eval-truth-types-x86_64.json");
+    let declared: usize = truth.0.values().map(|signature| signature.params.len()).sum();
+    assert_eq!(report.correct + report.wrong + report.missed, declared, "{}", report.summary());
+    assert!(report.wrong > 0, "{}", report.summary());
+    let counted: usize = report.disagreement_classes.values().sum();
+    assert_eq!(counted, report.wrong + report.missed + report.spurious);
+    assert_eq!(report.disagreements.len(), counted);
+    assert!(report.disagreement_classes.contains_key("struct_pointer->pointer"), "{:?}", report.disagreement_classes);
+    let entry = report.disagreements.iter().find(|entry| entry.outcome == Outcome::Wrong).unwrap();
+    assert!(entry.truth.as_deref().is_some_and(|truth| truth.starts_with("t_")), "{entry:?}");
+    assert!(entry.proposed.as_deref().is_some_and(|proposed| proposed.contains('(')), "{entry:?}");
+
+    let output = types(&["--metric", "classes", "--min-precision", "1.0"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    let failure = stderr.lines().find(|line| line.contains(": FAIL ")).unwrap();
+    assert!(failure.starts_with("types-classes-x86_64: FAIL precision "), "{stderr}");
+    assert!(!failure.contains("wrong"), "{stderr}");
+}
+
+/// The committed type truths are what `rampage-eval type-truth` reads from the committed `-g` builds, twin checks
+/// included, and they describe the corpus source's functions.
+#[test]
+fn committed_type_truths_are_reproducible() {
+    for arch in ["x86_64", "aarch64"] {
+        let output = eval()
+            .arg("type-truth")
+            .arg(fixture(&format!("eval-types-sym-{arch}.elf")))
+            .arg("--stripped")
+            .arg(fixture(&format!("eval-types-{arch}.elf")))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let truth = TypeTruth::from_json(&String::from_utf8(output.stdout).unwrap()).unwrap();
+        assert_eq!(truth, committed_types(&format!("eval-truth-types-{arch}.json")), "{arch}");
+        let sum = truth.0.values().find(|signature| signature.name == "t_sum_ints").unwrap();
+        assert!(sum.variadic, "{arch}");
+        assert!(truth.0.values().any(|signature| signature.name == "main"), "{arch}");
+    }
+}
+
+#[test]
+fn type_truth_rejects_a_stripped_twin_with_different_code() {
+    let output = eval()
+        .arg("type-truth")
+        .arg(fixture("eval-types-sym-x86_64.elf"))
+        .arg("--stripped")
+        .arg(fixture("eval-twin-x86_64.elf"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not a twin"), "{output:?}");
+}
+
+/// A binary without DWARF has no type truth, which reads as an empty truth rather than an error.
+#[test]
+fn type_truth_of_a_binary_without_dwarf_is_empty() {
+    let output = eval().arg("type-truth").arg(fixture("eval-types-x86_64.elf")).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "{}\n");
 }

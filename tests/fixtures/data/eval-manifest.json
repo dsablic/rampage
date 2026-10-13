@@ -41,8 +41,56 @@
     "toolid": {
       "family": "toolid",
       "truth": "eval-truth-toolid.json",
-      "min_recall": 0.7872,
+      "min_recall": 0.7986,
       "min_precision": 1.0
+    },
+    "types-params-x86_64": {
+      "family": "types",
+      "metric": "params",
+      "target": "../bin/eval-types-x86_64.elf",
+      "truth": "eval-truth-types-x86_64.json",
+      "min_recall": 0.923,
+      "min_precision": 0.923
+    },
+    "types-return-x86_64": {
+      "family": "types",
+      "metric": "return",
+      "target": "../bin/eval-types-x86_64.elf",
+      "truth": "eval-truth-types-x86_64.json",
+      "min_recall": 0.9411,
+      "min_precision": 1.0
+    },
+    "types-classes-x86_64": {
+      "family": "types",
+      "metric": "classes",
+      "target": "../bin/eval-types-x86_64.elf",
+      "truth": "eval-truth-types-x86_64.json",
+      "min_recall": 0.6231,
+      "min_precision": 0.6515
+    },
+    "types-params-aarch64": {
+      "family": "types",
+      "metric": "params",
+      "target": "../bin/eval-types-aarch64.elf",
+      "truth": "eval-truth-types-aarch64.json",
+      "min_recall": 0.9743,
+      "min_precision": 0.9743
+    },
+    "types-return-aarch64": {
+      "family": "types",
+      "metric": "return",
+      "target": "../bin/eval-types-aarch64.elf",
+      "truth": "eval-truth-types-aarch64.json",
+      "min_recall": 1.0,
+      "min_precision": 1.0
+    },
+    "types-classes-aarch64": {
+      "family": "types",
+      "metric": "classes",
+      "target": "../bin/eval-types-aarch64.elf",
+      "truth": "eval-truth-types-aarch64.json",
+      "min_recall": 0.6086,
+      "min_precision": 0.6176
     }
   }
 }
