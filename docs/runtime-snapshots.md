@@ -127,9 +127,22 @@ image/file hashes remain available and must not substitute for mapping identity 
 `rampage summarize capture.json --at 0x1000 --json` includes partial IR alongside the graph and references.
 `complete` applies to each lifted instruction, not the function. Unimplemented instruction semantics produce
 barriers. ARM64 integer coverage includes immediate/shifted ADD/SUB and NZCV, logical operations, wide moves,
-variable shifts, multiply/divide, ADR/ADRP, common scalar/pair memory operations and branch conditions.
+variable shifts, multiply/divide, ADR/ADRP, common scalar/pair memory operations and branch conditions. It also
+covers carry arithmetic (ADC/ADCS/SBC/SBCS, NGC/NGCS), conditional compares (CCMP/CCMN), every SBFM/UBFM/BFM
+bitfield shape including the wrapping SBFIZ/UBFIZ/BFI forms and BFXIL/BFC, long and high multiplies
+(S/UMADDL, S/UMSUBL and their aliases, SMULH/UMULH), EXTR/ROR immediate and CLZ/CLS/RBIT/REV/REV16/REV32.
+FEAT_CSSC, RMIF and SETF8/SETF16 remain barriers.
 Plain BL/BLR calls retain pre-call arguments, X8 result-buffer and SP dependencies and conservatively clobber
 caller-saved registers/memory; unknown, FP/SIMD and authenticated operations remain barriers.
+
+The IR is JSON tagged by `kind`. Carry arithmetic is a `carry_arithmetic` effect (`destination`, `left`, `right`,
+`subtract`, `set_flags`): `left + right + C`, or `left - right - !C` when `subtract`, reading the operands and
+the incoming C before writing either the destination or the flags. A conditional compare is a `conditional_flags`
+effect: when `condition` holds on the incoming flags, the flags become those of `operation` (`add`, `subtract` or
+`and`) on `left` and `right`, otherwise the packed `nzcv` immediate. A `unary` value applies `operation` to
+`value` at `bits` width: `count_leading_zeros`, `count_leading_sign_bits`, `reverse_bits`, `reverse_bytes`,
+`reverse_bytes_in_halfwords` or `reverse_bytes_in_words`. The `binary` operations include
+`unsigned_multiply_high` and `signed_multiply_high`, the upper half of the double-width product.
 
 The `ssa` field in AArch64 summaries gives each register and memory definition a unique ID. Block-entry phi
 nodes name incoming definitions by predecessor block, including an external input edge when the entry has
