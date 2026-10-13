@@ -11,7 +11,8 @@
   arithmetic is overflow-hardened. MSVC path is synthetic-tested only (no MSVC toolchain locally).
 - [x] Go binaries: `rampage_loaders::gopclntab` recovers function names from the pclntab
   (go1.2/1.16/1.18/1.20+ magics, either endianness) and `Binary::open` attaches them automatically, so stripped
-  Go names surface everywhere. Section-based (`.gopclntab`/`__gopclntab`); no full-image magic scan yet.
+  Go names surface everywhere. Section-based (`.gopclntab`/`__gopclntab`), with a bounded magic-scan fallback
+  over read-only/relro sections when the dedicated section is absent or renamed; a text-section anchor is required.
 
 ## IDA/Ghidra gap-closing wave 1 (done earlier)
 
@@ -45,7 +46,8 @@
   hashing is unchanged for accepted bodies. Thresholds are conservative heuristics (only ever stricter).
 - [x] PE enrichment: TLS callbacks seed function starts and delay-load imports surface as slots (bounded,
   panic-free on malformed PEs).
-- [x] Go pclntab: bounded full-image magic-scan fallback when the section is absent or renamed.
+- [x] Go pclntab: bounded magic-scan fallback over read-only/relro sections when the dedicated section is
+  absent or renamed; absent section headers/text anchors remain unsupported.
 - [ ] C++ class LAYOUT reconstruction (fields/sizes), building on the RTTI name/hierarchy recovery now in place.
 
 ### Capability-detection rules (capa-style, defensive triage)
@@ -160,24 +162,32 @@ on held-out, per-slice improvement with provenance and rollback.
   SSA, summaries, export-cfg) and jump xrefs, not seeds. Bounds survive only instructions whose register writes are
   fully modelled. aarch64 reference extents equal to symbol size: 188 -> 193 of 193; AArch64 chain agreement with
   Ghidra 100% on blocks and edges.
-- [ ] Structure switch regions in the native SSA pseudocode (it still prints `goto unknown_target` there).
+- [x] Resolved switches retain table-order entries and the guard address; native SSA pseudocode prints cases
+  and recovers the index operand when available. Bounded non-fall-through switch regions structure explicitly;
+  unsupported shapes retain the
+  labelled fallback (`ddeed9c`, `a5a07e2`).
 - [ ] AArch64 switch forms still unresolved: the `b.ls`/`b.lo` inverse (bound on the taken path) and a `cmp` not
   immediately before the conditional branch.
 - [x] x86/x86-64 switch jump tables: absolute `jmp [reg*8+table]` (i386 `[reg*4+table]`), `mov`+`jmp`, relative
   `lea`/`movsxd`/`add`, MSVC image-base form; bounds from unsigned `cmp`+`ja`/`jae` or a low-bits `and` mask; the
   same join, read-only-table and 4096-entry rules. Register facts are forgotten where a branch joins the run
   (`Disassembler::join`, all architectures). Ghidra-only blocks: eval-ref-x86_64 328 -> 8, hello-x64.exe 239 -> 44.
-- [ ] Switches whose index copy or table base is set up in an earlier block (eval-ref-x86_64 `0x1008e60`,
-  hello-x64.exe `0x140001aca`); PIC i386 tables.
+- [x] Cross-block switch facts: must-dataflow carries only facts agreed on by every incoming edge; added cases
+  are revalidated against the expanded graph. The earlier eval-ref-x86_64 and hello-x64.exe dispatches resolve
+  (`e8622fd`); the updated x86-64 chain-block/edge benchmark agrees with Ghidra on the affected fixtures.
+- [ ] Compiled PIC i386 switch-table acceptance fixture. The implementation recognises its get-PC/GOT forms,
+  but the current benchmark corpus has no such fixture.
 - [x] Noreturn analysis: a curated, case-sensitive list (C/POSIX, C++ ABI, Win32/CRT, Rust, Go; stubs, thunks and
   slots by name) plus incremental all-paths inference; conditional calls/returns and resumable traps handled; noreturn
   calls are terminal in structure/pseudocode, marked for the decompiler, and carry `listed`/`inferred` evidence in
   function_graph and export-cfg. Go edge precision vs Ghidra 95.3% -> 99.3%; go-arm64 structured functions 578 -> 755.
-- [ ] Noreturn: inference through mutual tail calls.
+- [x] Noreturn inference through mutual tail calls (`3f0eeaf`): a greatest fixpoint over the tail-call graph,
+  requiring a path to an evidenced non-returning call or trap. Cycles without that evidence remain unknown.
 - [x] Get-PC call-to-next only when the following code reads the return address (delay-slot aware; x86, MIPS, PPC,
   SPARC, ARM/Thumb/AArch64); PE import thunks seeded so tail jumps stay tail calls; undecodable starts dropped in
   discovery phase 2; RISC-V branch targets rendered absolute.
-- [ ] ARM `ldr` literal-pool addresses are treated as code pointers (hello-arm `sub_20338`, `sub_2033c`).
+- [x] Memory read/write addresses are data, not code-pointer seeds (`b4c5b3f`). Formed code addresses and loaded
+  read-only pointer values remain separate evidence; the hello-arm literal-pool phantom functions are gone.
 - [x] Library-ID misses explained and mostly fixed: signatures also hash the extent discovery finds (it stops at
   unresolved jump tables), and callee-name keys (`identify_program`, iterated) separate bodies that differ only in
   their callee (`mbstowcs`/`wcstombs`, `fprintf`/`sscanf`, `fmodl`/`__addtf3`). Callee keys apply only to bodies
@@ -198,7 +208,10 @@ on held-out, per-slice improvement with provenance and rollback.
 - [ ] Tool-ID remaining: Zig on stripped builds and PEs, Clang on Mach-O/PE (no producer record), the whole-file
   "rustc version" rule (tentative; scope or drop), real NSIS/Inno Setup installer fixtures, a Zig-language Mach-O
   fixture.
-- [ ] Later phases: a type-recovery (DWARF/PDB) slice; the proposal/gate/promote loop on top.
+- [x] DWARF-backed type-recovery evaluation: freestanding stripped twins per architecture, scoring parameter
+  count, void/value returns and parameter type classes against bounded debug truth, with per-metric gates.
+  This measures signature recovery, not aggregate/class-layout recovery or general type correctness.
+- [ ] PDB-backed type truth and automated proposal/gate/promote stages with held-out provenance and rollback.
 
 ## Ideas from adjacent projects (REA, Ghidra-MCP)
 
@@ -216,8 +229,8 @@ in UX/workflow ideas, not the multi-engine dispatch:
   MethodDef/Param/MemberRef/Assembly/AssemblyRef/NestedClass with every other table sized; IL body headers;
   never seeded as native code. API `dotnet_metadata` (paged, filterable), `rampage dotnet`, MCP tool, and
   `triage_report` routes managed assemblies to it. Validated on Microsoft.Bcl.HashCode 1.1.1 (MIT, committed with
-  its licence). Not decoded yet: signatures/generics, custom attributes, properties/events, resources, P/Invoke
-  targets, exception sections; no IL disassembly.
+  its licence). Signatures/generics, primitive attributes, P/Invoke and IL/exception decoding were added below;
+  remaining metadata includes property signatures, events, resources and richer attribute arguments.
 - [x] Embedded-binary carving (`rampage carve`, MCP `carve`, `rampage_api::carve`): bounded scan for ELF, PE,
   Mach-O (thin and universal) and zip/gzip/xz/zstd/LZMA/squashfs/cpio/uImage/Android boot, with validated header
   facts, header-derived extents, validated or magic-only confidence and a 4096-candidate cap.
@@ -225,8 +238,10 @@ in UX/workflow ideas, not the multi-engine dispatch:
   `image_offset`, offset-keyed sidecars, triage reports the image's own hashes and where it sits.
   `--image-length`/`image_length`, `Embedded.trailing` with a triage hint, `.rampage-image` sidecars that cannot
   collide with plain ones, offset 0 without a length is the plain file.
-- [ ] Open an embedded image in the UI. APK (JADX) and Electron unpacking are lower-priority follow-ons. (Done:
-  diff-builds `--other-image-offset`; sessions reload binaries changed on disk.)
+- [x] Open embedded images in the UI (`a8ac21e`): Carve window, validated executable candidates, explicit offsets
+  and optional lengths, including files that do not open as a whole image. Sessions reload changed binaries;
+  diff-builds supports `--other-image-offset`.
+- [ ] APK (JADX) and Electron unpacking are lower-priority follow-ons; carving is not archive extraction.
 - [x] .NET: ECMA-335 blob signatures (method/field/MemberRef, TypeSpec, GenericParam names) rendered ILAsm-style
   with depth/node/text caps and an `<unreadable>` fallback; ImplMap P/Invoke (DLL + import per method);
   CustomAttribute rows with type, target and primitive/string/Type fixed arguments; nested types as `Outer/Inner`.
@@ -243,7 +258,8 @@ in UX/workflow ideas, not the multi-engine dispatch:
   undo/redo refuse to restore a name another client has taken.
 - [x] `discard_undo` drops an undo step another client blocks (refuses unblocked steps unless forced). Reloads keep
   undo history; annotation logs record the image SHA-256 and warn when annotations were made on different bytes.
-- [ ] A UI action for discarding a blocked undo step; per-path image offsets for compare-pointers/compare-runtime.
+- [x] UI action for discarding a blocked undo step (`ab31d28`), showing the conflict without forcing the undo.
+- [ ] Per-path image offsets for compare-pointers/compare-runtime.
 - [x] MCP tool groups: every registry tool has a group; `rampage mcp` lists core + `enable_tools` (lists groups,
   enables them, sends tools/list_changed); `--all-tools` / `RAMPAGE_MCP_TOOLS` for clients without list_changed;
   calls to disabled tools error naming the group. The in-app agent and UI assistant still offer every tool.
@@ -263,8 +279,9 @@ unsandboxed native code. Three layers instead, in this order:
   Review fixes: YARA `include` refused in every rule set; files opened without following links and checked against
   what was budgeted; running per-pack and overall budgets, at most 64 packs, lazy loading; signature matches carry
   their `source`; pack problems reach detection `warnings` and the MCP instructions.
-- [ ] Packs: a constants pack format; pack loading in the UI; `identify --no-bundled` should accept a pack database
-  instead of requiring `--db`; `detect` prints pack PeID problems twice (output and stderr).
+- [x] Constants packs (`f5eecda`), UI pack loading/status (`d769e82`), pack-only `identify --no-bundled`
+  (`8379e5d`) and single-reporting of pack PeID problems (`8e7de84`). Constants retain information guards and
+  pack provenance; packs remain bounded data inputs, not executable extensions.
 - [x] Internal trait registries: guided workflows implement `Workflow` and are listed once in `WORKFLOWS`; the
   tool list (MCP, assistant) and `rampage report` enumerate it, with tests that each is unique, a tool of its group,
   served by MCP, named in the instructions and parsed by the CLI (docs/plugins.md). CLI and MCP output unchanged
@@ -436,7 +453,9 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Labeled and `--structured` SSA pseudocode with explicit predecessor tokens and simultaneous phi bindings.
 - [x] Execution comparisons cover both diamond arms, repeated loops and both loop-condition polarities.
 - [ ] Minimal phi placement, dead-definition elimination and broader expression simplification without amplification.
-- [ ] Nested/multi-block loops, broader branch joins, switch regions and explicit irreducible-flow fallback.
+- [x] Bounded non-fall-through switch regions with retained table entries and guard evidence; unsupported
+  switch shapes preserve labelled SSA diagnostics rather than invented structure.
+- [ ] Nested/multi-block loops, broader branch joins, fall-through switch regions and irreducible-flow handling.
 - [ ] Typed variables, source-level expressions/returns and readable decompiler output distinct from SSA diagnostics.
 
 ### 4. Jump tables and indirect flow — partial
@@ -444,27 +463,35 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Conservative ADR/ADRP/ADD/MOV/LDR/BR/BLR discovery; calls/stores invalidate captured-memory assumptions.
 - [x] Explicit bounded absolute64/signed-relative32 table inspection, without guessed dispatch bounds.
 - [x] Image-validated SSA target evidence, including a spilled constant target.
-- [ ] Automatic dispatch recognition, proven index bounds and validated table entries tied to the branch site.
-- [ ] Feed proven targets into discovery/CFG/xrefs with deterministic closure and retained source evidence.
+- [x] Bounded AArch64 and x86/x86-64 dispatch recognition with proven unsigned bounds, read-only backed tables,
+  validated destinations and branch-site evidence. Cross-block facts are revalidated after graph expansion.
+- [x] Proven immutable switch cases feed discovery/CFG/xrefs as case edges, not function seeds, retaining table
+  order and guard evidence. Other indirect-flow forms remain separate acceptance work.
 - [ ] Mutable pointers only after alias/reaching-store proof; authenticated or unmapped targets remain unresolved.
 - [ ] Fixtures for relative tables, duplicate targets, joins, loops, truncation, overflow and hostile index bounds.
 
 ### 5. Controlled runtime capture — initial gate complete
 
 - [x] Successful permitted stopped-process capture, module UUIDs/bases, register provenance and original correlation.
-- [ ] Reproducible session persistence and mapping-aware snapshot identity, including addresses/permissions/endianness.
+- [x] Mapping-aware snapshot identity and durable identity-scoped annotation persistence, including addresses,
+  permissions and endianness. Per-file provenance/register observations are not conflated by identity reuse.
+- [ ] Persist derived analysis caches and decompiler configuration as reproducible sessions.
 - [ ] Multiple modules/threads and stripped/relocated images; module-qualified navigation and cross-module references.
 - [ ] Broader debugger/platform integration, capture failure handling and provenance validation on larger fixtures.
 
-### 6. Accuracy benchmark — partial; external comparisons blocked
+### 6. Accuracy benchmark — partial
 
 - [x] Synthetic snapshots, native instruction oracles, compiled fixtures and malformed-input/resource regressions.
 - [x] Versioned, hash-/architecture-matched function-start reference imports; snapshot comparisons reject
   ambiguous identity.
-- [ ] A reproducible compiler/optimization corpus with recorded tool versions and instruction/CFG/xref/semantic metrics.
+- [x] Versioned x86-64/AArch64 matched-pair corpus for library ID, discovery, tool detection and DWARF-backed
+  signature recovery. The committed 13-slice baseline gate passes at `6122f64`.
+- [ ] Broader compiler/optimization/ABI coverage with instruction/stack/semantic and time/memory metrics.
 - [ ] CI gates for accuracy regressions, unsupported coverage, false positives and analysis time/memory bounds.
-- [ ] IDA/Ghidra exports and comparisons once installations are available; reference output is not ground truth.
-- [ ] Expand comparisons beyond function starts to CFGs, dispatch targets, stack/signature evidence and semantics.
+- [x] Ghidra exports compare function starts, blocks, CFG edges and calls on 18 fixtures; reference output is
+  not ground truth, and normalized chain agreement is not decompiler or semantic equivalence.
+- [ ] IDA exports/comparisons once an installation is available.
+- [ ] Expand beyond current CFG/call and signature metrics to dispatch truth, stack evidence and semantics.
 
 ### Next execution order
 
@@ -547,9 +574,10 @@ read-only triage inputs, never bypass or patch fixtures. Runtime tests use progr
   mutable and unmapped targets must remain unresolved.
 - [x] Analysis confidence: `audit`/`analysis_diagnostics` explain decode coverage and unreliable-code evidence over
   sparse memory without asserting encryption (below).
-- [ ] Language metadata: C++/Rust demangling with original lookup names, named and stripped Itanium/MSVC RTTI,
-  and Objective-C selector inventory are done. Remaining: Objective-C class/method metadata with
-  malformed-pointer tests.
+- [x] Language metadata: C++/Rust demangling with original lookup names, named/stripped Itanium/MSVC RTTI,
+  and bounded Objective-C classes/categories/methods/ivars/properties/protocols with malformed-pointer tests.
+  Objective-C metadata handles relative methods and static chained-fixup rebases; it is not runtime PAC recovery
+  or automatic C++ object-layout reconstruction.
 - [x] Data-flow/decompilation: structured function summaries shipped, and decompilation comes from the embedded
   Ghidra decompiler. The native IR/SSA work continues as diagnostics in the Deep ARM64 track; it is never
   labelled a decompiler.
@@ -602,6 +630,9 @@ arbitrary debugger control and multi-module runtime resolution must not be infer
 7. **CLI batch workflow:** first-class multi-architecture analysis reports with bounded function selection,
    per-command timeouts, recovery diagnostics and comparison summaries; avoid external orchestration for routine
    static/runtime retests. Keep candidate counts, weak signature proposals and recovered code distinct.
+   - [x] Single-image guided reports through `rampage report` and the shared workflow registry, with bounded
+     findings, evidence/confidence, explicit truncation and next-step tool calls.
+   - [ ] Multi-architecture/multi-function retest orchestration and runtime comparison report composition.
 8. **Debugger integration:** plan an LLDB-first read-only bridge after static acceptance, with explicit session/
    stop identities, module/thread navigation, quiescent capture manifests and agent/UI queries. Attach, resume,
    breakpoint insertion and target writes require separately reviewed controls; no automatic host or plugin launch.
