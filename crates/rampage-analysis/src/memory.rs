@@ -85,9 +85,15 @@ impl Memory for FlatMemory {
     fn immediates_may_be_addresses(&self) -> bool {
         self.base >= MIN_IMAGE_BASE_FOR_IMMEDIATES
     }
+}
 
-    fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
-        let offset = usize::try_from(address.checked_sub(self.base)?).ok()?;
-        read_uint(&self.bytes, offset, usize::from(size), false)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_flat_region_has_no_constants_because_nothing_proves_it_read_only() {
+        let memory = FlatMemory { base: 0x1000, bytes: vec![1, 0, 0, 0] };
+        assert_eq!(memory.read_constant(0x1000, 4), None);
     }
 }
