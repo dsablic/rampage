@@ -197,6 +197,19 @@ fn pe_import_thunks_are_named_without_analysis() {
 }
 
 #[test]
+fn a_jump_to_an_import_thunk_is_a_tail_call_even_from_a_single_caller() {
+    let binary = open("hello-x64.exe");
+    let program = functions::analyze(&binary).unwrap();
+    let names = functions::Names::new(&binary);
+    let thunk = names.address_of("fflush").expect("thunk named fflush");
+    assert!(program.function_at(thunk).is_some(), "fflush thunk is not a function");
+    // 0x140001440: push rbp; mov rbp, rsp; xor ecx, ecx; pop rbp; jmp fflush
+    let caller = program.function_at(0x1_4000_1440).expect("caller discovered");
+    assert!(!caller.contains(thunk), "{caller:?}");
+    assert!(program.xrefs_to(thunk).iter().any(|xref| xref.from == 0x1_4000_1447));
+}
+
+#[test]
 fn triage_hashes_measures_and_flags_overlays() {
     let binary = open("hello-x64.exe");
     let triage = rampage_analysis::triage::triage(&binary);

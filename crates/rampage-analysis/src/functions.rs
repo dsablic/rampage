@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rampage_arch::Arch;
 use rampage_arch::{Flow, UnsupportedArch};
@@ -57,6 +57,7 @@ pub fn analyze(binary: &Binary) -> Result<Program, UnsupportedArch> {
     let mut seeds: Vec<u64> = from_symbols(binary).iter().map(|function| function.address).collect();
     seeds.extend(&binary.function_starts);
     seeds.extend(stub_seeds(binary));
+    seeds.extend(thunk_seeds(binary));
     Ok(discover(binary, || binary.decoder().expect("architecture checked above"), &seeds))
 }
 
@@ -149,6 +150,22 @@ pub fn thunk_names(binary: &Binary) -> Vec<(u64, String)> {
         }
     }
     names
+}
+
+/// The PE import thunks that are functions of their own, so a jump to one is a tail call to the import rather than
+/// a block of the one function that jumps there. A thunk follows padding (`int3`, `nop`), another thunk or the
+/// start of its section; a `jmp [slot]` right after other code ends that code's function instead.
+fn thunk_seeds(binary: &Binary) -> Vec<u64> {
+    let thunks: BTreeSet<u64> = thunk_names(binary).into_iter().map(|(address, _)| address).collect();
+    let starts_function = |address: u64| {
+        let previous = address.checked_sub(1).filter(|&previous| binary.is_code(previous));
+        match previous.and_then(|previous| binary.read(previous, 1)) {
+            None => true,
+            Some(&[byte]) => matches!(byte, 0xcc | 0x90) || thunks.contains(&address.wrapping_sub(6)),
+            Some(_) => false,
+        }
+    };
+    thunks.iter().copied().filter(|&address| starts_function(address)).collect()
 }
 
 /// Names for addresses: function symbols first, then exports, the entry point and other symbols, then import
