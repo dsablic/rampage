@@ -1,8 +1,11 @@
 use iced_x86::{
-    Decoder, DecoderOptions, FlowControl, Formatter, Instruction, IntelFormatter, Mnemonic, OpKind, Register,
+    Decoder, DecoderOptions, FlowControl, Formatter, Instruction, InstructionInfoFactory, IntelFormatter, Mnemonic,
+    OpKind, Register,
 };
 
-use crate::{Disassembler, Flow, Insn};
+use crate::{Disassembler, Flow, Insn, JumpTable};
+
+mod switch;
 
 /// Immediates below this are almost never addresses (small constants, flags, sizes).
 const MIN_IMMEDIATE_ADDRESS: u64 = 0x1000;
@@ -10,11 +13,20 @@ const MIN_IMMEDIATE_ADDRESS: u64 = 0x1000;
 pub struct X86Disassembler {
     bitness: u32,
     formatter: Option<IntelFormatter>,
+    info: InstructionInfoFactory,
+    registers: switch::Registers,
+    jump_table: Option<JumpTable>,
 }
 
 impl X86Disassembler {
     pub fn new(bitness: u32) -> Self {
-        Self { bitness, formatter: None }
+        Self {
+            bitness,
+            formatter: None,
+            info: InstructionInfoFactory::new(),
+            registers: switch::Registers::default(),
+            jump_table: None,
+        }
     }
 
     fn decode_raw(&self, bytes: &[u8], address: u64) -> Instruction {
@@ -26,8 +38,10 @@ impl Disassembler for X86Disassembler {
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
         let instruction = self.decode_raw(bytes, address);
         if instruction.is_invalid() {
+            self.jump_table = None;
             return Insn { address, len: 1, flow: Flow::Invalid, data_ref: None, immediate: None };
         }
+        self.jump_table = self.registers.step(&instruction, self.bitness, &mut self.info);
         Insn {
             address,
             len: instruction.len() as u8,
@@ -35,6 +49,15 @@ impl Disassembler for X86Disassembler {
             data_ref: memory_ref_of(&instruction),
             immediate: pointer_immediate_of(&instruction),
         }
+    }
+
+    fn reset(&mut self) {
+        self.registers = switch::Registers::default();
+        self.jump_table = None;
+    }
+
+    fn jump_table(&self) -> Option<JumpTable> {
+        self.jump_table
     }
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {

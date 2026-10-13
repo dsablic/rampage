@@ -516,6 +516,8 @@ fn split_block(blocks: &mut BTreeMap<u64, u64>, address: u64) {
 
 #[cfg(test)]
 mod tests {
+    mod x86_switch;
+
     use rampage_arch::{Arch, decoder_for};
 
     use super::*;
