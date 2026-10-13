@@ -25,7 +25,13 @@ from pathlib import Path
 from typing import Any
 
 TOOLS = Path(__file__).resolve().parent
+SCRIPT = TOOLS / "ghidra_cfg_export.java"
 TOP = 10
+
+
+def cache_key(image_sha256: str, version: str, script: Path = SCRIPT) -> str:
+    """Names a cached Ghidra export by the image, the Ghidra version and the export script that produced it."""
+    return f"{image_sha256}-{version}-{hashlib.sha256(script.read_bytes()).hexdigest()[:16]}"
 
 
 def ghidra_version(install: Path) -> str:
@@ -238,7 +244,9 @@ def main() -> int:
     parser.add_argument("ghidra", type=Path, help="Ghidra install directory (contains support/analyzeHeadless)")
     parser.add_argument("fixtures", type=Path, nargs="+")
     parser.add_argument("--out", type=Path, help="write each fixture's full JSON report, disagreements included")
-    parser.add_argument("--ghidra-cache", type=Path, help="reuse Ghidra exports keyed by image and Ghidra version")
+    parser.add_argument(
+        "--ghidra-cache", type=Path, help="reuse Ghidra exports keyed by image, Ghidra version and export script"
+    )
     arguments = parser.parse_args()
 
     version = ghidra_version(arguments.ghidra)
@@ -255,7 +263,7 @@ def main() -> int:
         arguments.out.mkdir(parents=True, exist_ok=True)
     for fixture in arguments.fixtures:
         sha = hashlib.sha256(fixture.read_bytes()).hexdigest()
-        ghidra, seconds = ghidra_export(arguments.ghidra, fixture, f"{sha}-{version}", arguments.ghidra_cache)
+        ghidra, seconds = ghidra_export(arguments.ghidra, fixture, cache_key(sha, version), arguments.ghidra_cache)
         report = compare(ghidra, rampage_functions(arguments.rampage, fixture))
         report.update({
             "fixture": fixture.name, "image_sha256": sha, "ghidra_version": version,
