@@ -149,18 +149,22 @@ on held-out, per-slice improvement with provenance and rollback.
   libid-cross recall 0.746 -> 0.921 (x86_64), 0.595 -> 0.823 (aarch64), precision 1.000, twins unchanged.
   (An earlier note here claimed 47 names from `rampage identify` on each musl fixture; re-measured after the
   review fixes it was 58 and 66, and is now 59 and 71 -- see below.)
-- [x] Discovery false positives on aarch64: in-body ADR jump-table bases no longer seed functions (they cascaded
-  into interior blocks of `printf_core`/`vfscanf`). Precision 0.737 -> 0.990; the two left (`_start`,
-  `__set_thread_area`) are real functions the truth omits (no symbol size).
+- [x] Discovery false positives on aarch64: AArch64 switch jump-table bases (`adr` + `add ..., lsl` + `br`) inside
+  a function no longer seed functions (they cascaded into interior blocks of `printf_core`/`vfscanf`); every other
+  in-body code address still seeds (callbacks, code after noreturn calls). Precision 0.737 -> 0.990; the two left
+  (`_start`, `__set_thread_area`) are real functions the truth omits (no symbol size).
 - [ ] Resolve AArch64 jump tables (adr/ldrb|ldrh/add/br bounded by cmp+b.hi) so case blocks are explored and
   discovered extents match symbol sizes.
 - [x] Library-ID misses explained and mostly fixed: signatures also hash the extent discovery finds (it stops at
   unresolved jump tables), and callee-name keys (`identify_program`, iterated) separate bodies that differ only in
-  their callee (`mbstowcs`/`wcstombs`, `fprintf`/`sscanf`) and small tail-call stubs. Recall: twin x86_64 0.920 ->
-  0.977, cross x86_64 0.921 -> 0.937, twin aarch64 0.876 -> 0.953, cross aarch64 0.848 -> 0.899; precision 1.000.
-  `rampage identify` on the stripped musl fixtures names 59 (x86_64) and 71 (aarch64) functions. Remaining: musl
-  `dummy` stubs (ambiguous), aarch64 `__errno_location`/`difftime` (3-instruction leaves under the gate),
-  `__lctrans` (lone branch to an unidentifiable callee). Rebuild the bundled DBs whenever discovery extents change.
+  their callee (`mbstowcs`/`wcstombs`, `fprintf`/`sscanf`, `fmodl`/`__addtf3`). Callee keys apply only to bodies
+  that pass the confidence gate (ignoring landing pads and the final branch) and whose masked hash is ambiguous; a
+  user database's lookups outrank the bundled one's. Recall: twin x86_64 0.920 -> 0.977, cross x86_64 0.921 ->
+  0.937, twin aarch64 0.876 -> 0.927, cross aarch64 0.848 -> 0.886; precision 1.000. (A first version also named
+  gate-rejected tail-call stubs -- `atof`, `gmtime`, `localtime`, `strftime`, `__stdio_seek` -- and briefly reached
+  0.953/0.899; review found it would misname user thunks and wrappers, so those floors were set back.)
+  Remaining: musl `dummy` stubs (ambiguous), gate-rejected 2-3 instruction stubs and leaves (`__errno_location`,
+  `difftime`, the above), `__lctrans`. Rebuild the bundled DBs whenever discovery extents change.
 - [ ] Masking for 32-bit ARM literal pools and MIPS `lui`/`addiu` pairs, once a cross-program fixture exists.
 - [ ] Later phases: tool ID (known toolchains) and type recovery (DWARF/PDB) slices; the proposal/gate/promote
   loop on top.
@@ -190,10 +194,15 @@ in UX/workflow ideas, not the multi-engine dispatch:
   offset. APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
 - [x] .NET: ECMA-335 blob signatures (method/field/MemberRef, TypeSpec, GenericParam names) rendered ILAsm-style
   with depth/node/text caps and an `<unreadable>` fallback; ImplMap P/Invoke (DLL + import per method);
-  CustomAttribute rows with type, target and primitive/string/Type fixed arguments. In dotnet_metadata/CLI/MCP.
+  CustomAttribute rows with type, target and primitive/string/Type fixed arguments; nested types as `Outer/Inner`.
+  In dotnet_metadata/CLI/MCP with a `list` selector (types/pinvokes/attributes). Decode work (blob bytes and text)
+  is charged to one image-wide budget; array shapes are bounded by rank.
 - [ ] .NET: an IL disassembler; named/enum/array attribute arguments; locals/MethodSpec signatures.
 - [x] Agent batch annotation: `annotate_batch` (all-or-nothing, at most 1000 entries, one undo step, per-entry
-  outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits.
+  outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits. Name
+  checks run under the cross-process log lock; batches are logged under a header line and replay all-or-nothing;
+  undo/redo refuse to restore a name another client has taken.
+- [ ] An undo step blocked by another client's edit blocks every earlier step; offer a way to drop it.
 - [ ] Keep the MCP tool surface structured as it grows (lazy/grouped tool exposure).
 - [x] `persistence_surface` workflow: autostart-location strings (Windows Run/services/tasks/Startup, launchd,
   systemd, cron, XDG autostart, rc/init), service/registry-write APIs, referencing functions, capability tags.
