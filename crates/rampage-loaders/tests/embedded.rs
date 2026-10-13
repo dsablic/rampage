@@ -64,7 +64,11 @@ fn an_embedded_universal_binary_selects_the_requested_slice() {
     let direct = Binary::open_with(fixture("hello-universal.macho"), Some(Arch::Aarch64)).unwrap();
     let embedded = Binary::open_at_with(&temp.0, offset, None, Some(Arch::Aarch64)).unwrap();
     assert_eq!(embedded.arch, Arch::Aarch64);
-    assert_eq!(without_embedded(&embedded), without_embedded(&direct));
+    let mut value = without_embedded(&embedded);
+    assert!(embedded.warnings.iter().any(|warning| warning.contains("loaded independently")));
+    let warnings = value["warnings"].as_array_mut().unwrap();
+    warnings.retain(|warning| !warning.as_str().unwrap().contains("loaded independently"));
+    assert_eq!(value, without_embedded(&direct));
     let missing = Binary::open_at_with(&temp.0, offset, None, Some(Arch::Mips)).unwrap_err();
     assert!(matches!(missing, LoadError::Unsupported(_)), "{missing:?}");
 }

@@ -210,8 +210,8 @@ impl Binary {
             return crate::snapshot::load(data.to_vec(), wanted);
         }
         let (slices, image) = match object::FileKind::parse(&*data)? {
-            object::FileKind::MachOFat32 => select_slice(fat_slices::<FatArch32>(&data)?, wanted)?,
-            object::FileKind::MachOFat64 => select_slice(fat_slices::<FatArch64>(&data)?, wanted)?,
+            object::FileKind::MachOFat32 => select_universal::<FatArch32>(&data, wanted)?,
+            object::FileKind::MachOFat64 => select_universal::<FatArch64>(&data, wanted)?,
             _ => (Vec::new(), 0..data.len()),
         };
         Self::load(data, image, slices, wanted)
@@ -238,6 +238,41 @@ impl Binary {
         }
     }
 
+    /// Enumerates supported universal-header architectures without requiring any individual slice to load.
+    /// Thin images and snapshots use ordinary loading. Ambiguous duplicate architectures are rejected.
+    pub fn architecture_slices(path: impl AsRef<Path>, image: Option<ImageAt>) -> Result<Vec<Arch>, LoadError> {
+        let path = path.as_ref();
+        let data = map_executable(path)?;
+        let view = match image.filter(|image| !image.is_whole_file()) {
+            Some(image) => {
+                let start = usize::try_from(image.offset)
+                    .ok()
+                    .filter(|&start| start < data.len())
+                    .ok_or_else(|| LoadError::Location("architecture probe offset is outside the file".to_owned()))?;
+                let length = image.length.unwrap_or((data.len() - start) as u64);
+                let length = usize::try_from(length)
+                    .ok()
+                    .filter(|&length| length > 0)
+                    .ok_or_else(|| LoadError::Location("invalid architecture probe length".to_owned()))?;
+                let end = start
+                    .checked_add(length)
+                    .ok_or_else(|| LoadError::Location("architecture probe range overflows".to_owned()))?;
+                data.get(start..end)
+                    .ok_or_else(|| LoadError::Location("architecture probe range is outside the file".to_owned()))?
+            }
+            None => &data,
+        };
+        let slices = match object::FileKind::parse(view) {
+            Ok(object::FileKind::MachOFat32) => declared_architectures::<FatArch32>(view)?,
+            Ok(object::FileKind::MachOFat64) => declared_architectures::<FatArch64>(view)?,
+            _ => return Ok(Self::open_image(path, image, None)?.slices),
+        };
+        if slices.is_empty() {
+            return Err(LoadError::Unsupported("no supported architecture slices".to_owned()));
+        }
+        Ok(slices)
+    }
+
     /// [`Binary::open_at`], requiring the given architecture when one is requested.
     pub fn open_at_with(
         path: impl AsRef<Path>,
@@ -251,6 +286,27 @@ impl Binary {
             LoadError::Location(format!("offset {offset:#x} is past the end of the file ({file_size:#x} bytes)"))
         })?;
         let available = file_size - offset;
+        if let Some(wanted) = wanted {
+            let kind = object::FileKind::parse(&data[start..]).ok();
+            let selected = match kind {
+                Some(object::FileKind::MachOFat32) => {
+                    Some(explicit_fat_image::<FatArch32>(&data, start, length, wanted)?)
+                }
+                Some(object::FileKind::MachOFat64) => {
+                    Some(explicit_fat_image::<FatArch64>(&data, start, length, wanted)?)
+                }
+                _ => None,
+            };
+            if let Some((size, slices, image)) = selected {
+                let mut binary = Self::load(data, image, slices, Some(wanted))?;
+                binary.embedded =
+                    Some(Embedded { offset, size: size as u64, file_size, trailing: available - size as u64 });
+                binary.warnings.push(
+                    "explicit universal slice loaded independently; other slice bodies were not validated".to_owned(),
+                );
+                return Ok(binary);
+            }
+        }
         let candidate = crate::carve::executable(&data[start..])
             .ok_or_else(|| LoadError::Malformed(format!("no ELF, PE or Mach-O header at offset {offset:#x}")))?;
         if candidate.confidence != crate::carve::Confidence::Validated {
@@ -760,6 +816,94 @@ fn merged(mut ranges: Vec<Range<u64>>) -> Vec<Range<u64>> {
 struct Slice {
     arch: Option<Arch>,
     range: Range<usize>,
+}
+
+struct SliceHeader {
+    arch: Option<Arch>,
+    range: Option<Range<usize>>,
+}
+
+fn fat_headers<Fat: FatArch>(data: &[u8]) -> Result<Vec<SliceHeader>, LoadError> {
+    let fat = MachOFatFile::<Fat>::parse(data)?;
+    if fat.arches().len() > 64 {
+        return Err(LoadError::Malformed("architecture probe exceeds the 64-slice limit".to_owned()));
+    }
+    let table_end = 8 + std::mem::size_of_val(fat.arches());
+    Ok(fat
+        .arches()
+        .iter()
+        .map(|slice| {
+            let start = usize::try_from(slice.offset().into()).ok();
+            let length = usize::try_from(slice.size().into()).ok();
+            let range = start
+                .zip(length)
+                .and_then(|(start, length)| Some(start..start.checked_add(length)?))
+                .filter(|range| range.end <= data.len() && range.start >= table_end && !range.is_empty())
+                .filter(|range| slice.align() <= 20 && range.start.is_multiple_of(1usize << slice.align()));
+            SliceHeader { arch: arch_of(slice.architecture()), range }
+        })
+        .collect())
+}
+
+fn select_universal<Fat: FatArch>(data: &[u8], wanted: Option<Arch>) -> Result<(Vec<Arch>, Range<usize>), LoadError> {
+    let Some(wanted) = wanted else { return select_slice(fat_slices::<Fat>(data)?, None) };
+    let headers = fat_headers::<Fat>(data)?;
+    let present: Vec<_> = headers.iter().filter_map(|header| header.arch).collect();
+    let mut selected = headers.iter().filter(|header| header.arch == Some(wanted));
+    let first = selected.next().ok_or_else(|| {
+        LoadError::Unsupported(format!(
+            "no {wanted} slice; the file contains {}",
+            present.iter().map(Arch::to_string).collect::<Vec<_>>().join(", "),
+        ))
+    })?;
+    if selected.next().is_some() {
+        return Err(LoadError::Unsupported(format!("multiple {wanted} slices cannot be selected uniquely")));
+    }
+    let range = first
+        .range
+        .clone()
+        .ok_or_else(|| LoadError::Malformed(format!("{wanted} slice has an invalid file range or alignment",)))?;
+    if !matches!(
+        object::FileKind::parse(&data[range.clone()]),
+        Ok(object::FileKind::MachO32 | object::FileKind::MachO64)
+    ) {
+        return Err(LoadError::Malformed(format!("{wanted} universal slice is not a Mach-O image")));
+    }
+    Ok((present, range))
+}
+
+fn explicit_fat_image<Fat: FatArch>(
+    data: &[u8],
+    start: usize,
+    length: Option<u64>,
+    wanted: Arch,
+) -> Result<(usize, Vec<Arch>, Range<usize>), LoadError> {
+    let available = data.len() - start;
+    let size = usize::try_from(length.unwrap_or(available as u64))
+        .ok()
+        .filter(|&size| size > 0 && size <= available)
+        .ok_or_else(|| LoadError::Location("universal image length is outside the file".to_owned()))?;
+    let view = &data[start..start + size];
+    let headers = fat_headers::<Fat>(view)?;
+    let extent = headers.iter().filter_map(|header| header.range.as_ref().map(|range| range.end)).max().unwrap_or(0);
+    let size = if length.is_some() { size } else { extent };
+    let (slices, selected) = select_universal::<Fat>(view, Some(wanted))?;
+    Ok((size, slices, start + selected.start..start + selected.end))
+}
+
+fn declared_architectures<Fat: FatArch>(data: &[u8]) -> Result<Vec<Arch>, LoadError> {
+    let mut architectures = Vec::new();
+    for slice in fat_headers::<Fat>(data)? {
+        if let Some(arch) = slice.arch {
+            if architectures.contains(&arch) {
+                return Err(LoadError::Unsupported(format!(
+                    "multiple {arch} slices cannot be selected uniquely; open a thin image at an explicit offset",
+                )));
+            }
+            architectures.push(arch);
+        }
+    }
+    Ok(architectures)
 }
 
 fn fat_slices<Fat: FatArch>(data: &[u8]) -> Result<Vec<Slice>, LoadError> {
