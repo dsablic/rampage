@@ -165,7 +165,7 @@ fn loaded(expr: &Expression, value: u64) -> Known {
     }
 }
 
-fn solve(ssa: &Ssa, forwarded: &[Option<u64>]) -> Vec<Known> {
+pub(crate) fn solve(ssa: &Ssa, forwarded: &[Option<u64>], recovered: &[bool]) -> Vec<Known> {
     let mut values = vec![Known::Pending; ssa.definitions.len()];
     let mut users = vec![Vec::new(); values.len()];
     for definition in &ssa.definitions {
@@ -187,6 +187,7 @@ fn solve(ssa: &Ssa, forwarded: &[Option<u64>]) -> Vec<Known> {
         } else {
             evaluate(&definition.expression, &values)
         };
+        let next = if recovered[id] && matches!(next, Known::Stack(_)) { Known::Unknown } else { next };
         let next = merge(values[id], next);
         if values[id] != next {
             values[id] = next;
@@ -203,8 +204,9 @@ fn solve(ssa: &Ssa, forwarded: &[Option<u64>]) -> Vec<Known> {
 
 pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
     crate::pseudocode::validate(ssa, &[])?;
+    let recovered = crate::ssa::recovered_load_definitions(ssa)?;
     let mut forwarded = vec![None; ssa.definitions.len()];
-    let mut values = solve(ssa, &forwarded);
+    let mut values = solve(ssa, &forwarded, &recovered);
     let mut remaining = 200_000;
     let mut forwarded_loads = Vec::new();
     for _ in 0..8 {
@@ -230,7 +232,7 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
         if !changed {
             break;
         }
-        values = solve(ssa, &forwarded);
+        values = solve(ssa, &forwarded, &recovered);
     }
     let mut slots: BTreeMap<(i64, u8), StackSlot> = BTreeMap::new();
     let mut accessed = |expr: &Expression, at| {
@@ -371,8 +373,11 @@ pub fn analyze(ssa: &Ssa) -> Result<DataFlow, String> {
                 .to_owned(),
             "X0/X1 at RET are possible integer return values; void, aggregate and FP/SIMD signatures remain unknown."
                 .to_owned(),
-            "Loads forward only exact-width constant stores agreed across paths; \
+            "Constant memory forwarding uses only exact-width stores agreed across paths; \
              partial overlaps, calls and unknown aliases stop inference."
+                .to_owned(),
+            "Recovered nonconstant loads preserve SSA values, not stack-address provenance \
+             for further memory inference."
                 .to_owned(),
             "Memory forwarding is bounded to eight passes, 200,000 memory visits, \
              64 levels and 64 source stores per load."

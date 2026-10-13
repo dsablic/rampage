@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 
 use rampage_arch::Flow;
 use rampage_arch::ir::{Effect, FlagOperation, LiftedInstruction, Operation, UnaryOperation, Value};
@@ -43,6 +43,9 @@ pub struct Statement {
     pub flow: Flow,
     pub bits: u8,
     pub definitions: Vec<usize>,
+    /// Recovered memory-read results alias values, but do not grant entry-SP address provenance.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub recovered_loads: Vec<usize>,
     pub observations: Vec<Expression>,
     pub barrier: bool,
     /// A call that never returns, so its block ends here with no successor. [`build`] leaves it unset; the caller
@@ -587,6 +590,7 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
                 flow: insn.flow,
                 bits: insn.bits,
                 definitions: Vec::new(),
+                recovered_loads: Vec::new(),
                 observations: Vec::new(),
                 barrier: !insn.complete
                     || matches!(insn.flow, Flow::Invalid)
@@ -831,16 +835,337 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
             definition
         })
         .collect();
-    Ok(Ssa {
+    let mut ssa = Ssa {
         entry,
         blocks,
         definitions,
         limitations: vec![
             "Register and memory SSA only; block parameters may include redundant phi nodes.".to_owned(),
-            "Unsupported semantics invalidate all registers and memory; no alias analysis or decompilation.".to_owned(),
+            "Unsupported semantics invalidate all registers and memory; no general alias analysis or decompilation."
+                .to_owned(),
+            "Exact-width entry-SP spills alias only finite SSA values agreed across acyclic paths; \
+             original memory reads are retained. Proofs stop at 64 levels, 64 stores, \
+             200,000 visits and the value-node budget, without iterative pointer recovery."
+                .to_owned(),
             "32-bit results are low-32-bit values zero-extended into architectural registers.".to_owned(),
         ],
-    })
+    };
+    recover_stack_spills(&mut ssa);
+    Ok(ssa)
+}
+
+struct SpillProof<'a> {
+    definitions: &'a [Definition],
+    constants: &'a [crate::dataflow::Known],
+    visiting: BTreeSet<usize>,
+    remaining: &'a mut usize,
+}
+
+impl SpillProof<'_> {
+    fn visit(&mut self, depth: usize) -> Option<()> {
+        if depth > 64 || *self.remaining == 0 {
+            return None;
+        }
+        *self.remaining -= 1;
+        Some(())
+    }
+
+    fn address(&mut self, value: &Expression, depth: usize) -> Option<crate::dataflow::Known> {
+        use crate::dataflow::Known::{Constant, Stack};
+        self.visit(depth)?;
+        match value {
+            Expression::Constant { value } => Some(Constant(*value)),
+            Expression::Reference { definition: id } => {
+                if !self.visiting.insert(*id) {
+                    return None;
+                }
+                let definition = &self.definitions[*id];
+                let result = if definition.variable == Variable::StackPointer
+                    && matches!(definition.expression, Expression::Input)
+                {
+                    Some(Stack(0))
+                } else {
+                    self.address(&definition.expression, depth + 1)
+                };
+                self.visiting.remove(id);
+                result
+            }
+            Expression::Phi { inputs } if !inputs.is_empty() => {
+                let mut agreed = None;
+                for input in inputs {
+                    let value = self.address(&Expression::Reference { definition: input.definition }, depth + 1)?;
+                    if agreed.is_some_and(|existing| existing != value) {
+                        return None;
+                    }
+                    agreed = Some(value);
+                }
+                agreed
+            }
+            Expression::Add { left, right } | Expression::Subtract { left, right } => {
+                let subtract = matches!(value, Expression::Subtract { .. });
+                match (self.address(left, depth + 1)?, self.address(right, depth + 1)?) {
+                    (Constant(a), Constant(b)) => {
+                        Some(Constant(if subtract { a.wrapping_sub(b) } else { a.wrapping_add(b) }))
+                    }
+                    (Stack(a), Constant(b)) => {
+                        if subtract { a.checked_sub(b as i64) } else { a.checked_add(b as i64) }.map(Stack)
+                    }
+                    (Constant(a), Stack(b)) if !subtract => b.checked_add(a as i64).map(Stack),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn finite_value(&mut self, value: &Expression, depth: usize) -> Option<()> {
+        self.visit(depth)?;
+        match value {
+            Expression::Input | Expression::Constant { .. } => Some(()),
+            Expression::Reference { definition } => self.value_alias(*definition, depth + 1).map(|_| ()),
+            Expression::Add { left, right }
+            | Expression::Subtract { left, right }
+            | Expression::Binary { left, right, .. }
+            | Expression::Flags { left, right, .. } => {
+                self.finite_value(left, depth + 1)?;
+                self.finite_value(right, depth + 1)
+            }
+            Expression::Low32 { value } | Expression::Extend { value, .. } | Expression::Unary { value, .. } => {
+                self.finite_value(value, depth + 1)
+            }
+            Expression::Select { flags, when_true, when_false, .. } => {
+                self.value_alias(*flags, depth + 1)?;
+                self.finite_value(when_true, depth + 1)?;
+                self.finite_value(when_false, depth + 1)
+            }
+            _ => None,
+        }
+    }
+
+    fn value_alias(&mut self, id: usize, depth: usize) -> Option<usize> {
+        self.visit(depth)?;
+        if !self.visiting.insert(id) {
+            return None;
+        }
+        let result = match &self.definitions[id].expression {
+            Expression::Reference { definition } => self.value_alias(*definition, depth + 1),
+            Expression::Phi { inputs } if !inputs.is_empty() => {
+                let mut agreed = None;
+                let mut different = false;
+                for input in inputs {
+                    let Some(value) = self.value_alias(input.definition, depth + 1) else {
+                        self.visiting.remove(&id);
+                        return None;
+                    };
+                    different |= agreed.is_some_and(|existing| existing != value);
+                    agreed = Some(value);
+                }
+                if different { Some(id) } else { agreed }
+            }
+            value => self.finite_value(value, depth + 1).map(|_| id),
+        };
+        self.visiting.remove(&id);
+        result
+    }
+
+    fn stored_alias(&mut self, value: &Expression, bits: u8, depth: usize) -> Option<usize> {
+        self.visit(depth)?;
+        match value {
+            Expression::Reference { definition } => {
+                let id = self.value_alias(*definition, depth + 1)?;
+                if matches!(self.constants[id], crate::dataflow::Known::Constant(_)) { None } else { Some(id) }
+            }
+            Expression::Low32 { value } if bits <= 32 => self.stored_alias(value, bits, depth + 1),
+            Expression::Binary { operation: Operation::And, left, right, bits: 64 }
+                if matches!(right.as_ref(), Expression::Constant { value }
+                    if *value == if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 }) =>
+            {
+                self.stored_alias(left, bits, depth + 1)
+            }
+            _ => None,
+        }
+    }
+
+    fn reaching_value(
+        &mut self,
+        memory: usize,
+        offset: i64,
+        bits: u8,
+        stores: &mut BTreeSet<usize>,
+        depth: usize,
+    ) -> Option<usize> {
+        self.visit(depth)?;
+        if !self.visiting.insert(memory) {
+            return None;
+        }
+        let result = if self.definitions[memory].variable != Variable::Memory {
+            None
+        } else {
+            match &self.definitions[memory].expression {
+                Expression::Reference { definition } => {
+                    self.reaching_value(*definition, offset, bits, stores, depth + 1)
+                }
+                Expression::Store { memory: previous, address, value, bits: written_bits } => {
+                    match self.address(address, depth + 1) {
+                        Some(crate::dataflow::Known::Stack(written))
+                            if written.checked_add(i64::from(written_bits / 8)).is_some() =>
+                        {
+                            if written == offset && *written_bits == bits {
+                                stores.insert(memory);
+                                if stores.len() > 64 { None } else { self.stored_alias(value, bits, depth + 1) }
+                            } else if written + i64::from(written_bits / 8) <= offset
+                                || offset + i64::from(bits / 8) <= written
+                            {
+                                self.reaching_value(*previous, offset, bits, stores, depth + 1)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+                Expression::Phi { inputs } if !inputs.is_empty() => {
+                    let mut agreed = None;
+                    for input in inputs {
+                        let Some(value) = self.reaching_value(input.definition, offset, bits, stores, depth + 1) else {
+                            self.visiting.remove(&memory);
+                            return None;
+                        };
+                        if agreed.is_some_and(|existing| existing != value) {
+                            self.visiting.remove(&memory);
+                            return None;
+                        }
+                        agreed = Some(value);
+                    }
+                    agreed
+                }
+                _ => None,
+            }
+        };
+        self.visiting.remove(&memory);
+        result
+    }
+}
+
+fn spill_load(value: &Expression) -> Option<(usize, &Expression, u8)> {
+    match value {
+        Expression::Load { memory, address, bits } => Some((*memory, address, *bits)),
+        Expression::Extend { value, .. } | Expression::Low32 { value } => spill_load(value),
+        _ => None,
+    }
+}
+
+fn replace_spill_load(value: &mut Expression, definition: usize, bits: u8) -> Expression {
+    match value {
+        Expression::Extend { value, .. } | Expression::Low32 { value } => replace_spill_load(value, definition, bits),
+        _ => {
+            let reference = Expression::Reference { definition };
+            let replacement = if bits == 64 {
+                reference
+            } else {
+                Expression::Extend { value: Box::new(reference), from_bits: bits, to_bits: 64, signed: false }
+            };
+            std::mem::replace(value, replacement)
+        }
+    }
+}
+
+fn recover_stack_spills(ssa: &mut Ssa) {
+    if !ssa.definitions.iter().any(|definition| spill_load(&definition.expression).is_some()) {
+        return;
+    }
+    let constants =
+        crate::dataflow::solve(ssa, &vec![None; ssa.definitions.len()], &vec![false; ssa.definitions.len()]);
+    let mut nodes = 0;
+    let mut expressions: Vec<_> = ssa.definitions.iter().map(|definition| &definition.expression).collect();
+    expressions
+        .extend(ssa.blocks.iter().flat_map(|block| &block.statements).flat_map(|statement| &statement.observations));
+    while let Some(value) = expressions.pop() {
+        nodes += 1;
+        match value {
+            Expression::Phi { inputs } => nodes += inputs.len(),
+            Expression::Add { left, right }
+            | Expression::Subtract { left, right }
+            | Expression::Binary { left, right, .. }
+            | Expression::Flags { left, right, .. } => expressions.extend([left.as_ref(), right.as_ref()]),
+            Expression::Select { when_true, when_false, .. } => {
+                expressions.extend([when_true.as_ref(), when_false.as_ref()]);
+            }
+            Expression::Store { address, value, .. } => expressions.extend([address.as_ref(), value.as_ref()]),
+            Expression::Load { address, .. } => expressions.push(address),
+            Expression::Low32 { value }
+            | Expression::Extend { value, .. }
+            | Expression::Unary { value, .. }
+            | Expression::Condition { value, .. } => expressions.push(value),
+            Expression::IndirectBranch { target }
+            | Expression::Return { target, .. }
+            | Expression::Call { target, .. } => expressions.push(target),
+            _ => {}
+        }
+    }
+    let mut spare_nodes = MAX_VALUE_NODES.saturating_sub(nodes);
+    let mut remaining = 200_000;
+    let mut recovered = vec![None; ssa.definitions.len()];
+    for definition in &ssa.definitions {
+        let Some((memory, address, bits)) = spill_load(&definition.expression) else { continue };
+        let added = if bits == 64 { 1 } else { 2 };
+        if spare_nodes < added {
+            continue;
+        }
+        let mut proof = SpillProof {
+            definitions: &ssa.definitions,
+            constants: &constants,
+            visiting: BTreeSet::new(),
+            remaining: &mut remaining,
+        };
+        let Some(crate::dataflow::Known::Stack(offset)) = proof.address(address, 0) else { continue };
+        if offset.checked_add(i64::from(bits / 8)).is_none() {
+            continue;
+        }
+        if let Some(source) = proof.reaching_value(memory, offset, bits, &mut BTreeSet::new(), 0) {
+            spare_nodes -= added;
+            recovered[definition.id] = Some((source, bits));
+        }
+    }
+    // Prove against the original graph: recovered pointers cannot start another memory-inference chain.
+    for statement in ssa.blocks.iter_mut().flat_map(|block| &mut block.statements) {
+        for &id in &statement.definitions {
+            if let Some((source, bits)) = recovered[id] {
+                let access = replace_spill_load(&mut ssa.definitions[id].expression, source, bits);
+                statement.recovered_loads.push(id);
+                statement.observations.push(access);
+            }
+        }
+    }
+}
+
+pub(crate) fn recovered_load_definitions(ssa: &Ssa) -> Result<Vec<bool>, String> {
+    let mut recovered = vec![false; ssa.definitions.len()];
+    let mut owners = vec![0; ssa.definitions.len()];
+    for (index, statement) in ssa.blocks.iter().flat_map(|block| &block.statements).enumerate() {
+        for &id in &statement.definitions {
+            *owners.get_mut(id).ok_or("invalid recovered-load definition owner")? = index + 1;
+        }
+        let accesses = statement.observations.iter().filter(|value| matches!(value, Expression::Load { .. })).count();
+        if statement.recovered_loads.len() > accesses {
+            return Err("recovered loads require retained memory-access observations".to_owned());
+        }
+        for &id in &statement.recovered_loads {
+            if owners.get(id) != Some(&(index + 1))
+                || std::mem::replace(recovered.get_mut(id).ok_or("invalid recovered-load definition")?, true)
+            {
+                return Err("recovered load must uniquely name a definition owned by its statement".to_owned());
+            }
+            let mut value = &ssa.definitions[id].expression;
+            while let Expression::Extend { value: inner, .. } | Expression::Low32 { value: inner } = value {
+                value = inner;
+            }
+            if !matches!(value, Expression::Reference { .. }) {
+                return Err("recovered load must alias an SSA value".to_owned());
+            }
+        }
+    }
+    Ok(recovered)
 }
 
 fn rewrite(value: &mut Expression, remap: &[usize]) {
@@ -915,6 +1240,7 @@ fn representative(aliases: &mut [usize], id: usize) -> usize {
 /// Removes phi aliases without substituting expression trees or merging distinct predecessor values.
 pub fn simplify(ssa: &mut Ssa) -> Result<usize, String> {
     crate::pseudocode::validate(ssa, &[])?;
+    recovered_load_definitions(ssa)?;
     let count = ssa.definitions.len();
     let mut aliases: Vec<_> = (0..count).collect();
     let mut users = vec![Vec::new(); count];
@@ -1001,6 +1327,9 @@ pub fn simplify(ssa: &mut Ssa) -> Result<usize, String> {
         }
         for statement in &mut block.statements {
             for id in &mut statement.definitions {
+                *id = remap[*id];
+            }
+            for id in &mut statement.recovered_loads {
                 *id = remap[*id];
             }
             for observation in &mut statement.observations {
