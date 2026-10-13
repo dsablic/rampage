@@ -180,6 +180,68 @@ fn chained_fixups(
     Ok(())
 }
 
+/// The pointers a Mach-O image's chained fixups rebase, as `(location, target)` pairs sorted by location. On disk
+/// such a pointer holds the chain encoding (and, on arm64e, authentication bits), not an address; the target is
+/// what the loader writes there, before sliding. Binds are import slots instead. Empty without chained fixups.
+pub(crate) fn chained_rebases(parsed: &object::File, image: &[u8], warnings: &mut Vec<String>) -> Vec<(u64, u64)> {
+    let mut rebases = Vec::new();
+    let Some((mut commands, endian)) = crate::macho::load_commands(parsed) else { return rebases };
+    let segments: Vec<MachoSegment> = parsed
+        .segments()
+        .map(|segment| MachoSegment {
+            address: segment.address(),
+            size: segment.size(),
+            data: segment.data().unwrap_or_default(),
+        })
+        .collect();
+    let text_address =
+        parsed.segments().find(|segment| segment.name().ok().flatten() == Some("__TEXT")).map_or(0, |s| s.address());
+    while let Ok(Some(command)) = commands.next() {
+        if let Ok(LoadCommandVariant::LinkeditData(linkedit)) = command.variant()
+            && command.cmd() == macho::LC_DYLD_CHAINED_FIXUPS
+            && let Err(error) = collect_rebases(linkedit, endian, image, &segments, text_address, &mut rebases)
+        {
+            warnings.push(format!("chained fixup rebases unreadable: {error}"));
+        }
+    }
+    rebases.sort_unstable();
+    rebases.dedup_by_key(|rebase| rebase.0);
+    rebases
+}
+
+fn collect_rebases(
+    linkedit: &macho::LinkeditDataCommand<object::Endianness>,
+    endian: object::Endianness,
+    image: &[u8],
+    segments: &[MachoSegment],
+    text_address: u64,
+    rebases: &mut Vec<(u64, u64)>,
+) -> object::Result<()> {
+    use object::read::macho::Fixup;
+    let fixups = linkedit.chained_fixups(endian, image)?;
+    for segment in fixups.segments(endian)? {
+        let segment = segment?;
+        let Some(target) = segments.get(segment.index() as usize) else { continue };
+        // Chains from different pages may overlap in a crafted image; no valid one has more fixups than slots.
+        let limit = target.data.len() / 4 + 1;
+        for fixup in segment.fixups(endian, text_address, target.data).take(limit) {
+            let (offset, fixup) = fixup?;
+            let resolved = match fixup {
+                Fixup::Rebase(rebase) => text_address.checked_add(rebase.target_offset),
+                Fixup::KernelCacheRebase(rebase) => text_address.checked_add(rebase.target_offset),
+                Fixup::SegmentedRebase(rebase) => segments
+                    .get(usize::from(rebase.target_segment_index))
+                    .and_then(|segment| segment.address.checked_add(rebase.target_segment_offset)),
+                Fixup::Bind(_) => None,
+            };
+            if let (Some(address), Some(resolved)) = (target.address_of(offset), resolved) {
+                rebases.push((address, resolved));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn pe_iat<Pe: ImageNtHeaders>(file: &PeFile<Pe>) -> object::Result<Vec<ImportSlot>> {
     let image_base = file.relative_address_base();
     let mut slots = Vec::new();

@@ -20,4 +20,5 @@ pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind,
 pub mod debug;
 pub mod dotnet;
 pub mod gopclntab;
+pub mod objc;
 pub mod pdb;
