@@ -4442,6 +4442,7 @@ dependencies = [
  "object 0.40.0",
  "rampage-analysis",
  "rampage-arch",
+ "rampage-detect",
  "rampage-loaders",
  "rampage-signatures",
  "serde",
