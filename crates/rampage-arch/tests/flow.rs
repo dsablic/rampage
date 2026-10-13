@@ -104,6 +104,23 @@ fn a_call_to_the_next_instruction_is_a_call_unless_the_code_there_reads_the_link
     }
 }
 
+/// With a delay slot, the instruction after a call is the slot's successor: hello-mips `__start` reads the PC with
+/// `bal 1f; nop; 1: lui $gp, 2; addiu $gp, $gp, -0x7f4c; addu $gp, $gp, $ra`.
+#[test]
+fn a_call_past_its_delay_slot_is_to_the_next_instruction() {
+    let cases = [
+        (big_endian(Arch::Mips), "0411000100000000", "3c1c0002279c80b4039fe021", Flow::Next),
+        (big_endian(Arch::Mips), "0411000100000000", "27bdffe0afbf001c", Flow::Call(0x1008)), // sw $ra, 0x1c($sp)
+        (big_endian(Arch::Sparc), "4000000201000000", "ae03c017", Flow::Next),                // add %o7, %l7, %l7
+        (big_endian(Arch::Sparc), "4000000201000000", "9de3bfa0", Flow::Call(0x1008)),        // save %sp, -0x60, %sp
+    ];
+    for (target, call, after, expected) in cases {
+        let mut decoder = decoder(&target).unwrap();
+        let code = bytes(&format!("{call}{after}"));
+        assert_eq!(decoder.decode(&code, AT).flow, expected, "{:?} {call} {after}", target.arch);
+    }
+}
+
 #[test]
 fn thumb_it_blocks_make_their_instructions_conditional() {
     let mut decoder = decoder(&thumb()).unwrap();

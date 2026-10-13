@@ -322,7 +322,8 @@ impl Disassembler for CapstoneDisassembler {
         let Ok(detail) = self.engine.insn_detail(insn) else { return invalid };
         let arch = self.target.arch;
         let mnemonic = insn.mnemonic().unwrap_or("");
-        let next = address.wrapping_add(insn.len() as u64);
+        // Execution continues after the delay slot, whose instruction is as long as the branch's (MIPS, SPARC).
+        let next = address.wrapping_add(insn.len() as u64 * (1 + u64::from(arch.delay_slots())));
         let flow = match classify(arch, insn, &detail) {
             // `bcl 20, 31, .+4` is the form the ISA reserves for reading the PC (Capstone may print it as a
             // conditional `bdnzl`); no call to a function is a conditional branch to the next instruction.
