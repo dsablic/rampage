@@ -74,6 +74,125 @@ fn single_successor(edges: &[(usize, usize)], block: usize) -> Option<usize> {
     next.all(|other| other == first).then_some(first)
 }
 
+fn same_flags(ssa: &Ssa, flags: usize, guard: usize, budget: &mut usize, cache: &mut BTreeMap<usize, bool>) -> bool {
+    let mut pending = vec![(flags, false)];
+    let mut active = BTreeSet::new();
+    while let Some((id, finish)) = pending.pop() {
+        let Some(left) = budget.checked_sub(1) else { return false };
+        *budget = left;
+        if cache.contains_key(&id) {
+            continue;
+        }
+        if id == guard {
+            cache.insert(id, true);
+            continue;
+        }
+        if finish {
+            active.remove(&id);
+            let matched = match ssa.definitions.get(id).map(|definition| &definition.expression) {
+                Some(Expression::Reference { definition }) => cache.get(definition) == Some(&true),
+                Some(Expression::Phi { inputs }) => {
+                    inputs.iter().all(|input| cache.get(&input.definition) == Some(&true))
+                }
+                _ => false,
+            };
+            cache.insert(id, matched);
+            continue;
+        }
+        if !active.insert(id) {
+            cache.insert(id, false);
+            continue;
+        }
+        match ssa.definitions.get(id).map(|definition| &definition.expression) {
+            Some(Expression::Reference { definition }) => {
+                if pending.len().checked_add(2).is_none_or(|needed| needed > *budget) {
+                    *budget = 0;
+                    return false;
+                }
+                pending.push((id, true));
+                pending.push((*definition, false));
+            }
+            Some(Expression::Phi { inputs }) if !inputs.is_empty() => {
+                if pending
+                    .len()
+                    .checked_add(inputs.len())
+                    .and_then(|needed| needed.checked_add(1))
+                    .is_none_or(|needed| needed > *budget)
+                {
+                    *budget = 0;
+                    return false;
+                }
+                pending.push((id, true));
+                pending.extend(inputs.iter().map(|input| (input.definition, false)));
+            }
+            _ => {
+                active.remove(&id);
+                cache.insert(id, false);
+            }
+        }
+    }
+    cache.get(&flags) == Some(&true)
+}
+
+fn reaches_dispatch(ssa: &Ssa, edges: &[(usize, usize)], mut at: usize, dispatch: usize) -> bool {
+    for _ in 0..ssa.blocks.len() {
+        if at == dispatch {
+            return true;
+        }
+        let Some(next) = single_successor(edges, at) else { return false };
+        at = next;
+    }
+    false
+}
+
+#[cfg(test)]
+mod flag_provenance_tests {
+    use super::*;
+    use crate::ssa::{Definition, PhiInput};
+
+    fn graph(expressions: Vec<Expression>) -> Ssa {
+        let definitions = expressions
+            .into_iter()
+            .enumerate()
+            .map(|(id, expression)| Definition { id, variable: Variable::Flags, expression })
+            .collect();
+        Ssa { entry: 0, blocks: vec![], definitions, limitations: vec![] }
+    }
+
+    #[test]
+    fn shared_acyclic_nodes_are_reused_without_being_mistaken_for_cycles() {
+        let ssa = graph(vec![
+            Expression::Input,
+            Expression::Reference { definition: 0 },
+            Expression::Phi {
+                inputs: vec![
+                    PhiInput { predecessor: Some(0), definition: 1 },
+                    PhiInput { predecessor: Some(1), definition: 1 },
+                ],
+            },
+        ]);
+        let mut budget = 20;
+        let mut cache = BTreeMap::new();
+        assert!(same_flags(&ssa, 2, 0, &mut budget, &mut cache));
+        let before = budget;
+        assert!(same_flags(&ssa, 2, 0, &mut budget, &mut cache));
+        assert_eq!(budget, before - 1);
+        let cyclic = graph(vec![Expression::Input, Expression::Reference { definition: 1 }]);
+        assert!(!same_flags(&cyclic, 1, 0, &mut budget, &mut BTreeMap::new()));
+    }
+
+    #[test]
+    fn guard_leaves_are_charged_before_phi_expansion() {
+        let ssa = graph(vec![
+            Expression::Input,
+            Expression::Phi { inputs: (0..100).map(|_| PhiInput { predecessor: None, definition: 0 }).collect() },
+        ]);
+        let mut budget = 5;
+        assert!(!same_flags(&ssa, 1, 0, &mut budget, &mut BTreeMap::new()));
+        assert_eq!(budget, 0);
+    }
+}
+
 /// The switch whose register-indirect jump ends `block`, over SSA blocks; `None` leaves the jump unknown.
 pub(crate) fn dispatch(ssa: &Ssa, edges: &[(usize, usize)], switches: &[Switch], block: usize) -> Option<Dispatch> {
     let jump = ssa.blocks.get(block)?.statements.last().filter(|statement| statement.flow == Flow::IndirectJump)?;
@@ -104,33 +223,46 @@ pub(crate) fn dispatch(ssa: &Ssa, edges: &[(usize, usize)], switches: &[Switch],
             })
         })
     });
-    // The comparison's branch has one successor that runs on to the jump and one that is the default.
+    // Locate the branch that consumes the guard's flags, including when instructions or a block separate them.
     let default = guard.and_then(|(guard_block, _)| {
-        let last = ssa.blocks[guard_block].statements.last()?;
-        if !matches!(last.flow, Flow::ConditionalJump(_)) {
-            return None;
-        }
-        let mut successors: Vec<_> = edges.iter().filter(|edge| edge.0 == guard_block).map(|edge| edge.1).collect();
-        successors.sort_unstable();
-        successors.dedup();
-        let reaches = |mut at: usize| {
-            for _ in 0..ssa.blocks.len() {
-                if at == block {
-                    return true;
-                }
-                let Some(next) = single_successor(edges, at) else { return false };
-                at = next;
+        let (_, position) = guard?;
+        let flags = ssa.blocks[guard_block].statements[position]
+            .definitions
+            .iter()
+            .copied()
+            .find(|&id| ssa.definitions.get(id).is_some_and(|definition| definition.variable == Variable::Flags))?;
+        let mut budget = 16384;
+        let mut cache = BTreeMap::new();
+        let mut defaults = Vec::new();
+        for (branch_block, data) in ssa.blocks.iter().enumerate() {
+            let Some(last) = data.statements.last() else { continue };
+            let Flow::ConditionalJump(target) = last.flow else { continue };
+            let mut conditions = last.observations.iter().filter(|observation| {
+                matches!(observation, Expression::Condition { .. } | Expression::FlagsCondition { .. })
+            });
+            let Some(Expression::FlagsCondition { flags: used, condition }) = conditions.next() else { continue };
+            if conditions.next().is_some()
+                || !matches!(*condition, 2 | 3 | 8 | 9)
+                || !same_flags(ssa, *used, flags, &mut budget, &mut cache)
+            {
+                continue;
             }
-            false
-        };
-        match *successors.as_slice() {
-            [first, second] => match (reaches(first), reaches(second)) {
-                (true, false) => Some(second),
-                (false, true) => Some(first),
-                _ => None,
-            },
-            _ => None,
+            let condition = *condition;
+            let mut successors: Vec<_> =
+                edges.iter().filter(|edge| edge.0 == branch_block).map(|edge| edge.1).collect();
+            successors.sort_unstable();
+            successors.dedup();
+            let &[first, second] = successors.as_slice() else { continue };
+            let Some(taken) = block_at(ssa, target).filter(|taken| *taken == first || *taken == second) else {
+                continue;
+            };
+            let not_taken = if taken == first { second } else { first };
+            let (bounded, unbounded) = if matches!(condition, 3 | 9) { (taken, not_taken) } else { (not_taken, taken) };
+            if reaches_dispatch(ssa, edges, bounded, block) && !reaches_dispatch(ssa, edges, unbounded, block) {
+                defaults.push(unbounded);
+            }
         }
+        (budget > 0 && defaults.len() == 1).then(|| defaults[0])
     });
     Some(Dispatch { index, cases, default })
 }

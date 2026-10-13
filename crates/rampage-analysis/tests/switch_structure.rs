@@ -1,7 +1,7 @@
 use rampage_analysis::{
     discover::Switch,
     pseudocode,
-    ssa::{self, InputBlock, Ssa},
+    ssa::{self, Expression, InputBlock, Ssa, Variable},
     structure::{self, Region},
 };
 use rampage_arch::{
@@ -20,8 +20,12 @@ fn instruction(address: u64, flow: Flow, effects: Vec<Effect>) -> LiftedInstruct
 /// `0: cmp w8, #N; 4: b.hi DEFAULT; 10: br x9; 20, 30, 40: cases; 50: default; 60: return`. `flows` gives the
 /// terminal transfer of each case block.
 fn function(cases: [Flow; 3], edges: &[(usize, usize)]) -> Ssa {
+    function_with_split_guard(cases, edges, false)
+}
+
+fn function_with_split_guard(cases: [Flow; 3], edges: &[(usize, usize)], split: bool) -> Ssa {
     let control = || vec![Effect::Control { inputs: vec![] }];
-    let guard = InputBlock {
+    let mut guard = InputBlock {
         address: 0,
         instructions: vec![
             instruction(
@@ -44,7 +48,19 @@ fn function(cases: [Flow; 3], edges: &[(usize, usize)]) -> Ssa {
             vec![Effect::IndirectBranch { target: Value::Register { number: 9 } }],
         )],
     };
-    let mut blocks = vec![guard, dispatch];
+    let mut blocks = if split {
+        guard.instructions[1] = instruction(4, Flow::Jump(8), control());
+        let branch = InputBlock {
+            address: 8,
+            instructions: vec![
+                instruction(8, Flow::Next, vec![]),
+                instruction(12, Flow::ConditionalJump(DEFAULT), vec![Effect::FlagsConditional { condition: 8 }]),
+            ],
+        };
+        vec![guard, branch, dispatch]
+    } else {
+        vec![guard, dispatch]
+    };
     for (index, flow) in cases.into_iter().enumerate() {
         let address = 0x20 + 0x10 * index as u64;
         blocks.push(InputBlock { address, instructions: vec![instruction(address, flow, control())] });
@@ -148,4 +164,57 @@ fn fall_through_shared_and_external_cases_stay_flat() {
     // A table that disagrees with the graph's switch edges.
     let short = [switch(&[0x20, 0x30])];
     assert!(structure::analyze_with_switches(&ssa, &DENSE_EDGES, &short).is_err());
+}
+
+#[test]
+fn a_guard_in_an_earlier_block_still_recovers_the_bounding_branch_and_default() {
+    let mut edges: Vec<_> = DENSE_EDGES.iter().map(|&(from, to)| (from + 1, to + 1)).collect();
+    edges.push((0, 1));
+    let ssa = function_with_split_guard([JOIN; 3], &edges, true);
+    let switches = [switch(&[0x20, 0x30, 0x40])];
+    let flat = pseudocode::render_with_switches(&ssa, &edges, &switches).unwrap().text;
+    assert!(flat.contains("default: goto bb6;"), "{flat}");
+    let structured = structure::analyze_with_switches(&ssa, &edges, &switches).unwrap();
+    assert_eq!(cases(&structured.body), Some(vec![vec![0], vec![1], vec![2]]));
+}
+
+#[test]
+fn inverse_bounds_use_the_taken_dispatch_edge_not_the_default_edge() {
+    let mut ssa = function([JOIN; 3], &DENSE_EDGES);
+    let branch = ssa.blocks[0].statements.last_mut().unwrap();
+    branch.flow = Flow::ConditionalJump(DISPATCH);
+    let Expression::FlagsCondition { condition, .. } = &mut branch.observations[0] else { panic!("not flags") };
+    *condition = 9;
+    let switches = [switch(&[0x20, 0x30, 0x40])];
+    let flat = pseudocode::render_with_switches(&ssa, &DENSE_EDGES, &switches).unwrap().text;
+    assert!(flat.contains("default: goto bb5;"), "{flat}");
+    let structured = structure::analyze_with_switches(&ssa, &DENSE_EDGES, &switches).unwrap();
+    assert_eq!(cases(&structured.body), Some(vec![vec![0], vec![1], vec![2]]));
+}
+
+#[test]
+fn an_unrelated_condition_does_not_invent_a_switch_default() {
+    let mut ssa = function([JOIN; 3], &DENSE_EDGES);
+    let unrelated = ssa.definitions.len();
+    ssa.definitions.push(ssa::Definition { id: unrelated, variable: Variable::Flags, expression: Expression::Input });
+    let branch = ssa.blocks[0].statements.last_mut().unwrap();
+    let Expression::FlagsCondition { flags, .. } = &mut branch.observations[0] else { panic!("not flags") };
+    *flags = unrelated;
+    let flat = pseudocode::render_with_switches(&ssa, &DENSE_EDGES, &[switch(&[0x20, 0x30, 0x40])]).unwrap().text;
+    assert!(!flat.contains("default: goto bb5;"), "{flat}");
+}
+
+#[test]
+fn conflicting_branch_conditions_leave_the_default_unknown() {
+    let mut ssa = function([JOIN; 3], &DENSE_EDGES);
+    let unrelated = ssa.definitions.len();
+    ssa.definitions.push(ssa::Definition { id: unrelated, variable: Variable::Flags, expression: Expression::Input });
+    ssa.blocks[0]
+        .statements
+        .last_mut()
+        .unwrap()
+        .observations
+        .insert(0, Expression::FlagsCondition { flags: unrelated, condition: 8 });
+    let flat = pseudocode::render_with_switches(&ssa, &DENSE_EDGES, &[switch(&[0x20, 0x30, 0x40])]).unwrap().text;
+    assert!(!flat.contains("default: goto bb5;"), "{flat}");
 }
