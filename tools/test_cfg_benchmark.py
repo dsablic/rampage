@@ -58,6 +58,16 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(report["blocks"]["recall"], 3 / 4)
         self.assertEqual(report["edges"]["recall"], 1 / 2)
 
+    def test_computed_calls_of_every_kind_count_only_where_rampage_resolved_them(self) -> None:
+        calls = [
+            (0x14, 0x900, "COMPUTED_CALL"), (0x18, 0x904, "COMPUTED_CALL_TERMINATOR"), (0x1c, 0x908, "COMPUTED_CALL"),
+        ]
+        ghidra = {"functions": [ghidra_function(0x10, {0x10: []}, calls)]}
+        rampage = {0x10: rampage_function({0x10: []}, {(0x1c, 0x908): "call"})}
+        report = benchmark.compare(ghidra, rampage)
+        self.assertEqual(report["ghidra_computed_calls"], 2)
+        self.assertEqual(report["calls"]["recall"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

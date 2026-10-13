@@ -183,7 +183,8 @@ def compare(ghidra: dict[str, Any], ram: dict[int, Any]) -> dict[str, Any]:
             # Ghidra's computed calls carry a target read from memory, which can be an unrelocated GOT slot or
             # header bytes; they count only where rampage resolved the same call.
             counted = {
-                call for call, kind in function["calls"].items() if kind != "COMPUTED_CALL" or call in r["calls"]
+                call for call, kind in function["calls"].items()
+                if not kind.startswith("COMPUTED_CALL") or call in r["calls"]
             }
             totals["calls"][side] |= owned(counted)
             totals["call_graph"][side] |= {(start, target) for _, target in counted}
