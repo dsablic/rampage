@@ -202,6 +202,21 @@ fn riscv() {
 }
 
 #[test]
+fn riscv_branches_render_their_target_address() {
+    let mut decoder = decoder(&Target::new(Arch::Riscv64)).unwrap();
+    let cases = [
+        ("8dc1", "c.beqz a1, 0x1022"),
+        ("21a0", "c.j 0x1008"),
+        ("e39a54ff", "bne s1, s5, 0xff4"),
+        ("ef008000", "jal 0x1008"),
+        ("82808280", "c.jr ra"),
+    ];
+    for (hex, expected) in cases {
+        assert_eq!(decoder.format(&bytes(hex), AT), expected, "{hex}");
+    }
+}
+
+#[test]
 fn sparc() {
     use Flow::*;
     check(

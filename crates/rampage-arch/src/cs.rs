@@ -349,13 +349,19 @@ impl Disassembler for CapstoneDisassembler {
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {
         let Ok(instructions) = self.engine.disasm_count(bytes, address, 1) else { return "(bad)".to_owned() };
-        match instructions.iter().next() {
-            Some(insn) => match insn.op_str() {
-                Some(operands) if !operands.is_empty() => format!("{} {operands}", insn.mnemonic().unwrap_or("")),
-                _ => insn.mnemonic().unwrap_or("").to_owned(),
-            },
-            None => "(bad)".to_owned(),
+        let Some(insn) = instructions.iter().next() else { return "(bad)".to_owned() };
+        let mnemonic = insn.mnemonic().unwrap_or("");
+        let mut operands = insn.op_str().unwrap_or("").to_owned();
+        // Capstone prints a RISC-V branch's target as its offset from the branch; show the address, as elsewhere.
+        if matches!(self.target.arch, Arch::Riscv32 | Arch::Riscv64)
+            && let Ok(detail) = self.engine.insn_detail(insn)
+            && let Flow::Call(target) | Flow::Jump(target) | Flow::ConditionalJump(target) =
+                classify(self.target.arch, insn, &detail)
+        {
+            let kept = operands.rfind(", ").map_or("", |at| &operands[..at + 2]);
+            operands = format!("{kept}{target:#x}");
         }
+        if operands.is_empty() { mnemonic.to_owned() } else { format!("{mnemonic} {operands}") }
     }
 
     fn reset(&mut self) {
