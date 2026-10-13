@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use super::Decoded;
 use super::helpers::{ones, pc_relative};
 use super::spec::ENCODINGS;
-use super::spec_types::Encoding;
+use super::spec_types::{Encoding, Token};
 use crate::{Flow, JumpTable, MAX_JUMP_TABLE_ENTRIES};
 
 /// Addresses known to be held by general-purpose registers: ADRP pages, and the full addresses an ADD forms
@@ -168,6 +168,10 @@ struct Info {
     written: Vec<Written>,
     /// Pre- and post-indexed forms update the base register.
     writeback: Option<Written>,
+    /// Registers written that no operand names, such as CHKFEAT's x16.
+    implicit: Vec<u64>,
+    /// Whether `written`, `writeback` and `implicit` are every general-purpose register the instruction writes.
+    writes_known: bool,
     /// Calls and supervisor calls may change every caller-saved register.
     clobbers_caller_saved: bool,
 }
@@ -211,7 +215,7 @@ fn info_for(encoding: &Encoding) -> Info {
         match register {
             "Rd" | "Rdn" => true,
             "Rt" => starts(&["LD", "MRS", "MRRS", "SWP", "CAS", "RCW", "SYSL", "GCSPOP"]),
-            "Rt2" => starts(&["LD"]),
+            "Rt2" => starts(&["LD", "SWP", "RCW"]),
             // Store-exclusive status and compare-and-swap old values.
             "Rs" => starts(&["ST", "CAS", "RCW", "CPY", "SET"]),
             _ => false,
@@ -236,13 +240,103 @@ fn info_for(encoding: &Encoding) -> Info {
             written.push(Written { start: register.start, width: register.width, plus, narrow });
         }
     }
-    // CPY* and SET* advance all three of their registers; LDRAA and LDRAB write back when W is set.
+    // LD64B loads eight consecutive registers from one field.
+    if prefix == "LD64B" {
+        let first = written.pop();
+        written.extend(first.into_iter().flat_map(|first| (0..8).map(move |plus| Written { plus, ..first })));
+    }
+    // CPY* and SET* advance all three of their registers; LDRAA and LDRAB write back when W is set. Pre- and
+    // post-indexed forms without a class of their own (LDAPR Xt, [Xn], #8) show it in their syntax.
+    let indexed_syntax =
+        |token: &Token| matches!(token, Token::Text(text) if text.contains("]!") || text.contains("], #"));
     let indexed = ["post", "pre", "asisdlsep", "asisdlsop", "memcms", "memset_go", "64W_ldst_pac"]
         .iter()
-        .any(|n| name.contains(n));
+        .any(|n| name.contains(n))
+        || encoding.syntax.tokens.iter().any(indexed_syntax);
     let clobbers_caller_saved =
         matches!(flow, FlowClass::Call | FlowClass::IndirectCall) || matches!(prefix, "SVC" | "HVC" | "SMC");
-    Info { flow, effect, written, writeback: base.filter(|_| indexed), clobbers_caller_saved }
+    let implicit = match prefix {
+        "CHKFEAT" => vec![16],
+        "PACIA1716" | "PACIB1716" | "AUTIA1716" | "AUTIB1716" => vec![17],
+        "PACIAZ" | "PACIASP" | "PACIBZ" | "PACIBSP" | "AUTIAZ" | "AUTIASP" | "AUTIBZ" | "AUTIBSP" | "XPACLRI" => {
+            vec![30]
+        }
+        _ => Vec::new(),
+    };
+    Info {
+        flow,
+        effect,
+        written,
+        writeback: base.filter(|_| indexed),
+        implicit,
+        writes_known: writes_known(name, prefix),
+        clobbers_caller_saved,
+    }
+}
+
+/// Encoding classes where an instruction can write general-purpose registers that no operand names (CHKFEAT
+/// writes x16, LD64B eight registers from one field), with the mnemonics whose writes [`info_for`] models. Any
+/// other encoding of these classes, such as an unallocated hint that a later extension gives a result, may write
+/// registers the model misses.
+const AUDITED: &[(&str, &[&str])] = &[
+    (
+        "hints",
+        &[
+            "NOP",
+            "YIELD",
+            "WFE",
+            "WFI",
+            "SEV",
+            "SEVL",
+            "DGH",
+            "ESB",
+            "PSB",
+            "TSB",
+            "GCSB",
+            "CSDB",
+            "CLRBHB",
+            "BTI",
+            "PACM",
+            "STSHH",
+            "SHUH",
+            "STCPH",
+            "CHKFEAT",
+            "XPACLRI",
+            "PACIA1716",
+            "PACIB1716",
+            "AUTIA1716",
+            "AUTIB1716",
+            "PACIAZ",
+            "PACIASP",
+            "PACIBZ",
+            "PACIBSP",
+            "AUTIAZ",
+            "AUTIASP",
+            "AUTIBZ",
+            "AUTIBSP",
+        ],
+    ),
+    ("systeminstrs", &["SYS", "SYSL"]),
+    ("systeminstrswithreg", &["WFET", "WFIT"]),
+    ("syspairinstrs", &["SYSP"]),
+    ("systemmove", &["MRS", "MSR"]),
+    ("systemmovepr", &["MRRS", "MSRR"]),
+    ("exception", &["SVC", "HVC", "SMC", "BRK", "HLT"]),
+];
+
+/// Atomic memory-operation mnemonic families whose register writes [`info_for`] models.
+const AUDITED_MEMORY_OPERATIONS: &[&str] = &[
+    "LD64B", "ST64B", "LDADD", "LDCLR", "LDEOR", "LDSET", "LDSMAX", "LDSMIN", "LDUMAX", "LDUMIN", "LDAPR", "LDTADD",
+    "LDTCLR", "LDTSET", "SWP", "RCW",
+];
+
+/// Whether [`info_for`] knows every general-purpose register the encoding writes.
+fn writes_known(name: &str, prefix: &str) -> bool {
+    let class = name.splitn(3, '_').nth(2).unwrap_or("");
+    if class.starts_with("memop") {
+        return AUDITED_MEMORY_OPERATIONS.iter().any(|family| prefix.starts_with(family));
+    }
+    AUDITED.iter().find(|(audited, _)| *audited == class).is_none_or(|(_, mnemonics)| mnemonics.contains(&prefix))
 }
 
 /// The PC-relative target of a branch or literal load: imm26, imm19, imm14 or imm9 words.
@@ -476,6 +570,14 @@ pub fn analyze(
     }
     if let Some(base) = info.writeback {
         addresses.clear(register(base));
+    }
+    for &register in &info.implicit {
+        addresses.clear(register);
+    }
+    if !info.writes_known {
+        for register in 0..31 {
+            addresses.clear(register);
+        }
     }
     if info.clobbers_caller_saved {
         addresses.clobber_caller_saved();
