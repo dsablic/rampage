@@ -97,7 +97,8 @@ pub struct DotNetIlQuery {
     pub limit: Option<usize>,
 }
 
-/// A method's CIL: its header facts, locals and exception clauses in full, and one page of its instructions.
+/// A method's CIL: its header facts, its locals (up to a text cap), its exception clauses, and one page of its
+/// instructions.
 #[derive(Debug, Serialize)]
 pub struct DotNetIl {
     pub token: u32,
@@ -107,8 +108,12 @@ pub struct DotNetIl {
     pub rva: u32,
     pub body: IlBody,
     pub init_locals: bool,
-    /// Local variable types by index (`V_0`, `V_1`, ...).
+    /// Local variable types by index (`V_0`, `V_1`, ...), up to 64 KiB of type text.
     pub locals: Vec<String>,
+    /// Locals the method declares, listed or not.
+    pub locals_total: usize,
+    /// Whether `locals` stops before `locals_total`.
+    pub locals_truncated: bool,
     pub exception_clauses: Vec<ExceptionClause>,
     pub instructions: Page<Instruction>,
     /// Whether the listing stops before the end of the body (instruction cap, cut-off operand, short body).
@@ -145,6 +150,8 @@ impl Project {
             body: il.body,
             init_locals: il.init_locals,
             locals: il.locals,
+            locals_total: il.locals_total,
+            locals_truncated: il.locals_truncated,
             exception_clauses: il.exception_clauses,
             instructions: Page::of(il.instructions, query.offset, query.limit),
             truncated: il.truncated,

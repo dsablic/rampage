@@ -35,7 +35,9 @@ use serde::Serialize;
 use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 use heaps::Heaps;
-pub use il::{ClauseKind, ExceptionClause, IlError, Instruction, MAX_INSTRUCTIONS, MethodIl, MethodSelector};
+pub use il::{
+    ClauseKind, ExceptionClause, IlError, Instruction, MAX_INSTRUCTIONS, MAX_LOCALS_TEXT, MethodIl, MethodSelector,
+};
 pub use signatures::UNREADABLE;
 use signatures::{Generics, Reader};
 use tables::{Coded as C, Tables};

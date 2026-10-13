@@ -26,6 +26,9 @@ const MAX_SWITCH_TARGETS: usize = 4096;
 const MAX_LISTING_SWITCH_TARGETS: usize = 1 << 18;
 /// UTF-16 units of an `ldstr` literal shown; a longer literal is cut and its length given.
 const MAX_LITERAL_UNITS: usize = 512;
+/// Local variable type text kept from one LocalVarSig; up to 65,535 locals of up to 8 KiB each would otherwise
+/// fill every page of the listing. Later locals are counted, not listed.
+pub const MAX_LOCALS_TEXT: usize = 64 << 10;
 /// Rendered operand text of one listing; past it tokens show as hex, since every instruction naming a
 /// long signature would otherwise repeat it.
 const MAX_OPERAND_TEXT: usize = 16 << 20;
@@ -99,8 +102,13 @@ pub struct MethodIl {
     pub body: IlBody,
     /// Whether the fat header asks for zero-initialized locals (`.locals init`).
     pub init_locals: bool,
-    /// Local variable types by index, from the LocalVarSig; empty when there are none or it is unreadable.
+    /// Local variable types by index, from the LocalVarSig; empty when there are none or it is unreadable. Only
+    /// the first [`MAX_LOCALS_TEXT`] bytes of type text are kept.
     pub locals: Vec<String>,
+    /// Locals the LocalVarSig declares, listed or not.
+    pub locals_total: usize,
+    /// Whether `locals` stops before `locals_total`.
+    pub locals_truncated: bool,
     pub exception_clauses: Vec<ExceptionClause>,
     pub instructions: Vec<Instruction>,
     /// Whether the listing stops early: at the instruction cap, a cut-off operand, or a body shorter than its
@@ -644,7 +652,7 @@ pub(super) fn disassemble<'a>(
     let init_locals =
         body.header == super::IlHeader::Fat && read_u16(bytes, 0).is_some_and(|f| f & CORILMETHOD_INIT_LOCALS != 0);
     let method_row = method.token & tables::MAX_ROWS;
-    let locals = locals(decoder, body.local_var_sig_token, owner, method_row, &mut warnings);
+    let (locals, locals_total) = locals(decoder, body.local_var_sig_token, owner, method_row, &mut warnings);
     let mut names = Names::new(decoder, metadata);
     let (instructions, cut) = decode(code, &mut |token, warnings| names.operand(token, warnings), &mut warnings);
     let exception_clauses = if body.more_sections && code.len() == body.code_size as usize {
@@ -661,7 +669,9 @@ pub(super) fn disassemble<'a>(
         rva: method.rva,
         body,
         init_locals,
+        locals_truncated: locals.len() < locals_total,
         locals,
+        locals_total,
         exception_clauses,
         instructions,
         truncated: truncated || cut,
@@ -705,10 +715,11 @@ fn ambiguous(name: String, candidates: impl ExactSizeIterator<Item = String>) ->
     IlError::Ambiguous { name, total, candidates: candidates.take(MAX_CANDIDATES).collect() }
 }
 
-/// The local variable types of a LocalVarSig StandAloneSig token, in the method's generic context.
-fn locals(decoder: &Decoder, token: u32, owner: u32, method: u32, warnings: &mut Warnings) -> Vec<String> {
+/// The local variable types of a LocalVarSig StandAloneSig token, in the method's generic context, up to
+/// [`MAX_LOCALS_TEXT`] of their text, with how many it declares.
+fn locals(decoder: &Decoder, token: u32, owner: u32, method: u32, warnings: &mut Warnings) -> (Vec<String>, usize) {
     if token == 0 {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
     let blob = ((token >> 24) as u8 == tables::STAND_ALONE_SIG)
         .then(|| decoder.tables.cell(tables::STAND_ALONE_SIG, token & tables::MAX_ROWS, 0))
@@ -720,10 +731,28 @@ fn locals(decoder: &Decoder, token: u32, owner: u32, method: u32, warnings: &mut
     };
     let locals = blob.and_then(|blob| Reader::new(decoder, generics, &decoder.budget).locals(blob));
     match locals {
-        Some(locals) => locals.into_iter().map(|ty| ty.text).collect(),
+        Some(locals) => {
+            let total = locals.len();
+            let mut text = 0;
+            let kept: Vec<String> = locals
+                .into_iter()
+                .map(|ty| ty.text)
+                .take_while(|ty| {
+                    text += ty.len();
+                    text <= MAX_LOCALS_TEXT
+                })
+                .collect();
+            if kept.len() < total {
+                warnings.push(format!(
+                    "only the first {} of {total} locals are listed ({MAX_LOCALS_TEXT} bytes of type text)",
+                    kept.len()
+                ));
+            }
+            (kept, total)
+        }
         None => {
             warnings.push(format!("local variable signature {token:#010x} is unreadable"));
-            Vec::new()
+            (Vec::new(), 0)
         }
     }
 }

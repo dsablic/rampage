@@ -77,6 +77,7 @@ fn dotnet_il_pages_one_method_by_token_or_name() {
     assert!(page.total > 50);
     assert_eq!(page.items[0].text(), "IL_000b: ldarga.s 0");
     assert_eq!(by_token.locals.len(), 10);
+    assert_eq!((by_token.locals_total, by_token.locals_truncated), (10, false));
     let decimal = project.dotnet_il(&query(&0x0600_000D_u32.to_string(), None, Some(1))).unwrap().unwrap();
     assert_eq!(decimal.token, by_token.token);
 
