@@ -14,6 +14,11 @@ use crate::{ApiError, Packs, Project};
 
 /// Loaded binaries, with snapshots revalidated on each open to notice changed mappings or capture metadata, and
 /// ordinary binaries reloaded when their file's length, modification time or inode changes.
+///
+/// Binaries are memory-mapped, so replace one by writing the new file elsewhere and renaming it over the old: a
+/// rewrite in place that truncates the file can crash (SIGBUS) a call still reading the old mapping. Annotations
+/// made on the old binary stay in its log and apply to the new one by address, with a warning when the image differs
+/// (see [`Annotations::warnings`]).
 #[derive(Default)]
 pub struct Session {
     state: Mutex<State>,
@@ -160,7 +165,10 @@ impl Session {
             }
             legacy
         };
-        let annotations = Annotations::open(log).map_err(ApiError::Invalid)?;
+        // Snapshots share identity-scoped logs across captures whose bytes differ, so only ordinary images are named.
+        let digest = (binary.format != Format::Snapshot).then(|| Sha256::digest(binary.image_bytes()).into());
+        let annotations = Annotations::open_for_image(log, digest).map_err(ApiError::Invalid)?;
+        binary.warnings.extend(annotations.warnings());
 
         let mut state = self.state.lock().expect("session lock");
         if arch.is_none() {
@@ -168,6 +176,8 @@ impl Session {
         }
         let revalidate = state.capture_paths.contains(&canonical);
         let key = (canonical, image, binary.arch);
+        // A project this open replaces hands its undo history on: same log, same edits to undo.
+        let previous = state.projects.get(&key).cloned();
         let ordinary_source: Option<[u8; 32]> =
             (revalidate && binary.format != Format::Snapshot).then(|| Sha256::digest(binary.file_bytes()).into());
         if let Some(project) = state.projects.get(&key)
@@ -201,6 +211,10 @@ impl Session {
             sibling.is_file().then_some(sibling)
         });
         let project = state.projects.entry(key).or_insert_with(|| {
+            let mut annotations = annotations;
+            if let Some(previous) = previous {
+                annotations.inherit_history(&previous.annotations());
+            }
             let project = Project::with_annotations(binary, annotations);
             project.set_packs(Arc::clone(&self.packs));
             if let Some(executable) = worker {

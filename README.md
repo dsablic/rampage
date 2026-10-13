@@ -158,6 +158,10 @@ recording the value it replaced, so undo is just another edit and the file is a 
 under a header line and replayed only once all of its edits are present. Several clients can share it: the UI
 picks up names an agent saves through MCP within a second. The UI opens whole files and universal-binary slices,
 not embedded images, so an embedded image's annotations are shared by the CLI and MCP only.
+Edits follow a line naming the SHA-256 of the image they were made on; when the binary beside the log is rebuilt or
+replaced, its annotations still apply by address, with a warning (in the binary's warnings and `list_annotations`)
+that some were made on another image. Logs written before identity lines carry a note until the next edit. Replace a
+binary by renaming a new file over it rather than truncating it in place: it is memory-mapped while open.
 Snapshot annotations use a capture-identity log instead, sharing edits only across equal analysis identities
 in the same directory by default. Legacy unscoped snapshot logs are not automatically loaded or migrated;
 see [runtime snapshots](docs/runtime-snapshots.md) for persistence and explicit cross-directory reuse.
@@ -245,13 +249,13 @@ from the start, and `RAMPAGE_MCP_TOOLS=all` or `RAMPAGE_MCP_TOOLS=detection,type
 (`core` is always served). The UI's assistant offers every tool that works on the open binary (all but `carve`
 and `list_packs`). Workflow reports name each suggested tool's `group`, so an agent knows which to enable.
 
-`undo` and `redo` revert or reapply one step, which may be a whole batch. When another client's edit blocks undoing
-a step, `discard_undo` drops it from the session's undo history, leaving its edits in effect and the log unchanged,
-so earlier steps can be undone. `carve` takes any file path rather than
-a binary: it pages candidates with `offset`/`limit` and reports `more` instead of a total, scanning only as far as
-the candidate after the page. Agents' annotations land in the same log the UI and CLI use, and the UI shows them as
-they arrive. Analysis runs once per binary and is cached for the session. `observe_pointer` exposes captured slot
-evidence without modifying discovery.
+`undo` and `redo` revert or reapply one step, which may be a whole batch. When another client's edit blocks undoing a
+step, `discard_undo` drops it from the session's undo history, leaving its edits in effect and the log unchanged, so
+earlier steps can be undone; it refuses a step undo could still revert unless given `force: true`. `carve` takes any
+file path rather than a binary: it pages candidates with `offset`/`limit` and reports `more` instead of a total,
+scanning only as far as the candidate after the page. Agents' annotations land in the same log the UI and CLI use, and
+the UI shows them as they arrive. Analysis runs once per binary and is cached for the session. `observe_pointer` exposes
+captured slot evidence without modifying discovery.
 To add it to Claude Code:
 
 ```

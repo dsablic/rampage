@@ -162,6 +162,9 @@ pub struct Annotation {
 /// The user's names and comments.
 #[derive(Debug, Clone, Serialize)]
 pub struct AnnotationList {
+    /// Why the annotations may not fit this image, such as having been made on another build of it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     pub names: Vec<Annotation>,
     pub comments: Vec<Annotation>,
     pub signatures: Vec<Annotation>,

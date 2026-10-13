@@ -2,7 +2,8 @@
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
 use crate::{
-    ApiError, FunctionsQuery, ListQuery, Packs, Project, ReportLimits, StringsQuery, WorkflowReport, XrefQuery,
+    ApiError, FileOffset, FunctionsQuery, ListQuery, Packs, Project, ReportLimits, StringsQuery, WorkflowReport,
+    XrefQuery,
 };
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -384,25 +385,11 @@ struct DiffBuildsArgs {
     max_per_section: Option<usize>,
 }
 
-/// A file offset or byte count: an integer, or a string in hex ("0x...") or decimal.
 #[derive(serde::Deserialize, JsonSchema)]
-#[serde(untagged)]
-enum FileOffset {
-    Number(u64),
-    Text(String),
-}
-
-impl FileOffset {
-    fn value(&self, name: &str) -> Result<u64, ApiError> {
-        match self {
-            Self::Number(number) => Ok(*number),
-            Self::Text(text) => match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-                Some(hex) => u64::from_str_radix(hex, 16),
-                None => text.parse(),
-            }
-            .map_err(|_| ApiError::Invalid(format!("`{name}` must be a file offset such as \"0x1000\", not {text:?}"))),
-        }
-    }
+struct DiscardUndoArgs {
+    /// Drop the step even though undo could still revert it (no other client's edit blocks it).
+    #[serde(default)]
+    force: bool,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -734,8 +721,8 @@ pub fn tools() -> Vec<Tool> {
              `path`, other_image_offset one in `other`.",
             |project, args: DiffBuildsArgs| {
                 let limits = ReportLimits::new(args.max_per_section);
-                let offset = args.other_image_offset.map(|offset| offset.value("other_image_offset")).transpose()?;
-                let length = args.other_image_length.map(|length| length.value("other_image_length")).transpose()?;
+                let offset = args.other_image_offset.map(|offset| offset.0);
+                let length = args.other_image_length.map(|length| length.0);
                 let image = match (offset, length) {
                     (Some(offset), length) => Some(rampage_loaders::ImageAt::new(offset, length)),
                     (None, Some(_)) => {
@@ -1076,8 +1063,9 @@ pub fn tools() -> Vec<Tool> {
             "discard_undo",
             "Drop the last edit or batch from this session's undo history without reverting it, when another \
              client's edits block undoing it (which blocks every earlier step too). Its edits stay in effect; the \
-             annotation log is not rewritten. Returns the dropped edits; empty if there was none.",
-            |project, _: Nothing| Ok(project.discard_undo_step()),
+             annotation log is not rewritten. Refuses a step undo could still revert unless force is true. Returns \
+             the dropped edits; empty if there was none.",
+            |project, arguments: DiscardUndoArgs| project.discard_undo_step(arguments.force),
         ),
         tool(
             Group::Core,

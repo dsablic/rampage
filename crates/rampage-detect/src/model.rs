@@ -1,5 +1,6 @@
 //! The signature model: what a signature is, the conditions it can test, and what a match reports.
 
+use rampage_loaders::Format;
 use serde::Serialize;
 
 use crate::pattern::{BytePattern, MIN_DISTINCTIVE_NIBBLES};
@@ -32,10 +33,18 @@ pub enum Confidence {
 
 /// One testable condition. A [`Signature`] fires only when every one of its conditions holds (logical AND), so
 /// each condition can only tighten a match. "Any of these names" is expressed with [`Condition::AnySectionName`].
+///
+/// Some conditions search bytes the image's own code and data need not account for: an un-anchored
+/// [`Condition::Entry`], a [`Condition::SectionContains`] without a section, and [`Condition::OverlayContains`].
+/// Such bytes include programs and strings a file merely carries (an embedded installer, appended data, a
+/// detector's own signature table), so none of them makes a match `Strong` unless the signature also pins the
+/// [`Condition::Format`] it is written for.
 #[derive(Debug, Clone)]
 pub enum Condition {
+    /// The image is in this container format. It narrows other conditions; it is no evidence on its own.
+    Format(Format),
     /// The entry-point bytes match this pattern. When `ep_only` is false the pattern may appear anywhere in the
-    /// image, which mirrors PeID's `ep_only = false`.
+    /// image except its overlay, which mirrors PeID's `ep_only = false`.
     Entry { pattern: BytePattern, ep_only: bool },
     /// A section with exactly this name is present.
     SectionName(String),
@@ -45,9 +54,18 @@ pub enum Condition {
     /// Unlike [`Condition::AnySectionName`], only one tool emits these names, so a match is distinctive on its
     /// own. It is still evidence, not proof: a section can be renamed or a name planted.
     UniqueSectionName(Vec<String>),
-    /// A section (a named one, or any when `section` is `None`) contains this byte needle. This reads the
-    /// section's file-backed bytes, which also covers unloaded sections such as `.comment`.
+    /// A section (a named one, or anywhere in the image but its overlay when `section` is `None`) contains this
+    /// byte needle. This reads the section's file-backed bytes, which also covers unloaded sections such as
+    /// `.comment`.
     SectionContains { section: Option<String>, needle: Vec<u8> },
+    /// A DWARF debug section (`.debug_*` in ELF and PE, `__debug_*` in Mach-O, or their compressed `z` forms)
+    /// contains this byte needle.
+    DebugContains(Vec<u8>),
+    /// The overlay (data appended past everything the image's structures describe) contains this byte needle:
+    /// where installers keep their payload.
+    OverlayContains(Vec<u8>),
+    /// The PE debug directory's CodeView (RSDS) record has a GUID matching this pattern.
+    CodeViewGuid(BytePattern),
     /// An import from a library whose name contains this text (case-insensitive) is present.
     ImportLibrary(String),
     /// An import from a library named this prefix and then a version number (case-insensitive), such as
@@ -55,7 +73,8 @@ pub enum Condition {
     VersionedImportLibrary(String),
     /// An imported function with this exact name (case-insensitive) is present.
     ImportFunction(String),
-    /// A symbol (from the symbol table, so a stripped image has none) with exactly this name is present.
+    /// A symbol (from the symbol table, so a stripped image has none) with exactly this name is present. Names
+    /// are as the source spells them: a Mach-O symbol's one leading underscore is not part of the name.
     Symbol(String),
     /// A symbol whose name starts with this prefix (and goes on past it) is present.
     SymbolPrefix(String),
@@ -77,6 +96,9 @@ impl Condition {
         match self {
             Self::Entry { pattern, .. } => pattern.fixed_nibbles() >= MIN_DISTINCTIVE_NIBBLES,
             Self::SectionContains { .. }
+            | Self::DebugContains(_)
+            | Self::OverlayContains(_)
+            | Self::CodeViewGuid(_)
             | Self::ImportFunction(_)
             | Self::UniqueSectionName(_)
             | Self::Symbol(_)
@@ -84,6 +106,14 @@ impl Condition {
             | Self::BuildTool(_) => true,
             _ => false,
         }
+    }
+
+    /// Whether this condition searches bytes that need not be the image's own (see [`Condition`]).
+    pub(crate) fn is_unscoped(&self) -> bool {
+        matches!(
+            self,
+            Self::Entry { ep_only: false, .. } | Self::SectionContains { section: None, .. } | Self::OverlayContains(_)
+        )
     }
 }
 

@@ -23,11 +23,11 @@ struct Cli {
     arch: Option<Arch>,
     /// Open the executable embedded at this file offset (hex 0x... or decimal), such as one `carve` found; for a
     /// universal Mach-O, the offset of its fat header, with --arch for the slice. Offset 0 alone opens the file
-    #[arg(long, global = true, value_parser = parse_offset)]
+    #[arg(long, global = true, value_parser = rampage_api::parse_file_offset)]
     image_offset: Option<u64>,
     /// With --image-offset, the embedded image's length in bytes (hex 0x... or decimal); defaults to the extent its
     /// header tables give, so bytes after that (an overlay) are left out
-    #[arg(long, global = true, value_parser = parse_offset, requires = "image_offset")]
+    #[arg(long, global = true, value_parser = rampage_api::parse_file_offset, requires = "image_offset")]
     image_length: Option<u64>,
     /// A data pack directory (holding rampage-pack.toml) layered over the bundled heuristic databases; repeatable,
     /// earlier packs take precedence. Directories in RAMPAGE_PACKS (a path list) load after these
@@ -336,10 +336,10 @@ enum Command {
         other: Option<PathBuf>,
         /// diff-builds: open the executable embedded in --other at this file offset (hex 0x... or decimal), as
         /// --image-offset does for <FILE>
-        #[arg(long, value_parser = parse_offset, requires = "other")]
+        #[arg(long, value_parser = rampage_api::parse_file_offset, requires = "other")]
         other_image_offset: Option<u64>,
         /// With --other-image-offset, the embedded image's length in bytes; defaults to the extent its headers give
-        #[arg(long, value_parser = parse_offset, requires = "other_image_offset")]
+        #[arg(long, value_parser = rampage_api::parse_file_offset, requires = "other_image_offset")]
         other_image_length: Option<u64>,
         /// Findings kept per section (default 25, at most 200)
         #[arg(long)]
@@ -374,14 +374,6 @@ enum Command {
 
 fn parse_arch(text: &str) -> Result<Arch, String> {
     text.parse()
-}
-
-fn parse_offset(text: &str) -> Result<u64, String> {
-    let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        Some(hex) => u64::from_str_radix(hex, 16),
-        None => text.parse(),
-    };
-    parsed.map_err(|error| format!("not a file offset or length: {error}"))
 }
 
 fn parse_dotnet_list(text: &str) -> Result<rampage_api::DotNetList, String> {

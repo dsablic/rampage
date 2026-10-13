@@ -504,3 +504,52 @@ fn an_ordinary_binary_rewritten_on_disk_is_reloaded_with_its_annotations() {
     assert!(!Arc::ptr_eq(&replaced, &rewritten));
     assert!(Arc::ptr_eq(&rewritten, &session.open(&path, Some(rewritten.binary.arch)).unwrap()));
 }
+
+#[test]
+fn a_reloaded_binary_keeps_the_undo_history_of_its_annotation_log() {
+    let scratch = Scratch::new("reload-undo");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin");
+    let path = scratch.path("target.elf");
+    std::fs::copy(fixtures.join("hello-x64.elf"), &path).unwrap();
+    let session = Session::default();
+    let first = session.open(&path, None).unwrap();
+    first.comment(0x1000, Some("first")).unwrap();
+    first.comment(0x1000, Some("second")).unwrap();
+    first.undo().unwrap();
+
+    let replacement = scratch.path("replacement");
+    std::fs::copy(fixtures.join("hello-x64-dyn.elf"), &replacement).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    let replaced = session.open(&path, None).unwrap();
+    assert!(!Arc::ptr_eq(&first, &replaced));
+    assert_eq!(replaced.redo().unwrap()[0].value.as_deref(), Some("second"));
+    assert_eq!(replaced.undo().unwrap()[0].value.as_deref(), Some("second"));
+    assert_eq!(replaced.undo().unwrap()[0].value.as_deref(), Some("first"));
+    assert_eq!(replaced.comment_at(0x1000), None);
+}
+
+#[test]
+fn annotations_made_on_another_build_are_flagged_after_a_reload() {
+    let scratch = Scratch::new("reload-identity");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin");
+    let path = scratch.path("target.elf");
+    std::fs::copy(fixtures.join("hello-x64.elf"), &path).unwrap();
+    let session = Session::default();
+    let first = session.open(&path, None).unwrap();
+    first.comment(0x1000, Some("made on the first build")).unwrap();
+    let different = |warning: &String| warning.contains("different image");
+    assert!(!first.annotation_list().warnings.iter().any(different));
+
+    let replacement = scratch.path("replacement");
+    std::fs::copy(fixtures.join("hello-x64-dyn.elf"), &replacement).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    let replaced = session.open(&path, None).unwrap();
+    assert_eq!(replaced.comment_at(0x1000).as_deref(), Some("made on the first build"));
+    assert!(replaced.binary.warnings.iter().any(different), "{:?}", replaced.binary.warnings);
+    assert!(replaced.summary().warnings.iter().any(different));
+    assert!(replaced.annotation_list().warnings.iter().any(different));
+    // A fresh session over the original build again finds nothing to flag.
+    std::fs::copy(fixtures.join("hello-x64.elf"), &path).unwrap();
+    let original = Session::default().open(&path, None).unwrap();
+    assert!(original.binary.warnings.iter().all(|warning| !warning.contains("annotations in")));
+}

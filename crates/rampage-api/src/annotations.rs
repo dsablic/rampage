@@ -3,6 +3,12 @@
 //! Every edit records the value it replaced, so undo is just another edit that restores it, and the log on disk
 //! remains a complete history in JSON Lines that people and tools can read. Several processes (the UI, an MCP
 //! server, the CLI) may share one log: each appends its own edits and picks up the others' through `refresh`.
+//!
+//! The binary beside a log can be rebuilt or replaced, and an address then may name different code. So a writer
+//! that knows its image's SHA-256 logs it in an identity line (`{"image": "<hex>"}`) before the first edit it makes
+//! on that image, and every edit is attributed to the identity line before it, or, in a log begun before identity
+//! lines existed, to the first one. [`Annotations::warnings`] says when some edits were made on another image, or
+//! when none can be attributed yet.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions};
@@ -59,13 +65,23 @@ struct BatchMember<'a> {
     batch: &'a str,
 }
 
-/// Enough of a log line to tell a batch header (both), a batch's edit (`batch` only) and a lone edit (neither).
+/// Enough of a log line to tell a batch header (both), a batch's edit (`batch` only), an identity line (`image`)
+/// and a lone edit (none).
 #[derive(Deserialize)]
 struct LineKind {
     #[serde(default)]
     batch: Option<String>,
     #[serde(default)]
     edits: Option<usize>,
+    #[serde(default)]
+    image: Option<String>,
+}
+
+/// The line logged before the edits a writer makes on one image: that image's SHA-256, in hex. Readers that predate
+/// it skip it, as it is not an edit.
+#[derive(Serialize)]
+struct ImageLine<'a> {
+    image: &'a str,
 }
 
 /// An id no other batch in the log is likely to share: this process's, the time's, and a count.
@@ -76,9 +92,25 @@ fn batch_id() -> String {
     format!("{:x}-{nanos:x}-{count:x}", std::process::id())
 }
 
-/// Appended to an undo's refusal, which repeats until the step is undone or discarded.
+/// Appended to an undo's refusal over another client's edits, which repeats until the step is undone or discarded.
 const DISCARD_HINT: &str =
     "; discard_undo drops this step from the undo history (its edits stay in effect) so earlier ones can be undone";
+
+/// Why replaying a step changed nothing.
+enum Refusal {
+    /// Another client's edits since block it; trying again will not help until they change.
+    Blocked(String),
+    /// The result failed validation, or the log could not be written.
+    Failed(String),
+}
+
+impl Refusal {
+    fn message(self) -> String {
+        match self {
+            Self::Blocked(message) | Self::Failed(message) => message,
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Annotations {
@@ -107,18 +139,90 @@ struct Log {
     read: u64,
     /// The file read, to notice it being replaced by another of any size.
     identity: Option<(u64, u64)>,
+    /// The SHA-256 (hex) of the image these annotations are applied to, when known.
+    image: Option<String>,
+    /// The identity line last read: the image the edits after it were made on.
+    logged_image: Option<String>,
+    /// Edits were read before any identity line, so the image they were made on is not known yet.
+    unattributed: bool,
+    /// An image other than `image` that some edits read were made on.
+    other_image: Option<String>,
+}
+
+impl Log {
+    /// Attributes edits just read to the image they were made on.
+    fn attribute_edits(&mut self) {
+        match &self.logged_image {
+            None => self.unattributed = true,
+            Some(logged) => self.note_image(logged.clone()),
+        }
+    }
+
+    fn note_image(&mut self, logged: String) {
+        if self.image.as_ref().is_some_and(|image| *image != logged) {
+            self.other_image = Some(logged);
+        }
+    }
+
+    /// Reads an identity line. The first one in a log also stands for the edits before it, which were logged by
+    /// writers that predate identity lines.
+    fn read_image(&mut self, logged: String) {
+        if self.logged_image.is_none() && std::mem::take(&mut self.unattributed) {
+            self.note_image(logged.clone());
+        }
+        self.logged_image = Some(logged);
+    }
 }
 
 impl Annotations {
     /// Loads the log at `path` if it exists; later edits are appended to it.
     pub fn open(path: PathBuf) -> Result<Self, String> {
-        let mut annotations = Self { log: Some(Log { path, ..Log::default() }), ..Self::default() };
+        Self::open_for_image(path, None)
+    }
+
+    /// [`Annotations::open`] for an image whose SHA-256 is `image`: edits are logged as made on it, and
+    /// [`Annotations::warnings`] compares it with the images earlier edits were made on.
+    pub fn open_for_image(path: PathBuf, image: Option<[u8; 32]>) -> Result<Self, String> {
+        let image = image.map(|digest| rampage_arch::hex::bytes(&digest));
+        let mut annotations = Self { log: Some(Log { path, image, ..Log::default() }), ..Self::default() };
         annotations.refresh()?;
         Ok(annotations)
     }
 
+    /// Why these annotations may not fit this image: some were made on another image (a different build at the
+    /// same path), or the log predates identity lines, so nothing says which image they were made on.
+    pub fn warnings(&self) -> Vec<String> {
+        let Some(log) = &self.log else { return Vec::new() };
+        let Some(image) = &log.image else { return Vec::new() };
+        let path = log.path.display();
+        let mut warnings = Vec::new();
+        if let Some(other) = &log.other_image {
+            warnings.push(format!(
+                "annotations in {path} include edits made on a different image (sha256 {other}) than this one \
+                 (sha256 {image}); their addresses may no longer name the same code"
+            ));
+        }
+        if log.unattributed && log.logged_image.is_none() {
+            warnings.push(format!(
+                "annotations in {path} were logged without the image they were made on, so they are unverified \
+                 against this one (sha256 {image}); the next edit records it"
+            ));
+        }
+        warnings
+    }
+
     pub fn in_memory() -> Self {
         Self::default()
+    }
+
+    /// Takes over the undo and redo steps of `previous`, an instance this one replaces, when both write the same
+    /// log: the steps are edits in that log, so reloading the binary beside it leaves them as undoable as before.
+    pub(crate) fn inherit_history(&mut self, previous: &Self) {
+        let path = |annotations: &Self| annotations.log.as_ref().map(|log| log.path.clone());
+        if self.log.is_some() && path(self) == path(previous) {
+            self.done.clone_from(&previous.done);
+            self.undone.clone_from(&previous.undone);
+        }
     }
 
     pub(crate) fn snapshot(&self) -> Self {
@@ -210,6 +314,11 @@ impl Annotations {
             lines.push('\n');
             Ok(())
         };
+        // Every caller has read the log up to now under its lock, so the last identity line is current.
+        let new_image = log.image.clone().filter(|image| log.logged_image.as_ref() != Some(image));
+        if let Some(image) = &new_image {
+            push(serde_json::to_string(&ImageLine { image }))?;
+        }
         if let [edit] = edits {
             push(serde_json::to_string(edit))?;
         } else {
@@ -219,7 +328,11 @@ impl Annotations {
                 push(serde_json::to_string(&BatchMember { edit, batch: &batch }))?;
             }
         }
-        file.write_all(lines.as_bytes()).map_err(error)
+        file.write_all(lines.as_bytes()).map_err(error)?;
+        if new_image.is_some() {
+            log.logged_image = new_image;
+        }
+        Ok(())
     }
 
     fn commit(&mut self, edits: &[Edit]) -> Result<(), String> {
@@ -366,7 +479,10 @@ impl Annotations {
         self.refresh()?;
         let Some(step) = self.done.last().cloned() else { return Ok(Vec::new()) };
         let inverses: Vec<Edit> = step.iter().rev().map(Edit::inverse).collect();
-        self.replay(&inverses, validate).map_err(|error| format!("{error}{DISCARD_HINT}"))?;
+        self.replay(&inverses, validate).map_err(|refusal| match refusal {
+            Refusal::Blocked(message) => format!("{message}{DISCARD_HINT}"),
+            Refusal::Failed(message) => message,
+        })?;
         self.done.pop();
         self.undone.push(step.clone());
         Ok(step)
@@ -374,9 +490,21 @@ impl Annotations {
 
     /// Drops the last step from this instance's undo history without reverting it, for a step another client's
     /// edits block from undoing, which would otherwise block every earlier step too. Its edits stay in effect, and
-    /// the log is untouched. Returns the dropped step's edits; empty when there is nothing to undo.
-    pub fn discard_undo_step(&mut self) -> Vec<Edit> {
-        self.done.pop().unwrap_or_default()
+    /// the log is untouched. Unless `force` is set, it refuses a step that undo could still revert: one client
+    /// (such as an assistant sharing the user's project) must not silently take away another's undo. Returns the
+    /// dropped step's edits; empty when there is nothing to undo.
+    pub fn discard_undo_step(&mut self, force: bool) -> Result<Vec<Edit>, String> {
+        let Some(step) = self.done.last() else { return Ok(Vec::new()) };
+        if !force {
+            let inverses: Vec<Edit> = step.iter().rev().map(Edit::inverse).collect();
+            self.refresh()?;
+            if self.snapshot().blocked(&inverses).is_none() {
+                return Err("no other client's edit blocks undoing the last step, so undo can still revert it; \
+                            discard it anyway only with force"
+                    .to_owned());
+            }
+        }
+        Ok(self.done.pop().unwrap_or_default())
     }
 
     /// Reapplies the last undone step. Returns its edits; empty when there is nothing to redo.
@@ -394,7 +522,7 @@ impl Annotations {
         let _lock = self.log_lock()?;
         self.refresh()?;
         let Some(step) = self.undone.last().cloned() else { return Ok(Vec::new()) };
-        self.replay(&step, validate)?;
+        self.replay(&step, validate).map_err(Refusal::message)?;
         self.undone.pop();
         self.done.push(step.clone());
         Ok(step)
@@ -402,39 +530,46 @@ impl Annotations {
 
     /// Commits `edits` in order, each only over the value it replaces, and only once `validate` accepts the result
     /// when the step touches what the decompiler checks.
-    fn replay(&mut self, edits: &[Edit], validate: impl FnOnce(&Self) -> Result<(), String>) -> Result<(), String> {
+    fn replay(&mut self, edits: &[Edit], validate: impl FnOnce(&Self) -> Result<(), String>) -> Result<(), Refusal> {
         let mut candidate = self.snapshot();
-        let mut conflicts = Vec::new();
-        for edit in edits {
-            if !candidate.is_unchanged(edit) {
-                conflicts.push(edit.address);
-            }
-            candidate.apply(edit);
-        }
-        if !conflicts.is_empty() {
-            conflicts.sort_unstable();
-            conflicts.dedup();
-            let verb = if conflicts.len() == 1 { "was" } else { "were" };
-            return Err(format!("{} {verb} edited by another client since; not changed", address_list(&conflicts)));
-        }
-        let mut taken = Vec::new();
-        for edit in edits.iter().filter(|edit| edit.field == Field::Name) {
-            let Some(name) = &edit.value else { continue };
-            if candidate.names.iter().any(|(&address, other)| other == name && address != edit.address) {
-                taken.push(format!("{name:?}"));
-            }
-        }
-        if !taken.is_empty() {
-            return Err(format!("another client has since given {} to another address; not changed", taken.join(", ")));
+        if let Some(message) = candidate.blocked(edits) {
+            return Err(Refusal::Blocked(message));
         }
         let checked = edits.iter().any(|edit| {
             matches!(edit.field, Field::Signature | Field::Types | Field::Global)
                 || (edit.field == Field::Name && !candidate.globals().is_empty())
         });
         if checked {
-            validate(&candidate)?;
+            validate(&candidate).map_err(Refusal::Failed)?;
         }
-        self.commit(edits)
+        self.commit(edits).map_err(Refusal::Failed)
+    }
+
+    /// Applies `edits` to this state, saying why they cannot be replayed over other clients' edits: a field
+    /// changed since, or a name since given to another address. `None` when nothing blocks them.
+    fn blocked(&mut self, edits: &[Edit]) -> Option<String> {
+        let mut conflicts = Vec::new();
+        for edit in edits {
+            if !self.is_unchanged(edit) {
+                conflicts.push(edit.address);
+            }
+            self.apply(edit);
+        }
+        if !conflicts.is_empty() {
+            conflicts.sort_unstable();
+            conflicts.dedup();
+            let verb = if conflicts.len() == 1 { "was" } else { "were" };
+            return Some(format!("{} {verb} edited by another client since; not changed", address_list(&conflicts)));
+        }
+        let mut taken = Vec::new();
+        for edit in edits.iter().filter(|edit| edit.field == Field::Name) {
+            let Some(name) = &edit.value else { continue };
+            if self.names.iter().any(|(&address, other)| other == name && address != edit.address) {
+                taken.push(format!("{name:?}"));
+            }
+        }
+        (!taken.is_empty())
+            .then(|| format!("another client has since given {} to another address; not changed", taken.join(", ")))
     }
 
     /// Whether `edit`'s field still holds `edit.previous`: if another client changed it since, undoing or redoing
@@ -502,7 +637,7 @@ fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
     let identity = file_identity(&metadata);
     let restart = metadata.len() < log.read || (log.identity.is_some() && log.identity != identity);
     if restart {
-        *log = Log { path: path.clone(), ..Log::default() };
+        *log = Log { path: path.clone(), image: log.image.take(), ..Log::default() };
     }
     log.identity = identity;
     if metadata.len() == log.read {
@@ -525,19 +660,26 @@ fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
     while let Some(&(start, line)) = lines.get(index) {
         index += 1;
         match serde_json::from_slice::<LineKind>(line) {
-            Ok(LineKind { batch: Some(batch), edits: Some(count) }) => {
+            Ok(LineKind { batch: Some(batch), edits: Some(count), .. }) => {
                 let members: Vec<Edit> =
                     lines[index..].iter().take(count).map_while(|(_, line)| batch_member(line, &batch)).collect();
                 index += members.len();
                 if members.len() == count {
+                    log.attribute_edits();
                     edits.extend(members);
                 } else if index == lines.len() {
                     read = start;
                     break;
                 }
             }
-            Ok(LineKind { batch: Some(_), edits: None }) => {}
-            _ => edits.extend(serde_json::from_slice::<Edit>(line).ok()),
+            Ok(LineKind { batch: Some(_), edits: None, .. }) => {}
+            Ok(LineKind { batch: None, edits: None, image: Some(image) }) => log.read_image(image),
+            _ => {
+                if let Ok(edit) = serde_json::from_slice::<Edit>(line) {
+                    log.attribute_edits();
+                    edits.push(edit);
+                }
+            }
         }
     }
     log.read += read as u64;
@@ -697,14 +839,62 @@ mod tests {
         assert!(ui.undo().is_err());
         let log = std::fs::read_to_string(&path).unwrap();
 
-        let discarded = ui.discard_undo_step();
+        let discarded = ui.discard_undo_step(false).unwrap();
         assert_eq!(discarded.len(), 1);
         assert_eq!((discarded[0].address, discarded[0].value.as_deref()), (0x10, Some("a")));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), log);
         assert_eq!(ui.name(0x10), Some("b"));
         assert_eq!(ui.undo().unwrap()[0].address, 0x20);
         assert_eq!(ui.comment(0x20), None);
-        assert!(ui.discard_undo_step().is_empty());
+        assert!(ui.discard_undo_step(false).unwrap().is_empty());
+        cleanup(path);
+    }
+
+    #[test]
+    fn discarding_refuses_a_step_undo_could_still_revert_unless_forced() {
+        let path = temporary_log("discard-unblocked");
+        let mut user = Annotations::open(path.clone()).unwrap();
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        user.set(Field::Name, 0x10, Some("parse".into())).unwrap();
+        // Another client's edit elsewhere does not block it.
+        agent.set(Field::Name, 0x20, Some("other".into())).unwrap();
+        let error = user.discard_undo_step(false).unwrap_err();
+        assert!(error.contains("force"), "{error}");
+        assert_eq!(user.undo().unwrap()[0].address, 0x10, "the step is still there to undo");
+        user.redo().unwrap();
+        let dropped = user.discard_undo_step(true).unwrap();
+        assert_eq!((dropped[0].address, user.name(0x10)), (0x10, Some("parse")));
+        assert!(user.undo().unwrap().is_empty());
+        // A name another client has since taken blocks it as much as an edit to the same address.
+        user.set(Field::Name, 0x30, Some("first".into())).unwrap();
+        user.set(Field::Name, 0x30, Some("second".into())).unwrap();
+        agent.set(Field::Name, 0x40, Some("first".into())).unwrap();
+        assert_eq!(user.discard_undo_step(false).unwrap()[0].value.as_deref(), Some("second"));
+        cleanup(path);
+    }
+
+    #[test]
+    fn only_a_refusal_over_another_clients_edit_suggests_discarding() {
+        let mut annotations = Annotations::in_memory();
+        annotations.set(Field::Signature, 0x10, Some("int4 f(void);".into())).unwrap();
+        let error = annotations.undo_validated(|_| Err("the decompiler rejects it".to_owned())).unwrap_err();
+        assert_eq!(error, "the decompiler rejects it");
+        assert!(annotations.discard_undo_step(false).is_err(), "a validation failure is no other client's block");
+
+        let path = temporary_log("undo-io");
+        let mut writer = Annotations::open(path.clone()).unwrap();
+        writer.set(Field::Comment, 0x10, Some("note".into())).unwrap();
+        let writable = std::fs::metadata(&path).unwrap().permissions();
+        let mut read_only = writable.clone();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(&path, read_only).unwrap();
+        let error = writer.undo().unwrap_err();
+        assert!(!error.contains("discard_undo"), "{error}");
+        std::fs::set_permissions(&path, writable).unwrap();
+
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        agent.set(Field::Comment, 0x10, Some("changed".into())).unwrap();
+        assert!(writer.undo().unwrap_err().contains("discard_undo"));
         cleanup(path);
     }
 
@@ -855,6 +1045,68 @@ mod tests {
         append(&path, &format!("{}\n", member(0x20, "b")));
         assert!(reader.refresh().unwrap());
         assert_eq!((reader.name(0x10), reader.name(0x20)), (Some("a"), Some("b")));
+        cleanup(path);
+    }
+
+    fn open_on(path: &std::path::Path, image: u8) -> Annotations {
+        Annotations::open_for_image(path.to_path_buf(), Some([image; 32])).unwrap()
+    }
+
+    #[test]
+    fn edits_are_logged_after_the_identity_of_the_image_they_were_made_on() {
+        let path = temporary_log("image-identity");
+        let mut first = open_on(&path, 0xaa);
+        first.set(Field::Name, 0x10, Some("a".into())).unwrap();
+        first
+            .set_batch_validated(&[(Field::Name, 0x20, Some("b".into())), (Field::Comment, 0x20, None)], |_| Ok(()))
+            .unwrap();
+        let mut same = open_on(&path, 0xaa);
+        same.set(Field::Name, 0x30, Some("c".into())).unwrap();
+        let log = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(log.matches("\"image\"").count(), 1, "{log}");
+        assert!(log.starts_with(&format!("{{\"image\":\"{}\"}}\n", "aa".repeat(32))), "{log}");
+        assert!(open_on(&path, 0xaa).warnings().is_empty());
+        // A reader that predates identity lines still replays every edit.
+        let old: Vec<Edit> = log.lines().filter_map(|line| serde_json::from_str(line).ok()).collect();
+        assert_eq!(old.len(), 3);
+
+        let rebuilt = open_on(&path, 0xbb);
+        assert_eq!(rebuilt.name(0x30), Some("c"), "annotations still apply by address");
+        let warnings = rebuilt.warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains(&format!("different image (sha256 {})", "aa".repeat(32))), "{warnings:?}");
+        assert!(Annotations::open(path.clone()).unwrap().warnings().is_empty(), "no image to compare");
+        cleanup(path);
+    }
+
+    #[test]
+    fn edits_made_on_another_image_are_reported_to_every_image_but_that_one() {
+        let path = temporary_log("image-mixed");
+        open_on(&path, 0xaa).set(Field::Name, 0x10, Some("a".into())).unwrap();
+        open_on(&path, 0xbb).set(Field::Name, 0x20, Some("b".into())).unwrap();
+        let mut a = open_on(&path, 0xaa);
+        assert!(a.warnings()[0].contains(&"bb".repeat(32)), "{:?}", a.warnings());
+        // Switching back to the first image logs its identity again, for the edits after it.
+        a.set(Field::Name, 0x30, Some("c".into())).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().matches("\"image\"").count(), 3);
+        assert!(open_on(&path, 0xbb).warnings()[0].contains(&"aa".repeat(32)));
+        cleanup(path);
+    }
+
+    #[test]
+    fn a_log_without_identity_lines_is_unverified_until_an_image_is_recorded() {
+        let path = temporary_log("image-legacy");
+        append(&path, &(serde_json::to_string(&name_edit(0x10, "a")).unwrap() + "\n"));
+        let mut legacy = open_on(&path, 0xaa);
+        assert_eq!(legacy.name(0x10), Some("a"));
+        let warnings = legacy.warnings();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("unverified"), "{warnings:?}");
+        // The first identity line stands for the edits before it: the note is given once, not on every open.
+        legacy.set(Field::Comment, 0x10, Some("checked".into())).unwrap();
+        assert!(legacy.warnings().is_empty(), "{:?}", legacy.warnings());
+        assert!(open_on(&path, 0xaa).warnings().is_empty());
+        assert!(open_on(&path, 0xbb).warnings()[0].contains("different image"));
         cleanup(path);
     }
 

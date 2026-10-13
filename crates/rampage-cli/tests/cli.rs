@@ -513,6 +513,9 @@ fn image_offset_opens_an_embedded_executable_with_its_own_annotations() {
         .success()
         .stdout(predicates::str::contains("embedded_main"));
     rampage(&["annotations", path_text]).success().stdout(predicates::str::contains("embedded_main").not());
+    rampage(&["--image-offset", "1.5", "annotations", path_text])
+        .failure()
+        .stderr(predicates::str::contains("\"1.5\" is not a file offset or byte count: give a non-negative integer"));
 
     let triage = json_of(rampage(&["--json", "--image-offset", &offset, "triage", path_text]).success());
     let direct = json(&["--json", "triage"], "hello-x64-dyn.elf");

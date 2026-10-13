@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rampage_api::tools::{self, FileTool, Group, Tool};
-use rampage_api::{Packs, Project, Session};
+use rampage_api::{FileOffset, Packs, Project, Session};
 use rampage_arch::Arch;
 use rampage_loaders::ImageAt;
 use rmcp::model::{
@@ -59,22 +59,23 @@ finding behavior. Record findings with rename and set_comment, or many at once w
 check_names pre-flights candidate names): they persist beside the binary and every client of the same binary, \
 including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch; when \
 another client's edit blocks undoing a step, discard_undo drops it from the undo history (its edits stay) so earlier \
-steps can be undone. Memory snapshots and bundle directories use the same tools.
+steps can be undone; it refuses a step undo could still revert unless force is true, since the user's UI may share \
+that history. Memory snapshots and bundle directories use the same tools.
 
-Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code \
-by signature, bundled databases applied; build_signatures makes a database from a binary with symbols), \
-capabilities, yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are loaded with \
-their licence and provenance. Types: set_signature, set_types and set_global persist C declarations; \
+Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
+signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
+yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are \
+loaded with their licence and provenance. Types: set_signature, set_types and set_global persist C declarations; \
 language_metadata exposes demangled names and bounded metadata. Diagnostics: analysis_diagnostics reports decode \
-confidence limits. Runtime: compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal \
-runtime ranges, returning paginated byte evidence without sidecars or annotation transfer; verify identities when \
-combining pages. observe_indirect_branch takes explicit hexadecimal start/at addresses for a bounded ARM64 branch \
-window; slot links are conditional decoding evidence, not proof of execution or a call edge. \
-compare_pointer_observations takes another explicit capture path and hexadecimal at/other_at slots; before/after \
-ordering and slot correspondence are supplied by the analyst, not independently verified. Carve: carve scans any \
-file (firmware, installer, archive) for embedded executables and containers by validated header, with offsets and \
-header-estimated extents; it extracts and decompresses nothing. Pass an executable candidate's offset as \
-image_offset to any binary tool to analyze it in place, with annotations kept apart from the outer file's.";
+confidence limits. Runtime: compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal runtime \
+ranges, returning paginated byte evidence without sidecars or annotation transfer; verify identities when combining \
+pages. observe_indirect_branch takes explicit hexadecimal start/at addresses for a bounded ARM64 branch window; slot \
+links are conditional decoding evidence, not proof of execution or a call edge. compare_pointer_observations takes \
+another explicit capture path and hexadecimal at/other_at slots; before/after ordering and slot correspondence are \
+supplied by the analyst, not independently verified. Carve: carve scans any file (firmware, installer, archive) for \
+embedded executables and containers by validated header, with offsets and header-estimated extents; it extracts and \
+decompresses nothing. Pass an executable candidate's offset as image_offset to any binary tool to analyze it in place, \
+with annotations kept apart from the outer file's.";
 
 fn instructions(packs: &Packs) -> String {
     let groups: String =
@@ -336,20 +337,14 @@ impl RampageServer {
     }
 }
 
-/// An `image_offset` or `image_length` argument: a hex string with `0x`, a decimal string, or an integer.
+/// An `image_offset` or `image_length` argument (see [`FileOffset`]); `null` means none.
 fn file_offset(name: &str, value: &Value) -> Result<Option<u64>, String> {
-    let invalid = || format!("`{name}` must be a byte count or file offset such as \"0x1000\", not {value}");
-    match value {
-        Value::Null => Ok(None),
-        Value::Number(number) => number.as_u64().map(Some).ok_or_else(invalid),
-        Value::String(text) => match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-            Some(hex) => u64::from_str_radix(hex, 16),
-            None => text.parse(),
-        }
-        .map(Some)
-        .map_err(|_| invalid()),
-        _ => Err(invalid()),
+    if value.is_null() {
+        return Ok(None);
     }
+    serde_json::from_value::<FileOffset>(value.clone())
+        .map(|offset| Some(offset.0))
+        .map_err(|error| format!("`{name}`: {error}"))
 }
 
 fn error_text(error: &dyn std::error::Error) -> String {

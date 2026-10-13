@@ -182,3 +182,52 @@ fn identify_is_panic_free_across_every_fixture() {
         }
     }
 }
+
+/// `host` with each of `payloads` appended, written to a fresh temporary file and loaded.
+fn with_appended(name: &str, host: &str, payloads: &[&str]) -> Vec<rampage_detect::Detection> {
+    let mut bytes = std::fs::read(fixture(host)).unwrap();
+    for payload in payloads {
+        bytes.extend(std::fs::read(fixture(payload)).unwrap());
+    }
+    let path = std::env::temp_dir().join(format!("rampage-detect-{name}-{}", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let binary = Binary::open(&path).expect("host still loads");
+    std::fs::remove_file(&path).unwrap();
+    identify(&binary, &SignatureDb::bundled())
+}
+
+fn summary(detections: &[rampage_detect::Detection]) -> Vec<String> {
+    let mut names: Vec<String> = detections.iter().map(|d| format!("{} {:?}", d.name, d.confidence)).collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn appended_programs_lend_the_host_none_of_their_tools() {
+    let carrier = with_appended("carrier", "hello-x64.macho", &["hello-x64.exe", "musl-static-x86_64.elf"]);
+    assert_eq!(summary(&carrier), summary(&detect("hello-x64.macho")), "{carrier:?}");
+    // The appended PE and ELF on their own still report what the host must not.
+    assert!(named(&detect("hello-x64.exe"), "LLD") && named(&detect("hello-x64.exe"), "MinGW-w64"));
+    assert!(named(&detect("musl-static-x86_64.elf"), "musl"));
+
+    let carrier = with_appended("pe-carrier", "hello-x64.exe", &["musl-static-x86_64.elf", "hello-x64.macho"]);
+    assert_eq!(summary(&carrier), summary(&detect("hello-x64.exe")), "{carrier:?}");
+}
+
+#[test]
+fn the_detector_does_not_detect_the_signature_strings_it_links() {
+    // This test program links rampage-detect, so its read-only data holds every bundled needle.
+    let binary = Binary::open(std::env::current_exe().unwrap()).expect("the test binary loads");
+    let detections = identify(&binary, &SignatureDb::bundled());
+    // Only a glibc build's own glibc is a fact about this program; the rest would come from the signature table.
+    let borrowed: Vec<_> = detections
+        .iter()
+        .filter(|d| d.name != "glibc")
+        .filter(|d| {
+            matches!(d.kind, Kind::Runtime | Kind::Installer | Kind::Packer | Kind::Protector)
+                || matches!(d.name.as_str(), "Zig" | "Go" | "Delphi/Borland")
+                || (d.name == "LLD" && binary.format == rampage_loaders::Format::Pe)
+        })
+        .collect();
+    assert!(borrowed.is_empty(), "{borrowed:?}");
+}
