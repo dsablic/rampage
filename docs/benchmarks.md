@@ -75,21 +75,22 @@ Ghidra 12.1.4 (headless, default analysers, OpenJDK 21.0.12.1); rampage 0.1.0 at
 Ghidra's analysis takes 4–23 s per fixture, about 2.5 min for all 18 fixtures, so all of them are covered. A second
 run at `af40350` (regenerated signature databases), with Ghidra's exports cached, gave the same numbers. The x86-64
 rows (hello-x64.exe, eval-ref-x86_64, musl-static-x86_64, hello-go-x64) were re-measured with x86 switch tables
-resolved, from the same cached exports; the other x86-64 rows did not change.
+resolved, from the same cached exports; the other x86-64 rows did not change. The hello-x64.exe, ARM, Thumb, MIPS,
+PPC and RISC-V rows were re-measured the same way after the get-PC, import-thunk and undecodable-start fixes.
 
 | binary | funcs G/R/both | same blocks | block J | chain J | edge P / R | chain edge P / R | call P / R | callgraph P / R | G-only computed calls |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
 | hello-x64.elf | 41/41/41 | 41/41 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
 | hello-x64-dyn.elf | 6/7/6 | 6/6 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
-| hello-x64.exe | 497/525/497 | 461/497 | 99.2% | 99.8% | 97.8% / 97.3% | 99.9% / 99.7% | 100.0% / 99.7% | 100.0% / 99.5% | 1 |
+| hello-x64.exe | 497/537/497 | 463/497 | 99.2% | 99.8% | 97.9% / 97.3% | 99.9% / 99.7% | 100.0% / 99.8% | 100.0% / 100.0% | 1 |
 | hello-x64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
 | hello-arm64.elf | 6/9/6 | 6/6 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
 | hello-arm64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
-| hello-arm.elf | 4/11/4 | 4/4 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
-| hello-thumb.elf | 44/44/43 | 36/43 | 96.3% | 97.9% | 95.9% / 94.9% | 97.8% / 99.6% | 100.0% / 97.9% | 100.0% / 97.7% | 2 |
-| hello-mips.elf | 3/5/3 | 2/3 | 60.0% | 75.0% | N/A / 0.0% | N/A / 0.0% | 0.0% / N/A | 0.0% / N/A | 2 |
-| hello-mipsel.elf | 3/5/3 | 2/3 | 60.0% | 75.0% | N/A / 0.0% | N/A / 0.0% | 0.0% / N/A | 0.0% / N/A | 2 |
-| hello-ppc.elf | 42/42/42 | 42/42 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 95.9% | 100.0% / 95.5% | 3 |
+| hello-arm.elf | 4/10/4 | 4/4 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
+| hello-thumb.elf | 44/44/43 | 36/43 | 96.3% | 97.9% | 95.9% / 94.9% | 97.8% / 99.6% | 100.0% / 100.0% | 100.0% / 100.0% | 2 |
+| hello-mips.elf | 3/3/3 | 2/3 | 80.0% | 100.0% | 50.0% / 33.3% | 100.0% / 100.0% | N/A / N/A | N/A / N/A | 2 |
+| hello-mipsel.elf | 3/3/3 | 2/3 | 80.0% | 100.0% | 50.0% / 33.3% | 100.0% / 100.0% | N/A / N/A | N/A / N/A | 2 |
+| hello-ppc.elf | 42/42/42 | 42/42 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
 | hello-ppc64le.elf | 7/7/4 | 4/4 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | N/A / N/A | N/A / N/A | 0 |
 | hello-riscv64.elf | 8/9/8 | 5/8 | 57.9% | 100.0% | 0.0% / 0.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
 | eval-ref-x86_64.elf | 176/176/176 | 171/176 | 99.8% | 99.9% | 99.0% / 98.8% | 100.0% / 99.8% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
@@ -132,15 +133,16 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   `0x4337e0`). In hello-x64.exe, rampage adds edges after `exit`, `abort` and the MinGW error reporter `0x140001d20`
   (`0x1400013f7`, `0x1400013fc`, `0x140001cdd`). This is a precision loss in the CFG, and it also lets bodies run
   into the following code.
-- **Get-PC idioms and `bl next`.** rampage turns a call whose target is the next instruction into plain flow. On
-  MIPS that check compares against the delay slot, so `__start`'s `bal 0x203fc` (target after the delay slot) stays
-  a call. That creates a function `sub_203fc` in the middle of `__start` (hello-mips/mipsel `0x203f4`); Ghidra
-  treats it as a branch. The same rule drops real calls whose callee happens to be next:
-  `bl 0x20804` (`_Exit`) at hello-thumb `0x20800` and `bl 0x20790` (`_start_c`) at hello-ppc `0x2078c`. These are
-  the PPC and Thumb call-recall misses.
-- **Tail jumps to import thunks.** In hello-x64.exe, `jmp 0x140028d50` (the `fflush` IAT thunk) at `0x140001447`
-  is folded into the caller as an intra-function block, because only one function jumps there. Ghidra calls it a
-  thunk call. The same happens at `0x140001790` to `0x140028e10`.
+- **Get-PC idioms (resolved).** A call whose target is the instruction after it (after the delay slot on MIPS and
+  SPARC) reads the PC only when the code there takes the return address: `bal 1f; nop; 1: ... addu $gp, $gp, $ra`
+  (hello-mips/mipsel `__start`), `bl 1f; 1: mflr r30`, `call 1f; 1: pop ebx`. rampage treats those as plain flow
+  and every other call to the next instruction as a call, so `bl _Exit` (hello-thumb `0x20800`) and `bl _start_c`
+  (hello-ppc `0x2078c`) keep their call edges. Ghidra instead treats MIPS `bal 1f` as a branch and starts a block
+  at `0x203fc`. That is the remaining MIPS block and edge difference; chain Jaccard and chain edges agree.
+- **Tail jumps to import thunks (resolved).** PE `jmp [slot]` thunks that follow padding or another thunk are
+  functions, so `jmp 0x140028d50` (`fflush`) at hello-x64.exe `0x140001447` is a tail call rather than a block of
+  its only caller. ELF PLT and Mach-O stubs were already functions. Unreferenced thunks are now listed too, which
+  is why rampage's hello-x64.exe function count rose; Ghidra's export leaves thunks out.
 - **Ghidra's label splits (not a CFG difference).** `BasicBlockModel` starts a block at every labelled
   instruction. On RISC-V the `.Lpcrel_hi*` local symbols split straight-line code, so raw block Jaccard is 57.9% and
   chain Jaccard is 100%.
@@ -165,17 +167,9 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
    None of these fixtures needs either.
 3. Add noreturn analysis: imports (`exit`, `abort`), Go `runtime.throw`/`panic*`, and functions whose every path
    ends in a noreturn call. Evidence: about 900 extra Go edges; hello-x64.exe `0x1400013f7`.
-4. `rampage-arch` `Kind::flow` (`crates/rampage-arch/src/flow.rs`) compares a call target with the address right
-   after the instruction. With delay slots it should compare with the address after the slot; MIPS `bal` creates a
-   bogus `sub_203fc`. A call whose target is a known function or symbol should stay a call: hello-thumb `0x20800`
-   and hello-ppc `0x2078c` lose their call edges.
-5. A tail jump to an import thunk reached by a single caller is absorbed into that caller (hello-x64.exe
-   `0x140001447`). Treat `jmp [IAT]` stubs as functions.
-6. hello-arm.elf lists `sub_2036c`, whose first word (`7cfffeff`) does not decode, as a function with no blocks.
-   `function_graph` on it then fails with "no function contains 0x2036c". `export-cfg`
-   reports it with empty blocks.
-7. Disassembly text only: RISC-V compressed branches print the relative offset (`c.beqz a1, 0x22` at hello-riscv64
-   `0x10015d0`) rather than the target `0x10015f2`; the decoded flow is correct.
+4. ARM `ldr rN, [pc, #off]` literal-pool words become functions: discovery treats every data reference into
+   executable memory as a code pointer, including the address a load reads. Evidence: hello-arm.elf `sub_20338`
+   and `sub_2033c` (`_start`'s literals). A literal whose word does not decode (`0x2036c`) is no longer a function.
 
 ## Decompilation
 
