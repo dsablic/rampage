@@ -149,6 +149,12 @@ fn linkers() -> Vec<Signature> {
             vec![anywhere("52 53 44 53 ?? ?? ?? ?? ?? ?? ?? ?? 4C 4C 44 20 50 44 42 2E")],
         )
         .with_note("lld-link CodeView build-id record"),
+        // A Mach-O linker records itself as an LC_BUILD_VERSION tool: Apple's ld (ld64 and ld-prime) as tool 3,
+        // LLVM's ld64.lld as tool 4. Objects and LC_VERSION_MIN_* images carry no tool entry.
+        Signature::new("Apple ld", Kind::Linker, vec![Condition::BuildTool("ld".to_owned())])
+            .with_note("LC_BUILD_VERSION tool ld"),
+        Signature::new("LLD", Kind::Linker, vec![Condition::BuildTool("lld".to_owned())])
+            .with_note("LC_BUILD_VERSION tool lld"),
         // GNU ld (BFD) writes no tag at all. mold's tag reads "mold x.y (...; compatible with GNU ld)", so it
         // must be matched by its own name, not by "GNU ld".
         Signature::new("mold", Kind::Linker, vec![section_contains(".comment", "mold ")])

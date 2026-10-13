@@ -296,6 +296,45 @@ fn details_describe_each_format() {
     assert!(details.code_signature && details.uuid.is_some());
 }
 
+fn macho_build_tools(binary: &Binary) -> Vec<(String, String)> {
+    let rampage_loaders::Details::MachO(details) = &binary.details else { panic!("{:?}", binary.details) };
+    details.build_tools.iter().map(|entry| (entry.tool.clone(), entry.version.clone())).collect()
+}
+
+#[test]
+fn macho_build_version_tools_name_the_linker() {
+    let linked = Binary::open(fixture("hello-x64.macho")).unwrap();
+    let tools = macho_build_tools(&linked);
+    assert_eq!(tools.len(), 1, "{tools:?}");
+    assert_eq!(tools[0].0, "ld");
+    assert!(tools[0].1.starts_with(|c: char| c.is_ascii_digit()), "{tools:?}");
+    // debug-x64.macho was linked by ld64.lld, which records tool 4; a clang object records no tool.
+    assert_eq!(macho_build_tools(&Binary::open(fixture("debug-x64.macho")).unwrap())[0].0, "lld");
+    assert!(macho_build_tools(&Binary::open(fixture("hello-x64.o")).unwrap()).is_empty());
+}
+
+#[test]
+fn a_build_version_tool_count_past_the_command_reads_no_tools() {
+    let mut bytes = std::fs::read(fixture("hello-x64.macho")).unwrap();
+    let u32_at = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    let (count, mut at) = (u32_at(&bytes, 16) as usize, 32);
+    for _ in 0..count {
+        if u32_at(&bytes, at) == 0x32 {
+            break;
+        }
+        at += u32_at(&bytes, at + 4) as usize;
+    }
+    assert_eq!(u32_at(&bytes, at), 0x32, "LC_BUILD_VERSION");
+    // ntools follows cmd, cmdsize, platform, minos and sdk.
+    bytes[at + 20..at + 24].copy_from_slice(&u32::MAX.to_le_bytes());
+
+    let path = std::env::temp_dir().join(format!("rampage-ntools-{}.macho", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let binary = Binary::open(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(macho_build_tools(&binary).is_empty());
+}
+
 #[test]
 fn appended_data_is_an_overlay_and_padding_is_not() {
     for (name, original) in [("overlay.exe", "hello-x64.exe"), ("overlay.elf", "hello-x64-dyn.elf")] {

@@ -64,6 +64,23 @@ fn lld_link_is_named_by_its_codeview_build_id_record_when_one_is_present() {
 }
 
 #[test]
+fn apple_ld_is_named_by_the_build_version_tool_it_records() {
+    for name in ["hello-x64.macho", "hello-arm64.macho", "hello-x64.dylib", "hello-x64-stripped.macho"] {
+        let detections = detect(name);
+        let ld = find(&detections, "Apple ld").unwrap_or_else(|| panic!("{name}: {detections:?}"));
+        assert_eq!((ld.kind, ld.confidence), (Kind::Linker, Confidence::Strong));
+        assert!(ld.evidence[0].starts_with("LC_BUILD_VERSION records ld "), "{:?}", ld.evidence);
+        assert!(!named(&detections, "LLD"), "{name}");
+    }
+    // ld64.lld records itself as tool 4; an object, never linked, records no tool; ELF and PE have none.
+    assert!(named(&detect("debug-x64.macho"), "LLD"));
+    assert!(!named(&detect("debug-x64.macho"), "Apple ld"));
+    for name in ["hello-x64.o", "hello-x64.elf", "hello-x64.exe"] {
+        assert!(!named(&detect(name), "Apple ld"), "{name}");
+    }
+}
+
+#[test]
 fn mingw_w64_runtime_is_not_reported_on_msvc_elf_or_macho_fixtures() {
     for name in ["Microsoft.Bcl.HashCode.dll", "hello-x64.elf", "hello-x64-dyn.elf", "hello-x64.macho"] {
         let detections = detect(name);

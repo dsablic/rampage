@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use aho_corasick::AhoCorasick;
-use rampage_loaders::{Binary, shannon_entropy};
+use rampage_loaders::{Binary, Details, shannon_entropy};
 
 use crate::model::{Condition, Confidence, Detection, Signature, SignatureDb};
 use crate::pattern::BytePattern;
@@ -28,6 +28,8 @@ pub(crate) trait Image {
     fn imports_function(&self, name: &str) -> bool;
     /// The first symbol whose name satisfies `test`.
     fn find_symbol(&self, test: &dyn Fn(&str) -> bool) -> Option<&str>;
+    /// The Mach-O build-version tools, as (tool, version) pairs; empty for other formats.
+    fn build_tools(&self) -> Vec<(&str, &str)>;
     /// The overlay's size in bytes, when the image has one.
     fn overlay_size(&self) -> Option<u64>;
 }
@@ -183,6 +185,11 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
             imported_library(image, versioned).map(|name| format!("imports from versioned runtime {name}"))
         }
         Condition::ImportFunction(name) => image.imports_function(name).then(|| format!("imports function {name}")),
+        Condition::BuildTool(wanted) => image
+            .build_tools()
+            .into_iter()
+            .find(|(tool, _)| tool == wanted)
+            .map(|(tool, version)| format!("LC_BUILD_VERSION records {tool} {version}")),
         Condition::Symbol(name) => {
             image.find_symbol(&|symbol| symbol == name).map(|_| format!("symbol {name} present"))
         }
@@ -278,6 +285,15 @@ impl Image for Binary {
         self.symbols.iter().map(|symbol| symbol.name.as_str()).find(|name| test(name))
     }
 
+    fn build_tools(&self) -> Vec<(&str, &str)> {
+        match &self.details {
+            Details::MachO(macho) => {
+                macho.build_tools.iter().map(|entry| (entry.tool.as_str(), entry.version.as_str())).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn overlay_size(&self) -> Option<u64> {
         self.overlay.map(|overlay| overlay.size)
     }
@@ -298,6 +314,7 @@ mod tests {
         libraries: Vec<String>,
         functions: Vec<String>,
         symbols: Vec<String>,
+        tools: Vec<(String, String)>,
         overlay: Option<u64>,
     }
 
@@ -326,6 +343,9 @@ mod tests {
         }
         fn find_symbol(&self, test: &dyn Fn(&str) -> bool) -> Option<&str> {
             self.symbols.iter().map(String::as_str).find(|name| test(name))
+        }
+        fn build_tools(&self) -> Vec<(&str, &str)> {
+            self.tools.iter().map(|(tool, version)| (tool.as_str(), version.as_str())).collect()
         }
         fn overlay_size(&self) -> Option<u64> {
             self.overlay
