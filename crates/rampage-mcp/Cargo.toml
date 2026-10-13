@@ -14,3 +14,4 @@ tokio.workspace = true
 
 [dev-dependencies]
 rmcp = { workspace = true, features = ["client"] }
+tokio = { workspace = true, features = ["sync", "time"] }

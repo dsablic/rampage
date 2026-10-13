@@ -307,8 +307,8 @@ fn json_addresses_are_hex_strings() {
     assert!(info["segments"][0]["size"].is_u64(), "sizes stay numeric");
 }
 
-#[test]
-fn mcp_subcommand_speaks_json_rpc_over_stdio() {
+/// The tool names `rampage mcp` lists with `flags` and `RAMPAGE_MCP_TOOLS` set to `env`.
+fn mcp_tool_names(flags: &[&str], env: Option<&str>) -> Vec<Value> {
     let initialize = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -324,18 +324,48 @@ fn mcp_subcommand_speaks_json_rpc_over_stdio() {
         r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.to_owned(),
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#.to_owned(),
     ];
-    let output = Command::cargo_bin("rampage")
-        .unwrap()
-        .arg("mcp")
-        .write_stdin(requests.join("\n") + "\n")
-        .timeout(std::time::Duration::from_secs(10))
-        .output()
-        .unwrap();
+    let mut command = Command::cargo_bin("rampage").unwrap();
+    command.arg("mcp").args(flags).env_remove("RAMPAGE_MCP_TOOLS");
+    if let Some(env) = env {
+        command.env("RAMPAGE_MCP_TOOLS", env);
+    }
+    let output =
+        command.write_stdin(requests.join("\n") + "\n").timeout(std::time::Duration::from_secs(10)).output().unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let responses: Vec<Value> = stdout.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     let tools = responses.iter().find(|response| response["id"] == 2).expect("tools/list response");
-    let names: Vec<_> = tools["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].clone()).collect();
-    assert!(names.contains(&Value::from("list_functions")), "{names:?}");
+    tools["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].clone()).collect()
+}
+
+#[test]
+fn mcp_subcommand_speaks_json_rpc_over_stdio() {
+    let names = mcp_tool_names(&[], None);
+    for tool in ["list_functions", "enable_tools"] {
+        assert!(names.contains(&Value::from(tool)), "{names:?}");
+    }
+    assert!(!names.contains(&Value::from("carve")), "{names:?}");
+}
+
+#[test]
+fn mcp_serves_every_group_or_the_chosen_ones_from_the_start() {
+    let all = mcp_tool_names(&["--all-tools"], None);
+    for tool in ["carve", "detect_tools", "observe_pointer", "dotnet_metadata", "list_functions"] {
+        assert!(all.contains(&Value::from(tool)), "{all:?}");
+    }
+    assert_eq!(mcp_tool_names(&[], Some("all")).len(), all.len());
+    let chosen = mcp_tool_names(&[], Some("carve, dotnet"));
+    for tool in ["carve", "dotnet_metadata", "list_functions"] {
+        assert!(chosen.contains(&Value::from(tool)), "{chosen:?}");
+    }
+    assert!(!chosen.contains(&Value::from("detect_tools")), "{chosen:?}");
+    Command::cargo_bin("rampage")
+        .unwrap()
+        .arg("mcp")
+        .env("RAMPAGE_MCP_TOOLS", "bogus")
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("unknown tool group `bogus`"));
 }
 
 #[test]

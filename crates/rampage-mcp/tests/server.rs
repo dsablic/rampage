@@ -1,17 +1,28 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
+use rampage_api::tools::Group;
 use rampage_mcp::RampageServer;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
-use rmcp::service::{RoleClient, RunningService};
+use rmcp::service::{NotificationContext, RoleClient, RunningService};
 use rmcp::{ClientHandler, ServiceExt};
 use serde_json::{Value, json};
+use tokio::sync::Notify;
 
 #[derive(Clone, Default)]
-struct TestClient;
+struct TestClient {
+    tools_changed: Arc<Notify>,
+}
 
 impl ClientHandler for TestClient {
     fn get_info(&self) -> ClientConfig {
         ClientConfig::default()
+    }
+
+    fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) -> impl Future<Output = ()> + Send + '_ {
+        self.tools_changed.notify_one();
+        std::future::ready(())
     }
 }
 
@@ -20,12 +31,24 @@ fn fixture(name: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// A client of a server listing every tool group, as `rampage mcp --all-tools` does.
 async fn connect() -> RunningService<RoleClient, TestClient> {
+    connect_to(RampageServer::with_groups(Group::ALL)).await
+}
+
+async fn connect_to(server: RampageServer) -> RunningService<RoleClient, TestClient> {
     let (server_transport, client_transport) = tokio::io::duplex(1 << 20);
     tokio::spawn(async move {
-        RampageServer::default().serve(server_transport).await.unwrap().waiting().await.unwrap();
+        server.serve(server_transport).await.unwrap().waiting().await.unwrap();
     });
-    TestClient.serve(client_transport).await.unwrap()
+    TestClient::default().serve(client_transport).await.unwrap()
+}
+
+async fn tool_names(client: &RunningService<RoleClient, TestClient>) -> Vec<String> {
+    let mut names: Vec<String> =
+        client.list_all_tools().await.unwrap().into_iter().map(|tool| tool.name.into_owned()).collect();
+    names.sort();
+    names
 }
 
 async fn call(client: &RunningService<RoleClient, TestClient>, tool: &str, arguments: Value) -> CallToolResult {
@@ -45,9 +68,7 @@ fn json_of(result: &CallToolResult) -> Value {
 #[tokio::test]
 async fn lists_all_tools_with_instructions() {
     let client = connect().await;
-    let mut names: Vec<String> =
-        client.list_all_tools().await.unwrap().into_iter().map(|tool| tool.name.into_owned()).collect();
-    names.sort();
+    let names = tool_names(&client).await;
     let expected = [
         "analysis_diagnostics",
         "annotate_batch",
@@ -65,6 +86,7 @@ async fn lists_all_tools_with_instructions() {
         "diff_builds",
         "disassemble",
         "dotnet_metadata",
+        "enable_tools",
         "find_crypto",
         "find_main",
         "function_graph",
@@ -102,6 +124,111 @@ async fn lists_all_tools_with_instructions() {
     for tool in ["list_functions", "annotate_batch", "check_names"] {
         assert!(instructions.contains(tool), "{tool}");
     }
+    client.cancel().await.unwrap();
+}
+
+fn core_tool_names() -> Vec<String> {
+    let mut names: Vec<String> = rampage_api::tools::tools()
+        .iter()
+        .filter(|tool| tool.group == Group::Core && !tool.interactive)
+        .map(|tool| tool.name.to_owned())
+        .chain(["enable_tools".to_owned()])
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn lists_core_tools_and_enable_tools_by_default() {
+    let client = connect_to(RampageServer::default()).await;
+    let names = tool_names(&client).await;
+    assert_eq!(names, core_tool_names());
+    for tool in ["triage_report", "decompile", "xrefs", "annotate_batch", "undo", "list_annotations"] {
+        assert!(names.iter().any(|name| name == tool), "{tool}");
+    }
+    for tool in ["detect_tools", "find_crypto", "set_types", "observe_pointer", "dotnet_metadata", "carve"] {
+        assert!(!names.iter().any(|name| name == tool), "{tool}");
+    }
+    let info = client.peer_info().unwrap();
+    assert_eq!(info.capabilities.tools.as_ref().unwrap().list_changed, Some(true));
+    let instructions = info.instructions.as_deref().unwrap();
+    for text in ["enable_tools", "--all-tools", "RAMPAGE_MCP_TOOLS", "not enabled"] {
+        assert!(instructions.contains(text), "{text}");
+    }
+    for group in Group::ALL {
+        assert!(instructions.contains(&format!("- {}: ", group.name())), "{group:?}");
+    }
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn enabling_a_group_adds_its_tools_and_notifies() {
+    let client = connect_to(RampageServer::default()).await;
+    let listing = json_of(&call(&client, "enable_tools", json!({})).await);
+    assert_eq!(listing["newly_enabled"], json!([]));
+    let groups = listing["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), Group::ALL.len());
+    let detection = groups.iter().find(|group| group["name"] == "detection").unwrap();
+    assert_eq!(detection["enabled"], false);
+    assert!(!detection["description"].as_str().unwrap().is_empty());
+    assert_eq!(detection["tool_count"], detection["tools"].as_array().unwrap().len());
+    assert!(detection["tools"].as_array().unwrap().contains(&json!("find_crypto")));
+    assert_eq!(tool_names(&client).await, core_tool_names());
+
+    let enabled = json_of(&call(&client, "enable_tools", json!({ "groups": ["detection"] })).await);
+    assert_eq!(enabled["newly_enabled"], json!(["detection"]));
+    tokio::time::timeout(Duration::from_secs(10), client.service().tools_changed.notified())
+        .await
+        .expect("notifications/tools/list_changed");
+    let names = tool_names(&client).await;
+    for tool in ["detect_tools", "find_crypto", "identify_functions", "yara_scan", "decompile", "enable_tools"] {
+        assert!(names.iter().any(|name| name == tool), "{tool}");
+    }
+    assert!(!names.iter().any(|name| name == "carve"));
+    assert_eq!(names.len(), core_tool_names().len() + detection["tool_count"].as_u64().unwrap() as usize);
+
+    let again = json_of(&call(&client, "enable_tools", json!({ "groups": ["detection"] })).await);
+    assert_eq!(again["newly_enabled"], json!([]));
+    let unknown = call(&client, "enable_tools", json!({ "groups": ["everything"] })).await;
+    assert_eq!(unknown.is_error, Some(true));
+    assert!(text(&unknown).contains("unknown tool group `everything`"), "{}", text(&unknown));
+    let all = json_of(&call(&client, "enable_tools", json!({ "groups": ["all"] })).await);
+    assert!(all["groups"].as_array().unwrap().iter().all(|group| group["enabled"] == true));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_disabled_tool_fails_naming_its_group_and_runs_nothing() {
+    let client = connect_to(RampageServer::default()).await;
+    let path = fixture("hello-x64.elf");
+    let refused = call(&client, "detect_tools", json!({ "path": path })).await;
+    assert_eq!(refused.is_error, Some(true));
+    let message = text(&refused);
+    assert!(message.contains("`detection` group") && message.contains("enable_tools"), "{message}");
+    let carve = call(&client, "carve", json!({ "path": path })).await;
+    assert_eq!(carve.is_error, Some(true));
+    assert!(text(&carve).contains("`carve` group"), "{}", text(&carve));
+    let unknown = call(&client, "no_such_tool", json!({ "path": path })).await;
+    assert!(text(&unknown).contains("unknown tool"), "{}", text(&unknown));
+
+    json_of(&call(&client, "enable_tools", json!({ "groups": ["detection"] })).await);
+    json_of(&call(&client, "detect_tools", json!({ "path": path })).await);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn every_served_tool_is_in_exactly_one_group() {
+    let client = connect().await;
+    let listing = json_of(&call(&client, "enable_tools", json!({})).await);
+    let mut grouped: Vec<String> = listing["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["tools"].as_array().unwrap().iter().map(|name| name.as_str().unwrap().to_owned()))
+        .chain(["enable_tools".to_owned()])
+        .collect();
+    grouped.sort();
+    assert_eq!(grouped, tool_names(&client).await);
     client.cancel().await.unwrap();
 }
 

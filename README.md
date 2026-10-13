@@ -127,7 +127,7 @@ rampage comment <file> <addr|name> <text|--clear>
 rampage annotate-batch <file> <entries.json> # [{at, name?, comment?}] as one undo step, all or nothing
 rampage check-names <file> <name>...         # valid identifier? address-shaped? already used?
 rampage annotations <file>                   # names, comments, signatures, types and globals
-rampage mcp                                  # MCP server on stdin/stdout
+rampage mcp [--all-tools]                    # MCP server on stdin/stdout (core tools + enable_tools)
 
 # global flags
 --json                 machine-readable output for every command
@@ -167,23 +167,39 @@ are sent to Anthropic's API.
 
 ## Using it from an AI agent
 
-`rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the tools
-`triage`, `binary_info`, `list_functions`, `disassemble`, `list_strings`, `list_imports`, `list_exports`, `xrefs`,
-`decompile`, `rename`, `set_comment`, `annotate_batch` (bulk naming), `check_names` (pre-flight),
-`set_signature`, `set_types`, `set_global`, `import_debug_signatures`,
-`class_evidence`, `observe_pointer`, `observe_indirect_branch`, `compare_runtime_bytes`,
-`compare_pointer_observations`, `undo`, `redo`
-and `list_annotations`, plus one tool per guided workflow (`triage_report`, `persistence_surface`,
-`string_decoding`, ...). `undo` and `redo` revert or reapply one step, which may be a whole batch. `carve` takes
-any file path rather than a binary: it pages candidates with `offset`/`limit` and reports `more` instead of a
-total, scanning only as far as the candidate after the page.
-Agents' annotations land in the same log the
-UI and CLI use, and the UI shows them as they arrive. Analysis runs once per binary and is cached for the session.
-`observe_pointer` exposes captured slot evidence without modifying discovery.
+`rampage mcp` serves the [Model Context Protocol](https://modelcontextprotocol.io) over stdio. Its tools come in
+groups so the list an agent reads stays short:
+
+- `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
+  `function_summary`, `xrefs`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
+  `annotate_batch` (bulk naming), `check_names` (pre-flight), `undo`, `redo`, `list_annotations`, and the
+  workflows `triage_report`, `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`
+- `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
+  `capa_detect`, `find_crypto`
+- `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `class_evidence`,
+  `language_metadata`
+- `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`
+- `diagnostics`: `analysis_diagnostics`, `inspect_jump_table`
+- `dotnet`: `dotnet_metadata`
+- `carve`: `carve`
+
+By default the server lists `core` and an `enable_tools` meta-tool: called without arguments it lists every group
+with a one-line description and its tools; `{"groups": ["detection"]}` (or `["all"]`) enables groups and sends
+`notifications/tools/list_changed`. Calling a tool of a group that is not enabled fails with the group to enable
+and runs nothing. For clients that do not refresh their tool list, `rampage mcp --all-tools` lists every group
+from the start, and `RAMPAGE_MCP_TOOLS=all` or `RAMPAGE_MCP_TOOLS=detection,types` chooses groups by environment
+(`core` is always served). The UI's assistant always offers every tool.
+
+`undo` and `redo` revert or reapply one step, which may be a whole batch. `carve` takes any file path rather than
+a binary: it pages candidates with `offset`/`limit` and reports `more` instead of a total, scanning only as far as
+the candidate after the page. Agents' annotations land in the same log the UI and CLI use, and the UI shows them as
+they arrive. Analysis runs once per binary and is cached for the session. `observe_pointer` exposes captured slot
+evidence without modifying discovery.
 To add it to Claude Code:
 
 ```
 claude mcp add rampage -- /path/to/rampage mcp
+claude mcp add rampage -- /path/to/rampage mcp --all-tools   # every group, for clients without list_changed
 ```
 
 ## Performance

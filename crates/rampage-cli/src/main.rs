@@ -304,8 +304,13 @@ enum Command {
         #[arg(long)]
         no_decompile: bool,
     },
-    /// Serve the Model Context Protocol over stdin/stdout for AI agents
-    Mcp,
+    /// Serve the Model Context Protocol over stdin/stdout for AI agents. Lists the core tools and enable_tools,
+    /// which adds the other groups; RAMPAGE_MCP_TOOLS=all or a comma-separated list of groups serves more at once
+    Mcp {
+        /// List every tool group from the start, for clients that do not refresh their tool list
+        #[arg(long)]
+        all_tools: bool,
+    },
     /// List code and data cross-references to or from an address, symbol or function
     #[command(group(clap::ArgGroup::new("direction").required(true)))]
     Xrefs {
@@ -337,8 +342,8 @@ fn parse_token(text: &str) -> Result<u32, String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    if let Command::Mcp = cli.command {
-        return serve_mcp();
+    if let Command::Mcp { all_tools } = cli.command {
+        return serve_mcp(all_tools);
     }
     let options = Options { json: cli.json, arch: cli.arch };
     let mut out = BufWriter::new(io::stdout().lock());
@@ -424,7 +429,7 @@ fn main() -> ExitCode {
             let report_options = report::ReportOptions { other, limit, no_decompile };
             report::report(&mut out, workflow, &file, &report_options, &options)
         }
-        Command::Mcp => unreachable!("handled before opening stdout"),
+        Command::Mcp { .. } => unreachable!("handled before opening stdout"),
     }
     .and_then(|()| out.flush().map_err(Into::into));
 
@@ -438,7 +443,15 @@ fn main() -> ExitCode {
     }
 }
 
-fn serve_mcp() -> ExitCode {
+fn serve_mcp(all_tools: bool) -> ExitCode {
+    let env = std::env::var(rampage_mcp::TOOLS_ENV).ok();
+    let groups = match rampage_mcp::initial_groups(all_tools, env.as_deref()) {
+        Ok(groups) => groups,
+        Err(error) => {
+            eprintln!("rampage: {}: {error}", rampage_mcp::TOOLS_ENV);
+            return ExitCode::FAILURE;
+        }
+    };
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -446,7 +459,7 @@ fn serve_mcp() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(rampage_mcp::serve_stdio()) {
+    match runtime.block_on(rampage_mcp::serve_stdio(groups)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("rampage: mcp server failed: {error}");
