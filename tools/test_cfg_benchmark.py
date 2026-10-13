@@ -26,6 +26,22 @@ class CacheKeyTest(unittest.TestCase):
         self.assertTrue(benchmark.cache_key("abc", "12.0").startswith("abc-12.0-"))
 
 
+class ReadExportTest(unittest.TestCase):
+    def test_a_missing_or_truncated_export_exits_with_ghidras_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            out = Path(work) / "cfg.json"
+            logs = ["", "ERROR ghidra_cfg_export.java> NullPointerException"]
+            for written, problem in ((None, "wrote no CFG export"), ('{"functions":[{"address"', "truncated")):
+                if written is not None:
+                    out.write_text(written)
+                with self.assertRaises(SystemExit) as raised:
+                    benchmark.read_export(out, Path("fixture.elf"), logs)
+                self.assertIn(problem, str(raised.exception))
+                self.assertIn("NullPointerException", str(raised.exception))
+            out.write_text('{"functions":[]}')
+            self.assertEqual(benchmark.read_export(out, Path("fixture.elf"), logs), {"functions": []})
+
+
 def ghidra_function(start: int, blocks: dict[int, list[int]], calls: list[tuple[int, int, str]]) -> dict[str, Any]:
     return {
         "address": hex(start), "noreturn": False,

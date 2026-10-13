@@ -48,22 +48,41 @@ def java_home() -> str:
     return f"{prefix.stdout.strip()}/libexec/openjdk.jdk/Contents/Home"
 
 
+def log_text(path: Path) -> str:
+    return path.read_text(errors="replace") if path.exists() else ""
+
+
+def read_export(out: Path, fixture: Path, logs: list[str]) -> dict[str, Any]:
+    """The export the script wrote, or exit with the tail of Ghidra's output and logs when it is missing or cut short
+    (the script failed part-way, or Ghidra stopped before running it)."""
+    problem = None
+    if not out.exists():
+        problem = "wrote no CFG export"
+    else:
+        try:
+            return json.loads(out.read_text())
+        except json.JSONDecodeError as error:
+            problem = f"wrote a truncated or malformed CFG export ({error})"
+    tails = "\n".join(log[-4000:] for log in logs if log.strip())
+    raise SystemExit(f"ghidra {problem} for {fixture}; its output and logs end:\n{tails}")
+
+
 def ghidra_export(install: Path, fixture: Path, key: str, cache: Path | None) -> tuple[dict[str, Any], float | None]:
     cached = cache / f"{key}.json" if cache else None
     if cached and cached.exists():
         return json.loads(cached.read_text()), None
     with tempfile.TemporaryDirectory() as work:
         out = Path(work) / "cfg.json"
+        logs = [Path(work) / "application.log", Path(work) / "script.log"]
         command = [
             str(install / "support" / "analyzeHeadless"), work, "bench", "-import", str(fixture),
-            "-scriptPath", str(TOOLS), "-postScript", "ghidra_cfg_export.java", str(out), "-deleteProject",
+            "-scriptPath", str(TOOLS), "-postScript", SCRIPT.name, str(out), "-deleteProject",
+            "-log", str(logs[0]), "-scriptlog", str(logs[1]),
         ]
         started = time.monotonic()
         result = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "JAVA_HOME": java_home()})
         elapsed = time.monotonic() - started
-        if not out.exists():
-            raise SystemExit(f"ghidra failed on {fixture}:\n{result.stdout[-2000:]}\n{result.stderr[-2000:]}")
-        data = json.loads(out.read_text())
+        data = read_export(out, fixture, [result.stdout, result.stderr, *(log_text(log) for log in logs)])
     if cached:
         cache.mkdir(parents=True, exist_ok=True)
         cached.write_text(json.dumps(data))
