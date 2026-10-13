@@ -530,3 +530,40 @@ fn image_offset_opens_an_embedded_executable_with_its_own_annotations() {
     rampage(&["--image-offset", "nope", "info", path_text]).failure();
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+#[test]
+fn image_length_keeps_an_embedded_overlay_the_header_extent_leaves_out() {
+    let directory = std::env::temp_dir().join(format!("rampage-cli-embedded-length-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let malformed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/malformed/overlay.exe");
+    let image = std::fs::read(malformed).unwrap();
+    let mut file = b"junk!".repeat(200);
+    file.push(b'!');
+    file.extend(&image);
+    let path = directory.join("installer.bin");
+    std::fs::write(&path, &file).unwrap();
+    let path_text = path.to_str().unwrap();
+    let length = image.len().to_string();
+    let triage = |args: &[&str]| -> Value {
+        let mut command = assert_cmd::Command::cargo_bin("rampage").unwrap();
+        let output = command.args(["--json", "--image-offset", "1001"]).args(args).args(["triage", path_text]);
+        serde_json::from_slice(&output.assert().success().get_output().stdout).unwrap()
+    };
+
+    let cut = triage(&[]);
+    assert!(cut["overlay"].is_null(), "{cut}");
+    let trailing = cut["embedded"]["trailing"].as_u64().unwrap();
+    assert!(trailing > 0);
+    let hints = cut["hints"].to_string();
+    assert!(hints.contains(&format!("{trailing} bytes follow the image in the outer file")), "{hints}");
+
+    let whole = triage(&["--image-length", &length]);
+    assert_eq!(whole["overlay"]["size"].as_u64(), Some(trailing), "{whole}");
+    assert_eq!(whole["embedded"]["trailing"], 0);
+    assert!(whole["hints"].to_string().contains("bytes of overlay data"));
+
+    let mut command = assert_cmd::Command::cargo_bin("rampage").unwrap();
+    command.args(["--image-length", &length, "triage", path_text]).assert().failure();
+    std::fs::remove_dir_all(&directory).unwrap();
+}

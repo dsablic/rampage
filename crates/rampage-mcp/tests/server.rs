@@ -281,6 +281,26 @@ async fn image_offset_opens_a_carved_executable_with_its_own_annotations() {
     assert!(text(&unannotated).contains("no ELF, PE or Mach-O header"), "{}", text(&unannotated));
     let malformed = call(&client, "binary_info", json!({ "path": path, "image_offset": "x" })).await;
     assert_eq!(malformed.is_error, Some(true));
+
+    let size = std::fs::metadata(fixture("hello-arm64.macho")).unwrap().len();
+    let mut longer = std::fs::read(path).unwrap();
+    longer.extend(b"appended overlay");
+    let longer_path = directory.join("longer.bin");
+    std::fs::write(&longer_path, longer).unwrap();
+    let path = longer_path.to_str().unwrap();
+    let cut = json_of(&call(&client, "triage", json!({ "path": path, "image_offset": hex })).await);
+    assert_eq!(cut["embedded"]["trailing"], 16);
+    assert!(cut["overlay"].is_null());
+    let arguments = json!({ "path": path, "image_offset": hex, "image_length": size + 16 });
+    let whole = json_of(&call(&client, "triage", arguments).await);
+    assert_eq!(whole["overlay"]["size"], 16, "{whole}");
+    let lone = call(&client, "triage", json!({ "path": path, "image_length": 16 })).await;
+    assert!(text(&lone).contains("`image_length` needs `image_offset`"), "{}", text(&lone));
+    for tool in client.list_all_tools().await.unwrap() {
+        if tool.input_schema["properties"].get("image_offset").is_some() {
+            assert!(tool.input_schema["properties"].get("image_length").is_some(), "{}", tool.name);
+        }
+    }
     client.cancel().await.unwrap();
     std::fs::remove_dir_all(&directory).unwrap();
 }

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use rampage_analysis::capture_identity::capture_identity;
 use rampage_arch::Arch;
-use rampage_loaders::{Binary, Format};
+use rampage_loaders::{Binary, Format, ImageAt};
 use sha2::{Digest, Sha256};
 
 use crate::annotations::Annotations;
@@ -22,14 +22,14 @@ pub struct Session {
 
 #[derive(Default)]
 struct State {
-    /// Projects by canonical path, embedded image offset and the architecture of the slice loaded.
-    projects: HashMap<(PathBuf, Option<u64>, Arch), Arc<Project>>,
-    /// The slice each path and offset opens when no architecture is asked for.
-    defaults: HashMap<(PathBuf, Option<u64>), Arch>,
+    /// Projects by canonical path, embedded image location and the architecture of the slice loaded.
+    projects: HashMap<(PathBuf, Option<ImageAt>, Arch), Arc<Project>>,
+    /// The slice each path and image location opens when no architecture is asked for.
+    defaults: HashMap<(PathBuf, Option<ImageAt>), Arch>,
     /// Paths once used for captures remain revalidated even after an ordinary binary replaces them.
     capture_paths: HashSet<PathBuf>,
     /// Freeze hashes for ordinary replacements; their memory maps may reflect later in-place file writes.
-    ordinary_sources: HashMap<(PathBuf, Option<u64>, Arch), [u8; 32]>,
+    ordinary_sources: HashMap<(PathBuf, Option<ImageAt>, Arch), [u8; 32]>,
 }
 
 impl Session {
@@ -54,17 +54,17 @@ impl Session {
         self.open_at(path, arch, None)
     }
 
-    /// Opens the binary at `path`, or with an `offset`, the executable embedded there (see
+    /// Opens the binary at `path`, or with an `image` location, the executable embedded there (see
     /// [`Binary::open_at`]). An embedded image is a project of its own, with its own annotation sidecar.
-    pub fn open_at(&self, path: &Path, arch: Option<Arch>, offset: Option<u64>) -> Result<Arc<Project>, ApiError> {
+    pub fn open_at(&self, path: &Path, arch: Option<Arch>, image: Option<ImageAt>) -> Result<Arc<Project>, ApiError> {
         let executable = rampage_loaders::container::resolve_executable(path)
             .map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
         let path = executable.as_path();
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_owned());
         let cached = {
             let state = self.state.lock().expect("session lock");
-            let loaded = arch.or_else(|| state.defaults.get(&(canonical.clone(), offset)).copied());
-            if let Some(project) = loaded.and_then(|arch| state.projects.get(&(canonical.clone(), offset, arch)))
+            let loaded = arch.or_else(|| state.defaults.get(&(canonical.clone(), image)).copied());
+            if let Some(project) = loaded.and_then(|arch| state.projects.get(&(canonical.clone(), image, arch)))
                 && project.binary.format != Format::Snapshot
                 && !state.capture_paths.contains(&canonical)
             {
@@ -78,12 +78,9 @@ impl Session {
         {
             return Ok(project);
         }
-        let binary = match offset {
-            Some(offset) => Binary::open_at_with(path, offset, None, arch),
-            None => Binary::open_with(path, arch),
-        };
-        let mut binary = binary.map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
-        let legacy = annotation_path(path, &binary);
+        let mut binary =
+            Binary::open_image(path, image, arch).map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
+        let legacy = annotation_path(path, image, &binary);
         let log = if binary.format == Format::Snapshot {
             self.state.lock().expect("session lock").capture_paths.insert(canonical.clone());
             let identity = capture_identity(&binary)
@@ -121,10 +118,10 @@ impl Session {
 
         let mut state = self.state.lock().expect("session lock");
         if arch.is_none() {
-            state.defaults.insert((canonical.clone(), offset), binary.arch);
+            state.defaults.insert((canonical.clone(), image), binary.arch);
         }
         let revalidate = state.capture_paths.contains(&canonical);
-        let key = (canonical, offset, binary.arch);
+        let key = (canonical, image, binary.arch);
         let ordinary_source: Option<[u8; 32]> =
             (revalidate && binary.format != Format::Snapshot).then(|| Sha256::digest(binary.file_bytes()).into());
         if let Some(project) = state.projects.get(&key)
@@ -183,11 +180,15 @@ fn can_reuse_ordinary_input(path: &Path) -> Result<bool, ApiError> {
     }
 }
 
-/// `<file>.rampage`, with `@0x<offset>` for an embedded image and `.<arch>` for one slice of a universal binary.
-fn annotation_path(path: &Path, binary: &Binary) -> PathBuf {
+/// `<file>.rampage`, with `@0x<offset>` (and `+0x<length>` when given) for an embedded image and `.<arch>` for one
+/// slice of a universal binary.
+fn annotation_path(path: &Path, image: Option<ImageAt>, binary: &Binary) -> PathBuf {
     let mut log = path.as_os_str().to_owned();
-    if let Some(embedded) = binary.embedded {
-        log.push(format!("@{:#x}", embedded.offset));
+    if let Some(image) = image {
+        log.push(format!("@{:#x}", image.offset()));
+        if let Some(length) = image.length() {
+            log.push(format!("+{length:#x}"));
+        }
     }
     if binary.slices.len() > 1 {
         log.push(format!(".{}", binary.arch));

@@ -17,8 +17,8 @@ use serde::Serialize;
 pub struct Options {
     pub json: bool,
     pub arch: Option<Arch>,
-    /// Where the executable to open starts inside the file, for one embedded in a larger file.
-    pub offset: Option<u64>,
+    /// Where the executable to open lies inside the file, for one embedded in a larger file.
+    pub image: Option<rampage_loaders::ImageAt>,
     pub packs: Arc<Packs>,
 }
 
@@ -262,15 +262,12 @@ pub fn correlate(
 
 pub(crate) fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
     let session = Session::default().with_packs(Arc::clone(&options.packs));
-    Ok(session.open_at(path, options.arch, options.offset)?)
+    Ok(session.open_at(path, options.arch, options.image)?)
 }
 
 /// The binary at `path`, without its annotations.
 fn open_binary(path: &Path, options: &Options) -> Result<rampage_loaders::Binary> {
-    Ok(match options.offset {
-        Some(offset) => rampage_loaders::Binary::open_at_with(path, offset, None, options.arch)?,
-        None => rampage_loaders::Binary::open_with(path, options.arch)?,
-    })
+    Ok(rampage_loaders::Binary::open_image(path, options.image, options.arch)?)
 }
 
 pub fn compare_runtime(

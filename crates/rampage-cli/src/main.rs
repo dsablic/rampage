@@ -24,6 +24,10 @@ struct Cli {
     /// Open the executable embedded at this file offset (hex 0x... or decimal), such as one `carve` found
     #[arg(long, global = true, value_parser = parse_offset)]
     image_offset: Option<u64>,
+    /// With --image-offset, the embedded image's length in bytes (hex 0x... or decimal); defaults to the extent its
+    /// header tables give, so bytes after that (an overlay) are left out
+    #[arg(long, global = true, value_parser = parse_offset, requires = "image_offset")]
+    image_length: Option<u64>,
     /// A data pack directory (holding rampage-pack.toml) layered over the bundled heuristic databases; repeatable,
     /// earlier packs take precedence. Directories in RAMPAGE_PACKS (a path list) load after these
     #[arg(long = "pack", global = true, value_name = "DIR")]
@@ -364,7 +368,7 @@ fn parse_offset(text: &str) -> Result<u64, String> {
         Some(hex) => u64::from_str_radix(hex, 16),
         None => text.parse(),
     };
-    parsed.map_err(|error| format!("not a file offset: {error}"))
+    parsed.map_err(|error| format!("not a file offset or length: {error}"))
 }
 
 fn parse_dotnet_list(text: &str) -> Result<rampage_api::DotNetList, String> {
@@ -390,7 +394,8 @@ fn main() -> ExitCode {
     if let Command::Mcp { all_tools } = cli.command {
         return serve_mcp(all_tools, packs);
     }
-    let options = Options { json: cli.json, arch: cli.arch, offset: cli.image_offset, packs };
+    let image = cli.image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, cli.image_length));
+    let options = Options { json: cli.json, arch: cli.arch, image, packs };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match cli.command {
         Command::Info { file } => commands::info(&mut out, &file, &options),

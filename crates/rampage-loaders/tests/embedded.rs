@@ -52,7 +52,8 @@ fn an_embedded_image_loads_as_the_extracted_file_does() {
         assert_eq!(without_embedded(&embedded), without_embedded(&direct), "{name}");
         assert_eq!(embedded.image_bytes(), direct.image_bytes(), "{name}");
         let file_size = std::fs::metadata(&temp.0).unwrap().len();
-        assert_eq!(embedded.embedded, Some(Embedded { offset, size, file_size }), "{name}");
+        let trailing = 777;
+        assert_eq!(embedded.embedded, Some(Embedded { offset, size, file_size, trailing }), "{name}");
         assert!(!embedded.function_starts.is_empty() || !embedded.symbols.is_empty(), "{name}");
     }
 }
@@ -75,6 +76,32 @@ fn an_explicit_length_to_the_end_of_the_file_reports_the_trailing_bytes_as_overl
     let binary = Binary::open_at(&temp.0, offset, Some(file_size - offset)).unwrap();
     let overlay = binary.overlay.expect("the junk after the image is overlay");
     assert_eq!((overlay.offset, overlay.size, overlay.file_offset), (size, 777, offset + size));
+}
+
+#[test]
+fn bytes_after_the_header_extent_are_counted_and_an_explicit_length_keeps_them_as_overlay() {
+    for name in ["overlay.exe", "overlay.elf", "sstrip.elf"] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/malformed").join(name);
+        let image = std::fs::read(&path).unwrap();
+        let direct = Binary::open(&path).unwrap().overlay.expect("the fixture has an overlay");
+        let mut file = junk(1001, 7);
+        file.extend(&image);
+        let temp = temp_file(&format!("trailing-{name}"), &file);
+        let offset = 1001;
+
+        let cut = Binary::open_at(&temp.0, offset, None).unwrap();
+        assert_eq!(cut.overlay, None, "{name}");
+        let embedded = cut.embedded.unwrap();
+        assert_eq!((embedded.size, embedded.trailing), (direct.offset, direct.size), "{name}");
+
+        let whole = Binary::open_at(&temp.0, offset, Some(image.len() as u64)).unwrap();
+        let overlay = whole.overlay.expect("an explicit length keeps the overlay");
+        assert_eq!(
+            (overlay.offset, overlay.size, overlay.file_offset),
+            (direct.offset, direct.size, offset + direct.offset)
+        );
+        assert_eq!(whole.embedded.unwrap().trailing, 0, "{name}");
+    }
 }
 
 #[test]

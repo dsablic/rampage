@@ -37,6 +37,30 @@ pub struct Embedded {
     pub size: u64,
     /// The outer file's size.
     pub file_size: u64,
+    /// Bytes of the outer file after the image. They are not part of it, so they are not reported as overlay.
+    pub trailing: u64,
+}
+
+/// Where the image to open lies in its file: from `offset`, for `length` bytes when given, else for the extent its
+/// header tables give.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ImageAt {
+    offset: u64,
+    length: Option<u64>,
+}
+
+impl ImageAt {
+    pub fn new(offset: u64, length: Option<u64>) -> Self {
+        Self { offset, length }
+    }
+
+    pub fn offset(self) -> u64 {
+        self.offset
+    }
+
+    pub fn length(self) -> Option<u64> {
+        self.length
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -186,10 +210,19 @@ impl Binary {
 
     /// Opens the ELF, PE or Mach-O image embedded at `offset` in the file at `path`, such as one `carve` found.
     /// Its header must validate the way carving validates it. The image runs for `length` bytes, or else for the
-    /// extent its header tables give (cut at the end of the file). Addresses and file offsets are the image's own,
-    /// as if it had been extracted; [`Binary::embedded`] records where it lies.
+    /// extent its header tables give (cut at the end of the file); only bytes within it can be overlay, and
+    /// [`Embedded::trailing`] counts those after it. Addresses and file offsets are the image's own, as if it had
+    /// been extracted; [`Binary::embedded`] records where it lies.
     pub fn open_at(path: impl AsRef<Path>, offset: u64, length: Option<u64>) -> Result<Self, LoadError> {
         Self::open_at_with(path, offset, length, None)
+    }
+
+    /// [`Binary::open_with`] the whole file, or with `image`, [`Binary::open_at_with`] the image there.
+    pub fn open_image(path: impl AsRef<Path>, image: Option<ImageAt>, wanted: Option<Arch>) -> Result<Self, LoadError> {
+        match image {
+            Some(image) => Self::open_at_with(path, image.offset, image.length, wanted),
+            None => Self::open_with(path, wanted),
+        }
     }
 
     /// [`Binary::open_at`], requiring the given architecture when one is requested.
@@ -237,7 +270,7 @@ impl Binary {
             _ => (Vec::new(), image),
         };
         let mut binary = Self::load(data, image, slices, wanted)?;
-        binary.embedded = Some(Embedded { offset, size, file_size });
+        binary.embedded = Some(Embedded { offset, size, file_size, trailing: available - size });
         Ok(binary)
     }
 
