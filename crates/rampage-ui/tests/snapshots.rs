@@ -329,6 +329,40 @@ fn an_image_offset_and_length_open_from_the_open_flow() {
 }
 
 #[test]
+fn data_packs_apply_to_opened_binaries_and_list_their_problems() {
+    // Relative to the package, so the snapshot shows the same directory on every machine.
+    let directory = PathBuf::from("../../target/rampage-ui-tests/pack");
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("rampage-pack.toml"),
+        "name = \"ui-pack\"\nversion = \"1.0\"\nlicense = \"MIT\"\nsource = \"https://example.com/ui-pack\"\n\
+         description = \"UI test pack\"\n[[contents]]\nkind = \"peid\"\npath = \"userdb.txt\"\n\
+         [[contents]]\nkind = \"yara\"\npath = \"missing.yar\"\n",
+    )
+    .unwrap();
+    std::fs::write(directory.join("userdb.txt"), "[UI Pack DOS Header]\nsignature = 4D 5A\nep_only = false\n").unwrap();
+    let packs = std::sync::Arc::new(rampage_api::Packs::lazy(std::slice::from_ref(&directory)));
+
+    let mut harness = harness(App::blocking().with_packs(std::sync::Arc::clone(&packs)));
+    harness.run();
+    let ctx = harness.ctx.clone();
+    harness.state_mut().open(&ctx, fixture("hello-x64.exe"), None);
+    let project = &harness.state_mut().workspace_mut().unwrap().project;
+    assert!(std::sync::Arc::ptr_eq(&project.packs(), &packs));
+    let detections = project.detect_tools(None).unwrap().detections;
+    assert!(detections.iter().any(|detection| detection.name == "UI Pack DOS Header"), "{detections:?}");
+    harness.run();
+    harness.get_by_label("1 data pack problem").click();
+    harness.run();
+    harness.get_by_label("ui-pack 1.0 (MIT)");
+    harness.get_by_label("peid userdb.txt (loaded): 1 PeID signatures");
+    assert!(harness.get_all_by_label_contains("yara missing.yar (error): cannot open missing.yar").count() > 0);
+    harness.snapshot("about-packs");
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
 fn discarding_never_forces_away_a_step_undo_can_revert() {
     let (directory, path) = scratch_copy("undo-unblocked", "hello-arm64.macho");
     let ctx = egui::Context::default();

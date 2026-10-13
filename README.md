@@ -210,7 +210,7 @@ reported without keeping the others from loading.
 ## Desktop UI
 
 ```
-cargo run --release -p rampage-ui -- <file> [--arch aarch64] [--image-offset 0x1000 [--image-length N]]
+cargo run --release -p rampage-ui -- <file> [--arch aarch64] [--image-offset 0x1000 [--image-length N]] [--pack DIR]...
 ```
 
 An egui app over the same API: docked functions, strings, imports and exports lists, a disassembly listing with
@@ -224,6 +224,8 @@ When a file embeds other executables or containers, a Carve button lists them (`
 validated executable as a project of its own; a file that does not open whole shows the list straight away, and an
 offset and optional length can be typed in. An undo that another client's edit (an agent's, say) blocks shows the
 conflict and offers to discard the step from the undo history, keeping its edits; it never forces.
+Data packs given with `--pack` or `RAMPAGE_PACKS` apply as in the CLI; the About window lists them with each
+content's status, and the status bar counts the problems.
 
 The Assistant tab talks to Claude about the open binary: the model reads functions, graphs, strings and
 cross-references through rampage's tools, renames and comments what it works out, and points the listing at what it

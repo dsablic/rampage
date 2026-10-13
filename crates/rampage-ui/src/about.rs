@@ -1,8 +1,9 @@
-//! The About window: version, licence, and the notices for everything the binary bundles.
+//! The About window: version, licence, the data packs in use, and the notices for everything the binary bundles.
 
 use std::sync::OnceLock;
 
 use egui::{RichText, ScrollArea, Ui};
+use rampage_api::{ContentStatus, PackInfo, Packs};
 
 use crate::theme;
 
@@ -42,16 +43,16 @@ fn third_party_lines() -> &'static [&'static str] {
     LINES.get_or_init(|| THIRD_PARTY_NOTICES.lines().collect())
 }
 
-pub fn show(ctx: &egui::Context, open: &mut bool) {
+pub fn show(ctx: &egui::Context, open: &mut bool, packs: &Packs) {
     egui::Window::new("About rampage")
         .open(open)
         .collapsible(false)
         .default_size(egui::vec2(760.0, 640.0))
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ctx, contents);
+        .show(ctx, |ui| contents(ui, packs));
 }
 
-fn contents(ui: &mut Ui) {
+fn contents(ui: &mut Ui, packs: &Packs) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("rampage").size(22.0).color(theme::LINK));
         ui.label(RichText::new(env!("CARGO_PKG_VERSION")).color(theme::DIM).monospace());
@@ -59,6 +60,14 @@ fn contents(ui: &mut Ui) {
     ui.label("Licensed under the Apache License, Version 2.0.");
     ui.add_space(6.0);
     ScrollArea::vertical().id_salt("about").max_height(260.0).show(ui, |ui| {
+        // Listed only when packs were given (--pack, RAMPAGE_PACKS), so the built-in databases need no mention.
+        if packs.configured() {
+            ui.label(RichText::new("Data packs, in precedence order").strong());
+            for pack in packs.listing() {
+                pack_info(ui, &pack);
+            }
+            ui.add_space(6.0);
+        }
         ui.label(RichText::new("Bundled fonts").strong());
         for font in &FONTS {
             egui::CollapsingHeader::new(format!("{} ({})", font.name, font.licence)).show(ui, |ui| {
@@ -83,6 +92,38 @@ fn contents(ui: &mut Ui) {
             }
         },
     );
+}
+
+fn pack_info(ui: &mut Ui, pack: &PackInfo) {
+    let directory = pack.directory.as_ref().map(|directory| directory.display().to_string());
+    let title = match (&pack.manifest, &directory) {
+        (Some(manifest), _) => format!("{} {} ({})", manifest.name, manifest.version, manifest.license),
+        (None, Some(directory)) => directory.clone(),
+        (None, None) => "pack".to_owned(),
+    };
+    let failed = pack.error.is_some() || pack.contents.iter().any(|content| content.status != ContentStatus::Loaded);
+    let heading = if failed { RichText::new(title).color(theme::WARNING) } else { RichText::new(title) };
+    egui::CollapsingHeader::new(heading).id_salt(&directory).default_open(failed).show(ui, |ui| {
+        if let Some(directory) = &directory {
+            ui.label(RichText::new(directory).color(theme::DIM).monospace());
+        }
+        if let Some(manifest) = &pack.manifest {
+            ui.label(RichText::new(format!("source: {}", manifest.source)).color(theme::DIM));
+        }
+        if let Some(error) = &pack.error {
+            ui.label(RichText::new(format!("not loaded: {error}")).color(theme::WARNING));
+        }
+        for content in &pack.contents {
+            let status = match content.status {
+                ContentStatus::Loaded => "loaded",
+                ContentStatus::Error => "error",
+                ContentStatus::Unsupported => "unsupported",
+            };
+            let line = format!("{} {} ({status}): {}", content.kind, content.path, content.detail);
+            let colour = if content.status == ContentStatus::Loaded { theme::DIM } else { theme::WARNING };
+            ui.label(RichText::new(line).color(colour));
+        }
+    });
 }
 
 #[cfg(test)]

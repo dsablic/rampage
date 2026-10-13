@@ -11,11 +11,12 @@ pub mod theme;
 mod workspace;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use egui::{Key, Modifiers, RichText, TextEdit, Ui};
 use egui_dock::{DockArea, DockState, NodeIndex, Style};
-use rampage_api::Session;
 use rampage_api::annotations::Field;
+use rampage_api::{Packs, Session};
 use rampage_arch::Arch;
 use rampage_loaders::ImageAt;
 
@@ -24,6 +25,8 @@ pub use workspace::Workspace;
 
 pub struct App {
     session: Session,
+    /// One line per pack or content that did not load, once the packs have loaded.
+    pack_problems: Option<Vec<String>>,
     workspace: Option<Workspace>,
     /// The carving of the file last opened, for opening what it embeds.
     carve: Option<carve::Carve>,
@@ -51,6 +54,7 @@ impl Default for App {
     fn default() -> Self {
         Self {
             session: Session::default(),
+            pack_problems: None,
             workspace: None,
             carve: None,
             error: None,
@@ -101,6 +105,22 @@ impl App {
         }
     }
 
+    /// Layers data packs over the bundled databases of every binary opened. They load in the background (inline
+    /// for a blocking app), and the About window lists them with their problems.
+    pub fn with_packs(self, packs: Arc<Packs>) -> Self {
+        if packs.configured() {
+            if self.blocking {
+                packs.loaded();
+            } else {
+                let loading = Arc::clone(&packs);
+                std::thread::spawn(move || {
+                    loading.loaded();
+                });
+            }
+        }
+        Self { session: Session::default().with_packs(packs), ..self }
+    }
+
     /// Opens the About window with the version, licence and third-party notices.
     pub fn show_about(&mut self) {
         self.about = true;
@@ -137,7 +157,7 @@ impl App {
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status").exact_size(22.0).show(ui, |ui| self.status_bar(ui));
         if self.about {
-            about::show(&ui.ctx().clone(), &mut self.about);
+            about::show(&ui.ctx().clone(), &mut self.about, &self.session.packs());
         }
         self.carve_window(&ui.ctx().clone());
         let Some(workspace) = &mut self.workspace else {
@@ -369,7 +389,24 @@ impl App {
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
+        let packs = self.session.packs();
+        if self.pack_problems.is_none() && packs.configured() && packs.is_loaded() {
+            self.pack_problems = Some(packs.problems());
+        }
         ui.horizontal_centered(|ui| {
+            if let Some(problems) = self.pack_problems.as_ref().filter(|problems| !problems.is_empty()) {
+                let plural = if problems.len() == 1 { "" } else { "s" };
+                let label = ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("{} data pack problem{plural}", problems.len())).color(theme::WARNING),
+                    )
+                    .sense(egui::Sense::click()),
+                );
+                if label.on_hover_text(problems.join("\n")).clicked() {
+                    self.about = true;
+                }
+                ui.separator();
+            }
             if let Some(error) = &self.error {
                 ui.label(RichText::new(error).color(theme::WARNING));
                 ui.separator();
