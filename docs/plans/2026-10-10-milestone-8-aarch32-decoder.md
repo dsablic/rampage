@@ -1,5 +1,14 @@
 # Milestone 8: AArch32 (A32 and T32) decoder from the Arm specification
 
+**Date:** 2026-10-10. **Status:** historical execution plan; native A32/T32 decoding is implemented and
+replaces Capstone for `Arch::Arm`.
+
+The numbered approach retains the original sequencing and acceptance goals. Its proposed `mrs/` layout and
+references to what ARM tracking does "today" describe planning-time assumptions, not the current source tree.
+The generator is now `tools/armgen`; A64 and AArch32 have their own runtime modules. See the
+[README](../../README.md) and [feature reference](../features.md) for current decoding support, regeneration
+commands and reported match rates.
+
 **Goal:** decode 32-bit ARM and Thumb natively from the same open AARCHMRS data the A64 decoder uses, replacing
 Capstone for `Arch::Arm`, with output verified against llvm-mc.
 
@@ -22,8 +31,8 @@ halfword in bits 31..16. Decode conditions call `InITBlock`, `UInt`, `SInt`, `Bi
    hand-written operand semantics for the ~60 operand kinds (registers, shifts, modified immediates,
    register lists, labels, VFP/Advanced SIMD registers, data types, alignment, coprocessor fields).
 4. **Flow and addresses natively:** branches, calls (BL/BLX), returns (BX LR, POP/LDM with PC, MOV PC, LR),
-   conditions, and the address tracking `track.rs` does for ARM today (literal pools, MOVW/MOVT, PC-relative
-   ADD, PLT entries).
+   conditions, and the address tracking `track.rs` did for ARM at planning time (literal pools, MOVW/MOVT,
+   PC-relative ADD, PLT entries).
 5. **Verification:** a golden file sampled per encoding and checked with llvm-mc 22 (`armv8a` and `thumbv8a`
    with VFP and Advanced SIMD), plus a per-encoding fuzz test for panics. Then switch `Arch::Arm` to the native
    decoder once its golden match rate and fixture analysis are at least as good as Capstone's.

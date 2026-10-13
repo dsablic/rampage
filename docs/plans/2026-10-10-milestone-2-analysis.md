@@ -1,6 +1,16 @@
 # Milestone 2: Function Discovery and Cross-References Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+**Date:** 2026-10-10. **Status:** historical execution plan; function discovery and cross-references are
+implemented and have evolved beyond this milestone.
+
+The task order, proposed API shapes and limited metadata coverage below are the original implementation plan,
+not the current analysis contract. See the [README](../../README.md) and [feature reference](../features.md)
+for supported behavior, and [accuracy benchmarks](../benchmarks.md) for measured comparisons and their limits.
+Flat `funcs` and `xrefs` examples remain accepted for compatibility; the [CLI hierarchy](cli-hierarchy.md)
+and [CLI reference](../cli-reference.md) give canonical routes and usage.
+
+> **Historical execution instruction (not active):** use `superpowers:executing-plans` to implement the
+> original plan task-by-task.
 
 **Goal:** Find functions in stripped binaries by recursive descent from metadata seeds, record code and data
 cross-references, and expose them through `rampage funcs` and a new `rampage xrefs`.
@@ -13,7 +23,8 @@ a formatting-free `decode` path, because analysis never needs instruction text.
 
 **Tech Stack:** rayon for parallelism; everything else from milestone 1.
 
-**Toolchain note:** on this machine run `export PATH=/opt/homebrew/opt/rustup/bin:$PATH` before cargo commands.
+**Toolchain note:** make the project's rustup-managed toolchain available on `PATH`; the original
+machine-specific PATH setup is omitted. Use the README's build instructions for current development.
 
 ---
 

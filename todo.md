@@ -166,8 +166,10 @@ on held-out, per-slice improvement with provenance and rollback.
   and recovers the index operand when available. Bounded non-fall-through switch regions structure explicitly;
   unsupported shapes retain the
   labelled fallback (`ddeed9c`, `a5a07e2`).
-- [ ] AArch64 switch forms still unresolved: the `b.ls`/`b.lo` inverse (bound on the taken path) and a `cmp` not
-  immediately before the conditional branch.
+- [x] AArch64 inverse `b.ls`/`b.lo` bounds are applied only on the taken edge; scheduled immediate comparisons
+  survive audited NZCV/index-preserving instructions and agreeing joins. Weaker/incomparable proofs retain the
+  original bound/guard; native SSA consumers locate the actual flag-consuming branch and bounded successor.
+- [ ] Additional bound/comparison forms (including `BC.cond`) and broader compiled scheduling acceptance.
 - [x] x86/x86-64 switch jump tables: absolute `jmp [reg*8+table]` (i386 `[reg*4+table]`), `mov`+`jmp`, relative
   `lea`/`movsxd`/`add`, MSVC image-base form; bounds from unsigned `cmp`+`ja`/`jae` or a low-bits `and` mask; the
   same join, read-only-table and 4096-entry rules. Register facts are forgotten where a branch joins the run
@@ -230,7 +232,7 @@ in UX/workflow ideas, not the multi-engine dispatch:
   never seeded as native code. API `dotnet_metadata` (paged, filterable), `rampage dotnet`, MCP tool, and
   `triage_report` routes managed assemblies to it. Validated on Microsoft.Bcl.HashCode 1.1.1 (MIT, committed with
   its licence). Signatures/generics, primitive attributes, P/Invoke and IL/exception decoding were added below;
-  remaining metadata includes property signatures, events, resources and richer attribute arguments.
+  remaining metadata includes events, resources and richer attribute arguments.
 - [x] Embedded-binary carving (`rampage carve`, MCP `carve`, `rampage_api::carve`): bounded scan for ELF, PE,
   Mach-O (thin and universal) and zip/gzip/xz/zstd/LZMA/squashfs/cpio/uImage/Android boot, with validated header
   facts, header-derived extents, validated or magic-only confidence and a 4096-candidate cap.
@@ -250,8 +252,11 @@ in UX/workflow ideas, not the multi-engine dispatch:
 - [x] CIL disassembler: `dotnet_il` (API, `rampage dotnet --il`, MCP in the dotnet group): all Partition III
   opcodes with resolved tokens and signatures, generic instantiations, escaped capped `ldstr`, branch/switch labels,
   LocalVarSig locals, small and fat exception clauses; bounded and fuzzed; hand-verified (no ildasm locally).
-- [ ] .NET: named/enum/array attribute arguments; property signatures; compare `dotnet_il` with ildasm/ILSpy once
-  one is available.
+- [x] .NET property signatures, including ref returns, generic/index parameters and bounded same-owner accessor
+  tokens, with PropertyPtr order preserved. Fixed/named primitive/string/type, single-dimensional arrays and
+  verified local integral enums decode within shared budgets; named failures retain valid fixed arguments.
+- [ ] .NET boxed/jagged values, external or assembly-qualified/escaped enums, enum constant names, events/resources,
+  and comparison of `dotnet_il` with ildasm/ILSpy once available. Metadata bindings do not establish accessor behavior.
 - [x] Agent batch annotation: `annotate_batch` (all-or-nothing, at most 1000 entries, one undo step, per-entry
   outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits. Name
   checks run under the cross-process log lock; batches are logged under a header line and replay all-or-nothing;
@@ -391,7 +396,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - `a2c9ec0`: word-sized STP/LDP and signed LDPSW pairs with full-width SP writeback.
 - `1556f22`: opt-in structured SSA pseudocode, parallel phi bindings and CFG-versus-region execution tests.
 
-### Latest increment — reviewed and committed
+### Earlier native-analysis increment — reviewed and committed
 
 - [x] Local operand-use evidence: integer widths, address/code operands, signed/unsigned operation roles.
   This is not source-type inference; shift counts do not inherit pointer roles. Traversal is bounded.
@@ -403,6 +408,15 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Full debug workspace run completes (~1m45s); the earlier timeout was the one-time vendored C++ build of
   the decompiler, now cached. Suite is green with the decompiler integrated.
 - [x] Final formatting/diff checks, line-length cleanup and commit of this increment.
+
+### Latest todo-wave validation
+
+- [x] Ordinary release workspace suite, including CLI hierarchy, UI snapshots and the unchanged evaluation gate.
+- [x] Focused debug API/CLI and core regressions, plus controlled LLDB query/capture tests and merge-history
+  secret-scanner regression. Ignored scale/performance gates are not implied by an ordinary suite pass.
+- [ ] Complete the standard full debug workspace rerun on this host: one generated test artifact stalls at
+  `_dyld_start` before the test harness. Its release counterpart passes and byte-identical copied artifacts
+  enumerate tests, but the standard-path launch remains a host validation blocker; no security settings changed.
 
 ### Validation and external blockers
 
@@ -441,7 +455,11 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Integer AAPCS64 caller clobbers/callee preservation; X8 result-buffer and SP call dependencies.
 - [x] Entry-SP-relative slots, conflicting-path unknowns, per-RET X0/X1 candidates and input-use argument evidence.
 - [x] Exact-width constant-store forwarding with source IDs and all-path agreement; conservative alias boundaries.
-- [ ] Recover nonconstant spills/reloads, partial-width overlaps and safe cyclic-memory fixpoints.
+- [x] Exact-width nonconstant entry-SP spill/reload aliases when all reaching paths agree. Original load
+  observations and recovered-load provenance remain explicit; recovered pointers cannot restart stack-memory
+  inference. Source clobbers, width/sign extension, aliases and budgets have behavioral regressions.
+- [ ] Partial-width overlap reconstruction, safe cyclic-memory fixpoints and broader alias proofs. Calls,
+  unknown aliases, conflicting paths and cyclic proofs remain unresolved.
 - [ ] Stack-frame boundaries, outgoing stack arguments, saved-register roles and escaped-stack alias handling.
 - [ ] Interprocedural signatures: argument count/types, void versus value, aggregate returns, varargs and FP/SIMD ABI.
 - [ ] Propagate type constraints and reconstruct pointer/struct/class layouts; local operand roles alone are not types.
@@ -487,7 +505,10 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Versioned x86-64/AArch64 matched-pair corpus for library ID, discovery, tool detection and DWARF-backed
   signature recovery. The committed 13-slice baseline gate passes at `6122f64`.
 - [ ] Broader compiler/optimization/ABI coverage with instruction/stack/semantic and time/memory metrics.
-- [ ] CI gates for accuracy regressions, unsupported coverage, false positives and analysis time/memory bounds.
+- [x] Pinned read-only CI workflow: format, warnings-denied Clippy, ordinary macOS workspace/UI tests and selected
+  opt-ins, the unchanged evaluation gate, an explicit Linux core subset, and redacted HEAD/full merge-history
+  secret scans that cannot silently inherit repository allowlists. Hosted execution is not yet verified locally.
+- [ ] Quantitative unsupported-coverage and per-analysis time/memory gates; CI job/step timeouts are not substitutes.
 - [x] Ghidra exports compare function starts, blocks, CFG edges and calls on 18 fixtures; reference output is
   not ground truth, and normalized chain agreement is not decompiler or semantic equivalence.
 - [ ] IDA exports/comparisons once an installation is available.
@@ -632,10 +653,21 @@ arbitrary debugger control and multi-module runtime resolution must not be infer
    static/runtime retests. Keep candidate counts, weak signature proposals and recovered code distinct.
    - [x] Single-image guided reports through `rampage report` and the shared workflow registry, with bounded
      findings, evidence/confidence, explicit truncation and next-step tool calls.
-   - [ ] Multi-architecture/multi-function retest orchestration and runtime comparison report composition.
+   - [x] `rampage binary analyze` composes selected workflows and supervised function decompilations across supported
+     declared architectures; slice failures, identities, warnings and output-limit outcomes are retained in
+     bounded valid JSON. Text output includes workflow findings and failed previews, not just query completion.
+   - [ ] Runtime comparison report composition and workflow-wide wall-clock/memory supervision. The current
+     deadline bounds each supervised decompilation request; workflows retain their existing work/output budgets.
+   - [x] Noun/verb command hierarchy with shared argument definitions and typed normalization; flat spellings
+     remain hidden compatibility commands. Nested pack ordering and cross-level image dependencies are validated.
 8. **Debugger integration:** plan an LLDB-first read-only bridge after static acceptance, with explicit session/
    stop identities, module/thread navigation, quiescent capture manifests and agent/UI queries. Attach, resume,
    breakpoint insertion and target writes require separately reviewed controls; no automatic host or plugin launch.
+   - [x] In-session `rampage-query` foundation for session/module/thread, fresh-register and raw-memory queries,
+     with bounded JSON, stale stop tokens, exact known permissions and honest endian/stop evidence. Controlled
+     owned-fixture acceptance covers Apple LLDB; no command passthrough, attach/resume/evaluation/writes/listener.
+   - [ ] CLI/MCP/UI transport integration, module-qualified navigation and broader SDK/platform acceptance.
+     Query observations remain non-atomic and external-plugin runtime acceptance remains blocked on an authorized host.
 
 Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,
 CLI/API/MCP regressions, malformed-input bounds, native/compiled fixtures, exporter tests, the opt-in live

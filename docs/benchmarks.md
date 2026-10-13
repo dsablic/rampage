@@ -3,11 +3,14 @@
 rampage's analysis is measured against Ghidra as a reference. Ghidra's output is a reference, not ground truth:
 a matching function start does not establish a matching CFG, types or decompilation, and either tool can be
 wrong. The point is to catch regressions and large gaps in rampage's own analysis.
+The results below are recorded measurements, not a fresh run of the current working tree. Implementation
+descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
 ## Function discovery vs Ghidra
 
 `tools/benchmark.sh` runs Ghidra headless to list function starts, builds a reference in rampage's format
-(matching the image SHA-256 and architecture), and runs `rampage compare` against it.
+(matching the image SHA-256 and architecture), and runs the accepted legacy `rampage compare` route against it.
+The canonical route is `rampage function compare`.
 
 ```
 tools/benchmark.sh target/debug/rampage "$(brew --prefix ghidra)/libexec" \
@@ -19,7 +22,11 @@ precision, including thunks excluded from the reference. Empty denominators are 
 zero. The reference records the installed Ghidra version. These policies must match before comparisons across
 versions or corpora are interpreted.
 
-### Results (Ghidra 12.1.4, fixtures in `tests/fixtures/bin`)
+### Earlier function-start measurements (Ghidra 12.1.4, fixtures in `tests/fixtures/bin`)
+
+This table originated in `a74b679` (2026-10-11); the ARM/Thumb counts were updated in `b4c5b3f` (2026-10-13).
+It is not one synchronized current-build run. Later discovery changes are reflected in the separately recorded
+CFG/call benchmark below; counts and misses from this earlier table must not be read as current limitations.
 
 | binary            | arch     | ghidra | rampage | matched | recall |
 |-------------------|----------|-------:|--------:|--------:|-------:|
@@ -33,10 +40,10 @@ versions or corpora are interpreted.
 | hello-ppc.elf     | powerpc  |     42 |      42 |      42 | 100.0% |
 | hello-riscv64.elf | riscv64  |      8 |       8 |       8 | 100.0% |
 
-On the larger PE sample rampage matches every Ghidra function. The 83–98% cases are small fixtures where a
-single miss is a large percentage; the known gap is a startup/stub entry (such as the ARM `0x10100` veneer) that
-Ghidra treats as a function and rampage does not yet discover. These are tracked for discovery work separately
-from the embedded decompiler's integration accuracy.
+The larger PE sample matched every Ghidra function in these measurements. The 83–98% cases are small fixtures
+where a single miss is a large percentage; startup/stub entries were among the gaps at that stage. The later
+CFG table records all six Ghidra starts matched for both hello-x64-dyn.elf and hello-arm64.elf. Discovery
+agreement remains separate from the embedded decompiler's integration accuracy.
 
 ## Basic blocks, CFG edges and call edges vs Ghidra
 
@@ -47,13 +54,14 @@ also has, and the analysis below shows disagreements where rampage is right and 
 
 ```
 tools/cfg-benchmark.py target/release/rampage "$(brew --prefix ghidra)/libexec" \
-  tests/fixtures/bin/hello-x64.elf tests/fixtures/bin/hello-x64.exe ... --out /tmp/cfg-report
+  tests/fixtures/bin/hello-x64.elf tests/fixtures/bin/hello-x64.exe --out cfg-report
 ```
 
 - Ghidra side: headless auto-analysis, then `tools/ghidra_cfg_export.java` writes each non-thunk function's
   `BasicBlockModel` blocks, successors that stay inside the function body, and call references.
 - rampage side: `rampage export-cfg FILE` (hidden subcommand) writes the same `function_graph` blocks and edges and
-  `xrefs --from` references the MCP tools return, without the 60k-character tool-output bound.
+  `rampage function xrefs FILE --from ADDRESS` references the MCP tools return, without the 60k-character
+  tool-output bound.
 - Normalisation: a rampage jump to another function's entry counts as a call, because Ghidra records tail calls as
   call references. Ghidra `COMPUTED_CALL*` targets (every computed-call reference kind) count only when rampage
   found the same call; the rest are listed in their own column. These targets come from memory reads, and some are
@@ -78,7 +86,7 @@ rows (hello-x64.exe, eval-ref-x86_64, musl-static-x86_64, hello-go-x64) were re-
 resolved, from the same cached exports; the other x86-64 rows did not change. The hello-x64.exe, ARM, Thumb, MIPS,
 PPC and RISC-V rows were re-measured the same way after the get-PC, import-thunk and undecodable-start fixes.
 Adding noreturn analysis changed only the hello-x64.exe and hello-go-x64 rows (re-measured the same way). Every
-row below was last re-measured at `7c03e5c`, from the same cached exports, after switch resolution started
+row below was re-measured at `7c03e5c`, from the same cached exports, after switch resolution started
 forgetting facts at joins ahead of the comparison and stopped accepting 16-bit `movsxd` and non-contiguous masks;
 no row changed. They were re-measured again at `41e1224`, from the same cached exports, after the noreturn review
 fixes (conditional calls and returns, resumable traps, incremental inference, case-sensitive names, more get-PC
@@ -87,27 +95,77 @@ counting as a code pointer: only the hello-arm.elf (10 to 8 rampage functions) a
 changed. Inferring noreturn through mutual tail calls then changed no row. Resolving switches whose facts are set up
 in an earlier block (measured against `77d6709` from the same cached exports) changed only the hello-x64.exe,
 eval-ref-x86_64 and musl-static-x86_64 rows; every other fixture's functions, blocks and switches are identical.
+The cross-block update was recorded in `b01f074` (2026-10-13). No new measurements are added here for later
+working-tree changes, including inverse/scheduled AArch64 guards or nonconstant native SSA spill recovery.
 
-| binary | funcs G/R/both | same blocks | block J | chain J | edge P / R | chain edge P / R | call P / R | callgraph P / R | G-only computed calls |
-|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
-| hello-x64.elf | 41/41/41 | 41/41 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
-| hello-x64-dyn.elf | 6/7/6 | 6/6 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
-| hello-x64.exe | 497/537/497 | 463/497 | 99.4% | 100.0% | 97.9% / 97.5% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
-| hello-x64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
-| hello-arm64.elf | 6/9/6 | 6/6 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
-| hello-arm64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
-| hello-arm.elf | 4/8/4 | 4/4 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
-| hello-thumb.elf | 44/43/43 | 36/43 | 96.3% | 97.9% | 95.9% / 94.9% | 97.8% / 99.6% | 100.0% / 100.0% | 100.0% / 100.0% | 2 |
-| hello-mips.elf | 3/3/3 | 2/3 | 80.0% | 100.0% | 50.0% / 33.3% | 100.0% / 100.0% | N/A / N/A | N/A / N/A | 2 |
-| hello-mipsel.elf | 3/3/3 | 2/3 | 80.0% | 100.0% | 50.0% / 33.3% | 100.0% / 100.0% | N/A / N/A | N/A / N/A | 2 |
-| hello-ppc.elf | 42/42/42 | 42/42 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
-| hello-ppc64le.elf | 7/7/4 | 4/4 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | N/A / N/A | N/A / N/A | 0 |
-| hello-riscv64.elf | 8/9/8 | 5/8 | 57.9% | 100.0% | 0.0% / 0.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
-| eval-ref-x86_64.elf | 176/176/176 | 172/176 | 99.9% | 100.0% | 99.0% / 99.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
-| eval-ref-aarch64.elf | 194/195/194 | 189/194 | 99.8% | 100.0% | 98.5% / 98.4% | 100.0% / 100.0% | 99.8% / 100.0% | 99.7% / 100.0% | 2 |
-| musl-static-x86_64.elf | 67/67/67 | 67/67 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
-| musl-static-aarch64.elf | 82/83/82 | 79/82 | 99.7% | 100.0% | 98.1% / 97.9% | 100.0% / 100.0% | 99.5% / 100.0% | 99.1% / 100.0% | 1 |
-| hello-go-x64.elf | 1358/1806/1357 | 1321/1357 | 98.6% | 98.8% | 99.3% / 96.9% | 100.0% / 97.7% | 99.7% / 97.9% | 99.5% / 98.5% | 57 |
+Function and block agreement:
+
+| binary | funcs G/R/both | same blocks | block J | chain J |
+|---|---|--:|--:|--:|
+| hello-x64.elf | 41/41/41 | 41/41 | 100.0% | 100.0% |
+| hello-x64-dyn.elf | 6/7/6 | 6/6 | 100.0% | 100.0% |
+| hello-x64.exe | 497/537/497 | 463/497 | 99.4% | 100.0% |
+| hello-x64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% |
+| hello-arm64.elf | 6/9/6 | 6/6 | 100.0% | 100.0% |
+| hello-arm64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% |
+| hello-arm.elf | 4/8/4 | 4/4 | 100.0% | 100.0% |
+| hello-thumb.elf | 44/43/43 | 36/43 | 96.3% | 97.9% |
+| hello-mips.elf | 3/3/3 | 2/3 | 80.0% | 100.0% |
+| hello-mipsel.elf | 3/3/3 | 2/3 | 80.0% | 100.0% |
+| hello-ppc.elf | 42/42/42 | 42/42 | 100.0% | 100.0% |
+| hello-ppc64le.elf | 7/7/4 | 4/4 | 100.0% | 100.0% |
+| hello-riscv64.elf | 8/9/8 | 5/8 | 57.9% | 100.0% |
+| eval-ref-x86_64.elf | 176/176/176 | 172/176 | 99.9% | 100.0% |
+| eval-ref-aarch64.elf | 194/195/194 | 189/194 | 99.8% | 100.0% |
+| musl-static-x86_64.elf | 67/67/67 | 67/67 | 100.0% | 100.0% |
+| musl-static-aarch64.elf | 82/83/82 | 79/82 | 99.7% | 100.0% |
+| hello-go-x64.elf | 1358/1806/1357 | 1321/1357 | 98.6% | 98.8% |
+
+CFG edge agreement:
+
+| binary | edge P / R | chain edge P / R |
+|---|--:|--:|
+| hello-x64.elf | 100.0% / 100.0% | 100.0% / 100.0% |
+| hello-x64-dyn.elf | 100.0% / 100.0% | 100.0% / 100.0% |
+| hello-x64.exe | 97.9% / 97.5% | 100.0% / 100.0% |
+| hello-x64.macho | N/A / N/A | N/A / N/A |
+| hello-arm64.elf | 100.0% / 100.0% | 100.0% / 100.0% |
+| hello-arm64.macho | N/A / N/A | N/A / N/A |
+| hello-arm.elf | N/A / N/A | N/A / N/A |
+| hello-thumb.elf | 95.9% / 94.9% | 97.8% / 99.6% |
+| hello-mips.elf | 50.0% / 33.3% | 100.0% / 100.0% |
+| hello-mipsel.elf | 50.0% / 33.3% | 100.0% / 100.0% |
+| hello-ppc.elf | 100.0% / 100.0% | 100.0% / 100.0% |
+| hello-ppc64le.elf | N/A / N/A | N/A / N/A |
+| hello-riscv64.elf | 0.0% / 0.0% | 100.0% / 100.0% |
+| eval-ref-x86_64.elf | 99.0% / 99.0% | 100.0% / 100.0% |
+| eval-ref-aarch64.elf | 98.5% / 98.4% | 100.0% / 100.0% |
+| musl-static-x86_64.elf | 100.0% / 100.0% | 100.0% / 100.0% |
+| musl-static-aarch64.elf | 98.1% / 97.9% | 100.0% / 100.0% |
+| hello-go-x64.elf | 99.3% / 96.9% | 100.0% / 97.7% |
+
+Call agreement:
+
+| binary | call P / R | callgraph P / R | G-only computed calls |
+|---|--:|--:|--:|
+| hello-x64.elf | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
+| hello-x64-dyn.elf | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
+| hello-x64.exe | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
+| hello-x64.macho | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
+| hello-arm64.elf | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
+| hello-arm64.macho | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
+| hello-arm.elf | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
+| hello-thumb.elf | 100.0% / 100.0% | 100.0% / 100.0% | 2 |
+| hello-mips.elf | N/A / N/A | N/A / N/A | 2 |
+| hello-mipsel.elf | N/A / N/A | N/A / N/A | 2 |
+| hello-ppc.elf | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
+| hello-ppc64le.elf | N/A / N/A | N/A / N/A | 0 |
+| hello-riscv64.elf | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
+| eval-ref-x86_64.elf | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
+| eval-ref-aarch64.elf | 99.8% / 100.0% | 99.7% / 100.0% | 2 |
+| musl-static-x86_64.elf | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
+| musl-static-aarch64.elf | 99.5% / 100.0% | 99.1% / 100.0% | 1 |
+| hello-go-x64.elf | 99.7% / 97.9% | 99.5% / 98.5% | 57 |
 
 `N/A` means an empty denominator: the shared functions are single-block, or have no calls. The MIPS, RISC-V and
 small Mach-O/ARM fixtures share only 2–8 functions, so their percentages move a lot with a single decision.
@@ -116,8 +174,8 @@ small Mach-O/ARM fixtures share only 2–8 functions, so their percentages move 
 
 These come from inspecting the per-function reports (`--out`) and the disassembly at the listed addresses.
 
-- **x86-64 jump tables (resolved).** rampage resolves an x86 switch under the same bounded-switch rule as
-  AArch64. The index needs an unsigned bound, from a `cmp` directly followed by `ja`/`jae` or from an
+- **x86-64 jump tables (resolved in the measured cases).** The index needs an unsigned bound,
+  from a `cmp` directly followed by `ja`/`jae` or from an
   `and r, mask`, covering the whole register (a 32-bit write or `mov e, e` zero-extends it). No branch may join
   the straight-line run that proves the bound, the zero extension and the table base, and the table must be
   read-only data. This covers absolute
@@ -139,19 +197,20 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   took Ghidra-only blocks from 44 to 34 in hello-x64.exe, 8 to 4 in eval-ref-x86_64 and 4 to 0 in
   musl-static-x86_64; chain Jaccard and chain edges now agree completely on all three, and no other fixture changed.
   hello-x64.exe discovery takes about 24 ms instead of 18 (the extra exploration), hello-go-x64 57 instead of 53. The
-  same dataflow carries AArch64 facts, and PIC i386 tables (`call __x86.get_pc_thunk.bx` or `call 1f; 1: pop ebx`,
-  `add ebx, GOT`, `mov eax, [ebx + eax*4 + off]; add eax, ebx; jmp eax`) resolve through it; no fixture has
-  either.
-- **AArch64 jump tables (resolved).** rampage resolves every AArch64 switch in these fixtures under its
-  bounded-switch rule. The index needs an unsigned bound from a `cmp` directly followed by `b.hi`/`b.hs`, no branch
-  may join between that comparison and the `br`, and the table must be read-only data. That covers the compact
+  same dataflow carries AArch64 facts. PIC i386 tables (`call __x86.get_pc_thunk.bx` or `call 1f; 1: pop ebx`,
+  `add ebx, GOT`, `mov eax, [ebx + eax*4 + off]; add eax, ebx; jmp eax`) are recognized too, but no benchmark
+  fixture exercises them; compiled acceptance remains separate work.
+- **AArch64 jump tables (resolved in the measured cases).** The recorded fixtures use an unsigned bound from
+  `cmp` followed by `b.hi`/`b.hs` and read-only table data. The straight-line recognizer forgets facts at joins;
+  cross-block recovery retains only facts agreed on by every incoming path and revalidates added case edges.
+  That covers the compact
   `adr; ldrb/ldrh; add x, x, w, lsl #2; br` tables (musl-static-aarch64 `0x10149dc`, eval-ref-aarch64 `0x10184a0`)
   and `ldrsw` with an unrelated `movk` scheduled in between (eval-ref-aarch64 `0x102386c`). Each case gets a
   `switch` edge from the dispatch block. The remaining Ghidra-only blocks (3 in musl-static-aarch64, 6 in
   eval-ref-aarch64) are all the `br` itself: Ghidra starts a block at its `switchD` label, so its case edges leave
   from there, while rampage's leave from the block that ends in the `br`. Chain Jaccard and chain edges, which
   merge that split, agree completely.
-- **Noreturn calls (resolved; Ghidra now adds edges).** rampage ends a block at a call to a function that never
+- **Noreturn calls (terminal in rampage; Ghidra retains some fall-throughs).** rampage ends a block at a call that never
   returns: one in its curated list (`exit`, `abort`, `__stack_chk_fail`, `_CxxThrowException`, Rust
   `core::panicking::*`, Go `runtime.throw`/`runtime.gopanic`/`runtime.panic*`, ...), called directly, through a
   PLT/IAT stub or through an import slot, or one inferred because every path through it ends in such a call or a
@@ -207,9 +266,13 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
 
 ### Analysis follow-ups found by this benchmark
 
-1. Extend AArch64 switch recovery to the bounds it does not yet prove: the inverse form, where `b.ls`/`b.lo` jumps
-   to the dispatch and the fall-through is the default, and a `cmp` scheduled away from its conditional branch.
-   None of these fixtures needs either.
+The working implementation now accepts inverse AArch64 `b.ls`/`b.lo` bounds on the taken edge and scheduled
+immediate comparisons across audited NZCV/index-preserving instructions and agreeing joins. Native SSA locates
+the actual flag-consuming branch to recover the default. These increments have bounded regressions, but the
+recorded benchmark fixtures do not exercise them, and no new measurements are claimed here.
+
+Remaining acceptance includes `BC.cond`/other comparison forms, broader compiled scheduling cases and a
+compiled PIC i386 table fixture. See [Deep ARM64 analysis](arm64-development.md) for the proof boundaries.
 
 ## Decompilation
 
@@ -231,3 +294,5 @@ The versioned integration corpus runs with
 `python3 tools/decompiler_corpus.py target/debug/rampage --manifest tests/data/decompiler-corpus.json --isolated`.
 Its four controlled cases passed 15 selected assertions (x64/ARM64 greeting calls, BE8 instructions and Windows
 x64 arguments). That pass is bounded integration coverage, not a general decompilation accuracy percentage.
+This is the previously recorded integration result, not a rerun during this documentation review. See the
+[corpus runner reference](decompiler-corpus.md) for identity scope, assertion denominators and resource limits.

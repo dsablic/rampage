@@ -7,9 +7,10 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
-## Protocol version 2
+## Protocol version 3
 
-Protocol 2 adds structured result schemas; version-1 executables are rejected rather than silently mixed.
+Protocol 3 adds explicit `no_return` setup operations. Structured result schemas came with protocol 2;
+incompatible request/response versions are rejected rather than silently mixed.
 
 Requests own all data. Addresses and mapping sizes are JSON integers; `hex_bytes` contains consecutive hexadecimal
 pairs with no prefix. Mapping permissions and zero-fill size are preserved. `options.platform` is `default`,
@@ -17,7 +18,7 @@ pairs with no prefix. Mapping permissions and zero-fill size are preserved. `opt
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "arch": "x86_64",
   "big_endian": false,
   "options": { "platform": "default", "compiler": null },
@@ -46,16 +47,19 @@ The worker installs initial `code_modes`, then replays `operations` in their sup
 | `prototype` | `address`, `indirect`, `declaration` |
 | `runtime_prototype` | `address`, `indirect`, canonical runtime `name`, optional `optional` boolean |
 | `mode` | `modes`: objects with `address` and `thumb` |
+| `no_return` | `address`, `indirect`: registered function or import-slot function marked non-returning |
 
 `runtime_prototype` resolves the declaration using the worker's compiler data model. An unavailable prototype or
 failed setup operation is a structured error identifying the operation index. `optional: true` skips unknown
 runtime identities while preserving other setup errors. Unknown fields and versions are
 rejected.
 
-Responses are `{ "version": 2, "status": "ok", "output": ... }` or
-`{ "version": 2, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
+Responses are `{ "version": 3, "status": "ok", "output": ... }` or
+`{ "version": 3, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
 `data_organization` (`pointer`, `int`, `long` byte widths), and optional semantic `tokens` with `text`, `kind`, and
 optional numeric `address`.
+The CLI uses `rampage function decompile ... --isolated`; flat `decompile` remains accepted. Batch
+`rampage binary analyze` also requires supervision for explicit decompilations and workflow previews.
 
 `validate_only: true` checks mappings, modes and ordered setup operations without requiring any function to
 decompile. It returns empty text; typed annotation transactions use this to validate entryless images.

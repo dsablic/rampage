@@ -1,5 +1,13 @@
 # Milestone 4: AArch64 decoder from the Arm specification
 
+**Date:** 2026-10-10. **Status:** historical implementation and verification record; native AArch64 decoding
+is implemented.
+
+The verification counts, match rates and timing below are the original measurements, not a fresh run or a
+general accuracy guarantee. The follow-ups are the milestone's original backlog, not a current completion
+checklist. See the [README](../../README.md) and [feature reference](../features.md) for supported behavior and
+[ARM64 development](../arm64-development.md) for the separate native analysis track.
+
 **Goal:** disassemble and analyze AArch64 binaries with a decoder generated from Arm's specification rather than
 written by hand or borrowed from another disassembler.
 
@@ -12,6 +20,9 @@ decode and execute pseudocode and the operand descriptions.
 
 ## Approach
 
+The generator was subsequently generalized from `tools/a64gen` to `tools/armgen`; the old name below records
+the milestone's original implementation. The feature reference documents the current regeneration command.
+
 - `tools/a64gen` reads the JSON and writes `crates/rampage-arch/src/a64/spec.rs`:
   - every encoding's fixed bits and its decode condition, compiled from the specification's condition AST
     (feature checks are treated as implemented);
@@ -19,7 +30,7 @@ decode and execute pseudocode and the operand descriptions.
   - each instruction's and alias's assembly syntax, flattened from the grammar into tokens (text, operands,
     optional groups, alternatives), with each operand's source fields and legal spellings;
   - system register and system operation names keyed by encoding.
-- What the open-source data leaves out is written by hand in `rampage-arch/src/a64`:
+- What the open-source data leaves out is written by hand in `crates/rampage-arch/src/a64`:
   - operand semantics (`operands.rs`): how field values become registers, immediates, labels and arrangements.
     Where the grammar lists an operand's legal spellings, the value is mapped to them by enumerating which field
     values still decode to the same encoding, so reserved values are skipped using the specification itself;

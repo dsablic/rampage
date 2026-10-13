@@ -16,8 +16,8 @@ Select ranges explicitly. The exporter reads those ranges, refuses partial reads
 and limits captured bytes to 64 MiB. Requested permissions must exactly match every underlying readable mapped
 range reported by LLDB; writable memory cannot be labelled immutable and non-executable memory cannot be
 labelled code. Initial and publication-time mapping inspections share a 16,384-query budget.
-Captures are published atomically without
-overwriting existing files, and failed writes leave no partial destination. The stop identity includes
+Captures are published atomically without overwriting existing files; failed writes leave no partial destination.
+The stop identity includes
 expression-evaluation stops and is checked during capture and before publication.
 It does not resume, launch or attach. Use `--thumb` for Thumb code.
 Preserve the actual runtime addresses: they already include ASLR.
@@ -47,11 +47,11 @@ rampage-snapshot capture.json --module-region 01234567-89ab-cdef-0123-456789abcd
 `--module-region UUID:IMAGE_ADDRESS:SIZE:PERMS` and `--module-seed UUID:IMAGE_ADDRESS` may be repeated and mixed
 with explicit runtime ranges/seeds. Module selection requires an unambiguous compact or standard dashed UUID,
 matching architecture/byte order/address width, checked header slide and coverage by loaded section leaves.
-Every intersecting leaf
-must agree with that slide; mapping holes and contradictory section mappings are rejected. Enumeration is
+Every intersecting leaf must agree with that slide; mapping holes and contradictory section mappings are rejected.
+Enumeration is
 limited to 4,096 modules. Initial and publication-time section traversal share a 16,384-item budget across
-selected modules. Opaque identifiers
-remain available as provenance for explicit runtime captures but cannot be used as UUID selectors. No module
+selected modules. Opaque identifiers remain available as provenance for explicit runtime captures but cannot
+be used as UUID selectors. No module
 file is loaded or debugger expression evaluated, and no unselected section bytes are captured.
 
 Bytes come from LLDB `ReadMemory`, which normalizes inserted software-breakpoint traps. Provenance records
@@ -60,10 +60,10 @@ that normalization; do not interpret a capture as a byte-for-byte view of breakp
 ## Open in rampage
 
 ```sh
-rampage info capture.json
-rampage disasm capture.json --at 0x1000 --count 20
-rampage funcs capture.json
-rampage audit capture.json
+rampage binary inspect capture.json
+rampage function disassemble capture.json --at 0x1000 --count 20
+rampage function list capture.json
+rampage binary audit capture.json
 cargo run -p rampage-ui -- capture.json
 ```
 
@@ -74,7 +74,9 @@ Stores and calls invalidate subsequent captured-memory inference conservatively;
 are not simulated.
 Missing memory remains unavailable instead of being fabricated as zeros.
 
-`audit` samples bounded code-region prefixes without running whole-program discovery. Add `--include-discovery`
+The flat CLI spellings remain accepted for compatibility; MCP tool names are unchanged.
+
+`binary audit` samples bounded code-region prefixes without running whole-program discovery. Add `--include-discovery`
 to correlate candidate entries with those exact samples and use branch-learned ARM/Thumb modes. The MCP
 `analysis_diagnostics` tool accepts `include_discovery`; otherwise it reuses existing cached discovery when
 available. Tiny-candidate counts and region signals are evidence, not verified function counts. Unsampled
@@ -105,8 +107,8 @@ Snapshots may include module UUIDs/paths, original/runtime header bases and sele
 These are provenance, not inputs to static register inference. A module slide is the runtime base minus its
 original image base; it must be applied explicitly when correlating addresses. Relocations, types and execution
 history are not captured. Authenticated pointers and unknown indirect targets are not guessed.
-A capture is not a decompiler
-or a complete debugger integration. `audit` reports evidence and limitations, not proof of encryption.
+A capture is not a decompiler or a complete debugger integration. The separate [LLDB query bridge](lldb-query.md)
+offers read-only in-session queries; neither interface proves atomic capture or encryption.
 
 Optional `target` metadata contains `platform` (`default`, `darwin` or `windows`) and an optional compiler
 specification ID. The LLDB exporter records the platform from its target triple; `--compiler` records an
@@ -124,7 +126,7 @@ Names, paths, descriptive provenance and register metadata are excluded; this is
 identity, not a whole-process-state fingerprint, execution proof or authenticity guarantee. Ordinary raw
 image/file hashes remain available and must not substitute for mapping identity in snapshot comparisons.
 
-`rampage summarize capture.json --at 0x1000 --json` includes partial IR alongside the graph and references.
+`rampage function summarize capture.json --at 0x1000 --json` includes partial IR alongside graph/reference evidence.
 `complete` applies to each lifted instruction, not the function. Unimplemented instruction semantics produce
 barriers. ARM64 integer coverage includes immediate/shifted ADD/SUB and NZCV, logical operations, wide moves,
 variable shifts, multiply/divide, ADR/ADRP, common scalar/pair memory operations and branch conditions. It also
@@ -147,8 +149,7 @@ effect: when `condition` holds on the incoming flags, the flags become those of 
 The `ssa` field in AArch64 summaries gives each register and memory definition a unique ID. Block-entry phi
 nodes name incoming definitions by predecessor block, including an external input edge when the entry has
 a backedge. Stores create memory versions; loads retain references even when dataflow reports a forwarded constant.
-Unknown
-instructions invalidate register and memory knowledge. A 32-bit result is represented as `low32`, zero-extended
+Unknown instructions invalidate register and memory knowledge. A 32-bit result is represented as `low32`, zero-extended
 into its architectural register. Scalar signed loads use explicit width-extension expressions.
 Unreachable blocks contribute no phi inputs.
 Loads/stores retain their access widths; conditional controls retain polarity and the tested bit where applicable.
@@ -157,11 +158,15 @@ SSA is omitted with a limitation message for functions exceeding 512 blocks, 20,
 edges, or budgets of 20,000 generated definitions and 80,000 input value nodes. Budgets are checked before
 SSA allocation. It represents data flow over partial IR, not source-level variable recovery or a decompiler.
 
-`rampage pseudocode capture.json --at 0x1000` prints an explicitly partial SSA-style view, retaining labels,
+`rampage function pseudocode capture.json --at 0x1000` prints a partial SSA-style view, retaining labels,
 phi nodes, memory widths and unknowns. It does not claim structured C source. Function summaries also include
 bounded constant and entry-SP-relative stack-slot evidence; conflicting predecessor values stay unknown.
 Exact-width constant spill/reloads can be forwarded with source-store evidence. This does not infer values
 from captured memory: unknown aliases, partial overlaps, calls and cyclic memory stop forwarding.
+Exact-width nonconstant entry-SP spills can also alias a stored SSA definition when all reaching paths agree.
+Original load observations and `recovered_loads` provenance remain explicit, preserving widths and extensions;
+recovered pointers do not restart stack-address memory inference. Partial-width reconstruction, cyclic
+fixpoints and general alias proofs remain unsupported.
 
 Optional `modules` entries have `name`, `path`, `uuid`, `image_base` and `runtime_base`. Optional `registers`
 entries have hexadecimal `thread_id`/`value` and a register `name`. Both lists are limited to 4,096 entries;
@@ -170,7 +175,7 @@ stopped target without evaluating expressions or executing target code. The opt-
 test verifies live export and original-image correlation with ASLR enabled; the earlier launch stall was avoided
 by leaving ASLR enabled rather than requesting its disablement.
 
-`rampage correlate capture.json --original module.dylib --module <uuid> --at 0x1010` checks the recorded UUID
+`rampage runtime module correlate capture.json --original module.dylib --module <uuid> --at 0x1010` checks the UUID
 against the explicitly supplied Mach-O image and translates the runtime address using the recorded header
 slide. It never opens paths stored inside a snapshot. UUID correlation does not assert that runtime bytes
 equal the original file and does not reconstruct relocations or authenticated pointers.
@@ -178,7 +183,7 @@ equal the original file and does not reconstruct relocations or authenticated po
 ## Compare selected runtime bytes with an original image
 
 ```sh
-rampage compare-runtime capture.json --original module.dylib \
+rampage runtime bytes compare capture.json --original module.dylib \
   --module 01234567-89ab-cdef-0123-456789abcdef --range 0x1010:0x100 --json
 ```
 
@@ -204,10 +209,10 @@ for this tool, rather than reusing an annotation-bearing session. No whole-progr
 ## Observe a captured pointer slot
 
 ```sh
-rampage observe-pointer capture.json --at 0x3000 --json
+rampage runtime pointer observe capture.json --at 0x3000 --json
 ```
 
-`observe-pointer` and the API/MCP `observe_pointer` read one complete captured pointer word using the snapshot's
+`runtime pointer observe` and API/MCP `observe_pointer` read a complete captured pointer word using the snapshot's
 pointer width and data byte order. JSON/API/MCP output includes raw value, slot permissions, capture identity and an
 optional code-candidate address. Writable slots may be observed but are never treated as proven future loads
 or added as call/discovery edges. Code candidates require readable executable backing for the minimum aligned
@@ -218,7 +223,7 @@ Missing, unreadable or truncated slot words remain unavailable. CLI observations
 ## Link an indirect branch to a captured slot
 
 ```sh
-rampage observe-indirect-branch capture.json --start 0x1000 --at 0x1008 --json
+rampage runtime branch inspect capture.json --start 0x1000 --at 0x1008 --json
 ```
 
 The API/MCP `observe_indirect_branch` accepts explicit hexadecimal `start` and `at` addresses for a
@@ -239,7 +244,7 @@ is not inferred from header proximity.
 ## Compare pointer observations across captures
 
 ```sh
-rampage compare-pointers before.json --other after.json --at 0x3000 --other-at 0x7000 --json
+rampage runtime pointer compare before.json --other after.json --at 0x3000 --other-at 0x7000 --json
 ```
 
 API/MCP `compare_pointer_observations` accepts an explicit second capture `other` and hexadecimal `at`/`other_at`

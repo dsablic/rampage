@@ -13,6 +13,13 @@ successful outputs separately. Older outputs without these diagnostics are `unav
 `no_reported_issues` is not a semantic-equivalence or correctness claim. Fixture assertions can intentionally
 pass for a warning-bearing result; the assertion score does not override the reported recovery status.
 
+| Recovery status | Meaning |
+| --- | --- |
+| `incomplete` | The engine reports bad data or unimplemented semantics. |
+| `warnings` | No incomplete flag, but warnings, unresolved flow or partial jump tables are reported. |
+| `no_reported_issues` | Diagnostics are present and none of those issues are reported; correctness is not proved. |
+| `unavailable` | The result producer did not supply diagnostics. |
+
 ```sh
 python3 tools/decompiler_corpus.py target/debug/rampage \
   --case tests/fixtures/bin/hello-x64-dyn.elf main \
@@ -40,6 +47,8 @@ Every case launches `RAMPAGE --json [--arch ARCH] decompile IMAGE --at FUNCTION`
 with optional compiler and isolated flags. Cases run sequentially in fresh
 processes, even without `--isolated`; no warm project/decompiler state is shared.
 `--isolated` adds native worker isolation inside each CLI invocation.
+The runner uses the accepted legacy `decompile` route; its canonical interactive
+equivalent is `RAMPAGE --json [--arch ARCH] function decompile IMAGE --at FUNCTION`.
 
 Exit status is `0` when every case completes successfully and all declared
 assertions pass, `1` for case failures, assertion failures or reference identity
@@ -112,11 +121,11 @@ opaque provenance label; the runner neither reads it nor hashes it.
 | `expected_contains` | List of literal substrings that must occur in rendered C. |
 | `expected_not_contains` | List of literal substrings that must not occur in rendered C. |
 | `expected_params` | Nonnegative count, or ordered list of objects with `name` and/or `type`. List length must match. |
-| `expected_signature` | Nonempty object: `return_type`, `calling_convention`, and/or `variadic` (described below). |
+| `expected_signature` | Nonempty object with return type, convention and/or variadic fields (below). |
 | `expected_calls` | Object list: `name`, `target`, and/or `indirect`; each must match a recovered call. |
-| `expected_strings` | List of literal rendered substrings; include quotes/escapes when asserting a C literal. |
-| `expected_switch_targets` | Unsigned address list, integers or `0x...` strings; each must occur in a jump table. |
-| `expected_switch_case_values` | Unsigned raw integer bit patterns; each must occur in recovered table labels. |
+| `expected_strings` | Literal rendered substrings, including quotes/escapes for C literals. |
+| `expected_switch_targets` | Unsigned addresses (integer or `0x...`); each must occur in a jump table. |
+| `expected_switch_case_values` | Unsigned raw bit patterns; each must occur in recovered table labels. |
 
 Parameter `type` is compared with the engine's `data_type.name`. Addresses are
 compared numerically. Other comparisons are exact literal comparisons. Signature
@@ -198,7 +207,8 @@ it is null when no validated result is available. The returned `address` is
 required, unsigned and parseable.
 Successful JSON results additionally record:
 
-- Actual language/compiler ID and complete recovered signature/parameters.
+- Actual language/compiler ID and the exported recovered signature/parameters;
+  these are engine evidence, not proof that the original source signature was recovered.
 - Recovered calls and their count; `typed_call_count: null` because the CLI's
   recovered calls do not export prototypes. A `type` token is not proof of a typed call.
 - Token totals by kind, recovered block count, jump-table/target counts and table metadata.
@@ -263,13 +273,14 @@ separately report total, evaluated, passed, failed and unavailable counts:
   denominator is explicitly reported. Failed cases must not appear warning-free.
 
 These are assertion coverage/pass measures, **not precision or recall**. Function
-discovery precision/recall remain in the existing `rampage compare` and
+discovery precision/recall remain in `rampage function compare` and
 `tools/benchmark.sh` workflow. A passing substring/signature/call/switch assertion
 does not establish semantic equivalence, full decompiler accuracy or matched Ghidra parity.
 
 ## Dataset provenance and coverage fields
 
-The runner ships no frozen accuracy corpus or score. Each manifest should record
+The supplied integration manifest contains selected controlled assertions, not a
+frozen general-accuracy corpus or score. Each manifest should record
 dataset source/revision/license, source language, compiler version, optimization
 and linker flags, stripping/debug-info policy, target triple, ABI/platform,
 architecture/endianness and actual analysis settings. Per-case metadata should

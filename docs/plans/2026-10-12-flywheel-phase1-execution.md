@@ -1,7 +1,23 @@
 # Flywheel Phase 1 — eval harness + disagreement set (execution plan)
 
-> **For Claude:** execute task-by-task; each task is TDD (write the failing test, make it pass, commit). This is
-> the executable breakdown of Phase 1 of `2026-10-12-heuristic-self-improvement-flywheel.md`.
+**Date:** 2026-10-12. **Status:** historical execution plan; the Phase 1 evaluation substrate is implemented
+and has expanded beyond the original library-ID scope.
+
+The tasks retain their original order, proposed artifact names, formulas and acceptance baselines. They are
+not the current CLI/schema reference: `rampage-eval` now has `truth`, `type-truth`, `strip` and `run` commands,
+with family-specific gates and library-ID, discovery, tool-identification and type-recovery slices. Generated
+manifests are measurement inputs; committed manifests supply the regression floors. This does not implement
+an AI proposer, automatic held-out candidate comparison or promotion.
+
+See the [README](../../README.md) and [measurement reference](../features.md#measurements-and-development)
+for current behavior and references, and the
+[flywheel strategy](2026-10-12-heuristic-self-improvement-flywheel.md) for the intended later phases.
+Rampage command spellings in the plan are historical compatibility forms; the
+[CLI hierarchy](cli-hierarchy.md) maps canonical routes with usage in the [CLI reference](../cli-reference.md).
+`rampage-eval` is a separate executable.
+
+> **Historical execution instruction (not active):** execute the original tasks test-first, then implement
+> and commit each task. This is the original breakdown of Phase 1 of the linked flywheel strategy.
 
 **Goal:** A reproducible, offline, self-supervised evaluation of the *library-identification* heuristic family
 that emits per-slice precision/recall and a machine-readable **disagreement set** -- the "measure" step the whole
@@ -87,6 +103,10 @@ nonzero if `wrong > 0` or `spurious > 0` (the hard-failure conditions).
 ---
 
 ## Done = the disagreement set is real
+
+This section records the original acceptance target. Regression floors and per-slice failures are implemented;
+the later held-out improvement and promotion language is a design requirement, not a guarantee supplied by
+the current baseline gate alone.
 
 At the end of Phase 1 there is: a reproducible matched-pair corpus, a `Report` with precision/recall per arch
 slice, a machine-readable disagreement set, committed baselines that fail CI on `wrong`/`spurious`, and a

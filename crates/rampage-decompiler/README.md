@@ -20,8 +20,8 @@ upstream behavior; `modelrules.hh` and `modelrules.cc` add optional aligned stac
 Other vendored sources are unchanged.
 
 Ghidra is Copyright the National Security Agency, licensed under the Apache License 2.0; `vendor/ghidra/LICENSE`
-is that license. rampage's own code is under the workspace's MIT/Apache-2.0 terms, but this crate links the
-vendored Apache-2.0 sources.
+is that license. rampage's own code uses the workspace's Apache-2.0 license. The root `NOTICE` retains attribution
+for vendored components; this crate links the vendored Apache-2.0 sources.
 
 ## Memory mappings
 
@@ -49,7 +49,7 @@ whole-program point-count cutoff. The million-point scale gate runs with
 The project layer selects Windows specifications for PE, Apple specifications for little-endian ARM64 Mach-O,
 macOS specifications for big-endian PowerPC Mach-O, and existing defaults otherwise. `DecompilerOptions` exposes
 platform/compiler overrides; `Project::set_decompiler_options(None)` restores format-based selection. The CLI accepts
-`decompile --compiler windows` (or another compiler ID advertised by the selected processor language).
+`rampage function decompile IMAGE --at FUNCTION --compiler windows` (or another advertised compiler ID).
 Unknown IDs are errors, not silent fallback to the first compiler in a language definition. Results report the
 exact selected `language_id`.
 
@@ -61,9 +61,12 @@ that still contain the original missing/incorrect widths.
 Pointer, `int` and `long` widths come from the selected compiler specification. `Decompiler::c_prototype`
 uses those widths for `size_t`, `ssize_t`, `long` and `unsigned long`, and applies `__cdecl` to x86 Windows CRT
 functions rather than the specification's default `__stdcall`. The `clangwindows` alias gets identical runtime
-handling. Automatic declarations omit library-dependent
-`off_t`, `time_t`, `clock_t` and `pthread_t`; a compiler spec alone does not establish those typedefs. The legacy
-free `c_prototype` helper remains LP64-only and is not used by the project integration.
+handling. Selected POSIX I/O/time declarations also substitute `off_t`, `time_t`, `mode_t` and `pid_t` widths:
+Darwin uses 64-bit `off_t` and 16-bit `mode_t`; otherwise they use `long` and 32 bits respectively. `time_t` uses
+`long` width and `pid_t` uses 32 bits. These are explicit prototype policies, not universal libc typedef inference:
+32-bit Linux unsuffixed I/O uses 32-bit offsets, and 32-bit Darwin uses 32-bit time. Time64/large-file variants
+and other library-specific ABI choices need separate evidence. `clock_t` and `pthread_t` are not guessed.
+The legacy free `c_prototype` helper remains LP64-only and is not used by the project integration.
 
 These defaults do not establish full ABI parity. Darwin ARM64 selects `apple`, with byte-packed fixed stack
 arguments, consecutive integer register allocation, reserved x18 preservation and explicit unnamed-argument
@@ -87,6 +90,11 @@ Runtime prototypes bind by target address, separately from displayed names. Impo
 external function bindings; their contents are not fabricated into resolved pointers. Duplicate low-level slot
 registration fails explicitly. Project name changes, undo/redo and refreshed external edits rebuild the cached
 engine; anonymous functions named after a runtime function do not gain that runtime signature.
+Discovery's listed and inferred noreturn callees are marked by address in both native and worker engines,
+including registered import slots. Calls marked `listed` or `inferred` in function graphs have no fall-through;
+native SSA treats them as terminal. Conditional calls retain fall-through, resumable traps are not terminal
+evidence, and mutual tail-call inference requires a path to an evidenced noreturn call or non-resumable trap.
+An unevidenced tail-call cycle remains unknown, not a newly inferred noreturn function.
 
 `set_signature` persists one address-bound declaration; `set_types` persists typedef/struct/union/enum declarations.
 `set_global` persists named object declarations on fully mapped, non-executable data ranges. Storage classes and
@@ -94,11 +102,11 @@ qualifiers are rejected rather than silently discarded; function-pointer objects
 are available through API/MCP and participate in shared-log locking, validation and undo/redo. Type removal
 is rejected while a signature depends on it. Declarations use sized types, contain no comments/preprocessor
 directives, and have decimal array bounds in 1..65536 without leading zeros. Array layouts are at most one MiB;
-array parameters require explicit pointers. `debug-types` previews bounded embedded-DWARF scalar/pointer
-function signatures; `--apply` merges them without replacing analyst signatures. Aggregate layouts and external
-debug files are explicitly skipped with diagnostics. `class_evidence` reports bounded named Itanium vtable/RTTI
-candidates and validated code slots without inferring object layouts or applying class types. Automatic C++
-class-layout recovery is not provided.
+array parameters require explicit pointers. `rampage type import-debug IMAGE` previews bounded embedded-DWARF
+scalar/pointer function signatures; `--apply` merges them without replacing analyst signatures. Aggregate layouts
+and external debug files are explicitly skipped with diagnostics. `class_evidence` reports bounded named Itanium
+vtable/RTTI candidates and validated code slots without inferring object layouts or applying class types.
+Automatic C++ class-layout recovery is not provided.
 
 ## Structured output and limits
 
@@ -120,14 +128,18 @@ The CLI and pseudocode panel surface issues; corpus reports keep output success 
 separate. Header warnings have no instruction address; body warnings carry their engine instruction address.
 
 Text output is bounded to four MiB and tokens to 262,144; the engine also retains its instruction-flow bound.
-`rampage decompile --isolated` uses a supervised sibling `rampage-worker`; `RAMPAGE_WORKER` explicitly selects
-the executable for sessions (including UI/MCP). `Project::set_decompiler_worker` enables it programmatically.
+`rampage function decompile IMAGE --at FUNCTION --isolated` uses a supervised sibling `rampage-worker`;
+`RAMPAGE_WORKER` explicitly selects the executable for sessions (including UI/MCP).
+`Project::set_decompiler_worker` enables it programmatically.
 Sessions select a sibling worker automatically when installed beside the application; `tools/install.sh`
 installs the worker and CLI together, optionally with the UI. Direct `Project` construction remains explicitly
 opt-in; `Session::open` also selects a sibling worker when present.
+Worker protocol version 3 carries ordered symbol/type/prototype/global/mode and `no_return` operations;
+mismatched request or response versions are rejected. Install the CLI and worker together rather than mixing builds.
 The protocol bounds input/output, drains pipes concurrently, cancels/times out and reaps failed children without
-native fallback. Defaults are 30 seconds and one GiB memory. Linux uses hard AS/DATA limits; macOS samples RSS
-and can overshoot between samples. Supervision is supported on 64-bit Linux/macOS and is not an OS sandbox.
+native fallback. Hard wire limits are 128 MiB requests, 16 MiB stdout and 64 KiB stderr. Defaults are 30 seconds
+and one GiB memory. Linux uses hard AS/DATA limits; macOS samples RSS and can overshoot between samples.
+Supervision is supported on 64-bit Linux/macOS and is not an OS sandbox.
 All native C ABI operations contain C++ exceptions; unexpected partial native failures poison the handle and
 retain unsafe state until process exit rather than risking cleanup through corrupt ownership. In-process mode
 must still be limited to trusted inputs: exception containment does not prevent native memory-safety bugs.

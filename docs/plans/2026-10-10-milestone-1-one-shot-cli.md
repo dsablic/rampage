@@ -1,6 +1,16 @@
 # Milestone 1: One-Shot CLI Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+**Date:** 2026-10-10. **Status:** historical execution plan; the one-shot CLI milestone is implemented.
+
+The task order, proposed APIs and initial dependency versions below describe the original milestone, not a
+recipe for rebuilding the current workspace. The ARM64 unsupported-architecture expectation and the proposed
+dual-license workspace metadata are superseded; see the [feature reference](../features.md) for decoding
+support and the [README](../../README.md) for licensing and build instructions. Flat command examples remain
+accepted for compatibility; use the [CLI hierarchy](cli-hierarchy.md) and
+[CLI reference](../cli-reference.md) for canonical routes and usage.
+
+> **Historical execution instruction (not active):** use `superpowers:executing-plans` to implement the
+> original plan task-by-task. The test-first and commit steps below are retained as the original workflow.
 
 **Goal:** A `rampage` binary with `info`, `disasm`, `strings` and `funcs` subcommands that work on PE, ELF and
 Mach-O x86/x64 binaries, with text and JSON output.
@@ -10,10 +20,11 @@ file, parses it once with `object`, and exposes an owned, serializable `Binary` 
 `rampage-arch` wraps `iced-x86` behind a small decoder API that also reports control flow (used by milestone 2).
 `rampage-analysis` holds string scanning and symbol-derived functions. `rampage-cli` is a thin clap front end.
 
-**Tech Stack:** Rust 1.99 (edition 2024), object 0.40, memmap2 0.9, iced-x86 1.21, clap 4, serde/serde_json,
-thiserror 2, anyhow (CLI only), assert_cmd + insta for CLI tests.
+**Original planned tech stack:** Rust 1.99 (edition 2024), object 0.40, memmap2 0.9, iced-x86 1.21, clap 4,
+serde/serde_json, thiserror 2, anyhow (CLI only), assert_cmd + insta for CLI tests.
 
-**Toolchain note:** on this machine run `export PATH=/opt/homebrew/opt/rustup/bin:$PATH` before cargo commands.
+**Toolchain note:** make the project's rustup-managed toolchain available on `PATH`; the original
+machine-specific PATH setup is omitted. Use the README's build instructions for current development.
 
 ---
 

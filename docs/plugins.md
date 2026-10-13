@@ -12,8 +12,8 @@ A guided workflow implements `rampage_api::workflows::Workflow` and is listed in
 
 | Method | Used for |
 | --- | --- |
-| `name` | The tool name (`snake_case`); `rampage report` takes it in kebab-case |
-| `summary` | The one-line help of `rampage report <WORKFLOW>` |
+| `name` | The tool name (`snake_case`); `rampage workflow run` takes it in kebab-case |
+| `summary` | The workflow's one-line CLI help |
 | `description`, `group`, `input_schema` | The tool as MCP and the assistant list it |
 | `options` | Reading the tool's JSON arguments into `WorkflowOptions` |
 | `compares` | Whether it needs a second binary (`--other` / `other`) |
@@ -23,7 +23,10 @@ From that one entry:
 
 - `rampage_api::tools::tools()` serves it as a tool (its report shrunk to fit one result), so MCP and the
   assistant pick it up;
-- `rampage report` accepts it, with its summary in `--help`, and checks `--other` against `compares`.
+- `rampage workflow run` accepts it, with its summary in `--help`, and checks `--other` against `compares`.
+
+The flat `report` spelling remains accepted for compatibility. The noun/verb routing shares its argument
+definitions and execution action; MCP workflow names and the workflow registry are unchanged.
 
 To add one: write the module under `workflows/`, implement `Workflow` next to the code (the existing ones each
 keep theirs above their `impl Project` block), and add it to `WORKFLOWS`. Name it in its tool group's description
@@ -32,7 +35,7 @@ say when to use it in the MCP usage instructions (`rampage-mcp`).
 
 Registry tests (`workflows::registry`, `rampage-mcp`, `rampage-cli`'s `report`) check that names are unique
 `snake_case`, that each workflow is a tool of its group with its own description and schema, that it is served by
-MCP and named in the instructions and its group's description, and that `rampage report` parses it.
+MCP and named in the instructions and its group's description, and that the CLI workflow selector parses it.
 
 ## Tools
 

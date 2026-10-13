@@ -1,6 +1,18 @@
 # Heuristic self-improvement flywheel
 
-**Status:** proposal / design. Not started. This is the strategic plan, not a task-by-task execution plan.
+**Date:** 2026-10-12. **Status:** historical strategy / design; the evaluation substrate is implemented,
+while the proposer and automated promotion loop remain proposed.
+
+**Original status (2026-10-12):** proposal / design. Not started. This is the strategic plan, not a
+task-by-task execution plan.
+
+The motivation, phase order and competitive thesis below record the original proposal, not a verified
+comparison with every heuristic used by IDA or Ghidra. "Mostly exists", "current" and roadmap references
+describe the planning snapshot. The [Phase 1 execution plan](2026-10-12-flywheel-phase1-execution.md) records
+the initial library-ID scope; the evaluator now also covers discovery, tool identification and type recovery.
+A passing fixed-baseline gate is not evidence that an autonomous held-out promotion loop has shipped.
+For current behavior and references, see the [README](../../README.md),
+[measurement reference](../features.md#measurements-and-development) and [accuracy benchmarks](../benchmarks.md).
 
 **Goal (one sentence):** A `propose -> measure -> gate -> promote` loop in which an AI proposes heuristic edits
 from rampage's own failures against ground truth, an eval gate accepts only measured held-out improvements, and
@@ -53,9 +65,10 @@ Where the flywheel spins is entirely determined by how cheaply we can get a corr
   compiler/ABI idioms, type recovery -- which is most of the value.
 - **Controlled-toolchain builds (perfect labels).** We own the compiler, so packer/compiler/linker
   identification has exact ground truth: build with a known toolchain/packer, verify rampage names it.
-- **Cross-tool reference (noisy oracle).** Ghidra (installed locally, already used by the decompiler) gives a
-  CFG/type/switch reference for discovery and structuring. Reference output is not ground truth; treat
-  disagreements as candidates to investigate, not as automatic labels.
+- **Cross-tool reference (noisy oracle).** A separately installed Ghidra headless analyzer can provide a
+  CFG/type/switch reference for discovery and structuring. Rampage embeds Ghidra's decompiler, but that does
+  not provide a headless reference installation or an independent oracle. Reference output is not ground
+  truth; treat disagreements as candidates to investigate, not as automatic labels.
 - **Labeled corpora (expensive, slow).** Malicious-intent and family-attribution heuristics need curated
   benign/malware labels, which are scarce and legally fraught. This family improves slowly and conservatively.
 
@@ -76,10 +89,14 @@ type/signature recovery, then capa behaviors, with malicious-intent last and mos
 
 ## Phases
 
+These are the original phases and planning-time substrate assessment. Phase 1's measurement and regression-gate
+substrate has since been implemented; Phases 2-4 still describe the intended proposer/promotion workflow rather
+than current automation.
+
 - **Phase 0 - substrate (mostly exists).** Heuristics-as-data DBs (signatures/capabilities/detect/yara; done or
   in progress). Partial strip-and-compare generation (`tools/gen-signatures.sh`, the FLIRT-from-symbols path).
-  Partial benchmark harness (discovery precision/recall vs installed Ghidra; the versioned corpus-runner items
-  already on the todo).
+  Partial benchmark harness (discovery precision/recall vs a separately installed Ghidra; the versioned
+  corpus-runner items already on the todo).
 - **Phase 1 - eval harness + disagreement set.** A reproducible corpus from controlled compilers; per-family
   metrics; a held-out split; per-slice reporting; a stable, machine-readable **disagreement set** artifact.
   Deterministic, offline, CI-gateable. (Extends the "versioned differential benchmark / accuracy corpus / CI

@@ -1,5 +1,18 @@
 # rampage: design
 
+**Date:** 2026-10-10. **Status:** historical design / roadmap; partly implemented and partly superseded.
+
+This records the original scope, architecture choices and milestone order, not the current feature inventory.
+In particular, the v1/v2 decompiler split is superseded: rampage now embeds Ghidra's decompiler and has a
+desktop UI. The database, incremental-analysis and project-format descriptions below remain design intent,
+not a claim that an append-only transaction database or rkyv snapshot format has shipped.
+
+For supported behavior, start with the [README](../../README.md) and [feature reference](../features.md).
+The [CLI hierarchy](cli-hierarchy.md) is the canonical command map, with usage in the
+[CLI reference](../cli-reference.md); implemented flat spellings remain compatibility commands rather than
+the primary help surface.
+`search`, `patch` and `sql` remain historical proposals, not accepted compatibility commands.
+
 A high-performance, open source reverse engineering toolkit. A general-purpose IDA Pro competitor
 where AI agents are first-class clients: MCP, a scriptable CLI and headless operation come first,
 and a GUI arrives later as one more client of the same API.
@@ -11,11 +24,14 @@ and a GUI arrives later as one more client of the same API.
 | Language | Rust (Cargo workspace) |
 | Architectures (v1) | x86/x64 and AArch64 |
 | x86 decoding | `iced-x86` |
-| AArch64 decoding | Own decoder generated from Arm's machine-readable spec (XML/ASL), tested exhaustively against its encoding tables |
-| Semantics | Own small SSA-friendly IR; hand-written lifters for compiler-emitted instructions first, validated against Ghidra P-code; generated lifters later |
-| File formats | `object` crate for PE / ELF / Mach-O; replace only where deeper or malformed-tolerant parsing is needed |
+| AArch64 decoding | Own spec-generated decoder (XML/ASL), with exhaustive encoding-table tests |
+| Semantics | Own small SSA-friendly IR; compiler-instruction lifters first, generated lifters later |
+| File formats | `object` for PE/ELF/Mach-O; replace only for deeper or malformed-tolerant parsing |
 | Interfaces (v1) | Library API, CLI, MCP server. GUI after v1 |
 | v1 scope | Analysis without a decompiler. The decompiler is the v2 headline, built on the v1 IR |
+
+The planned initial lifters are hand-written for compiler-emitted instructions and validated against Ghidra
+P-code before generated lifters are added. This is the historical plan, not a current validation result.
 
 ## Two modes of use
 
@@ -77,6 +93,10 @@ land when benchmarks show they are needed.
 7. `rampage sql`, benchmarks, performance work.
 
 ## Decision: Capstone as the fallback decoder (2026-10-10)
+
+This is the decision's historical snapshot. Native A32/T32 decoding subsequently replaced the ARM fallback;
+see the [AArch32 milestone](2026-10-10-milestone-8-aarch32-decoder.md). Capstone remains the fallback for the
+other listed architectures. "Now" and "next" below refer to the original decision date.
 
 Native decoders generated from machine-readable specifications remain the goal (AArch64 is done; A32/T32 come
 from the same Arm data next). To support every major architecture now, architectures without a native decoder

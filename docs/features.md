@@ -1,0 +1,169 @@
+# Feature reference
+
+rampage provides static binary analysis through a CLI, MCP server and desktop UI. Findings are evidence for an
+investigation, not proof of behavior, recovered original source or parity with another reverse engineering tool.
+See the [CLI reference](cli-reference.md) for commands and [MCP reference](mcp.md) for tool names.
+
+## Formats and instruction decoding
+
+- ELF, PE and Mach-O, including universal Mach-O binaries and explicitly selected embedded executable images.
+- x86 and x86-64 use [iced-x86](https://github.com/icedland/iced).
+- AArch64 and 32-bit ARM decode natively from Arm's
+  [machine-readable architecture specification][arm-spec]. AArch64 includes SVE and SME; AArch32 includes A32,
+  Thumb, VFP and Advanced SIMD.
+- MIPS, PowerPC, RISC-V, SPARC, z/Architecture and m68k use
+  [Capstone](https://www.capstone-engine.org), with supported little- and big-endian variants. MIPS and SPARC
+  delay slots remain in their branch's block. Native, specification-derived decoders are the preferred direction
+  where machine-readable specifications exist.
+- Runtime snapshots and bundle directories use the same query surfaces. Snapshots contain validated sparse
+  memory, virtual addresses, explicit seeds and provenance; missing memory is unavailable, not fabricated zeros.
+  See [runtime snapshots](runtime-snapshots.md) for capture, persistence and format limits.
+
+The previously reported decoder comparisons sampled words across every encoding: A32 matched `llvm-mc` on
+97.95%, 16-bit Thumb on 100%, and 32-bit Thumb on 97.49%. AArch64 matched every instruction sampled from
+Chrome's arm64 code and 99.85% of sampled words across encodings. These are sampled output comparisons, not
+proof of exhaustive instruction coverage or semantic correctness.
+
+## Function discovery, names and references
+
+Recursive-descent discovery builds functions, control-flow graphs and cross-references. Names come from symbols
+and exports, then import stubs and thunks (`puts`, or `puts@plt` on ELF). A bare import name resolves to its stub;
+import slots such as GOT entries, Mach-O symbol pointers and the PE import address table are `__imp_<name>`.
+Disassembly comments branches and data references with the name or string they target. Stripped Go function
+names are recovered from the embedded pclntab, including binaries built with `-ldflags "-s -w"`.
+
+On AArch64, ADRP+ADD and ADRP+LDR pairs provide data references. Known ADR/ADRP/ADD/MOV/LDR values can resolve
+BR/BLR targets through readable, non-writable pointers. This does not resolve authenticated pointers or prove
+that a runtime branch executes. Writable captured slots are observation evidence, not proven call edges.
+
+Calls to documented non-returning functions (`exit`, `abort`, `__stack_chk_fail`, `ExitProcess`, C++ throw
+helpers, Rust and Go panics) terminate a block without fall-through. Discovery can also infer non-returning
+functions when every path ends in a qualifying call or trap. `function_graph` and the hidden `export-cfg`
+command mark these calls `listed` or `inferred`; the decompiler receives the same callee information.
+
+`function_summary` reports the decoded graph, paginated references and partial typed AArch64 IR, not recovered
+source. Bounded register/memory SSA exposes predecessor-indexed phi nodes and 32-bit result truncation.
+Unsupported instruction semantics are explicit barriers, not inferred no-ops. Partial ARM64 SSA pseudocode
+also retains explicit unknowns. See the [ARM64 development track](arm64-development.md) for validation and limits.
+
+## Decompilation and persistent types
+
+Embedded Ghidra (Apache-2.0) produces C for the decoded architectures except s390x. The integration includes
+target-sized runtime prototypes, ARM/Thumb context, BE8 and a Darwin ARM64 compiler model. Results include C,
+address-linked semantic tokens, signatures, storage mappings, CFG edges and recovered calls/jump tables.
+Processor specifications are embedded: relocated executables need no external Ghidra installation.
+`GHIDRA_INSTALL_DIR` overrides the embedded specifications; otherwise they use a writable HOME cache.
+
+Sessions select a supervised sibling `rampage-worker` when installed. `--isolated` explicitly requires worker
+execution; batch decompilations and workflow previews also require supervision.
+`RAMPAGE_WORKER` selects an explicit worker executable.
+Direct library projects can opt in through `set_decompiler_worker`. Supervision is not an OS sandbox, and
+in-process native decompilation must be limited to trusted inputs. Producing C or reporting no engine warnings
+does not prove correct recovery. See the [decompiler reference](../crates/rampage-decompiler/README.md) for
+compiler models, resource bounds, diagnostics and supported supervisor platforms, and the
+[integration corpus](decompiler-corpus.md) for bounded recovery checks.
+
+Address-bound signatures, calling conventions, type declarations and typed globals share the annotation log
+and dependency-checked undo/redo. Embedded DWARF scalar/pointer signatures can be previewed and imported
+without replacing analyst signatures. Named Itanium and MSVC vtables provide bounded class evidence, including
+the C++ class name, not inferred object layouts. For stripped binaries, Itanium and MSVC RTTI scanning recovers
+class names and base-class edges. See [debug signature import](debug-signatures.md).
+
+## Triage and detection
+
+Triage reports MD5/SHA-1/SHA-256, section entropy and a file-wide entropy profile, overlays, and PE imphash
+using pefile's algorithm without its ordinal-name tables. Format details include:
+
+- PE build time, mitigations, Rich header and signing.
+- ELF interpreter, needed libraries, NX/RELRO/PIE and build ID.
+- Mach-O dylibs, platform, UUID, signing and encryption.
+
+Hints identify likely packing and missing hardening. Permissive default databases are bundled; additional
+databases are supplied at runtime. Detection databases name likely packers, compilers,
+protectors, installers, linkers and runtimes; user PeID `userdb.txt` files are accepted, with warnings for
+malformed entries that are skipped. YARA runs through embedded yara-x, while Mandiant capa rules use imports,
+exports and strings only: file-scope features, not instruction/function-level capa analysis. Built-in
+[capability rules](capabilities.md) use corroborated evidence. Every hit is a triage signal, not proof.
+
+The corresponding MCP tools are `detect_tools`, `yara_scan`, `capa_detect` and `capabilities`. A spec-derived
+constant database finds AES, DES, Blowfish, SHA/MD5, ChaCha, CRC, Deflate, Base64 and curve-parameter tables.
+[Data packs](data-packs.md) extend these heuristic databases with data only.
+
+## Library identification
+
+FLIRT/Function-ID-style signatures hash function bytes with position-dependent encodings masked out: relative
+branch/call targets, x86 RIP-relative displacements and PC-relative encodings of fixed-width instruction sets.
+Supported signature architectures are x86, x86-64, AArch64, A32/Thumb, MIPS/MIPS64 and PowerPC/PowerPC64.
+
+Identification applies the bundled musl libc starter database for x86-64 and AArch64 without setup. Build an
+overlay database from a binary with named functions using `function build-signatures` (legacy `signatures`).
+A database hashes each function over both its symbol size and discovered extent. A function cut short at an
+unresolved jump table can match when discovery stops at the same place in the target.
+
+Colliding masked bodies, such as `fprintf`/`sscanf`, are distinguished by named callees once those are known.
+Databases retain these keys in optional `calls`/`ambiguous_calls` fields; bodies below the confidence gate do
+not use them, so a thunk is not named after the function it forwards to. A database matches only the library
+build it was generated from, not every version of that library. Regenerate or extend the bundled set with
+`tools/gen-signatures.sh`; see [rampage-signatures](../crates/rampage-signatures).
+
+## Guided reports and batch analysis
+
+`triage_report`, `find_main`, `network_surface`, `find_crypto`, `persistence_surface`, `string_decoding` and
+`diff_builds` compose primitives into bounded reports. Each finding retains evidence, source tool and confidence;
+reports state limitations and end with concrete next tool calls. These are MCP tools or CLI workflows.
+
+`binary analyze` (legacy `analyze`) composes workflows and explicitly selected supervised decompilations across
+supported architecture slices into one bounded report, retaining task failures and recovery diagnostics. It
+does not execute suggested next steps or annotation edits. See [CLI batch analysis](cli-analysis.md).
+
+## Managed assemblies
+
+ECMA-335 metadata includes assembly identity, references, entry point and one paged list:
+
+- `types`: fields, method/property signatures, metadata accessor tokens and IL body sizes.
+- `pinvokes`: the DLL export bound by each P/Invoke method.
+- `attributes`: targets and fixed/named primitive, string, type, single-dimensional array and verified
+  local-enum arguments; unsupported values report errors. An attribute target can be filtered by parent token.
+
+One method's CIL can be disassembled ILDasm-style with tokens resolved to names/signatures, `ldstr` literals,
+branch/switch labels, locals and exception clauses. Paging counts instructions; an IL label selects the
+instruction containing that offset. Metadata and body decoding are bounded against hostile inputs. CIL is
+reported as managed code, never treated as native instructions. See
+[managed CLI commands](cli-reference.md#managed-code) or MCP tools `dotnet_metadata` and `dotnet_il`.
+
+## Measurements and development
+
+The `rampage-eval` harness scores library identification on stripped reference copies and different programs
+linking the same library, and function discovery against symbol starts. It reports precision, recall and
+architecture-specific disagreements, with no-wrong-name gates and committed recall floors. Previously reported
+cross-program library-ID recall was 0.92 (x86-64) and 0.82 (AArch64), at precision 1.00. These results describe
+the evaluated samples, not expected accuracy on arbitrary inputs; see the [benchmark reference](benchmarks.md)
+for methods and comparison limits. Fixture passes do not establish IDA/Ghidra parity or semantic equivalence.
+
+Previously reported discovery on a stripped Chrome framework on an M1 Max found 176,480 functions and
+14.5 million instructions in the x86_64 slice in about 1.2 s, and 186,252 functions and 13.8 million instructions
+in the arm64 slice in about 1.4 s. Repeated MCP queries reuse session analysis; previously reported cached queries
+took milliseconds. Timings depend on the binary, machine, build and query, and are not latency guarantees.
+
+| Crate | Purpose |
+| --- | --- |
+| `rampage-loaders` | Memory-mapped PE/ELF/Mach-O loading and address-based reads |
+| `rampage-arch` | Instruction decoding with control-flow classification |
+| `rampage-analysis` | Strings, recursive-descent discovery and cross-references |
+| `rampage-api` | Session/query layer shared by clients |
+| `rampage-mcp`, `rampage-cli`, `rampage-ui` | MCP server, CLI and desktop clients |
+| `rampage-decompiler`, `rampage-worker` | Embedded native engine/specifications and supervised worker |
+
+`tools/armgen` regenerates decoder tables from an AARCHMRS release, one instruction set at a time:
+
+```sh
+cargo run --release -p armgen -- <AARCHMRS-directory> A64 crates/rampage-arch/src/a64/spec.rs
+```
+
+Test fixtures live in `tests/fixtures`; `tests/fixtures/build.sh` rebuilds them using zig and Apple clang.
+`tools/install.sh [ROOT] [--ui]` builds and installs the CLI and worker together, optionally with the UI.
+See [extension points](plugins.md): registries are internal, not a stable public plugin API or dynamic loader.
+The [LLDB query bridge](lldb-query.md) provides bounded read-only queries in an existing authorized stopped
+session; it is not an attach/resume controller or an MCP/UI debugger transport.
+
+[arm-spec]: https://developer.arm.com/Architectures/A-Profile%20Architecture
