@@ -10,7 +10,7 @@ use rampage_loaders::{Details, Format};
 use serde_json::json;
 
 use super::{Confidence, Excerpt, Finding, ReportLimits, Section, WorkflowReport, api_matches, is_default_name, quote};
-use crate::{ApiError, DisassemblyLine, Project, XrefQuery};
+use crate::{ApiError, DisassemblyLine, Project, SignatureMatch, XrefQuery};
 
 /// Symbol names that conventionally mark a program's entry logic, most specific first: in a cgo binary `main` is
 /// the Go runtime's C entry stub and `main.main` the program's own logic.
@@ -183,17 +183,22 @@ impl Project {
         candidates
     }
 
-    /// Names a startup stub's call target: by symbol, import or stub name, or else by bundled signature (matched
-    /// once, on first need, since that hashes every function).
-    fn transfer_name(&self, target: u64, signatures: &OnceCell<HashMap<u64, String>>) -> Option<(String, bool)> {
-        self.name_at(target)
-            .map(|name| (name, false))
-            .or_else(|| signatures.get_or_init(|| self.signature_names()).get(&target).map(|name| (name.clone(), true)))
+    /// Names a startup stub's call target: by symbol, import or stub name, or else by library signature (matched
+    /// once, on first need, since that hashes every function), with the database that named it.
+    fn transfer_name(
+        &self,
+        target: u64,
+        signatures: &OnceCell<HashMap<u64, SignatureMatch>>,
+    ) -> Option<(String, Option<String>)> {
+        self.name_at(target).map(|name| (name, None)).or_else(|| {
+            let found = signatures.get_or_init(|| self.signature_names()).get(&target)?;
+            Some((found.name.clone(), Some(found.origin())))
+        })
     }
 
-    fn signature_names(&self) -> HashMap<u64, String> {
+    fn signature_names(&self) -> HashMap<u64, SignatureMatch> {
         self.apply_signatures_default(None, false)
-            .map(|found| found.matches.into_iter().map(|found| (found.address, found.name)).collect())
+            .map(|found| found.matches.into_iter().map(|found| (found.address, found)).collect())
             .unwrap_or_default()
     }
 
@@ -221,13 +226,17 @@ impl Project {
                 };
                 let Some(target) = target else { break };
                 let name = self.transfer_name(target, &signatures);
-                if let Some((name, by_signature)) = name.as_ref().filter(|(name, _)| is_libc_start_main(name)) {
+                if let Some((name, signature)) = name.as_ref().filter(|(name, _)| is_libc_start_main(name)) {
                     let Some((value, load)) = loaded else { return Ok(None) };
-                    let how = if *by_signature { "named by bundled signature" } else { "named by the binary" };
+                    let by_signature = signature.is_some();
+                    let how = match signature {
+                        Some(origin) => format!("named by a signature in {origin}"),
+                        None => "named by the binary".to_owned(),
+                    };
                     trail.extend([load, format!("{} -> `{name}` ({how})", describe(&line))]);
                     return Ok(Some(Candidate {
                         address: value,
-                        confidence: if *by_signature { Confidence::Low } else { Confidence::Medium },
+                        confidence: if by_signature { Confidence::Low } else { Confidence::Medium },
                         source: "disassemble",
                         observation: format!(
                             "passed as the first argument to `{name}` in the startup code; by the C runtime ABI \

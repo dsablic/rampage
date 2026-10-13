@@ -1,5 +1,5 @@
 //! `triage_report`: a one-shot overview chaining binary_info, triage, detect_tools, capabilities, imports,
-//! strings, function discovery and bundled-signature identification.
+//! strings, function discovery and library-signature identification (bundled and data-pack databases).
 
 use std::collections::BTreeMap;
 
@@ -160,17 +160,18 @@ impl Project {
                     .evidence(["recursive descent from the entry point, symbols, exports and unwind metadata"]),
                 );
                 let identified = self.apply_signatures_default(None, false)?;
-                // Name to (address, whether that function is still unnamed) per match.
-                let mut by_name: BTreeMap<&str, Vec<(u64, bool)>> = BTreeMap::new();
+                // Name to the matches proposing it, each with whether that function is still unnamed.
+                let mut by_name: BTreeMap<&str, Vec<(u64, bool, String)>> = BTreeMap::new();
                 for candidate in &identified.matches {
-                    by_name.entry(&candidate.name).or_default().push((candidate.address, candidate.unnamed));
+                    let found = (candidate.address, candidate.unnamed, candidate.origin());
+                    by_name.entry(&candidate.name).or_default().push(found);
                 }
                 for (name, matches) in by_name {
                     let shared = matches.len() > 1;
                     if !shared && matches[0].1 {
                         unnamed_matches += 1;
                     }
-                    let addresses: Vec<u64> = matches.iter().map(|&(address, _)| address).collect();
+                    let addresses: Vec<u64> = matches.iter().map(|&(address, ..)| address).collect();
                     let (confidence, observation) = if shared {
                         (
                             Confidence::Low,
@@ -181,7 +182,8 @@ impl Project {
                             ),
                         )
                     } else {
-                        (Confidence::Medium, format!("matches the bundled signature of library function `{name}`"))
+                        let origin = &matches[0].2;
+                        (Confidence::Medium, format!("matches the signature of library function `{name}` in {origin}"))
                     };
                     functions.push(
                         Finding::new("identify_functions", confidence, observation)
@@ -232,6 +234,9 @@ impl Project {
                 json!({}),
                 "This is a managed assembly: list its types and methods (CIL bodies) from the .NET metadata.",
             );
+            if let Some((token, reason)) = self.first_cil_method(managed.as_ref()) {
+                report.step("dotnet_il", json!({ "method": format!("{token:#010x}") }), reason);
+            }
             report.limitation(
                 "This is a .NET assembly: its methods are CIL bytecode, so native function discovery, disassembly and \
                  decompilation do not describe its logic; the .NET metadata does.",
@@ -258,7 +263,7 @@ impl Project {
                 "identify_functions",
                 json!({ "apply": true }),
                 format!(
-                    "{unnamed_matches} unnamed functions match a unique bundled signature. Review the shared-hash \
+                    "{unnamed_matches} unnamed functions match a unique library signature. Review the shared-hash \
                      matches first: apply also names one function of each shared hash."
                 ),
             );
@@ -284,5 +289,16 @@ impl Project {
              differently compiled library code, and small stubs can share a hash.",
         );
         Ok(report)
+    }
+
+    /// A method whose CIL to list first: the managed entry point, or else (a library) the first method with an IL
+    /// body among the first page of types, with why it was chosen.
+    fn first_cil_method(&self, managed: Option<&crate::DotNetSummary>) -> Option<(u32, &'static str)> {
+        if let Some(rampage_loaders::dotnet::EntryPoint::Method { token, .. }) = managed?.entry_point {
+            return Some((token, "List the CIL of the managed entry point, where the program's own logic starts."));
+        }
+        let page = self.dotnet_metadata(&DotNetQuery::default()).ok()??.types?;
+        let method = page.items.iter().flat_map(|ty| &ty.methods).find(|method| method.il.is_some())?;
+        Some((method.token, "No managed entry point (a library): list the CIL of its first method with an IL body."))
     }
 }

@@ -70,6 +70,27 @@ fn a_slow_rule_stops_at_the_timeout() {
 }
 
 #[test]
+fn include_statements_are_refused_without_reading_the_named_file() {
+    let dir = std::env::temp_dir().join(format!("rampage-yara-include-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let secret = dir.join("secret.yar");
+    std::fs::write(&secret, "rule outside_secret_line { condition: true }").unwrap();
+    let source = format!("include \"{}\"\nrule inside {{ condition: true }}", secret.display());
+    let plain = compile(&source).err().expect("include is refused").to_string();
+    let sources = [("pack.yar".to_owned(), source)];
+    let namespaced = rampage_yara::compile_sources(Some("pack"), &sources).err().expect("include is refused");
+    std::fs::remove_dir_all(&dir).unwrap();
+    for message in [plain, namespaced.to_string()] {
+        assert!(message.contains("include"), "{message}");
+        assert!(!message.contains("outside_secret_line"), "{message}");
+    }
+
+    let started = std::time::Instant::now();
+    assert!(compile("include \"/dev/zero\"\nrule inside { condition: true }").is_err());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
 fn unreadable_rule_file_error_names_the_cause() {
     let missing = std::env::temp_dir().join(format!("rampage-yara-missing-{}.yar", std::process::id()));
     let message = rampage_yara::compile_files(&[&missing]).err().expect("missing file fails").to_string();

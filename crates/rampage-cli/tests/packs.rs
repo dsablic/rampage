@@ -71,7 +71,20 @@ fn yara_runs_pack_rules_without_rules_of_its_own() {
 }
 
 #[test]
-fn packs_list_shows_the_builtin_pack_then_flag_then_environment_packs() {
+fn a_pack_in_both_the_flag_and_the_environment_loads_once_without_warning() {
+    let pack = yara_pack("both");
+    rampage()
+        .env("RAMPAGE_PACKS", pack.arg())
+        .args(["yara", "--pack", pack.arg()])
+        .arg(fixture("hello-x64.exe"))
+        .assert()
+        .success()
+        .stdout(contains("pack_pe [format]"))
+        .stderr("");
+}
+
+#[test]
+fn packs_list_shows_flag_then_environment_packs_then_the_builtin_pack() {
     let flagged = yara_pack("flagged");
     let ambient = yara_pack("ambient");
     let output = rampage()
@@ -84,11 +97,11 @@ fn packs_list_shows_the_builtin_pack_then_flag_then_environment_packs() {
         .clone();
     let packs: serde_json::Value = serde_json::from_slice(&output).unwrap();
     let names: Vec<&str> = packs.as_array().unwrap().iter().map(|pack| pack["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["rampage-builtin", "flagged", "ambient"]);
-    assert_eq!(packs[0]["license"], "Apache-2.0");
-    assert_eq!(packs[1]["license"], "CC0-1.0");
-    assert_eq!(packs[1]["source"], "https://example.com/flagged");
-    assert_eq!(packs[1]["contents"][0]["status"], "loaded");
+    assert_eq!(names, ["flagged", "ambient", "rampage-builtin"]);
+    assert_eq!(packs[2]["license"], "Apache-2.0");
+    assert_eq!(packs[0]["license"], "CC0-1.0");
+    assert_eq!(packs[0]["source"], "https://example.com/flagged");
+    assert_eq!(packs[0]["contents"][0]["status"], "loaded");
 
     rampage()
         .args(["packs", "list", "--pack", flagged.arg()])
@@ -119,6 +132,8 @@ fn packs_check_fails_on_a_content_that_does_not_load_and_analysis_warns() {
         .success()
         .stdout(contains("] Pack MZ ("))
         .stderr(contains("rampage: warning: pack ").and(contains("yara broken.yar")));
+    // A command that consults no heuristic database does not load packs, so it has nothing to warn about.
+    rampage().args(["info", "--pack", pack.arg()]).arg(fixture("hello-x64.exe")).assert().success().stderr("");
 
     let valid = yara_pack("valid");
     rampage().args(["packs", "check", valid.arg()]).assert().success();

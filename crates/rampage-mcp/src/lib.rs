@@ -29,13 +29,6 @@ List rampage's tool groups (name, one-line description, tool count and names, wh
 with `groups`, e.g. [\"detection\"] or [\"all\"]. Enabling adds the group's tools to the tool list and sends \
 notifications/tools/list_changed. Without `groups` nothing changes.";
 
-const LIST_PACKS: &str = "list_packs";
-const LIST_PACKS_DESCRIPTION: &str = "\
-List the heuristic-database packs in effect: the built-in one (bundled signatures, tool and crypto-constant \
-databases) and every data pack loaded with --pack or RAMPAGE_PACKS, in precedence order. Each has its name, \
-version, SPDX licence, source (provenance) and description, and each content its kind, path and status (loaded, \
-error or unsupported) with a detail saying what loaded or why not. Takes no arguments.";
-
 const INSTRUCTIONS_INTRO: &str = "\
 rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, \
 RISC-V, SPARC, s390x and m68k. Every tool takes the binary's file path; the first call that needs analysis runs it \
@@ -52,20 +45,20 @@ groups. The groups:";
 
 const INSTRUCTIONS_USAGE: &str = "\
 Core: start with triage_report: one bounded overview (layout, triage hints, producing toolchain, capability tags, \
-imports, notable strings, library functions) that ends with concrete next tool calls, some of which may be in \
-other groups. The other guided workflows compose the primitives the same way: find_main (the program's own entry \
-logic), network_surface, persistence_surface (autostart locations, service and registry APIs), string_decoding \
-(candidate byte-decoding loops with their call sites and encoded-looking data) and diff_builds; find_crypto \
-(algorithm constants and crypto APIs with the code that uses them) is in detection. Every workflow finding carries \
-its evidence, source tool and confidence, and every report states its limitations: treat findings as evidence, not \
-verdicts. For a single question use triage or binary_info, then list_functions (filter with name_contains, page \
+imports, notable strings, library functions) that ends with concrete next tool calls, each naming its `group`; enable \
+that group first when it is not enabled. The other guided workflows compose the primitives the same way: find_main \
+(the program's own entry logic), network_surface, persistence_surface (autostart locations, service and registry \
+APIs), string_decoding (candidate byte-decoding loops with their call sites and encoded-looking data) and diff_builds; \
+find_crypto (algorithm constants and crypto APIs with the code that uses them) is in detection. Every workflow finding \
+carries its evidence, source tool and confidence, and every report states its limitations: treat findings as evidence, \
+not verdicts. For a single question use triage or binary_info, then list_functions (filter with name_contains, page \
 with offset/limit), then decompile a function to C to understand it (the best starting point; falls back to \
-function_summary, a structural CFG/reference summary, where no decompiler specification is available), or \
-disassemble or function_graph it, and follow references with xrefs. list_imports and list_strings are good \
-starting points for finding behavior. Record findings with rename and set_comment, or many at once with \
-annotate_batch (all or nothing; check_names pre-flights candidate names): they persist beside the binary and every \
-client of the same binary, including the rampage UI, picks them up. undo and redo revert or reapply one step, \
-which may be a whole batch. Memory snapshots and bundle directories use the same tools.
+function_summary, a structural CFG/reference summary, where no decompiler specification is available), or disassemble \
+or function_graph it, and follow references with xrefs. list_imports and list_strings are good starting points for \
+finding behavior. Record findings with rename and set_comment, or many at once with annotate_batch (all or nothing; \
+check_names pre-flights candidate names): they persist beside the binary and every client of the same binary, \
+including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch. Memory \
+snapshots and bundle directories use the same tools.
 
 Detection: detect_tools (packer/compiler/protector), identify_functions (library code by signature, bundled \
 databases applied; build_signatures makes a database from a binary with symbols), capabilities, yara_scan and \
@@ -82,10 +75,21 @@ file (firmware, installer, archive) for embedded executables and containers by v
 header-estimated extents; it extracts and decompresses nothing. Pass an executable candidate's offset as \
 image_offset to any binary tool to analyze it in place, with annotations kept apart from the outer file's.";
 
-fn instructions() -> String {
+fn instructions(packs: &Packs) -> String {
     let groups: String =
         Group::ALL.iter().map(|group| format!("\n- {}: {}", group.name(), group.description())).collect();
-    format!("{INSTRUCTIONS_INTRO}{groups}\n\n{INSTRUCTIONS_USAGE}")
+    let mut text = format!("{INSTRUCTIONS_INTRO}{groups}\n\n{INSTRUCTIONS_USAGE}");
+    // Only a server given packs loads them here; the problem count must be known before any tool runs.
+    if packs.configured() {
+        let problems = packs.problems().len();
+        text.push_str(&format!(
+            "\n\nData packs: {} loaded, {problems} problems (packs rejected or contents that did not load). \
+             Detection results that consult packs (identify_functions, detect_tools, yara_scan, capa_detect) list \
+             the problems bearing on them in `warnings`; list_packs (detection) shows each pack's status.",
+            packs.loaded().iter().filter(|pack| pack.error.is_none()).count()
+        ));
+    }
+    text
 }
 
 /// The groups to serve from the start: every group with `all_tools`, else those `env` names (`all` or a
@@ -162,13 +166,24 @@ fn enable_tools_schema() -> Map<String, Value> {
     schema.as_object().cloned().unwrap_or_default()
 }
 
-#[derive(Clone)]
+/// One MCP connection's server. The loaded binaries are shared with its clones; the enabled groups are not, so a
+/// clone serving another connection starts from the groups enabled when it was cloned.
 pub struct RampageServer {
     session: Arc<Session>,
     tools: Arc<Vec<Tool>>,
     file_tools: Arc<Vec<FileTool>>,
-    enabled: Arc<Mutex<BTreeSet<Group>>>,
-    packs: Arc<Packs>,
+    enabled: Mutex<BTreeSet<Group>>,
+}
+
+impl Clone for RampageServer {
+    fn clone(&self) -> Self {
+        Self {
+            session: Arc::clone(&self.session),
+            tools: Arc::clone(&self.tools),
+            file_tools: Arc::clone(&self.file_tools),
+            enabled: Mutex::new(self.enabled()),
+        }
+    }
 }
 
 impl Default for RampageServer {
@@ -187,14 +202,24 @@ impl RampageServer {
             session: Arc::default(),
             tools: Arc::new(tools),
             file_tools: Arc::new(tools::file_tools()),
-            enabled: Arc::new(Mutex::new(enabled)),
-            packs: Arc::default(),
+            enabled: Mutex::new(enabled),
         }
     }
 
-    /// This server with `packs` layered over the bundled databases of its heuristic-database tools.
+    /// This server opening binaries in `session`, with its settings.
+    pub fn with_session(self, session: Session) -> Self {
+        Self { session: Arc::new(session), ..self }
+    }
+
+    /// This server with `packs` layered over the bundled databases of its heuristic-database tools, keeping its
+    /// session's other settings.
     pub fn with_packs(self, packs: Arc<Packs>) -> Self {
-        Self { session: Arc::new(Session::default().with_packs(Arc::clone(&packs))), packs, ..self }
+        let session = Arc::try_unwrap(self.session).unwrap_or_else(|shared| shared.unloaded_copy());
+        Self { session: Arc::new(session.with_packs(packs)), ..self }
+    }
+
+    fn packs(&self) -> Arc<Packs> {
+        self.session.packs()
     }
 
     fn enabled(&self) -> BTreeSet<Group> {
@@ -205,7 +230,7 @@ impl RampageServer {
     fn catalog(&self) -> impl Iterator<Item = (Group, &'static str)> + '_ {
         let tools = self.tools.iter().map(|tool| (tool.group, tool.name));
         let file_tools = self.file_tools.iter().map(|tool| (tool.group, tool.name));
-        tools.chain(file_tools).chain([(Group::Detection, LIST_PACKS)])
+        tools.chain(file_tools)
     }
 
     /// Enables the groups `arguments` names, returning the groups with their tools and the ones newly enabled.
@@ -264,14 +289,8 @@ impl RampageServer {
 
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
     fn run(&self, name: &str, mut arguments: Map<String, Value>) -> CallToolResult {
-        if name == LIST_PACKS {
-            return match serde_json::to_string(&self.packs.listing()) {
-                Ok(output) => CallToolResult::success(vec![ContentBlock::text(output)]),
-                Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
-            };
-        }
         if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
-            return match tool.call(Value::Object(arguments)) {
+            return match tool.call(&self.packs(), Value::Object(arguments)) {
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
                 Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
             };
@@ -301,7 +320,7 @@ impl RampageServer {
             } else {
                 let binary = rampage_loaders::Binary::open_image(path, image, arch);
                 let project = Project::new(binary.map_err(|error| error_text(&error))?);
-                project.set_packs(Arc::clone(&self.packs));
+                project.set_packs(self.packs());
                 Arc::new(project)
             };
             match tools::call(&self.tools, &project, name, Value::Object(arguments)) {
@@ -347,7 +366,7 @@ impl ServerHandler for RampageServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tool_list_changed().build())
             .with_server_info(Implementation::new("rampage", env!("CARGO_PKG_VERSION")))
-            .with_instructions(instructions())
+            .with_instructions(instructions(&self.packs()))
     }
 
     async fn list_tools(
@@ -365,11 +384,7 @@ impl ServerHandler for RampageServer {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
             rmcp::model::Tool::new(tool.name, tool.description, schema)
         });
-        let list_packs = enabled.contains(&Group::Detection).then(|| {
-            let schema = json!({ "type": "object", "properties": {} });
-            rmcp::model::Tool::new(LIST_PACKS, LIST_PACKS_DESCRIPTION, schema.as_object().cloned().unwrap_or_default())
-        });
-        let all = std::iter::once(meta).chain(tools).chain(file_tools).chain(list_packs);
+        let all = std::iter::once(meta).chain(tools).chain(file_tools);
         Ok(ListToolsResult::with_all_items(all.collect()))
     }
 
@@ -418,6 +433,24 @@ pub async fn serve_stdio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packs_keep_the_session_settings_and_clones_keep_their_own_groups() {
+        let directory = std::env::temp_dir();
+        let packs = Arc::new(Packs::default());
+        let server = RampageServer::default().with_session(Session::with_capture_annotations(directory.clone()));
+        let shared = server.clone();
+        for server in [server.with_packs(Arc::clone(&packs)), shared.with_packs(Arc::clone(&packs))] {
+            assert_eq!(server.session.capture_annotations(), Some(directory.as_path()));
+            assert!(Arc::ptr_eq(&server.packs(), &packs));
+        }
+
+        let first = RampageServer::default();
+        let second = first.clone();
+        first.enable(json!({ "groups": ["detection"] }).as_object().unwrap()).unwrap();
+        assert!(first.enabled().contains(&Group::Detection));
+        assert_eq!(second.enabled(), BTreeSet::from([Group::Core]));
+    }
 
     #[test]
     fn initial_groups_come_from_the_flag_then_the_environment() {

@@ -65,7 +65,7 @@ pub use rows::{
 };
 pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, RuntimeRange};
 pub use session::Session;
-pub use signatures::{SignatureApplication, SignatureMatch};
+pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};
 pub use summary::FunctionSummary;
 pub use workflows::{
     Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportLimits, ReportTarget, Section, WorkflowReport,

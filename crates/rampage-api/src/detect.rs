@@ -18,7 +18,8 @@ const MAX_PEID_WARNINGS: usize = 20;
 pub struct ToolDetections {
     pub detections: Vec<Detection>,
     /// PeID database entries and lines that were skipped, so that a partly broken database is not silently
-    /// treated as complete. At most [`MAX_PEID_WARNINGS`] are listed, followed by a count of the rest.
+    /// treated as complete. At most [`MAX_PEID_WARNINGS`] are listed, followed by a count of the rest. Then the
+    /// data-pack problems bearing on PeID signatures.
     pub warnings: Vec<String>,
 }
 
@@ -38,6 +39,7 @@ impl Project {
                 warnings.push(format!("PeID database: ... and {more} more problems skipped"));
             }
         }
+        warnings.extend(self.packs().problems_for("peid"));
         Ok(ToolDetections { detections: identify(&self.binary, &db), warnings })
     }
 

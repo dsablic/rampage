@@ -1,7 +1,9 @@
 //! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
-use crate::{ApiError, FunctionsQuery, ListQuery, Project, ReportLimits, StringsQuery, WorkflowReport, XrefQuery};
+use crate::{
+    ApiError, FunctionsQuery, ListQuery, Packs, Project, ReportLimits, StringsQuery, WorkflowReport, XrefQuery,
+};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -15,7 +17,8 @@ const DEFAULT_PAGE: usize = 100;
 type Handler = Box<dyn Fn(&Project, Value) -> Result<Value, String> + Send + Sync>;
 
 /// A set of related tools. MCP clients see the core group first and enable the others when they need them, so the
-/// tool list stays short as it grows; the UI's assistant offers every group.
+/// tool list stays short as it grows; the UI's assistant offers every tool of every group that works on the open
+/// binary ([`tools`], not the [`file_tools`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Group {
     Core,
@@ -167,20 +170,22 @@ fn error_chain(error: &ApiError) -> String {
     text
 }
 
-/// A tool that takes a file path instead of a project, for files no loader needs to open first.
+/// A tool that works without a loaded binary: on a file path no loader needs to open first (carve), or on the
+/// data packs in effect alone (list_packs).
 pub struct FileTool {
     pub group: Group,
     pub name: &'static str,
     pub description: &'static str,
-    /// Includes the required `path` argument.
+    /// The whole input schema; a tool taking a file has a required `path` argument.
     pub input_schema: Value,
-    handler: fn(Value) -> Result<Value, String>,
+    handler: fn(&Packs, Value) -> Result<Value, String>,
 }
 
 impl FileTool {
-    /// Runs the tool with `input`, returning its JSON result or an error the caller can read.
-    pub fn call(&self, input: Value) -> Result<Value, String> {
-        (self.handler)(input)
+    /// Runs the tool with `input` and the `packs` in effect, returning its JSON result or an error the caller can
+    /// read.
+    pub fn call(&self, packs: &Packs, input: Value) -> Result<Value, String> {
+        (self.handler)(packs, input)
     }
 }
 
@@ -194,12 +199,13 @@ struct CarveArgs {
     limit: Option<usize>,
 }
 
-/// Every tool that takes a file path instead of a project.
+/// Every tool that works without a loaded binary.
 pub fn file_tools() -> Vec<FileTool> {
-    vec![FileTool {
-        group: Group::Carve,
-        name: "carve",
-        description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers: \
+    vec![
+        FileTool {
+            group: Group::Carve,
+            name: "carve",
+            description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers: \
                       ELF, PE, Mach-O (thin and universal), zip, gzip, xz, zstd, LZMA, squashfs, cpio, uImage and \
                       Android boot images. Each candidate has its offset, kind, validated header facts (arch, bits, \
                       endianness, declared size) and an extent estimated from headers, with confidence validated or \
@@ -207,15 +213,31 @@ pub fn file_tools() -> Vec<FileTool> {
                       scan stops at 4096 candidates, saying so. Paginated with offset/limit: each page scans only \
                       as far as the candidate after it and reports `more` (whether another page follows) rather \
                       than a total.",
-        input_schema: schema::<CarveArgs>(),
-        handler: |input| {
-            let args: CarveArgs =
-                serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
-            let page = crate::carve_page(std::path::Path::new(&args.path), args.offset, args.limit)
-                .map_err(|error| error_chain(&error))?;
-            serde_json::to_value(page).map_err(|error| error.to_string())
+            input_schema: schema::<CarveArgs>(),
+            handler: |_, input| {
+                let args: CarveArgs =
+                    serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
+                let page = crate::carve_page(std::path::Path::new(&args.path), args.offset, args.limit)
+                    .map_err(|error| error_chain(&error))?;
+                serde_json::to_value(page).map_err(|error| error.to_string())
+            },
         },
-    }]
+        FileTool {
+            group: Group::Detection,
+            name: "list_packs",
+            description: "List the heuristic-database packs in effect, in precedence order: every data pack loaded \
+                          with --pack or RAMPAGE_PACKS (earlier ones first), then the built-in one (bundled \
+                          signatures, tool and crypto-constant databases), which applies last. Each has its name, \
+                          version, SPDX licence, source (provenance) and description, and each content its kind, \
+                          path and status (loaded, error or unsupported) with a detail saying what loaded or why not. \
+                          Takes no arguments.",
+            input_schema: schema::<Nothing>(),
+            handler: |packs, input| {
+                serde_json::from_value::<Nothing>(input).map_err(|error| format!("invalid arguments: {error}"))?;
+                serde_json::to_value(packs.listing()).map_err(|error| error.to_string())
+            },
+        },
+    ]
 }
 
 /// No arguments.
@@ -242,11 +264,12 @@ struct SignatureBuildArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct IdentifyArgs {
-    /// Optional file path of a signature database built with build_signatures, overlaid on the bundled starter
-    /// database. Omit it to match against the bundled database alone.
+    /// Optional file path of a signature database built with build_signatures, applied first: before the loaded
+    /// data packs' databases and the bundled starter database. Omit it to match against those alone.
     #[serde(default)]
     database: Option<String>,
-    /// Match against `database` alone, without the bundled starter database (requires `database`).
+    /// Leave out the bundled starter database, matching against `database` and the data packs' databases only
+    /// (needs at least one of them).
     #[serde(default)]
     no_bundled: bool,
     /// Persist matched names for still-unnamed functions as user names (never overwriting existing names).
@@ -313,6 +336,20 @@ struct CapaArgs {
     /// Optional when a loaded data pack holds capa rules; those are always evaluated too.
     #[serde(default)]
     rules_dir: Option<String>,
+}
+
+/// A YARA scan's matches with the data-pack problems bearing on YARA rules.
+#[derive(Serialize)]
+struct YaraScan {
+    matches: Vec<rampage_yara::YaraMatch>,
+    warnings: Vec<String>,
+}
+
+/// A capa evaluation's capabilities with the data-pack problems bearing on capa rules.
+#[derive(Serialize)]
+struct CapaScan {
+    capabilities: Vec<rampage_capabilities::Capability>,
+    warnings: Vec<String>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -574,12 +611,14 @@ pub fn tools() -> Vec<Tool> {
             Group::Detection,
             "identify_functions",
             "Name functions by matching signature databases (FLIRT/Function-ID style), so statically linked \
-             library code in a stripped binary gets recognized. Applies the bundled starter database for the \
-             architecture; an optional database path is overlaid on top (or used alone with no_bundled=true), and \
-             loaded data packs' databases layer between the two, in pack order. \
+             library code in a stripped binary gets recognized. Applies, first match winning: an optional \
+             database path, then loaded data packs' databases in pack order, then the bundled starter database for \
+             the architecture (left out with no_bundled=true). Each match's `source` names the database that named \
+             it: \"user database\", the data pack's name, or \"rampage-builtin\". \
              A function whose masked body collides with another's is named by the names of the functions it \
              calls, once those are named; thunks too small for the confidence gate are never named. apply=true \
-             saves names for unnamed functions.",
+             saves names for unnamed functions. `warnings` names data packs or pack signature databases that did \
+             not load.",
             |project, arguments: IdentifyArgs| {
                 let user = match &arguments.database {
                     Some(path) => {
@@ -604,7 +643,8 @@ pub fn tools() -> Vec<Tool> {
             "triage_report",
             "Guided first look in one bounded report: format and entry, hashes and packing hints, toolchain \
              signatures, capability tags, imports by library, notable strings (URLs, IPs, paths, registry keys), \
-             function count and bundled-signature matches, with suggested next tool calls. Every finding names its \
+             function count and library-signature matches (bundled and data-pack databases), with suggested next \
+             tool calls. Every finding names its \
              source primitive and confidence; evidence, not verdicts.",
             |project, args: ReportArgs| fitted(project.triage_report(ReportLimits::new(args.max_per_section))),
         ),
@@ -732,8 +772,8 @@ pub fn tools() -> Vec<Tool> {
              from a bundled heuristic database of entry-point, section, import, overlay and entropy signatures. \
              Optionally overlay a user-supplied PeID userdb.txt; loaded data packs' PeID signatures are always \
              overlaid. Returns {detections, warnings}: warnings name the \
-             PeID entries and lines skipped as malformed (the first 20, then a count). Confidence is a signal, not \
-             proof.",
+             PeID entries and lines skipped as malformed (the first 20, then a count), then data packs or pack PeID \
+             files that did not load. Confidence is a signal, not proof.",
             |project, args: DetectToolsArgs| {
                 let peid = match &args.peid {
                     Some(path) => {
@@ -749,10 +789,15 @@ pub fn tools() -> Vec<Tool> {
             "yara_scan",
             "Compile the given YARA rule source and scan the binary's image bytes, returning matching rules with \
              their tags, metadata and bounded matched-string offsets. Rules are user-supplied; the rules of loaded \
-             data packs (see list_packs) run too, in a namespace named after their pack.",
-            |project, args: YaraArgs| match &args.rules {
-                Some(rules) => project.yara_scan(rules),
-                None => project.yara_scan_packs(),
+             data packs (see list_packs) run too, in a namespace named after their pack. Returns {matches, \
+             warnings}: warnings name data packs or pack rule files that did not load. include statements are \
+             refused.",
+            |project, args: YaraArgs| {
+                let matches = match &args.rules {
+                    Some(rules) => project.yara_scan(rules)?,
+                    None => project.yara_scan_packs()?,
+                };
+                Ok(YaraScan { matches, warnings: project.packs().problems_for("yara") })
             },
         ),
         tool(
@@ -760,10 +805,14 @@ pub fn tools() -> Vec<Tool> {
             "capa_detect",
             "Evaluate a directory of Mandiant capa rules, plus those of loaded data packs (see list_packs), against \
              the binary's imports, exports and strings, returning the behaviors whose file-scope features match. A \
-             partial capa evaluator (no disassembly features); triage evidence, not proof.",
-            |project, args: CapaArgs| match &args.rules_dir {
-                Some(directory) => project.detect_capa(std::path::Path::new(directory)),
-                None => project.detect_capa_packs(),
+             partial capa evaluator (no disassembly features); triage evidence, not proof. Returns \
+             {capabilities, warnings}: warnings name data packs or pack rule sets that did not load.",
+            |project, args: CapaArgs| {
+                let capabilities = match &args.rules_dir {
+                    Some(directory) => project.detect_capa(std::path::Path::new(directory))?,
+                    None => project.detect_capa_packs()?,
+                };
+                Ok(CapaScan { capabilities, warnings: project.packs().problems_for("capa") })
             },
         ),
         tool(
@@ -991,6 +1040,16 @@ pub fn tools() -> Vec<Tool> {
     ]
 }
 
+/// The group of the tool (or file tool) `name` in the registry.
+pub fn group_of(name: &str) -> Option<Group> {
+    static GROUPS: std::sync::OnceLock<std::collections::HashMap<&'static str, Group>> = std::sync::OnceLock::new();
+    let groups = GROUPS.get_or_init(|| {
+        let tools = tools().into_iter().map(|tool| (tool.name, tool.group));
+        tools.chain(file_tools().into_iter().map(|tool| (tool.name, tool.group))).collect()
+    });
+    groups.get(name).copied()
+}
+
 /// Runs the tool `name` with `input`, returning its result as text for the model and whether it failed.
 pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (String, bool) {
     let Some(tool) = tools.iter().find(|tool| tool.name == name) else {
@@ -1033,6 +1092,10 @@ mod tests {
             assert_eq!(group.name().parse::<Group>(), Ok(group));
         }
         assert!("everything".parse::<Group>().unwrap_err().contains("core, detection"));
+        assert_eq!(group_of("list_packs"), Some(Group::Detection));
+        let listing = file_tools().into_iter().find(|tool| tool.name == "list_packs").unwrap();
+        let packs = listing.call(&Packs::default(), serde_json::json!({})).unwrap();
+        assert_eq!(packs[0]["name"], crate::packs::BUILTIN_PACK);
     }
 
     #[test]

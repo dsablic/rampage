@@ -80,14 +80,24 @@ pub struct YaraMatch {
     pub total_matched_strings: usize,
 }
 
-/// Compile one or more YARA rules from a single source string.
-pub fn compile(sources: &str) -> Result<Rules, YaraError> {
+/// A compiler that refuses `include` statements. yara-x would otherwise read any file an include names (relative
+/// to the working directory, not the rule file), so rules from a pack or an agent could pull in files outside
+/// them, echo their lines in compile errors, or name `/dev/zero`.
+fn compiler<'a>() -> yara_x::Compiler<'a> {
     let mut compiler = yara_x::Compiler::new();
+    compiler.enable_includes(false);
+    compiler
+}
+
+/// Compile one or more YARA rules from a single source string. `include` statements are refused.
+pub fn compile(sources: &str) -> Result<Rules, YaraError> {
+    let mut compiler = compiler();
     compiler.add_source(sources).map_err(|e| YaraError::Compile(e.to_string()))?;
     Ok(Rules::new(compiler.build()))
 }
 
-/// Compile rules from a set of files, tagging each with its path so compile errors name the source file.
+/// Compile rules from a set of files, tagging each with its path so compile errors name the source file. `include`
+/// statements are refused: each rule file stands alone.
 pub fn compile_files<P: AsRef<Path>>(paths: &[P]) -> Result<Rules, YaraError> {
     // Read every file first and keep the text alive for the whole build: `SourceCode` borrows it.
     let mut sources: Vec<(String, String)> = Vec::with_capacity(paths.len());
@@ -102,9 +112,9 @@ pub fn compile_files<P: AsRef<Path>>(paths: &[P]) -> Result<Rules, YaraError> {
 
 /// Compile `(origin, text)` sources, each tagged with its origin so compile errors name it, into `namespace` (or
 /// yara-x's `default` one). A namespace keeps rule identifiers from colliding with other rule sets and names the
-/// set in every match.
+/// set in every match. `include` statements are refused.
 pub fn compile_sources(namespace: Option<&str>, sources: &[(String, String)]) -> Result<Rules, YaraError> {
-    let mut compiler = yara_x::Compiler::new();
+    let mut compiler = compiler();
     if let Some(namespace) = namespace {
         compiler.new_namespace(namespace);
     }

@@ -734,19 +734,53 @@ async fn list_packs_reports_loaded_packs_and_scans_use_their_rules() {
     let client = connect_to(RampageServer::with_groups(Group::ALL).with_packs(packs)).await;
 
     let listing = json_of(&call(&client, "list_packs", json!({})).await);
-    assert_eq!(listing[0]["name"], "rampage-builtin");
-    assert_eq!(listing[0]["license"], "Apache-2.0");
-    assert_eq!(listing[1]["name"], "mcp-pack");
-    assert_eq!(listing[1]["source"], "https://example.com/mcp-pack");
-    assert_eq!(listing[1]["contents"][0]["status"], "loaded");
-    assert_eq!(listing[1]["contents"][1]["status"], "unsupported");
+    assert_eq!(listing[1]["name"], "rampage-builtin");
+    assert_eq!(listing[1]["license"], "Apache-2.0");
+    assert_eq!(listing[0]["name"], "mcp-pack");
+    assert_eq!(listing[0]["source"], "https://example.com/mcp-pack");
+    assert_eq!(listing[0]["contents"][0]["status"], "loaded");
+    assert_eq!(listing[0]["contents"][1]["status"], "unsupported");
 
-    let matches = json_of(&call(&client, "yara_scan", json!({ "path": fixture("hello-x64.exe") })).await);
+    let scan = json_of(&call(&client, "yara_scan", json!({ "path": fixture("hello-x64.exe") })).await);
+    let matches = &scan["matches"];
     assert_eq!(matches[0]["identifier"], "mcp_pe", "{matches}");
     assert_eq!(matches[0]["namespace"], "mcp-pack", "{matches}");
+    assert_eq!(scan["warnings"], json!([]), "{scan}");
     let error = call(&client, "capa_detect", json!({ "path": fixture("hello-x64.exe") })).await;
     assert_eq!(error.is_error, Some(true));
     assert!(text(&error).contains("no capa rules"), "{}", text(&error));
+    client.cancel().await.unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
+async fn pack_problems_reach_agents_in_instructions_and_detection_warnings() {
+    let directory = std::env::temp_dir().join(format!("rampage-mcp-broken-pack-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("rampage-pack.toml"),
+        "name = \"broken-pack\"\nversion = \"1\"\nlicense = \"MIT\"\nsource = \"test\"\ndescription = \"test\"\n\
+         [[contents]]\nkind = \"yara\"\npath = \"broken.yar\"\n\
+         [[contents]]\nkind = \"peid\"\npath = \"userdb.txt\"\n",
+    )
+    .unwrap();
+    std::fs::write(directory.join("broken.yar"), "rule broken {").unwrap();
+    std::fs::write(directory.join("userdb.txt"), "[Pack MZ]\nsignature = 4D 5A\nep_only = false\n").unwrap();
+    let packs = Arc::new(rampage_api::Packs::lazy(std::slice::from_ref(&directory)));
+    let client = connect_to(RampageServer::with_groups(Group::ALL).with_packs(packs)).await;
+
+    let instructions = client.peer_info().unwrap().instructions.clone().unwrap();
+    assert!(instructions.contains("Data packs: 1 loaded, 1 problems"), "{instructions}");
+    let path = fixture("hello-x64.exe");
+    let rules = "rule user_mz { strings: $mz = \"MZ\" condition: $mz at 0 }";
+    let scan = json_of(&call(&client, "yara_scan", json!({ "path": path, "rules": rules })).await);
+    assert_eq!(scan["matches"][0]["identifier"], "user_mz", "{scan}");
+    let warnings = scan["warnings"].as_array().unwrap();
+    assert!(warnings.len() == 1 && warnings[0].as_str().unwrap().contains("yara broken.yar"), "{scan}");
+    // The problem bears on YARA rules alone, not on the PeID signatures detect_tools consults.
+    let detected = json_of(&call(&client, "detect_tools", json!({ "path": path })).await);
+    assert_eq!(detected["warnings"], json!([]), "{detected}");
     client.cancel().await.unwrap();
     std::fs::remove_dir_all(&directory).unwrap();
 }

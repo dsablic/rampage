@@ -39,7 +39,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum PacksCommand {
-    /// List the built-in pack and every pack loaded with --pack or RAMPAGE_PACKS, with each content's status
+    /// List every pack loaded with --pack or RAMPAGE_PACKS, then the built-in one (precedence order), with each
+    /// content's status
     List,
     /// Validate one pack directory and report each content's status; fails when anything does not load
     Check { directory: PathBuf },
@@ -203,7 +204,7 @@ enum Command {
     /// are told apart by the names of the functions they call
     Identify {
         file: PathBuf,
-        /// A signature database to apply, overlaid on the bundled starter database unless --no-bundled is set
+        /// A signature database to apply first, before data packs' databases and the bundled starter one
         #[arg(long)]
         db: Option<PathBuf>,
         /// Do not apply the bundled starter database (requires --db)
@@ -395,17 +396,14 @@ fn main() -> ExitCode {
         eprintln!("rampage: --image-offset does not apply to {command}, which does not open one embedded image");
         return ExitCode::FAILURE;
     }
-    let packs = Arc::new(Packs::load_with_env(&cli.packs));
-    if !matches!(cli.command, Command::Packs { .. }) {
-        for problem in packs.problems() {
-            eprintln!("rampage: warning: {problem}");
-        }
-    }
+    // Loaded on first use, so that commands which consult no heuristic database do not read any pack.
+    let packs = Arc::new(Packs::lazy_with_env(&cli.packs));
+    let warn = !matches!(cli.command, Command::Packs { .. });
     if let Command::Mcp { all_tools } = cli.command {
         return serve_mcp(all_tools, packs);
     }
     let image = cli.image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, cli.image_length));
-    let options = Options { json: cli.json, arch: cli.arch, image, packs };
+    let options = Options { json: cli.json, arch: cli.arch, image, packs: Arc::clone(&packs) };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match cli.command {
         Command::Info { file } => commands::info(&mut out, &file, &options),
@@ -507,6 +505,11 @@ fn main() -> ExitCode {
     }
     .and_then(|()| out.flush().map_err(Into::into));
 
+    if warn && packs.is_loaded() {
+        for problem in packs.problems() {
+            eprintln!("rampage: warning: {problem}");
+        }
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) if is_broken_pipe(&error) => ExitCode::SUCCESS,
