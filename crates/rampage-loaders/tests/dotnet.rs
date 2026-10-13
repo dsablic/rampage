@@ -46,6 +46,20 @@ struct Spec {
     object_name: Option<String>,
     /// Replaces the signature of MemberRef 1, the attribute constructor.
     ctor_signature: Option<Vec<u8>>,
+    property_signatures: Vec<Vec<u8>>,
+    property_flags: u16,
+    property_maps: Vec<(u32, u32)>,
+    property_ptrs: Vec<u32>,
+    /// MethodSemantics rows: flags, method row, HasSemantics coded association.
+    semantics: Vec<(u16, u32, u32)>,
+    extra_methods: u32,
+    /// Makes Inner a local enum with one value__ field of this primitive type.
+    enum_underlying: Option<u8>,
+    enum_field_name: Option<String>,
+    enum_field_flags: Option<u16>,
+    field_lists: Option<[u32; 3]>,
+    duplicate_enum_name: bool,
+    inner_name: Option<String>,
 }
 
 const SECTION_RVA: u32 = 0x2000;
@@ -109,6 +123,12 @@ fn build(spec: &Spec) -> Vec<u8> {
     let mut strings = Heap::new();
     let mut blobs = Heap::new();
     let field_signature = blobs.blob(&[0x06, 0x08]);
+    let enum_signature = blobs.blob(&[0x06, spec.enum_underlying.unwrap_or(0x08)]);
+    let property_signatures: Vec<_> = if spec.property_signatures.is_empty() {
+        vec![blobs.blob(&[0x28, 0, 0x08])]
+    } else {
+        spec.property_signatures.iter().map(|signature| blobs.blob(signature)).collect()
+    };
     // Main(string[]), Compute<T>(T, T) returning int32, Helper(), Run(native int) returning int32.
     let main_signature = blobs.blob(spec.main_signature.as_deref().unwrap_or(&[0x00, 1, 0x01, 0x1D, 0x0E]));
     let compute_signature = blobs.blob(&[0x10, 1, 2, 0x08, 0x1E, 0, 0x1E, 0]);
@@ -131,7 +151,7 @@ fn build(spec: &Spec) -> Vec<u8> {
 
     let wide = |set: bool| if set || spec.jtd { 4 } else { 2 };
     let (s, g, b, i) = (wide(spec.wide_strings), wide(spec.wide_guids), wide(spec.wide_blobs), wide(false));
-    let type_refs = 1 + spec.extra_type_refs;
+    let type_refs = 1 + spec.extra_type_refs + u32::from(spec.enum_underlying.is_some());
     // TypeDefOrRef and ResolutionScope have 2 tag bits, MemberRefParent 3, HasCustomAttribute 5.
     let coded = |tag_bits: u32| wide(type_refs >= (1 << (16 - tag_bits)));
     let (tdor, scope, mrp, hca) = (coded(2), coded(2), coded(3), coded(5));
@@ -157,17 +177,43 @@ fn build(spec: &Spec) -> Vec<u8> {
     for _ in 0..spec.extra_type_refs {
         tables.put(spec.pad_scope.unwrap_or((1 << 2) | 2), scope).put(pad_name, s).put(system, s);
     }
+    if spec.enum_underlying.is_some() {
+        let enum_name = strings.string("Enum");
+        tables.put((1 << 2) | 2, scope).put(enum_name, s).put(system, s);
+    }
     // TypeDef: <Module>, Demo.Program extends TypeRef 1 (TypeDefOrRef tag 1), and Inner nested in Program.
-    let (module_type, program, demo, inner) =
-        (strings.string("<Module>"), strings.string("Program"), strings.string("Demo"), strings.string("Inner"));
-    let method_lists = spec.method_lists.unwrap_or([1, 1, 5]);
-    tables.put(0, 4).put(module_type, s).put(0, s).put(0, tdor).put(1, i).put(method_lists[0], i);
-    tables.put(0x0010_0001, 4).put(program, s).put(demo, s).put((1 << 2) | 1, tdor).put(1, i).put(method_lists[1], i);
-    let inner_extends = spec.inner_extends.unwrap_or((1 << 2) | 1);
-    tables.put(0x0010_0002, 4).put(inner, s).put(0, s).put(inner_extends, tdor).put(2, i).put(method_lists[2], i);
+    let module_type = strings.string(if spec.duplicate_enum_name { "Inner" } else { "<Module>" });
+    let (program, demo, inner) = (
+        strings.string("Program"),
+        strings.string("Demo"),
+        strings.string(spec.inner_name.as_deref().unwrap_or("Inner")),
+    );
+    let method_lists = spec.method_lists.unwrap_or([1, 1, 5 + spec.extra_methods]);
+    let field_lists = spec.field_lists.unwrap_or([1, 1, 2]);
+    tables.put(0, 4).put(module_type, s).put(0, s).put(0, tdor).put(field_lists[0], i).put(method_lists[0], i);
+    tables
+        .put(0x0010_0001, 4)
+        .put(program, s)
+        .put(demo, s)
+        .put((1 << 2) | 1, tdor)
+        .put(field_lists[1], i)
+        .put(method_lists[1], i);
+    let inner_extends =
+        spec.inner_extends.unwrap_or(if spec.enum_underlying.is_some() { (type_refs << 2) | 1 } else { (1 << 2) | 1 });
+    tables
+        .put(0x0010_0002, 4)
+        .put(inner, s)
+        .put(0, s)
+        .put(inner_extends, tdor)
+        .put(field_lists[2], i)
+        .put(method_lists[2], i);
     // Field
     let counter = strings.string("counter");
     tables.put(0x0001, 2).put(counter, s).put(field_signature, b);
+    if spec.enum_underlying.is_some() {
+        let value = strings.string(spec.enum_field_name.as_deref().unwrap_or("value__"));
+        tables.put(u32::from(spec.enum_field_flags.unwrap_or(0x0606)), 2).put(value, s).put(enum_signature, b);
+    }
     // MethodDef: Main (tiny IL), Compute (fat IL), Helper (native), Run (abstract, no body).
     let main = if spec.bad_method_name { 0xFFFF } else { strings.string("Main") };
     let (compute, helper, run) = (strings.string("Compute"), strings.string("Helper"), strings.string("Run"));
@@ -176,6 +222,9 @@ fn build(spec: &Spec) -> Vec<u8> {
     tables.put(native_rva, 4).put(0x0001, 2).put(0x0016, 2).put(helper, s).put(helper_signature, b).put(5, i);
     // Run is static pinvokeimpl (0x2000) and has no body.
     tables.put(0, 4).put(0, 2).put(0x2096, 2).put(run, s).put(run_signature, b).put(5, i);
+    for _ in 0..spec.extra_methods {
+        tables.put(0, 4).put(0, 2).put(0x0016, 2).put(helper, s).put(helper_signature, b).put(5, i);
+    }
     // Param: Main(args); Compute's return row (sequence 0) and its parameters stored out of order.
     let (args, x, y) = (strings.string("args"), strings.string("x"), strings.string("y"));
     tables.put(0, 2).put(1, 2).put(args, s);
@@ -197,8 +246,19 @@ fn build(spec: &Spec) -> Vec<u8> {
     let (changed, count) = (strings.string("Changed"), strings.string("Count"));
     tables.put(2, i).put(1, i);
     tables.put(0, 2).put(changed, s).put((1 << 2) | 1, tdor);
-    tables.put(2, i).put(1, i);
-    tables.put(0, 2).put(count, s).put(field_signature, b);
+    let property_maps = if spec.property_maps.is_empty() { vec![(2, 1)] } else { spec.property_maps.clone() };
+    for &(owner, start) in &property_maps {
+        tables.put(owner, i).put(start, i);
+    }
+    for &property in &spec.property_ptrs {
+        tables.put(property, i);
+    }
+    for &signature in &property_signatures {
+        tables.put(u32::from(spec.property_flags), 2).put(count, s).put(signature, b);
+    }
+    for &(semantics, method, association) in &spec.semantics {
+        tables.put(u32::from(semantics), 2).put(method, i).put(association, i);
+    }
     // ModuleRef, and ImplMap binding Run (MemberForwarded tag 1 = MethodDef) to native.dll!RunNative.
     let (native_dll, run_native) = (strings.string("native.dll"), strings.string("RunNative"));
     tables.put(native_dll, s);
@@ -211,34 +271,40 @@ fn build(spec: &Spec) -> Vec<u8> {
     tables.put(4, 2).put(0, 2).put(0, 2).put(0, 2).put(0, 4).put(token_blob, b).put(mscorlib, s).put(0, s).put(0, b);
     // NestedClass: Inner (TypeDef 3) inside Program (TypeDef 2).
     tables.put(3, i).put(2, i);
+    if spec.duplicate_enum_name {
+        tables.put(1, i).put(2, i);
+    }
     // GenericParam: Compute's T (TypeOrMethodDef tag 1 = MethodDef 2).
     let t = strings.string("T");
     tables.put(0, 2).put(0, 2).put((2 << 1) | 1, i).put(t, s);
     // MethodSpec: Compute (MethodDefOrRef tag 0 = MethodDef 2) instantiated with int32.
     tables.put(2 << 1, i).put(instantiation, b);
 
-    let present: [(u8, u32); 20] = [
+    let present = [
         (0x00, 1),
         (0x01, type_refs),
         (0x02, spec.declared_type_defs.unwrap_or(3)),
-        (0x04, 1),
-        (0x06, 4),
+        (0x04, 1 + u32::from(spec.enum_underlying.is_some())),
+        (0x06, 4 + spec.extra_methods),
         (0x08, 4),
         (0x0A, 1),
         (0x0C, attribute_parents.len() as u32),
         (0x11, 1),
         (0x12, 1),
         (0x14, 1),
-        (0x15, 1),
-        (0x17, 1),
+        (0x15, property_maps.len() as u32),
+        (0x16, spec.property_ptrs.len() as u32),
+        (0x17, property_signatures.len() as u32),
+        (0x18, spec.semantics.len() as u32),
         (0x1A, 1),
         (0x1C, 1),
         (0x20, 1),
         (0x23, 1),
-        (0x29, 1),
+        (0x29, 1 + u32::from(spec.duplicate_enum_name)),
         (0x2A, 1),
         (0x2B, 1),
     ];
+    let present: Vec<_> = present.into_iter().filter(|&(_, rows)| rows != 0).collect();
     let heap_sizes = u8::from(spec.wide_strings) | (u8::from(spec.wide_guids) << 1) | (u8::from(spec.wide_blobs) << 2);
     let mut table_stream = vec![0, 0, 0, 0, 2, 0, heap_sizes, 1];
     let valid = present.iter().fold(0u64, |mask, &(id, _)| mask | (1 << id));
@@ -520,6 +586,422 @@ fn attribute_targets_and_nested_types_name_their_owners() {
 }
 
 #[test]
+fn property_signatures_flags_and_semantics_are_reported() {
+    let spec = Spec {
+        property_signatures: vec![vec![0x28, 2, 0x0E, 0x08, 0x0E], vec![0x08, 0, 0x08]],
+        property_flags: 0x1200,
+        semantics: vec![(2, 1, 3), (1, 2, 3), (4, 3, 3), (2, 1, 3), (2, 4, 5)],
+        ..Spec::default()
+    };
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+    let properties = &program(&metadata).properties;
+    assert_eq!(properties.len(), 2);
+    assert_eq!((properties[0].token, properties[0].flags), (0x1700_0001, 0x1200));
+    assert_eq!(properties[0].signature, "instance string Count(int32, string)");
+    assert_eq!(properties[1].signature, "int32 Count()");
+    let bindings: Vec<_> =
+        properties[0].accessors.iter().map(|binding| (binding.semantics, binding.method_token)).collect();
+    assert_eq!(bindings, [(2, 0x0600_0001), (1, 0x0600_0002), (4, 0x0600_0003)]);
+    assert_eq!(properties[1].accessors[0].method_token, 0x0600_0004);
+    assert_eq!(parse(&Spec { jtd: true, ..spec }).unwrap().unwrap().types, metadata.types);
+}
+
+#[test]
+fn malformed_properties_keep_names_flags_and_valid_method_bindings() {
+    let malformed = [
+        vec![],
+        vec![0x06, 0x08],
+        vec![0x18, 0, 0x08],
+        vec![0x68, 0, 0x08],
+        vec![0x28, 2, 0x08, 0x0E],
+        vec![0x28, 0, 0x01],
+        vec![0x28, 1, 0x08, 0x01],
+        vec![0x28, 0, 0x08, 0x08],
+        vec![0x28, 0, 0x1D, 0x01],
+        vec![0x28, 0, 0x14, 0x01, 1, 0, 0],
+        vec![0x28, 0, 0x15, 0x12, 5, 1, 0x01],
+        vec![0x28, 0, 0x0F, 0x1D, 0x01],
+        vec![0x28, 1, 0x08, 0x1D, 0x01],
+        vec![0x28, 1, 0x08, 0x10, 0x01],
+        vec![0x28, 0, 0x1D, 0x16],
+        vec![0x28, 0, 0x45, 0x08],
+        vec![0x28, 0, 0x10, 0x01],
+        vec![0x28, 0, 0x1F, 5, 0x10, 0x01],
+        vec![0x28, 0, 0x10, 0x1F, 5, 0x01],
+        vec![0x28, 0, 0x1F, 5, 0x01],
+        vec![0x28, 0, 0x1D, 0x10, 0x08],
+    ];
+    for signature in malformed {
+        let metadata = parse(&Spec {
+            property_signatures: vec![signature.clone()],
+            property_flags: 0x0200,
+            semantics: vec![(2, 1, 3), (1, 99, 3), (0x10, 2, 3), (2, 1, 999)],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        let property = &program(&metadata).properties[0];
+        assert_eq!(
+            (property.name.as_str(), property.flags, property.signature.as_str()),
+            ("Count", 0x0200, "<unreadable>")
+        );
+        assert_eq!(property.accessors.len(), 1, "{signature:02x?}");
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("Property row 1: signature")));
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("invalid property method binding")));
+    }
+    let metadata =
+        parse(&Spec { property_maps: vec![(3, 1)], semantics: vec![(2, 1, 3)], ..Spec::default() }).unwrap().unwrap();
+    let inner = &metadata.types[2];
+    assert!(inner.properties[0].accessors.is_empty(), "a method from a different owner must not bind");
+    assert!(program(&metadata).properties.is_empty());
+}
+
+#[test]
+fn property_lists_and_accessor_fanout_are_bounded() {
+    let metadata = parse(&Spec {
+        extra_methods: 70,
+        semantics: (1..=74).map(|method| (4, method, 3)).collect(),
+        ..Spec::default()
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(program(&metadata).properties[0].accessors.len(), 64);
+    assert_eq!(metadata.warnings, ["Property row 1: accessor bindings capped at 64"]);
+
+    let spec = Spec {
+        jtd: true,
+        property_signatures: vec![vec![0x28, 0, 0x08]; 2],
+        property_ptrs: vec![2, 2, 1],
+        property_maps: vec![(2, 1), (3, 3)],
+        ..Spec::default()
+    };
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert_eq!(program(&metadata).properties[0].token, 0x1700_0002);
+    assert_eq!(metadata.types[2].properties[0].token, 0x1700_0001);
+    assert_eq!(metadata.types.iter().map(|ty| ty.properties.len()).sum::<usize>(), 2);
+    let metadata = parse(&Spec { property_maps: vec![(2, 3), (3, 1)], ..spec }).unwrap().unwrap();
+    assert!(metadata.types.iter().map(|ty| ty.properties.len()).sum::<usize>() <= 2);
+    assert!(metadata.warnings.iter().any(|warning| warning.contains("out of order")));
+}
+
+#[test]
+fn property_pointer_lists_keep_owner_list_order_and_binding_targets() {
+    for jtd in [false, true] {
+        let metadata = parse(&Spec {
+            jtd,
+            property_signatures: vec![vec![0x28, 0, 0x08], vec![0x28, 0, 0x0E]],
+            property_ptrs: vec![2, 1, 2],
+            semantics: vec![(2, 1, 3), (2, 2, 5)],
+            attribute_parents: vec![(1 << 5) | 9, (2 << 5) | 9],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+        let properties = &program(&metadata).properties;
+        let rows: Vec<_> = properties.iter().map(|property| (property.token, property.signature.as_str())).collect();
+        assert_eq!(rows, [(0x1700_0002, "instance string Count()"), (0x1700_0001, "instance int32 Count()")]);
+        assert_eq!(properties[0].accessors[0].method_token, 0x0600_0002);
+        assert_eq!(properties[1].accessors[0].method_token, 0x0600_0001);
+        assert!(
+            metadata
+                .custom_attributes
+                .iter()
+                .all(|attribute| attribute.parent.as_deref() == Some("Demo.Program::Count"))
+        );
+    }
+}
+
+#[test]
+fn properties_allow_void_only_in_pointer_targets_and_function_pointer_returns() {
+    let metadata = parse(&Spec {
+        property_signatures: vec![
+            vec![0x28, 0, 0x0F, 0x01],
+            vec![0x28, 0, 0x1D, 0x0F, 0x01],
+            vec![0x28, 0, 0x1B, 0x00, 0, 0x01],
+            vec![0x28, 1, 0x08, 0x10, 0x08],
+        ],
+        ..Spec::default()
+    })
+    .unwrap()
+    .unwrap();
+    assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+    let signatures: Vec<_> = program(&metadata).properties.iter().map(|property| property.signature.as_str()).collect();
+    assert_eq!(
+        signatures,
+        [
+            "instance void* Count()",
+            "instance void*[] Count()",
+            "instance method void *() Count()",
+            "instance int32 Count(int32&)",
+        ]
+    );
+}
+
+#[test]
+fn ref_return_properties_and_root_custom_modifiers_remain_readable() {
+    let metadata = parse(&Spec {
+        property_signatures: vec![
+            vec![0x28, 0, 0x10, 0x08],
+            vec![0x28, 0, 0x10, 0x1C],
+            vec![0x28, 0, 0x1F, 5, 0x10, 0x08],
+            vec![0x28, 0, 0x10, 0x20, 5, 0x08],
+            vec![0x28, 0, 0x20, 5, 0x1D, 0x08],
+        ],
+        ..Spec::default()
+    })
+    .unwrap()
+    .unwrap();
+    assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+    let signatures: Vec<_> = program(&metadata).properties.iter().map(|property| property.signature.as_str()).collect();
+    assert_eq!(
+        signatures,
+        [
+            "instance int32& Count()",
+            "instance object& Count()",
+            "instance int32& modreq(System.Object) Count()",
+            "instance int32 modopt(System.Object)& Count()",
+            "instance int32[] modopt(System.Object) Count()",
+        ]
+    );
+}
+
+fn ser_text(text: &str) -> Vec<u8> {
+    let mut bytes = compressed(text.len() as u32);
+    bytes.extend(text.as_bytes());
+    bytes
+}
+
+#[test]
+fn custom_attributes_decode_named_primitives_types_and_arrays() {
+    let mut value = vec![1, 0];
+    value.extend(2i32.to_le_bytes());
+    value.extend(42i32.to_le_bytes());
+    value.extend((-7i32).to_le_bytes());
+    value.extend(3u16.to_le_bytes());
+    value.extend([0x53, 0x02]);
+    value.extend(ser_text("Enabled"));
+    value.push(1);
+    value.extend([0x54, 0x1D, 0x0E]);
+    value.extend(ser_text("Labels"));
+    value.extend(2i32.to_le_bytes());
+    value.extend(ser_text("hello"));
+    value.push(0xFF);
+    value.extend([0x54, 0x50]);
+    value.extend(ser_text("Target"));
+    value.extend(ser_text("Demo.Program"));
+    let metadata = parse(&Spec {
+        ctor_signature: Some(vec![0x20, 1, 0x01, 0x1D, 0x08]),
+        attribute_value: Some(value),
+        ..Spec::default()
+    })
+    .unwrap()
+    .unwrap();
+    let attribute = &metadata.custom_attributes[0];
+    assert_eq!(attribute.arguments.as_ref().unwrap(), &["[42, -7]"]);
+    assert_eq!(attribute.arguments_error, None);
+    let named = attribute.named_arguments.as_ref().unwrap();
+    assert_eq!(named.len(), 3);
+    assert_eq!(named[0].kind, dotnet::NamedArgumentKind::Field);
+    assert_eq!(
+        (named[0].name.as_str(), named[0].argument_type.as_str(), named[0].value.as_str()),
+        ("Enabled", "bool", "true")
+    );
+    assert_eq!(named[1].kind, dotnet::NamedArgumentKind::Property);
+    assert_eq!((named[1].argument_type.as_str(), named[1].value.as_str()), ("string[]", "[\"hello\", null]"));
+    assert_eq!(named[2].value, "typeof(Demo.Program)");
+    let json = serde_json::to_value(attribute).unwrap();
+    assert_eq!(json["named_arguments"][1]["kind"], "property");
+}
+
+#[test]
+fn verified_local_enum_widths_and_signedness_drive_attribute_values() {
+    for (underlying, bytes, number) in [
+        (0x04, vec![0xFE], "-2"),
+        (0x05, vec![0xFE], "254"),
+        (0x06, (-1234i16).to_le_bytes().to_vec(), "-1234"),
+        (0x07, 60_000u16.to_le_bytes().to_vec(), "60000"),
+        (0x08, (-123_456i32).to_le_bytes().to_vec(), "-123456"),
+        (0x09, 4_000_000_000u32.to_le_bytes().to_vec(), "4000000000"),
+        (0x0A, (-8_000_000_000i64).to_le_bytes().to_vec(), "-8000000000"),
+        (0x0B, 18_000_000_000u64.to_le_bytes().to_vec(), "18000000000"),
+    ] {
+        let mut value = vec![1, 0];
+        value.extend(&bytes);
+        value.extend(1i32.to_le_bytes());
+        value.extend(&bytes);
+        value.extend(1u16.to_le_bytes());
+        value.extend([0x54, 0x55]);
+        value.extend(ser_text("Demo.Program+Inner"));
+        value.extend(ser_text("Choice"));
+        value.extend(&bytes);
+        let metadata = parse(&Spec {
+            enum_underlying: Some(underlying),
+            ctor_signature: Some(vec![0x20, 2, 0x01, 0x11, 12, 0x1D, 0x11, 12]),
+            attribute_value: Some(value),
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments_error, None, "{underlying:#x}");
+        assert_eq!(
+            attribute.arguments.as_ref().unwrap(),
+            &[format!("Demo.Program/Inner({number})"), format!("[Demo.Program/Inner({number})]")]
+        );
+        let named = &attribute.named_arguments.as_ref().unwrap()[0];
+        assert_eq!(
+            (named.argument_type.as_str(), named.value.as_str()),
+            ("Demo.Program+Inner", format!("Demo.Program+Inner({number})").as_str())
+        );
+    }
+}
+
+#[test]
+fn unknown_or_unverified_enums_are_never_assumed_to_be_int32() {
+    let spec = Spec {
+        enum_underlying: Some(0x08),
+        ctor_signature: Some(vec![0x20, 1, 0x01, 0x11, 12]),
+        attribute_value: Some(vec![1, 0, 42, 0, 0, 0, 0, 0]),
+        ..Spec::default()
+    };
+    let invalid = [
+        Spec { enum_field_name: Some("not_value__".to_owned()), ..spec.clone() },
+        Spec { enum_field_flags: Some(0x0616), ..spec.clone() },
+        Spec { enum_field_flags: Some(0x0006), ..spec.clone() },
+        Spec { enum_underlying: Some(0x02), ..spec.clone() },
+        Spec { inner_extends: Some(5), ..spec.clone() },
+        Spec { field_lists: Some([1, 1, 1]), ..spec.clone() },
+        Spec { ctor_signature: Some(vec![0x20, 1, 0x01, 0x11, 5]), ..spec.clone() },
+    ];
+    for spec in invalid {
+        let metadata = parse(&spec).unwrap().unwrap();
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments, None, "{spec:?}");
+        assert_eq!(attribute.named_arguments, None);
+        assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+    }
+    for count in [-1i32, 0] {
+        let mut value = vec![1, 0];
+        value.extend(count.to_le_bytes());
+        value.extend([0, 0]);
+        let metadata = parse(&Spec {
+            ctor_signature: Some(vec![0x20, 1, 0x01, 0x1D, 0x11, 5]),
+            attribute_value: Some(value),
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments, None, "null/empty arrays must not imply a known external enum type");
+        assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+    }
+    for name in ["External.Mode, OtherAssembly", "Demo.Program+Inner, Demo"] {
+        let mut value = vec![1, 0, 1, 0, 0x54, 0x55];
+        value.extend(ser_text(name));
+        value.extend(ser_text("Mode"));
+        value.extend(42i32.to_le_bytes());
+        let metadata =
+            parse(&Spec { ctor_signature: Some(vec![0x20, 0, 0x01]), attribute_value: Some(value), ..spec.clone() })
+                .unwrap()
+                .unwrap();
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments, Some(vec![]));
+        assert_eq!(attribute.named_arguments, None);
+        assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+    }
+}
+
+#[test]
+fn a_named_enum_with_duplicate_local_type_names_is_unknown() {
+    let mut value = vec![1, 0];
+    value.extend(42i16.to_le_bytes());
+    value.extend([1, 0, 0x54, 0x55]);
+    value.extend(ser_text("Demo.Program+Inner"));
+    value.extend(ser_text("Choice"));
+    value.extend(99i16.to_le_bytes());
+    let metadata = parse(&Spec {
+        enum_underlying: Some(0x06),
+        duplicate_enum_name: true,
+        ctor_signature: Some(vec![0x20, 1, 0x01, 0x11, 12]),
+        attribute_value: Some(value),
+        ..Spec::default()
+    })
+    .unwrap()
+    .unwrap();
+    let attribute = &metadata.custom_attributes[0];
+    assert_eq!(attribute.arguments, Some(vec!["Demo.Program/Inner(42)".to_owned()]));
+    assert_eq!(attribute.named_arguments, None, "a verified enum and non-enum namesake must remain ambiguous");
+    assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+}
+
+#[test]
+fn named_enum_reflection_metacharacters_never_resolve_literal_type_names() {
+    for name in ["Mode*", "Mode&", "Mode[]", "Mode+", "Mode,", "Mode\\"] {
+        let mut value = vec![1, 0];
+        value.extend(42i16.to_le_bytes());
+        value.extend([1, 0, 0x54, 0x55]);
+        value.extend(ser_text(&format!("Demo.Program+{name}")));
+        value.extend(ser_text("Choice"));
+        value.extend(99i16.to_le_bytes());
+        let metadata = parse(&Spec {
+            enum_underlying: Some(0x06),
+            inner_name: Some(name.to_owned()),
+            ctor_signature: Some(vec![0x20, 1, 0x01, 0x11, 12]),
+            attribute_value: Some(value),
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments, Some(vec![format!("Demo.Program/{name}(42)")]));
+        assert_eq!(attribute.named_arguments, None, "unescaped reflection name {name:?} must not bind a literal enum");
+        assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+    }
+}
+
+#[test]
+fn array_counts_and_named_attribute_corruption_fail_boundedly() {
+    for (count, expected) in [(-1i32, Some("null")), (0, Some("[]")), (-2, None), (i32::MAX, None), (1, None)] {
+        let mut value = vec![1, 0];
+        value.extend(count.to_le_bytes());
+        value.extend([0, 0]);
+        let metadata = parse(&Spec {
+            ctor_signature: Some(vec![0x20, 1, 0x01, 0x1D, 0x08]),
+            attribute_value: Some(value),
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(metadata.custom_attributes[0].arguments, expected.map(|text| vec![text.to_owned()]));
+    }
+    let mut valid = vec![1, 0, 1, 0, 0x54, 0x08];
+    valid.extend(ser_text("Number"));
+    valid.extend(42i32.to_le_bytes());
+    for end in 2..valid.len() {
+        let metadata = parse(&Spec {
+            ctor_signature: Some(vec![0x20, 0, 0x01]),
+            attribute_value: Some(valid[..end].to_vec()),
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments, Some(vec![]));
+        assert_eq!(attribute.named_arguments, None, "truncation at {end}");
+        assert!(attribute.arguments_error.is_some());
+    }
+    let spec =
+        Spec { ctor_signature: Some(vec![0x20, 0, 0x01]), attribute_value: Some(valid.clone()), ..Spec::default() };
+    assert!(parse(&spec).unwrap().unwrap().custom_attributes[0].arguments_error.is_none());
+    valid.push(0);
+    let metadata = parse(&Spec { attribute_value: Some(valid), ..spec }).unwrap().unwrap();
+    assert_eq!(metadata.custom_attributes[0].named_arguments, None, "trailing bytes are not silently ignored");
+}
+
+#[test]
 fn heap_size_flags_widen_heap_indexes() {
     let narrow = parse(&Spec::default()).unwrap().unwrap();
     for (wide_strings, wide_guids, wide_blobs) in [(true, false, false), (false, true, false), (false, false, true)] {
@@ -557,9 +1039,11 @@ fn coded_indexes_widen_at_the_tag_limit() {
 
 #[test]
 fn loads_through_binary_open() {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("dotnet-synthetic.dll");
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("dotnet-synthetic-{}.dll", std::process::id()));
     std::fs::write(&path, build(&Spec::default())).unwrap();
-    let binary = Binary::open(&path).unwrap();
+    let opened = Binary::open(&path);
+    std::fs::remove_file(&path).unwrap();
+    let binary = opened.unwrap();
     let metadata = dotnet::metadata(&binary).unwrap().unwrap();
     assert_eq!(program(&metadata).methods[0].name, "Main");
     // IL is not native code: no method body may become a function start or a symbol.

@@ -67,6 +67,51 @@ fn dotnet_metadata_reports_signatures_and_filters_attributes() {
 }
 
 #[test]
+fn dotnet_metadata_exposes_properties_named_values_and_unknown_external_enums() {
+    let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();
+    let all = project.dotnet_metadata(&DotNetQuery { limit: Some(100), ..Default::default() }).unwrap().unwrap();
+    let types = all.types.unwrap().items;
+    assert_eq!(all.counts.properties, types.iter().map(|ty| ty.properties.len()).sum::<usize>());
+    let query = DotNetQuery { contains: Some("useNonRandomizedHashSeed".to_owned()), ..Default::default() };
+    let filtered = project.dotnet_metadata(&query).unwrap().unwrap().types.unwrap();
+    assert_eq!(filtered.total, 1);
+    let ty = &filtered.items[0];
+    assert_eq!(ty.full_name(), "System.LocalAppContextSwitches");
+    let property = ty.properties.iter().find(|property| property.name == "UseNonRandomizedHashSeed").unwrap();
+    assert_eq!(property.signature, "bool UseNonRandomizedHashSeed()");
+    let getter = property.accessors.iter().find(|binding| binding.semantics == 2).unwrap();
+    assert!(
+        ty.methods
+            .iter()
+            .any(|method| method.token == getter.method_token && method.name == "get_UseNonRandomizedHashSeed")
+    );
+
+    let query = DotNetQuery {
+        list: DotNetList::Attributes,
+        contains: Some("RuntimeCompatibilityAttribute".to_owned()),
+        ..Default::default()
+    };
+    let attributes = project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes.unwrap();
+    let compatibility = &attributes.items[0];
+    let named = compatibility.named_arguments.as_ref().unwrap();
+    assert!(named.iter().any(|argument| {
+        argument.name == "WrapNonExceptionThrows" && argument.argument_type == "bool" && argument.value == "true"
+    }));
+    assert!(compatibility.arguments_error.is_none());
+    let query = DotNetQuery {
+        list: DotNetList::Attributes,
+        contains: Some("DebuggableAttribute".to_owned()),
+        ..Default::default()
+    };
+    let attributes = project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes.unwrap();
+    let debuggable = &attributes.items[0];
+    assert!(debuggable.arguments.is_none() && debuggable.named_arguments.is_none());
+    assert!(debuggable.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+    let json = serde_json::to_value(debuggable).unwrap();
+    assert!(json["arguments_error"].as_str().unwrap().contains("unknown"));
+}
+
+#[test]
 fn dotnet_il_pages_one_method_by_token_or_name() {
     let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();
     let query = |method: &str, offset, limit| DotNetIlQuery { method: method.to_owned(), offset, limit, at: None };

@@ -1,7 +1,7 @@
 //! The `#Strings`, `#US`, `#GUID` and `#Blob` heaps (II.24.2.2 - II.24.2.5).
 
 /// Longest identifier read from `#Strings`; real names are far shorter, generated ones rarely exceed this.
-const MAX_NAME_BYTES: usize = 1024;
+pub(super) const MAX_NAME_BYTES: usize = 1024;
 /// Caps on the `#US` literals collected, so a huge or hostile heap cannot dominate the result.
 pub(super) const MAX_USER_STRINGS: usize = 65_536;
 const MAX_USER_STRING_UNITS: usize = 4096;
@@ -22,6 +22,14 @@ impl<'a> Heaps<'a> {
         let tail = &tail[..tail.len().min(MAX_NAME_BYTES)];
         let end = tail.iter().position(|&byte| byte == 0).unwrap_or(tail.len());
         Some(String::from_utf8_lossy(&tail[..end]).into_owned())
+    }
+
+    /// A complete identifier for identity checks, never truncated or lossily decoded like display text.
+    pub(super) fn exact_string(&self, offset: u32) -> Option<&'a str> {
+        let tail = self.strings.get(usize::try_from(offset).ok()?..)?;
+        let tail = &tail[..tail.len().min(MAX_NAME_BYTES + 1)];
+        let end = tail.iter().position(|&byte| byte == 0)?;
+        std::str::from_utf8(&tail[..end]).ok()
     }
 
     /// The 1-based GUID at `index` as its canonical text; index 0 is the null GUID and yields `None`.
@@ -146,5 +154,21 @@ mod tests {
         assert_eq!(heaps.user_string(0, 8), Some((vec![], 0)));
         assert_eq!(truncated.user_string(1, 8), None);
         assert_eq!(heaps.user_string(u32::MAX, 8), None);
+    }
+
+    #[test]
+    fn identity_checks_reject_truncated_unterminated_and_lossy_names() {
+        let mut strings = vec![b'x'; MAX_NAME_BYTES + 1];
+        strings.push(0);
+        strings.extend([0xFF, 0]);
+        strings.extend(b"Enum");
+        let heaps = Heaps { strings: &strings, ..Heaps::default() };
+        assert!(heaps.string(0).is_some(), "display names remain bounded and readable");
+        assert_eq!(heaps.exact_string(0), None);
+        assert_eq!(heaps.exact_string((MAX_NAME_BYTES + 2) as u32), None);
+        assert_eq!(heaps.exact_string((MAX_NAME_BYTES + 4) as u32), None);
+        let heaps = Heaps { strings: b"\0System\0Enum\0", ..Heaps::default() };
+        assert_eq!(heaps.exact_string(1), Some("System"));
+        assert_eq!(heaps.exact_string(8), Some("Enum"));
     }
 }

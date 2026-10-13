@@ -12,9 +12,10 @@
 //! warnings and partial results. Only an image that claims to be managed but whose CLI header or metadata root
 //! cannot be read is an error.
 //!
-//! Method, field and member-reference signatures are rendered as ILAsm-style text, P/Invoke imports are read
-//! from ImplMap, and custom attributes are listed with their fixed constructor arguments when those are
-//! primitives, strings or types. Not decoded: named or enum/array/boxed attribute arguments and resources.
+//! Method, field, property and member-reference signatures are rendered as ILAsm-style text. Properties include
+//! bounded MethodSemantics bindings; P/Invoke imports come from ImplMap. Custom attributes decode fixed and named
+//! primitive/string/type arguments, single-dimensional arrays and enums verified in this image. External enum
+//! underlying types remain unknown. Boxed attribute arguments and resources are not decoded.
 //!
 //! [`method_il`] disassembles one method's CIL on request, with its locals and exception clauses; that is a
 //! listing for a reader, never a source of native analysis.
@@ -49,6 +50,7 @@ const MAX_VERSION_BYTES: usize = 256;
 const METADATA_SIGNATURE: u32 = 0x424A_5342;
 /// Enclosing types prefixed to a nested type's name; deeper (or cyclic) nesting is cut off.
 const MAX_NESTING: u32 = 16;
+const MAX_PROPERTY_ACCESSORS: usize = 64;
 const BUDGET_EXHAUSTED: &str = "signature text budget exhausted; remaining signatures not rendered";
 
 /// CLI header flags (II.25.3.3.1).
@@ -170,6 +172,27 @@ pub struct TypeDef {
     pub enclosing: Option<u32>,
     pub fields: Vec<FieldDef>,
     pub methods: Vec<MethodDef>,
+    pub properties: Vec<PropertyDef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PropertyDef {
+    pub token: u32,
+    pub name: String,
+    /// PropertyAttributes (II.23.1.14), retained even when the signature is unreadable.
+    pub flags: u16,
+    /// Type, name and index parameter types, prefixed with `instance` when HASTHIS is set.
+    pub signature: String,
+    /// Up to 64 distinct getter/setter/other bindings to methods declared by the same type.
+    /// These report MethodSemantics rows, not inferred accessors or validated method signatures.
+    pub accessors: Vec<PropertyAccessor>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PropertyAccessor {
+    /// MethodSemanticsAttributes: 1 setter, 2 getter or 4 other (II.23.1.12).
+    pub semantics: u16,
+    pub method_token: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -291,11 +314,30 @@ pub struct CustomAttribute {
     /// The constructor's declaring type, e.g. `System.Runtime.CompilerServices.CompilerGeneratedAttribute`.
     pub attribute_type: Option<String>,
     pub constructor_token: u32,
-    /// The fixed constructor arguments as text when each is a primitive, string or `System.Type`; `None` for
-    /// any other argument type (enum, array, boxed object) or an unreadable value. Named arguments are skipped.
+    /// Fixed constructor values, including arrays and verified local enums; `None` when unreadable/unsupported.
     pub arguments: Option<Vec<String>>,
+    /// Named field/property values; `None` when the fixed or named portion cannot be decoded completely.
+    pub named_arguments: Option<Vec<NamedArgument>>,
+    /// Why some arguments are unavailable, including unknown external enum underlying types.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments_error: Option<String>,
     /// Bytes in the attribute's value blob.
     pub blob_length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NamedArgument {
+    pub kind: NamedArgumentKind,
+    pub name: String,
+    pub argument_type: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NamedArgumentKind {
+    Field,
+    Property,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -610,10 +652,15 @@ struct Decoder<'t, 'a> {
     enclosing: HashMap<u32, u32>,
     /// The owning MethodDef row of each Param row, filled in as the methods are decoded.
     param_methods: HashMap<u32, u32>,
+    member_types: MemberTypes,
+    enum_underlying: HashMap<u32, u8>,
+    named_enums: HashMap<String, Option<u8>>,
 }
 
 /// `Namespace.Type::member` for each method and field token.
 type MemberOwners = HashMap<u32, String>;
+/// Owning TypeDef row by `(table, row)` of a mapped Property or Event.
+type MemberTypes = HashMap<(u8, u32), u32>;
 
 impl signatures::Resolve for Decoder<'_, '_> {
     fn type_name(&self, table: u8, row: u32) -> Option<String> {
@@ -622,6 +669,14 @@ impl signatures::Resolve for Decoder<'_, '_> {
 
     fn type_spec(&self, row: u32) -> Option<&[u8]> {
         self.heaps.blob(self.tables.cell(tables::TYPE_SPEC, row, 0)?)
+    }
+
+    fn enum_underlying(&self, table: u8, row: u32) -> Option<u8> {
+        (table == tables::TYPE_DEF).then(|| self.enum_underlying.get(&row).copied())?
+    }
+
+    fn named_enum_underlying(&self, name: &str) -> Option<u8> {
+        self.named_enums.get(name).copied().flatten()
     }
 }
 
@@ -658,6 +713,9 @@ impl<'t, 'a> Decoder<'t, 'a> {
             budget_reported: false,
             enclosing,
             param_methods: HashMap::new(),
+            member_types: HashMap::new(),
+            enum_underlying: HashMap::new(),
+            named_enums: HashMap::new(),
         }
     }
 }
@@ -841,6 +899,10 @@ impl Decoder<'_, '_> {
         let table = tables::TYPE_DEF;
         let field_lists = self.member_lists(table, 4, tables::FIELD, tables::FIELD_PTR);
         let method_lists = self.member_lists(table, 5, tables::METHOD_DEF, tables::METHOD_PTR);
+        self.index_enums(&field_lists);
+        let (member_types, property_lists) = self.property_and_event_types();
+        self.member_types = member_types;
+        let mut accessors = self.property_accessors(&method_lists);
         let param_lists = self.member_lists(tables::METHOD_DEF, 5, tables::PARAM, tables::PARAM_PTR);
         for (params, method) in param_lists.iter().zip(1..) {
             self.param_methods.extend(params.iter().map(|&param| (param, method)));
@@ -848,12 +910,26 @@ impl Decoder<'_, '_> {
         field_lists
             .into_iter()
             .zip(method_lists)
+            .zip(property_lists)
             .zip(1..)
-            .map(|((fields, methods), row)| {
+            .map(|(((fields, methods), properties), row)| {
                 let fields = fields.into_iter().map(|field| self.field(field, row)).collect();
                 let methods = methods
                     .into_iter()
                     .map(|method| self.method(method, row, &param_lists[method as usize - 1]))
+                    .collect();
+                let properties = properties
+                    .into_iter()
+                    .map(|property| {
+                        let name = self.string(tables::PROPERTY, property, 1);
+                        PropertyDef {
+                            token: token(tables::PROPERTY, property),
+                            flags: self.tables.cell(tables::PROPERTY, property, 0).unwrap_or(0) as u16,
+                            signature: self.signature(tables::PROPERTY, property, &name, Some(row)),
+                            name,
+                            accessors: accessors.remove(&property).unwrap_or_default(),
+                        }
+                    })
                     .collect();
                 TypeDef {
                     token: token(table, row),
@@ -864,9 +940,138 @@ impl Decoder<'_, '_> {
                     enclosing: self.enclosing.get(&row).map(|&outer| token(table, outer)),
                     fields,
                     methods,
+                    properties,
                 }
             })
             .collect()
+    }
+
+    fn index_enums(&mut self, field_lists: &[Vec<u32>]) {
+        if self.tables.rows(tables::CUSTOM_ATTRIBUTE) == 0 {
+            return;
+        }
+        for (fields, row) in field_lists.iter().zip(1..) {
+            if self.budget.get() == 0 {
+                break;
+            }
+            let base = self.tables.cell(tables::TYPE_DEF, row, 3).and_then(|value| C::TypeDefOrRef.decode(value));
+            let Some((tables::TYPE_REF, base)) = base else { continue };
+            let identifier = |table, row, column| self.enum_identifier(table, row, column);
+            let scope = self.tables.cell(tables::TYPE_REF, base, 0).and_then(|value| C::ResolutionScope.decode(value));
+            let valid_scope = scope.is_some_and(|(table, row)| {
+                table == tables::ASSEMBLY_REF && row != 0 && row <= self.tables.rows(table)
+            });
+            if !valid_scope
+                || identifier(tables::TYPE_REF, base, 1) != Some("Enum")
+                || identifier(tables::TYPE_REF, base, 2) != Some("System")
+            {
+                continue;
+            }
+            let mut instances = fields
+                .iter()
+                .copied()
+                .filter(|&field| self.tables.cell(tables::FIELD, field, 0).is_some_and(|flags| flags & 0x0010 == 0));
+            let Some(field) = instances.next() else { continue };
+            if instances.next().is_some() {
+                continue;
+            }
+            let flags = self.tables.cell(tables::FIELD, field, 0).unwrap_or(0);
+            let name = identifier(tables::FIELD, field, 1);
+            let blob = self.tables.cell(tables::FIELD, field, 2).and_then(|offset| self.heaps.blob(offset));
+            let Some(&[0x06, underlying @ 0x04..=0x0B]) = blob else { continue };
+            if name != Some("value__") || flags & 0x0600 != 0x0600 {
+                continue;
+            }
+            self.enum_underlying.insert(row, underlying);
+        }
+        if self.enum_underlying.is_empty() {
+            return;
+        }
+        // Include non-enum types when detecting duplicate names; a valid enum beside an invalid namesake is
+        // ambiguous too. Failed lookups and name rendering share the image-wide signature work budget.
+        for row in 1..=self.tables.rows(tables::TYPE_DEF) {
+            if self.budget.get() == 0 {
+                self.named_enums.clear();
+                break;
+            }
+            if let Some(name) = self.serialized_type_def_name(row, 0) {
+                let underlying = self.enum_underlying.get(&row).copied();
+                self.named_enums.entry(name).and_modify(|kind| *kind = None).or_insert(underlying);
+            }
+        }
+    }
+
+    fn enum_identifier(&self, table: u8, row: u32, column: usize) -> Option<&str> {
+        if self.budget.get() == 0 {
+            return None;
+        }
+        let text = self.heaps.exact_string(self.tables.cell(table, row, column)?);
+        let cost = text.map_or(heaps::MAX_NAME_BYTES + 1, |text| text.len() + 1);
+        let left = self.budget.get().checked_sub(cost);
+        self.budget.set(left.unwrap_or(0));
+        left?;
+        text
+    }
+
+    /// The unescaped subset of reflection names that can safely resolve named enum types in this image.
+    fn serialized_type_def_name(&self, row: u32, depth: u32) -> Option<String> {
+        if depth > MAX_NESTING || self.budget.get() == 0 {
+            return None;
+        }
+        let identifier = |column| self.enum_identifier(tables::TYPE_DEF, row, column);
+        let (namespace, name) = (identifier(2)?, identifier(1)?);
+        if namespace
+            .chars()
+            .chain(name.chars())
+            .any(|character| matches!(character, '+' | '/' | ',' | '\\' | '[' | ']' | '*' | '&'))
+        {
+            return None;
+        }
+        let name = qualified_name(namespace, name);
+        let name = match self.enclosing.get(&row) {
+            Some(&outer) => format!("{}+{name}", self.serialized_type_def_name(outer, depth + 1)?),
+            None => name,
+        };
+        let left = self.budget.get().checked_sub(name.len());
+        self.budget.set(left.unwrap_or(0));
+        left?;
+        (name.len() <= signatures::MAX_TEXT).then_some(name)
+    }
+
+    fn property_accessors(&mut self, method_lists: &[Vec<u32>]) -> HashMap<u32, Vec<PropertyAccessor>> {
+        let table = tables::METHOD_SEMANTICS;
+        if self.tables.rows(table) == 0 {
+            return HashMap::new();
+        }
+        let mut method_types = HashMap::new();
+        for (methods, owner) in method_lists.iter().zip(1..) {
+            method_types.extend(methods.iter().map(|&method| (method, owner)));
+        }
+        let mut accessors: HashMap<u32, Vec<PropertyAccessor>> = HashMap::new();
+        let mut capped = std::collections::HashSet::new();
+        for row in 1..=self.tables.rows(table) {
+            let association = self.tables.cell(table, row, 2).and_then(|value| C::HasSemantics.decode(value));
+            let Some((tables::PROPERTY, property)) = association else { continue };
+            let method = self.tables.cell(table, row, 1).unwrap_or(0);
+            let semantics = self.tables.cell(table, row, 0).unwrap_or(0) as u16;
+            let owner = self.member_types.get(&(tables::PROPERTY, property));
+            if owner.is_none() || owner != method_types.get(&method) || !matches!(semantics, 1 | 2 | 4) {
+                self.warnings.push(format!("MethodSemantics row {row}: invalid property method binding"));
+                continue;
+            }
+            let bindings = accessors.entry(property).or_default();
+            let binding = PropertyAccessor { semantics, method_token: token(tables::METHOD_DEF, method) };
+            if bindings.contains(&binding) {
+                continue;
+            }
+            if bindings.len() < MAX_PROPERTY_ACCESSORS {
+                bindings.push(binding);
+            } else if capped.insert(property) {
+                self.warnings
+                    .push(format!("Property row {property}: accessor bindings capped at {MAX_PROPERTY_ACCESSORS}"));
+            }
+        }
+        accessors
     }
 
     fn field(&mut self, row: u32, owner: u32) -> FieldDef {
@@ -900,7 +1105,7 @@ impl Decoder<'_, '_> {
         Some(Reader::new(self, Generics::default(), &self.budget).type_spec(blob)?.text)
     }
 
-    /// The signature of a MethodDef, Field or MemberRef row rendered with its name, in the generic context of
+    /// A MethodDef, Field, Property or MemberRef signature rendered with its name, in the generic context of
     /// TypeDef `owner`; `None` when the blob is missing or malformed.
     fn render_signature(&self, table: u8, row: u32, name: &str, owner: Option<u32>) -> Option<String> {
         let column = if table == tables::METHOD_DEF { 4 } else { 2 };
@@ -913,6 +1118,7 @@ impl Decoder<'_, '_> {
         match table {
             tables::FIELD => reader.field(blob).map(|ty| format!("{} {name}", ty.text)),
             tables::METHOD_DEF => reader.method(blob).map(|method| method.render(name, &generics)),
+            tables::PROPERTY => reader.property(blob).map(|property| property.render(name, &generics)),
             _ => reader.member(blob).map(|member| member.render(name, &generics)),
         }
     }
@@ -966,7 +1172,6 @@ impl Decoder<'_, '_> {
         if self.tables.rows(table) == 0 {
             return attributes;
         }
-        let members = self.property_and_event_types();
         for row in 1..=self.tables.rows(table) {
             let parent = self.tables.cell(table, row, 0).and_then(|value| C::HasCustomAttribute.decode(value));
             let constructor = self.tables.cell(table, row, 1).and_then(|value| C::CustomAttributeType.decode(value));
@@ -975,7 +1180,7 @@ impl Decoder<'_, '_> {
                 self.warnings.push(format!("CustomAttribute row {row}: value blob is outside #Blob"));
             }
             let parent_token = parent.map_or(0, |(table, row)| token(table, row));
-            let parent = parent.and_then(|(table, row)| self.attribute_target(table, row, owners, &members));
+            let parent = parent.and_then(|(table, row)| self.attribute_target(table, row, owners, &self.member_types));
             let constructor_token = constructor.map_or(0, |(table, row)| token(table, row));
             let (attribute_type, signature) = match constructor {
                 Some((tables::METHOD_DEF, method)) => (
@@ -997,23 +1202,34 @@ impl Decoder<'_, '_> {
                 .and_then(|offset| self.heaps.blob(offset))
                 .and_then(|blob| Reader::new(self, Generics::default(), &self.budget).method(blob))
                 .map(|method| method.params);
-            let arguments =
-                params.zip(value).and_then(|(params, value)| signatures::attribute_arguments(&params, value));
+            let decoded = params.zip(value).map(|(params, value)| {
+                Reader::new(self, Generics::default(), &self.budget).attribute_arguments(&params, value)
+            });
+            let (arguments, named_arguments, arguments_error) = match decoded {
+                Some(decoded) => (decoded.arguments, decoded.named_arguments, decoded.error.map(str::to_owned)),
+                None => (None, None, Some("constructor signature or attribute value is unreadable".to_owned())),
+            };
+            if self.budget.get() == 0 && !std::mem::replace(&mut self.budget_reported, true) {
+                self.warnings.push(BUDGET_EXHAUSTED.to_owned());
+            }
             attributes.push(CustomAttribute {
                 parent_token,
                 parent,
                 attribute_type,
                 constructor_token,
                 arguments,
+                named_arguments,
+                arguments_error,
                 blob_length: value.map_or(0, <[u8]>::len),
             });
         }
         attributes
     }
 
-    /// The TypeDef row declaring each Property and Event row, from PropertyMap and EventMap.
-    fn property_and_event_types(&mut self) -> HashMap<(u8, u32), u32> {
+    /// Property/Event ownership and each type's Property rows in map/pointer-list order.
+    fn property_and_event_types(&mut self) -> (MemberTypes, Vec<Vec<u32>>) {
         let mut types = HashMap::new();
+        let mut properties = vec![Vec::new(); self.tables.rows(tables::TYPE_DEF) as usize];
         let maps = [
             (tables::PROPERTY_MAP, tables::PROPERTY, tables::PROPERTY_PTR),
             (tables::EVENT_MAP, tables::EVENT, tables::EVENT_PTR),
@@ -1021,23 +1237,22 @@ impl Decoder<'_, '_> {
         for (map, target, ptr) in maps {
             for (members, row) in self.member_lists(map, 1, target, ptr).into_iter().zip(1..) {
                 if let Some(parent) = self.tables.cell(map, row, 0) {
+                    if target == tables::PROPERTY
+                        && let Some(list) = parent.checked_sub(1).and_then(|row| properties.get_mut(row as usize))
+                    {
+                        list.extend(&members);
+                    }
                     types.extend(members.into_iter().map(|member| ((target, member), parent)));
                 }
             }
         }
-        types
+        (types, properties)
     }
 
     /// What a custom attribute is applied to: a member as `Type::member`, a parameter as `Type::Method/param`,
     /// a generic parameter as `Owner<T>`, anything else by its row label. A parameter, property or event whose
     /// owner does not resolve is named with its table, e.g. `Property Count`.
-    fn attribute_target(
-        &self,
-        table: u8,
-        row: u32,
-        owners: &MemberOwners,
-        members: &HashMap<(u8, u32), u32>,
-    ) -> Option<String> {
+    fn attribute_target(&self, table: u8, row: u32, owners: &MemberOwners, members: &MemberTypes) -> Option<String> {
         if let Some(owner) = owners.get(&token(table, row)) {
             return Some(owner.clone());
         }
@@ -1210,6 +1425,22 @@ mod tests {
         let types = decoder.types();
         let signatures: Vec<&str> = types[0].methods.iter().map(|method| method.signature.as_str()).collect();
         assert_eq!(signatures, ["int32 M()", UNREADABLE, UNREADABLE, UNREADABLE]);
+        assert_eq!(warnings.0, [BUDGET_EXHAUSTED]);
+    }
+
+    #[test]
+    fn failed_enum_identity_lookups_spend_the_shared_budget() {
+        let (stream, blobs) = method_tables(&[&[0x00, 0, 0x01]]);
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: b"\0M\0", blobs: &blobs, ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        decoder.enclosing.insert(1, 1);
+        decoder.budget.set(40);
+        assert!(decoder.serialized_type_def_name(1, 0).is_none(), "cycles never resolve an enum name");
+        assert_eq!(decoder.budget.get(), 0, "failed nested name lookups still cost work");
+        assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
+        assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
         assert_eq!(warnings.0, [BUDGET_EXHAUSTED]);
     }
 

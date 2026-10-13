@@ -1,8 +1,9 @@
 //! .NET (ECMA-335) metadata of a managed assembly, from `rampage_loaders::dotnet`: the assembly identity, its
 //! references and entry point, the size of each list, and one page of one list -- its types with their methods
 //! and signatures, its P/Invoke imports, or its custom attributes -- filterable because a real assembly can hold
-//! thousands of entries. Method bodies are CIL bytecode and are reported, never analyzed as native code; one
-//! method's CIL can be listed, a page at a time, by [`Project::dotnet_il`].
+//! thousands of entries. Type rows include fields, methods and properties. Method bodies are CIL bytecode,
+//! reported but never analyzed as native code; one method's CIL can be listed a page at a time by
+//! [`Project::dotnet_il`].
 
 use std::str::FromStr;
 
@@ -19,12 +20,12 @@ use crate::{ApiError, Page, Project};
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DotNetList {
-    /// Types with their fields and methods.
+    /// Types with their fields, methods and properties.
     #[default]
     Types,
     /// P/Invoke imports: the DLL export each native method binds to.
     Pinvokes,
-    /// Custom attributes with their targets and constructor arguments.
+    /// Custom attributes with their targets, constructor arguments and named field/property arguments.
     Attributes,
 }
 
@@ -42,7 +43,7 @@ impl FromStr for DotNetList {
 }
 
 /// One page of `list`, case-insensitively matching `contains`: types by full name (`Namespace.Name`) or a method
-/// name, P/Invoke imports by method, DLL or import name, custom attributes by attribute type or target.
+/// or property name, P/Invoke imports by method, DLL or import name, custom attributes by attribute type or target.
 /// `parent_token` keeps only the attributes applied to that metadata token.
 #[derive(Debug, Default, Clone)]
 pub struct DotNetQuery {
@@ -57,6 +58,7 @@ pub struct DotNetQuery {
 pub struct DotNetCounts {
     pub types: usize,
     pub methods: usize,
+    pub properties: usize,
     pub il_methods: usize,
     pub native_methods: usize,
     pub type_refs: usize,
@@ -206,6 +208,7 @@ impl Project {
         let counts = DotNetCounts {
             types: metadata.types.len(),
             methods: methods().count(),
+            properties: metadata.types.iter().map(|ty| ty.properties.len()).sum(),
             il_methods: methods().filter(|method| matches!(method.body, BodyKind::Il)).count(),
             native_methods: methods().filter(|method| matches!(method.body, BodyKind::Native)).count(),
             type_refs: metadata.type_refs.len(),
@@ -220,7 +223,9 @@ impl Project {
         match query.list {
             DotNetList::Types => {
                 let wanted = |ty: &TypeDef| {
-                    matcher.matches(&ty.full_name()) || ty.methods.iter().any(|method| matcher.matches(&method.name))
+                    matcher.matches(&ty.full_name())
+                        || ty.methods.iter().any(|method| matcher.matches(&method.name))
+                        || ty.properties.iter().any(|property| matcher.matches(&property.name))
                 };
                 types = Some(Page::of(metadata.types.into_iter().filter(wanted), query.offset, query.limit));
             }

@@ -65,7 +65,7 @@ impl Group {
                  bytes against the original Mach-O, ARM64 indirect-branch windows."
             }
             Group::Diagnostics => "Decode coverage and unreliable-code evidence, and explicit ARM64 jump-table checks.",
-            Group::DotNet => "Managed (.NET) assembly metadata (types, methods, P/Invokes, attributes) and method CIL.",
+            Group::DotNet => "Managed (.NET) metadata (types, methods, properties, P/Invokes, attributes) and CIL.",
             Group::Carve => "Scan any file (firmware, installer, archive) for embedded executables and containers.",
         }
     }
@@ -305,7 +305,7 @@ struct DotNetArgs {
     #[serde(default)]
     list: crate::DotNetList,
     /// Case-insensitive filter on the selected list: types whose full name (Namespace.Name) or a method name
-    /// contains this text, P/Invoke imports by method, DLL or import name, attributes by attribute type or target.
+    /// or property name contains this text, P/Invoke imports by method/DLL/import, attributes by type or target.
     #[serde(default)]
     contains: Option<String>,
     /// With `list: attributes`, only the attributes applied to this metadata token (e.g. 0x06000001 for
@@ -649,14 +649,12 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::DotNet,
             "dotnet_metadata",
-            "For a managed (.NET) assembly: CLI header, assembly identity, referenced assemblies, entry point, \
-             the size of each list, and one page of the list chosen by `list`: `types` (default; fields and \
-             methods with decoded signatures such as `int32 Combine<T1>(T1)`, method RVAs, IL body sizes and \
-             flags), `pinvokes` (DLL and export per P/Invoke method) or `attributes` (custom attribute type, \
-             target, primitive/string/type constructor arguments; `parent_token` keeps one target's). Filter \
-             with `contains`, page with offset/limit. Method bodies are CIL bytecode, not native code: \
-             disassemble and decompile do not apply to them; list one with dotnet_il. Returns null for a native \
-             image.",
+            "Managed assembly identity and a bounded page chosen by `list`: types with method/property signatures, \
+             pinvokes with DLL/exports, or attributes with fixed/named values. Supported values include primitives, \
+             strings, types, single-dimensional arrays and verified local enums; unsupported values report errors. \
+             Property accessor tokens are metadata bindings, not inferred behavior. Filter with contains and page \
+             with offset/limit; parent_token selects an attribute target. Bodies are CIL, listed by dotnet_il, \
+             not native code for decompile/disassemble. Returns null for a native image.",
             |project, args: DotNetArgs| {
                 let query = crate::DotNetQuery {
                     list: args.list,

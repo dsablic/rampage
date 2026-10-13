@@ -29,6 +29,7 @@ pub(super) const EVENT: u8 = 0x14;
 pub(super) const PROPERTY_MAP: u8 = 0x15;
 pub(super) const PROPERTY_PTR: u8 = 0x16;
 pub(super) const PROPERTY: u8 = 0x17;
+pub(super) const METHOD_SEMANTICS: u8 = 0x18;
 pub(super) const MODULE_REF: u8 = 0x1A;
 pub(super) const TYPE_SPEC: u8 = 0x1B;
 pub(super) const IMPL_MAP: u8 = 0x1C;

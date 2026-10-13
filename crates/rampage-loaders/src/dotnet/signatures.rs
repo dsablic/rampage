@@ -1,4 +1,4 @@
-//! Blob signatures (II.23.2) rendered as ILAsm-style text (`int32 Combine<T1>(T1)`), and the fixed arguments of
+//! Blob signatures (II.23.2) rendered as ILAsm-style text (`int32 Combine<T1>(T1)`), and fixed/named arguments of
 //! custom attribute values (II.23.3).
 //!
 //! Signatures are hostile input that can nest (a TypeSpec naming a TypeSpec) and fan out (generic arguments), so a
@@ -10,12 +10,13 @@ use std::cell::Cell;
 
 use super::heaps::compressed_length;
 use super::tables::{self, Coded};
+use super::{NamedArgument, NamedArgumentKind};
 
 /// What a signature that cannot be decoded, or that exceeds a cap, renders as.
 pub const UNREADABLE: &str = "<unreadable>";
 const MAX_DEPTH: u32 = 32;
 const MAX_NODES: u32 = 512;
-const MAX_TEXT: usize = 8192;
+pub(super) const MAX_TEXT: usize = 8192;
 /// Array ranks and generic parameter counts above this are treated as corrupt rather than rendered.
 pub(super) const MAX_ARITY: u32 = 64;
 /// Text rendered plus blob bytes read across every signature of one image, so a file full of expanding or
@@ -23,10 +24,12 @@ pub(super) const MAX_ARITY: u32 = 64;
 pub(super) const TOTAL_BUDGET: usize = 64 << 20;
 /// Longest string or type-name argument kept from a custom attribute value.
 const MAX_ARGUMENT_BYTES: usize = 1024;
+const UNKNOWN_ENUM: &str = "enum underlying type is unknown (external or unsupported metadata)";
 
 const ELEMENT_STRING: u8 = 0x0E;
 const ELEMENT_SENTINEL: u8 = 0x41;
 const FIELD_SIGNATURE: u8 = 0x06;
+const PROPERTY_SIGNATURE: u8 = 0x08;
 const LOCAL_SIGNATURE: u8 = 0x07;
 const GENERIC_INSTANTIATION: u8 = 0x0A;
 /// `ldloc` takes a 16-bit index (III.3.43), so a method has at most this many locals.
@@ -41,6 +44,13 @@ pub(super) trait Resolve {
     fn type_name(&self, table: u8, row: u32) -> Option<String>;
     /// The signature blob of a TypeSpec row.
     fn type_spec(&self, row: u32) -> Option<&[u8]>;
+    /// Only enums whose underlying integral type is verified in this image resolve.
+    fn enum_underlying(&self, _table: u8, _row: u32) -> Option<u8> {
+        None
+    }
+    fn named_enum_underlying(&self, _name: &str) -> Option<u8> {
+        None
+    }
 }
 
 /// Generic parameter names, `(number, name)` sorted by number, of the type and method a signature belongs to. A
@@ -60,12 +70,15 @@ fn generic_name(params: &[(u32, String)], number: u32, prefix: &str) -> String {
 }
 
 /// What a custom attribute value can hold for a parameter of this type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Kind {
     /// A bare ELEMENT_TYPE (primitive, string, object, ...).
     Element(u8),
     /// `System.Type`, stored in an attribute value as the type's name.
     SystemType,
+    Enum(u8, u32),
+    NamedEnum(u8),
+    Array(Box<Ty>),
     Other,
 }
 
@@ -177,11 +190,22 @@ pub(super) struct Reader<'r> {
     budget: &'r Cell<usize>,
     nodes: u32,
     text: usize,
+    attribute_error: Option<&'static str>,
+    strict_types: bool,
+}
+
+#[derive(Clone, Copy)]
+enum TypeContext {
+    Type,
+    PropertyResult,
+    Parameter,
+    Return,
+    PointerTarget,
 }
 
 impl<'r> Reader<'r> {
     pub(super) fn new(resolve: &'r dyn Resolve, generics: Generics<'r>, budget: &'r Cell<usize>) -> Self {
-        Self { resolve, generics, budget, nodes: 0, text: 0 }
+        Self { resolve, generics, budget, nodes: 0, text: 0, attribute_error: None, strict_types: false }
     }
 
     /// A MethodDefSig or MethodRefSig (II.23.2.1, II.23.2.2).
@@ -197,6 +221,34 @@ impl<'r> Reader<'r> {
             }
             reader.ty(cursor, 0)
         })
+    }
+
+    /// A PropertySig (II.23.2.5): PROPERTY, optionally HASTHIS, then its type and index parameters.
+    pub(super) fn property(&mut self, blob: &[u8]) -> Option<MethodSig> {
+        let previous = std::mem::replace(&mut self.strict_types, true);
+        let property = self.read(blob, |reader, cursor| {
+            let first = cursor.byte()?;
+            if first != PROPERTY_SIGNATURE && first != PROPERTY_SIGNATURE | SIGNATURE_HAS_THIS {
+                return None;
+            }
+            let count = cursor.compressed()?;
+            let ret = reader.ty_at(cursor, 0, TypeContext::PropertyResult)?;
+            let params =
+                (0..count).map(|_| reader.ty_at(cursor, 0, TypeContext::Parameter)).collect::<Option<Vec<_>>>()?;
+            if cursor.at != blob.len() {
+                return None;
+            }
+            Some(MethodSig {
+                has_this: first & SIGNATURE_HAS_THIS != 0,
+                explicit_this: false,
+                convention: 0,
+                generic_count: 0,
+                ret,
+                params,
+            })
+        });
+        self.strict_types = previous;
+        property
     }
 
     /// A MemberRef signature, which is either a field or a method signature.
@@ -279,7 +331,7 @@ impl<'r> Reader<'r> {
             return None;
         }
         let count = cursor.compressed()?;
-        let ret = self.ty(cursor, depth + 1)?;
+        let ret = self.ty_at(cursor, depth + 1, TypeContext::Return)?;
         let mut params = Vec::new();
         // Every parameter consumes at least one byte, so a huge declared count fails at the blob's end.
         for _ in 0..count {
@@ -287,7 +339,7 @@ impl<'r> Reader<'r> {
                 cursor.byte();
                 params.push(Ty { text: "...".to_owned(), kind: Kind::Other });
             }
-            params.push(self.ty(cursor, depth + 1)?);
+            params.push(self.ty_at(cursor, depth + 1, TypeContext::Parameter)?);
         }
         Some(MethodSig {
             has_this: first & SIGNATURE_HAS_THIS != 0,
@@ -309,11 +361,27 @@ impl<'r> Reader<'r> {
     /// One Type (II.23.2.12), including the BYREF, TYPEDBYREF, VOID and custom-modifier prefixes that RetType,
     /// Param and FieldSig allow around it.
     fn ty(&mut self, cursor: &mut Cursor, depth: u32) -> Option<Ty> {
+        self.ty_at(cursor, depth, TypeContext::Type)
+    }
+
+    fn ty_at(&mut self, cursor: &mut Cursor, depth: u32, context: TypeContext) -> Option<Ty> {
         self.nodes += 1;
         if depth > MAX_DEPTH || self.nodes > MAX_NODES || self.budget.get() == 0 {
             return None;
         }
         let element = cursor.byte()?;
+        if self.strict_types {
+            let valid = match element {
+                0x01 => matches!(context, TypeContext::Return | TypeContext::PointerTarget),
+                0x10 => matches!(context, TypeContext::PropertyResult | TypeContext::Return | TypeContext::Parameter),
+                0x16 => matches!(context, TypeContext::Return | TypeContext::Parameter),
+                0x45 => false,
+                _ => true,
+            };
+            if !valid {
+                return None;
+            }
+        }
         let primitive = match element {
             0x01 => Some("void"),
             0x02 => Some("bool"),
@@ -339,11 +407,20 @@ impl<'r> Reader<'r> {
             return self.charge(name.to_owned(), Kind::Element(element));
         }
         let text = match element {
-            0x0F => format!("{}*", self.ty(cursor, depth + 1)?.text),
+            0x0F => format!("{}*", self.ty_at(cursor, depth + 1, TypeContext::PointerTarget)?.text),
             0x10 => format!("{}&", self.ty(cursor, depth + 1)?.text),
             0x11 | 0x12 => {
+                let token_at = cursor.at;
                 let name = self.type_def_or_ref(cursor, depth)?;
-                let kind = if element == 0x12 && name == "System.Type" { Kind::SystemType } else { Kind::Other };
+                let kind = if element == 0x12 && name == "System.Type" {
+                    Kind::SystemType
+                } else if element == 0x11 {
+                    let mut token = Cursor::new(&cursor.bytes[token_at..cursor.at]);
+                    let (table, row) = Coded::TypeDefOrRef.decode(token.compressed()?)?;
+                    Kind::Enum(table, row)
+                } else {
+                    Kind::Other
+                };
                 return self.charge(name, kind);
             }
             0x13 => generic_name(self.generics.type_params, cursor.compressed()?, "!"),
@@ -387,10 +464,13 @@ impl<'r> Reader<'r> {
                 let method = self.method_at(cursor, depth + 1)?;
                 format!("method {}", method.render("*", &Generics::default()))
             }
-            0x1D => format!("{}[]", self.ty(cursor, depth + 1)?.text),
+            0x1D => {
+                let inner = self.ty(cursor, depth + 1)?;
+                return self.charge(format!("{}[]", inner.text), Kind::Array(Box::new(inner)));
+            }
             0x1F | 0x20 => {
                 let modifier = self.type_def_or_ref(cursor, depth)?;
-                let inner = self.ty(cursor, depth + 1)?;
+                let inner = self.ty_at(cursor, depth + 1, context)?;
                 let keyword = if element == 0x1F { "modreq" } else { "modopt" };
                 return self.charge(format!("{} {keyword}({modifier})", inner.text), inner.kind);
             }
@@ -405,7 +485,14 @@ impl<'r> Reader<'r> {
         let (table, row) = Coded::TypeDefOrRef.decode(cursor.compressed()?)?;
         if table == tables::TYPE_SPEC {
             let blob = self.resolve.type_spec(row)?;
-            return Some(self.read(blob, |reader, cursor| reader.ty(cursor, depth + 1))?.text);
+            let ty = self.read(blob, |reader, cursor| {
+                let ty = reader.ty(cursor, depth + 1)?;
+                if reader.strict_types && cursor.at != blob.len() {
+                    return None;
+                }
+                Some(ty)
+            })?;
+            return Some(ty.text);
         }
         self.resolve.type_name(table, row)
     }
@@ -419,22 +506,141 @@ fn without_arity(name: &str) -> &str {
     }
 }
 
-/// The fixed arguments of a custom attribute value (II.23.3), one rendered value per constructor parameter, or
-/// `None` when the prolog is missing, a parameter is not a primitive, string or `System.Type`, or the blob ends.
-pub(super) fn attribute_arguments(params: &[Ty], value: &[u8]) -> Option<Vec<String>> {
-    let mut cursor = Cursor::new(value);
-    if cursor.array::<2>()? != [0x01, 0x00] {
-        return None;
-    }
-    params.iter().map(|param| fixed_argument(&mut cursor, param.kind)).collect()
+pub(super) struct AttributeValue {
+    pub(super) arguments: Option<Vec<String>>,
+    pub(super) named_arguments: Option<Vec<NamedArgument>>,
+    pub(super) error: Option<&'static str>,
 }
 
-fn fixed_argument(cursor: &mut Cursor, kind: Kind) -> Option<String> {
-    let Kind::Element(element) = kind else {
-        return (kind == Kind::SystemType)
-            .then(|| ser_string(cursor))?
-            .map(|name| name.map_or_else(|| "null".to_owned(), |name| format!("typeof({}){}", name.text, name.cut())));
-    };
+impl Reader<'_> {
+    /// Fixed and named values share the signature depth/node/text caps and image-wide work budget.
+    pub(super) fn attribute_arguments(&mut self, params: &[Ty], value: &[u8]) -> AttributeValue {
+        let mut cursor = Cursor::new(value);
+        let mut arguments = (|| {
+            if cursor.array::<2>()? != [1, 0] {
+                return None;
+            }
+            params.iter().map(|param| self.argument(&mut cursor, param, 0)).collect::<Option<Vec<_>>>()
+        })();
+        if self.spend(cursor.at).is_none() {
+            arguments = None;
+        }
+        let fixed_end = cursor.at;
+        let mut named_arguments = arguments.as_ref().and_then(|_| self.named_arguments(&mut cursor));
+        if self.spend(cursor.at - fixed_end).is_none() {
+            named_arguments = None;
+        }
+        let error = if arguments.is_none() || named_arguments.is_none() {
+            Some(self.attribute_error.unwrap_or("attribute value is malformed, unsupported or exceeds rendering caps"))
+        } else {
+            None
+        };
+        AttributeValue { arguments, named_arguments, error }
+    }
+
+    fn attribute_node(&mut self, depth: u32) -> Option<()> {
+        self.nodes += 1;
+        (depth <= MAX_DEPTH && self.nodes <= MAX_NODES && self.budget.get() > 0).then_some(())
+    }
+
+    fn argument(&mut self, cursor: &mut Cursor, ty: &Ty, depth: u32) -> Option<String> {
+        self.attribute_node(depth)?;
+        let text = match &ty.kind {
+            Kind::Element(element) => primitive_argument(cursor, *element)?,
+            Kind::SystemType => ser_string(cursor)?
+                .map_or_else(|| "null".to_owned(), |name| format!("typeof({}){}", name.text, name.cut())),
+            Kind::Enum(table, row) => {
+                let Some(element) = self.resolve.enum_underlying(*table, *row) else {
+                    self.attribute_error = Some(UNKNOWN_ENUM);
+                    return None;
+                };
+                format!("{}({})", ty.text, primitive_argument(cursor, element)?)
+            }
+            Kind::NamedEnum(element) => format!("{}({})", ty.text, primitive_argument(cursor, *element)?),
+            Kind::Array(inner) => {
+                let supported = match inner.kind {
+                    Kind::Element(element) => matches!(element, 0x02..=0x0E),
+                    Kind::SystemType | Kind::NamedEnum(_) => true,
+                    Kind::Enum(table, row) => {
+                        let known = self.resolve.enum_underlying(table, row).is_some();
+                        if !known {
+                            self.attribute_error = Some(UNKNOWN_ENUM);
+                        }
+                        known
+                    }
+                    Kind::Array(_) | Kind::Other => false,
+                };
+                if !supported {
+                    return None;
+                }
+                let count = i32::from_le_bytes(cursor.array()?);
+                if count == -1 {
+                    "null".to_owned()
+                } else {
+                    if count < 0 || count as u32 > MAX_NODES {
+                        return None;
+                    }
+                    let elements =
+                        (0..count).map(|_| self.argument(cursor, inner, depth + 1)).collect::<Option<Vec<_>>>()?;
+                    format!("[{}]", elements.join(", "))
+                }
+            }
+            Kind::Other => return None,
+        };
+        self.charge(text, Kind::Other).map(|ty| ty.text)
+    }
+
+    fn named_arguments(&mut self, cursor: &mut Cursor) -> Option<Vec<NamedArgument>> {
+        let count = u16::from_le_bytes(cursor.array()?);
+        if u32::from(count) > MAX_NODES {
+            return None;
+        }
+        let mut arguments = Vec::new();
+        for _ in 0..count {
+            self.attribute_node(0)?;
+            let kind = match cursor.byte()? {
+                0x53 => NamedArgumentKind::Field,
+                0x54 => NamedArgumentKind::Property,
+                _ => return None,
+            };
+            let ty = self.serialized_type(cursor, 0)?;
+            let name = exact_ser_string(cursor)?;
+            self.charge(name.clone(), Kind::Other)?;
+            let value = self.argument(cursor, &ty, 0)?;
+            arguments.push(NamedArgument { kind, name, argument_type: ty.text, value });
+        }
+        (cursor.at == cursor.bytes.len()).then_some(arguments)
+    }
+
+    fn serialized_type(&mut self, cursor: &mut Cursor, depth: u32) -> Option<Ty> {
+        self.attribute_node(depth)?;
+        let element = cursor.byte()?;
+        if element == 0x1D {
+            let inner = self.serialized_type(cursor, depth + 1)?;
+            if matches!(inner.kind, Kind::Array(_)) {
+                return None;
+            }
+            return self.charge(format!("{}[]", inner.text), Kind::Array(Box::new(inner)));
+        }
+        if element == 0x55 {
+            let name = exact_ser_string(cursor)?;
+            let Some(underlying) = self.resolve.named_enum_underlying(&name) else {
+                self.attribute_error = Some(UNKNOWN_ENUM);
+                return None;
+            };
+            return self.charge(name, Kind::NamedEnum(underlying));
+        }
+        if element == 0x50 {
+            return self.charge("System.Type".to_owned(), Kind::SystemType);
+        }
+        if !matches!(element, 0x02..=0x0E) {
+            return None;
+        }
+        self.ty(&mut Cursor::new(&[element]), depth)
+    }
+}
+
+fn primitive_argument(cursor: &mut Cursor, element: u8) -> Option<String> {
     Some(match element {
         0x02 => (cursor.byte()? != 0).to_string(),
         0x03 => {
@@ -456,6 +662,15 @@ fn fixed_argument(cursor: &mut Cursor, kind: Kind) -> Option<String> {
         }
         _ => return None,
     })
+}
+
+/// Identifiers must be complete and valid UTF-8; truncated or lossy text must not resolve a different enum.
+fn exact_ser_string(cursor: &mut Cursor) -> Option<String> {
+    let length = usize::try_from(cursor.compressed()?).ok()?;
+    if length > MAX_ARGUMENT_BYTES {
+        return None;
+    }
+    std::str::from_utf8(cursor.take(length)?).ok().map(str::to_owned)
 }
 
 /// The kept text of a SerString, and its full length in bytes when the text was cut.
@@ -516,6 +731,11 @@ mod tests {
     const TYPE: u8 = (2 << 2) | 1;
     const LIST: u8 = (3 << 2) | 1;
     const SPEC1: u8 = (1 << 2) | 2;
+
+    fn attribute_arguments(params: &[Ty], value: &[u8]) -> Option<Vec<String>> {
+        let budget = Cell::new(TOTAL_BUDGET);
+        Reader::new(&Fake(Vec::new()), Generics::default(), &budget).attribute_arguments(params, value).arguments
+    }
 
     fn method(blob: &[u8], name: &str) -> String {
         method_with(&Fake(Vec::new()), Generics::default(), blob, name)
@@ -682,6 +902,192 @@ mod tests {
         assert_eq!(attribute_arguments(&params[..1], &[1, 0, 9, b'a']), None, "string past the blob");
         assert_eq!(attribute_arguments(&[ty(Kind::Other)], &[1, 0, 0, 0, 0, 0]), None, "enum or array");
         assert_eq!(attribute_arguments(&[ty(Kind::Element(0x1C))], &[1, 0, 0x08, 1, 0, 0, 0]), None, "boxed");
+    }
+
+    #[test]
+    fn property_signatures_use_the_owner_generics_and_signature_caps() {
+        let fake = Fake(Vec::new());
+        let names = [(0, "T".to_owned())];
+        let generics = Generics { type_params: &names, method_params: &[] };
+        let budget = Cell::new(TOTAL_BUDGET);
+        let property = Reader::new(&fake, generics, &budget).property(&[0x28, 1, 0x13, 0, 0x13, 0]).unwrap();
+        assert_eq!(property.render("Item", &generics), "instance T Item(T)");
+
+        let mut many = vec![0x28, 0x82, 0x00, 0x08];
+        many.extend([0x08; 512]);
+        assert!(Reader::new(&fake, generics, &budget).property(&many).is_none(), "node cap includes the result type");
+        let recursive = Fake(vec![vec![0x12, SPEC1]]);
+        assert!(Reader::new(&recursive, generics, &budget).property(&[0x28, 0, 0x12, SPEC1]).is_none());
+        let tiny_budget = Cell::new(8);
+        assert!(Reader::new(&fake, generics, &tiny_budget).property(&[0x28, 0, 0x08]).is_some());
+        assert!(Reader::new(&fake, generics, &tiny_budget).property(&[0x28, 0, 0x08]).is_none());
+    }
+
+    #[test]
+    fn attribute_arrays_share_node_text_and_image_budgets() {
+        let fake = Fake(Vec::new());
+        let budget = Cell::new(TOTAL_BUDGET);
+        let params =
+            Reader::new(&fake, Generics::default(), &budget).method(&[0x20, 1, 0x01, 0x1D, 0x08]).unwrap().params;
+        let array = |count: u32| {
+            let mut value = vec![1, 0];
+            value.extend(count.to_le_bytes());
+            value.extend(vec![0; count as usize * 4]);
+            value.extend([0, 0]);
+            value
+        };
+        let decoded =
+            Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &array(MAX_NODES - 1));
+        assert!(decoded.error.is_none());
+        let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &array(MAX_NODES));
+        assert!(decoded.arguments.is_none() && decoded.named_arguments.is_none(), "array elements consume nodes");
+
+        let params =
+            Reader::new(&fake, Generics::default(), &budget).method(&[0x20, 1, 0x01, 0x1D, 0x0E]).unwrap().params;
+        let mut long_array = vec![1, 0, 4, 0, 0, 0];
+        for _ in 0..4 {
+            long_array.extend([0x84, 0]);
+            long_array.extend([b'x'; 1024]);
+        }
+        long_array.extend([0, 0]);
+        let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &long_array);
+        assert!(decoded.arguments.is_none(), "individually bounded strings must also obey the total text cap");
+        assert!(budget.get() > 0, "per-attribute caps do not spend the entire image budget");
+
+        let params = [Ty { text: "string".to_owned(), kind: Kind::Element(ELEMENT_STRING) }];
+        let mut long = vec![1, 0, 0xA7, 0x10]; // 10,000 UTF-8 bytes, kept text fits the per-string cap.
+        long.extend([b'x'; 10_000]);
+        long.extend([0, 0]);
+        let budget = Cell::new(2000);
+        let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &long);
+        assert!(decoded.arguments.is_none(), "skipped string bytes still cost image-wide work");
+        assert_eq!(budget.get(), 0);
+    }
+
+    #[test]
+    fn named_argument_budget_failures_preserve_fully_charged_fixed_arguments() {
+        let fake = Fake(Vec::new());
+        let params = [Ty { text: "int32".to_owned(), kind: Kind::Element(0x08) }];
+        let value = [1, 0, 42, 0, 0, 0, 1, 0, 0x54, 0x08, 1, b'X', 0, 0, 0, 0];
+        for (available, fixed_available, named_available) in
+            [(7, false, false), (8, true, false), (14, true, false), (20, true, false), (25, true, true)]
+        {
+            let budget = Cell::new(available);
+            let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+            assert_eq!(decoded.arguments, fixed_available.then(|| vec!["42".to_owned()]), "budget {available}");
+            assert_eq!(decoded.named_arguments.is_some(), named_available, "budget {available}");
+            assert_eq!(decoded.error.is_none(), named_available, "budget {available}");
+            assert_eq!(budget.get(), 0);
+            if let Some(named) = decoded.named_arguments {
+                assert_eq!((named[0].name.as_str(), named[0].value.as_str()), ("X", "0"));
+            }
+            let later = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+            assert!(later.arguments.is_none(), "preserving charged values must not replenish the shared budget");
+        }
+    }
+
+    #[test]
+    fn property_type_specs_and_custom_modifiers_cannot_hide_invalid_void_contexts() {
+        let fake = Fake(vec![vec![0x1D, 0x01]]);
+        let budget = Cell::new(TOTAL_BUDGET);
+        for blob in [
+            vec![0x28, 0, 0x12, SPEC1],
+            vec![0x28, 0, 0x1F, OBJECT, 0x1D, 0x01],
+            vec![0x28, 0, 0x1D, 0x20, OBJECT, 0x01],
+            vec![0x28, 0, 0x1B, 0x00, 0, 0x1D, 0x01],
+            vec![0x28, 0, 0x1B, 0x00, 1, 0x01, 0x01],
+        ] {
+            assert!(Reader::new(&fake, Generics::default(), &budget).property(&blob).is_none(), "{blob:02x?}");
+        }
+        let pointer =
+            Reader::new(&fake, Generics::default(), &budget).property(&[0x28, 0, 0x0F, 0x20, OBJECT, 0x01]).unwrap();
+        assert_eq!(pointer.render("P", &Generics::default()), "instance void modopt(System.Object)* P()");
+        let mut reader = Reader::new(&fake, Generics::default(), &budget);
+        assert!(reader.property(&[0x28, 0, 0x1D, 0x01]).is_none());
+        assert!(
+            reader.method(&[0x00, 0, 0x01]).is_some(),
+            "the property-only grammar mode must be restored on failure"
+        );
+    }
+
+    #[test]
+    fn ref_return_properties_share_signature_budgets_without_admitting_void_references() {
+        let fake = Fake(Vec::new());
+        for (available, readable) in [(14, false), (15, true)] {
+            let budget = Cell::new(available);
+            let property = Reader::new(&fake, Generics::default(), &budget).property(&[0x28, 0, 0x10, 0x08]);
+            assert_eq!(property.is_some(), readable);
+            if let Some(property) = property {
+                assert_eq!(property.render("P", &Generics::default()), "instance int32& P()");
+            }
+            assert_eq!(budget.get(), 0);
+            assert!(Reader::new(&fake, Generics::default(), &budget).property(&[0x28, 0, 0x10, 0x08]).is_none());
+        }
+        let budget = Cell::new(TOTAL_BUDGET);
+        for blob in [
+            vec![0x28, 0, 0x10, 0x01],
+            vec![0x28, 0, 0x20, OBJECT, 0x10, 0x01],
+            vec![0x28, 0, 0x10, 0x1F, OBJECT, 0x01],
+        ] {
+            assert!(Reader::new(&fake, Generics::default(), &budget).property(&blob).is_none(), "{blob:02x?}");
+        }
+    }
+
+    #[test]
+    fn property_type_spec_references_require_complete_nested_blobs_and_charge_failed_work() {
+        let property = [0x28, 0, 0x12, SPEC1];
+        let valid = Fake(vec![vec![0x1D, 0x08]]);
+        let budget = Cell::new(TOTAL_BUDGET);
+        let decoded = Reader::new(&valid, Generics::default(), &budget).property(&property).unwrap();
+        assert_eq!(decoded.render("P", &Generics::default()), "instance int32[] P()");
+
+        for trailing in [0x01, 0x08, 0xFF] {
+            let invalid = Fake(vec![vec![0x1D, 0x08, trailing]]);
+            let budget = Cell::new(TOTAL_BUDGET);
+            assert!(Reader::new(&invalid, Generics::default(), &budget).property(&property).is_none());
+            let prefix_cost = "int32".len() + "int32[]".len() + 2 + property.len();
+            assert_eq!(TOTAL_BUDGET - budget.get(), prefix_cost, "failed nested decoding still charges read work");
+            let budget = Cell::new(prefix_cost - 1);
+            assert!(Reader::new(&invalid, Generics::default(), &budget).property(&property).is_none());
+            assert_eq!(budget.get(), 0);
+            assert!(Reader::new(&invalid, Generics::default(), &budget).property(&[0x28, 0, 0x08]).is_none());
+
+            let indirect = Fake(vec![vec![0x12, (2 << 2) | 2], vec![0x1D, 0x08, trailing]]);
+            let budget = Cell::new(TOTAL_BUDGET);
+            assert!(Reader::new(&indirect, Generics::default(), &budget).property(&property).is_none());
+            assert!(
+                Reader::new(&invalid, Generics::default(), &budget).method(&[0x00, 0, 0x12, SPEC1]).is_some(),
+                "complete TypeSpec consumption is scoped to strict property decoding"
+            );
+        }
+    }
+
+    #[test]
+    fn named_attribute_types_counts_and_identifiers_are_not_guessed() {
+        let fake = Fake(Vec::new());
+        let budget = Cell::new(TOTAL_BUDGET);
+        let malformed = [
+            vec![1, 0, 0xFF, 0xFF],
+            vec![1, 0, 1, 0, 0x55, 0x08, 0, 0, 0, 0, 0],
+            vec![1, 0, 1, 0, 0x54, 0x51, 0, 0, 0, 0, 0],
+            vec![1, 0, 1, 0, 0x54, 0x08, 0xFF, 0, 0, 0, 0],
+            vec![1, 0, 1, 0, 0x54, 0x08, 1, 0xFF, 0, 0, 0, 0],
+        ];
+        for value in malformed {
+            let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&[], &value);
+            assert_eq!(decoded.arguments, Some(vec![]), "fixed values remain available");
+            assert!(decoded.named_arguments.is_none() && decoded.error.is_some(), "{value:02x?}");
+        }
+        let mut nested = vec![1, 0, 1, 0, 0x54];
+        nested.extend([0x1D; MAX_DEPTH as usize + 2]);
+        nested.extend([0x08, 0, 0, 0, 0, 0]);
+        let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&[], &nested);
+        assert!(decoded.named_arguments.is_none(), "deep serialized type nesting is bounded");
+        let params =
+            Reader::new(&fake, Generics::default(), &budget).method(&[0x20, 1, 0x01, 0x1D, 0x1D, 0x08]).unwrap().params;
+        let decoded = Reader::new(&fake, Generics::default(), &budget)
+            .attribute_arguments(&params, &[1, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0]);
+        assert!(decoded.arguments.is_none(), "jagged arrays are not valid custom attribute array types");
     }
 
     #[test]

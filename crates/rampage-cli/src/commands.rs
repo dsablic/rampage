@@ -896,11 +896,12 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
     let counts = &summary.counts;
     writeln!(
         out,
-        "{} types, {} methods ({} IL, {} native), {} P/Invoke imports, {} attributes",
+        "{} types, {} methods ({} IL, {} native), {} properties, {} P/Invoke imports, {} attributes",
         counts.types,
         counts.methods,
         counts.il_methods,
         counts.native_methods,
+        counts.properties,
         counts.pinvokes,
         counts.custom_attributes
     )?;
@@ -1000,6 +1001,21 @@ fn dotnet_types(out: &mut impl Write, types: &rampage_api::Page<rampage_loaders:
                 if method.params.is_empty() { String::new() } else { format!("  [{}]", method.params.join(", ")) };
             writeln!(out, "  {}{names}  {body}", method_text(method))?;
         }
+        for property in &ty.properties {
+            let signature = if property.signature == rampage_loaders::dotnet::UNREADABLE {
+                format!("{}(...) <unreadable signature>", property.name)
+            } else {
+                property.signature.clone()
+            };
+            writeln!(out, "  property {signature} (token {:#010x})", property.token)?;
+            for accessor in &property.accessors {
+                writeln!(
+                    out,
+                    "    metadata accessor {:#010x}, semantics {:#x}",
+                    accessor.method_token, accessor.semantics
+                )?;
+            }
+        }
     }
     Ok(())
 }
@@ -1042,6 +1058,21 @@ fn dotnet_attributes(
         let attribute_type = attribute.attribute_type.as_deref().unwrap_or("unresolved type");
         let parent = attribute.parent.as_deref().unwrap_or("unresolved target");
         writeln!(out, "attribute  [{attribute_type}{arguments}] on {parent}")?;
+        if let Some(named) = &attribute.named_arguments {
+            for argument in named {
+                writeln!(
+                    out,
+                    "  {} {} {} = {}",
+                    label(&argument.kind),
+                    argument.argument_type,
+                    serde_json::to_string(&argument.name)?,
+                    argument.value
+                )?;
+            }
+        }
+        if let Some(error) = &attribute.arguments_error {
+            writeln!(out, "  unreadable arguments: {error}")?;
+        }
     }
     Ok(())
 }
