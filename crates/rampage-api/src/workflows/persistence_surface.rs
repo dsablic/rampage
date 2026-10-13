@@ -3,10 +3,15 @@
 //! startup files), the service, registry and file-writing APIs that could act on them, the functions referencing
 //! either, and persistence capability tags. Indicators show where such code and data are, not that they run.
 
+use std::collections::BTreeSet;
+
+use rampage_analysis::discover::XrefKind;
 use serde_json::json;
 
-use super::{Confidence, Finding, ReportLimits, Section, Tracer, WorkflowReport, capability_section, match_api, quote};
-use crate::{ApiError, Project};
+use super::{
+    Confidence, Finding, ReportLimits, Scope, Section, Tracer, WorkflowReport, capability_section, match_api, quote,
+};
+use crate::{ApiError, Project, XrefQuery};
 
 /// Lowercase substrings of autostart locations and commands, each with the mechanism it names and how specific
 /// the match is. Path separators are matched as written: registry paths use `\`, Unix paths `/`.
@@ -55,12 +60,30 @@ const LOCATIONS: &[(&str, &str, Confidence)] = &[
     (".zshenv", "shell startup file", Confidence::Medium),
 ];
 
-/// APIs that install services, write the registry or schedule tasks (patterns, see `api_matches`), always listed.
+/// The registry locations among `LOCATIONS`: registry writes are listed only beside one of them.
+const REGISTRY_LOCATIONS: [&str; 8] = [
+    "currentversion\\runonce",
+    "currentversion\\runservices",
+    "currentversion\\run",
+    "policies\\explorer\\run",
+    "currentversion\\winlogon",
+    "image file execution options",
+    "appinit_dlls",
+    "currentcontrolset\\services",
+];
+
+/// APIs that install services or schedule tasks (patterns, see `api_matches`), always listed.
 const MECHANISM_APIS: &[(&str, &str)] = &[
     ("openscmanager", "service installation"),
     ("createservice", "service installation"),
     ("changeserviceconfig", "service installation"),
     ("changeserviceconfig2", "service installation"),
+    ("netschedulejobadd", "scheduled task"),
+];
+
+/// Registry writes, listed only from a function that also references an autostart registry key: on their own they
+/// are how programs store settings.
+const REGISTRY_APIS: &[(&str, &str)] = &[
     ("regcreatekey", "registry write"),
     ("regcreatekeyex", "registry write"),
     ("regsetvalue", "registry write"),
@@ -69,26 +92,23 @@ const MECHANISM_APIS: &[(&str, &str)] = &[
     ("ntsetvaluekey", "registry write"),
     ("zwsetvaluekey", "registry write"),
     ("shsetvalue", "registry write"),
-    ("netschedulejobadd", "scheduled task"),
 ];
 
-/// File-writing and command APIs, listed only beside an autostart location string: on their own they are ordinary
-/// program behavior, not a persistence indicator.
+/// File-opening and command APIs, listed only from a function that references an autostart location string or one
+/// it calls directly: on their own they are ordinary program behavior. Stream writes (`fprintf`, `fputs`,
+/// `fwrite`) are left out, since they mostly write to already-open streams such as stdout.
 const SUPPORTING_APIS: &[(&str, &str)] = &[
-    ("createfile", "file write"),
-    ("writefile", "file write"),
-    ("copyfile", "file write"),
-    ("copyfileex", "file write"),
-    ("movefile", "file write"),
-    ("movefileex", "file write"),
-    ("fopen", "file write"),
-    ("fopen64", "file write"),
-    ("fputs", "file write"),
-    ("fwrite", "file write"),
-    ("fprintf", "file write"),
-    ("creat", "file write"),
-    ("rename", "file write"),
-    ("symlink", "file write"),
+    ("createfile", "file open/write"),
+    ("writefile", "file open/write"),
+    ("copyfile", "file open/write"),
+    ("copyfileex", "file open/write"),
+    ("movefile", "file open/write"),
+    ("movefileex", "file open/write"),
+    ("fopen", "file open/write"),
+    ("fopen64", "file open/write"),
+    ("creat", "file open/write"),
+    ("rename", "file open/write"),
+    ("symlink", "file open/write"),
     ("system", "command execution"),
     ("popen", "command execution"),
     ("execve", "command execution"),
@@ -106,6 +126,26 @@ const SUPPORTING_APIS: &[(&str, &str)] = &[
 const RELATED_CAPABILITIES: [&str; 2] = ["service-control", "registry"];
 /// Functions suggested for decompilation in next steps.
 const SUGGESTED_FUNCTIONS: usize = 3;
+/// References read from each function referencing an autostart location, looking for the functions it calls.
+const CALLS_PER_FUNCTION: usize = 500;
+
+/// Which functions must reference an API for it to be listed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApiScope {
+    Anywhere,
+    /// A function referencing an autostart registry key.
+    RegistryLocation,
+    /// A function referencing an autostart location, or one such a function calls directly.
+    Location,
+}
+
+/// The area and scope of a persistence-related API.
+fn api_area(name: &str) -> Option<(&'static str, ApiScope)> {
+    match_api(MECHANISM_APIS, name)
+        .map(|area| (area, ApiScope::Anywhere))
+        .or_else(|| match_api(REGISTRY_APIS, name).map(|area| (area, ApiScope::RegistryLocation)))
+        .or_else(|| match_api(SUPPORTING_APIS, name).map(|area| (area, ApiScope::Location)))
+}
 
 /// The mechanism and match confidence of the first autostart location `text` names.
 fn location(text: &str) -> Option<(&'static str, &'static str, Confidence)> {
@@ -137,10 +177,16 @@ impl Project {
 
         let mut locations = Section::new("Autostart locations in strings", limits);
         let mut first_location = None;
+        let mut location_users = BTreeSet::new();
+        let mut registry_users = BTreeSet::new();
         for found in self.scanned_strings() {
             let Some((pattern, mechanism, confidence)) = location(&found.text) else { continue };
             first_location.get_or_insert(found.address);
             let referenced = tracer.users(&[found.address]);
+            location_users.extend(referenced.addresses());
+            if REGISTRY_LOCATIONS.contains(&pattern) {
+                registry_users.extend(referenced.addresses());
+            }
             let mut evidence =
                 vec![format!("string {} at {:#x}", quote(&found.text), found.address), format!("contains `{pattern}`")];
             evidence.extend(referenced.evidence());
@@ -152,17 +198,34 @@ impl Project {
             tracer.record(&referenced, &format!("references {mechanism} {}", quote(&found.text)));
         }
 
-        let with_locations = locations.total > 0;
-        let apis = tracer.api_section("Persistence-related APIs", limits, |name| {
-            match_api(MECHANISM_APIS, name)
-                .or_else(|| with_locations.then(|| match_api(SUPPORTING_APIS, name)).flatten())
+        let registry_scope = Scope {
+            functions: registry_users,
+            why: "listed because the calling function also references an autostart registry key",
+        };
+        let mut near_locations = location_users.clone();
+        for &function in &location_users {
+            near_locations.extend(self.direct_callees(function));
+        }
+        let location_scope = Scope {
+            functions: near_locations,
+            why: "listed because the calling function, or a function calling it directly, references an autostart \
+                  location",
+        };
+        let apis = tracer.api_section_within("Persistence-related APIs", limits, |name| {
+            api_area(name).map(|(area, scope)| match scope {
+                ApiScope::Anywhere => (area, None),
+                ApiScope::RegistryLocation => (area, Some(&registry_scope)),
+                ApiScope::Location => (area, Some(&location_scope)),
+            })
         });
-        let (functions, ranked) = tracer.finish(
+        let (functions, mut ranked) = tracer.finish(
             &mut report,
             "Functions referencing persistence indicators",
             "persistence indicators",
             limits,
         );
+        // A function naming an autostart location says more about where persistence is set up than an API call.
+        ranked.sort_by_key(|(address, _)| !location_users.contains(address));
         let capabilities = self.capabilities();
         let tags = capability_section(
             "Persistence capability tags",
@@ -199,12 +262,12 @@ impl Project {
         }
         report.sections.extend([locations, apis, functions, tags]);
 
-        if !with_locations {
-            report.limitation(
-                "File-writing and command APIs are listed only beside an autostart location string; none was \
-                 found, so they were not listed.",
-            );
-        }
+        report.limitation(
+            "File-opening and command APIs are listed only beside an autostart location string (from a function \
+             referencing one, or a function it calls directly), and registry writes only beside an autostart \
+             registry key (from a function referencing one); stream writes such as fprintf are not listed. Writes \
+             reached through deeper calls or computed paths are missed.",
+        );
         report.limitation(
             "Absence of evidence is not evidence of absence: locations built at run time, encoded strings, APIs \
              resolved by name at run time, COM task registration without these strings, and raw system calls are not \
@@ -220,6 +283,12 @@ impl Project {
              registers, or why.",
         );
         Ok(report)
+    }
+
+    /// The targets of `function`'s direct calls, among its first `CALLS_PER_FUNCTION` references.
+    fn direct_callees(&self, function: u64) -> Vec<u64> {
+        let Ok(page) = self.xrefs(XrefQuery::From(function), None, Some(CALLS_PER_FUNCTION)) else { return vec![] };
+        page.items.iter().filter(|row| row.kind == XrefKind::Call).map(|row| row.to).collect()
     }
 }
 
@@ -264,10 +333,24 @@ mod tests {
     #[test]
     fn supporting_apis_match_decorated_names() {
         assert_eq!(match_api(MECHANISM_APIS, "__imp_CreateServiceW"), Some("service installation"));
-        assert_eq!(match_api(MECHANISM_APIS, "RegSetValueExA"), Some("registry write"));
-        assert_eq!(match_api(MECHANISM_APIS, "RegOpenKeyExA"), None);
-        assert_eq!(match_api(SUPPORTING_APIS, "fopen@plt"), Some("file write"));
+        assert_eq!(match_api(REGISTRY_APIS, "RegSetValueExA"), Some("registry write"));
+        assert_eq!(match_api(REGISTRY_APIS, "RegOpenKeyExA"), None);
+        assert_eq!(match_api(SUPPORTING_APIS, "fopen@plt"), Some("file open/write"));
         assert_eq!(match_api(SUPPORTING_APIS, "ShellExecuteExW"), Some("command execution"));
         assert_eq!(match_api(SUPPORTING_APIS, "systemd_notify"), None);
+    }
+
+    #[test]
+    fn only_service_and_task_apis_count_without_a_location() {
+        assert_eq!(api_area("CreateServiceA"), Some(("service installation", ApiScope::Anywhere)));
+        assert_eq!(api_area("RegSetValueExW"), Some(("registry write", ApiScope::RegistryLocation)));
+        assert_eq!(api_area("RegCreateKeyExA"), Some(("registry write", ApiScope::RegistryLocation)));
+        assert_eq!(api_area("_fopen"), Some(("file open/write", ApiScope::Location)));
+        for stream_write in ["_fprintf", "fputs@plt", "fwrite"] {
+            assert_eq!(api_area(stream_write), None, "{stream_write}");
+        }
+        for registry in REGISTRY_LOCATIONS {
+            assert!(LOCATIONS.iter().any(|(pattern, ..)| *pattern == registry), "{registry}");
+        }
     }
 }

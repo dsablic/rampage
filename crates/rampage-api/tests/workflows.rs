@@ -388,15 +388,26 @@ fn persistence_surface_maps_unix_autostart_paths_to_the_code_writing_them() {
     let unit = locations.findings.iter().find(|finding| finding.observation.contains("systemd unit location")).unwrap();
     assert_eq!(unit.confidence, FindingConfidence::High);
     assert!(unit.evidence.iter().any(|line| line.contains("referenced from `install_unit`")), "{unit:#?}");
-    // File-writing APIs count only because autostart strings are present.
+    // File-opening APIs count only because `append_line`, which calls fopen, is called by functions naming autostart
+    // locations; stream writes are not listed.
     let apis = section(&report, "Persistence-related APIs");
-    assert!(has_observation(apis, "`fopen` from libc.so.6 (file write)"), "{:?}", observations(apis));
+    assert!(has_observation(apis, "`fopen` from libc.so.6 (file open/write)"), "{:?}", observations(apis));
+    assert!(!has_observation(apis, "`fputs`"), "{:?}", observations(apis));
+    let fopen = apis.findings.iter().find(|finding| finding.observation.contains("`fopen`")).unwrap();
+    assert!(fopen.evidence[1].contains("references an autostart location"), "{fopen:#?}");
     let functions = observations(section(&report, "Functions referencing persistence indicators"));
     for name in ["`main`", "`install_unit`", "`append_line`"] {
         assert!(functions.iter().any(|observation| observation.starts_with(name)), "{name}: {functions:?}");
     }
     assert!(report.summary[0].contains("indicators, not evidence"), "{:?}", report.summary);
-    assert!(report.next_steps.iter().any(|step| step.tool == "decompile"), "{:?}", report.next_steps);
+    // Functions naming autostart locations are suggested before the one only calling a file API.
+    let decompile: Vec<&str> = report
+        .next_steps
+        .iter()
+        .filter(|step| step.tool == "decompile")
+        .map(|step| step.reason.split('`').nth(1).unwrap())
+        .collect();
+    assert_eq!(decompile, ["main", "install_unit", "append_line"], "{:?}", report.next_steps);
     assert!(report.next_steps.iter().any(|step| step.tool == "xrefs"), "{:?}", report.next_steps);
 }
 
@@ -416,6 +427,10 @@ fn persistence_surface_reports_windows_run_keys_services_and_tags() {
     let create = apis.findings.iter().find(|finding| finding.observation.contains("`CreateServiceA`")).unwrap();
     assert!(create.observation.ends_with("(service installation)"), "{create:#?}");
     assert!(create.evidence.iter().any(|line| line.starts_with("referenced from")), "{create:#?}");
+    // The registry write is listed because its caller also names the Run key; the stdio write is not listed.
+    let set = apis.findings.iter().find(|finding| finding.observation.contains("`RegSetValueExA`")).unwrap();
+    assert!(set.evidence[1].contains("autostart registry key"), "{set:#?}");
+    assert!(!has_observation(apis, "`fwrite`"), "{:?}", observations(apis));
     let tags = section(&report, "Persistence capability tags");
     assert!(has_observation(tags, "Registry autorun modification indicators"), "{:?}", observations(tags));
     assert!(has_observation(tags, "Service installation indicators"), "{:?}", observations(tags));

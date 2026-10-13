@@ -310,8 +310,8 @@ const REFERENCES_PER_ITEM: usize = 200;
 
 /// The functions referencing one traced item (an API, a string, a constant).
 pub(crate) struct Users {
-    /// Function start to name, for every referencing function found.
-    functions: BTreeMap<u64, String>,
+    /// Function start to name and reference count, for every referencing function found.
+    functions: BTreeMap<u64, (String, usize)>,
     references: usize,
     /// Whether references were looked up at all (they are not when analysis is unavailable).
     traced: bool,
@@ -334,9 +334,34 @@ impl Users {
             format!("{} references from discovered functions", self.references)
         };
         let referencing =
-            self.functions.iter().map(|(address, name)| format!("referenced from `{name}` ({address:#x})"));
+            self.functions.iter().map(|(address, (name, _))| format!("referenced from `{name}` ({address:#x})"));
         std::iter::once(count).chain(referencing).collect()
     }
+
+    /// The evidence, keeping only the referencing functions in `scope` (with the scope's reason after the count),
+    /// or `None` when `scope` keeps none.
+    fn evidence_within(&mut self, scope: Option<&Scope>) -> Option<Vec<String>> {
+        let Some(scope) = scope else { return Some(self.evidence()) };
+        self.functions.retain(|address, _| scope.functions.contains(address));
+        if self.functions.is_empty() {
+            return None;
+        }
+        self.references = self.functions.values().map(|(_, count)| count).sum();
+        let mut evidence = self.evidence();
+        evidence.insert(1, scope.why.to_owned());
+        Some(evidence)
+    }
+
+    /// The start of every referencing function.
+    pub(crate) fn addresses(&self) -> impl Iterator<Item = u64> + '_ {
+        self.functions.keys().copied()
+    }
+}
+
+/// The functions an API must be referenced from to be listed, and why, as an evidence line.
+pub(crate) struct Scope {
+    pub(crate) functions: BTreeSet<u64>,
+    pub(crate) why: &'static str,
 }
 
 /// Traces items (APIs, strings, constants) to the functions that reference them, and gathers per-function evidence
@@ -399,7 +424,7 @@ impl<'p> Tracer<'p> {
                     && targets.binary_search(&function).is_err()
                 {
                     users.references += 1;
-                    users.functions.entry(function).or_insert_with(|| self.project.function_name(function));
+                    users.functions.entry(function).or_insert_with(|| (self.project.function_name(function), 0)).1 += 1;
                 }
             }
         }
@@ -411,7 +436,7 @@ impl<'p> Tracer<'p> {
 
     /// Credits every function in `found` with `evidence`, for the ranked section.
     pub(crate) fn record(&mut self, found: &Users, evidence: &str) {
-        for (&address, name) in &found.functions {
+        for (&address, (name, _)) in &found.functions {
             self.users.entry(address).or_insert_with(|| (name.clone(), Vec::new())).1.push(evidence.to_owned());
         }
     }
@@ -424,11 +449,22 @@ impl<'p> Tracer<'p> {
         limits: ReportLimits,
         area: impl Fn(&str) -> Option<&'static str>,
     ) -> Section {
+        self.api_section_within(title, limits, |name| area(name).map(|area| (area, None)))
+    }
+
+    /// [`Self::api_section`], where an API that `area` gives a [`Scope`] is listed only when functions in the
+    /// scope reference it, with only those functions as its users.
+    pub(crate) fn api_section_within<'s>(
+        &mut self,
+        title: &str,
+        limits: ReportLimits,
+        area: impl Fn(&str) -> Option<(&'static str, Option<&'s Scope>)>,
+    ) -> Section {
         let project = self.project;
         let mut section = Section::new(title, limits);
         let mut seen = BTreeSet::new();
         for import in &project.binary.imports {
-            let Some(area) = area(&import.name) else { continue };
+            let Some((area, scope)) = area(&import.name) else { continue };
             if !seen.insert(import.name.as_str()) {
                 continue;
             }
@@ -440,14 +476,15 @@ impl<'p> Tracer<'p> {
                 .map(|slot| slot.address)
                 .collect();
             targets.extend(project.resolve(&import.name).ok());
-            let found = self.users(&targets);
+            let mut found = self.users(&targets);
+            let Some(evidence) = found.evidence_within(scope) else { continue };
             let library = import.library.as_deref().unwrap_or("an unrecorded library");
             let mut finding = Finding::new(
                 "list_imports",
                 Confidence::Observed,
                 format!("imports `{}` from {library} ({area})", import.name),
             )
-            .evidence(found.evidence());
+            .evidence(evidence);
             if let Some(&address) = targets.first() {
                 finding = finding.at(address);
             }
@@ -461,9 +498,10 @@ impl<'p> Tracer<'p> {
             {
                 continue;
             }
-            let Some(area) = area(&symbol.name) else { continue };
+            let Some((area, scope)) = area(&symbol.name) else { continue };
             seen.insert(symbol.name.as_str());
-            let found = self.users(&[symbol.address]);
+            let mut found = self.users(&[symbol.address]);
+            let Some(evidence) = found.evidence_within(scope) else { continue };
             section.push(
                 Finding::new(
                     "list_functions",
@@ -471,7 +509,7 @@ impl<'p> Tracer<'p> {
                     format!("contains function `{}` ({area}), statically linked or local", symbol.name),
                 )
                 .at(symbol.address)
-                .evidence(found.evidence()),
+                .evidence(evidence),
             );
             self.record(&found, &format!("calls `{}` ({area})", symbol.name));
         }
@@ -647,6 +685,28 @@ mod tests {
             let finding = finding.unwrap_or_else(|| panic!("{name}: {section:#?}"));
             assert!(finding.evidence[0].ends_with("references from discovered functions"), "{finding:#?}");
         }
+    }
+
+    #[test]
+    fn scoped_apis_are_listed_only_from_functions_in_scope() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64-dyn.elf");
+        let project = Project::new(rampage_loaders::Binary::open(path).unwrap());
+        let mut report = WorkflowReport::new("test", &project);
+        let mut tracer = Tracer::new(&project, &mut report);
+        let outside = Scope { functions: BTreeSet::from([1]), why: "in scope" };
+        let area = |scope| move |name: &str| (name == "puts").then_some(("test", Some(scope)));
+        assert_eq!(tracer.api_section_within("APIs", ReportLimits::default(), area(&outside)).total, 0);
+
+        let all = tracer.api_section("APIs", ReportLimits::default(), |name| (name == "puts").then_some("test"));
+        let users: BTreeSet<u64> = all.findings[0].evidence[1..]
+            .iter()
+            .map(|line| u64::from_str_radix(line.rsplit_once("(0x").unwrap().1.trim_end_matches(')'), 16).unwrap())
+            .collect();
+        let inside = Scope { functions: users.iter().copied().take(1).collect(), why: "in scope" };
+        let section = tracer.api_section_within("APIs", ReportLimits::default(), area(&inside));
+        let evidence = &section.findings[0].evidence;
+        assert_eq!(evidence[1], "in scope", "{evidence:?}");
+        assert_eq!(evidence.len(), 3, "only the function in scope is listed: {evidence:?}");
     }
 
     #[test]
