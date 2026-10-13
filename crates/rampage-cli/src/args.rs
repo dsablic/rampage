@@ -8,6 +8,19 @@ pub(crate) struct FileArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct QueryDebuggerArgs {
+    /// Explicit absolute path to an operator-started LLDB Unix socket (no attach or discovery)
+    #[arg(long)]
+    pub(crate) socket: PathBuf,
+    /// One bounded version 1 JSON read-only request; subsequent queries require expected_token
+    #[arg(long)]
+    pub(crate) request: String,
+    /// End-to-end timeout in milliseconds
+    #[arg(long, default_value_t = 3000, value_parser = clap::value_parser!(u64).range(1..=30000))]
+    pub(crate) timeout_ms: u64,
+}
+
+#[derive(Args)]
 pub(crate) struct DirectoryArgs {
     pub(crate) directory: PathBuf,
 }

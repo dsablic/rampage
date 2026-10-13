@@ -6,8 +6,8 @@ use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
     DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportsArgs, JumpTableArgs, McpArgs,
-    ObserveIndirectBranchArgs, PseudocodeArgs, RenameArgs, ReportArgs, SignaturesArgs, StringsArgs, XrefsArgs,
-    YaraArgs,
+    ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs, SignaturesArgs, StringsArgs,
+    XrefsArgs, YaraArgs,
 };
 use crate::{Command, PacksCommand};
 
@@ -105,6 +105,7 @@ impl RootCommand {
             Self::Runtime(RuntimeCommand::Branch(BranchCommand::Inspect(args))) => Command::ObserveIndirectBranch(args),
             Self::Runtime(RuntimeCommand::Bytes(BytesCommand::Compare(args))) => Command::CompareRuntime(args),
             Self::Runtime(RuntimeCommand::Module(ModuleCommand::Correlate(args))) => Command::Correlate(args),
+            Self::Runtime(RuntimeCommand::Debugger(DebuggerCommand::Query(args))) => Command::QueryDebugger(args),
             Self::Pack(action) => Command::Packs { action },
             Self::Workflow(WorkflowCommand::Run(args)) => Command::Report(args),
             Self::Server(ServerCommand::Serve(args)) => Command::Mcp(args),
@@ -215,6 +216,9 @@ pub(crate) enum TypeCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum RuntimeCommand {
+    /// Query an explicitly supplied operator-started stopped debugger session (read-only)
+    #[command(subcommand)]
+    Debugger(DebuggerCommand),
     /// Compare explicit pointer slots in runtime captures
     #[command(subcommand)]
     Pointer(PointerCommand),
@@ -227,6 +231,12 @@ pub(crate) enum RuntimeCommand {
     /// Correlate captured modules with an original image
     #[command(subcommand)]
     Module(ModuleCommand),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DebuggerCommand {
+    /// Send one typed read-only JSON request to a local LLDB socket; never attach or open an image
+    Query(QueryDebuggerArgs),
 }
 
 #[derive(Subcommand)]

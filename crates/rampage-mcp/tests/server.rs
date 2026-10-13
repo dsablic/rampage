@@ -107,6 +107,7 @@ async fn lists_all_tools_with_instructions() {
         "observe_indirect_branch",
         "observe_pointer",
         "persistence_surface",
+        "query_debugger",
         "redo",
         "rename",
         "set_comment",

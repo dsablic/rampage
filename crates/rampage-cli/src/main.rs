@@ -17,8 +17,8 @@ use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
     DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportsArgs, JumpTableArgs, McpArgs,
-    ObserveIndirectBranchArgs, PseudocodeArgs, RenameArgs, ReportArgs, SignaturesArgs, StringsArgs, XrefsArgs,
-    YaraArgs,
+    ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs, SignaturesArgs, StringsArgs,
+    XrefsArgs, YaraArgs,
 };
 use crate::commands::Options;
 use crate::hierarchy::RootCommand;
@@ -59,6 +59,8 @@ enum PacksCommand {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    QueryDebugger(QueryDebuggerArgs),
     /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
     #[command(hide = true)]
     Analyze(analyze::AnalyzeArgs),
@@ -234,6 +236,7 @@ fn main() -> ExitCode {
     let options = Options { json: cli.json, arch: cli.arch, image, packs: Arc::clone(&packs) };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match command {
+        Command::QueryDebugger(args) => debugger_query(&mut out, args),
         Command::Analyze(args) => analyze::analyze(&mut out, &args, &options),
         Command::Info(FileArgs { file }) => commands::info(&mut out, &file, &options),
         Command::Disasm(DisasmArgs { file, at, count }) => {
@@ -381,11 +384,25 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
         Command::Inventory(..) => "inventory",
         Command::Packs { .. } => "packs",
         Command::Mcp(..) => "mcp (pass image_offset to each tool call instead)",
+        Command::QueryDebugger(..) => "runtime debugger query (does not open an image)",
         Command::Correlate(..) => "correlate",
         Command::CompareRuntime(..) => "compare-runtime",
         Command::ComparePointers(..) => "compare-pointers",
         _ => return None,
     })
+}
+
+fn debugger_query(out: &mut impl Write, args: QueryDebuggerArgs) -> anyhow::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(args.timeout_ms);
+    let request = rampage_api::DebuggerRequest::from_json(&args.request)?;
+    let response = rampage_api::query_debugger(&args.socket, &request, deadline)?;
+    serde_json::to_writer(&mut *out, &response)?;
+    writeln!(out)?;
+    out.flush()?;
+    if let Some(error) = response.error {
+        anyhow::bail!("debugger {}: {}", error.code, error.message);
+    }
+    Ok(())
 }
 
 fn serve_mcp(all_tools: bool, packs: Arc<Packs>) -> ExitCode {

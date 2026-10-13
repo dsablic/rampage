@@ -293,6 +293,9 @@ impl RampageServer {
     fn run(&self, name: &str, mut arguments: Map<String, Value>) -> CallToolResult {
         if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
             return match tool.call(&self.packs(), Value::Object(arguments)) {
+                Ok(output) if name == "query_debugger" && output.get("ok") == Some(&Value::Bool(false)) => {
+                    CallToolResult::error(vec![ContentBlock::text(output.to_string())])
+                }
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
                 Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
             };

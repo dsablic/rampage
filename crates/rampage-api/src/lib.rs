@@ -8,6 +8,7 @@ mod capabilities;
 mod carve;
 mod correlation;
 mod debug_import;
+mod debugger;
 mod decompile;
 mod detect;
 mod diagnostics;
@@ -41,6 +42,10 @@ pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use carve::{CarvingPage, MAX_CARVE_PAGE, carve, carve_page};
 pub use correlation::RuntimeCorrelation;
 pub use debug_import::DebugImport;
+pub use debugger::{
+    DebuggerAddress, DebuggerBackend, DebuggerError, DebuggerObservation, DebuggerPermissions, DebuggerRequest,
+    DebuggerResponse, DebuggerToken, MAX_DEBUGGER_REQUEST_BYTES, MAX_DEBUGGER_RESPONSE_BYTES, query_debugger,
+};
 pub use decompile::Decompilation;
 pub use detect::ToolDetections;
 pub use dotnet::{DotNetCounts, DotNetIl, DotNetIlQuery, DotNetList, DotNetQuery, DotNetSummary, parse_il_offset};
@@ -55,7 +60,7 @@ pub use offset::{FileOffset, parse_file_offset};
 pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
 pub use pointer_compare::{PointerChange, PointerComparison};
 pub use pointer_observation::{PointerAssessment, PointerObservation};
-pub use project::Project;
+pub use project::{PdbImport, Project};
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
 pub use rampage_decompiler::results::RecoveryStatus;

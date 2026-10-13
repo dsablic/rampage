@@ -204,9 +204,55 @@ struct CarveArgs {
     limit: Option<usize>,
 }
 
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct QueryDebuggerArgs {
+    /// Explicit absolute path of an operator-started LLDB Unix socket in a same-user 0700 directory.
+    socket: std::path::PathBuf,
+    /// Version 1 read-only query. Copy the returned token into expected_token for subsequent operations.
+    request: crate::DebuggerRequest,
+    /// End-to-end timeout in milliseconds (1..=30000, default 3000).
+    #[schemars(range(min = 1, max = 30000))]
+    timeout_ms: Option<u64>,
+}
+
 /// Every tool that works without a loaded binary.
 pub fn file_tools() -> Vec<FileTool> {
     vec![
+        FileTool {
+            group: Group::Runtime,
+            name: "query_debugger",
+            description: "Read an existing authorized stopped LLDB session through an explicitly supplied local Unix \
+                          socket. The operator must start rampage-query-serve first. Only describe_session, \
+                          list_modules, list_threads, read_registers and read_memory are permitted; no attach, launch, \
+                          resume, expressions, writes or process commands. Requires socket and a version 1 request; \
+                          all but initial describe_session require expected_token from a prior response. No binary \
+                          path, discovery, environment fallback or sidecar access. Responses preserve stop evidence \
+                          and revalidated-non-atomic observations; content hashes are not authenticity or atomicity \
+                          proofs. Reduce page size or memory size if a response exceeds the tool's 60000-byte budget.",
+            input_schema: schema::<QueryDebuggerArgs>(),
+            handler: |_, input| {
+                let started = std::time::Instant::now();
+                if input.to_string().len() > crate::MAX_DEBUGGER_REQUEST_BYTES + 1024 {
+                    return Err("debugger arguments exceed the input byte limit".to_owned());
+                }
+                let mut args: QueryDebuggerArgs = arguments(input)?;
+                let timeout = args.timeout_ms.unwrap_or(3000);
+                if !(1..=30000).contains(&timeout) {
+                    return Err("timeout_ms must be in 1..=30000".to_owned());
+                }
+                args.request.validate().map_err(|error| error_chain(&error))?;
+                args.request.cap_response_budget(MAX_RESULT_CHARS);
+                let deadline = started + std::time::Duration::from_millis(timeout);
+                let response = crate::query_debugger(&args.socket, &args.request, deadline)
+                    .map_err(|error| error_chain(&error))?;
+                let output = serde_json::to_value(response).map_err(|error| error.to_string())?;
+                if output.to_string().len() > MAX_RESULT_CHARS {
+                    return Err("debugger result exceeds tool output limit; request a smaller page or range".to_owned());
+                }
+                Ok(output)
+            },
+        },
         FileTool {
             group: Group::Carve,
             name: "carve",
