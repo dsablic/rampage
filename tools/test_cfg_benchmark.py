@@ -26,6 +26,14 @@ class CacheKeyTest(unittest.TestCase):
         self.assertTrue(benchmark.cache_key("abc", "12.0").startswith("abc-12.0-"))
 
 
+class ReportNameTest(unittest.TestCase):
+    def test_fixtures_with_one_name_in_different_directories_get_different_reports(self) -> None:
+        first, second = Path("a/hello.elf"), Path("b/hello.elf")
+        self.assertNotEqual(benchmark.report_name(first), benchmark.report_name(second))
+        self.assertEqual(benchmark.report_name(first), benchmark.report_name(Path("a/../a/hello.elf")))
+        self.assertTrue(benchmark.report_name(first).startswith("hello.elf-"))
+
+
 class ReadExportTest(unittest.TestCase):
     def test_a_missing_or_truncated_export_exits_with_ghidras_logs(self) -> None:
         with tempfile.TemporaryDirectory() as work:

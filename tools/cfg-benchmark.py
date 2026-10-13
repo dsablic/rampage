@@ -263,6 +263,13 @@ def pair(metric: dict[str, Any]) -> str:
     return f"{percent(metric['precision'])} / {percent(metric['recall'])}"
 
 
+def report_name(fixture: Path) -> str:
+    """The `--out` file name for a fixture: its name, plus a digest of its full path so that fixtures with the same
+    name in different directories do not overwrite each other's reports."""
+    digest = hashlib.sha256(str(fixture.resolve()).encode()).hexdigest()[:8]
+    return f"{fixture.name}-{digest}.json"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("rampage", type=Path)
@@ -295,7 +302,7 @@ def main() -> int:
             "rampage_version": rampage_version,
         })
         if arguments.out:
-            (arguments.out / f"{fixture.name}.json").write_text(json.dumps(report, indent=1))
+            (arguments.out / report_name(fixture)).write_text(json.dumps(report, indent=1))
         f, b, k = report["functions"], report["blocks"], report["chains"]
         print(f"| {fixture.name} | {f['ghidra']}/{f['rampage']}/{f['common']} | "
               f"{b['identical_functions']}/{f['common']} | {percent(b['jaccard'])} | {percent(k['jaccard'])} | "
