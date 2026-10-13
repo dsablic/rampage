@@ -10,13 +10,14 @@ use rampage_loaders::{Binary, Format};
 use sha2::{Digest, Sha256};
 
 use crate::annotations::Annotations;
-use crate::{ApiError, Project};
+use crate::{ApiError, Packs, Project};
 
 /// Loaded binaries, with snapshots revalidated on each open to notice changed mappings or capture metadata.
 #[derive(Default)]
 pub struct Session {
     state: Mutex<State>,
     capture_annotations: Option<PathBuf>,
+    packs: Arc<Packs>,
 }
 
 #[derive(Default)]
@@ -37,6 +38,16 @@ impl Session {
     /// Ordinary binaries still use their existing per-path, per-slice sidecars.
     pub fn with_capture_annotations(directory: PathBuf) -> Self {
         Self { capture_annotations: Some(directory), ..Self::default() }
+    }
+
+    /// Layers `packs` over the bundled heuristic databases of every project this session opens.
+    pub fn with_packs(self, packs: Arc<Packs>) -> Self {
+        Self { packs, ..self }
+    }
+
+    /// The data packs every project of this session uses.
+    pub fn packs(&self) -> Arc<Packs> {
+        Arc::clone(&self.packs)
     }
 
     pub fn open(&self, path: &Path, arch: Option<Arch>) -> Result<Arc<Project>, ApiError> {
@@ -139,6 +150,7 @@ impl Session {
         });
         let project = state.projects.entry(key).or_insert_with(|| {
             let project = Project::with_annotations(binary, annotations);
+            project.set_packs(Arc::clone(&self.packs));
             if let Some(executable) = worker {
                 project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
                     executable: Some(executable),

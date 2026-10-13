@@ -297,14 +297,18 @@ struct DetectToolsArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct YaraArgs {
-    /// YARA rule source text to compile and run against the binary's image bytes.
-    rules: String,
+    /// YARA rule source text to compile and run against the binary's image bytes. Optional when a loaded data
+    /// pack holds YARA rules; those always run too.
+    #[serde(default)]
+    rules: Option<String>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct CapaArgs {
     /// Path to a directory of Mandiant capa rule YAML files (only the file-scope feature subset is evaluated).
-    rules_dir: String,
+    /// Optional when a loaded data pack holds capa rules; those are always evaluated too.
+    #[serde(default)]
+    rules_dir: Option<String>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -567,7 +571,8 @@ pub fn tools() -> Vec<Tool> {
             "identify_functions",
             "Name functions by matching signature databases (FLIRT/Function-ID style), so statically linked \
              library code in a stripped binary gets recognized. Applies the bundled starter database for the \
-             architecture; an optional database path is overlaid on top (or used alone with no_bundled=true). \
+             architecture; an optional database path is overlaid on top (or used alone with no_bundled=true), and \
+             loaded data packs' databases layer between the two, in pack order. \
              A function whose masked body collides with another's is named by the names of the functions it \
              calls, once those are named; thunks too small for the confidence gate are never named. apply=true \
              saves names for unnamed functions.",
@@ -715,7 +720,8 @@ pub fn tools() -> Vec<Tool> {
             "detect_tools",
             "Identify the tools that likely produced the binary (packer, compiler, protector, installer, linker) \
              from a bundled heuristic database of entry-point, section, import, overlay and entropy signatures. \
-             Optionally overlay a user-supplied PeID userdb.txt. Returns {detections, warnings}: warnings name the \
+             Optionally overlay a user-supplied PeID userdb.txt; loaded data packs' PeID signatures are always \
+             overlaid. Returns {detections, warnings}: warnings name the \
              PeID entries and lines skipped as malformed (the first 20, then a count). Confidence is a signal, not \
              proof.",
             |project, args: DetectToolsArgs| {
@@ -732,16 +738,23 @@ pub fn tools() -> Vec<Tool> {
             Group::Detection,
             "yara_scan",
             "Compile the given YARA rule source and scan the binary's image bytes, returning matching rules with \
-             their tags, metadata and bounded matched-string offsets. Rules are user-supplied.",
-            |project, args: YaraArgs| project.yara_scan(&args.rules),
+             their tags, metadata and bounded matched-string offsets. Rules are user-supplied; the rules of loaded \
+             data packs (see list_packs) run too, in a namespace named after their pack.",
+            |project, args: YaraArgs| match &args.rules {
+                Some(rules) => project.yara_scan(rules),
+                None => project.yara_scan_packs(),
+            },
         ),
         tool(
             Group::Detection,
             "capa_detect",
-            "Evaluate a directory of Mandiant capa rules against the binary's imports, exports and strings, \
-             returning the behaviors whose file-scope features match. A partial capa evaluator (no disassembly \
-             features); triage evidence, not proof.",
-            |project, args: CapaArgs| project.detect_capa(std::path::Path::new(&args.rules_dir)),
+            "Evaluate a directory of Mandiant capa rules, plus those of loaded data packs (see list_packs), against \
+             the binary's imports, exports and strings, returning the behaviors whose file-scope features match. A \
+             partial capa evaluator (no disassembly features); triage evidence, not proof.",
+            |project, args: CapaArgs| match &args.rules_dir {
+                Some(directory) => project.detect_capa(std::path::Path::new(directory)),
+                None => project.detect_capa_packs(),
+            },
         ),
         tool(
             Group::Runtime,

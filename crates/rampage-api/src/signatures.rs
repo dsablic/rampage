@@ -92,8 +92,9 @@ impl Project {
         rampage_signatures::bundled(self.binary.arch)
     }
 
-    /// Identifies functions against an optional `user` database first, then the bundled starter database for this
-    /// architecture (so user names win). With neither database, nothing matches.
+    /// Identifies functions against an optional `user` database first, then the data packs' databases for this
+    /// architecture in pack order, then the bundled starter database (so user names win). With no database,
+    /// nothing matches.
     pub fn apply_signatures_default(
         &self,
         user: Option<&SignatureDb>,
@@ -102,19 +103,26 @@ impl Project {
         self.identify_functions(user, true, apply)
     }
 
-    /// Identifies functions against an optional `user` database first, then, with `bundled`, the bundled starter
-    /// database. Leaving out the bundled database needs a `user` one, so that the request is never silently empty.
+    /// Identifies functions against an optional `user` database first, then the data packs' databases for this
+    /// architecture in pack order, then, with `bundled`, the bundled starter database. Leaving out the bundled
+    /// database needs a `user` or pack one, so that the request is never silently empty.
     pub fn identify_functions(
         &self,
         user: Option<&SignatureDb>,
         bundled: bool,
         apply: bool,
     ) -> Result<SignatureApplication, ApiError> {
-        if !bundled && user.is_none() {
-            return Err(ApiError::Invalid("leaving out the bundled signatures needs a signature database".to_owned()));
+        let packs = self.packs();
+        let packed: Vec<&SignatureDb> = packs.signatures_for(self.binary.arch).collect();
+        if !bundled && user.is_none() && packed.is_empty() {
+            return Err(ApiError::Invalid(
+                "leaving out the bundled signatures needs a signature database or a pack with one for this \
+                 architecture"
+                    .to_owned(),
+            ));
         }
         let bundled = if bundled { self.bundled_signatures() } else { None };
-        let databases: Vec<&SignatureDb> = user.into_iter().chain(bundled.as_ref()).collect();
+        let databases: Vec<&SignatureDb> = user.into_iter().chain(packed).chain(bundled.as_ref()).collect();
         self.apply_layered_signatures(&databases, apply)
     }
 }

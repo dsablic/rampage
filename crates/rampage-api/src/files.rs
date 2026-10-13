@@ -12,6 +12,10 @@ const MIB: u64 = 1024 * 1024;
 pub const MAX_SIGNATURE_DB_BYTES: u64 = 256 * MIB;
 /// The largest PeID `userdb.txt` read from a path.
 pub const MAX_PEID_BYTES: u64 = 16 * MIB;
+/// The largest single YARA or capa rule file read from a data pack.
+pub const MAX_RULE_FILE_BYTES: u64 = 16 * MIB;
+/// The largest data-pack manifest read from a path.
+pub const MAX_PACK_MANIFEST_BYTES: u64 = MIB;
 
 /// The UTF-8 text of the regular file at `path`, refusing anything else or anything over `max` bytes. `what` names
 /// the file in errors, beside its path.

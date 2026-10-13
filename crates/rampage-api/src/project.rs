@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::{OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
 
 use rampage_analysis::discover::Program;
 use rampage_analysis::functions::{self, Names};
@@ -9,12 +9,12 @@ use rampage_analysis::triage::{self, Triage};
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::{Binary, Export, LoadError};
 
-use crate::ApiError;
 use crate::annotations::{Annotations, Edit, Field};
 use crate::rows::{
     Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Matcher, Page,
     StringsQuery, Summary,
 };
+use crate::{ApiError, Packs};
 
 /// The shortest string listed unless a query asks for shorter ones.
 const DEFAULT_STRING_LENGTH: usize = 4;
@@ -30,6 +30,8 @@ pub struct Project {
     /// The embedded decompiler, built once over the executable segments on first use. Behind a mutex because
     /// Ghidra's decompiler is not thread-safe and a project is shared across threads.
     pub(crate) decompiler: std::sync::Mutex<crate::decompile::DecompilerState>,
+    /// Data packs layered over the bundled heuristic databases.
+    packs: RwLock<Arc<Packs>>,
 }
 
 pub(crate) struct Analysis {
@@ -80,7 +82,18 @@ impl Project {
             triage: OnceLock::new(),
             strings: OnceLock::new(),
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
+            packs: RwLock::default(),
         }
+    }
+
+    /// Layers `packs` over the bundled databases for identification, tool detection, YARA and capa.
+    pub fn set_packs(&self, packs: Arc<Packs>) {
+        *self.packs.write().expect("packs lock") = packs;
+    }
+
+    /// The data packs in effect.
+    pub fn packs(&self) -> Arc<Packs> {
+        Arc::clone(&self.packs.read().expect("packs lock"))
     }
 
     pub(crate) fn annotations(&self) -> RwLockReadGuard<'_, Annotations> {

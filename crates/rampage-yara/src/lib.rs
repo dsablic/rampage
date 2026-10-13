@@ -97,8 +97,18 @@ pub fn compile_files<P: AsRef<Path>>(paths: &[P]) -> Result<Rules, YaraError> {
             std::fs::read_to_string(path).map_err(|source| YaraError::Io { path: path.to_path_buf(), source })?;
         sources.push((path.display().to_string(), text));
     }
+    compile_sources(None, &sources)
+}
+
+/// Compile `(origin, text)` sources, each tagged with its origin so compile errors name it, into `namespace` (or
+/// yara-x's `default` one). A namespace keeps rule identifiers from colliding with other rule sets and names the
+/// set in every match.
+pub fn compile_sources(namespace: Option<&str>, sources: &[(String, String)]) -> Result<Rules, YaraError> {
     let mut compiler = yara_x::Compiler::new();
-    for (origin, text) in &sources {
+    if let Some(namespace) = namespace {
+        compiler.new_namespace(namespace);
+    }
+    for (origin, text) in sources {
         let code = yara_x::SourceCode::from(text.as_str()).with_origin(origin);
         compiler.add_source(code).map_err(|e| YaraError::Compile(e.to_string()))?;
     }
