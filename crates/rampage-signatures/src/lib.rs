@@ -34,8 +34,9 @@
 //! and `sscanf` differ only in calling `vfprintf` or `vsscanf`. Only a body that passes the gate, even without its
 //! landing pads and final branch, gets such a key, so a thunk is never named after what it forwards to (a user
 //! `strtod(s, 0)` wrapper is byte-identical to musl's `atof`). And a database built with
-//! [`SignatureDb::from_binary_with_extents`] also hashes each function over the extent discovery finds for it,
-//! since identification hashes discovered bodies and discovery stops short of a jump table it cannot follow.
+//! [`SignatureDb::from_binary_with_extents`] also hashes each function over the extent discovery finds for it in
+//! the reference: identification hashes discovered bodies and discovery stops short of a jump table it cannot
+//! follow, so this matches a stripped target where discovery stops at the same place in both.
 
 mod bundled;
 
@@ -864,9 +865,11 @@ impl SignatureDb {
     }
 
     /// [`SignatureDb::from_binary`], also hashing each function over the extent function discovery found for it
-    /// (`extents` maps a start to its exclusive end, as `DiscoveredFunction::end` gives it). Identification hashes
-    /// what discovery finds in the target, and discovery can stop short of a function's symbol size (at a jump
-    /// table it cannot follow), so a database built from symbol sizes alone could never match that function.
+    /// in this reference (`extents` maps a start to its exclusive end, as `DiscoveredFunction::end` gives it).
+    /// Identification hashes what discovery finds in the target, and discovery can stop short of a function's
+    /// symbol size (at a jump table it cannot follow), so a database built from symbol sizes alone could never
+    /// match that function. The reference's extent matches a stripped target's only when discovery stops at the
+    /// same place in both, which it does for the same code but need not where symbols or layout steer it.
     pub fn from_binary_with_extents(binary: &Binary, extents: &BTreeMap<u64, u64>) -> SignatureDb {
         let mut db = SignatureDb::empty(binary.arch, CURRENT_SCHEME);
         db.add_binary(binary, extents);

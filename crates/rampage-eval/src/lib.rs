@@ -317,8 +317,9 @@ pub fn proposals(db: &SignatureDb, target: &Binary) -> Result<Vec<(u64, Option<S
         .collect())
 }
 
-/// Each function discovery finds in `binary`, its start mapped to the end of its body: the extents a signature
-/// database is also built over (`SignatureDb::from_binary_with_extents`), since identification hashes them.
+/// Each function discovery finds in `binary`, its start mapped to the end of its body: the reference extents a
+/// signature database is also built over (`SignatureDb::from_binary_with_extents`). Identification hashes the
+/// extents discovery finds in the target, which match these only where discovery stops at the same place in both.
 pub fn discovered_extents(binary: &Binary) -> Result<BTreeMap<u64, u64>, UnsupportedArch> {
     let program = rampage_analysis::functions::analyze(binary)?;
     Ok(program.functions.iter().map(|function| (function.address, function.end())).collect())

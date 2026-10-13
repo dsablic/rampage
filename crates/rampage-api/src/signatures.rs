@@ -28,7 +28,8 @@ pub struct SignatureApplication {
 
 impl Project {
     /// Builds a signature database from this binary's named functions, over both their symbol sizes and the
-    /// extents discovery finds for them (which is what identification hashes in a target).
+    /// extents discovery finds for them here. Identification hashes the extents discovery finds in a stripped
+    /// target, which match these only where discovery cuts both copies of a function short in the same place.
     pub fn build_signatures(&self) -> SignatureDb {
         let extents = match self.analysis() {
             Ok(analysis) => {
