@@ -58,7 +58,8 @@ impl Project {
     /// The control-flow graph of the function containing `address`.
     pub fn function_graph(&self, address: u64) -> Result<FunctionGraph, ApiError> {
         let listing = self.function_listing(address)?;
-        let function = self.analysis()?.program.function_at(listing.address).expect("listing names a function");
+        let program = &self.analysis()?.program;
+        let function = program.function_at(listing.address).expect("listing names a function");
         let ends: HashMap<_, _> = function.blocks.iter().map(|block| (block.start, block.end)).collect();
         let delay_slots = usize::from(self.binary.arch.delay_slots());
         let blocks: Vec<GraphBlock> = listing
@@ -96,6 +97,7 @@ impl Project {
                     }
                 }
                 Flow::Return | Flow::Halt | Flow::Invalid => {}
+                Flow::Call(_) | Flow::IndirectCall if program.is_noreturn_call(branch.address) => {}
                 // A block that ends without a branch runs into the next one.
                 Flow::Next | Flow::Call(_) | Flow::IndirectCall => add(index_of(end), EdgeKind::Unconditional),
             }

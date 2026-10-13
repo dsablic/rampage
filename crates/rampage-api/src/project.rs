@@ -455,6 +455,7 @@ mod tests {
                     xrefs: vec![],
                     code_modes: vec![(address, true)],
                     resolved_flows: vec![],
+                    ..Default::default()
                 },
                 xrefs_by_source: vec![],
                 blocks: vec![BlockSpan { start: address, end: address + 2, function: address, reach: address + 2 }],

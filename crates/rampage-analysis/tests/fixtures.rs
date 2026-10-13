@@ -57,6 +57,24 @@ fn analysis_of_entry_alone_reaches_main_through_code_pointer() {
 }
 
 #[test]
+fn calls_to_noreturn_imports_and_their_wrappers_end_blocks() {
+    let binary = open("hello-x64.exe");
+    let program = functions::analyze(&binary).unwrap();
+    // 0x1400013f7: call exit (an import thunk); 0x1400017c0 prints "runtime error %d" and calls _exit.
+    let exit = binary.import_slots.iter().find(|slot| slot.name == "exit").unwrap().address;
+    assert!(program.noreturn.contains(&exit));
+    assert!(program.is_noreturn_call(0x1400013f7));
+    assert!(program.noreturn.contains(&0x1400017c0));
+    assert!(program.is_noreturn_call(0x1400013e6));
+    assert!(!program.noreturn.contains(&0x140001060));
+
+    let binary = open("hello-x64.elf");
+    let program = functions::analyze(&binary).unwrap();
+    assert!(program.noreturn.contains(&symbol_address(&binary, "exit")));
+    assert!(!program.noreturn.contains(&symbol_address(&binary, "main")));
+}
+
+#[test]
 fn analysis_of_stripped_macho_finds_add() {
     let add = symbol_address(&open("hello-x64.macho"), "_add");
     let stripped = open("hello-x64-stripped.macho");

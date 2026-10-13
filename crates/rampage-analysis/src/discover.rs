@@ -99,6 +99,12 @@ pub struct Program {
     pub code_modes: Vec<(u64, bool)>,
     #[serde(skip)]
     pub resolved_flows: Vec<ResolvedFlow>,
+    /// Functions, import stubs and import slots known by name or inferred never to return, sorted.
+    #[serde(skip_serializing_if = "Vec::is_empty", serialize_with = "rampage_arch::hex::addresses")]
+    pub noreturn: Vec<u64>,
+    /// Calls to a [`Program::noreturn`] callee, sorted: each ends its block with no fall-through.
+    #[serde(skip_serializing_if = "Vec::is_empty", serialize_with = "rampage_arch::hex::addresses")]
+    pub noreturn_calls: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +118,11 @@ impl Program {
     pub fn function_at(&self, address: u64) -> Option<&DiscoveredFunction> {
         let index = self.functions.binary_search_by_key(&address, |function| function.address).ok()?;
         Some(&self.functions[index])
+    }
+
+    /// Whether the call at `address` never returns, so nothing falls through after it.
+    pub fn is_noreturn_call(&self, address: u64) -> bool {
+        self.noreturn_calls.binary_search(&address).is_ok()
     }
 
     pub fn xrefs_to(&self, address: u64) -> &[Xref] {
@@ -128,7 +139,55 @@ impl Program {
 /// tail, which would otherwise be copied into every caller). Phase 2 then builds every function's blocks against
 /// that final set, so whether a jump is a tail call does not depend on the round its target was found in.
 /// Merges are ordered by address, so the result does not depend on thread count or scheduling.
+///
+/// No callee is known not to return beyond what discovery infers; see [`discover_with_noreturn`].
 pub fn discover<M, F>(memory: &M, new_decoder: F, seeds: &[u64]) -> Program
+where
+    M: Memory,
+    F: Fn() -> Box<dyn Disassembler> + Sync,
+{
+    discover_with_noreturn(memory, new_decoder, seeds, &ReturnFacts::default())
+}
+
+/// What is known, before discovery, about whether callees return.
+#[derive(Debug, Clone, Default)]
+pub struct ReturnFacts {
+    /// Functions, import stubs and import slots that never return.
+    pub noreturn: BTreeSet<u64>,
+    /// Functions never inferred noreturn: they resume their caller through a saved context, not a return.
+    pub returns: BTreeSet<u64>,
+}
+
+/// Rounds of noreturn inference: each one finds the wrappers around the previous round's noreturn functions.
+const MAX_NORETURN_ROUNDS: usize = 8;
+
+/// [`discover`], where a call to an address in `facts.noreturn` (a function, or the import slot an indirect call
+/// goes through) ends its block with no fall-through. A function is inferred not to return when no path through it
+/// returns and at least one ends in a noreturn call or a trap; discovery repeats with those added until no more
+/// are found, at most [`MAX_NORETURN_ROUNDS`] times. Anything unknown on a path (an unresolved indirect jump,
+/// undecodable bytes, a tail call to a function that may return) counts as returning, and nothing in
+/// `facts.returns` is inferred.
+pub fn discover_with_noreturn<M, F>(memory: &M, new_decoder: F, seeds: &[u64], facts: &ReturnFacts) -> Program
+where
+    M: Memory,
+    F: Fn() -> Box<dyn Disassembler> + Sync,
+{
+    let mut noreturn = facts.noreturn.clone();
+    let mut round = 0;
+    loop {
+        let (mut program, inferred) = discover_round(memory, &new_decoder, seeds, &noreturn);
+        round += 1;
+        let before = noreturn.len();
+        noreturn.extend(inferred.into_iter().filter(|address| !facts.returns.contains(address)));
+        if noreturn.len() == before || round == MAX_NORETURN_ROUNDS {
+            program.noreturn = noreturn.into_iter().collect();
+            return program;
+        }
+    }
+}
+
+/// One discovery with the callees in `noreturn` known not to return, and the functions it infers never return.
+fn discover_round<M, F>(memory: &M, new_decoder: &F, seeds: &[u64], noreturn: &BTreeSet<u64>) -> (Program, Vec<u64>)
 where
     M: Memory,
     F: Fn() -> Box<dyn Disassembler> + Sync,
@@ -140,9 +199,9 @@ where
      -> Vec<Explored> {
         starts
             .par_iter()
-            .map_init(&new_decoder, |decoder, &start| {
+            .map_init(new_decoder, |decoder, &start| {
                 decoder.set_code_modes(modes);
-                explore(memory, decoder.as_mut(), known, branch_targets, start)
+                explore(memory, decoder.as_mut(), known, branch_targets, noreturn, start)
             })
             .collect()
     };
@@ -245,11 +304,13 @@ where
     // Phase 1 saw every branch; a fall-through that is also a branch target joins paths and starts afresh.
     branch_targets.sort_unstable();
     branch_targets.dedup();
-    let (functions, mut xrefs, mut resolved_flows) = loop {
+    let (functions, mut xrefs, mut resolved_flows, mut noreturn_calls, inferred) = loop {
         let starts: Vec<u64> = known.iter().copied().collect();
         let mut functions = Vec::with_capacity(starts.len());
         let mut xrefs = Vec::new();
         let mut resolved_flows = Vec::new();
+        let mut noreturn_calls = Vec::new();
+        let mut inferred = Vec::new();
         let mut added = BTreeSet::new();
         let mut targets = branch_targets.clone();
         let mut jump_owners = HashMap::new();
@@ -280,6 +341,10 @@ where
             targets.extend(result.branch_targets);
             resolved_flows.extend(result.resolved_flows);
             xrefs.extend(result.xrefs);
+            noreturn_calls.extend(result.noreturn_calls);
+            if result.never_returns {
+                inferred.push(result.function.address);
+            }
             functions.push(result.function);
         }
         targets.sort_unstable();
@@ -287,7 +352,7 @@ where
         let explored = known.len();
         known.retain(|start| !undecodable.contains(start));
         if added.is_empty() && targets == branch_targets && known.len() == explored {
-            break (functions, xrefs, resolved_flows);
+            break (functions, xrefs, resolved_flows, noreturn_calls, inferred);
         }
         known.extend(added);
         branch_targets = targets;
@@ -295,7 +360,10 @@ where
     xrefs.sort_unstable();
     xrefs.dedup();
     resolved_flows.sort_by_key(|flow| (flow.function, flow.address));
-    Program { functions, xrefs, code_modes: code_modes.into_iter().collect(), resolved_flows }
+    noreturn_calls.sort_unstable();
+    noreturn_calls.dedup();
+    let code_modes = code_modes.into_iter().collect();
+    (Program { functions, xrefs, code_modes, resolved_flows, noreturn: Vec::new(), noreturn_calls }, inferred)
 }
 
 struct Explored {
@@ -312,6 +380,10 @@ struct Explored {
     jump_targets: Vec<u64>,
     /// Targets of every branch taken while exploring.
     branch_targets: Vec<u64>,
+    /// Calls that end their block because the callee never returns.
+    noreturn_calls: Vec<u64>,
+    /// No path through the function returns, and at least one ends in a noreturn call or a trap.
+    never_returns: bool,
 }
 
 /// Explores the function at `start`. `all_branch_targets`, when given, lists every branch target in the program:
@@ -322,10 +394,24 @@ fn explore(
     decoder: &mut dyn Disassembler,
     known: &BTreeSet<u64>,
     all_branch_targets: Option<&[u64]>,
+    noreturn: &BTreeSet<u64>,
     start: u64,
 ) -> Explored {
     decoder.begin_run();
     let is_other_function = |address: u64| address != start && known.contains(&address);
+    let mut exits = Exits::default();
+    let mut noreturn_calls = Vec::new();
+    let never_returns = |insn: &rampage_arch::Insn, resolved: Option<Flow>| match insn.flow {
+        Flow::Call(target) => noreturn.contains(&target),
+        Flow::IndirectCall | Flow::IndirectJump => {
+            let resolved = resolved.and_then(|flow| match flow {
+                Flow::Call(target) | Flow::Jump(target) => Some(target),
+                _ => None,
+            });
+            insn.data_ref.into_iter().chain(resolved).any(|target| noreturn.contains(&target))
+        }
+        _ => false,
+    };
     let trust_immediates = memory.immediates_may_be_addresses();
     let delay_slots = decoder.delay_slots();
     // Data references and code pointers an instruction contributes.
@@ -382,28 +468,39 @@ fn explore(
         let mut address = block_start;
         loop {
             if is_other_function(address) || address != block_start && instructions.contains(&address) {
+                if is_other_function(address) {
+                    exits.leave_to(address, noreturn);
+                }
                 if let Some(thumb) = decoder.code_mode_at(address) {
                     mode_hints.push((block_start, address, thumb));
                 }
                 split_block(&mut blocks, address);
                 break;
             }
-            let Some(bytes) = memory.code_from(address) else { break };
+            let Some(bytes) = memory.code_from(address) else {
+                exits.returns = true;
+                break;
+            };
             let insn = decoder.decode_with_memory(bytes, address, &|at, size| memory.read_pointer(at, size));
-            if let Some(flow) = decoder.resolved_flow() {
+            let resolved = decoder.resolved_flow();
+            if let Some(flow) = resolved {
                 resolved_flows.push(ResolvedFlow { function: start, address, flow });
             }
             jump_bases.extend(decoder.indirect_jump_base());
             let jump_table = decoder.jump_table();
             mode_hints.extend(decoder.code_modes().into_iter().map(|(at, thumb)| (address, at, thumb)));
             if insn.flow == Flow::Invalid {
+                exits.returns = true;
                 break;
             }
             instructions.insert(address);
             if let Some(thumb) = decoder.instruction_mode() {
                 instruction_modes.push((address, thumb));
             }
-            let Some(mut next) = address.checked_add(u64::from(insn.len)) else { break };
+            let Some(mut next) = address.checked_add(u64::from(insn.len)) else {
+                exits.returns = true;
+                break;
+            };
             // MIPS and SPARC execute the instruction after a branch before the branch takes effect: it belongs to
             // the branch's block, and execution falls through past it.
             if delay_slots > 0 && !matches!(insn.flow, Flow::Next | Flow::Invalid | Flow::Halt) {
@@ -419,20 +516,33 @@ fn explore(
                 }
             }
             record_refs(&insn, &mut xrefs, &mut code_pointers);
+            let stops = never_returns(&insn, resolved);
             match insn.flow {
-                Flow::Next | Flow::IndirectCall => address = next,
-                Flow::Call(target) => {
-                    xrefs.push(Xref { to: target, from: address, kind: XrefKind::Call });
-                    new_seeds.push(target);
+                Flow::Next => address = next,
+                Flow::Call(_) | Flow::IndirectCall => {
+                    if let Flow::Call(target) = insn.flow {
+                        xrefs.push(Xref { to: target, from: address, kind: XrefKind::Call });
+                        new_seeds.push(target);
+                    }
+                    let call = address;
                     address = next;
+                    if stops {
+                        exits.stops = true;
+                        noreturn_calls.push(call);
+                        break;
+                    }
                 }
                 Flow::ConditionalJump(target) => {
                     xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
                     branch_targets.push(target);
-                    if !is_other_function(target) {
+                    if is_other_function(target) {
+                        exits.leave_to(target, noreturn);
+                    } else {
                         worklist.push(target);
                     }
-                    if !is_other_function(next) {
+                    if is_other_function(next) {
+                        exits.leave_to(next, noreturn);
+                    } else {
                         fall_through = Some(next);
                     }
                     address = next;
@@ -441,7 +551,9 @@ fn explore(
                 Flow::Jump(target) => {
                     xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
                     branch_targets.push(target);
-                    if !is_other_function(target) {
+                    if is_other_function(target) {
+                        exits.leave_to(target, noreturn);
+                    } else {
                         worklist.push(target);
                         jump_targets.push(target);
                     }
@@ -455,16 +567,28 @@ fn explore(
                         for &target in &cases {
                             xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
                             branch_targets.push(target);
-                            if !is_other_function(target) {
+                            if is_other_function(target) {
+                                exits.leave_to(target, noreturn);
+                            } else {
                                 worklist.push(target);
                             }
                         }
                         switches.push(Switch { jump: address, cases });
+                    } else if stops {
+                        exits.stops = true;
+                    } else {
+                        exits.returns = true;
                     }
                     address = next;
                     break;
                 }
-                Flow::Return | Flow::Halt | Flow::Invalid => {
+                Flow::Return | Flow::Invalid => {
+                    exits.returns = true;
+                    address = next;
+                    break;
+                }
+                Flow::Halt => {
+                    exits.stops = true;
                     address = next;
                     break;
                 }
@@ -486,7 +610,38 @@ fn explore(
     let end = function.end();
     let is_local_jump_base = |target: u64| start < target && target < end && jump_bases.contains(&target);
     new_seeds.extend(code_pointers.into_iter().filter(|&target| !is_local_jump_base(target)));
-    Explored { function, xrefs, new_seeds, jump_targets, branch_targets, mode_hints, instruction_modes, resolved_flows }
+    Explored {
+        function,
+        xrefs,
+        new_seeds,
+        jump_targets,
+        branch_targets,
+        mode_hints,
+        instruction_modes,
+        resolved_flows,
+        noreturn_calls,
+        never_returns: exits.stops && !exits.returns,
+    }
+}
+
+/// How the paths through a function leave it.
+#[derive(Default)]
+struct Exits {
+    /// Some path returns, or leaves through something unknown that may.
+    returns: bool,
+    /// Some path ends in a noreturn call or a trap.
+    stops: bool,
+}
+
+impl Exits {
+    /// A path that runs into, or tail-calls, the function at `target`.
+    fn leave_to(&mut self, target: u64, noreturn: &BTreeSet<u64>) {
+        if noreturn.contains(&target) {
+            self.stops = true;
+        } else {
+            self.returns = true;
+        }
+    }
 }
 
 /// The case targets of the switch whose register-indirect jump at `jump` dispatches through `table`, or `None` to
@@ -821,6 +976,155 @@ mod tests {
         // cmp w0, #1, lsl #12: one more is left unresolved.
         let hostile = switch(0x7140_041f).discover(entries, vec![]);
         assert!(!hostile.function_at(0).unwrap().contains(CASES[0]));
+    }
+
+    fn run_noreturn(arch: Arch, bytes: Vec<u8>, seeds: &[u64], noreturn: &[u64]) -> Program {
+        let memory = FlatMemory { base: 0, bytes };
+        let facts = ReturnFacts { noreturn: noreturn.iter().copied().collect(), ..Default::default() };
+        discover_with_noreturn(&memory, || decoder_for(arch).unwrap(), seeds, &facts)
+    }
+
+    /// `call target` at `at` in x86-64 code.
+    fn put_call(bytes: &mut [u8], at: usize, target: usize) {
+        bytes[at] = 0xe8;
+        bytes[at + 1..at + 5].copy_from_slice(&((target as i32) - (at as i32 + 5)).to_le_bytes());
+    }
+
+    #[test]
+    fn a_call_to_a_noreturn_callee_has_no_fall_through() {
+        // 0: call 0x40 (exit); 5: xor eax, eax; 7: ret (code nothing else reaches); 40: ret
+        let mut bytes = vec![0xcc; 0x41];
+        put_call(&mut bytes, 0, 0x40);
+        bytes[5..8].copy_from_slice(&[0x31, 0xc0, 0xc3]);
+        bytes[0x40] = 0xc3;
+        let program = run_noreturn(Arch::X86_64, bytes.clone(), &[0], &[0x40]);
+        assert_eq!(blocks(&program, 0), [(0, 5)]);
+        assert_eq!(program.noreturn_calls, [0]);
+        assert!(program.is_noreturn_call(0));
+        assert!(program.noreturn.contains(&0x40));
+        assert!(program.xrefs.contains(&Xref { to: 0x40, from: 0, kind: XrefKind::Call }));
+        // Without the knowledge, the caller runs on into the following code.
+        let program = run_noreturn(Arch::X86_64, bytes, &[0], &[]);
+        assert_eq!(blocks(&program, 0), [(0, 8)]);
+        assert!(program.noreturn_calls.is_empty());
+    }
+
+    #[test]
+    fn a_call_through_a_noreturn_import_slot_has_no_fall_through() {
+        // 0: call [rip+0x3a] (slot 0x40); 6: ret
+        let mut bytes = vec![0xff, 0x15, 0x3a, 0, 0, 0, 0xc3];
+        bytes.resize(0x48, 0);
+        let program = run_noreturn(Arch::X86_64, bytes, &[0], &[0x40]);
+        assert_eq!(blocks(&program, 0), [(0, 6)]);
+        assert_eq!(program.noreturn_calls, [0]);
+    }
+
+    #[test]
+    fn a_wrapper_whose_every_path_calls_a_noreturn_callee_is_inferred_noreturn() {
+        // 0: call 0x10; 5: xor eax, eax; 7: ret. 10: test edi, edi; 12: je 0x19; 14: call 0x40 (abort);
+        // 19: call 0x40 (abort). 40: ret
+        let mut bytes = vec![0xcc; 0x41];
+        put_call(&mut bytes, 0, 0x10);
+        bytes[5..8].copy_from_slice(&[0x31, 0xc0, 0xc3]);
+        bytes[0x10..0x14].copy_from_slice(&[0x85, 0xff, 0x74, 0x05]);
+        put_call(&mut bytes, 0x14, 0x40);
+        put_call(&mut bytes, 0x19, 0x40);
+        bytes[0x40] = 0xc3;
+        let program = run_noreturn(Arch::X86_64, bytes.clone(), &[0], &[0x40]);
+        // The caller's only path calls the wrapper, so it never returns either.
+        assert_eq!(program.noreturn, [0, 0x10, 0x40]);
+        assert_eq!(blocks(&program, 0), [(0, 5)]);
+        assert_eq!(program.noreturn_calls, [0, 0x14, 0x19]);
+
+        // 19: ret instead: one path returns, so neither the wrapper nor its caller's call is noreturn.
+        bytes[0x19] = 0xc3;
+        let program = run_noreturn(Arch::X86_64, bytes, &[0], &[0x40]);
+        assert_eq!(program.noreturn, [0x40]);
+        assert_eq!(blocks(&program, 0), [(0, 8)]);
+        assert_eq!(program.noreturn_calls, [0x14]);
+    }
+
+    #[test]
+    fn unknown_exits_count_as_returning() {
+        // 10: test edi, edi; 12: je 0x19; 14: call 0x40 (abort); 19: jmp rax. And then 19: undecodable bytes.
+        let mut bytes = vec![0xcc; 0x41];
+        put_call(&mut bytes, 0, 0x10);
+        bytes[5..8].copy_from_slice(&[0x31, 0xc0, 0xc3]);
+        bytes[0x10..0x14].copy_from_slice(&[0x85, 0xff, 0x74, 0x05]);
+        put_call(&mut bytes, 0x14, 0x40);
+        bytes[0x19..0x1b].copy_from_slice(&[0xff, 0xe0]);
+        bytes[0x40] = 0xc3;
+        let program = run_noreturn(Arch::X86_64, bytes.clone(), &[0], &[0x40]);
+        assert_eq!(program.noreturn, [0x40]);
+        bytes[0x19] = 0x06;
+        let program = run_noreturn(Arch::X86_64, bytes, &[0], &[0x40]);
+        assert_eq!(program.noreturn, [0x40]);
+    }
+
+    #[test]
+    fn a_function_ending_in_a_trap_is_noreturn_and_tail_calls_carry_it() {
+        // 0: call 0x10; 5: ret. 10: jmp 0x20 (a tail call: 0x20 is also called from 0x30). 20: ud2.
+        // 30: call 0x20; 35: ret
+        let mut bytes = vec![0xcc; 0x36];
+        put_call(&mut bytes, 0, 0x10);
+        bytes[5] = 0xc3;
+        bytes[0x10..0x12].copy_from_slice(&[0xeb, 0x0e]);
+        bytes[0x20..0x22].copy_from_slice(&[0x0f, 0x0b]);
+        put_call(&mut bytes, 0x30, 0x20);
+        bytes[0x35] = 0xc3;
+        let program = run_noreturn(Arch::X86_64, bytes, &[0, 0x30], &[]);
+        assert_eq!(program.noreturn, [0, 0x10, 0x20, 0x30]);
+        assert_eq!(program.noreturn_calls, [0, 0x30]);
+        assert_eq!(blocks(&program, 0x30), [(0x30, 0x35)]);
+    }
+
+    #[test]
+    fn recursion_reaches_a_fixpoint() {
+        // f at 0x10: call 0x20 (g); 15: ret. g at 0x20: call 0x10 (f); 25: ud2. g never returns, so neither does
+        // f once that is known, and then g's call to f is noreturn too.
+        let mut bytes = vec![0xcc; 0x30];
+        put_call(&mut bytes, 0x10, 0x20);
+        bytes[0x15] = 0xc3;
+        put_call(&mut bytes, 0x20, 0x10);
+        bytes[0x25..0x27].copy_from_slice(&[0x0f, 0x0b]);
+        let program = run_noreturn(Arch::X86_64, bytes.clone(), &[0x10], &[]);
+        assert_eq!(program.noreturn, [0x10, 0x20]);
+        assert_eq!(blocks(&program, 0x10), [(0x10, 0x15)]);
+        assert_eq!(blocks(&program, 0x20), [(0x20, 0x25)]);
+        // g resumes its caller through a saved context (like Go's mcall), so nothing is inferred from it.
+        let memory = FlatMemory { base: 0, bytes };
+        let facts = ReturnFacts { returns: [0x20].into(), ..Default::default() };
+        let program = discover_with_noreturn(&memory, || decoder_for(Arch::X86_64).unwrap(), &[0x10], &facts);
+        assert!(program.noreturn.is_empty());
+        assert_eq!(blocks(&program, 0x10), [(0x10, 0x16)]);
+
+        // f at 0x10: test edi, edi; je 0x19; call 0x10 (itself); 19: ret. A recursive function that returns.
+        let mut bytes = vec![0xcc; 0x20];
+        bytes[0x10..0x14].copy_from_slice(&[0x85, 0xff, 0x74, 0x05]);
+        put_call(&mut bytes, 0x14, 0x10);
+        bytes[0x19] = 0xc3;
+        let program = run_noreturn(Arch::X86_64, bytes, &[0x10], &[]);
+        assert!(program.noreturn.is_empty());
+        assert!(program.function_at(0x10).unwrap().contains(0x19));
+    }
+
+    #[test]
+    fn aarch64_calls_to_noreturn_callees_and_trapping_wrappers_end_their_blocks() {
+        let bl = |from: u32, to: u32| 0x9400_0000 | ((to.wrapping_sub(from) / 4) & 0x3ff_ffff);
+        // 0: bl 0x40 (exit); 4: ret. 10: bl 0x20; 14: ret. 20: brk #1. 40: ret
+        let mut words = [NOP; 0x11];
+        words[0] = bl(0, 0x40);
+        words[1] = RET;
+        words[4] = bl(0x10, 0x20);
+        words[5] = RET;
+        words[8] = 0xd420_0020;
+        words[0x10] = RET;
+        let bytes = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        let program = run_noreturn(Arch::Aarch64, bytes, &[0, 0x10], &[0x40]);
+        assert_eq!(blocks(&program, 0), [(0, 4)]);
+        assert_eq!(blocks(&program, 0x10), [(0x10, 0x14)]);
+        assert_eq!(program.noreturn, [0, 0x10, 0x20, 0x40]);
+        assert_eq!(program.noreturn_calls, [0, 0x10]);
     }
 
     #[test]

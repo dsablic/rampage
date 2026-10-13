@@ -5,7 +5,8 @@ use rampage_arch::{Flow, UnsupportedArch};
 use rampage_loaders::{Binary, Format, SectionKind, SymbolKind};
 use serde::Serialize;
 
-use crate::discover::{Program, discover};
+use crate::discover::{Program, discover_with_noreturn};
+use crate::noreturn::return_facts;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Function {
@@ -51,14 +52,16 @@ pub fn from_symbols(binary: &Binary) -> Vec<Function> {
     by_address.into_values().collect()
 }
 
-/// Discovers functions by recursive descent from every metadata seed.
+/// Discovers functions by recursive descent from every metadata seed, with the callees named in
+/// [`crate::noreturn`] known not to return.
 pub fn analyze(binary: &Binary) -> Result<Program, UnsupportedArch> {
     binary.decoder()?;
     let mut seeds: Vec<u64> = from_symbols(binary).iter().map(|function| function.address).collect();
     seeds.extend(&binary.function_starts);
     seeds.extend(stub_seeds(binary));
     seeds.extend(thunk_seeds(binary));
-    Ok(discover(binary, || binary.decoder().expect("architecture checked above"), &seeds))
+    let decoder = || binary.decoder().expect("architecture checked above");
+    Ok(discover_with_noreturn(binary, decoder, &seeds, &return_facts(binary)))
 }
 
 /// Function entries in the stub sections: each section's first stub (the ELF PLT[0] resolver) and every named

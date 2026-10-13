@@ -231,6 +231,17 @@ fn function_graphs_connect_blocks_by_their_branches() {
 }
 
 #[test]
+fn a_block_ending_in_a_noreturn_call_has_no_fall_through_edge() {
+    let project = Session::default().open(&fixture("hello-x64.exe"), None).unwrap();
+    // 0x1400013f5: mov ecx, eax; call exit. 0x1400013fc: call abort, a block of its own because a branch reaches it.
+    let graph = project.function_graph(0x1400013f7).unwrap();
+    let index = |start: u64| graph.blocks.iter().position(|block| block.start == start).unwrap();
+    let (exit, abort) = (index(0x1400013f5), index(0x1400013fc));
+    assert!(graph.edges.iter().all(|edge| edge.from != exit && edge.from != abort), "{:?}", graph.edges);
+    assert!(graph.edges.iter().any(|edge| edge.to == abort));
+}
+
+#[test]
 fn a_compiled_arm64_switch_dispatch_block_has_an_edge_to_every_case() {
     let project = Session::default().open(&fixture("musl-static-aarch64.elf"), None).unwrap();
     // The function at 0x10149ac bounds w8 to 17 and jumps through an 18-entry byte table with `br x10` at 0x10149dc.
