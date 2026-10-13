@@ -6,9 +6,12 @@ license = "Apache-2.0"
 
 [dependencies]
 clap.workspace = true
+gimli = { version = "=0.34.0", default-features = false, features = ["read", "std"] }
 object = { workspace = true, features = ["build"] }
 rampage-analysis.workspace = true
+rampage-api.workspace = true
 rampage-arch.workspace = true
+rampage-decompiler.workspace = true
 rampage-detect.workspace = true
 rampage-loaders.workspace = true
 rampage-signatures.workspace = true

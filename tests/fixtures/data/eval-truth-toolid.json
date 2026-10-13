@@ -107,6 +107,27 @@
         "installer"
       ]
     },
+    "zig-cc-freestanding": {
+      "how": "zig cc -target <arch>-linux-musl -nostdlib -ffreestanding -static (zig 0.17.0), linked, no libc",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "Clang/LLVM",
+          "why": "zig cc compiles C with the clang it bundles; .comment carries its producer string"
+        },
+        {
+          "kind": "linker",
+          "name": "LLD",
+          "why": "zig links ELF executables with its bundled LLD"
+        }
+      ],
+      "absent": [
+        "runtime",
+        "packer",
+        "protector",
+        "installer"
+      ]
+    },
     "apple-clang-macho": {
       "how": "Apple clang / clang++ -arch <arch> (Xcode toolchain), linked by Apple ld",
       "expected": [
@@ -175,6 +196,22 @@
     }
   },
   "binaries": {
+    "../bin/eval-types-sym-x86_64.elf": {
+      "toolchain": "zig-cc-freestanding",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-types-x86_64.elf": {
+      "toolchain": "zig-cc-freestanding",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-types-sym-aarch64.elf": {
+      "toolchain": "zig-cc-freestanding",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
+    "../bin/eval-types-aarch64.elf": {
+      "toolchain": "zig-cc-freestanding",
+      "built": "tools/eval-corpus.sh --fixtures"
+    },
     "../bin/hello-x64.elf": {
       "toolchain": "zig-cc-linux-musl",
       "built": "tests/fixtures/build.sh"

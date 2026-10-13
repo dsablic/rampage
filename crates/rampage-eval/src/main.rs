@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use rampage_eval::{Evaluation, Gate, Report, ToolTruth, Truth};
+use rampage_eval::{Evaluation, Gate, ProposedSignature, Report, ToolTruth, Truth, TypeMetric, TypeTruth};
 use rampage_loaders::Binary;
 use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
@@ -33,6 +33,14 @@ enum Command {
         #[arg(long, requires = "library")]
         program: Vec<PathBuf>,
     },
+    /// Print the type truth ({"0x<address>": {"name", "return", "params", "variadic"}}) taken from a binary's
+    /// embedded DWARF: each function's return and parameter type classes.
+    TypeTruth {
+        debug: PathBuf,
+        /// The stripped twin; every function symbol's bytes must be identical in it, proving the same layout.
+        #[arg(long)]
+        stripped: Option<PathBuf>,
+    },
     /// Write a copy of an ELF without debug sections and symbols, every loaded byte left at its address.
     Strip {
         input: PathBuf,
@@ -44,7 +52,8 @@ enum Command {
     /// Score a heuristic family on stripped targets against their truth, per slice. Prints
     /// {"slices": {"<name>": report}, "gates": {..}} as JSON and a one-line summary per slice on stderr; exits 1
     /// when any slice fails its gate (any wrong answer; for libid any spurious name; recall or precision below
-    /// --min-recall or --min-precision). A toolid slice takes no --target: its truth names the binaries.
+    /// --min-recall or --min-precision). A toolid slice takes no --target: its truth names the binaries. A types
+    /// slice decompiles every function of its type truth in the stripped target and scores one --metric.
     Run(RunArgs),
 }
 
@@ -60,6 +69,9 @@ enum Family {
     /// Producing-tool identification: the compilers, linkers and packers `detect_tools` names for each binary
     /// of a tool truth, against the toolchain that built it.
     Toolid,
+    /// Signature recovery: the parameter counts, returns and parameter type classes the decompiler infers for
+    /// a stripped target, against its DWARF.
+    Types,
 }
 
 impl Family {
@@ -68,13 +80,43 @@ impl Family {
             Family::Libid => "libid",
             Family::Discovery => "discovery",
             Family::Toolid => "toolid",
+            Family::Types => "types",
         }
     }
 
     /// Discovery tolerates spurious starts: code without a sized symbol is still code. Tool identification's
-    /// spurious detections are bounded by its precision floor, like discovery's.
+    /// spurious detections are bounded by its precision floor, like discovery's. A recovered type is often
+    /// wrong in a way a stripped binary cannot avoid, so type recovery bounds wrong answers by its floors too.
     fn gate(self, min_recall: f64, min_precision: f64) -> Gate {
-        Gate { allow_spurious: matches!(self, Family::Discovery | Family::Toolid), min_recall, min_precision }
+        Gate {
+            allow_spurious: matches!(self, Family::Discovery | Family::Toolid | Family::Types),
+            allow_wrong: matches!(self, Family::Types),
+            min_recall,
+            min_precision,
+        }
+    }
+}
+
+/// The part of a signature a types slice scores ([`TypeMetric`]).
+#[derive(Clone, Copy, Default, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+enum Metric {
+    /// Each function's parameter count.
+    #[default]
+    Params,
+    /// Each function's void-versus-value return.
+    Return,
+    /// Each parameter's type class.
+    Classes,
+}
+
+impl From<Metric> for TypeMetric {
+    fn from(metric: Metric) -> TypeMetric {
+        match metric {
+            Metric::Params => TypeMetric::Params,
+            Metric::Return => TypeMetric::Return,
+            Metric::Classes => TypeMetric::Classes,
+        }
     }
 }
 
@@ -95,15 +137,19 @@ struct RunArgs {
     slice: Option<String>,
     #[arg(long, value_enum, default_value_t = Family::Libid, conflicts_with = "manifest")]
     family: Family,
+    /// What a types slice scores.
+    #[arg(long, value_enum, default_value_t = Metric::Params, conflicts_with = "manifest")]
+    metric: Metric,
     /// The recall baseline; a lower measured recall fails the gate.
     #[arg(long, default_value_t = 0.0, conflicts_with = "manifest")]
     min_recall: f64,
     /// The precision baseline; a lower measured precision fails the gate.
     #[arg(long, default_value_t = 0.0, conflicts_with = "manifest")]
     min_precision: f64,
-    /// Evaluate every slice of a manifest instead: {"slices": {"<name>": {"family": "libid"|"discovery"|"toolid",
-    /// "refs": [..], "dbs": [..], "target": "..", "truth": "..", "min_recall": 0.0, "min_precision": 0.0}}},
-    /// paths relative to the manifest; refs and dbs apply to libid only, and toolid has no target.
+    /// Evaluate every slice of a manifest instead: {"slices": {"<name>": {"family": "libid"|"discovery"|"toolid"
+    /// |"types", "refs": [..], "dbs": [..], "target": "..", "truth": "..", "metric": "params"|"return"|"classes",
+    /// "min_recall": 0.0, "min_precision": 0.0}}}, paths relative to the manifest; refs and dbs apply to libid
+    /// only, metric to types only, and toolid has no target.
     #[arg(long, conflicts_with_all = ["databases", "references"])]
     manifest: Option<PathBuf>,
     /// Keep at most this many disagreements per slice in the JSON (the counts still cover all of them).
@@ -116,6 +162,7 @@ fn main() -> ExitCode {
         Command::Truth { symbolized, stripped, library, program } => {
             truth(&symbolized, stripped.as_deref(), &library, &program)
         }
+        Command::TypeTruth { debug, stripped } => type_truth(&debug, stripped.as_deref()),
         Command::Strip { input, output, keep_symbols } => strip(&input, &output, keep_symbols),
         Command::Run(args) => run(args),
     };
@@ -140,19 +187,7 @@ fn truth(
 ) -> Result<ExitCode, String> {
     let binary = open(symbolized)?;
     if let Some(stripped) = stripped {
-        let twin = open(stripped)?;
-        for symbol in named_functions(&binary) {
-            let ours = binary.read(symbol.address, symbol.size);
-            if ours.is_none() || ours != twin.read(symbol.address, symbol.size) {
-                return Err(format!(
-                    "{} is not a twin of {}: {} at {:#x} differs",
-                    stripped.display(),
-                    symbolized.display(),
-                    symbol.name,
-                    symbol.address
-                ));
-            }
-        }
+        check_twin(&binary, symbolized, stripped)?;
     }
     let mut truth = Truth::from_binary(&binary);
     if !library.is_empty() {
@@ -164,6 +199,37 @@ fn truth(
             Ok(all)
         };
         truth = truth.identifiable(&names(library)?, &names(program)?);
+    }
+    print!("{}", truth.to_json());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Every function symbol of `binary` (read from `path`) has the same bytes in the binary at `stripped`.
+fn check_twin(binary: &Binary, path: &Path, stripped: &Path) -> Result<(), String> {
+    let twin = open(stripped)?;
+    for symbol in named_functions(binary) {
+        let ours = binary.read(symbol.address, symbol.size);
+        if ours.is_none() || ours != twin.read(symbol.address, symbol.size) {
+            return Err(format!(
+                "{} is not a twin of {}: {} at {:#x} differs",
+                stripped.display(),
+                path.display(),
+                symbol.name,
+                symbol.address
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn type_truth(debug: &Path, stripped: Option<&Path>) -> Result<ExitCode, String> {
+    if let Some(stripped) = stripped {
+        check_twin(&open(debug)?, debug, stripped)?;
+    }
+    let bytes = std::fs::read(debug).map_err(|error| format!("{}: {error}", debug.display()))?;
+    let (truth, notes) = TypeTruth::from_dwarf(&bytes).map_err(|error| format!("{}: {error}", debug.display()))?;
+    for note in notes {
+        eprintln!("{}: {note}", debug.display());
     }
     print!("{}", truth.to_json());
     Ok(ExitCode::SUCCESS)
@@ -194,6 +260,8 @@ struct Slice {
     #[serde(default)]
     family: Family,
     #[serde(default)]
+    metric: Metric,
+    #[serde(default)]
     min_recall: f64,
     #[serde(default)]
     min_precision: f64,
@@ -205,6 +273,9 @@ struct Slice {
     target: Option<PathBuf>,
     truth: PathBuf,
 }
+
+/// Each types target's decompiled signatures, so the slices scoring other metrics of it decompile it once.
+type Decompiled = BTreeMap<PathBuf, BTreeMap<u64, Result<ProposedSignature, String>>>;
 
 #[derive(Deserialize)]
 struct Manifest {
@@ -252,13 +323,14 @@ impl Slice {
     }
 
     /// The slice's report, and its default name.
-    fn evaluate(&self) -> Result<(Report, String), String> {
+    fn evaluate(&self, decompiled: &mut Decompiled) -> Result<(Report, String), String> {
         match (self.family, &self.target) {
             (Family::Toolid, None) => Ok((self.evaluate_tools()?, Family::Toolid.tag().to_owned())),
             (Family::Toolid, Some(target)) => {
                 Err(format!("{}: a toolid slice takes its binaries from its truth", target.display()))
             }
             (family, None) => Err(format!("{}: a {} slice needs a target", self.truth.display(), family.tag())),
+            (Family::Types, Some(target)) => self.evaluate_types(target, decompiled),
             (family, Some(target)) => self.evaluate_target(family, target),
         }
     }
@@ -282,6 +354,26 @@ impl Slice {
             rampage_eval::evaluate_discovery(&target, &truth).map_err(unsupported)?
         };
         Ok((report, format!("{}-{arch}", family.tag())))
+    }
+
+    /// Decompiles (once per target) every truth function of the stripped target and scores the slice's metric.
+    fn evaluate_types(&self, target_path: &Path, decompiled: &mut Decompiled) -> Result<(Report, String), String> {
+        let truth =
+            TypeTruth::from_json(&read(&self.truth)?).map_err(|error| format!("{}: {error}", self.truth.display()))?;
+        let target = open(target_path)?;
+        let name = format!("types-{}-{}", TypeMetric::from(self.metric).tag(), target.arch);
+        if !decompiled.contains_key(target_path) {
+            let signatures = rampage_eval::decompiled_signatures(target, truth.0.keys().copied());
+            decompiled.insert(target_path.to_owned(), signatures);
+        }
+        let signatures = &decompiled[target_path];
+        // A second truth for the same target names functions the cached run never decompiled.
+        let missing = truth.0.keys().filter(|address| !signatures.contains_key(address)).count();
+        if missing > 0 {
+            let target = target_path.display();
+            return Err(format!("{target}: {missing} truth functions were not decompiled; use one truth per target"));
+        }
+        Ok((rampage_eval::score_types(self.metric.into(), signatures, &truth), name))
     }
 
     /// Detects the tools of every binary the truth scores, its paths relative to the truth file.
@@ -308,6 +400,7 @@ fn manifest(path: &Path) -> Result<Vec<(Option<String>, Slice)>, String> {
         .map(|(name, slice)| {
             let slice = Slice {
                 family: slice.family,
+                metric: slice.metric,
                 min_recall: slice.min_recall,
                 min_precision: slice.min_precision,
                 refs: resolve(slice.refs),
@@ -329,6 +422,7 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
             };
             let slice = Slice {
                 family: args.family,
+                metric: args.metric,
                 min_recall: args.min_recall,
                 min_precision: args.min_precision,
                 refs: args.references,
@@ -340,8 +434,9 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
         }
     };
     let mut evaluation = Evaluation::default();
+    let mut decompiled = Decompiled::new();
     for (name, slice) in slices {
-        let (mut report, default_name) = slice.evaluate()?;
+        let (mut report, default_name) = slice.evaluate(&mut decompiled)?;
         let name = name.unwrap_or(default_name);
         eprintln!("{name}: {}", report.summary());
         report.truncate_disagreements(args.max_disagreements);

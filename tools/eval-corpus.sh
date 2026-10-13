@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds the strip-and-compare corpus for rampage-eval: library identification (libid) and function discovery.
+# Builds the strip-and-compare corpus for rampage-eval: library identification (libid), function discovery and
+# type (signature) recovery.
 #
 # Per architecture it emits, into OUT_DIR:
 #   ref-<arch>/*.elf               symbolized reference programs (the signature database is built from these)
@@ -9,6 +10,9 @@
 #   target-<arch>.symbolized.elf   its symbolized twin, the truth source
 #   truth-twin-<arch>.json         every sized function symbol of the twin (libid-twin and discovery truth)
 #   truth-cross-<arch>.json        the cross-program target's identifiable functions (libid-cross truth)
+#   types-<arch>.debug.elf         types-corpus.c built with -g, freestanding: DWARF is the signature truth
+#   types-<arch>.elf               its stripped twin
+#   truth-types-<arch>.json        each function's return and parameter type classes, from the DWARF
 #   zig-version                    the toolchain that produced them; a different zig can change code and hashes
 #   manifest.json                  every slice, for: rampage-eval run --manifest OUT_DIR/manifest.json
 #
@@ -23,6 +27,13 @@
 #   libid-cross-<arch>   reference DB vs a different program. Its copies of the same libc functions sit at other
 #                        addresses, so whatever the hash fails to mask (absolute addresses) shows up as misses.
 #   discovery-<arch>     discovered function starts of the stripped twin vs its sized function symbols.
+#   types-{params,return,classes}-<arch>
+#                        signatures the decompiler infers for the stripped types corpus vs its DWARF: parameter
+#                        counts, void-versus-value returns, and each parameter's type class.
+#
+# The types corpus links no libc (-nostdlib, entry main; it is never run), so the truth is the program's own
+# functions rather than hundreds of libc ones, and the fixtures stay small. -fdebug-prefix-map keeps the
+# checkout's path out of the DWARF so the build is reproducible.
 #
 # A libid truth holds only identifiable code. The twin is a reference, so all of it is (its `main` included).
 # The cross truth keeps the target's functions whose name a reference also defines, minus the programs' own
@@ -37,6 +48,7 @@
 # reference alone (the committed references keep their symbols but drop debug sections, so they stay small):
 #   tests/fixtures/bin/eval-{ref,twin,target,target-sym}-<arch>.elf, eval-program-{corpus,target}-<arch>.o
 #   tests/fixtures/data/eval-truth-{twin,cross}-<arch>.json
+#   tests/fixtures/bin/eval-types-{sym,}-<arch>.elf, tests/fixtures/data/eval-truth-types-<arch>.json
 #
 # Requires: zig (0.17.x) and a build of rampage-eval (cargo build -p rampage-eval, or point RAMPAGE_EVAL at
 # another build).
@@ -146,6 +158,17 @@ for entry in "${targets[@]}"; do
     add_slice "libid-cross-$tag" "\"refs\": $refs, " "target-$tag.elf" "truth-cross-$tag.json"
     add_slice "discovery-$tag" '"family": "discovery", ' "twin-$tag.elf" "truth-twin-$tag.json"
 
+    zig cc -target "$triple" -O1 -g -nostdlib -ffreestanding -static -Wl,-e,main -fdebug-prefix-map="$repo"=. \
+        -o "$out/types-$tag.debug.elf" types-corpus.c
+    "$eval_bin" strip "$out/types-$tag.debug.elf" "$out/types-$tag.elf"
+    "$eval_bin" type-truth "$out/types-$tag.debug.elf" --stripped "$out/types-$tag.elf" >"$out/truth-types-$tag.json"
+    types_count=$(count "$out/truth-types-$tag.json")
+    echo "  -> $tag: types $types_count functions"
+    for metric in params return classes; do
+        add_slice "types-$metric-$tag" "\"family\": \"types\", \"metric\": \"$metric\", " "types-$tag.elf" \
+            "truth-types-$tag.json"
+    done
+
     if $fixtures; then
         bin="$repo/tests/fixtures/bin"
         data="$repo/tests/fixtures/data"
@@ -163,8 +186,12 @@ for entry in "${targets[@]}"; do
             >"$data/eval-truth-twin-$tag.json"
         "$eval_bin" truth "$bin/eval-target-sym-$tag.elf" --stripped "$bin/eval-target-$tag.elf" \
             "${fixture_truth[@]}" >"$data/eval-truth-cross-$tag.json"
-        echo "  -> fixtures: eval-{ref,twin,target,target-sym}-$tag.elf, eval-program-*-$tag.o," \
-            "eval-truth-{twin,cross}-$tag.json"
+        cp "$out/types-$tag.debug.elf" "$bin/eval-types-sym-$tag.elf"
+        cp "$out/types-$tag.elf" "$bin/eval-types-$tag.elf"
+        "$eval_bin" type-truth "$bin/eval-types-sym-$tag.elf" --stripped "$bin/eval-types-$tag.elf" \
+            >"$data/eval-truth-types-$tag.json"
+        echo "  -> fixtures: eval-{ref,twin,target,target-sym,types,types-sym}-$tag.elf, eval-program-*-$tag.o," \
+            "eval-truth-{twin,cross,types}-$tag.json"
     fi
 done
 

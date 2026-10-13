@@ -207,6 +207,7 @@ pub fn score_tools(detections: &BTreeMap<String, Vec<DetectedTool>>, truth: &Too
         spurious,
         disagreements: Vec::new(),
         tool_disagreements: disagreements,
+        disagreement_classes: BTreeMap::new(),
         omitted: 0,
     }
 }
