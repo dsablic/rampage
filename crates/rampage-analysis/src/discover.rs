@@ -155,7 +155,8 @@ where
     let mut previous_instruction_modes = BTreeMap::new();
     let mut previous_instruction_owners = BTreeMap::new();
     seen_modes.insert(Vec::<(u64, bool)>::new());
-    let (mut known, mut branch_targets) = loop {
+    // Starts whose first instruction does not decode are not functions, in either phase.
+    let (mut known, mut branch_targets, mut undecodable) = loop {
         let mut known = initial_seeds.clone();
         let mut pending: Vec<_> = known.iter().copied().collect();
         let mut first_jumper: HashMap<u64, u64> = HashMap::new();
@@ -200,7 +201,7 @@ where
         }
         if merged == code_modes {
             known.retain(|start| !empty.contains(start));
-            break (known, branch_targets);
+            break (known, branch_targets, empty);
         }
         let state: Vec<_> = merged.iter().map(|(&at, &thumb)| (at, thumb)).collect();
         if !seen_modes.insert(state) {
@@ -254,6 +255,10 @@ where
         let mut jump_owners = HashMap::new();
         let modes: Vec<_> = code_modes.iter().map(|(&at, &thumb)| (at, thumb)).collect();
         for result in explore_all(&starts, &known, Some(&branch_targets), &modes) {
+            if result.function.blocks.is_empty() {
+                undecodable.insert(result.function.address);
+                continue;
+            }
             for target in &result.jump_targets {
                 if let Some(owner) = jump_owners.insert(*target, result.function.address)
                     && owner != result.function.address
@@ -266,7 +271,12 @@ where
             for &(_, at, thumb) in &result.mode_hints {
                 code_modes.entry(at).or_insert(thumb);
             }
-            added.extend(result.new_seeds.into_iter().filter(|at| !known.contains(at) && memory.is_executable(*at)));
+            added.extend(
+                result
+                    .new_seeds
+                    .into_iter()
+                    .filter(|at| !known.contains(at) && !undecodable.contains(at) && memory.is_executable(*at)),
+            );
             targets.extend(result.branch_targets);
             resolved_flows.extend(result.resolved_flows);
             xrefs.extend(result.xrefs);
@@ -274,7 +284,9 @@ where
         }
         targets.sort_unstable();
         targets.dedup();
-        if added.is_empty() && targets == branch_targets {
+        let explored = known.len();
+        known.retain(|start| !undecodable.contains(start));
+        if added.is_empty() && targets == branch_targets && known.len() == explored {
             break (functions, xrefs, resolved_flows);
         }
         known.extend(added);
@@ -554,6 +566,14 @@ mod tests {
         let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
         let from_load: Vec<_> = program.xrefs.iter().filter(|xref| xref.from == 0x10).collect();
         assert!(from_load.is_empty(), "{from_load:?}");
+    }
+
+    #[test]
+    fn a_code_pointer_to_undecodable_bytes_is_not_a_function() {
+        // 0: lea rax, [rip + 1] (0x8); 7: ret; 8: an opcode invalid in 64-bit mode (hello-arm.elf's literal 0x2036c)
+        let program = run(&[0x48, 0x8d, 0x05, 0x01, 0, 0, 0, 0xc3, 0x06], &[0]);
+        let starts: Vec<_> = program.functions.iter().map(|function| function.address).collect();
+        assert_eq!(starts, [0]);
     }
 
     #[test]

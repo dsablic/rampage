@@ -296,10 +296,13 @@ fn export_cfg_lists_blocks_edges_and_calls_of_every_function() {
 }
 
 #[test]
-fn export_cfg_keeps_a_function_whose_start_does_not_decode() {
+fn export_cfg_lists_no_function_whose_start_does_not_decode() {
+    // 0x2036c is main's literal word `7cfffeff`, a data reference rather than code.
     let functions = json(&["export-cfg"], "hello-arm.elf");
-    let empty = functions.as_array().unwrap().iter().find(|function| function["address"] == "0x2036c").unwrap();
-    assert_eq!(empty["blocks"], serde_json::json!([]));
+    let functions = functions.as_array().unwrap();
+    assert!(functions.iter().any(|function| function["address"] == "0x20350"));
+    assert!(functions.iter().all(|function| function["address"] != "0x2036c"));
+    assert!(functions.iter().all(|function| !function["blocks"].as_array().unwrap().is_empty()));
 }
 
 #[test]
