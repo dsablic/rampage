@@ -7,6 +7,16 @@ const X64_FIXTURES: [(&str, &str); 3] =
     [("hello-x64.elf", "add"), ("hello-x64.exe", "add"), ("hello-x64.macho", "_add")];
 
 #[test]
+fn metadata_lists_objective_c_classes_and_named_methods_of_a_stripped_image() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/objc-x64-stripped.macho");
+    let output = Command::cargo_bin("rampage").unwrap().arg("metadata").arg(&path).assert().success();
+    let text = String::from_utf8_lossy(&output.get_output().stdout).into_owned();
+    assert!(text.contains(" objc_class Dog : Animal\n"), "{text}");
+    assert!(text.contains(" objc_category NSString(Shout)\n"), "{text}");
+    assert!(text.contains(" objc_method +[Dog population]\n"), "{text}");
+}
+
+#[test]
 fn snapshot_disassembly_and_functions_use_captured_virtual_addresses() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64.snapshot.json");
     let output = Command::cargo_bin("rampage")
