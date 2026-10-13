@@ -4,9 +4,10 @@ mod report;
 use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use rampage_api::{FunctionsQuery, ListQuery, StringsQuery};
+use rampage_api::{FunctionsQuery, ListQuery, Packs, StringsQuery};
 use rampage_arch::Arch;
 
 use crate::commands::Options;
@@ -23,8 +24,20 @@ struct Cli {
     /// Open the executable embedded at this file offset (hex 0x... or decimal), such as one `carve` found
     #[arg(long, global = true, value_parser = parse_offset)]
     image_offset: Option<u64>,
+    /// A data pack directory (holding rampage-pack.toml) layered over the bundled heuristic databases; repeatable,
+    /// earlier packs take precedence. Directories in RAMPAGE_PACKS (a path list) load after these
+    #[arg(long = "pack", global = true, value_name = "DIR")]
+    packs: Vec<PathBuf>,
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Subcommand)]
+enum PacksCommand {
+    /// List the built-in pack and every pack loaded with --pack or RAMPAGE_PACKS, with each content's status
+    List,
+    /// Validate one pack directory and report each content's status; fails when anything does not load
+    Check { directory: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -92,21 +105,28 @@ enum Command {
     /// Identify the producing tool (packer/compiler/protector/installer) from heuristic signatures
     Detect {
         file: PathBuf,
-        /// A user-supplied PeID userdb.txt, overlaid on the bundled database
+        /// A user-supplied PeID userdb.txt, overlaid on the bundled database (with any packs' PeID signatures)
         #[arg(long)]
         peid: Option<PathBuf>,
     },
-    /// Scan with user-supplied YARA rules (a .yar/.yara file or a directory of them)
+    /// Scan with user-supplied YARA rules (a .yar/.yara file or a directory of them) and those of data packs
     Yara {
         file: PathBuf,
+        /// Optional when a data pack holds YARA rules
         #[arg(long)]
-        rules: PathBuf,
+        rules: Option<PathBuf>,
     },
-    /// Detect behaviors with a directory of Mandiant capa rules (file-scope feature subset)
+    /// Detect behaviors with a directory of Mandiant capa rules and those of data packs (file-scope feature subset)
     Capa {
         file: PathBuf,
+        /// Optional when a data pack holds capa rules
         #[arg(long)]
-        rules: PathBuf,
+        rules: Option<PathBuf>,
+    },
+    /// List the data packs in effect, or check one pack directory
+    Packs {
+        #[command(subcommand)]
+        action: PacksCommand,
     },
     /// Decode coverage and evidence that static disassembly may be unreliable
     Audit {
@@ -361,10 +381,16 @@ fn parse_token(text: &str) -> Result<u32, String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    if let Command::Mcp { all_tools } = cli.command {
-        return serve_mcp(all_tools);
+    let packs = Arc::new(Packs::load_with_env(&cli.packs));
+    if !matches!(cli.command, Command::Packs { .. }) {
+        for problem in packs.problems() {
+            eprintln!("rampage: warning: {problem}");
+        }
     }
-    let options = Options { json: cli.json, arch: cli.arch, offset: cli.image_offset };
+    if let Command::Mcp { all_tools } = cli.command {
+        return serve_mcp(all_tools, packs);
+    }
+    let options = Options { json: cli.json, arch: cli.arch, offset: cli.image_offset, packs };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match cli.command {
         Command::Info { file } => commands::info(&mut out, &file, &options),
@@ -407,8 +433,12 @@ fn main() -> ExitCode {
             commands::dotnet(&mut out, &file, &query, &options)
         }
         Command::Detect { file, peid } => commands::detect(&mut out, &file, peid.as_deref(), &options),
-        Command::Yara { file, rules } => commands::yara(&mut out, &file, &rules, &options),
-        Command::Capa { file, rules } => commands::capa(&mut out, &file, &rules, &options),
+        Command::Yara { file, rules } => commands::yara(&mut out, &file, rules.as_deref(), &options),
+        Command::Capa { file, rules } => commands::capa(&mut out, &file, rules.as_deref(), &options),
+        Command::Packs { action: PacksCommand::List } => commands::packs_list(&mut out, &options),
+        Command::Packs { action: PacksCommand::Check { directory } } => {
+            commands::packs_check(&mut out, &directory, &options)
+        }
         Command::Audit { file, include_discovery } => commands::audit(&mut out, &file, include_discovery, &options),
         Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
         Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),
@@ -471,7 +501,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn serve_mcp(all_tools: bool) -> ExitCode {
+fn serve_mcp(all_tools: bool, packs: Arc<Packs>) -> ExitCode {
     let env = std::env::var(rampage_mcp::TOOLS_ENV).ok();
     let groups = match rampage_mcp::initial_groups(all_tools, env.as_deref()) {
         Ok(groups) => groups,
@@ -487,7 +517,7 @@ fn serve_mcp(all_tools: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(rampage_mcp::serve_stdio(groups)) {
+    match runtime.block_on(rampage_mcp::serve_stdio(groups, packs)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("rampage: mcp server failed: {error}");

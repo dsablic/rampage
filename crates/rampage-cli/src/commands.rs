@@ -6,7 +6,8 @@ use anyhow::Result;
 use rampage_analysis::functions;
 use rampage_analysis::strings::Encoding;
 use rampage_api::{
-    Capability, EditResult, FunctionsQuery, ListQuery, Project, Session, StringsQuery, XrefQuery, label,
+    Capability, ContentStatus, EditResult, FunctionsQuery, ListQuery, PackInfo, Packs, Project, Session, StringsQuery,
+    XrefQuery, label,
 };
 use rampage_arch::Arch;
 use rampage_loaders::Details;
@@ -18,6 +19,7 @@ pub struct Options {
     pub arch: Option<Arch>,
     /// Where the executable to open starts inside the file, for one embedded in a larger file.
     pub offset: Option<u64>,
+    pub packs: Arc<Packs>,
 }
 
 pub fn audit(out: &mut impl Write, path: &Path, include_discovery: bool, options: &Options) -> Result<()> {
@@ -259,7 +261,8 @@ pub fn correlate(
 }
 
 pub(crate) fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
-    Ok(Session::default().open_at(path, options.arch, options.offset)?)
+    let session = Session::default().with_packs(Arc::clone(&options.packs));
+    Ok(session.open_at(path, options.arch, options.offset)?)
 }
 
 /// The binary at `path`, without its annotations.
@@ -1060,8 +1063,12 @@ pub fn detect(out: &mut impl Write, path: &Path, peid: Option<&Path>, options: &
     Ok(())
 }
 
-pub fn yara(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) -> Result<()> {
-    let matches = open(path, options)?.yara_scan_path(rules)?;
+pub fn yara(out: &mut impl Write, path: &Path, rules: Option<&Path>, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let matches = match rules {
+        Some(rules) => project.yara_scan_path(rules)?,
+        None => project.yara_scan_packs()?,
+    };
     if options.json {
         return write_json(out, &matches);
     }
@@ -1075,9 +1082,62 @@ pub fn yara(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) 
     Ok(())
 }
 
-pub fn capa(out: &mut impl Write, path: &Path, rules: &Path, options: &Options) -> Result<()> {
-    let capabilities = open(path, options)?.detect_capa(rules)?;
+pub fn capa(out: &mut impl Write, path: &Path, rules: Option<&Path>, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let capabilities = match rules {
+        Some(rules) => project.detect_capa(rules)?,
+        None => project.detect_capa_packs()?,
+    };
     render_capabilities(out, &capabilities, "no capa rules matched", options)
+}
+
+pub fn packs_list(out: &mut impl Write, options: &Options) -> Result<()> {
+    let packs = options.packs.listing();
+    if options.json {
+        return write_json(out, &packs);
+    }
+    for pack in &packs {
+        render_pack(out, pack)?;
+    }
+    Ok(())
+}
+
+pub fn packs_check(out: &mut impl Write, directory: &Path, options: &Options) -> Result<()> {
+    let pack = Packs::check(directory);
+    if options.json {
+        write_json(out, &pack)?;
+    } else {
+        render_pack(out, &pack)?;
+    }
+    if pack.error.is_some() || pack.contents.iter().any(|content| content.status != ContentStatus::Loaded) {
+        out.flush()?;
+        anyhow::bail!("pack {} does not fully load", directory.display());
+    }
+    Ok(())
+}
+
+fn render_pack(out: &mut impl Write, pack: &PackInfo) -> Result<()> {
+    let location = match &pack.directory {
+        Some(directory) => directory.display().to_string(),
+        None => "built in".to_owned(),
+    };
+    match &pack.manifest {
+        Some(manifest) => {
+            writeln!(out, "{} {} ({}) [{location}]", manifest.name, manifest.version, manifest.license)?;
+            writeln!(out, "  source: {}", manifest.source)?;
+            writeln!(out, "  {}", manifest.description)?;
+        }
+        None => writeln!(out, "{location}")?,
+    }
+    if let Some(error) = &pack.error {
+        writeln!(out, "  error: {error}")?;
+    }
+    for content in &pack.contents {
+        let arch = content.arch.as_deref().map(|arch| format!(" [{arch}]")).unwrap_or_default();
+        let status = label(&content.status);
+        writeln!(out, "  {status}: {} {}{arch}: {}", content.kind, content.path, content.detail)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

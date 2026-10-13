@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rampage_api::tools::{self, FileTool, Group, Tool};
-use rampage_api::{Project, Session};
+use rampage_api::{Packs, Project, Session};
 use rampage_arch::Arch;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, ListToolsResult,
@@ -27,6 +27,13 @@ const ENABLE_TOOLS_DESCRIPTION: &str = "\
 List rampage's tool groups (name, one-line description, tool count and names, whether enabled), or enable groups \
 with `groups`, e.g. [\"detection\"] or [\"all\"]. Enabling adds the group's tools to the tool list and sends \
 notifications/tools/list_changed. Without `groups` nothing changes.";
+
+const LIST_PACKS: &str = "list_packs";
+const LIST_PACKS_DESCRIPTION: &str = "\
+List the heuristic-database packs in effect: the built-in one (bundled signatures, tool and crypto-constant \
+databases) and every data pack loaded with --pack or RAMPAGE_PACKS, in precedence order. Each has its name, \
+version, SPDX licence, source (provenance) and description, and each content its kind, path and status (loaded, \
+error or unsupported) with a detail saying what loaded or why not. Takes no arguments.";
 
 const INSTRUCTIONS_INTRO: &str = "\
 rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, \
@@ -61,7 +68,8 @@ which may be a whole batch. Memory snapshots and bundle directories use the same
 
 Detection: detect_tools (packer/compiler/protector), identify_functions (library code by signature, bundled \
 databases applied; build_signatures makes a database from a binary with symbols), capabilities, yara_scan and \
-capa_detect (user-supplied rules). Types: set_signature, set_types and set_global persist C declarations; \
+capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are loaded with \
+their licence and provenance. Types: set_signature, set_types and set_global persist C declarations; \
 language_metadata exposes demangled names and bounded metadata. Diagnostics: analysis_diagnostics reports decode \
 confidence limits. Runtime: compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal \
 runtime ranges, returning paginated byte evidence without sidecars or annotation transfer; verify identities when \
@@ -150,6 +158,7 @@ pub struct RampageServer {
     tools: Arc<Vec<Tool>>,
     file_tools: Arc<Vec<FileTool>>,
     enabled: Arc<Mutex<BTreeSet<Group>>>,
+    packs: Arc<Packs>,
 }
 
 impl Default for RampageServer {
@@ -169,7 +178,13 @@ impl RampageServer {
             tools: Arc::new(tools),
             file_tools: Arc::new(tools::file_tools()),
             enabled: Arc::new(Mutex::new(enabled)),
+            packs: Arc::default(),
         }
+    }
+
+    /// This server with `packs` layered over the bundled databases of its heuristic-database tools.
+    pub fn with_packs(self, packs: Arc<Packs>) -> Self {
+        Self { session: Arc::new(Session::default().with_packs(Arc::clone(&packs))), packs, ..self }
     }
 
     fn enabled(&self) -> BTreeSet<Group> {
@@ -179,7 +194,8 @@ impl RampageServer {
     /// Every tool this server can serve, with its group, whether enabled or not.
     fn catalog(&self) -> impl Iterator<Item = (Group, &'static str)> + '_ {
         let tools = self.tools.iter().map(|tool| (tool.group, tool.name));
-        tools.chain(self.file_tools.iter().map(|tool| (tool.group, tool.name)))
+        let file_tools = self.file_tools.iter().map(|tool| (tool.group, tool.name));
+        tools.chain(file_tools).chain([(Group::Detection, LIST_PACKS)])
     }
 
     /// Enables the groups `arguments` names, returning the groups with their tools and the ones newly enabled.
@@ -238,6 +254,12 @@ impl RampageServer {
 
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
     fn run(&self, name: &str, mut arguments: Map<String, Value>) -> CallToolResult {
+        if name == LIST_PACKS {
+            return match serde_json::to_string(&self.packs.listing()) {
+                Ok(output) => CallToolResult::success(vec![ContentBlock::text(output)]),
+                Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
+            };
+        }
         if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
             return match tool.call(Value::Object(arguments)) {
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
@@ -264,7 +286,9 @@ impl RampageServer {
                     Some(offset) => rampage_loaders::Binary::open_at_with(path, offset, None, arch),
                     None => rampage_loaders::Binary::open_with(path, arch),
                 };
-                Arc::new(Project::new(binary.map_err(|error| error_text(&error))?))
+                let project = Project::new(binary.map_err(|error| error_text(&error))?);
+                project.set_packs(Arc::clone(&self.packs));
+                Arc::new(project)
             };
             match tools::call(&self.tools, &project, name, Value::Object(arguments)) {
                 (output, false) => Ok(output),
@@ -327,7 +351,12 @@ impl ServerHandler for RampageServer {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
             rmcp::model::Tool::new(tool.name, tool.description, schema)
         });
-        Ok(ListToolsResult::with_all_items(std::iter::once(meta).chain(tools).chain(file_tools).collect()))
+        let list_packs = enabled.contains(&Group::Detection).then(|| {
+            let schema = json!({ "type": "object", "properties": {} });
+            rmcp::model::Tool::new(LIST_PACKS, LIST_PACKS_DESCRIPTION, schema.as_object().cloned().unwrap_or_default())
+        });
+        let all = std::iter::once(meta).chain(tools).chain(file_tools).chain(list_packs);
+        Ok(ListToolsResult::with_all_items(all.collect()))
     }
 
     async fn call_tool(
@@ -362,9 +391,13 @@ impl ServerHandler for RampageServer {
     }
 }
 
-/// Serves MCP over stdin/stdout until the client disconnects, listing `groups` (and core) from the start.
-pub async fn serve_stdio(groups: BTreeSet<Group>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    RampageServer::with_groups(groups).serve(rmcp::transport::stdio()).await?.waiting().await?;
+/// Serves MCP over stdin/stdout until the client disconnects, listing `groups` (and core) from the start, with
+/// `packs` layered over the bundled databases.
+pub async fn serve_stdio(
+    groups: BTreeSet<Group>,
+    packs: Arc<Packs>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    RampageServer::with_groups(groups).with_packs(packs).serve(rmcp::transport::stdio()).await?.waiting().await?;
     Ok(())
 }
 

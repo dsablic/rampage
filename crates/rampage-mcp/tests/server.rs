@@ -100,6 +100,7 @@ async fn lists_all_tools_with_instructions() {
         "list_exports",
         "list_functions",
         "list_imports",
+        "list_packs",
         "list_strings",
         "network_surface",
         "observe_indirect_branch",
@@ -681,6 +682,45 @@ async fn agents_annotate_in_batches() {
     json_of(&call(&client, "redo", json!({ "path": path })).await);
     let functions = json_of(&call(&client, "list_functions", json!({ "path": path, "name_contains": "say_" })).await);
     assert_eq!(functions["items"][0]["name"], "say_hello");
+    client.cancel().await.unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
+async fn list_packs_reports_loaded_packs_and_scans_use_their_rules() {
+    let directory = std::env::temp_dir().join(format!("rampage-mcp-pack-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("rampage-pack.toml"),
+        "name = \"mcp-pack\"\nversion = \"1\"\nlicense = \"MIT\"\nsource = \"https://example.com/mcp-pack\"\n\
+         description = \"MCP test pack\"\n[[contents]]\nkind = \"yara\"\npath = \"pe.yar\"\n\
+         [[contents]]\nkind = \"constants\"\npath = \"pe.yar\"\n",
+    )
+    .unwrap();
+    std::fs::write(directory.join("pe.yar"), "rule mcp_pe { strings: $mz = \"MZ\" condition: $mz at 0 }").unwrap();
+    let packs = rampage_api::Packs::load(std::slice::from_ref(&directory));
+    let packs = std::sync::Arc::new(packs);
+    let core = connect_to(RampageServer::default().with_packs(std::sync::Arc::clone(&packs))).await;
+    let refused = call(&core, "list_packs", json!({})).await;
+    assert!(text(&refused).contains("is in the `detection` group"), "{}", text(&refused));
+    core.cancel().await.unwrap();
+    let client = connect_to(RampageServer::with_groups(Group::ALL).with_packs(packs)).await;
+
+    let listing = json_of(&call(&client, "list_packs", json!({})).await);
+    assert_eq!(listing[0]["name"], "rampage-builtin");
+    assert_eq!(listing[0]["license"], "Apache-2.0");
+    assert_eq!(listing[1]["name"], "mcp-pack");
+    assert_eq!(listing[1]["source"], "https://example.com/mcp-pack");
+    assert_eq!(listing[1]["contents"][0]["status"], "loaded");
+    assert_eq!(listing[1]["contents"][1]["status"], "unsupported");
+
+    let matches = json_of(&call(&client, "yara_scan", json!({ "path": fixture("hello-x64.exe") })).await);
+    assert_eq!(matches[0]["identifier"], "mcp_pe", "{matches}");
+    assert_eq!(matches[0]["namespace"], "mcp-pack", "{matches}");
+    let error = call(&client, "capa_detect", json!({ "path": fixture("hello-x64.exe") })).await;
+    assert_eq!(error.is_error, Some(true));
+    assert!(text(&error).contains("no capa rules"), "{}", text(&error));
     client.cancel().await.unwrap();
     std::fs::remove_dir_all(&directory).unwrap();
 }

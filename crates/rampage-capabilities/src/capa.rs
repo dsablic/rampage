@@ -169,15 +169,32 @@ pub fn load_capa_rules(dir: &Path) -> Result<CapaRuleSet, CapaError> {
     let mut rules = Vec::new();
     for path in paths {
         let text = fs::read_to_string(&path).map_err(|source| CapaError::Io { path: path.clone(), source })?;
-        let parsed = parse_rule(&text).map_err(|source| CapaError::Parse { path: Some(path.clone()), source })?;
-        if let Some(rule) = parsed {
-            if rules.len() >= MAX_RULES {
-                return Err(CapaError::LimitExceeded);
-            }
-            rules.push(rule);
-        }
+        push_rule(&mut rules, &path, &text)?;
     }
     Ok(CapaRuleSet::new(rules))
+}
+
+/// Parses one rule per `(path, text)` file already read by the caller, as [`load_capa_rules`] does for the files
+/// it finds; the paths only name the files in errors.
+pub fn load_capa_rule_texts<'a>(
+    files: impl IntoIterator<Item = (&'a Path, &'a str)>,
+) -> Result<CapaRuleSet, CapaError> {
+    let mut rules = Vec::new();
+    for (path, text) in files {
+        push_rule(&mut rules, path, text)?;
+    }
+    Ok(CapaRuleSet::new(rules))
+}
+
+fn push_rule(rules: &mut Vec<CapaRule>, path: &Path, text: &str) -> Result<(), CapaError> {
+    let parsed = parse_rule(text).map_err(|source| CapaError::Parse { path: Some(path.to_path_buf()), source })?;
+    if let Some(rule) = parsed {
+        if rules.len() >= MAX_RULES {
+            return Err(CapaError::LimitExceeded);
+        }
+        rules.push(rule);
+    }
+    Ok(())
 }
 
 /// Parses one or more capa rules from a YAML string (documents may be separated by `---`). A malformed document
