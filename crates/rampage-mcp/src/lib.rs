@@ -449,6 +449,17 @@ mod tests {
     }
 
     #[test]
+    fn every_registered_workflow_is_served_in_its_group_and_named_in_the_instructions() {
+        let server = RampageServer::default();
+        let text = instructions(&Packs::default());
+        for workflow in rampage_api::workflows::WORKFLOWS {
+            let name = workflow.name();
+            assert!(server.catalog().any(|entry| entry == (workflow.group(), name)), "{name} is not served");
+            assert!(text.contains(name), "{name} is missing from the instructions");
+        }
+    }
+
+    #[test]
     fn initial_groups_come_from_the_flag_then_the_environment() {
         let all: BTreeSet<Group> = Group::ALL.into();
         assert_eq!(initial_groups(true, Some("detection")), Ok(all.clone()));

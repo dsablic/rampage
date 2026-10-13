@@ -4,15 +4,53 @@
 use std::collections::BTreeMap;
 
 use rampage_detect::{Confidence as DetectConfidence, Kind};
-use serde_json::json;
+use serde_json::{Value, json};
 
+use super::registry::{Workflow, WorkflowOptions, report_options, report_schema};
 use super::{
     Confidence, Finding, ReportLimits, Section, WorkflowReport, capability_section, classify, is_default_name, quote,
 };
+use crate::tools::Group;
 use crate::{ApiError, DotNetQuery, FunctionsQuery, Project};
 
 /// Import names listed per library before the rest are counted.
 const NAMES_PER_LIBRARY: usize = 12;
+
+pub struct TriageReport;
+
+impl Workflow for TriageReport {
+    fn name(&self) -> &'static str {
+        "triage_report"
+    }
+
+    fn summary(&self) -> &'static str {
+        "One-shot overview with suggested next steps"
+    }
+
+    fn description(&self) -> &'static str {
+        "Guided first look in one bounded report: format and entry, hashes and packing hints, toolchain \
+         signatures, capability tags, imports by library, notable strings (URLs, IPs, paths, registry keys), \
+         function count and library-signature matches (bundled and data-pack databases), with suggested next \
+         tool calls. Every finding names its \
+         source primitive and confidence; evidence, not verdicts."
+    }
+
+    fn group(&self) -> Group {
+        Group::Core
+    }
+
+    fn input_schema(&self) -> Value {
+        report_schema()
+    }
+
+    fn options(&self, input: Value) -> Result<WorkflowOptions, String> {
+        report_options(input)
+    }
+
+    fn run(&self, project: &Project, options: &WorkflowOptions) -> Result<WorkflowReport, ApiError> {
+        project.triage_report(options.limits)
+    }
+}
 
 impl Project {
     /// A bounded first look at the binary: what it is, what built it, what it imports and contains, and where to

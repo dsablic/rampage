@@ -8,6 +8,7 @@ mod find_main;
 mod indicators;
 mod network_surface;
 mod persistence_surface;
+mod registry;
 mod string_decoding;
 mod triage_report;
 
@@ -22,6 +23,7 @@ use serde_json::Value;
 use crate::{Project, XrefQuery};
 
 pub use indicators::{Indicator, IndicatorKind, classify};
+pub use registry::{WORKFLOWS, Workflow, WorkflowOptions, workflow};
 
 /// Findings per section unless the caller asks for another count.
 pub const DEFAULT_SECTION_LIMIT: usize = 25;

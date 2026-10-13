@@ -8,12 +8,14 @@ use std::path::Path;
 
 use rampage_loaders::{Binary, ImageAt};
 use rampage_signatures::{FunctionHash, MaskContext, function_hash_in};
-use serde_json::json;
+use serde_json::{Value, json};
 
+use super::registry::{Workflow, WorkflowOptions};
 use super::{
     Confidence, Finding, ReportLimits, ReportTarget, Section, WorkflowReport, classify, is_default_name, quote,
 };
-use crate::{ApiError, Project};
+use crate::tools::Group;
+use crate::{ApiError, FileOffset, Project};
 
 /// Strings shorter than this are too common to be worth diffing.
 const MIN_DIFF_STRING: usize = 6;
@@ -116,6 +118,77 @@ fn strings(project: &Project) -> BTreeMap<String, u64> {
         .filter(|found| found.text.chars().count() >= MIN_DIFF_STRING)
         .map(|found| (found.text.clone(), found.address))
         .collect()
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct DiffBuildsArgs {
+    /// File path of the other build to compare with (same architecture); "added" means only in that build.
+    other: String,
+    /// Compare with the ELF, PE or Mach-O image embedded in `other` at this file offset (hex "0x..." or decimal),
+    /// as image_offset does for `path`; omitted, `other` is opened whole.
+    #[serde(default)]
+    other_image_offset: Option<FileOffset>,
+    /// With other_image_offset, the embedded image's length in bytes; defaults to the extent its headers give.
+    #[serde(default)]
+    other_image_length: Option<FileOffset>,
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
+    /// reports are cut further to fit one tool result.
+    max_per_section: Option<usize>,
+}
+
+pub struct DiffBuilds;
+
+impl Workflow for DiffBuilds {
+    fn name(&self) -> &'static str {
+        "diff_builds"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Compare with another build (--other): matched, changed, added and removed functions"
+    }
+
+    fn description(&self) -> &'static str {
+        "Compare this binary with another build of the same architecture: functions paired by unique name, by \
+         masked signature hash and by identical bytes at an unchanged address into identical, changed, \
+         hash-matched, name-only (too small to hash), added and removed, plus import and string differences. \
+         Hash equality is signature-level, not semantic equivalence. image_offset picks an embedded image in \
+         `path`, other_image_offset one in `other`."
+    }
+
+    fn group(&self) -> Group {
+        Group::Core
+    }
+
+    fn input_schema(&self) -> Value {
+        crate::tools::schema::<DiffBuildsArgs>()
+    }
+
+    fn options(&self, input: Value) -> Result<WorkflowOptions, String> {
+        let args: DiffBuildsArgs = crate::tools::arguments(input)?;
+        let offset = args.other_image_offset.map(|offset| offset.0);
+        let length = args.other_image_length.map(|length| length.0);
+        let other_image = match (offset, length) {
+            (Some(offset), length) => Some(ImageAt::new(offset, length)),
+            (None, Some(_)) => return Err("`other_image_length` needs `other_image_offset`".to_owned()),
+            (None, None) => None,
+        };
+        Ok(WorkflowOptions {
+            limits: ReportLimits::new(args.max_per_section),
+            other: Some(args.other.into()),
+            other_image,
+            ..WorkflowOptions::default()
+        })
+    }
+
+    fn compares(&self) -> bool {
+        true
+    }
+
+    fn run(&self, project: &Project, options: &WorkflowOptions) -> Result<WorkflowReport, ApiError> {
+        let other =
+            options.other.as_deref().ok_or_else(|| ApiError::Invalid("diff_builds needs `other`".to_owned()))?;
+        project.diff_builds_image(other, options.other_image, options.limits)
+    }
 }
 
 impl Project {

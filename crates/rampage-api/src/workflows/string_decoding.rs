@@ -8,9 +8,11 @@ use std::collections::BTreeMap;
 use rampage_analysis::discover::{DiscoveredFunction, XrefKind};
 use rampage_arch::{Arch, Disassembler, Flow, Insn};
 use rampage_loaders::shannon_entropy;
-use serde_json::json;
+use serde_json::{Value, json};
 
+use super::registry::{Workflow, WorkflowOptions, report_options, report_schema};
 use super::{Confidence, Finding, ReportLimits, Section, Tracer, WorkflowReport};
+use crate::tools::Group;
 use crate::{ApiError, Project, XrefQuery};
 
 /// Instructions in a loop body (from a backward branch's target to the branch) for it to count as a byte loop.
@@ -307,6 +309,41 @@ fn block_instructions<'b>(
         offset += length;
     }
     instructions
+}
+
+pub struct StringDecoding;
+
+impl Workflow for StringDecoding {
+    fn name(&self) -> &'static str {
+        "string_decoding"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Candidate string-decoding loops, their call sites and the encoded-looking data passed to them"
+    }
+
+    fn description(&self) -> &'static str {
+        "Find candidate string-decoding routines statically: functions with a short loop that loads, transforms \
+         (XOR, rotate, byte ADD/SUB) and stores bytes, their direct call sites, and the non-printable or \
+         high-entropy data blobs passed to them (address, length estimate, entropy). Nothing is emulated or \
+         executed; candidates are loop shapes with medium or low confidence."
+    }
+
+    fn group(&self) -> Group {
+        Group::Core
+    }
+
+    fn input_schema(&self) -> Value {
+        report_schema()
+    }
+
+    fn options(&self, input: Value) -> Result<WorkflowOptions, String> {
+        report_options(input)
+    }
+
+    fn run(&self, project: &Project, options: &WorkflowOptions) -> Result<WorkflowReport, ApiError> {
+        project.string_decoding(options.limits)
+    }
 }
 
 impl Project {

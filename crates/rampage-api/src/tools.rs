@@ -1,10 +1,8 @@
 //! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
-use crate::{
-    ApiError, FileOffset, FunctionsQuery, ListQuery, Packs, Project, ReportLimits, StringsQuery, WorkflowReport,
-    XrefQuery,
-};
+use crate::workflows::{WORKFLOWS, Workflow};
+use crate::{ApiError, FunctionsQuery, ListQuery, Packs, Project, StringsQuery, WorkflowReport, XrefQuery};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -123,7 +121,8 @@ pub enum Effect {
     ShowAddress,
 }
 
-fn schema<A: JsonSchema>() -> Value {
+/// The JSON schema of a tool taking arguments `A`.
+pub(crate) fn schema<A: JsonSchema>() -> Value {
     let mut schema = serde_json::to_value(schemars::schema_for!(A)).unwrap_or_default();
     if let Some(object) = schema.as_object_mut() {
         object.remove("$schema");
@@ -144,7 +143,7 @@ where
     R: Serialize + 'static,
 {
     let handler = move |project: &Project, input: Value| -> Result<Value, String> {
-        let arguments: A = serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
+        let arguments: A = arguments(input)?;
         let result = run(project, arguments).map_err(|error| error_chain(&error))?;
         serde_json::to_value(result).map_err(|error| error.to_string())
     };
@@ -158,6 +157,11 @@ where
         reads_annotations: true,
         handler: Box::new(handler),
     }
+}
+
+/// A tool's JSON `input` read as arguments `A`, or an error the model can read.
+pub(crate) fn arguments<A: DeserializeOwned>(input: Value) -> Result<A, String> {
+    serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))
 }
 
 fn error_chain(error: &ApiError) -> String {
@@ -354,38 +358,6 @@ struct CapaScan {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
-struct ReportArgs {
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
-    /// reports are cut further to fit one tool result.
-    max_per_section: Option<usize>,
-}
-
-#[derive(serde::Deserialize, JsonSchema)]
-struct FindMainArgs {
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
-    /// reports are cut further to fit one tool result.
-    max_per_section: Option<usize>,
-    /// Include a bounded decompilation preview of the best candidate (default true).
-    decompile: Option<bool>,
-}
-
-#[derive(serde::Deserialize, JsonSchema)]
-struct DiffBuildsArgs {
-    /// File path of the other build to compare with (same architecture); "added" means only in that build.
-    other: String,
-    /// Compare with the ELF, PE or Mach-O image embedded in `other` at this file offset (hex "0x..." or decimal),
-    /// as image_offset does for `path`; omitted, `other` is opened whole.
-    #[serde(default)]
-    other_image_offset: Option<FileOffset>,
-    /// With other_image_offset, the embedded image's length in bytes; defaults to the extent its headers give.
-    #[serde(default)]
-    other_image_length: Option<FileOffset>,
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
-    /// reports are cut further to fit one tool result.
-    max_per_section: Option<usize>,
-}
-
-#[derive(serde::Deserialize, JsonSchema)]
 struct DiscardUndoArgs {
     /// Drop the step even though undo could still revert it (no other client's edit blocks it).
     #[serde(default)]
@@ -556,7 +528,7 @@ fn page_limit(limit: Option<usize>) -> Option<usize> {
 
 /// Every tool, in the order the model sees them.
 pub fn tools() -> Vec<Tool> {
-    vec![
+    let mut tools = vec![
         tool(
             Group::Diagnostics,
             "inspect_jump_table",
@@ -654,85 +626,10 @@ pub fn tools() -> Vec<Tool> {
             },
         )
         .annotates(),
-        tool(
-            Group::Core,
-            "triage_report",
-            "Guided first look in one bounded report: format and entry, hashes and packing hints, toolchain \
-             signatures, capability tags, imports by library, notable strings (URLs, IPs, paths, registry keys), \
-             function count and library-signature matches (bundled and data-pack databases), with suggested next \
-             tool calls. Every finding names its \
-             source primitive and confidence; evidence, not verdicts.",
-            |project, args: ReportArgs| fitted(project.triage_report(ReportLimits::new(args.max_per_section))),
-        ),
-        tool(
-            Group::Core,
-            "find_main",
-            "Locate the program's own entry logic past the runtime startup: entry symbols (main, WinMain, \
-             main.main) when present, else stated heuristics (the __libc_start_main first argument, the MinGW CRT \
-             call before exit, the Mach-O LC_MAIN entry) with confidence and the instructions they rest on. \
-             Profiles the best candidate's calls and strings with a bounded decompilation preview.",
-            |project, args: FindMainArgs| {
-                fitted(project.find_main(ReportLimits::new(args.max_per_section), args.decompile.unwrap_or(true)))
-            },
-        ),
-        tool(
-            Group::Core,
-            "network_surface",
-            "Map the networking surface as evidence: socket/DNS/HTTP/TLS imports and symbols, URL/IP/domain-like \
-             strings, the functions that reference them (via xrefs), and networking capability tags. An empty \
-             report says nothing was observed, not that the binary cannot communicate.",
-            |project, args: ReportArgs| fitted(project.network_surface(ReportLimits::new(args.max_per_section))),
-        ),
-        tool(
-            Group::Detection,
-            "find_crypto",
-            "Map cryptographic evidence: algorithm constants embedded in the image (AES/DES/Blowfish tables, SHA/MD5 \
-             round constants, ChaCha, curve parameters; checksum/compression/encoding tables listed separately), \
-             crypto library APIs, the functions that reference them (via xrefs), and crypto capability tags. A \
-             constant shows a table is present, not that the algorithm runs.",
-            |project, args: ReportArgs| fitted(project.find_crypto(ReportLimits::new(args.max_per_section))),
-        ),
-        tool(
-            Group::Core,
-            "persistence_surface",
-            "Map persistence indicators as evidence: autostart locations in strings (registry Run/RunOnce and \
-             service keys, scheduled tasks, launchd LaunchAgents/LaunchDaemons, systemd units, cron, XDG autostart, \
-             shell startup files), service-installation and registry-write APIs (file-write and command APIs beside \
-             such strings), the functions that reference them (via xrefs), and persistence capability tags. \
-             Indicators, not intent.",
-            |project, args: ReportArgs| fitted(project.persistence_surface(ReportLimits::new(args.max_per_section))),
-        ),
-        tool(
-            Group::Core,
-            "string_decoding",
-            "Find candidate string-decoding routines statically: functions with a short loop that loads, transforms \
-             (XOR, rotate, byte ADD/SUB) and stores bytes, their direct call sites, and the non-printable or \
-             high-entropy data blobs passed to them (address, length estimate, entropy). Nothing is emulated or \
-             executed; candidates are loop shapes with medium or low confidence.",
-            |project, args: ReportArgs| fitted(project.string_decoding(ReportLimits::new(args.max_per_section))),
-        ),
-        tool(
-            Group::Core,
-            "diff_builds",
-            "Compare this binary with another build of the same architecture: functions paired by unique name, by \
-             masked signature hash and by identical bytes at an unchanged address into identical, changed, \
-             hash-matched, name-only (too small to hash), added and removed, plus import and string differences. \
-             Hash equality is signature-level, not semantic equivalence. image_offset picks an embedded image in \
-             `path`, other_image_offset one in `other`.",
-            |project, args: DiffBuildsArgs| {
-                let limits = ReportLimits::new(args.max_per_section);
-                let offset = args.other_image_offset.map(|offset| offset.0);
-                let length = args.other_image_length.map(|length| length.0);
-                let image = match (offset, length) {
-                    (Some(offset), length) => Some(rampage_loaders::ImageAt::new(offset, length)),
-                    (None, Some(_)) => {
-                        return Err(ApiError::Invalid("`other_image_length` needs `other_image_offset`".to_owned()));
-                    }
-                    (None, None) => None,
-                };
-                fitted(project.diff_builds_image(std::path::Path::new(&args.other), image, limits))
-            },
-        ),
+    ];
+    // The workflow registry's tools, at the place in the order models have always seen them.
+    tools.extend(WORKFLOWS.iter().map(|&workflow| workflow_tool(workflow)));
+    tools.extend([
         tool(
             Group::Diagnostics,
             "analysis_diagnostics",
@@ -1076,7 +973,27 @@ pub fn tools() -> Vec<Tool> {
             |project, _: Nothing| project.redo(),
         )
         .annotates(),
-    ]
+    ]);
+    tools
+}
+
+/// The tool running `workflow`, its report shrunk to fit one result.
+fn workflow_tool(workflow: &'static dyn Workflow) -> Tool {
+    let handler = move |project: &Project, input: Value| -> Result<Value, String> {
+        let options = workflow.options(input)?;
+        let report = fitted(workflow.run(project, &options)).map_err(|error| error_chain(&error))?;
+        serde_json::to_value(report).map_err(|error| error.to_string())
+    };
+    Tool {
+        group: workflow.group(),
+        name: workflow.name(),
+        description: workflow.description(),
+        input_schema: workflow.input_schema(),
+        interactive: false,
+        effect: Effect::None,
+        reads_annotations: true,
+        handler: Box::new(handler),
+    }
 }
 
 /// The group of the tool (or file tool) `name` in the registry.

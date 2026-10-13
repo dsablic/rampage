@@ -2,29 +2,42 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Result, bail};
+use clap::ValueEnum;
+use clap::builder::PossibleValue;
+use rampage_api::workflows::{self, WorkflowOptions};
 use rampage_api::{ReportLimits, WorkflowReport};
 use rampage_loaders::ImageAt;
 
 use crate::commands::{Options, open, write_json};
 
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum Workflow {
-    /// One-shot overview with suggested next steps
-    TriageReport,
-    /// Locate the program's own entry logic past the runtime startup code
-    FindMain,
-    /// Networking imports, network-like strings and the functions referencing them
-    NetworkSurface,
-    /// Algorithm constants, crypto APIs and the functions referencing them
-    FindCrypto,
-    /// Autostart locations, service/registry APIs and the functions referencing them (indicators, not intent)
-    PersistenceSurface,
-    /// Candidate string-decoding loops, their call sites and the encoded-looking data passed to them
-    StringDecoding,
-    /// Compare with another build (--other): matched, changed, added and removed functions
-    DiffBuilds,
+/// A registered workflow as `rampage report` names it: its tool name in kebab-case.
+#[derive(Clone, Copy)]
+pub struct Workflow {
+    workflow: &'static dyn workflows::Workflow,
+    command: &'static str,
+}
+
+impl clap::ValueEnum for Workflow {
+    fn value_variants<'a>() -> &'a [Self] {
+        static VARIANTS: OnceLock<Vec<Workflow>> = OnceLock::new();
+        VARIANTS.get_or_init(|| {
+            workflows::WORKFLOWS
+                .iter()
+                .map(|&workflow| {
+                    // Leaked once per registered workflow: clap takes possible values as static strings.
+                    let command: &'static str = Box::leak(workflow.name().replace('_', "-").into_boxed_str());
+                    Workflow { workflow, command }
+                })
+                .collect()
+        })
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(PossibleValue::new(self.command).help(self.workflow.summary()))
+    }
 }
 
 pub struct ReportOptions {
@@ -42,27 +55,29 @@ pub fn report(
     report_options: &ReportOptions,
     options: &Options,
 ) -> Result<()> {
-    match (workflow, &report_options.other) {
-        (Workflow::DiffBuilds, None) => bail!("diff-builds needs --other <file>"),
-        (Workflow::DiffBuilds, Some(_)) | (_, None) => {}
-        (_, Some(_)) => bail!("--other only applies to diff-builds"),
+    match (workflow.workflow.compares(), &report_options.other) {
+        (true, None) => bail!("{} needs --other <file>", workflow.command),
+        (true, Some(_)) | (false, None) => {}
+        (false, Some(_)) => bail!("--other only applies to {}", comparing_commands()),
     }
     let project = open(path, options)?;
-    let limits = ReportLimits::new(report_options.limit);
-    let report = match (workflow, &report_options.other) {
-        (Workflow::TriageReport, _) => project.triage_report(limits)?,
-        (Workflow::FindMain, _) => project.find_main(limits, !report_options.no_decompile)?,
-        (Workflow::NetworkSurface, _) => project.network_surface(limits)?,
-        (Workflow::FindCrypto, _) => project.find_crypto(limits)?,
-        (Workflow::PersistenceSurface, _) => project.persistence_surface(limits)?,
-        (Workflow::StringDecoding, _) => project.string_decoding(limits)?,
-        (Workflow::DiffBuilds, Some(other)) => project.diff_builds_image(other, report_options.other_image, limits)?,
-        (Workflow::DiffBuilds, None) => unreachable!("checked before opening the binary"),
+    let run_options = WorkflowOptions {
+        limits: ReportLimits::new(report_options.limit),
+        decompile: !report_options.no_decompile,
+        other: report_options.other.clone(),
+        other_image: report_options.other_image,
     };
+    let report = workflow.workflow.run(&project, &run_options)?;
     if options.json {
         return write_json(out, &report);
     }
     render(out, &report)
+}
+
+/// The workflows taking `--other`, as `rampage report` names them.
+fn comparing_commands() -> String {
+    let comparing = Workflow::value_variants().iter().filter(|workflow| workflow.workflow.compares());
+    comparing.map(|workflow| workflow.command).collect::<Vec<_>>().join(", ")
 }
 
 fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
@@ -119,4 +134,21 @@ fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
         writeln!(out, "  - {limitation}")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_registered_workflow_is_a_report_value() {
+        for &registered in workflows::WORKFLOWS {
+            let command = registered.name().replace('_', "-");
+            let parsed = Workflow::from_str(&command, false).unwrap();
+            assert!(std::ptr::addr_eq(parsed.workflow, registered), "{command}");
+            assert_eq!(parsed.to_possible_value().unwrap().get_help().unwrap().to_string(), registered.summary());
+        }
+        assert_eq!(Workflow::value_variants().len(), workflows::WORKFLOWS.len());
+        assert_eq!(comparing_commands(), "diff-builds");
+    }
 }

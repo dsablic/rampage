@@ -7,9 +7,11 @@ use std::collections::{BTreeSet, HashMap};
 use rampage_arch::{Arch, Flow};
 use rampage_capabilities::names;
 use rampage_loaders::{Details, Format};
-use serde_json::json;
+use serde_json::{Value, json};
 
+use super::registry::{Workflow, WorkflowOptions};
 use super::{Confidence, Excerpt, Finding, ReportLimits, Section, WorkflowReport, api_matches, is_default_name, quote};
+use crate::tools::Group;
 use crate::{ApiError, DisassemblyLine, Project, SignatureMatch, XrefQuery};
 
 /// Symbol names that conventionally mark a program's entry logic, most specific first: in a cgo binary `main` is
@@ -70,6 +72,55 @@ fn describe(line: &DisassemblyLine) -> String {
     match &line.comment {
         Some(comment) => format!("{:#x}: {}  ; {comment}", line.address, line.text),
         None => format!("{:#x}: {}", line.address, line.text),
+    }
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct FindMainArgs {
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
+    /// reports are cut further to fit one tool result.
+    max_per_section: Option<usize>,
+    /// Include a bounded decompilation preview of the best candidate (default true).
+    decompile: Option<bool>,
+}
+
+pub struct FindMain;
+
+impl Workflow for FindMain {
+    fn name(&self) -> &'static str {
+        "find_main"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Locate the program's own entry logic past the runtime startup code"
+    }
+
+    fn description(&self) -> &'static str {
+        "Locate the program's own entry logic past the runtime startup: entry symbols (main, WinMain, \
+         main.main) when present, else stated heuristics (the __libc_start_main first argument, the MinGW CRT \
+         call before exit, the Mach-O LC_MAIN entry) with confidence and the instructions they rest on. \
+         Profiles the best candidate's calls and strings with a bounded decompilation preview."
+    }
+
+    fn group(&self) -> Group {
+        Group::Core
+    }
+
+    fn input_schema(&self) -> Value {
+        crate::tools::schema::<FindMainArgs>()
+    }
+
+    fn options(&self, input: Value) -> Result<WorkflowOptions, String> {
+        let args: FindMainArgs = crate::tools::arguments(input)?;
+        Ok(WorkflowOptions {
+            limits: ReportLimits::new(args.max_per_section),
+            decompile: args.decompile.unwrap_or(true),
+            ..WorkflowOptions::default()
+        })
+    }
+
+    fn run(&self, project: &Project, options: &WorkflowOptions) -> Result<WorkflowReport, ApiError> {
+        project.find_main(options.limits, options.decompile)
     }
 }
 

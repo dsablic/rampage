@@ -6,11 +6,13 @@
 use std::collections::BTreeSet;
 
 use rampage_analysis::discover::XrefKind;
-use serde_json::json;
+use serde_json::{Value, json};
 
+use super::registry::{Workflow, WorkflowOptions, report_options, report_schema};
 use super::{
     Confidence, Finding, ReportLimits, Scope, Section, Tracer, WorkflowReport, capability_section, match_api, quote,
 };
+use crate::tools::Group;
 use crate::{ApiError, Project, XrefQuery};
 
 /// Lowercase substrings of autostart locations and commands, each with the mechanism it names and how specific
@@ -166,6 +168,42 @@ fn contains_token(text: &str, pattern: &str) -> bool {
     text.match_indices(pattern).any(|(at, _)| {
         (open_start || !text[..at].ends_with(word)) && (open_end || !text[at + pattern.len()..].starts_with(word))
     })
+}
+
+pub struct PersistenceSurface;
+
+impl Workflow for PersistenceSurface {
+    fn name(&self) -> &'static str {
+        "persistence_surface"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Autostart locations, service/registry APIs and the functions referencing them (indicators, not intent)"
+    }
+
+    fn description(&self) -> &'static str {
+        "Map persistence indicators as evidence: autostart locations in strings (registry Run/RunOnce and \
+         service keys, scheduled tasks, launchd LaunchAgents/LaunchDaemons, systemd units, cron, XDG autostart, \
+         shell startup files), service-installation and registry-write APIs (file-write and command APIs beside \
+         such strings), the functions that reference them (via xrefs), and persistence capability tags. \
+         Indicators, not intent."
+    }
+
+    fn group(&self) -> Group {
+        Group::Core
+    }
+
+    fn input_schema(&self) -> Value {
+        report_schema()
+    }
+
+    fn options(&self, input: Value) -> Result<WorkflowOptions, String> {
+        report_options(input)
+    }
+
+    fn run(&self, project: &Project, options: &WorkflowOptions) -> Result<WorkflowReport, ApiError> {
+        project.persistence_surface(options.limits)
+    }
 }
 
 impl Project {

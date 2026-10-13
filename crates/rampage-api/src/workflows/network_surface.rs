@@ -1,11 +1,13 @@
 //! `network_surface`: networking imports, network-like strings and the functions that reference them, with the
 //! related capability tags. It maps where the communication surface is, as evidence; it does not judge intent.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
+use super::registry::{Workflow, WorkflowOptions, report_options, report_schema};
 use super::{
     Finding, ReportLimits, Section, Tracer, WorkflowReport, api_matches, capability_section, classify, match_api, quote,
 };
+use crate::tools::Group;
 use crate::{ApiError, Project};
 
 /// Networking API patterns (see `api_matches`), each with the area it belongs to.
@@ -78,6 +80,40 @@ const SUGGESTED_FUNCTIONS: usize = 3;
 /// The area of a networking API, if `name` is one.
 fn network_api(name: &str) -> Option<&'static str> {
     match_api(NETWORK_APIS, name)
+}
+
+pub struct NetworkSurface;
+
+impl Workflow for NetworkSurface {
+    fn name(&self) -> &'static str {
+        "network_surface"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Networking imports, network-like strings and the functions referencing them"
+    }
+
+    fn description(&self) -> &'static str {
+        "Map the networking surface as evidence: socket/DNS/HTTP/TLS imports and symbols, URL/IP/domain-like \
+         strings, the functions that reference them (via xrefs), and networking capability tags. An empty \
+         report says nothing was observed, not that the binary cannot communicate."
+    }
+
+    fn group(&self) -> Group {
+        Group::Core
+    }
+
+    fn input_schema(&self) -> Value {
+        report_schema()
+    }
+
+    fn options(&self, input: Value) -> Result<WorkflowOptions, String> {
+        report_options(input)
+    }
+
+    fn run(&self, project: &Project, options: &WorkflowOptions) -> Result<WorkflowReport, ApiError> {
+        project.network_surface(options.limits)
+    }
 }
 
 impl Project {

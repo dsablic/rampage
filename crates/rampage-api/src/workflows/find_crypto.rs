@@ -3,9 +3,11 @@
 //! capability tags. A constant shows that a table is present, not that the algorithm runs or what it protects.
 
 use rampage_constants::{ConstantDb, Endian, Kind, scan_binary_report};
-use serde_json::json;
+use serde_json::{Value, json};
 
+use super::registry::{Workflow, WorkflowOptions, report_options, report_schema};
 use super::{Confidence, Finding, ReportLimits, Section, Tracer, WorkflowReport, capability_section, match_api};
+use crate::tools::Group;
 use crate::{ApiError, Project};
 
 /// Crypto library API patterns (see `api_matches`), each with the library family it belongs to.
@@ -74,6 +76,41 @@ fn kind_label(kind: Kind) -> &'static str {
         Kind::Compression => "compression",
         Kind::Encoding => "encoding",
         Kind::PublicKey => "public-key parameter",
+    }
+}
+
+pub struct FindCrypto;
+
+impl Workflow for FindCrypto {
+    fn name(&self) -> &'static str {
+        "find_crypto"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Algorithm constants, crypto APIs and the functions referencing them"
+    }
+
+    fn description(&self) -> &'static str {
+        "Map cryptographic evidence: algorithm constants embedded in the image (AES/DES/Blowfish tables, SHA/MD5 \
+         round constants, ChaCha, curve parameters; checksum/compression/encoding tables listed separately), \
+         crypto library APIs, the functions that reference them (via xrefs), and crypto capability tags. A \
+         constant shows a table is present, not that the algorithm runs."
+    }
+
+    fn group(&self) -> Group {
+        Group::Detection
+    }
+
+    fn input_schema(&self) -> Value {
+        report_schema()
+    }
+
+    fn options(&self, input: Value) -> Result<WorkflowOptions, String> {
+        report_options(input)
+    }
+
+    fn run(&self, project: &Project, options: &WorkflowOptions) -> Result<WorkflowReport, ApiError> {
+        project.find_crypto(options.limits)
     }
 }
 
