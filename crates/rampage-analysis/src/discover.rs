@@ -45,7 +45,7 @@ pub struct Switch {
     /// The target of each table entry in table order: entry `i` is selected by switch index `i`.
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
     pub table: Vec<u64>,
-    /// The comparison that bounds the index; out-of-range indices take its branch instead of the table.
+    /// The comparison that bounds the index; out-of-range indices follow its other edge instead of the table.
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub guard: u64,
 }
@@ -788,6 +788,7 @@ fn split_block(blocks: &mut BTreeMap<u64, u64>, address: u64) {
 
 #[cfg(test)]
 mod tests {
+    mod a64_switch;
     mod joined_switch;
     mod literal_pools;
     mod x86_switch;

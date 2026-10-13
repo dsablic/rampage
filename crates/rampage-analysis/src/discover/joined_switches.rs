@@ -4,7 +4,8 @@
 //! function's blocks are known, this carries the decoder's register facts across its control-flow graph instead:
 //! a must-dataflow whose facts at a block's start are those that hold at the end of every edge into it. A path
 //! that enters from outside the function, or at its entry, contributes nothing, so only facts established inside the
-//! function on every path to the jump survive. A bound holds only on the fall-through of the `ja` that proved it.
+//! function on every path to the jump survive. A bound holds only on the successor edge that proved it: the
+//! fall-through of `ja` / AArch64 `b.hi`, or the taken edge of AArch64 `b.ls`.
 //!
 //! A table resolved this way adds case edges, which may join the paths it was proven on, so discovery explores the
 //! function again assuming it and keeps it only if the facts still prove the same table over the larger graph

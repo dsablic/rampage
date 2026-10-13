@@ -25,15 +25,15 @@ pub struct Addresses {
     derived_base: [u64; 31],
     /// Registers whose upper 32 bits a write to their W view zeroed.
     upper_zero: u32,
-    /// The comparison of a register with an immediate that the previous instruction made.
+    /// The comparison of a still-unmodified register with an immediate that NZCV still describes.
     compare: Option<Compare>,
-    /// Unsigned bounds that a `b.hi` or `b.hs` after a comparison proved on its fall-through path.
+    /// Unsigned bounds proven on the current path by a comparison and conditional branch.
     bounds: [Option<Bound>; 31],
     /// Registers holding a switch-table entry, or a target formed from one.
     entries: [Option<Entry>; 31],
     pub memory_changed: bool,
-    /// Registers whose bound the conditional branch just analyzed proved on its fall-through path only.
-    fall_through_bounds: u32,
+    /// The taken edge's bound where the conditional branch just analyzed differs from its fall-through.
+    taken_bound: Option<EdgeBound>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +50,23 @@ struct Bound {
     /// Whether the bound covers the whole X register rather than only its W view.
     wide: bool,
     guard: u64,
+}
+
+impl Bound {
+    fn refine(self, other: Self) -> Self {
+        // Keep one guard's complete proof: never take the limit from one and the register width from another.
+        if other.max <= self.max && (other.wide || !self.wide) && (other.max < self.max || other.wide != self.wide) {
+            other
+        } else {
+            self
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EdgeBound {
+    register: u64,
+    bound: Option<Bound>,
 }
 
 /// How a table load extends its entry into the 64-bit register.
@@ -108,6 +125,9 @@ impl Addresses {
             self.upper_zero &= !(1 << register);
             self.bounds[register as usize] = None;
             self.entries[register as usize] = None;
+            if self.compare.is_some_and(|compare| compare.register == register) {
+                self.compare = None;
+            }
         }
     }
 
@@ -129,7 +149,7 @@ impl Addresses {
     /// The facts on the fall-through path of the instruction just analyzed, with nothing kept for registers that
     /// hold no address.
     pub fn fall_through(&self) -> Self {
-        let mut facts = Self { fall_through_bounds: 0, ..self.clone() };
+        let mut facts = Self { taken_bound: None, ..self.clone() };
         for register in 0..31 {
             if facts.valid & (1 << register) == 0 {
                 facts.value[register] = 0;
@@ -142,11 +162,11 @@ impl Addresses {
         facts
     }
 
-    /// The facts where the conditional branch just analyzed is taken: its bound holds only when it is not.
+    /// The facts where the conditional branch just analyzed is taken, including inverse `b.ls` / `b.lo` bounds.
     pub fn taken(&self) -> Self {
         let mut taken = self.fall_through();
-        for register in (0..31).filter(|register| self.fall_through_bounds & (1 << register) != 0) {
-            taken.bounds[register] = None;
+        if let Some(edge) = self.taken_bound {
+            taken.bounds[edge.register as usize] = edge.bound;
         }
         taken
     }
@@ -180,7 +200,7 @@ impl Addresses {
             bounds: std::array::from_fn(|register| bound(a.bounds[register], b.bounds[register])),
             entries: std::array::from_fn(|register| equal(a.entries[register], b.entries[register])),
             memory_changed: a.memory_changed || b.memory_changed,
-            fall_through_bounds: 0,
+            taken_bound: None,
         }
         .fall_through()
     }
@@ -235,6 +255,8 @@ struct Info {
     writes_known: bool,
     /// Calls and supervisor calls may change every caller-saved register.
     clobbers_caller_saved: bool,
+    /// Audited instructions that leave NZCV unchanged; all others forget the pending comparison.
+    preserves_flags: bool,
 }
 
 static INFO: LazyLock<Vec<Info>> = LazyLock::new(|| ENCODINGS.iter().map(info_for).collect());
@@ -333,6 +355,50 @@ fn info_for(encoding: &Encoding) -> Info {
         implicit,
         writes_known: writes_known(name, prefix),
         clobbers_caller_saved,
+        preserves_flags: preserves_flags(name, prefix),
+    }
+}
+
+fn preserves_flags(name: &str, prefix: &str) -> bool {
+    let class = name.splitn(3, '_').nth(2).unwrap_or("");
+    match class {
+        "pcreladdr" => matches!(prefix, "ADR" | "ADRP"),
+        "addsub_imm" | "addsub_shift" | "addsub_ext" => matches!(prefix, "ADD" | "SUB"),
+        "log_imm" | "log_shift" => matches!(prefix, "AND" | "ORR" | "EOR" | "BIC" | "ORN" | "EON"),
+        "movewide" => matches!(prefix, "MOVN" | "MOVZ" | "MOVK"),
+        "bitfield" => matches!(prefix, "SBFM" | "BFM" | "UBFM"),
+        "extract" => prefix == "EXTR",
+        "condsel" => matches!(prefix, "CSEL" | "CSINC" | "CSINV" | "CSNEG"),
+        "hints" => matches!(prefix, "NOP" | "BTI"),
+        "branch_imm" | "condbranch" => matches!(prefix, "B" | "BC"),
+        "compbranch" => matches!(prefix, "CBZ" | "CBNZ"),
+        "testbranch" => matches!(prefix, "TBZ" | "TBNZ"),
+        "loadlit" | "ldst_pos" | "ldst_regoff" | "ldst_unscaled" | "ldst_immpre" | "ldst_immpost" | "ldstpair_off"
+        | "ldstpair_pre" | "ldstpair_post" => matches!(
+            prefix,
+            "LDR"
+                | "LDRB"
+                | "LDRH"
+                | "LDRSB"
+                | "LDRSH"
+                | "LDRSW"
+                | "LDUR"
+                | "LDURB"
+                | "LDURH"
+                | "LDURSB"
+                | "LDURSH"
+                | "LDURSW"
+                | "LDP"
+                | "LDPSW"
+                | "STR"
+                | "STRB"
+                | "STRH"
+                | "STUR"
+                | "STURB"
+                | "STURH"
+                | "STP"
+        ),
+        _ => false,
     }
 }
 
@@ -519,8 +585,8 @@ pub fn analyze(
     read: &dyn Fn(u64, u8) -> Option<u64>,
 ) -> Analysis {
     let info = &INFO[index_of(decoded.encoding)];
-    let compare = addresses.compare.take();
-    addresses.fall_through_bounds = 0;
+    let compare = addresses.compare;
+    addresses.taken_bound = None;
     let direct = |make: fn(u64) -> Flow| relative_target(decoded, address).map_or(Flow::Invalid, make);
     let mut flow = match info.flow {
         FlowClass::Next => Flow::Next,
@@ -566,15 +632,17 @@ pub fn analyze(
         .filter(|entry| entry.table.base.is_some() || entry.table.entry_size == 8)
         .map(|entry| entry.table);
     let switch = switch_entry(decoded, addresses);
-    // A `b.hi` or `b.hs` straight after `cmp xN, #limit` falls through only when xN is within the limit.
+    // HI/HS bound the fall-through; their inverses LS/LO bound the taken edge instead.
     let bound = compare.filter(|_| name == "B_only_condbranch").and_then(|compare| {
-        let max = match decoded.field("cond")? {
-            0b1000 => compare.limit,
-            0b0010 => compare.limit.checked_sub(1)?,
+        let (max, taken) = match decoded.field("cond")? {
+            0b1000 => (compare.limit, false),
+            0b0010 => (compare.limit.checked_sub(1)?, false),
+            0b1001 => (compare.limit, true),
+            0b0011 => (compare.limit.checked_sub(1)?, true),
             _ => return None,
         };
         let wide = compare.wide || addresses.upper_zero & (1 << compare.register) != 0;
-        Some((compare.register, Bound { max, wide, guard: compare.address }))
+        Some((compare.register, Bound { max, wide, guard: compare.address }, taken))
     });
     let offset_from = matches!(name, "ADD_64_addsub_shift" | "ADD_64_addsub_ext")
         .then(|| decoded.field("Rn").and_then(|rn| addresses.base(rn)))
@@ -659,6 +727,9 @@ pub fn analyze(
         addresses.clobber_caller_saved();
         addresses.memory_changed = true;
     }
+    if !info.preserves_flags || !info.writes_known || info.clobbers_caller_saved {
+        addresses.compare = None;
+    }
     if let (Some((value, page)), Some(rd)) = (produced, destination) {
         addresses.set(rd, value, page);
     }
@@ -668,9 +739,15 @@ pub fn analyze(
     if let Some((register, entry)) = switch.filter(|&(register, _)| register < 31) {
         addresses.entries[register as usize] = Some(entry);
     }
-    if let Some((register, bound)) = bound {
-        addresses.bounds[register as usize] = Some(bound);
-        addresses.fall_through_bounds = 1 << register;
+    if let Some((register, bound, taken)) = bound {
+        let previous = addresses.bounds[register as usize];
+        let refined = Some(previous.map_or(bound, |previous| previous.refine(bound)));
+        if taken {
+            addresses.taken_bound = Some(EdgeBound { register, bound: refined });
+        } else {
+            addresses.bounds[register as usize] = refined;
+            addresses.taken_bound = Some(EdgeBound { register, bound: previous });
+        }
     }
     if matches!(name, "SUBS_32S_addsub_imm" | "SUBS_64S_addsub_imm")
         && decoded.field("Rd") == Some(31)
