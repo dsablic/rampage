@@ -60,9 +60,9 @@ check_names pre-flights candidate names): they persist beside the binary and eve
 including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch. Memory \
 snapshots and bundle directories use the same tools.
 
-Detection: detect_tools (packer/compiler/protector), identify_functions (library code by signature, bundled \
-databases applied; build_signatures makes a database from a binary with symbols), capabilities, yara_scan and \
-capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are loaded with \
+Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code \
+by signature, bundled databases applied; build_signatures makes a database from a binary with symbols), \
+capabilities, yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are loaded with \
 their licence and provenance. Types: set_signature, set_types and set_global persist C declarations; \
 language_metadata exposes demangled names and bounded metadata. Diagnostics: analysis_diagnostics reports decode \
 confidence limits. Runtime: compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal \

@@ -523,6 +523,24 @@ mod tests {
     }
 
     #[test]
+    fn a_gcc_producer_in_pe_rdata_is_tentative_gcc_and_the_crt_banner_is_a_runtime() {
+        let rdata = b"GCC: (GNU) 13.2.0\0Mingw-w64 runtime failure:\n\0";
+        let image = Fake { image: rdata.to_vec(), ..Fake::default() }.with_section(".rdata", rdata);
+        let detections = identify_image(&image, &SignatureDb::bundled());
+        let found = |name: &str| detections.iter().find(|d| d.name == name).map(|d| (d.kind, d.confidence));
+        assert_eq!(found("GCC"), Some((Kind::Compiler, Confidence::Tentative)));
+        assert_eq!(found("MinGW-w64"), Some((Kind::Runtime, Confidence::Strong)));
+        // The banner alone says nothing about the compiler.
+        let banner = b"Mingw-w64 runtime failure:\n\0";
+        let clang = Fake { image: banner.to_vec(), ..Fake::default() }.with_section(".rdata", banner);
+        let detections = identify_image(&clang, &SignatureDb::bundled());
+        assert!(detections.iter().all(|d| d.kind == Kind::Runtime), "{detections:?}");
+        // An MSVC image has neither.
+        let msvc = Fake { libraries: vec!["VCRUNTIME140.dll".to_owned()], ..Fake::default() };
+        assert!(!identify_image(&msvc, &SignatureDb::bundled()).iter().any(|d| d.kind == Kind::Runtime));
+    }
+
+    #[test]
     fn two_independent_tentative_signals_for_one_tool_merge_strong() {
         let image = Fake { overlay: Some(64), ..Fake::default() }.with_section("pec1", &[0u8; 8]);
         let section = Signature::new("PECompact", Kind::Packer, vec![Condition::SectionName("pec1".to_owned())]);

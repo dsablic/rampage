@@ -24,8 +24,8 @@ pub struct ToolDetections {
 }
 
 impl Project {
-    /// Identify the tools that likely produced this binary (packer, compiler, protector, installer, linker) from
-    /// the bundled heuristic database, optionally extended with user-supplied PeID `userdb.txt` text.
+    /// Identify the tools that likely produced this binary (packer, compiler, protector, installer, linker,
+    /// runtime) from the bundled heuristic database, optionally extended with user-supplied PeID `userdb.txt` text.
     /// PeID signatures from data packs are overlaid too.
     pub fn detect_tools(&self, peid: Option<&str>) -> Result<ToolDetections, ApiError> {
         let mut db = SignatureDb::bundled();

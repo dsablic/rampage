@@ -13,6 +13,9 @@ pub enum Kind {
     Protector,
     Installer,
     Linker,
+    /// A C or language runtime linked into the image (musl, glibc, the MinGW-w64 CRT): it says which libc the
+    /// program uses, not which compiler built it.
+    Runtime,
     /// A user-supplied signature we cannot categorize, such as a parsed PeID entry.
     Unknown,
 }

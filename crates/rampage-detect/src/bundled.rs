@@ -16,6 +16,7 @@ pub(crate) fn bundled() -> SignatureDb {
     db.extend(protectors());
     db.extend(compilers());
     db.extend(linkers());
+    db.extend(runtimes());
     db.extend(installers());
     db
 }
@@ -102,12 +103,15 @@ fn compilers() -> Vec<Signature> {
         Signature::new("MSVC", Kind::Compiler, vec![versioned_import("vcruntime")]).with_note("VCRUNTIME import"),
         Signature::new("MSVC", Kind::Compiler, vec![versioned_import("msvcr")]).with_note("MSVCR runtime import"),
         Signature::new("MSVC", Kind::Compiler, vec![versioned_import("msvcp")]).with_note("MSVCP C++ runtime import"),
-        // MinGW embeds its runtime-failure banner in read-only data.
-        Signature::new("MinGW/GCC", Kind::Compiler, vec![contains("Mingw-w64")]).with_note("Mingw-w64 banner"),
         // GCC and Clang stamp a producer string into .comment. "GCC:" alone is weak: glibc's crt1.o/crti.o and
         // libgcc's crtbegin.o carry it too, so Clang- and Rust-built glibc programs show it as well.
         Signature::new("GCC", Kind::Compiler, vec![section_contains(".comment", "GCC:")])
             .with_note(".comment GCC producer (also stamped by glibc/libgcc startup objects)")
+            .corroborating(),
+        // A PE has no .comment: GNU ld folds GCC's .rdata$zzz producer strings into .rdata. A GCC-built
+        // MinGW-w64 CRT brings its own, so a Clang build against that CRT shows them too.
+        Signature::new("GCC", Kind::Compiler, vec![section_contains(".rdata", "GCC: (")])
+            .with_note(".rdata GCC producer (also stamped by GCC-built MinGW-w64 CRT objects)")
             .corroborating(),
         Signature::new("Clang/LLVM", Kind::Compiler, vec![section_contains(".comment", "clang")])
             .with_note(".comment clang producer"),
@@ -134,6 +138,15 @@ fn linkers() -> Vec<Signature> {
             .with_note(".comment mold linker tag"),
         Signature::new("GNU gold", Kind::Linker, vec![unique_section(&[".note.gnu.gold-version"])])
             .with_note("gold version note"),
+    ]
+}
+
+fn runtimes() -> Vec<Signature> {
+    vec![
+        // The MinGW-w64 CRT's runtime-failure banner. It names the C runtime, not the compiler: GCC and Clang
+        // (zig cc, llvm-mingw) both link it.
+        Signature::new("MinGW-w64", Kind::Runtime, vec![contains("Mingw-w64 runtime failure")])
+            .with_note("MinGW-w64 CRT runtime-failure banner"),
     ]
 }
 

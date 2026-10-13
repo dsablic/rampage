@@ -36,11 +36,27 @@ fn clang_static_elf_reports_clang_and_lld() {
     assert!(named(&detections, "LLD"), "expected LLD linker in {detections:?}");
 }
 
+fn find<'a>(detections: &'a [rampage_detect::Detection], name: &str) -> Option<&'a rampage_detect::Detection> {
+    detections.iter().find(|d| d.name == name)
+}
+
 #[test]
-fn mingw_pe_is_detected() {
-    // hello-x64.exe is built with MinGW-w64; its runtime banner is embedded in read-only data.
+fn mingw_w64_crt_is_a_runtime_not_a_gcc_compiler() {
+    // hello-x64.exe is `zig cc -target x86_64-windows-gnu`: Clang against the MinGW-w64 CRT, whose runtime-failure
+    // banner sits in read-only data. That banner names the C runtime; nothing GCC-specific is in the image.
     let detections = detect("hello-x64.exe");
-    assert!(named(&detections, "MinGW/GCC"), "expected MinGW/GCC in {detections:?}");
+    let mingw = find(&detections, "MinGW-w64").expect("MinGW-w64 runtime");
+    assert_eq!((mingw.kind, mingw.confidence), (Kind::Runtime, Confidence::Strong));
+    assert!(!named(&detections, "GCC"), "no GCC producer string in a Clang-built PE: {detections:?}");
+    assert!(!detections.iter().any(|d| d.kind == Kind::Compiler && d.name.contains("MinGW")), "{detections:?}");
+}
+
+#[test]
+fn mingw_w64_runtime_is_not_reported_on_msvc_elf_or_macho_fixtures() {
+    for name in ["Microsoft.Bcl.HashCode.dll", "hello-x64.elf", "hello-x64-dyn.elf", "hello-x64.macho"] {
+        let detections = detect(name);
+        assert!(!named(&detections, "MinGW-w64"), "{name}: {detections:?}");
+    }
 }
 
 #[test]
