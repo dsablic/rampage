@@ -102,10 +102,12 @@ impl Registers {
                 });
             }
             (Mnemonic::And, Some(register), None) if matches!(size(register), 32 | 64) => {
-                // The mask bounds the whole register: a 32-bit `and` zeroes the upper half.
-                bound = immediate(instruction).zip(gpr(register)).map(|(mask, index)| {
+                // The mask bounds the whole register: a 32-bit `and` zeroes the upper half. Only a mask of low bits
+                // selects every index up to it; any other leaves gaps that are not table entries.
+                bound = immediate(instruction).zip(gpr(register)).and_then(|(mask, index)| {
                     let max = if size(register) == 32 { mask & 0xffff_ffff } else { mask };
-                    (index, Bound { max, wide: true, guard: instruction.ip() })
+                    (max & max.wrapping_add(1) == 0)
+                        .then(|| (index, Bound { max, wide: true, guard: instruction.ip() }))
                 });
             }
             (Mnemonic::Mov, Some(to_register), Some(from_register))

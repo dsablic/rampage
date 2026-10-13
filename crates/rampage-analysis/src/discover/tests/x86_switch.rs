@@ -145,6 +145,12 @@ fn an_x86_switch_needs_an_unsigned_bound_on_every_path_to_its_jump() {
     // and edi, 3 masks the index.
     let masked = Switch { compare: [0x83, 0xe7, 3, 0x90, 0x90, 0x90], branch: [0x90; 2], ..switch() };
     assert!(resolved(&masked.discover(absolute_entries(), vec![])));
+    // and edi, 5 leaves 0, 1, 4 and 5, not the six dense indices 0..=5; and edi, 7 bounds eight.
+    let eight: Vec<u8> = [&absolute_entries()[..], &absolute_entries()].concat();
+    let sparse = Switch { compare: [0x83, 0xe7, 5, 0x90, 0x90, 0x90], ..masked.clone() };
+    assert!(!resolved(&sparse.discover(eight.clone(), vec![])));
+    let dense = Switch { compare: [0x83, 0xe7, 7, 0x90, 0x90, 0x90], ..masked };
+    assert!(resolved(&dense.discover(eight, vec![])));
 }
 
 #[test]
