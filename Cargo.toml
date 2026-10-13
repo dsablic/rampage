@@ -50,6 +50,14 @@ thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "io-std"] }
 toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "serde"] }
 
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

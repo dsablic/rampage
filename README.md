@@ -16,10 +16,12 @@ confidence and limitations; producing C is not proof of correct recovery.
   CIL remains separate from native analysis.
 
 Use rampage for files and captures you own or have permission to inspect. Analysis does not execute the target,
-launch/attach/resume a process or bypass protections. Snapshot capture and the LLDB query bridge operate only
+launch/attach/resume a target process or bypass protections. Snapshot capture and the LLDB query bridge operate only
 inside an existing authorized stopped debugger session. Native decompiler supervision is not an OS sandbox.
 See the [feature reference](docs/features.md) for architecture coverage and limits, and
 [the design](docs/plans/2026-10-10-rampage-design.md) for the roadmap.
+
+[Development and cleanup](docs/development.md) describes the smaller build profiles, validation and worktree lifecycle.
 
 ## Rust quickstart
 
