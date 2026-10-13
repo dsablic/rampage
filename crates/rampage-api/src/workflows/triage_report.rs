@@ -234,6 +234,9 @@ impl Project {
                 json!({}),
                 "This is a managed assembly: list its types and methods (CIL bodies) from the .NET metadata.",
             );
+            if let Some((token, reason)) = self.first_cil_method(managed.as_ref()) {
+                report.step("dotnet_il", json!({ "method": format!("{token:#010x}") }), reason);
+            }
             report.limitation(
                 "This is a .NET assembly: its methods are CIL bytecode, so native function discovery, disassembly and \
                  decompilation do not describe its logic; the .NET metadata does.",
@@ -286,5 +289,16 @@ impl Project {
              differently compiled library code, and small stubs can share a hash.",
         );
         Ok(report)
+    }
+
+    /// A method whose CIL to list first: the managed entry point, or else (a library) the first method with an IL
+    /// body among the first page of types, with why it was chosen.
+    fn first_cil_method(&self, managed: Option<&crate::DotNetSummary>) -> Option<(u32, &'static str)> {
+        if let Some(rampage_loaders::dotnet::EntryPoint::Method { token, .. }) = managed?.entry_point {
+            return Some((token, "List the CIL of the managed entry point, where the program's own logic starts."));
+        }
+        let page = self.dotnet_metadata(&DotNetQuery::default()).ok()??.types?;
+        let method = page.items.iter().flat_map(|ty| &ty.methods).find(|method| method.il.is_some())?;
+        Some((method.token, "No managed entry point (a library): list the CIL of its first method with an IL body."))
     }
 }

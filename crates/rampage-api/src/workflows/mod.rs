@@ -152,10 +152,14 @@ impl Section {
     }
 }
 
-/// A follow-up tool call: the tool to run, its arguments (beside the binary's `path`), and why.
+/// A follow-up tool call: the tool to run, its group, its arguments (beside the binary's `path`), and why.
 #[derive(Debug, Clone, Serialize)]
 pub struct NextStep {
     pub tool: &'static str,
+    /// The tool group serving `tool` (see [`crate::tools::Group`]); an MCP client that has not enabled it calls
+    /// enable_tools with it first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<&'static str>,
     pub arguments: Value,
     pub reason: String,
 }
@@ -223,7 +227,8 @@ impl WorkflowReport {
             return;
         }
         if self.next_steps.len() < MAX_NEXT_STEPS {
-            self.next_steps.push(NextStep { tool, arguments, reason: reason.into() });
+            let group = crate::tools::group_of(tool).map(crate::tools::Group::name);
+            self.next_steps.push(NextStep { tool, group, arguments, reason: reason.into() });
         } else {
             self.next_steps_omitted += 1;
         }

@@ -1008,6 +1008,16 @@ pub fn tools() -> Vec<Tool> {
     ]
 }
 
+/// The group of the tool (or file tool) `name` in the registry.
+pub fn group_of(name: &str) -> Option<Group> {
+    static GROUPS: std::sync::OnceLock<std::collections::HashMap<&'static str, Group>> = std::sync::OnceLock::new();
+    let groups = GROUPS.get_or_init(|| {
+        let tools = tools().into_iter().map(|tool| (tool.name, tool.group));
+        tools.chain(file_tools().into_iter().map(|tool| (tool.name, tool.group))).collect()
+    });
+    groups.get(name).copied()
+}
+
 /// Runs the tool `name` with `input`, returning its result as text for the model and whether it failed.
 pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (String, bool) {
     let Some(tool) = tools.iter().find(|tool| tool.name == name) else {

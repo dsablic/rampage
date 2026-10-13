@@ -39,6 +39,11 @@ fn assert_well_formed(report: &WorkflowReport) {
             assert!(!finding.source.is_empty());
         }
     }
+    // Every suggestion names the group serving its tool, so an agent knows which one to enable.
+    for step in &report.next_steps {
+        assert_eq!(step.group, rampage_api::tools::group_of(step.tool).map(|group| group.name()), "{step:?}");
+        assert!(step.group.is_some(), "{step:?}");
+    }
     serde_json::to_string(report).unwrap();
 }
 
@@ -93,6 +98,10 @@ fn triage_report_on_a_static_binary_states_the_missing_imports() {
     let full = open(fixture("musl-static-x86_64.elf")).triage_report(ReportLimits::new(Some(200))).unwrap();
     let functions = section(&full, "Functions");
     assert!(has_observation(functions, "`exit`"), "{:?}", observations(functions));
+    let identify = report.next_steps.iter().find(|step| step.tool == "identify_functions").unwrap();
+    assert_eq!(identify.group, Some("detection"));
+    let json = serde_json::to_value(identify).unwrap();
+    assert_eq!(json["group"], "detection");
 }
 
 #[test]

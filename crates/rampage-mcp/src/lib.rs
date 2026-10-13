@@ -52,8 +52,8 @@ groups. The groups:";
 
 const INSTRUCTIONS_USAGE: &str = "\
 Core: start with triage_report: one bounded overview (layout, triage hints, producing toolchain, capability tags, \
-imports, notable strings, library functions) that ends with concrete next tool calls, some of which may be in \
-other groups. The other guided workflows compose the primitives the same way: find_main (the program's own entry \
+imports, notable strings, library functions) that ends with concrete next tool calls, each naming its `group`; \
+enable that group first when it is not enabled. The other guided workflows compose the primitives the same way: find_main (the program's own entry \
 logic), network_surface, persistence_surface (autostart locations, service and registry APIs), string_decoding \
 (candidate byte-decoding loops with their call sites and encoded-looking data) and diff_builds; find_crypto \
 (algorithm constants and crypto APIs with the code that uses them) is in detection. Every workflow finding carries \

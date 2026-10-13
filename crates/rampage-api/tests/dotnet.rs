@@ -109,6 +109,12 @@ fn managed_dll_is_detected_strongly_and_triaged_as_managed() {
     );
     let report = project.triage_report(ReportLimits::default()).unwrap();
     assert!(report.next_steps.iter().any(|step| step.tool == "dotnet_metadata"), "{report:#?}");
+    // A library has no entry point: the CIL of its first method with an IL body is suggested instead.
+    let il = report.next_steps.iter().find(|step| step.tool == "dotnet_il").expect("dotnet_il is suggested");
+    assert_eq!(il.group, Some("dotnet"));
+    let method = il.arguments["method"].as_str().unwrap();
+    let query = rampage_api::DotNetIlQuery { method: method.to_owned(), ..Default::default() };
+    assert!(project.dotnet_il(&query).unwrap().is_some(), "{method}");
     assert!(report.next_steps.iter().all(|step| step.tool != "find_main"), "{report:#?}");
     assert!(report.limitations.iter().any(|text| text.contains("CIL bytecode")), "{report:#?}");
 }
