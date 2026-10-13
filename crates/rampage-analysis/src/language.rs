@@ -47,6 +47,8 @@ fn demangle_msvc(name: &str) -> Option<String> {
 pub struct LanguageMetadata {
     pub symbols: Vec<LanguageSymbol>,
     pub selectors: Vec<Selector>,
+    /// Objective-C classes and categories from the runtime metadata, with skipped structures as warnings.
+    pub objc: rampage_loaders::objc::ObjcReport,
     pub limitations: Vec<String>,
 }
 
@@ -140,11 +142,15 @@ pub fn metadata(binary: &Binary) -> LanguageMetadata {
     LanguageMetadata {
         symbols,
         selectors,
+        objc: rampage_loaders::objc::parse(binary),
         limitations: vec![
             "Vtables require sized Itanium ABI symbols and readable function pointers; \
              stripped tables are not guessed."
                 .to_owned(),
-            "Objective-C selectors are strings, not recovered call edges or complete class layouts.".to_owned(),
+            "Objective-C selectors are strings, not recovered call edges. Classes and categories come from \
+             __objc_classlist and __objc_catlist; legacy arm64e __chain_starts pointers and shared-cache \
+             images are not resolved, and method types are raw encodings."
+                .to_owned(),
             "MSVC names are demangled, but MSVC vtable targets and relative/authenticated vtables are not \
              extracted."
                 .to_owned(),

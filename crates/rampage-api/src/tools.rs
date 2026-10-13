@@ -559,7 +559,8 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "language_metadata",
-            "Demangled symbols, named Itanium vtables/RTTI and Objective-C selector strings, with limits.",
+            "Demangled symbols, named Itanium vtables/RTTI, Objective-C selector strings and Objective-C classes and \
+             categories (superclasses, methods with implementations, ivars, properties, protocols), with limits.",
             |project, _: Nothing| Ok(rampage_analysis::language::metadata(&project.binary)),
         ),
         tool(

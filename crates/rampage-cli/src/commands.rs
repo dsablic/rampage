@@ -73,6 +73,23 @@ pub fn metadata(out: &mut impl Write, path: &Path, options: &Options) -> Result<
     for selector in metadata.selectors {
         writeln!(out, "{:#x} selector {}", selector.address, selector.name)?;
     }
+    for class in &metadata.objc.classes {
+        let superclass = class.superclass.as_deref().map(|name| format!(" : {name}")).unwrap_or_default();
+        writeln!(out, "{:#x} objc_class {}{superclass}", class.address, class.name)?;
+    }
+    for category in &metadata.objc.categories {
+        let class = category.class.as_deref().unwrap_or("?");
+        writeln!(out, "{:#x} objc_category {class}({})", category.address, category.name)?;
+    }
+    let classes = metadata.objc.classes.iter().map(|class| &class.methods);
+    for method in classes.chain(metadata.objc.categories.iter().map(|category| &category.methods)).flatten() {
+        if let Some(address) = method.implementation {
+            writeln!(out, "{address:#x} objc_method {}", method.name)?;
+        }
+    }
+    for warning in &metadata.objc.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
     Ok(())
 }
 

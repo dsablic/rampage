@@ -89,3 +89,17 @@ fn named_itanium_vtables_follow_only_captured_code_pointers() {
     assert_eq!(metadata.symbols[0].category, "vtable");
     assert_eq!(metadata.symbols[0].vtable_targets, [0x1000]);
 }
+
+#[test]
+fn objective_c_classes_and_metadata_derived_method_names_reach_language_metadata_and_names() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/objc-arm64-stripped.macho");
+    let binary = Binary::open(path).unwrap();
+    let metadata = language::metadata(&binary);
+    let dog = metadata.objc.classes.iter().find(|class| class.name == "Dog").unwrap();
+    assert_eq!(dog.superclasses, ["Animal", "NSObject"]);
+    let fetch = dog.methods.iter().find(|method| method.selector == "fetch:").unwrap();
+    let names = Names::new(&binary);
+    assert_eq!(names.get(fetch.implementation.unwrap()), Some("-[Dog fetch:]"));
+    assert!(names.address_of("-[Dog(Tricks) rollOver]").is_some());
+    assert_eq!(metadata.objc.categories[1].class.as_deref(), Some("NSString"));
+}

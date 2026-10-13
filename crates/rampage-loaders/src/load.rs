@@ -105,6 +105,9 @@ pub struct Binary {
     global_pointer: Option<u64>,
     #[serde(skip)]
     got: Option<rampage_arch::Got>,
+    /// Mach-O chained-fixup rebases: each pointer's location and the target the loader writes there.
+    #[serde(skip)]
+    rebases: Vec<(u64, u64)>,
     #[serde(skip)]
     data: Bytes,
     #[serde(skip)]
@@ -179,6 +182,7 @@ impl Binary {
             code_ranges,
             global_pointer: None,
             got: None,
+            rebases: Vec::new(),
             data: Bytes::Owned(data),
             image: 0..len,
             snapshot_source: Some(source),
@@ -425,6 +429,7 @@ impl Binary {
         let exception_directory = starts::pe_exception_directory(&parsed);
         let tls_directory = starts::pe_tls_directory(&parsed);
         let import_slots = crate::slots::collect(&parsed, image_bytes, &mut warnings);
+        let rebases = crate::slots::chained_rebases(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
         let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64).unwrap_or_else(|warning| {
             warnings.push(warning);
@@ -453,6 +458,7 @@ impl Binary {
             code_ranges: Vec::new(),
             global_pointer: None,
             got: None,
+            rebases,
             data: Bytes::Mapped(data),
             snapshot_source: None,
             provenance: None,
@@ -483,6 +489,8 @@ impl Binary {
         // Stripped Go binaries keep their function names only in the pclntab; recover them as symbols.
         let go = binary.recover_go_symbols();
         binary.warnings.extend(go.warnings);
+        let objc = binary.recover_objc_symbols();
+        binary.warnings.extend(objc.warnings);
         Ok(binary)
     }
 
@@ -607,6 +615,18 @@ impl Binary {
             return None;
         }
         read_uint(self.read(address, u64::from(size))?, 0, usize::from(size), self.big_endian)
+    }
+
+    /// The address a pointer stored at `address` holds once loaded, when a Mach-O chained fixup rebases it. The
+    /// stored bytes are then a chain encoding, so they must not be read as an address.
+    pub fn rebase_target(&self, address: u64) -> Option<u64> {
+        let index = self.rebases.binary_search_by_key(&address, |&(location, _)| location).ok()?;
+        Some(self.rebases[index].1)
+    }
+
+    /// Whether this image's pointers are encoded as chained fixups rather than stored as addresses.
+    pub fn has_chained_fixups(&self) -> bool {
+        !self.rebases.is_empty()
     }
 
     /// Returns the file-backed bytes from `address` to the end of its segment's file data.

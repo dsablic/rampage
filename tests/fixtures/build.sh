@@ -31,6 +31,17 @@ strip -o bin/hello-x64-stripped.macho bin/hello-x64.macho
 # Stripped C++ fixture for RTTI class recovery: classic rebase (-no_fixup_chains) keeps on-disk pointers real.
 clang++ -arch arm64 -O1 -Wl,-no_fixup_chains -o bin/classes-arm64.macho src/classes.cpp
 strip bin/classes-arm64.macho
+# Objective-C metadata: arm64 and arm64e use chained fixups (arm64e pointers are authenticated) and relative
+# method lists, with category merging off so a category on a local class survives; x86_64 targets 10.14 for
+# classic rebase/bind info and absolute method lists. The stripped copies keep only the runtime metadata.
+objc=(-O1 -fobjc-arc -framework Foundation)
+clang -arch arm64 "${objc[@]}" -Wl,-no_objc_category_merging -o bin/objc-arm64.macho src/objc.m
+clang -arch arm64e "${objc[@]}" -Wl,-no_objc_category_merging -o objc-arm64e.tmp src/objc.m
+clang -arch x86_64 "${objc[@]}" -mmacosx-version-min=10.14 -o objc-x64.tmp src/objc.m
+strip -o bin/objc-arm64-stripped.macho bin/objc-arm64.macho
+strip -o bin/objc-arm64e-stripped.macho objc-arm64e.tmp
+strip -o bin/objc-x64-stripped.macho objc-x64.tmp
+rm objc-arm64e.tmp objc-x64.tmp
 clang -arch x86_64 -O1 -c -o bin/hello-x64.o "$src"
 zig cc -target x86_64-linux-gnu -O1 -g0 -c -o bin/hello-x64-elf.o "$src"
 # Stripped Go binaries keep their gopclntab, from which function names are recovered. Needs the Go toolchain.
