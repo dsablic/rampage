@@ -153,8 +153,22 @@ on held-out, per-slice improvement with provenance and rollback.
   a function no longer seed functions (they cascaded into interior blocks of `printf_core`/`vfscanf`); every other
   in-body code address still seeds (callbacks, code after noreturn calls). Precision 0.737 -> 0.990; the two left
   (`_start`, `__set_thread_area`) are real functions the truth omits (no symbol size).
-- [ ] Resolve AArch64 jump tables (adr/ldrb|ldrh/add/br bounded by cmp+b.hi) so case blocks are explored and
-  discovered extents match symbol sizes.
+- [x] AArch64 switch jump tables resolved in discovery: a `cmp` immediately followed by `b.hi`/`b.hs` bounds the
+  index; byte/half/word/doubleword tables (signed and unsigned) through `adr`/`adrp+add` with lsl/extends, plus the
+  absolute 64-bit form; entries only from read-only file-backed data; every target aligned decodable code; at most
+  4096 entries; no branch may join between the `cmp` and the `br`. Cases are CFG edges and jump xrefs, not seeds.
+  aarch64 reference extents equal to symbol size: 188 -> 193 of 193.
+- [ ] AArch64 switch forms still unresolved: the `b.ls`/`b.lo` inverse (bound on the taken path) and a `cmp` not
+  immediately before the conditional branch.
+- [ ] x86-64 jump tables (absolute `[reg*8+table]` and relative `movsxd`+`add`), found by the Ghidra CFG benchmark
+  (eval-ref-x86_64 `0x100e148`, hello-x64.exe `0x1400170f4`).
+- [ ] Noreturn analysis: discovery falls through after calls that never return (~900 extra edges on Go after
+  `runtime.throw`/`panic*`; hello-x64.exe `0x1400013f7`).
+- [ ] `flow.rs` "call to the next instruction" check: delay-slot aware (MIPS `bal` makes a bogus `sub_203fc` in
+  `__start`), and keep real calls whose callee is next (hello-thumb `0x20800`, hello-ppc `0x2078c`).
+- [ ] A tail jump to an import thunk with a single caller is absorbed into the caller (hello-x64.exe `0x140001447`).
+- [ ] hello-arm.elf lists a function at `0x2036c` whose first word does not decode (no blocks; function_graph fails).
+- [ ] Display: RISC-V compressed branches print a relative offset instead of the target (`0x10015d0`).
 - [x] Library-ID misses explained and mostly fixed: signatures also hash the extent discovery finds (it stops at
   unresolved jump tables), and callee-name keys (`identify_program`, iterated) separate bodies that differ only in
   their callee (`mbstowcs`/`wcstombs`, `fprintf`/`sscanf`, `fmodl`/`__addtf3`). Callee keys apply only to bodies
@@ -166,8 +180,12 @@ on held-out, per-slice improvement with provenance and rollback.
   Remaining: musl `dummy` stubs (ambiguous), gate-rejected 2-3 instruction stubs and leaves (`__errno_location`,
   `difftime`, the above), `__lctrans`. Rebuild the bundled DBs whenever discovery extents change.
 - [ ] Masking for 32-bit ARM literal pools and MIPS `lui`/`addiu` pairs, once a cross-program fixture exists.
-- [ ] Later phases: tool ID (known toolchains) and type recovery (DWARF/PDB) slices; the proposal/gate/promote
-  loop on top.
+- [x] Tool-identification slice (`toolid`, `tests/fixtures/data/eval-truth-toolid.json`): `detect_tools` against
+  the build-script toolchains of 46 committed fixtures; recall 0.4397, precision 0.9538.
+- [ ] Tool-ID flywheel candidates from that slice: Zig on `zig cc` builds (30 misses), a runtime kind (musl/glibc/
+  MinGW-w64), MinGW/GCC reclassified as the MinGW-w64 runtime on clang-built PEs (the 3 spurious), LLD on PE
+  ("LLD PDB."), Apple ld from `LC_BUILD_VERSION`, Clang on Mach-O (hardest: no producer record).
+- [ ] Later phases: a type-recovery (DWARF/PDB) slice; the proposal/gate/promote loop on top.
 
 ## Ideas from adjacent projects (REA, Ghidra-MCP)
 
@@ -190,20 +208,27 @@ in UX/workflow ideas, not the multi-engine dispatch:
 - [x] Embedded-binary carving (`rampage carve`, MCP `carve`, `rampage_api::carve`): bounded scan for ELF, PE,
   Mach-O (thin and universal) and zip/gzip/xz/zstd/LZMA/squashfs/cpio/uImage/Android boot, with validated header
   facts, header-derived extents, validated or magic-only confidence and a 4096-candidate cap.
-- [ ] Open a carved executable at an offset (`Binary::open_at`), keying the session and annotation sidecar by
-  offset. APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
+- [x] Open an embedded executable: `Binary::open_at`, `Session::open_at`, global `--image-offset` / MCP
+  `image_offset`, offset-keyed sidecars, triage reports the image's own hashes and where it sits.
+- [ ] Open an embedded image in the UI. APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
 - [x] .NET: ECMA-335 blob signatures (method/field/MemberRef, TypeSpec, GenericParam names) rendered ILAsm-style
   with depth/node/text caps and an `<unreadable>` fallback; ImplMap P/Invoke (DLL + import per method);
   CustomAttribute rows with type, target and primitive/string/Type fixed arguments; nested types as `Outer/Inner`.
   In dotnet_metadata/CLI/MCP with a `list` selector (types/pinvokes/attributes). Decode work (blob bytes and text)
   is charged to one image-wide budget; array shapes are bounded by rank.
-- [ ] .NET: an IL disassembler; named/enum/array attribute arguments; locals/MethodSpec signatures.
+- [x] CIL disassembler: `dotnet_il` (API, `rampage dotnet --il`, MCP in the dotnet group): all Partition III
+  opcodes with resolved tokens and signatures, generic instantiations, escaped capped `ldstr`, branch/switch labels,
+  LocalVarSig locals, small and fat exception clauses; bounded and fuzzed; hand-verified (no ildasm locally).
+- [ ] .NET: named/enum/array attribute arguments; property signatures; compare `dotnet_il` with ildasm/ILSpy once
+  one is available.
 - [x] Agent batch annotation: `annotate_batch` (all-or-nothing, at most 1000 entries, one undo step, per-entry
   outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits. Name
   checks run under the cross-process log lock; batches are logged under a header line and replay all-or-nothing;
   undo/redo refuse to restore a name another client has taken.
 - [ ] An undo step blocked by another client's edit blocks every earlier step; offer a way to drop it.
-- [ ] Keep the MCP tool surface structured as it grows (lazy/grouped tool exposure).
+- [x] MCP tool groups: every registry tool has a group; `rampage mcp` lists core + `enable_tools` (lists groups,
+  enables them, sends tools/list_changed); `--all-tools` / `RAMPAGE_MCP_TOOLS` for clients without list_changed;
+  calls to disabled tools error naming the group. The in-app agent and UI assistant still offer every tool.
 - [x] `persistence_surface` workflow: autostart-location strings (Windows Run/services/tasks/Startup, launchd,
   systemd, cron, XDG autostart, rc/init), service/registry-write APIs, referencing functions, capability tags.
 - [x] `string_decoding` workflow: static candidate decoders (bounded byte load/transform/store loops), call sites
@@ -214,8 +239,10 @@ in UX/workflow ideas, not the multi-engine dispatch:
 Native `.so`/`.dylib` plugins are out: Rust has no stable ABI, and a tool that reads hostile input should not load
 unsandboxed native code. Three layers instead, in this order:
 
-- [ ] Data packs: formalize the heuristic-DB layer as packs (a directory plus a manifest: kind, version,
-  licence, provenance) for signatures, PEiD, YARA, capa and constants. This is also how the flywheel ships.
+- [x] Data packs: `rampage-pack.toml` packs (signatures/peid/yara/capa) loaded strictly with contained paths and
+  size caps via `--pack`/`RAMPAGE_PACKS`; applied to identify (before bundled, in pack order), detect, yara and
+  capa; `rampage packs list|check` and MCP `list_packs` with licence/provenance and per-content status.
+- [ ] Packs: a constants pack format; pack loading in the UI.
 - [ ] Internal trait registries: built-ins register through `Loader`, `Detector`, `Workflow` and `ToolProvider`
   traits instead of hand-wired match arms and tool lists. Prerequisite for anything external.
 - [ ] WASM component plugins (wasmtime is already a dependency via yara-x): sandboxed, language-agnostic code for
@@ -340,8 +367,9 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Controlled live export on Apple LLDB `2103.0.34.103`: executable bytes, module identities and registers;
   explicit original Mach-O correlation verified with ASLR enabled. Capture artifacts were removed.
 - [x] Previous committed milestones passed full debug/release suites and fresh-context review.
-- [ ] Actual IDA/Ghidra comparisons for rampage's own analysis (discovery/CFG/xrefs). Ghidra is now installed
-  locally (used by the decompiler), so this is unblocked; IDA is still absent. No comparative claim yet.
+- [x] Ghidra comparisons for rampage's own analysis: `tools/cfg-benchmark.py` (+ `tools/ghidra_cfg_export.java`,
+  hidden `rampage export-cfg`) compares blocks, CFG edges and call edges on 18 fixtures (docs/benchmarks.md), Ghidra
+  as reference, not ground truth. IDA is still absent.
 - [ ] Resolve the local `rust-objcopy` missing-`libLLVM.dylib` stripping warning; release tests still execute.
   - Command-local `DYLD_LIBRARY_PATH=<rustc-sysroot>/lib` resolves the installed tool's library lookup;
     permanent managed-toolchain repair remains open rather than patching rustup-owned executables.
