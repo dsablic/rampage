@@ -76,6 +76,10 @@ fn batch_id() -> String {
     format!("{:x}-{nanos:x}-{count:x}", std::process::id())
 }
 
+/// Appended to an undo's refusal, which repeats until the step is undone or discarded.
+const DISCARD_HINT: &str =
+    "; discard_undo drops this step from the undo history (its edits stay in effect) so earlier ones can be undone";
+
 #[derive(Default)]
 pub struct Annotations {
     names: BTreeMap<u64, String>,
@@ -362,10 +366,17 @@ impl Annotations {
         self.refresh()?;
         let Some(step) = self.done.last().cloned() else { return Ok(Vec::new()) };
         let inverses: Vec<Edit> = step.iter().rev().map(Edit::inverse).collect();
-        self.replay(&inverses, validate)?;
+        self.replay(&inverses, validate).map_err(|error| format!("{error}{DISCARD_HINT}"))?;
         self.done.pop();
         self.undone.push(step.clone());
         Ok(step)
+    }
+
+    /// Drops the last step from this instance's undo history without reverting it, for a step another client's
+    /// edits block from undoing, which would otherwise block every earlier step too. Its edits stay in effect, and
+    /// the log is untouched. Returns the dropped step's edits; empty when there is nothing to undo.
+    pub fn discard_undo_step(&mut self) -> Vec<Edit> {
+        self.done.pop().unwrap_or_default()
     }
 
     /// Reapplies the last undone step. Returns its edits; empty when there is nothing to redo.
@@ -670,6 +681,30 @@ mod tests {
         agent.set(Field::Name, 0x10, Some("b".into())).unwrap();
         assert!(ui.undo().is_err());
         assert_eq!(ui.name(0x10), Some("b"));
+        cleanup(path);
+    }
+
+    #[test]
+    fn discarding_a_blocked_undo_step_unblocks_the_earlier_ones() {
+        let path = temporary_log("discard");
+        let mut ui = Annotations::open(path.clone()).unwrap();
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        ui.set(Field::Comment, 0x20, Some("kept".into())).unwrap();
+        ui.set(Field::Name, 0x10, Some("a".into())).unwrap();
+        agent.set(Field::Name, 0x10, Some("b".into())).unwrap();
+        let error = ui.undo().unwrap_err();
+        assert!(error.contains("discard_undo"), "{error}");
+        assert!(ui.undo().is_err());
+        let log = std::fs::read_to_string(&path).unwrap();
+
+        let discarded = ui.discard_undo_step();
+        assert_eq!(discarded.len(), 1);
+        assert_eq!((discarded[0].address, discarded[0].value.as_deref()), (0x10, Some("a")));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), log);
+        assert_eq!(ui.name(0x10), Some("b"));
+        assert_eq!(ui.undo().unwrap()[0].address, 0x20);
+        assert_eq!(ui.comment(0x20), None);
+        assert!(ui.discard_undo_step().is_empty());
         cleanup(path);
     }
 

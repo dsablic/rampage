@@ -1033,6 +1033,14 @@ pub fn tools() -> Vec<Tool> {
         .annotates(),
         tool(
             Group::Core,
+            "discard_undo",
+            "Drop the last edit or batch from this session's undo history without reverting it, when another \
+             client's edits block undoing it (which blocks every earlier step too). Its edits stay in effect; the \
+             annotation log is not rewritten. Returns the dropped edits; empty if there was none.",
+            |project, _: Nothing| Ok(project.discard_undo_step()),
+        ),
+        tool(
+            Group::Core,
             "redo",
             "Redo the last edit or batch undone. Returns its edits; empty if there was none.",
             |project, _: Nothing| project.redo(),

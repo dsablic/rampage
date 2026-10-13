@@ -197,6 +197,13 @@ impl Project {
             .map_err(ApiError::Invalid)
     }
 
+    /// Drops the last edit or batch from this project's undo history without reverting it: the way past a step
+    /// another client's edits block from undoing, which otherwise blocks every earlier step. Its edits stay in
+    /// effect and the log is not rewritten. Returns its edits; empty when there was nothing to undo.
+    pub fn discard_undo_step(&self) -> Vec<Edit> {
+        self.annotations.write().expect("annotations lock").discard_undo_step()
+    }
+
     /// Reapplies the last undone edit or batch. Returns its edits; empty when there was nothing to redo.
     pub fn redo(&self) -> Result<Vec<Edit>, ApiError> {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());

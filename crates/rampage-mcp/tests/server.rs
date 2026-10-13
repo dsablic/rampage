@@ -85,6 +85,7 @@ async fn lists_all_tools_with_instructions() {
         "detect_tools",
         "diff_builds",
         "disassemble",
+        "discard_undo",
         "dotnet_il",
         "dotnet_metadata",
         "enable_tools",
@@ -658,6 +659,13 @@ async fn agents_rename_and_comment() {
     assert_eq!(undone[0]["field"], "comment");
     let redone = json_of(&call(&client, "redo", json!({ "path": path })).await);
     assert_eq!(redone[0]["value"], "entry");
+    let discarded = json_of(&call(&client, "discard_undo", json!({ "path": path })).await);
+    assert_eq!(discarded[0]["value"], "entry");
+    let undone = json_of(&call(&client, "undo", json!({ "path": path })).await);
+    assert_eq!(undone[0]["field"], "name");
+    let list = json_of(&call(&client, "list_annotations", json!({ "path": path })).await);
+    assert_eq!((&list["names"], &list["comments"][0]["text"]), (&json!([]), &json!("entry")));
+    json_of(&call(&client, "redo", json!({ "path": path })).await);
     let cleared =
         json_of(&call(&client, "set_comment", json!({ "path": path, "at": "say_hello", "clear": true })).await);
     assert_eq!((&cleared["value"], &cleared["changed"]), (&json!(null), &json!(true)));

@@ -57,8 +57,9 @@ function_summary, a structural CFG/reference summary, where no decompiler specif
 or function_graph it, and follow references with xrefs. list_imports and list_strings are good starting points for \
 finding behavior. Record findings with rename and set_comment, or many at once with annotate_batch (all or nothing; \
 check_names pre-flights candidate names): they persist beside the binary and every client of the same binary, \
-including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch. Memory \
-snapshots and bundle directories use the same tools.
+including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch; when \
+another client's edit blocks undoing a step, discard_undo drops it from the undo history (its edits stay) so earlier \
+steps can be undone. Memory snapshots and bundle directories use the same tools.
 
 Detection: detect_tools (packer/compiler/protector), identify_functions (library code by signature, bundled \
 databases applied; build_signatures makes a database from a binary with symbols), capabilities, yara_scan and \

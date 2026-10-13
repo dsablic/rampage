@@ -224,8 +224,9 @@ groups so the list an agent reads stays short:
 
 - `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
   `function_summary`, `xrefs`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
-  `annotate_batch` (bulk naming), `check_names` (pre-flight), `undo`, `redo`, `list_annotations`, and the
-  workflows `triage_report`, `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`
+  `annotate_batch` (bulk naming), `check_names` (pre-flight), `undo`, `redo`, `discard_undo`, `list_annotations`,
+  and the workflows `triage_report`, `find_main`, `network_surface`, `persistence_surface`, `string_decoding`,
+  `diff_builds`
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `class_evidence`,
@@ -243,7 +244,9 @@ from the start, and `RAMPAGE_MCP_TOOLS=all` or `RAMPAGE_MCP_TOOLS=detection,type
 (`core` is always served). The UI's assistant offers every tool that works on the open binary (all but `carve`
 and `list_packs`). Workflow reports name each suggested tool's `group`, so an agent knows which to enable.
 
-`undo` and `redo` revert or reapply one step, which may be a whole batch. `carve` takes any file path rather than
+`undo` and `redo` revert or reapply one step, which may be a whole batch. When another client's edit blocks undoing
+a step, `discard_undo` drops it from the session's undo history, leaving its edits in effect and the log unchanged,
+so earlier steps can be undone. `carve` takes any file path rather than
 a binary: it pages candidates with `offset`/`limit` and reports `more` instead of a total, scanning only as far as
 the candidate after the page. Agents' annotations land in the same log the UI and CLI use, and the UI shows them as
 they arrive. Analysis runs once per binary and is cached for the session. `observe_pointer` exposes captured slot
