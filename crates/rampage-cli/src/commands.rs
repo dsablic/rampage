@@ -16,6 +16,8 @@ use serde::Serialize;
 pub struct Options {
     pub json: bool,
     pub arch: Option<Arch>,
+    /// Where the executable to open starts inside the file, for one embedded in a larger file.
+    pub offset: Option<u64>,
 }
 
 pub fn audit(out: &mut impl Write, path: &Path, include_discovery: bool, options: &Options) -> Result<()> {
@@ -257,7 +259,15 @@ pub fn correlate(
 }
 
 pub(crate) fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
-    Ok(Session::default().open(path, options.arch)?)
+    Ok(Session::default().open_at(path, options.arch, options.offset)?)
+}
+
+/// The binary at `path`, without its annotations.
+fn open_binary(path: &Path, options: &Options) -> Result<rampage_loaders::Binary> {
+    Ok(match options.offset {
+        Some(offset) => rampage_loaders::Binary::open_at_with(path, offset, None, options.arch)?,
+        None => rampage_loaders::Binary::open_with(path, options.arch)?,
+    })
 }
 
 pub fn compare_runtime(
@@ -268,7 +278,7 @@ pub fn compare_runtime(
     ranges: &[String],
     options: &Options,
 ) -> Result<()> {
-    let project = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
+    let project = Project::new(open_binary(path, options)?);
     let original = rampage_loaders::Binary::open_with(original, Some(project.binary.arch))?;
     let ranges = ranges
         .iter()
@@ -303,7 +313,7 @@ pub fn compare_runtime(
 }
 
 pub fn observe_pointer(out: &mut impl Write, path: &Path, at: &str, options: &Options) -> Result<()> {
-    let project = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
+    let project = Project::new(open_binary(path, options)?);
     let observation = project.observe_pointer(project.resolve(at)?)?;
     if options.json {
         return write_json(out, &observation);
@@ -329,7 +339,7 @@ pub fn compare_pointers(
     other_at: &str,
     options: &Options,
 ) -> Result<()> {
-    let before = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
+    let before = Project::new(open_binary(path, options)?);
     let after = before.open_peer(other)?;
     let result = before.compare_pointer_observations(
         rampage_loaders::snapshot::address(at)?,
@@ -362,7 +372,7 @@ pub fn observe_indirect_branch(
     at: &str,
     options: &Options,
 ) -> Result<()> {
-    let project = Project::new(rampage_loaders::Binary::open_with(path, options.arch)?);
+    let project = Project::new(open_binary(path, options)?);
     let observation = project
         .observe_indirect_branch(rampage_loaders::snapshot::address(start)?, rampage_loaders::snapshot::address(at)?)?;
     if options.json {
@@ -402,6 +412,9 @@ pub fn info(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> 
     if summary.slices.len() > 1 {
         let slices: Vec<_> = summary.slices.iter().map(Arch::to_string).collect();
         writeln!(out, "slices    {}", slices.join(", "))?;
+    }
+    if let Some(embedded) = summary.embedded {
+        writeln!(out, "embedded  {} bytes at offset {:#x} of the outer file", embedded.size, embedded.offset)?;
     }
     match summary.entry {
         Some(entry) => writeln!(out, "entry     {entry:#x}")?,
@@ -542,7 +555,11 @@ pub fn triage(out: &mut impl Write, path: &Path, options: &Options) -> Result<()
         writeln!(out, "capture   {} ({})", identity.sha256, identity.schema)?;
     }
     if let (Some(size), Some(hashes)) = (triage.file_size, &triage.file_hashes) {
-        writeln!(out, "file      {size} bytes (universal binary), sha256 {}", hashes.sha256)?;
+        let whole = if triage.embedded.is_some() { "outer file" } else { "universal binary" };
+        writeln!(out, "file      {size} bytes ({whole}), sha256 {}", hashes.sha256)?;
+    }
+    if let Some(embedded) = triage.embedded {
+        writeln!(out, "embedded  at offset {:#x} of the outer file", embedded.offset)?;
     }
     if let Some(imphash) = &triage.imphash {
         writeln!(out, "imphash   {imphash}")?;

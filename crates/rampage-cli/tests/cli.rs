@@ -457,3 +457,51 @@ fn annotate_batch_applies_a_json_file_all_or_nothing() {
         .stdout(predicates::str::contains("greets"));
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+#[test]
+fn image_offset_opens_an_embedded_executable_with_its_own_annotations() {
+    use predicates::prelude::PredicateBooleanExt;
+    let directory = std::env::temp_dir().join(format!("rampage-cli-embedded-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let image = std::fs::read(fixture("hello-x64-dyn.elf")).unwrap();
+    let mut file = std::fs::read(fixture("hello-x64.elf")).unwrap();
+    file.extend(b"junk!".repeat(31));
+    let offset = format!("{:#x}", file.len());
+    file.extend(&image);
+    let path = directory.join("firmware.bin");
+    std::fs::write(&path, &file).unwrap();
+    let path_text = path.to_str().unwrap();
+    let rampage = |args: &[&str]| assert_cmd::Command::cargo_bin("rampage").unwrap().args(args).assert();
+    let json_of =
+        |assert: assert_cmd::assert::Assert| -> Value { serde_json::from_slice(&assert.get_output().stdout).unwrap() };
+
+    let embedded = json_of(rampage(&["--json", "--image-offset", &offset, "funcs", path_text]).success());
+    assert_eq!(embedded, json(&["--json", "funcs"], "hello-x64-dyn.elf"));
+
+    rampage(&["rename", path_text, "main", "embedded_main", "--image-offset", &offset]).success();
+    assert!(directory.join(format!("firmware.bin@{offset}.rampage")).exists());
+    rampage(&["--image-offset", &offset, "annotations", path_text])
+        .success()
+        .stdout(predicates::str::contains("embedded_main"));
+    rampage(&["annotations", path_text]).success().stdout(predicates::str::contains("embedded_main").not());
+
+    let triage = json_of(rampage(&["--json", "--image-offset", &offset, "triage", path_text]).success());
+    let direct = json(&["--json", "triage"], "hello-x64-dyn.elf");
+    assert_eq!(triage["image_hashes"], direct["image_hashes"]);
+    assert_eq!(triage["embedded"]["offset"], u64::from_str_radix(&offset[2..], 16).unwrap());
+    assert_eq!(triage["file_size"], file.len() as u64);
+    rampage(&["--image-offset", &offset, "triage", path_text])
+        .success()
+        .stdout(predicates::str::contains(format!("embedded  at offset {offset} of the outer file")));
+    rampage(&["--image-offset", &offset, "info", path_text]).success().stdout(predicates::str::contains("embedded"));
+
+    rampage(&["--image-offset", "0x3", "info", path_text])
+        .failure()
+        .stderr(predicates::str::contains("no ELF, PE or Mach-O header at offset 0x3"));
+    rampage(&["--image-offset", "0xffffffffffffffff", "info", path_text])
+        .failure()
+        .stderr(predicates::str::contains("past the end of the file"));
+    rampage(&["--image-offset", "nope", "info", path_text]).failure();
+    std::fs::remove_dir_all(&directory).unwrap();
+}

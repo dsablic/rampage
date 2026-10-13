@@ -20,6 +20,9 @@ struct Cli {
     /// Architecture slice to load from a universal binary (x86, x86_64, aarch64, arm, mips, powerpc, riscv64, ...)
     #[arg(long, global = true, value_parser = parse_arch)]
     arch: Option<Arch>,
+    /// Open the executable embedded at this file offset (hex 0x... or decimal), such as one `carve` found
+    #[arg(long, global = true, value_parser = parse_offset)]
+    image_offset: Option<u64>,
     #[command(subcommand)]
     command: Command,
 }
@@ -328,6 +331,14 @@ fn parse_arch(text: &str) -> Result<Arch, String> {
     text.parse()
 }
 
+fn parse_offset(text: &str) -> Result<u64, String> {
+    let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => text.parse(),
+    };
+    parsed.map_err(|error| format!("not a file offset: {error}"))
+}
+
 fn parse_dotnet_list(text: &str) -> Result<rampage_api::DotNetList, String> {
     text.parse()
 }
@@ -345,7 +356,7 @@ fn main() -> ExitCode {
     if let Command::Mcp { all_tools } = cli.command {
         return serve_mcp(all_tools);
     }
-    let options = Options { json: cli.json, arch: cli.arch };
+    let options = Options { json: cli.json, arch: cli.arch, offset: cli.image_offset };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match cli.command {
         Command::Info { file } => commands::info(&mut out, &file, &options),

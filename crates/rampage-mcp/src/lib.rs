@@ -70,7 +70,8 @@ window; slot links are conditional decoding evidence, not proof of execution or 
 compare_pointer_observations takes another explicit capture path and hexadecimal at/other_at slots; before/after \
 ordering and slot correspondence are supplied by the analyst, not independently verified. Carve: carve scans any \
 file (firmware, installer, archive) for embedded executables and containers by validated header, with offsets and \
-header-estimated extents; it extracts and decompresses nothing.";
+header-estimated extents; it extracts and decompresses nothing. Pass an executable candidate's offset as \
+image_offset to any binary tool to analyze it in place, with annotations kept apart from the outer file's.";
 
 fn instructions() -> String {
     let groups: String =
@@ -95,8 +96,8 @@ pub fn initial_groups(all_tools: bool, env: Option<&str>) -> Result<BTreeSet<Gro
     Ok(groups)
 }
 
-/// A tool's schema with the arguments every tool takes besides its own: which binary, and which slice of a
-/// universal one.
+/// A tool's schema with the arguments every tool takes besides its own: which binary, which slice of a universal
+/// one, and where in the file an embedded one starts.
 fn with_binary_arguments(schema: &Value) -> Map<String, Value> {
     let mut schema = schema.as_object().cloned().unwrap_or_default();
     let properties = schema.entry("properties").or_insert_with(|| json!({}));
@@ -108,6 +109,16 @@ fn with_binary_arguments(schema: &Value) -> Map<String, Value> {
                 "type": ["string", "null"],
                 "description": "Slice to load from a universal Mach-O (x86, x86_64, aarch64, arm, powerpc, ...). \
                                 Defaults to x86_64, then aarch64, then x86, when present."
+            }),
+        );
+        // Not `offset`, which many tools already take for paging.
+        properties.insert(
+            "image_offset".to_owned(),
+            json!({
+                "type": ["string", "integer", "null"],
+                "description": "Open the ELF, PE or Mach-O image embedded at this file offset (hex \"0x...\" or \
+                                decimal), such as a carve candidate's offset. Its annotations are kept apart from \
+                                the outer file's."
             }),
         );
     }
@@ -235,20 +246,25 @@ impl RampageServer {
         }
         let path = arguments.remove("path");
         let arch = arguments.remove("arch");
+        let image_offset = arguments.remove("image_offset");
         let outcome = (|| -> Result<String, String> {
             let tool =
                 self.tools.iter().find(|tool| tool.name == name).ok_or_else(|| format!("unknown tool {name}"))?;
             let path = path.as_ref().and_then(Value::as_str).ok_or("`path` is required")?;
             let arch = arch.as_ref().and_then(Value::as_str).map(str::parse::<Arch>).transpose()?;
+            let offset = image_offset.as_ref().map(file_offset).transpose()?.flatten();
             let project = if tool.reads_annotations {
-                let project = self.session.open(&PathBuf::from(path), arch).map_err(|error| error_text(&error))?;
+                let project =
+                    self.session.open_at(&PathBuf::from(path), arch, offset).map_err(|error| error_text(&error))?;
                 // Other clients (the UI, the CLI) may have saved names since the last call.
                 project.refresh_annotations().map_err(|error| error_text(&error))?;
                 project
             } else {
-                Arc::new(Project::new(
-                    rampage_loaders::Binary::open_with(path, arch).map_err(|error| error_text(&error))?,
-                ))
+                let binary = match offset {
+                    Some(offset) => rampage_loaders::Binary::open_at_with(path, offset, None, arch),
+                    None => rampage_loaders::Binary::open_with(path, arch),
+                };
+                Arc::new(Project::new(binary.map_err(|error| error_text(&error))?))
             };
             match tools::call(&self.tools, &project, name, Value::Object(arguments)) {
                 (output, false) => Ok(output),
@@ -259,6 +275,22 @@ impl RampageServer {
             Ok(output) => CallToolResult::success(vec![ContentBlock::text(output)]),
             Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
         }
+    }
+}
+
+/// An `image_offset` argument: a hex string with `0x`, a decimal string, or an integer.
+fn file_offset(value: &Value) -> Result<Option<u64>, String> {
+    let invalid = || format!("`image_offset` must be a file offset such as \"0x1000\", not {value}");
+    match value {
+        Value::Null => Ok(None),
+        Value::Number(number) => number.as_u64().map(Some).ok_or_else(invalid),
+        Value::String(text) => match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            Some(hex) => u64::from_str_radix(hex, 16),
+            None => text.parse(),
+        }
+        .map(Some)
+        .map_err(|_| invalid()),
+        _ => Err(invalid()),
     }
 }
 

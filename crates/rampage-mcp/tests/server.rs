@@ -233,6 +233,53 @@ async fn every_served_tool_is_in_exactly_one_group() {
 }
 
 #[tokio::test]
+async fn image_offset_opens_a_carved_executable_with_its_own_annotations() {
+    let directory = std::env::temp_dir().join(format!("rampage-mcp-embedded-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut file = std::fs::read(fixture("hello-x64.elf")).unwrap();
+    file.extend(b"junk".repeat(25));
+    file.push(b'!');
+    let offset = file.len() as u64;
+    file.extend(std::fs::read(fixture("hello-arm64.macho")).unwrap());
+    let path = directory.join("firmware.bin");
+    std::fs::write(&path, file).unwrap();
+    let path = path.to_str().unwrap();
+    let client = connect().await;
+
+    let tools = client.list_all_tools().await.unwrap();
+    let rename = tools.iter().find(|tool| tool.name == "rename").unwrap();
+    assert!(rename.input_schema["properties"].get("image_offset").is_some());
+
+    let carving = json_of(&call(&client, "carve", json!({ "path": path })).await);
+    let candidate = carving["candidates"].as_array().unwrap().iter().find(|candidate| candidate["kind"] == "mach_o");
+    assert_eq!(candidate.unwrap()["offset"], offset);
+    let hex = format!("{offset:#x}");
+    let direct = json_of(&call(&client, "list_functions", json!({ "path": fixture("hello-arm64.macho") })).await);
+    let embedded = json_of(&call(&client, "list_functions", json!({ "path": path, "image_offset": hex })).await);
+    assert_eq!(embedded, direct);
+
+    let arguments = json!({ "path": path, "image_offset": offset, "at": "_main", "name": "say_hello" });
+    assert_eq!(json_of(&call(&client, "rename", arguments).await)["changed"], true);
+    assert!(directory.join(format!("firmware.bin@{hex}.rampage")).exists());
+    let list = json_of(&call(&client, "list_annotations", json!({ "path": path, "image_offset": hex })).await);
+    assert_eq!(list["names"][0]["text"], "say_hello");
+    let outer = json_of(&call(&client, "list_annotations", json!({ "path": path })).await);
+    assert!(outer["names"].as_array().unwrap().is_empty());
+    let triage = json_of(&call(&client, "triage", json!({ "path": path, "image_offset": hex })).await);
+    assert_eq!(triage["embedded"]["offset"], offset);
+
+    let bad = call(&client, "binary_info", json!({ "path": path, "image_offset": "0x1" })).await;
+    assert!(text(&bad).contains("no ELF, PE or Mach-O header at offset 0x1"), "{}", text(&bad));
+    let unannotated = call(&client, "observe_pointer", json!({ "path": path, "image_offset": 1, "at": "0x0" })).await;
+    assert!(text(&unannotated).contains("no ELF, PE or Mach-O header"), "{}", text(&unannotated));
+    let malformed = call(&client, "binary_info", json!({ "path": path, "image_offset": "x" })).await;
+    assert_eq!(malformed.is_error, Some(true));
+    client.cancel().await.unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
 async fn carve_scans_any_file_by_path_with_pages() {
     let client = connect().await;
     let path = fixture("hello-universal.macho");
