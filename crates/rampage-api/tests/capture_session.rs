@@ -469,3 +469,38 @@ fn ordinary_binaries_keep_per_slice_sidecars_and_cached_project_behavior() {
     assert!(!scratch.path("unused-directory").exists());
     assert!(capture_identity(&Binary::open(&path).unwrap()).is_none());
 }
+
+#[test]
+fn an_ordinary_binary_rewritten_on_disk_is_reloaded_with_its_annotations() {
+    let scratch = Scratch::new("ordinary-rewrite");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin");
+    let path = scratch.path("target.elf");
+    std::fs::copy(fixtures.join("hello-x64.elf"), &path).unwrap();
+    let session = Session::default();
+    let first = session.open(&path, None).unwrap();
+    first.comment(0x1000, Some("kept across reloads")).unwrap();
+    assert!(Arc::ptr_eq(&first, &session.open(&path, None).unwrap()));
+
+    let replacement = scratch.path("replacement");
+    std::fs::copy(fixtures.join("hello-x64-dyn.elf"), &replacement).unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    let replaced = session.open(&path, None).unwrap();
+    assert!(!Arc::ptr_eq(&first, &replaced));
+    assert_eq!(replaced.binary.file_bytes(), std::fs::read(&path).unwrap());
+    assert_eq!(replaced.comment_at(0x1000).as_deref(), Some("kept across reloads"));
+    assert!(Arc::ptr_eq(&replaced, &session.open(&path, None).unwrap()));
+
+    // An in-place rewrite of the same length, as an editor or linker might make, is told by its modification time.
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let last = *std::fs::read(&path).unwrap().last().unwrap();
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::End(-1)).unwrap();
+        file.write_all(&[last ^ 1]).unwrap();
+        file.set_modified(modified + std::time::Duration::from_secs(2)).unwrap();
+    }
+    let rewritten = session.open(&path, None).unwrap();
+    assert!(!Arc::ptr_eq(&replaced, &rewritten));
+    assert!(Arc::ptr_eq(&rewritten, &session.open(&path, Some(rewritten.binary.arch)).unwrap()));
+}

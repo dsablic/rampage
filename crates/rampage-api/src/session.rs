@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 use crate::annotations::Annotations;
 use crate::{ApiError, Packs, Project};
 
-/// Loaded binaries, with snapshots revalidated on each open to notice changed mappings or capture metadata.
+/// Loaded binaries, with snapshots revalidated on each open to notice changed mappings or capture metadata, and
+/// ordinary binaries reloaded when their file's length, modification time or inode changes.
 #[derive(Default)]
 pub struct Session {
     state: Mutex<State>,
@@ -30,6 +31,29 @@ struct State {
     capture_paths: HashSet<PathBuf>,
     /// Freeze hashes for ordinary replacements; their memory maps may reflect later in-place file writes.
     ordinary_sources: HashMap<(PathBuf, Option<ImageAt>, Arch), [u8; 32]>,
+    /// The file each ordinary project was loaded from, to notice it being rewritten or replaced while cached.
+    stamps: HashMap<(PathBuf, Option<ImageAt>, Arch), FileStamp>,
+}
+
+/// A cheap stand-in for a file's contents: its length, modification time and, on Unix, device and inode. A rewrite
+/// that keeps all of them (same length, within the file system's timestamp granularity) goes unnoticed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: Option<(u64, u64)>,
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    let inode = {
+        use std::os::unix::fs::MetadataExt;
+        Some((metadata.dev(), metadata.ino()))
+    };
+    #[cfg(not(unix))]
+    let inode = None;
+    Some(FileStamp { length: metadata.len(), modified: metadata.modified().ok(), inode })
 }
 
 impl Session {
@@ -74,12 +98,18 @@ impl Session {
             .map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
         let path = executable.as_path();
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_owned());
+        // Taken before loading, so a write racing the load leaves a stamp the next open finds stale.
+        let stamp = file_stamp(path);
         let cached = {
             let state = self.state.lock().expect("session lock");
             let loaded = arch.or_else(|| state.defaults.get(&(canonical.clone(), image)).copied());
-            if let Some(project) = loaded.and_then(|arch| state.projects.get(&(canonical.clone(), image, arch)))
+            let key = loaded.map(|arch| (canonical.clone(), image, arch));
+            if let Some(key) = key
+                && let Some(project) = state.projects.get(&key)
                 && project.binary.format != Format::Snapshot
                 && !state.capture_paths.contains(&canonical)
+                && stamp.is_some()
+                && state.stamps.get(&key) == stamp.as_ref()
             {
                 Some(Arc::clone(project))
             } else {
@@ -156,6 +186,15 @@ impl Session {
         }
         if let Some(source) = ordinary_source {
             state.ordinary_sources.insert(key.clone(), source);
+        }
+        if !revalidate && binary.format != Format::Snapshot {
+            if stamp.is_none() || state.stamps.get(&key) != stamp.as_ref() {
+                state.projects.remove(&key);
+            }
+            match stamp {
+                Some(stamp) => state.stamps.insert(key.clone(), stamp),
+                None => state.stamps.remove(&key),
+            };
         }
         let worker = std::env::var_os("RAMPAGE_WORKER").map(PathBuf::from).or_else(|| {
             let sibling = std::env::current_exe().ok()?.with_file_name("rampage-worker");
