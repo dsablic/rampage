@@ -76,6 +76,10 @@ impl Project {
                 .and_then(|entry| ssa::build(&blocks, &edges, entry));
             match result {
                 Ok(mut ssa) => {
+                    let program = &self.analysis()?.program;
+                    for statement in ssa.blocks.iter_mut().flat_map(|block| &mut block.statements) {
+                        statement.noreturn = program.is_noreturn_call(statement.address);
+                    }
                     if let Err(error) = ssa::simplify(&mut ssa) {
                         limitations.push(format!("SSA simplification omitted: {error}"));
                     }

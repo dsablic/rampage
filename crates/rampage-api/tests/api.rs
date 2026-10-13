@@ -90,6 +90,22 @@ fn arm64_binaries_are_analyzed() {
     assert_eq!(lines[1].text, "mov x29, sp");
 }
 
+/// Calls that never return end their paths in structured control, as returns do. 578 functions of hello-go-arm64
+/// structured before discovery ended blocks at such calls, 552 after, and 755 once those calls count as terminal.
+#[test]
+fn go_arm64_functions_with_noreturn_calls_stay_structured() {
+    let project = Session::default().open(&fixture("hello-go-arm64.elf"), None).unwrap();
+    let query = FunctionsQuery { limit: Some(100_000), ..FunctionsQuery::default() };
+    let functions = project.functions(&query).unwrap().items;
+    let structured = functions
+        .iter()
+        .filter(|function| {
+            project.function_summary(function.address).is_ok_and(|summary| summary.structured_control.is_some())
+        })
+        .count();
+    assert!(structured >= 578, "{structured}");
+}
+
 #[test]
 fn disassembly_comments_name_targets_and_strings() {
     let project = Session::default().open(&fixture("hello-arm64.macho"), None).unwrap();

@@ -123,6 +123,12 @@ impl Context<'_> {
             regions.push(Region::Block { block: at });
             let statement = self.ssa.blocks[at].statements.last().ok_or("empty control block")?;
             match statement.flow {
+                _ if statement.is_terminal() => {
+                    if !self.successors[at].is_empty() {
+                        return Err("terminal block has internal successors".to_owned());
+                    }
+                    break;
+                }
                 Flow::ConditionalJump(target) => {
                     let successors = self.successors[at].clone();
                     if successors.len() != 2 {
@@ -147,14 +153,9 @@ impl Context<'_> {
                         break;
                     }
                 }
-                Flow::Return | Flow::Halt | Flow::Invalid => {
-                    if !self.successors[at].is_empty() {
-                        return Err("terminal block has internal successors".to_owned());
-                    }
-                    break;
-                }
                 Flow::IndirectJump => return Err("unknown indirect transfer cannot be structured".to_owned()),
-                Flow::Next | Flow::Jump(_) | Flow::Call(_) | Flow::IndirectCall => {
+                // A fall-through, jump or call that returns.
+                _ => {
                     let [next] = self.successors[at].as_slice() else {
                         return Err("nonterminal transfer does not have one internal successor".to_owned());
                     };

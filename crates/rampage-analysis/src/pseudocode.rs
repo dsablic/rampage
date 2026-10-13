@@ -391,11 +391,15 @@ pub fn render(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<Pseudocode, String>
                 Flow::Halt | Flow::Invalid => {
                     line!(text, "  stop;");
                 }
+                Flow::Call(_) | Flow::IndirectCall if statement.noreturn => {
+                    line!(text, "  stop; // the call never returns");
+                }
                 _ => {}
             }
         }
         if let Some(statement) = block.statements.last()
             && matches!(statement.flow, Flow::Next | Flow::Call(_) | Flow::IndirectCall | Flow::ConditionalJump(_))
+            && !statement.noreturn
         {
             let taken = match statement.flow {
                 Flow::ConditionalJump(target) => Some(target),
@@ -471,6 +475,9 @@ fn structured_block(
             }
             Flow::Halt | Flow::Invalid => {
                 line!(text, "{prefix}stop;");
+            }
+            Flow::Call(_) | Flow::IndirectCall if statement.noreturn => {
+                line!(text, "{prefix}stop; // the call never returns");
             }
             _ => {}
         }

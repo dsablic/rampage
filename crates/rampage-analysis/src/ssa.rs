@@ -45,6 +45,18 @@ pub struct Statement {
     pub definitions: Vec<usize>,
     pub observations: Vec<Expression>,
     pub barrier: bool,
+    /// A call that never returns, so its block ends here with no successor. [`build`] leaves it unset; the caller
+    /// marks the calls that discovery found noreturn.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub noreturn: bool,
+}
+
+impl Statement {
+    /// Whether control never continues past this statement: a return, a trap, undecodable bytes, or a call that
+    /// never returns.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self.flow, Flow::Return | Flow::Halt | Flow::Invalid) || self.noreturn
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -581,6 +593,7 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
                     || matches!(insn.flow, Flow::Call(_) | Flow::IndirectCall)
                         && !insn.effects.iter().any(|effect| matches!(effect, Effect::Call { .. }))
                     || insn.effects.iter().any(|effect| matches!(effect, Effect::Barrier { .. })),
+                noreturn: false,
             };
             if statement.barrier {
                 for index in 0..VARIABLES {

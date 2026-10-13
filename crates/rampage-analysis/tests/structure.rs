@@ -91,3 +91,20 @@ fn malformed_deep_conditions_are_rejected_before_cloning() {
         vec![Expression::Condition { value: Box::new(value), nonzero: false, bit: None }];
     assert!(structure::analyze(&ssa, &edges).is_err());
 }
+
+#[test]
+fn a_call_that_never_returns_ends_its_path() {
+    // if (c) abort(); return;
+    let edges = [(0, 1), (0, 2)];
+    let mut ssa = graph(&[Flow::ConditionalJump(8), Flow::Call(0x100), Flow::Return], &edges);
+    assert!(structure::analyze(&ssa, &edges).is_err());
+    ssa.blocks[1].statements[0].noreturn = true;
+    let Region::Sequence { regions } = structure::analyze(&ssa, &edges).unwrap().body else { panic!("not sequence") };
+    assert!(matches!(regions[1], Region::If { .. }));
+
+    let unstructured = rampage_analysis::pseudocode::render(&ssa, &edges).unwrap().text;
+    assert!(unstructured.contains("stop; // the call never returns"), "{unstructured}");
+    assert!(!unstructured.contains("unknown_fallthrough"), "{unstructured}");
+    let structured = rampage_analysis::pseudocode::render_structured(&ssa, &edges).unwrap().text;
+    assert!(structured.contains("stop; // the call never returns"), "{structured}");
+}
