@@ -6,7 +6,10 @@ use rampage_arch::{
 };
 use serde::Serialize;
 
-use crate::ssa::{Expression, Ssa, Variable};
+use crate::{
+    discover::Switch,
+    ssa::{Expression, Ssa, Variable},
+};
 
 #[derive(Debug, Serialize)]
 pub struct Pseudocode {
@@ -320,8 +323,33 @@ fn expression(expr: &Expression, ssa: &Ssa, remaining: &mut usize) -> Result<Str
     })
 }
 
+/// `case` labels for ascending table indices; runs of three or more become a range.
+fn case_labels(values: &[u64]) -> String {
+    let mut labels = Vec::new();
+    let mut rest = values;
+    while let [first, ..] = *rest {
+        let run = rest.iter().zip(first..).take_while(|&(&value, expected)| value == expected).count();
+        if run >= 3 {
+            labels.push(format!("case {first} ... {}:", rest[run - 1]));
+        } else {
+            labels.extend(rest[..run].iter().map(|value| format!("case {value}:")));
+        }
+        rest = &rest[run..];
+    }
+    labels.join(" ")
+}
+
+fn switch_index(index: Option<&Expression>, ssa: &Ssa, remaining: &mut usize) -> Result<String, String> {
+    index.map_or_else(|| Ok("unrecovered_index".to_owned()), |index| expression(index, ssa, remaining))
+}
+
 /// Bounded SSA pseudocode, with explicit labels and phi nodes rather than claiming recovered C source.
 pub fn render(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<Pseudocode, String> {
+    render_with_switches(ssa, edges, &[])
+}
+
+/// Like [`render`], printing the register-indirect jumps that `switches` resolved as `switch` statements.
+pub fn render_with_switches(ssa: &Ssa, edges: &[(usize, usize)], switches: &[Switch]) -> Result<Pseudocode, String> {
     validate(ssa, edges)?;
     let mut text = Output(String::from("// Partial ARM64 SSA pseudocode; unknowns and phi nodes are explicit.\n"));
     let mut remaining = 100_000;
@@ -385,9 +413,24 @@ pub fn render(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<Pseudocode, String>
                     }
                     line!(text, "  return; // return value/type not inferred");
                 }
-                Flow::IndirectJump => {
-                    line!(text, "  goto unknown_target;");
-                }
+                Flow::IndirectJump => match crate::structure::dispatch(ssa, edges, switches, index) {
+                    Some(dispatch) => {
+                        let index = switch_index(dispatch.index.as_ref(), ssa, &mut remaining)?;
+                        line!(text, "  switch ({index}) {{ // jump table at {:#x}", statement.address);
+                        for (values, target) in &dispatch.cases {
+                            let label = match target {
+                                Ok(block) => format!("bb{block}"),
+                                Err(address) => format!("external_{address:x}"),
+                            };
+                            line!(text, "  {} goto {label};", case_labels(values));
+                        }
+                        if let Some(default) = dispatch.default {
+                            line!(text, "  default: goto bb{default}; // taken at the bounding comparison");
+                        }
+                        line!(text, "  }}");
+                    }
+                    None => line!(text, "  goto unknown_target;"),
+                },
                 Flow::Halt | Flow::Invalid => {
                     line!(text, "  stop;");
                 }
@@ -520,14 +563,33 @@ fn structured_region(
             structured_region(text, ssa, body, indentation + 1, remaining)?;
             line!(text, "{prefix}}}");
         }
+        Region::Switch { dispatch, index, cases } => {
+            let index = switch_index(index.as_ref(), ssa, remaining)?;
+            line!(text, "{prefix}switch ({index}) {{ // bb{dispatch}'s jump table; the bound check already passed");
+            for case in cases {
+                line!(text, "{prefix}{}", case_labels(&case.values));
+                structured_region(text, ssa, &case.body, indentation + 1, remaining)?;
+                line!(text, "{prefix}  break;");
+            }
+            line!(text, "{prefix}}}");
+        }
     }
     Ok(())
 }
 
 /// Prints only graph shapes accepted by conservative control structuring; expressions remain explicit SSA.
 pub fn render_structured(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<Pseudocode, String> {
+    render_structured_with_switches(ssa, edges, &[])
+}
+
+/// Like [`render_structured`], also structuring the register-indirect jumps that `switches` resolved.
+pub fn render_structured_with_switches(
+    ssa: &Ssa,
+    edges: &[(usize, usize)],
+    switches: &[Switch],
+) -> Result<Pseudocode, String> {
     validate(ssa, edges)?;
-    let structure = crate::structure::analyze(ssa, edges)?;
+    let structure = crate::structure::analyze_with_switches(ssa, edges, switches)?;
     let mut text = Output(String::from("// Partial structured ARM64 SSA pseudocode, not typed source.\n"));
     let mut remaining = 100_000;
     for definition in &ssa.definitions {

@@ -36,6 +36,12 @@ pub struct Switch {
     /// Sorted and distinct. A case may be another function's entry.
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
     pub cases: Vec<u64>,
+    /// The target of each table entry in table order: entry `i` is selected by switch index `i`.
+    #[serde(serialize_with = "rampage_arch::hex::addresses")]
+    pub table: Vec<u64>,
+    /// The comparison that bounds the index; out-of-range indices take its branch instead of the table.
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub guard: u64,
 }
 
 impl DiscoveredFunction {
@@ -629,9 +635,14 @@ fn explore(
                     break;
                 }
                 Flow::IndirectJump => {
-                    let cases = jump_table
-                        .and_then(|table| switch_targets(memory, decoder, &table, address, all_branch_targets?));
-                    if let Some(cases) = cases {
+                    let resolved = jump_table.and_then(|table| {
+                        let entries = switch_targets(memory, decoder, &table, address, all_branch_targets?)?;
+                        Some((table.guard, entries))
+                    });
+                    if let Some((guard, table)) = resolved {
+                        let mut cases = table.clone();
+                        cases.sort_unstable();
+                        cases.dedup();
                         for &target in &cases {
                             xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
                             branch_targets.push(target);
@@ -641,7 +652,7 @@ fn explore(
                                 worklist.push(target);
                             }
                         }
-                        switches.push(Switch { jump: address, cases });
+                        switches.push(Switch { jump: address, cases, table, guard });
                     } else if stops {
                         exits.stops = true;
                     } else {
@@ -725,10 +736,10 @@ impl Exits {
     }
 }
 
-/// The case targets of the switch whose register-indirect jump at `jump` dispatches through `table`, or `None` to
-/// leave the jump unresolved. The decoder proved the index bound along the straight-line run from the comparison,
-/// so it holds only if no branch joins that run after the comparison. Every entry must be read from read-only
-/// image data and select an instruction in code.
+/// The entry targets, in table order, of the switch whose register-indirect jump at `jump` dispatches through
+/// `table`, or `None` to leave the jump unresolved. The decoder proved the index bound along the straight-line run
+/// from the comparison, so it holds only if no branch joins that run after the comparison. Every entry must be read
+/// from read-only image data and select an instruction in code.
 fn switch_targets(
     memory: &impl Memory,
     decoder: &mut dyn Disassembler,
@@ -741,17 +752,14 @@ fn switch_targets(
     if joined || table.entries > MAX_JUMP_TABLE_ENTRIES {
         return None;
     }
-    let mut targets = (0..table.entries)
+    (0..table.entries)
         .map(|index| {
             let raw = memory.read_constant(table.slot(index)?, table.entry_size)?;
             let target = table.target(raw)?;
             let bytes = memory.code_from(target)?;
             (decoder.decode(bytes, target).flow != Flow::Invalid).then_some(target)
         })
-        .collect::<Option<Vec<_>>>()?;
-    targets.sort_unstable();
-    targets.dedup();
-    Some(targets)
+        .collect::<Option<Vec<_>>>()
 }
 
 /// Splits the block containing `address` so that a new block starts there. Misaligned decoding can leave smaller
@@ -984,6 +992,17 @@ mod tests {
         // ldrsb x11; add x10, x10, w11, uxtb #2 zero-extends the entries again, selecting addresses past the code.
         let mismatched = Switch::new(0x38a0_492b, 0x8b2b_094a, DEFAULT);
         assert!(!resolved(&mismatched.discover(relative_entries(DEFAULT, 2, 1), vec![])));
+    }
+
+    #[test]
+    fn a_switch_keeps_its_entries_in_table_order_and_its_guard() {
+        // ldrb entries selecting 0x30, 0x28, 0x30, 0x34 for indices 0..4.
+        let rodata = [0x30u64, 0x28, 0x30, 0x34].map(|case| ((case - CASES[0]) >> 2) as u8).to_vec();
+        let program = Switch::new(0x3860_492b, 0x8b0b_094a, CASES[0]).discover(rodata, vec![]);
+        let switch = &program.function_at(0).unwrap().switches[0];
+        assert_eq!(switch.table, [0x30, 0x28, 0x30, 0x34]);
+        assert_eq!(switch.cases, [0x28, 0x30, 0x34]);
+        assert_eq!(switch.guard, 8);
     }
 
     #[test]
