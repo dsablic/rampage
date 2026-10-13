@@ -121,7 +121,7 @@ impl Registers {
                     }
                 }
             }
-            (Mnemonic::Movsxd, Some(to), Some(from)) => {
+            (Mnemonic::Movsxd, Some(to), Some(from)) if matches!(size(to), 32 | 64) && size(from) == 32 => {
                 bound = gpr(from).zip(gpr(to)).and_then(|(from, to)| {
                     let bound = self.bounds[from].filter(|bound| bound.max < 1 << 31)?;
                     Some((to, Bound { wide: true, ..bound }))

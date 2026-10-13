@@ -136,6 +136,12 @@ fn an_x86_switch_needs_an_unsigned_bound_on_every_path_to_its_jump() {
     // jae bounds the index below its limit: cmp edi, 4; jae DEFAULT.
     let below = Switch { compare: [0x81, 0xff, 4, 0, 0, 0], branch: [0x73, JA[1]], ..switch() };
     assert!(resolved(&below.discover(absolute_entries(), vec![])));
+    // movsxd rax, edi sign-extends the bounded index into rax; movsxd ax, di leaves rax's upper bits as they were.
+    let jump_rax = [0xff, 0x24, 0xc5, 0, 0, 1, 0];
+    let extended = Switch { gap: [0x90; 2], ..Switch::new([&[0x48, 0x63, 0xc7][..], &jump_rax].concat()) };
+    assert!(resolved(&extended.discover(absolute_entries(), vec![])));
+    let halfword = Switch { gap: [0x90; 2], ..Switch::new([&[0x66, 0x63, 0xc7][..], &jump_rax].concat()) };
+    assert!(!resolved(&halfword.discover(absolute_entries(), vec![])));
     // and edi, 3 masks the index.
     let masked = Switch { compare: [0x83, 0xe7, 3, 0x90, 0x90, 0x90], branch: [0x90; 2], ..switch() };
     assert!(resolved(&masked.discover(absolute_entries(), vec![])));
