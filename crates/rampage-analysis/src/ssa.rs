@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use rampage_arch::Flow;
-use rampage_arch::ir::{Effect, FlagOperation, LiftedInstruction, Operation, Value};
+use rampage_arch::ir::{Effect, FlagOperation, LiftedInstruction, Operation, UnaryOperation, Value};
 use serde::Serialize;
 
 const VARIABLES: usize = 34;
@@ -90,6 +90,11 @@ pub enum Expression {
         operation: Operation,
         left: Box<Expression>,
         right: Box<Expression>,
+        bits: u8,
+    },
+    Unary {
+        operation: UnaryOperation,
+        value: Box<Expression>,
         bits: u8,
     },
     Flags {
@@ -189,6 +194,11 @@ fn expression(value: &Value, state: &[usize; VARIABLES], depth: usize) -> Result
             right: Box::new(expression(right, state, depth + 1)?),
             bits: *bits,
         },
+        Value::Unary { operation, value, bits } => Expression::Unary {
+            operation: *operation,
+            value: Box::new(expression(value, state, depth + 1)?),
+            bits: *bits,
+        },
         Value::Register { number } if *number < 31 => Expression::Reference { definition: state[*number as usize] },
         Value::Register { .. } => return Err("IR register number must be below 31".to_owned()),
         Value::StackPointer => Expression::Reference { definition: state[31] },
@@ -202,6 +212,44 @@ fn expression(value: &Value, state: &[usize; VARIABLES], depth: usize) -> Result
             right: Box::new(expression(right, state, depth + 1)?),
         },
     })
+}
+
+const CARRY_SET: u8 = 2;
+
+fn not(value: Expression, bits: u8) -> Expression {
+    Expression::Binary {
+        operation: Operation::Xor,
+        left: Box::new(value),
+        right: Box::new(Expression::Constant { value: u64::MAX }),
+        bits,
+    }
+}
+
+/// `left + right + C`, or `left - right - !C`, selected on the incoming carry.
+fn carry_result(flags: usize, left: Expression, right: Expression, subtract: bool) -> Expression {
+    let (left, right) = (Box::new(left), Box::new(right));
+    let one = Box::new(Expression::Constant { value: 1 });
+    let (when_true, when_false) = if subtract {
+        let difference = Expression::Subtract { left, right };
+        (difference.clone(), Expression::Subtract { left: Box::new(difference), right: one })
+    } else {
+        let sum = Expression::Add { left, right };
+        (Expression::Add { left: Box::new(sum.clone()), right: one }, sum)
+    };
+    Expression::Select { flags, condition: CARRY_SET, when_true: Box::new(when_true), when_false: Box::new(when_false) }
+}
+
+/// AddWithCarry(x, y, 1) has the flags of x - NOT(y), and AddWithCarry(x, y, 0) those of x + y; subtraction
+/// passes y = NOT(right).
+fn carry_flags(flags: usize, left: Expression, right: Expression, subtract: bool, bits: u8) -> Expression {
+    let computed =
+        |operation, right| Expression::Flags { operation, left: Box::new(left.clone()), right: Box::new(right), bits };
+    let (when_true, when_false) = if subtract {
+        (computed(FlagOperation::Subtract, right.clone()), computed(FlagOperation::Add, not(right, bits)))
+    } else {
+        (computed(FlagOperation::Subtract, not(right.clone(), bits)), computed(FlagOperation::Add, right))
+    };
+    Expression::Select { flags, condition: CARRY_SET, when_true: Box::new(when_true), when_false: Box::new(when_false) }
 }
 
 fn narrow(value: Expression, bits: u8) -> Expression {
@@ -261,9 +309,10 @@ pub(crate) fn references(value: &Expression, out: &mut Vec<usize>) {
             references(left, out);
             references(right, out);
         }
-        Expression::Low32 { value } | Expression::Condition { value, .. } | Expression::Extend { value, .. } => {
-            references(value, out)
-        }
+        Expression::Low32 { value }
+        | Expression::Condition { value, .. }
+        | Expression::Extend { value, .. }
+        | Expression::Unary { value, .. } => references(value, out),
         Expression::FlagsCondition { flags, .. } => out.push(*flags),
         Expression::Call { target, arguments, memory, result_buffer, stack_pointer, .. } => {
             references(target, out);
@@ -301,7 +350,7 @@ fn validate_values(values: &[&Value], nodes: &mut usize) -> Result<(), String> {
                     stack.push((right, depth + 1));
                     stack.push((left, depth + 1));
                 }
-                Value::Low32 { value } => stack.push((value, depth + 1)),
+                Value::Low32 { value } | Value::Unary { value, .. } => stack.push((value, depth + 1)),
                 _ => {}
             }
         }
@@ -418,6 +467,26 @@ fn budget(input: &[InputBlock]) -> Result<(), String> {
                     if *condition > 15 {
                         return Err("invalid flag condition".to_owned());
                     }
+                }
+                Effect::CarryArithmetic { destination, left, right, set_flags, .. } => {
+                    if !barrier {
+                        definitions += usize::from(!matches!(destination, Value::Constant { value: 0 }));
+                        definitions += usize::from(*set_flags);
+                    }
+                    // Each operand is expanded into both carry arms of the result and of the flags.
+                    for _ in 0..if *set_flags { 4 } else { 2 } {
+                        validate_values(&[left, right], &mut nodes)?;
+                    }
+                    validate_values(&[destination], &mut nodes)?;
+                }
+                Effect::ConditionalFlags { condition, nzcv, left, right, .. } => {
+                    if *condition > 15 || *nzcv > 15 {
+                        return Err("invalid conditional flags".to_owned());
+                    }
+                    if !barrier {
+                        definitions += 1;
+                    }
+                    validate_values(&[left, right], &mut nodes)?;
                 }
                 Effect::Call { target, .. } => {
                     if !barrier {
@@ -640,6 +709,35 @@ pub fn build(input: &[InputBlock], edges: &[(usize, usize)], entry: usize) -> Re
                             };
                             statement.definitions.push(define(&mut definitions, state, FLAGS, value));
                         }
+                        Effect::CarryArithmetic { destination: target, left, right, subtract, set_flags } => {
+                            let flags = state[FLAGS];
+                            let (left, right) = (expression(left, state, 0)?, expression(right, state, 0)?);
+                            if *set_flags {
+                                let value = carry_flags(flags, left.clone(), right.clone(), *subtract, insn.bits);
+                                statement.definitions.push(define(&mut definitions, state, FLAGS, value));
+                            }
+                            let value = narrow(carry_result(flags, left, right, *subtract), insn.bits);
+                            if matches!(target, Value::Constant { value: 0 }) {
+                                statement.observations.push(value);
+                            } else {
+                                let index = destination(target).ok_or("IR carry destination is not writable")?;
+                                statement.definitions.push(define(&mut definitions, state, index, value));
+                            }
+                        }
+                        Effect::ConditionalFlags { condition, operation, left, right, nzcv } => {
+                            let value = Expression::Select {
+                                flags: state[FLAGS],
+                                condition: *condition,
+                                when_true: Box::new(Expression::Flags {
+                                    operation: *operation,
+                                    bits: insn.bits,
+                                    left: Box::new(expression(left, state, 0)?),
+                                    right: Box::new(expression(right, state, 0)?),
+                                }),
+                                when_false: Box::new(Expression::Constant { value: u64::from(*nzcv) }),
+                            };
+                            statement.definitions.push(define(&mut definitions, state, FLAGS, value));
+                        }
                         Effect::FlagsConditional { condition } => statement
                             .observations
                             .push(Expression::FlagsCondition { flags: state[FLAGS], condition: *condition }),
@@ -755,9 +853,10 @@ fn rewrite(value: &mut Expression, remap: &[usize]) {
             rewrite(left, remap);
             rewrite(right, remap);
         }
-        Expression::Low32 { value } | Expression::Condition { value, .. } | Expression::Extend { value, .. } => {
-            rewrite(value, remap)
-        }
+        Expression::Low32 { value }
+        | Expression::Condition { value, .. }
+        | Expression::Extend { value, .. }
+        | Expression::Unary { value, .. } => rewrite(value, remap),
         Expression::FlagsCondition { flags, .. } => *flags = remap[*flags],
         Expression::Call { target, arguments, memory, result_buffer, stack_pointer, .. } => {
             rewrite(target, remap);

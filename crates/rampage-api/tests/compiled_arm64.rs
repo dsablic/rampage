@@ -24,6 +24,9 @@ mod arm64 {
             Value::Binary { operation, left, right, bits } => {
                 ir::binary(*operation, evaluate(left, registers), evaluate(right, registers), *bits).unwrap()
             }
+            Value::Unary { operation, value, bits } => {
+                ir::unary(*operation, evaluate(value, registers), *bits).unwrap()
+            }
             Value::StackPointer => panic!("unexpected stack access in straight-line fixture"),
         }
     }

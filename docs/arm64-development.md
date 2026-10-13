@@ -102,8 +102,15 @@ by integer SSA.
 Integer conditional selects (CSEL/CSINC/CSINV/CSNEG and their aliases) retain NZCV conditions in SSA.
 Extended-register ADD/SUB preserves signed/unsigned byte, halfword and word extensions and SP/ZR rules;
 reserved shifts remain barriers. Boundary tests compare extended arithmetic with native ARM64 execution.
-Common non-wrapping bitfield aliases, including shifts and signed/unsigned extracts, are supported;
-unsupported wrapping field shapes remain barriers. Native optimized integer/select fixtures cover both paths.
+SBFM/UBFM/BFM are supported in every allocated shape, including the wrapping `imms < immr` forms (SBFIZ, UBFIZ,
+BFI) and BFXIL/BFC. Native optimized integer/select fixtures cover both paths.
+ADC/ADCS/SBC/SBCS (and NGC/NGCS) read the incoming carry before writing either the destination or the flags;
+in SSA both are selects on the incoming flags' C. CCMP/CCMN select between the compare flags and the encoded
+NZCV immediate. Long multiplies (SMADDL/UMADDL/SMSUBL/UMSUBL and their SMULL/UMULL/SMNEGL/UMNEGL aliases),
+SMULH/UMULH, EXTR/ROR immediate, CLZ, CLS, RBIT and REV/REV16/REV32 are also lifted. Each family is compared
+with native execution over boundary operands, 32/64-bit widths, the zero register and, for flag-dependent
+families, all sixteen NZCV inputs; the SSA/dataflow lowering of the flag-dependent families is compared the same
+way. FEAT_CSSC (ABS, CNT, CTZ, MIN/MAX), RMIF and SETF8/SETF16 remain barriers.
 
 ## Explicit jump-table inspection
 
