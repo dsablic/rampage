@@ -582,6 +582,9 @@ fn parse_root(
             Some(tables) => {
                 let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
                 decoder.decode(&mut metadata);
+                // The visitor gets a budget of its own: a metadata-heavy image must not leave it nothing.
+                decoder.budget.set(signatures::TOTAL_BUDGET);
+                decoder.budget_reported = false;
                 visit(&decoder, &metadata);
             }
             None => warnings.push("table stream header is unreadable".to_owned()),

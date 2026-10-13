@@ -42,6 +42,10 @@ struct Spec {
     inner_extends: Option<u32>,
     /// Replaces Compute's LocalVarSig blob.
     compute_locals: Option<Vec<u8>>,
+    /// Replaces the name of TypeRef 1 (`Object`).
+    object_name: Option<String>,
+    /// Replaces the signature of MemberRef 1, the attribute constructor.
+    ctor_signature: Option<Vec<u8>>,
 }
 
 const SECTION_RVA: u32 = 0x2000;
@@ -111,7 +115,7 @@ fn build(spec: &Spec) -> Vec<u8> {
     let helper_signature = blobs.blob(&[0x00, 0, 0x01]);
     let run_signature = blobs.blob(&[0x00, 1, 0x08, 0x18]);
     // Object::.ctor(string, int32) as an instance method, and an attribute value calling it with ("abc", 42).
-    let ctor_signature = blobs.blob(&[0x20, 2, 0x01, 0x0E, 0x08]);
+    let ctor_signature = blobs.blob(spec.ctor_signature.as_deref().unwrap_or(&[0x20, 2, 0x01, 0x0E, 0x08]));
     let attribute_value =
         blobs.blob(spec.attribute_value.as_deref().unwrap_or(&[0x01, 0x00, 3, b'a', b'b', b'c', 42, 0, 0, 0, 0, 0]));
     let token_blob = blobs.blob(&[0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a]);
@@ -146,7 +150,8 @@ fn build(spec: &Spec) -> Vec<u8> {
     let module_name = strings.string("Demo.dll");
     tables.put(0, 2).put(module_name, s).put(1, g).put(0, g).put(0, g);
     // TypeRef: row 1 is System.Object in AssemblyRef 1 (ResolutionScope tag 2).
-    let (object_name, system) = (strings.string("Object"), strings.string("System"));
+    let (object_name, system) =
+        (strings.string(spec.object_name.as_deref().unwrap_or("Object")), strings.string("System"));
     tables.put((1 << 2) | 2, scope).put(object_name, s).put(system, s);
     let pad_name = strings.string("Pad");
     for _ in 0..spec.extra_type_refs {
@@ -895,6 +900,44 @@ fn locals_are_listed_up_to_a_text_cap() {
     assert!(compute.locals.iter().all(|local| local == "string"));
     let warning = format!("only the first {kept} of 12000 locals are listed (65536 bytes of type text)");
     assert_eq!(compute.warnings, [warning]);
+}
+
+#[test]
+fn a_listing_has_its_own_signature_budget() {
+    // 10,000 attributes whose constructor takes seven parameters of a 1,000-character type: each renders ~7 KB,
+    // which spends the image's 64 MiB signature budget while the metadata decodes.
+    let mut ctor = vec![0x20, 7, 0x01];
+    ctor.extend([0x12, 0x05].repeat(7));
+    let spec = Spec {
+        object_name: Some("O".repeat(1000)),
+        ctor_signature: Some(ctor),
+        attribute_parents: vec![(1 << 5) | 7; 10_000],
+        ..Spec::default()
+    };
+    let image = build(&spec);
+    let compute = listing(&image, MethodSelector::Name("Demo.Program::Compute"));
+    assert_eq!(compute.locals, ["int32", "T"]);
+    assert_eq!(texts(&compute), ["IL_0000: call int32 Demo.Program::Compute<int32>(!!0, !!0)"]);
+    assert!(compute.warnings.is_empty(), "{:?}", compute.warnings);
+}
+
+#[test]
+fn a_spent_listing_budget_is_reported_not_blamed_on_the_signature() {
+    // A LocalVarSig of 65,535 locals of a generic instance over a 1,000-character type, ~3 KB of text each:
+    // each is well-formed, but together they render more than the listing's 64 MiB budget.
+    let count = 65_535u32;
+    let mut signature = vec![0x07];
+    signature.extend(compressed(count));
+    signature.extend([0x15, 0x12, 0x05, 2, 0x12, 0x05, 0x12, 0x05].repeat(count as usize));
+    let spec = Spec {
+        object_name: Some("O".repeat(1000)),
+        compute_locals: Some(signature),
+        wide_blobs: true,
+        ..Spec::default()
+    };
+    let compute = listing(&build(&spec), MethodSelector::Name("Demo.Program::Compute"));
+    assert!(compute.locals.is_empty());
+    assert_eq!(compute.warnings, ["signature text budget exhausted; remaining signatures not rendered"]);
 }
 
 #[test]

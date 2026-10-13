@@ -479,6 +479,8 @@ struct Names<'d, 't, 'a> {
     cache: HashMap<u32, Option<String>>,
     spent: usize,
     spent_reported: bool,
+    /// Whether the warning that the signature budget ran out has been given.
+    budget_reported: bool,
 }
 
 impl<'d, 't, 'a> Names<'d, 't, 'a> {
@@ -488,7 +490,16 @@ impl<'d, 't, 'a> Names<'d, 't, 'a> {
             let members = ty.methods.iter().map(|method| method.token);
             owners.extend(members.chain(ty.fields.iter().map(|field| field.token)).map(|token| (token, row)));
         }
-        Self { decoder, owners, cache: HashMap::new(), spent: 0, spent_reported: false }
+        Self { decoder, owners, cache: HashMap::new(), spent: 0, spent_reported: false, budget_reported: false }
+    }
+
+    /// Whether the signature budget is spent, warning of it once; a signature that fails then is not malformed.
+    fn budget_spent(&mut self, warnings: &mut Warnings) -> bool {
+        let spent = self.decoder.budget.get() == 0;
+        if spent && !std::mem::replace(&mut self.budget_reported, true) {
+            warnings.push(super::BUDGET_EXHAUSTED.to_owned());
+        }
+        spent
     }
 
     /// The operand text of `token`: its name and signature, or `<token 0x...>` when it does not resolve or the
@@ -505,6 +516,7 @@ impl<'d, 't, 'a> Names<'d, 't, 'a> {
             Some(text) => text.clone(),
             None => {
                 let text = self.resolve(token);
+                self.budget_spent(warnings);
                 self.cache.insert(token, text.clone());
                 text
             }
@@ -652,8 +664,8 @@ pub(super) fn disassemble<'a>(
     let init_locals =
         body.header == super::IlHeader::Fat && read_u16(bytes, 0).is_some_and(|f| f & CORILMETHOD_INIT_LOCALS != 0);
     let method_row = method.token & tables::MAX_ROWS;
-    let (locals, locals_total) = locals(decoder, body.local_var_sig_token, owner, method_row, &mut warnings);
     let mut names = Names::new(decoder, metadata);
+    let (locals, locals_total) = locals(&mut names, body.local_var_sig_token, owner, method_row, &mut warnings);
     let (instructions, cut) = decode(code, &mut |token, warnings| names.operand(token, warnings), &mut warnings);
     let exception_clauses = if body.more_sections && code.len() == body.code_size as usize {
         let clauses = exception_clauses(bytes, method.rva, declared_end, &mut names, &mut warnings);
@@ -717,7 +729,8 @@ fn ambiguous(name: String, candidates: impl ExactSizeIterator<Item = String>) ->
 
 /// The local variable types of a LocalVarSig StandAloneSig token, in the method's generic context, up to
 /// [`MAX_LOCALS_TEXT`] of their text, with how many it declares.
-fn locals(decoder: &Decoder, token: u32, owner: u32, method: u32, warnings: &mut Warnings) -> (Vec<String>, usize) {
+fn locals(names: &mut Names, token: u32, owner: u32, method: u32, warnings: &mut Warnings) -> (Vec<String>, usize) {
+    let decoder = names.decoder;
     if token == 0 {
         return (Vec::new(), 0);
     }
@@ -751,7 +764,9 @@ fn locals(decoder: &Decoder, token: u32, owner: u32, method: u32, warnings: &mut
             (kept, total)
         }
         None => {
-            warnings.push(format!("local variable signature {token:#010x} is unreadable"));
+            if !names.budget_spent(warnings) {
+                warnings.push(format!("local variable signature {token:#010x} is unreadable"));
+            }
             (Vec::new(), 0)
         }
     }
