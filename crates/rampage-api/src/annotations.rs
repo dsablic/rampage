@@ -137,6 +137,16 @@ impl Annotations {
         Self::default()
     }
 
+    /// Takes over the undo and redo steps of `previous`, an instance this one replaces, when both write the same
+    /// log: the steps are edits in that log, so reloading the binary beside it leaves them as undoable as before.
+    pub(crate) fn inherit_history(&mut self, previous: &Self) {
+        let path = |annotations: &Self| annotations.log.as_ref().map(|log| log.path.clone());
+        if self.log.is_some() && path(self) == path(previous) {
+            self.done.clone_from(&previous.done);
+            self.undone.clone_from(&previous.undone);
+        }
+    }
+
     pub(crate) fn snapshot(&self) -> Self {
         Self {
             names: self.names.clone(),

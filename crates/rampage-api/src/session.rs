@@ -168,6 +168,8 @@ impl Session {
         }
         let revalidate = state.capture_paths.contains(&canonical);
         let key = (canonical, image, binary.arch);
+        // A project this open replaces hands its undo history on: same log, same edits to undo.
+        let previous = state.projects.get(&key).cloned();
         let ordinary_source: Option<[u8; 32]> =
             (revalidate && binary.format != Format::Snapshot).then(|| Sha256::digest(binary.file_bytes()).into());
         if let Some(project) = state.projects.get(&key)
@@ -201,6 +203,10 @@ impl Session {
             sibling.is_file().then_some(sibling)
         });
         let project = state.projects.entry(key).or_insert_with(|| {
+            let mut annotations = annotations;
+            if let Some(previous) = previous {
+                annotations.inherit_history(&previous.annotations());
+            }
             let project = Project::with_annotations(binary, annotations);
             project.set_packs(Arc::clone(&self.packs));
             if let Some(executable) = worker {
