@@ -60,8 +60,8 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
 - Go binaries: stripped Go function names are recovered from the embedded pclntab at load, so they appear in the
   function list, metadata and disassembly even after `-ldflags "-s -w"`.
 - Heuristic databases: one detection layer where each database is data, with permissive defaults bundled and the
-  rest supplied at runtime. `rampage detect` names the producing packer, compiler, protector, installer or linker
-  from an authored signature database (and accepts your own PeID `userdb.txt`, warning about the entries it
+  rest supplied at runtime. `rampage detect` names the producing packer, compiler, protector, installer, linker or
+  runtime from an authored signature database (and accepts your own PeID `userdb.txt`, warning about the entries it
   skips as malformed); `rampage yara` runs your YARA rules through the embedded yara-x engine; `rampage capa`
   evaluates a Mandiant capa-rules directory against imports, exports and strings (file-scope features only);
   `rampage capabilities` applies the built-in corroborated rules. Every hit carries its evidence and is a triage
