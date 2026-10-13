@@ -231,6 +231,25 @@ fn function_graphs_connect_blocks_by_their_branches() {
 }
 
 #[test]
+fn a_compiled_arm64_switch_dispatch_block_has_an_edge_to_every_case() {
+    let project = Session::default().open(&fixture("musl-static-aarch64.elf"), None).unwrap();
+    // The function at 0x10149ac bounds w8 to 17 and jumps through an 18-entry byte table with `br x10` at 0x10149dc.
+    let graph = project.function_graph(0x10149dc).unwrap();
+    let dispatch = graph.blocks.iter().position(|block| block.start == 0x10149b8).unwrap();
+    assert_eq!(graph.blocks[dispatch].lines.last().unwrap().address, 0x10149dc);
+    let mut cases: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.from == dispatch)
+        .inspect(|edge| assert_eq!(edge.kind, EdgeKind::Switch))
+        .map(|edge| graph.blocks[edge.to].start)
+        .collect();
+    cases.sort_unstable();
+    let expected = [0x10149e0, 0x1014a24, 0x1014a48, 0x1014a6c, 0x1014a90, 0x1014ab4, 0x1014ad8, 0x1014afc, 0x1014b20];
+    assert_eq!(cases, expected);
+}
+
+#[test]
 fn decompiles_a_function_to_c_when_ghidra_is_present() {
     // The decompiler needs a local Ghidra install for processor specs; skip cleanly without one.
     if rampage_decompiler::sleigh_home().is_none() {

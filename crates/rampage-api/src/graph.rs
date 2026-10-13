@@ -17,6 +17,8 @@ pub enum EdgeKind {
     Taken,
     /// A conditional branch, not taken: the fall-through.
     NotTaken,
+    /// A register-indirect jump to one case of a bounded switch table.
+    Switch,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,20 +76,26 @@ impl Project {
             // branch target and so starts a block of its own.
             let branches = |line: &&DisassemblyLine| !matches!(line.flow, Flow::Next | Flow::Invalid);
             let before_slot = block.lines.len().checked_sub(1 + delay_slots).and_then(|index| block.lines.get(index));
-            let flow = before_slot.filter(|_| delay_slots > 0).filter(branches).map_or(last.flow, |line| line.flow);
+            let branch = before_slot.filter(|_| delay_slots > 0).filter(branches).unwrap_or(last);
             let end = ends[&block.start];
             let mut add = |to: Option<usize>, kind| {
                 if let Some(to) = to {
                     edges.push(Edge { from, to, kind });
                 }
             };
-            match flow {
+            match branch.flow {
                 Flow::Jump(target) => add(index_of(target), EdgeKind::Unconditional),
                 Flow::ConditionalJump(target) => {
                     add(index_of(target), EdgeKind::Taken);
                     add(index_of(end), EdgeKind::NotTaken);
                 }
-                Flow::Return | Flow::IndirectJump | Flow::Halt | Flow::Invalid => {}
+                // Cases in other functions are tail calls, not edges.
+                Flow::IndirectJump => {
+                    for &case in function.switch_cases(branch.address).unwrap_or_default() {
+                        add(index_of(case), EdgeKind::Switch);
+                    }
+                }
+                Flow::Return | Flow::Halt | Flow::Invalid => {}
                 // A block that ends without a branch runs into the next one.
                 Flow::Next | Flow::Call(_) | Flow::IndirectCall => add(index_of(end), EdgeKind::Unconditional),
             }

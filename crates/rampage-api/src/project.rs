@@ -433,6 +433,7 @@ mod tests {
             address,
             blocks: vec![Block { start: address, end: address + 2 }],
             instruction_count: 1,
+            switches: vec![],
         };
         project
             .analysis
