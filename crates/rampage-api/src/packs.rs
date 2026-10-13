@@ -4,6 +4,7 @@
 //! is read with a size cap, and a content that fails to load is reported without keeping the others from loading.
 
 use std::collections::HashSet;
+use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 
 use rampage_arch::Arch;
@@ -11,7 +12,7 @@ use rampage_capabilities::CapaRuleSet;
 use serde::{Deserialize, Serialize};
 
 use crate::files::{MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MAX_SIGNATURE_DB_BYTES};
-use crate::read_bounded;
+use crate::files::read_open_bounded;
 
 /// The manifest file at the root of every pack directory.
 pub const MANIFEST_FILE: &str = "rampage-pack.toml";
@@ -237,8 +238,8 @@ impl Packs {
         let path = contained(root, &entry.path).map_err(error)?;
         match entry.kind {
             Kind::Signatures => {
-                let text = read_bounded(&path, MAX_SIGNATURE_DB_BYTES, "signature database")
-                    .map_err(|problem| error(problem.to_string()))?;
+                let text =
+                    read_contained(root, &path, MAX_SIGNATURE_DB_BYTES, "signature database").map_err(error)?;
                 let database = rampage_signatures::SignatureDb::from_json(&text)
                     .map_err(|problem| error(format!("invalid signature database: {problem}")))?;
                 let declared = entry.arch.as_deref().map(str::parse::<Arch>).transpose().map_err(error)?;
@@ -257,8 +258,7 @@ impl Packs {
                 Ok(detail)
             }
             Kind::Peid => {
-                let text = read_bounded(&path, MAX_PEID_BYTES, "PeID database")
-                    .map_err(|problem| error(problem.to_string()))?;
+                let text = read_contained(root, &path, MAX_PEID_BYTES, "PeID database").map_err(error)?;
                 let mut database = rampage_detect::SignatureDb::new();
                 let skipped =
                     database.load_peid(&text).map_err(|problem| error(format!("PeID database: {problem}")))?;
@@ -272,7 +272,7 @@ impl Packs {
             }
             Kind::Yara => {
                 let files = rule_files(root, &path, &["yar", "yara"], false).map_err(error)?;
-                let sources = read_rule_files(&files, "YARA rules").map_err(error)?;
+                let sources = read_rule_files(root, &files, "YARA rules").map_err(error)?;
                 let origins: Vec<(String, String)> =
                     sources.into_iter().map(|(file, text)| (file.display().to_string(), text)).collect();
                 let rules = rampage_yara::compile_sources(Some(pack), &origins)
@@ -282,7 +282,7 @@ impl Packs {
             }
             Kind::Capa => {
                 let files = rule_files(root, &path, &["yml", "yaml"], true).map_err(error)?;
-                let sources = read_rule_files(&files, "capa rule").map_err(error)?;
+                let sources = read_rule_files(root, &files, "capa rule").map_err(error)?;
                 let rules = rampage_capabilities::load_capa_rule_texts(
                     sources.iter().map(|(file, text)| (file.as_path(), text.as_str())),
                 )
@@ -308,7 +308,7 @@ fn open_manifest(directory: &Path, names: &mut HashSet<String>) -> Result<(PathB
         return Err("not a directory".to_owned());
     }
     let path = contained(&root, MANIFEST_FILE)?;
-    let text = read_bounded(&path, MAX_PACK_MANIFEST_BYTES, "pack manifest").map_err(|error| error.to_string())?;
+    let text = read_contained(&root, &path, MAX_PACK_MANIFEST_BYTES, "pack manifest")?;
     let manifest: Manifest = toml::from_str(&text).map_err(|error| format!("invalid {MANIFEST_FILE}: {error}"))?;
     validate(&manifest)?;
     if manifest.name == USER_RULES_NAMESPACE {
@@ -372,7 +372,7 @@ fn validate(manifest: &Manifest) -> Result<(), String> {
 }
 
 /// The canonical path of `relative` under the canonical `root`, refusing one that resolves outside it (through a
-/// symbolic link, say).
+/// symbolic link, say). Open it with [`open_contained`], which makes sure the file opened is the one checked.
 fn contained(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let path = root.join(relative).canonicalize().map_err(|error| format!("cannot open {relative}: {error}"))?;
     if !path.starts_with(root) {
@@ -381,9 +381,52 @@ fn contained(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Opens `target`, a canonical path [`contained`] checked, as a regular file. On Unix every component is opened
+/// from `root` without following symbolic links, so a link swapped in after the check fails instead of leading out
+/// of the pack, and a FIFO is opened without blocking.
+fn open_contained(root: &Path, target: &Path) -> Result<File, String> {
+    let failure = |error: std::io::Error| format!("cannot open {}: {error}", target.display());
+    let outside = || format!("{} is outside the pack directory", target.display());
+    let relative = target.strip_prefix(root).map_err(|_| outside())?;
+    let file = open_beneath(root, relative).map_err(failure)?;
+    if !file.metadata().map_err(failure)?.is_file() {
+        return Err(format!("{} is not a regular file", target.display()));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_beneath(root: &Path, relative: &Path) -> std::io::Result<File> {
+    use rustix::fs::{Mode, OFlags, open, openat};
+    let directory = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let file = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let mut at = open(root, directory, Mode::empty())?;
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else {
+            return Err(std::io::Error::other("not a plain relative path"));
+        };
+        let flags = if components.peek().is_some() { directory } else { file };
+        at = openat(&at, name, flags, Mode::empty())?;
+    }
+    Ok(File::from(at))
+}
+
+#[cfg(not(unix))]
+fn open_beneath(root: &Path, relative: &Path) -> std::io::Result<File> {
+    File::open(root.join(relative))
+}
+
+/// The UTF-8 text of the pack file at the checked `target`, up to `max` bytes.
+fn read_contained(root: &Path, target: &Path, max: u64, what: &str) -> Result<String, String> {
+    let file = open_contained(root, target)?;
+    read_open_bounded(file, target, max, what).map_err(|error| error.to_string())
+}
+
 /// The rule files a content names: the file itself, or the files with one of `extensions` in the directory (and,
-/// when `recursive`, its subdirectories), sorted. Symbolic links to files are taken only when they stay inside the
-/// pack; linked directories are not followed, which also rules out cycles.
+/// when `recursive`, its subdirectories), sorted, each as the canonical path checked to be inside the pack. Symbolic
+/// links to files are taken only when they stay inside the pack; linked directories are not followed, which also
+/// rules out cycles.
 fn rule_files(root: &Path, path: &Path, extensions: &[&str], recursive: bool) -> Result<Vec<PathBuf>, String> {
     if path.is_file() {
         return Ok(vec![path.to_owned()]);
@@ -410,22 +453,18 @@ fn rule_files(root: &Path, path: &Path, extensions: &[&str], recursive: bool) ->
                     }
                     pending.push((file, depth + 1));
                 }
-            } else if wanted(&file) {
-                if file_type.is_symlink() {
-                    let target = file.canonicalize().map_err(|error| failure(&file, error))?;
-                    if !target.starts_with(root) {
-                        return Err(format!("{} links outside the pack directory", file.display()));
-                    }
-                    if !target.is_file() {
-                        continue;
-                    }
-                } else if !file_type.is_file() {
+            } else if wanted(&file) && (file_type.is_file() || file_type.is_symlink()) {
+                let target = file.canonicalize().map_err(|error| failure(&file, error))?;
+                if !target.starts_with(root) {
+                    return Err(format!("{} links outside the pack directory", file.display()));
+                }
+                if !target.is_file() {
                     continue;
                 }
                 if files.len() >= MAX_RULE_FILES {
                     return Err(format!("more than {MAX_RULE_FILES} rule files"));
                 }
-                files.push(file);
+                files.push(target);
             }
         }
     }
@@ -437,14 +476,8 @@ fn rule_files(root: &Path, path: &Path, extensions: &[&str], recursive: bool) ->
     Ok(files)
 }
 
-fn read_rule_files(files: &[PathBuf], what: &str) -> Result<Vec<(PathBuf, String)>, String> {
-    files
-        .iter()
-        .map(|file| {
-            let text = read_bounded(file, MAX_RULE_FILE_BYTES, what).map_err(|error| error.to_string())?;
-            Ok((file.clone(), text))
-        })
-        .collect()
+fn read_rule_files(root: &Path, files: &[PathBuf], what: &str) -> Result<Vec<(PathBuf, String)>, String> {
+    files.iter().map(|file| Ok((file.clone(), read_contained(root, file, MAX_RULE_FILE_BYTES, what)?))).collect()
 }
 
 /// The databases bundled in rampage, described as a pack.
@@ -484,5 +517,70 @@ fn builtin() -> PackInfo {
         }),
         error: None,
         contents,
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// A canonical temporary directory removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("rampage-packs-unit-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path.canonicalize().unwrap())
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_link_swapped_in_after_the_check_is_not_followed() {
+        let outside = Scratch::new("swap-outside");
+        std::fs::create_dir_all(outside.0.join("rules")).unwrap();
+        std::fs::write(outside.0.join("rules/a.yar"), "outside").unwrap();
+        std::fs::write(outside.0.join("b.yar"), "outside").unwrap();
+        let pack = Scratch::new("swap");
+        std::fs::create_dir_all(pack.0.join("rules")).unwrap();
+        std::fs::write(pack.0.join("rules/a.yar"), "inside").unwrap();
+        std::fs::write(pack.0.join("b.yar"), "inside").unwrap();
+
+        let directory = contained(&pack.0, "rules/a.yar").unwrap();
+        let file = contained(&pack.0, "b.yar").unwrap();
+        assert_eq!(read_contained(&pack.0, &directory, 64, "rule").unwrap(), "inside");
+        // Between the check and the open, a directory and a file become links out of the pack.
+        std::fs::rename(pack.0.join("rules"), pack.0.join("moved")).unwrap();
+        std::os::unix::fs::symlink(outside.0.join("rules"), pack.0.join("rules")).unwrap();
+        std::fs::remove_file(pack.0.join("b.yar")).unwrap();
+        std::os::unix::fs::symlink(outside.0.join("b.yar"), pack.0.join("b.yar")).unwrap();
+        assert!(read_contained(&pack.0, &directory, 64, "rule").is_err());
+        assert!(read_contained(&pack.0, &file, 64, "rule").is_err());
+    }
+
+    #[test]
+    fn rule_files_are_the_checked_link_targets() {
+        let pack = Scratch::new("targets");
+        std::fs::create_dir_all(pack.0.join("rules")).unwrap();
+        std::fs::write(pack.0.join("real.yar"), "rule").unwrap();
+        std::os::unix::fs::symlink(pack.0.join("real.yar"), pack.0.join("rules/alias.yar")).unwrap();
+        let files = rule_files(&pack.0, &pack.0.join("rules"), &["yar"], false).unwrap();
+        assert_eq!(files, [pack.0.join("real.yar")]);
+    }
+
+    #[test]
+    fn a_fifo_is_refused_without_blocking() {
+        let pack = Scratch::new("fifo");
+        let fifo = pack.0.join("rules.yar");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let error = read_contained(&pack.0, &fifo, 64, "rule").unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
     }
 }

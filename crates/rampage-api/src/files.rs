@@ -27,7 +27,14 @@ pub fn read_bounded(path: &Path, max: u64, what: &str) -> Result<String, ApiErro
         return Err(invalid("not a regular file".to_owned()));
     }
     let file = File::open(path).map_err(|error| invalid(error.to_string()))?;
-    if !file.metadata().map_err(|error| invalid(error.to_string()))?.is_file() {
+    read_open_bounded(file, path, max, what)
+}
+
+/// [`read_bounded`] for a file already open, `path` naming it in errors.
+pub(crate) fn read_open_bounded(file: File, path: &Path, max: u64, what: &str) -> Result<String, ApiError> {
+    let invalid = |reason: String| ApiError::Invalid(format!("cannot read {what} {}: {reason}", path.display()));
+    let metadata = file.metadata().map_err(|error| invalid(error.to_string()))?;
+    if !metadata.is_file() {
         return Err(invalid("not a regular file".to_owned()));
     }
     let too_large = || invalid(format!("larger than {}", size_label(max)));
