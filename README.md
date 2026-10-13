@@ -81,8 +81,11 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   identity, references, entry point, and one paged list chosen with `--list` / `list`: `types` (fields and
   methods with ILAsm-style signatures such as `int32 Combine<T1>(T1)` and IL body sizes), `pinvokes` (the DLL
   export each P/Invoke method binds to) or `attributes` (custom attributes with their targets and
-  primitive/string/type arguments, filterable by `--parent-token`). Decoding is bounded against hostile
-  metadata. CIL is reported, never treated as native code.
+  primitive/string/type arguments, filterable by `--parent-token`). `rampage dotnet --il <token|Type::Name>`
+  (and the `dotnet_il` tool) disassembles one method's CIL, ILDasm style: tokens resolved to names and
+  signatures, `ldstr` literals, branch and switch labels, locals and exception clauses; `--offset` / `offset`
+  pages by instruction index, `--at IL_0042` / `at` starts at the instruction holding that IL offset. Decoding
+  is bounded against hostile metadata and bodies. CIL is reported, never treated as native code.
 
 ## Usage
 
@@ -95,6 +98,7 @@ rampage report persistence-surface|string-decoding <file>  # autostart indicator
 rampage report diff-builds <file> --other <file>
 rampage carve   <file> [--max-candidates N]  # embedded executables/archives by validated header; extracts nothing
 rampage dotnet  <file> [--list types|pinvokes|attributes] [--contains TEXT]  # .NET metadata, one list per page
+rampage dotnet  <file> --il <token|Type::Name> [--at IL_0042 | --offset N]  # one method's CIL, a page at a time
 rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
 rampage detect  <file> [--peid <userdb.txt>]  # producing packer/compiler/...; warns on skipped PeID entries
 rampage yara    <file> --rules <file|dir>     # run user-supplied YARA rules (embedded yara-x)
