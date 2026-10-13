@@ -89,12 +89,35 @@ pub struct DotNetSummary {
 
 /// One page of a managed method's CIL listing. `method` is a MethodDef token (`0x0600000d`, or decimal) or a
 /// `Namespace.Type::Name` (nested types as `Outer/Inner`; a bare method name also works) naming exactly one
-/// method; an overloaded name is refused with the candidates' tokens.
+/// method; an overloaded name is refused with the candidates' tokens. The page starts `offset` instructions in,
+/// or, given `at` instead, at the instruction containing that IL byte offset (the `IL_xxxx` label numbering).
 #[derive(Debug, Default, Clone)]
 pub struct DotNetIlQuery {
     pub method: String,
+    /// Instructions to skip: an instruction index, not an IL byte offset.
     pub offset: Option<usize>,
     pub limit: Option<usize>,
+    /// The IL byte offset to start the page at; see [`parse_il_offset`].
+    pub at: Option<u32>,
+}
+
+/// An IL byte offset as an ILDasm label (`IL_0042`, hex), hex with `0x`, or decimal.
+pub fn parse_il_offset(text: &str) -> Result<u32, String> {
+    let text = text.trim();
+    let hex = ["IL_", "il_", "0x", "0X"].iter().find_map(|prefix| text.strip_prefix(prefix));
+    let parsed = match hex {
+        Some(hex) => u32::from_str_radix(hex, 16),
+        None => text.parse(),
+    };
+    parsed.map_err(|_| format!("`{text}` is not an IL offset (IL_0042, 0x42 or 66)"))
+}
+
+/// The index of the instruction that holds IL byte `at`, which must lie within the body's `code_size` bytes.
+fn instruction_at(instructions: &[Instruction], at: u32, code_size: u32) -> Result<usize, ApiError> {
+    if at >= code_size {
+        return Err(ApiError::Invalid(format!("IL_{at:04x} is past the end of the {code_size}-byte body")));
+    }
+    Ok(instructions.partition_point(|instruction| instruction.offset <= at).saturating_sub(1))
 }
 
 /// A method's CIL: its header facts, its locals (up to a text cap), its exception clauses, and one page of its
@@ -137,12 +160,22 @@ impl Project {
         if method.is_empty() {
             return Err(ApiError::Invalid("method is required: a MethodDef token or Type::Method name".to_owned()));
         }
+        if query.at.is_some() && query.offset.is_some() {
+            return Err(ApiError::Invalid(
+                "give offset (an instruction index) or at (an IL offset), not both".to_owned(),
+            ));
+        }
         let listing = dotnet::method_il(&self.binary, method_selector(method)).map_err(|error| match error {
             IlError::Load(error) => ApiError::Invalid(format!("malformed .NET metadata: {error}")),
             IlError::NotFound(_) => ApiError::NotFound(error.to_string()),
             _ => ApiError::Invalid(error.to_string()),
         })?;
-        Ok(listing.map(|il| DotNetIl {
+        let Some(il) = listing else { return Ok(None) };
+        let offset = match query.at {
+            Some(at) => Some(instruction_at(&il.instructions, at, il.body.code_size)?),
+            None => query.offset,
+        };
+        Ok(Some(DotNetIl {
             token: il.token,
             method: il.method,
             signature: il.signature,
@@ -153,7 +186,7 @@ impl Project {
             locals_total: il.locals_total,
             locals_truncated: il.locals_truncated,
             exception_clauses: il.exception_clauses,
-            instructions: Page::of(il.instructions, query.offset, query.limit),
+            instructions: Page::of(il.instructions, offset, query.limit),
             truncated: il.truncated,
             warnings: il.warnings,
         }))

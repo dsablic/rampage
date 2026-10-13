@@ -98,6 +98,9 @@ enum Command {
         /// Entries of the list (or instructions with --il) to skip, for paging
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// With --il, start at the instruction containing this IL offset (IL_0042, 0x42 or decimal) instead
+        #[arg(long, requires = "il", conflicts_with = "offset", value_parser = rampage_api::parse_il_offset)]
+        at: Option<u32>,
         /// Entries per page
         #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
         limit: u64,
@@ -414,15 +417,16 @@ fn main() -> ExitCode {
         Command::ExportCfg { file } => commands::export_cfg(&mut out, &file, &options),
         Command::Triage { file } => commands::triage(&mut out, &file, &options),
         Command::Capabilities { file } => commands::capabilities(&mut out, &file, &options),
-        Command::Dotnet { file, il: Some(method), offset, limit, .. } => {
+        Command::Dotnet { file, il: Some(method), offset, limit, at, .. } => {
             let query = rampage_api::DotNetIlQuery {
                 method,
-                offset: Some(offset),
+                offset: at.is_none().then_some(offset),
                 limit: Some(usize::try_from(limit).unwrap_or(usize::MAX)),
+                at,
             };
             commands::dotnet_il(&mut out, &file, &query, &options)
         }
-        Command::Dotnet { file, list, contains, parent_token, offset, limit, il: None } => {
+        Command::Dotnet { file, list, contains, parent_token, offset, limit, il: None, .. } => {
             let query = rampage_api::DotNetQuery {
                 list,
                 contains,

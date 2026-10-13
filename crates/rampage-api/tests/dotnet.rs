@@ -69,7 +69,7 @@ fn dotnet_metadata_reports_signatures_and_filters_attributes() {
 #[test]
 fn dotnet_il_pages_one_method_by_token_or_name() {
     let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();
-    let query = |method: &str, offset, limit| DotNetIlQuery { method: method.to_owned(), offset, limit };
+    let query = |method: &str, offset, limit| DotNetIlQuery { method: method.to_owned(), offset, limit, at: None };
     let by_token = project.dotnet_il(&query("0x0600000d", Some(5), Some(3))).unwrap().expect("managed assembly");
     assert_eq!(by_token.method, "System.HashCode::Combine");
     let page = &by_token.instructions;
@@ -92,6 +92,29 @@ fn dotnet_il_pages_one_method_by_token_or_name() {
     assert!(matches!(project.dotnet_il(&query(" ", None, None)), Err(ApiError::Invalid(_))));
     let native = Session::default().open(&fixture("hello-x64.exe"), None).unwrap();
     assert!(native.dotnet_il(&query("0x06000001", None, None)).unwrap().is_none());
+}
+
+#[test]
+fn dotnet_il_pages_from_an_il_offset() {
+    let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();
+    let at = |at: &str, offset| DotNetIlQuery {
+        method: "0x0600000d".to_owned(),
+        offset,
+        limit: Some(2),
+        at: Some(rampage_api::parse_il_offset(at).unwrap()),
+    };
+    // IL_000b is the sixth instruction; IL_000c is the second byte of the same `ldarga.s`.
+    for label in ["IL_000b", "0xc", "11"] {
+        let page = project.dotnet_il(&at(label, None)).unwrap().unwrap().instructions;
+        assert_eq!((page.offset, page.items[0].text()), (5, "IL_000b: ldarga.s 0".to_owned()), "{label}");
+    }
+    assert_eq!(project.dotnet_il(&at("IL_0000", None)).unwrap().unwrap().instructions.offset, 0);
+    let last = project.dotnet_il(&at("IL_00e0", None)).unwrap().unwrap().instructions;
+    assert_eq!((last.offset, last.items.len()), (last.total - 1, 1));
+    let past = project.dotnet_il(&at("IL_00e1", None)).unwrap_err();
+    assert!(matches!(&past, ApiError::Invalid(text) if text.contains("past the end")), "{past}");
+    assert!(matches!(project.dotnet_il(&at("IL_0000", Some(1))), Err(ApiError::Invalid(_))));
+    assert!(rampage_api::parse_il_offset("IL_zz").is_err());
 }
 
 #[test]

@@ -146,6 +146,12 @@ fn dotnet_il_lists_a_method_a_page_at_a_time() {
     let page = json(&["--json", "dotnet", "--il", "0x0600000d", "--offset", "1", "--limit", "1"], ASSEMBLY);
     assert_eq!(page["instructions"]["items"][0]["opcode"], "box");
     assert_eq!(page["instructions"]["items"][0]["token"], 0x1B00_0001);
+    rampage(&["dotnet", "--il", "0x0600000d", "--at", "IL_000c", "--limit", "1"], ASSEMBLY)
+        .success()
+        .stdout(contains("\nIL_000b: ldarga.s 0\n"))
+        .stdout(contains("(page with --il 0x0600000d --offset 6)"));
+    rampage(&["dotnet", "--il", "0x0600000d", "--at", "IL_000c", "--offset", "2"], ASSEMBLY).failure();
+    rampage(&["dotnet", "--at", "0x42"], ASSEMBLY).failure();
     rampage(&["dotnet", "--il", "System.HashCode::Combine"], ASSEMBLY).failure().stderr(contains("0x0600000d"));
     rampage(&["dotnet", "--il", "Main", "--contains", "x"], ASSEMBLY).failure().stderr(contains("cannot be used"));
 }
