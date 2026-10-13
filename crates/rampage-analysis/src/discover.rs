@@ -158,44 +158,49 @@ pub struct ReturnFacts {
     pub returns: BTreeSet<u64>,
 }
 
-/// Rounds of noreturn inference: each one finds the wrappers around the previous round's noreturn functions.
-const MAX_NORETURN_ROUNDS: usize = 8;
-
 /// [`discover`], where a call to an address in `facts.noreturn` (a function, or the import slot an indirect call
 /// goes through) ends its block with no fall-through. A function is inferred not to return when no path through it
-/// returns and at least one ends in a noreturn call or a trap; discovery repeats with those added until no more
-/// are found, at most [`MAX_NORETURN_ROUNDS`] times. Anything unknown on a path (an unresolved indirect jump,
-/// undecodable bytes, a tail call to a function that may return) counts as returning, and nothing in
+/// returns and at least one ends in a noreturn call or a trap. Anything unknown on a path (an unresolved indirect
+/// jump, undecodable bytes, a tail call to a function that may return) counts as returning, and nothing in
 /// `facts.returns` is inferred.
+///
+/// Each discovery infers to a fixpoint by re-exploring only the functions that reach a newly inferred one. Ending
+/// those calls can drop code, and so function starts and branch targets, that the discovery was built on; it is
+/// repeated with everything inferred until it infers nothing more, which the growing noreturn set guarantees.
 pub fn discover_with_noreturn<M, F>(memory: &M, new_decoder: F, seeds: &[u64], facts: &ReturnFacts) -> Program
 where
     M: Memory,
     F: Fn() -> Box<dyn Disassembler> + Sync,
 {
     let mut noreturn = facts.noreturn.clone();
-    let mut round = 0;
     loop {
-        let (mut program, inferred) = discover_round(memory, &new_decoder, seeds, &noreturn);
-        round += 1;
-        let before = noreturn.len();
-        noreturn.extend(inferred.into_iter().filter(|address| !facts.returns.contains(address)));
-        if noreturn.len() == before || round == MAX_NORETURN_ROUNDS {
+        let (mut program, inferred) = discover_round(memory, &new_decoder, seeds, &noreturn, &facts.returns);
+        if inferred.is_subset(&noreturn) {
             program.noreturn = noreturn.into_iter().collect();
             return program;
         }
+        noreturn.extend(inferred);
     }
 }
 
-/// One discovery with the callees in `noreturn` known not to return, and the functions it infers never return.
-fn discover_round<M, F>(memory: &M, new_decoder: &F, seeds: &[u64], noreturn: &BTreeSet<u64>) -> (Program, Vec<u64>)
+/// One discovery with the callees in `noreturn` known not to return. Returns it with `noreturn` and every function
+/// inferred from it; when nothing new is inferred the discovery is exact for `noreturn`.
+fn discover_round<M, F>(
+    memory: &M,
+    new_decoder: &F,
+    seeds: &[u64],
+    noreturn: &BTreeSet<u64>,
+    returns: &BTreeSet<u64>,
+) -> (Program, BTreeSet<u64>)
 where
     M: Memory,
     F: Fn() -> Box<dyn Disassembler> + Sync,
 {
-    let explore_all = |starts: &[u64],
-                       known: &BTreeSet<u64>,
-                       branch_targets: Option<&[u64]>,
-                       modes: &[(u64, bool)]|
+    let explore_with = |starts: &[u64],
+                        known: &BTreeSet<u64>,
+                        branch_targets: Option<&[u64]>,
+                        modes: &[(u64, bool)],
+                        noreturn: &BTreeSet<u64>|
      -> Vec<Explored> {
         starts
             .par_iter()
@@ -204,6 +209,9 @@ where
                 explore(memory, decoder.as_mut(), known, branch_targets, noreturn, start)
             })
             .collect()
+    };
+    let explore_all = |starts: &[u64], known: &BTreeSet<u64>, branch_targets: Option<&[u64]>, modes: &[(u64, bool)]| {
+        explore_with(starts, known, branch_targets, modes, noreturn)
     };
 
     let initial_seeds: BTreeSet<u64> = seeds.iter().copied().filter(|&seed| memory.is_executable(seed)).collect();
@@ -304,13 +312,9 @@ where
     // Phase 1 saw every branch; a fall-through that is also a branch target joins paths and starts afresh.
     branch_targets.sort_unstable();
     branch_targets.dedup();
-    let (functions, mut xrefs, mut resolved_flows, mut noreturn_calls, inferred) = loop {
+    let (mut results, modes) = loop {
         let starts: Vec<u64> = known.iter().copied().collect();
-        let mut functions = Vec::with_capacity(starts.len());
-        let mut xrefs = Vec::new();
-        let mut resolved_flows = Vec::new();
-        let mut noreturn_calls = Vec::new();
-        let mut inferred = Vec::new();
+        let mut results = BTreeMap::new();
         let mut added = BTreeSet::new();
         let mut targets = branch_targets.clone();
         let mut jump_owners = HashMap::new();
@@ -328,42 +332,67 @@ where
                     added.insert(*target);
                 }
             }
-            code_modes.extend(result.instruction_modes);
+            code_modes.extend(result.instruction_modes.iter().copied());
             for &(_, at, thumb) in &result.mode_hints {
                 code_modes.entry(at).or_insert(thumb);
             }
             added.extend(
                 result
                     .new_seeds
-                    .into_iter()
-                    .filter(|at| !known.contains(at) && !undecodable.contains(at) && memory.is_executable(*at)),
+                    .iter()
+                    .copied()
+                    .filter(|&at| !known.contains(&at) && !undecodable.contains(&at) && memory.is_executable(at)),
             );
-            targets.extend(result.branch_targets);
-            resolved_flows.extend(result.resolved_flows);
-            xrefs.extend(result.xrefs);
-            noreturn_calls.extend(result.noreturn_calls);
-            if result.never_returns {
-                inferred.push(result.function.address);
-            }
-            functions.push(result.function);
+            targets.extend_from_slice(&result.branch_targets);
+            results.insert(result.function.address, result);
         }
         targets.sort_unstable();
         targets.dedup();
         let explored = known.len();
         known.retain(|start| !undecodable.contains(start));
         if added.is_empty() && targets == branch_targets && known.len() == explored {
-            break (functions, xrefs, resolved_flows, noreturn_calls, inferred);
+            break (results, modes);
         }
         known.extend(added);
         branch_targets = targets;
     };
+
+    // Infer to a fixpoint over this set of functions: a newly inferred function changes only the functions that
+    // call it, jump to it, point at it or run into it.
+    let mut noreturn = noreturn.clone();
+    loop {
+        let newly: BTreeSet<u64> = results
+            .values()
+            .filter(|result| result.never_returns)
+            .map(|result| result.function.address)
+            .filter(|address| !returns.contains(address) && !noreturn.contains(address))
+            .collect();
+        if newly.is_empty() {
+            break;
+        }
+        noreturn.extend(&newly);
+        let affected: Vec<u64> =
+            results.values().filter(|result| result.reaches(&newly)).map(|result| result.function.address).collect();
+        for result in explore_with(&affected, &known, Some(&branch_targets), &modes, &noreturn) {
+            results.insert(result.function.address, result);
+        }
+    }
+
+    let mut functions = Vec::with_capacity(results.len());
+    let (mut xrefs, mut resolved_flows, mut noreturn_calls) = (Vec::new(), Vec::new(), Vec::new());
+    for result in results.into_values() {
+        xrefs.extend(result.xrefs);
+        resolved_flows.extend(result.resolved_flows);
+        noreturn_calls.extend(result.noreturn_calls);
+        functions.push(result.function);
+    }
     xrefs.sort_unstable();
     xrefs.dedup();
     resolved_flows.sort_by_key(|flow| (flow.function, flow.address));
     noreturn_calls.sort_unstable();
     noreturn_calls.dedup();
     let code_modes = code_modes.into_iter().collect();
-    (Program { functions, xrefs, code_modes, resolved_flows, noreturn: Vec::new(), noreturn_calls }, inferred)
+    (Program { functions, xrefs, code_modes, resolved_flows, noreturn: Vec::new(), noreturn_calls }, noreturn)
 }
 
 struct Explored {
@@ -633,6 +662,19 @@ fn explore(
         resolved_flows,
         noreturn_calls,
         never_returns: exits.stops && !exits.returns,
+    }
+}
+
+impl Explored {
+    /// Whether a call, jump, code pointer, resolved indirect transfer or fall-through of this function reaches one
+    /// of `functions`.
+    fn reaches(&self, functions: &BTreeSet<u64>) -> bool {
+        self.xrefs.iter().any(|xref| functions.contains(&xref.to))
+            || self.resolved_flows.iter().any(|flow| match flow.flow {
+                Flow::Call(target) | Flow::Jump(target) => functions.contains(&target),
+                _ => false,
+            })
+            || self.function.blocks.iter().any(|block| functions.contains(&block.end))
     }
 }
 
@@ -1106,6 +1148,22 @@ mod tests {
         assert_eq!(program.noreturn, [0, 0x10, 0x20, 0x30]);
         assert_eq!(program.noreturn_calls, [0, 0x30]);
         assert_eq!(blocks(&program, 0x30), [(0x30, 0x35)]);
+    }
+
+    #[test]
+    fn long_wrapper_chains_are_inferred_to_the_end() {
+        // f_i at 0x10 * i: call f_(i+1); xor eax, eax; ret, for twelve wrappers; f_12 at 0xc0: ud2. Each wrapper
+        // never returns once the one it calls is known not to, however deep the chain.
+        let mut bytes = vec![0xcc; 0xc2];
+        for i in 0..12 {
+            put_call(&mut bytes, 0x10 * i, 0x10 * (i + 1));
+            bytes[0x10 * i + 5..0x10 * i + 8].copy_from_slice(&[0x31, 0xc0, 0xc3]);
+        }
+        bytes[0xc0..0xc2].copy_from_slice(&[0x0f, 0x0b]);
+        let program = run_noreturn(Arch::X86_64, bytes, &[0], &[]);
+        assert_eq!(program.noreturn, (0..=12).map(|i| 0x10 * i).collect::<Vec<u64>>());
+        assert_eq!(program.noreturn_calls, (0..12).map(|i| 0x10 * i).collect::<Vec<u64>>());
+        assert_eq!(blocks(&program, 0), [(0, 5)]);
     }
 
     #[test]
