@@ -380,6 +380,22 @@ async fn identify_functions_can_leave_out_the_bundled_database() {
     client.cancel().await.unwrap();
 }
 
+/// Function signatures (masked and exact) and callee keys are counted apart.
+#[tokio::test]
+async fn build_signatures_counts_function_signatures_and_callee_keys_apart() {
+    let client = connect().await;
+    let output = std::env::temp_dir().join(format!("rampage-mcp-build-db-{}.json", std::process::id()));
+    let arguments = json!({ "path": fixture("eval-ref-x86_64.elf"), "output": output });
+    let built = json_of(&call(&client, "build_signatures", arguments).await);
+    let written: Value = serde_json::from_str(&std::fs::read_to_string(&output).unwrap()).unwrap();
+    std::fs::remove_file(&output).unwrap();
+    let count = |field: &str| written.get(field).and_then(Value::as_object).map_or(0, |map| map.len() as u64);
+    assert_eq!(built["signatures"].as_u64(), Some(count("entries") + count("exact")), "{built}");
+    assert_eq!(built["callee_keys"].as_u64(), Some(count("calls")), "{built}");
+    assert!(count("calls") > 0, "{built}");
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn triage_and_imports_describe_a_binary() {
     let client = connect().await;

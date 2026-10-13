@@ -1049,11 +1049,18 @@ impl SignatureDb {
         }
     }
 
-    /// The number of unambiguous signatures.
+    /// The number of unambiguous function signatures, masked and exact. Callee keys, which name functions those
+    /// cannot tell apart, are counted by [`SignatureDb::callee_keys`].
     pub fn len(&self) -> usize {
-        self.entries.len() + self.exact.len() + self.calls.len()
+        self.entries.len() + self.exact.len()
     }
 
+    /// The number of unambiguous callee keys.
+    pub fn callee_keys(&self) -> usize {
+        self.calls.len()
+    }
+
+    /// Whether the database holds nothing to match: no function signatures and no callee keys.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.exact.is_empty() && self.calls.is_empty()
     }
@@ -1953,6 +1960,8 @@ mod tests {
         // A second name makes the body ambiguous; both functions then answer by their callees.
         db.add(hash, None, key("vsscanf"), "sscanf");
         assert_eq!(db.calls.len(), 2);
+        // Callee keys are not function signatures, though they still make the database worth matching against.
+        assert_eq!((db.len(), db.callee_keys(), db.is_empty()), (0, 2, false));
         let named = |callee: &'static str| move |_: u64| Some(callee);
         assert_eq!(db.identify_with_callees(&x64, &image(), &call, 0x1000, named("vfprintf")), Some("fprintf"));
         assert_eq!(db.identify_with_callees(&x64, &image(), &call, 0x1000, named("vsscanf")), Some("sscanf"));

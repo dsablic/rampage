@@ -449,7 +449,11 @@ pub fn tools() -> Vec<Tool> {
                 let database = project.build_signatures();
                 std::fs::write(&arguments.output, database.to_json())
                     .map_err(|error| ApiError::Invalid(format!("cannot write {}: {error}", arguments.output)))?;
-                Ok(serde_json::json!({ "signatures": database.len(), "output": arguments.output }))
+                Ok(serde_json::json!({
+                    "signatures": database.len(),
+                    "callee_keys": database.callee_keys(),
+                    "output": arguments.output,
+                }))
             },
         ),
         tool(

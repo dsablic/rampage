@@ -735,7 +735,8 @@ pub fn signatures(out: &mut impl Write, path: &Path, output: Option<&Path>, opti
     let json = database.to_json();
     if let Some(output) = output {
         std::fs::write(output, &json)?;
-        writeln!(out, "wrote {} signatures to {}", database.len(), output.display())?;
+        let (signatures, callee_keys) = (database.len(), database.callee_keys());
+        writeln!(out, "wrote {signatures} signatures and {callee_keys} callee keys to {}", output.display())?;
     } else {
         writeln!(out, "{json}")?;
     }
