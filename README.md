@@ -97,8 +97,9 @@ rampage carve   <file> [--max-candidates N]  # embedded executables/archives by 
 rampage dotnet  <file> [--list types|pinvokes|attributes] [--contains TEXT]  # .NET metadata, one list per page
 rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
 rampage detect  <file> [--peid <userdb.txt>]  # producing packer/compiler/...; warns on skipped PeID entries
-rampage yara    <file> --rules <file|dir>     # run user-supplied YARA rules (embedded yara-x)
-rampage capa    <file> --rules <dir>          # evaluate Mandiant capa rules (file-scope subset)
+rampage yara    <file> [--rules <file|dir>]   # user-supplied and data-pack YARA rules (embedded yara-x)
+rampage capa    <file> [--rules <dir>]        # user and data-pack Mandiant capa rules (file-scope subset)
+rampage packs list | check <dir>             # data packs in effect, or validate one pack
 rampage capabilities <file>                   # built-in corroborated behavior indicators
 rampage audit   <file>                       # bounded decode coverage and unreliable-code evidence
 rampage metadata <file>                      # demangled symbols, named RTTI/vtables, ObjC selectors
@@ -133,7 +134,11 @@ rampage mcp [--all-tools]                    # MCP server on stdin/stdout (core 
 --json                 machine-readable output for every command
 --arch x86_64|aarch64|arm|...  pick a slice from a universal Mach-O
 --image-offset 0x...   open the ELF/PE/Mach-O embedded at this file offset (e.g. a carve candidate) in place
+--pack <dir>           layer a data pack over the bundled heuristic databases (repeatable; see Data packs)
 ```
+
+`--rules` is optional for `yara` and `capa` when a data pack holds rules of that kind. YARA `include` statements
+are refused in every rule set (yours, packs' and agents'): each rule file must stand alone.
 
 Addresses accept `0x` hex, decimal, symbol and export names, or `sub_<hex>`. In JSON output every address is
 a `"0x…"` string, because JSON numbers lose precision above 2^53 in common consumers.
@@ -147,6 +152,43 @@ picks up names an agent saves through MCP within a second.
 Snapshot annotations use a capture-identity log instead, sharing edits only across equal analysis identities
 in the same directory by default. Legacy unscoped snapshot logs are not automatically loaded or migrated;
 see [runtime snapshots](docs/runtime-snapshots.md) for persistence and explicit cross-directory reuse.
+
+## Data packs
+
+A data pack is a directory that extends the heuristic databases with data only: nothing is downloaded or run.
+Load packs with `--pack <dir>` (repeatable) or `RAMPAGE_PACKS` (a platform path list, loaded after the flags); a
+directory given twice loads once. `rampage packs list` shows the packs in effect, in precedence order, with each
+content's status; `rampage packs check <dir>` validates one pack and fails when anything in it does not load. Over
+MCP, `list_packs` (detection group) does the same, and detection results carry the pack problems bearing on them
+in `warnings`. Packs load on first use, so commands that consult no database never read them.
+
+Each pack holds a `rampage-pack.toml`; unknown fields are rejected:
+
+```toml
+name = "acme-sdk"                 # letters, digits, -, _ and .; not rampage-builtin or default
+version = "1.2.0"
+license = "CC-BY-4.0"             # an SPDX expression
+source = "https://example.com/acme-sdk"   # provenance
+description = "Signatures and rules for the Acme SDK"
+
+[[contents]]
+kind = "signatures"               # a database from `rampage signatures` / build_signatures (JSON)
+path = "sigs/x86_64.json"
+arch = "x86_64"                   # optional, signatures only; must match the database
+
+[[contents]]
+kind = "yara"                     # a .yar/.yara file or a directory of them
+path = "yara"
+```
+
+Kinds: `signatures` (library identification), `peid` (a PeID `userdb.txt` overlaid for tool detection), `yara`
+(compiled in a namespace named after the pack), `capa` (a capa rule file or directory tree) and `constants`
+(accepted, but reported as unsupported: the crypto-constant database takes no user data yet). For identification
+the first database to name a function wins: a user database (`--db`), then packs in the order given, then the
+bundled `rampage-builtin` one; each match names its `source`. PeID, YARA and capa contents all run beside the
+bundled and user-supplied ones. Every path must stay inside the pack (symbolic links included), each file is read
+once with a size cap and within per-pack and overall budgets, at most 64 packs load, and a content that fails is
+reported without keeping the others from loading.
 
 ## Desktop UI
 
@@ -177,12 +219,12 @@ groups so the list an agent reads stays short:
   `annotate_batch` (bulk naming), `check_names` (pre-flight), `undo`, `redo`, `list_annotations`, and the
   workflows `triage_report`, `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
-  `capa_detect`, `find_crypto`
+  `capa_detect`, `find_crypto`, `list_packs`
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `class_evidence`,
   `language_metadata`
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`
 - `diagnostics`: `analysis_diagnostics`, `inspect_jump_table`
-- `dotnet`: `dotnet_metadata`
+- `dotnet`: `dotnet_metadata`, `dotnet_il`
 - `carve`: `carve`
 
 By default the server lists `core` and an `enable_tools` meta-tool: called without arguments it lists every group
@@ -190,7 +232,8 @@ with a one-line description and its tools; `{"groups": ["detection"]}` (or `["al
 `notifications/tools/list_changed`. Calling a tool of a group that is not enabled fails with the group to enable
 and runs nothing. For clients that do not refresh their tool list, `rampage mcp --all-tools` lists every group
 from the start, and `RAMPAGE_MCP_TOOLS=all` or `RAMPAGE_MCP_TOOLS=detection,types` chooses groups by environment
-(`core` is always served). The UI's assistant always offers every tool.
+(`core` is always served). The UI's assistant offers every tool that works on the open binary (all but `carve`
+and `list_packs`). Workflow reports name each suggested tool's `group`, so an agent knows which to enable.
 
 `undo` and `redo` revert or reapply one step, which may be a whole batch. `carve` takes any file path rather than
 a binary: it pages candidates with `offset`/`limit` and reports `more` instead of a total, scanning only as far as

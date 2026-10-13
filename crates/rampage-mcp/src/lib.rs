@@ -28,14 +28,6 @@ List rampage's tool groups (name, one-line description, tool count and names, wh
 with `groups`, e.g. [\"detection\"] or [\"all\"]. Enabling adds the group's tools to the tool list and sends \
 notifications/tools/list_changed. Without `groups` nothing changes.";
 
-const LIST_PACKS: &str = "list_packs";
-const LIST_PACKS_DESCRIPTION: &str = "\
-List the heuristic-database packs in effect, in precedence order: every data pack loaded with --pack or \
-RAMPAGE_PACKS (earlier ones first), then the built-in one (bundled signatures, tool and crypto-constant \
-databases), which applies last. Each has its name, \
-version, SPDX licence, source (provenance) and description, and each content its kind, path and status (loaded, \
-error or unsupported) with a detail saying what loaded or why not. Takes no arguments.";
-
 const INSTRUCTIONS_INTRO: &str = "\
 rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, \
 RISC-V, SPARC, s390x and m68k. Every tool takes the binary's file path; the first call that needs analysis runs it \
@@ -228,7 +220,7 @@ impl RampageServer {
     fn catalog(&self) -> impl Iterator<Item = (Group, &'static str)> + '_ {
         let tools = self.tools.iter().map(|tool| (tool.group, tool.name));
         let file_tools = self.file_tools.iter().map(|tool| (tool.group, tool.name));
-        tools.chain(file_tools).chain([(Group::Detection, LIST_PACKS)])
+        tools.chain(file_tools)
     }
 
     /// Enables the groups `arguments` names, returning the groups with their tools and the ones newly enabled.
@@ -287,14 +279,8 @@ impl RampageServer {
 
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
     fn run(&self, name: &str, mut arguments: Map<String, Value>) -> CallToolResult {
-        if name == LIST_PACKS {
-            return match serde_json::to_string(&self.packs().listing()) {
-                Ok(output) => CallToolResult::success(vec![ContentBlock::text(output)]),
-                Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
-            };
-        }
         if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
-            return match tool.call(Value::Object(arguments)) {
+            return match tool.call(&self.packs(), Value::Object(arguments)) {
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
                 Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
             };
@@ -384,11 +370,7 @@ impl ServerHandler for RampageServer {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
             rmcp::model::Tool::new(tool.name, tool.description, schema)
         });
-        let list_packs = enabled.contains(&Group::Detection).then(|| {
-            let schema = json!({ "type": "object", "properties": {} });
-            rmcp::model::Tool::new(LIST_PACKS, LIST_PACKS_DESCRIPTION, schema.as_object().cloned().unwrap_or_default())
-        });
-        let all = std::iter::once(meta).chain(tools).chain(file_tools).chain(list_packs);
+        let all = std::iter::once(meta).chain(tools).chain(file_tools);
         Ok(ListToolsResult::with_all_items(all.collect()))
     }
 

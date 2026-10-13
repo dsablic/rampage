@@ -1,7 +1,9 @@
 //! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
-use crate::{ApiError, FunctionsQuery, ListQuery, Project, ReportLimits, StringsQuery, WorkflowReport, XrefQuery};
+use crate::{
+    ApiError, FunctionsQuery, ListQuery, Packs, Project, ReportLimits, StringsQuery, WorkflowReport, XrefQuery,
+};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -15,7 +17,8 @@ const DEFAULT_PAGE: usize = 100;
 type Handler = Box<dyn Fn(&Project, Value) -> Result<Value, String> + Send + Sync>;
 
 /// A set of related tools. MCP clients see the core group first and enable the others when they need them, so the
-/// tool list stays short as it grows; the UI's assistant offers every group.
+/// tool list stays short as it grows; the UI's assistant offers every tool of every group that works on the open
+/// binary ([`tools`], not the [`file_tools`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Group {
     Core,
@@ -167,20 +170,22 @@ fn error_chain(error: &ApiError) -> String {
     text
 }
 
-/// A tool that takes a file path instead of a project, for files no loader needs to open first.
+/// A tool that works without a loaded binary: on a file path no loader needs to open first (carve), or on the
+/// data packs in effect alone (list_packs).
 pub struct FileTool {
     pub group: Group,
     pub name: &'static str,
     pub description: &'static str,
-    /// Includes the required `path` argument.
+    /// The whole input schema; a tool taking a file has a required `path` argument.
     pub input_schema: Value,
-    handler: fn(Value) -> Result<Value, String>,
+    handler: fn(&Packs, Value) -> Result<Value, String>,
 }
 
 impl FileTool {
-    /// Runs the tool with `input`, returning its JSON result or an error the caller can read.
-    pub fn call(&self, input: Value) -> Result<Value, String> {
-        (self.handler)(input)
+    /// Runs the tool with `input` and the `packs` in effect, returning its JSON result or an error the caller can
+    /// read.
+    pub fn call(&self, packs: &Packs, input: Value) -> Result<Value, String> {
+        (self.handler)(packs, input)
     }
 }
 
@@ -194,12 +199,13 @@ struct CarveArgs {
     limit: Option<usize>,
 }
 
-/// Every tool that takes a file path instead of a project.
+/// Every tool that works without a loaded binary.
 pub fn file_tools() -> Vec<FileTool> {
-    vec![FileTool {
-        group: Group::Carve,
-        name: "carve",
-        description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers: \
+    vec![
+        FileTool {
+            group: Group::Carve,
+            name: "carve",
+            description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers: \
                       ELF, PE, Mach-O (thin and universal), zip, gzip, xz, zstd, LZMA, squashfs, cpio, uImage and \
                       Android boot images. Each candidate has its offset, kind, validated header facts (arch, bits, \
                       endianness, declared size) and an extent estimated from headers, with confidence validated or \
@@ -207,15 +213,31 @@ pub fn file_tools() -> Vec<FileTool> {
                       scan stops at 4096 candidates, saying so. Paginated with offset/limit: each page scans only \
                       as far as the candidate after it and reports `more` (whether another page follows) rather \
                       than a total.",
-        input_schema: schema::<CarveArgs>(),
-        handler: |input| {
-            let args: CarveArgs =
-                serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
-            let page = crate::carve_page(std::path::Path::new(&args.path), args.offset, args.limit)
-                .map_err(|error| error_chain(&error))?;
-            serde_json::to_value(page).map_err(|error| error.to_string())
+            input_schema: schema::<CarveArgs>(),
+            handler: |_, input| {
+                let args: CarveArgs =
+                    serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
+                let page = crate::carve_page(std::path::Path::new(&args.path), args.offset, args.limit)
+                    .map_err(|error| error_chain(&error))?;
+                serde_json::to_value(page).map_err(|error| error.to_string())
+            },
         },
-    }]
+        FileTool {
+            group: Group::Detection,
+            name: "list_packs",
+            description: "List the heuristic-database packs in effect, in precedence order: every data pack loaded \
+                          with --pack or RAMPAGE_PACKS (earlier ones first), then the built-in one (bundled \
+                          signatures, tool and crypto-constant databases), which applies last. Each has its name, \
+                          version, SPDX licence, source (provenance) and description, and each content its kind, \
+                          path and status (loaded, error or unsupported) with a detail saying what loaded or why not. \
+                          Takes no arguments.",
+            input_schema: schema::<Nothing>(),
+            handler: |packs, input| {
+                serde_json::from_value::<Nothing>(input).map_err(|error| format!("invalid arguments: {error}"))?;
+                serde_json::to_value(packs.listing()).map_err(|error| error.to_string())
+            },
+        },
+    ]
 }
 
 /// No arguments.
@@ -1060,6 +1082,10 @@ mod tests {
             assert_eq!(group.name().parse::<Group>(), Ok(group));
         }
         assert!("everything".parse::<Group>().unwrap_err().contains("core, detection"));
+        assert_eq!(group_of("list_packs"), Some(Group::Detection));
+        let listing = file_tools().into_iter().find(|tool| tool.name == "list_packs").unwrap();
+        let packs = listing.call(&Packs::default(), serde_json::json!({})).unwrap();
+        assert_eq!(packs[0]["name"], crate::packs::BUILTIN_PACK);
     }
 
     #[test]
