@@ -3,9 +3,9 @@ use iced_x86::{
     OpKind, Register,
 };
 
-use crate::{Disassembler, Flow, Insn, JumpTable};
+use crate::{Disassembler, Facts, Flow, Insn, JumpTable, RegisterFacts};
 
-mod switch;
+pub(crate) mod switch;
 
 /// Immediates below this are almost never addresses (small constants, flags, sizes).
 const MIN_IMMEDIATE_ADDRESS: u64 = 0x1000;
@@ -32,10 +32,8 @@ impl X86Disassembler {
     fn decode_raw(&self, bytes: &[u8], address: u64) -> Instruction {
         Decoder::with_ip(self.bitness, bytes, address, DecoderOptions::NONE).decode()
     }
-}
 
-impl Disassembler for X86Disassembler {
-    fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
+    fn decode_reading(&mut self, bytes: &[u8], address: u64, read: Option<&dyn Fn(u64, u8) -> Option<u64>>) -> Insn {
         let instruction = self.decode_raw(bytes, address);
         if instruction.is_invalid() {
             self.jump_table = None;
@@ -49,7 +47,7 @@ impl Disassembler for X86Disassembler {
                 conditional: false,
             };
         }
-        self.jump_table = self.registers.step(&instruction, self.bitness, &mut self.info);
+        self.jump_table = self.registers.step(&instruction, self.bitness, &mut self.info, read);
         let mut flow = flow_of(&instruction);
         // `call 1f; 1: pop reg` and `call 1f; 1: mov reg, [esp]` read the PC; a callee would not start by taking
         // its own return address.
@@ -71,6 +69,16 @@ impl Disassembler for X86Disassembler {
             conditional: false,
         }
     }
+}
+
+impl Disassembler for X86Disassembler {
+    fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
+        self.decode_reading(bytes, address, None)
+    }
+
+    fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
+        self.decode_reading(bytes, address, Some(read))
+    }
 
     fn reset(&mut self) {
         self.registers = switch::Registers::default();
@@ -79,6 +87,23 @@ impl Disassembler for X86Disassembler {
 
     fn jump_table(&self) -> Option<JumpTable> {
         self.jump_table
+    }
+
+    fn facts(&self) -> Option<RegisterFacts> {
+        Some(RegisterFacts(Facts::X86(Box::new(self.registers.fall_through()))))
+    }
+
+    fn taken_facts(&self) -> Option<RegisterFacts> {
+        Some(RegisterFacts(Facts::X86(Box::new(self.registers.taken()))))
+    }
+
+    fn assume(&mut self, facts: &RegisterFacts) {
+        if let RegisterFacts(Facts::X86(registers)) = facts {
+            self.registers = registers.as_ref().clone();
+            self.jump_table = None;
+        } else {
+            self.join();
+        }
     }
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {

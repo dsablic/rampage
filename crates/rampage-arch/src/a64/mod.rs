@@ -4,7 +4,7 @@
 //! and its assembly syntax. The operand semantics the open-source specification leaves out (how field values
 //! become register names, immediates and labels) are written by hand in `operands.rs`.
 
-mod flow;
+pub(crate) mod flow;
 mod helpers;
 mod operands;
 #[allow(clippy::all)]
@@ -15,7 +15,7 @@ mod undefined;
 
 use crate::mrs::{self, Encoding, State, Syntax};
 
-use crate::{Disassembler, Flow, Insn, JumpTable};
+use crate::{Disassembler, Facts, Flow, Insn, JumpTable, RegisterFacts};
 
 pub use operands::LabelStyle;
 
@@ -175,6 +175,25 @@ impl Disassembler for A64Disassembler {
 
     fn jump_table(&self) -> Option<JumpTable> {
         self.jump_table
+    }
+
+    fn facts(&self) -> Option<RegisterFacts> {
+        Some(RegisterFacts(Facts::A64(Box::new(self.addresses.fall_through()))))
+    }
+
+    fn taken_facts(&self) -> Option<RegisterFacts> {
+        Some(RegisterFacts(Facts::A64(Box::new(self.addresses.taken()))))
+    }
+
+    fn assume(&mut self, facts: &RegisterFacts) {
+        if let RegisterFacts(Facts::A64(addresses)) = facts {
+            self.addresses = addresses.as_ref().clone();
+            self.resolved = None;
+            self.jump_base = None;
+            self.jump_table = None;
+        } else {
+            self.join();
+        }
     }
 }
 

@@ -259,6 +259,29 @@ impl JumpTable {
     }
 }
 
+/// What a decoder's run has proven about registers at one point (known addresses, bounded indices, copies,
+/// loaded table entries), for carrying across joins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisterFacts(Facts);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Facts {
+    X86(Box<x86::switch::Registers>),
+    A64(Box<a64::flow::Addresses>),
+}
+
+impl RegisterFacts {
+    /// What holds on both of two paths that join.
+    pub fn meet(&self, other: &Self) -> Self {
+        match (&self.0, &other.0) {
+            (Facts::X86(a), Facts::X86(b)) => RegisterFacts(Facts::X86(Box::new(a.meet(b)))),
+            (Facts::A64(a), Facts::A64(b)) => RegisterFacts(Facts::A64(Box::new(a.meet(b)))),
+            // Facts from different decoders share nothing.
+            _ => RegisterFacts(Facts::X86(Box::default())),
+        }
+    }
+}
+
 pub trait Disassembler {
     /// Decodes one instruction. Undecodable bytes yield a `Flow::Invalid` instruction.
     ///
@@ -306,6 +329,18 @@ pub trait Disassembler {
     fn jump_table(&self) -> Option<JumpTable> {
         None
     }
+    /// What the run has proven about registers on the fall-through path of the instruction just decoded, or `None`
+    /// when this decoder cannot carry its facts across joins.
+    fn facts(&self) -> Option<RegisterFacts> {
+        None
+    }
+    /// What the run has proven about registers where the conditional branch just decoded is taken.
+    fn taken_facts(&self) -> Option<RegisterFacts> {
+        self.facts()
+    }
+    /// Continues the run from `facts`, which must hold on every path into the next instruction decoded. Facts from
+    /// another kind of decoder say nothing, so the run forgets what it proved, as at a join.
+    fn assume(&mut self, _facts: &RegisterFacts) {}
     /// Instructions executed after a branch before it takes effect (MIPS and SPARC delay slots).
     fn delay_slots(&self) -> u8 {
         0

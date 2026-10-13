@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use joined_switches::Assumed;
 use rampage_arch::{Disassembler, Flow, JumpTable, MAX_JUMP_TABLE_ENTRIES};
 use rampage_loaders::Binary;
 use rayon::prelude::*;
@@ -10,6 +11,7 @@ use serde::Serialize;
 use crate::memory::Memory;
 
 mod exits;
+mod joined_switches;
 
 use exits::{Exits, never_returning};
 
@@ -238,19 +240,23 @@ where
                         known: &BTreeSet<u64>,
                         branch_targets: Option<&[u64]>,
                         modes: &[(u64, bool)],
-                        noreturn: &BTreeSet<u64>|
+                        noreturn: &BTreeSet<u64>,
+                        assumed: &Assumed|
      -> Vec<Explored> {
         starts
             .par_iter()
             .map_init(new_decoder, |decoder, &start| {
                 decoder.set_code_modes(modes);
-                explore(memory, decoder.as_mut(), known, branch_targets, noreturn, start)
+                explore(memory, decoder.as_mut(), known, branch_targets, noreturn, assumed, start)
             })
             .collect()
     };
-    let explore_all = |starts: &[u64], known: &BTreeSet<u64>, branch_targets: Option<&[u64]>, modes: &[(u64, bool)]| {
-        explore_with(starts, known, branch_targets, modes, noreturn)
-    };
+    let explore_all =
+        |starts: &[u64],
+         known: &BTreeSet<u64>,
+         branch_targets: Option<&[u64]>,
+         modes: &[(u64, bool)],
+         assumed: &Assumed| { explore_with(starts, known, branch_targets, modes, noreturn, assumed) };
 
     let initial_seeds: BTreeSet<u64> = seeds.iter().copied().filter(|&seed| memory.is_executable(seed)).collect();
     let mut code_modes = BTreeMap::new();
@@ -273,7 +279,7 @@ where
         let modes: Vec<_> = code_modes.iter().map(|(&at, &thumb)| (at, thumb)).collect();
         while !pending.is_empty() {
             let mut next = BTreeSet::new();
-            for result in explore_all(&pending, &known, None, &modes) {
+            for result in explore_all(&pending, &known, None, &modes, &Assumed::new()) {
                 contributions.extend(result.mode_hints);
                 instruction_owners
                     .extend(result.instruction_modes.iter().map(|&(at, _)| (at, result.function.address)));
@@ -350,6 +356,10 @@ where
     // Phase 1 saw every branch; a fall-through that is also a branch target joins paths and starts afresh.
     branch_targets.sort_unstable();
     branch_targets.dedup();
+    // Switch tables proven across joins are assumed in the next exploration and kept only while that exploration
+    // still proves them; one that is not is never assumed again, so this settles.
+    let mut assumed = Assumed::new();
+    let mut rejected = BTreeSet::new();
     let (mut results, modes) = loop {
         let starts: Vec<u64> = known.iter().copied().collect();
         let mut results = BTreeMap::new();
@@ -357,7 +367,7 @@ where
         let mut targets = branch_targets.clone();
         let mut jump_owners = HashMap::new();
         let modes: Vec<_> = code_modes.iter().map(|(&at, &thumb)| (at, thumb)).collect();
-        for result in explore_all(&starts, &known, Some(&branch_targets), &modes) {
+        for result in explore_all(&starts, &known, Some(&branch_targets), &modes, &assumed) {
             if result.function.blocks.is_empty() {
                 undecodable.insert(result.function.address);
                 continue;
@@ -388,9 +398,13 @@ where
         targets.dedup();
         let explored = known.len();
         known.retain(|start| !undecodable.contains(start));
-        if added.is_empty() && targets == branch_targets && known.len() == explored {
+        let mut proven = joined_switches::resolve(memory, new_decoder, &results, &assumed);
+        rejected.extend(assumed.iter().filter(|&(jump, table)| proven.get(jump) != Some(table)).map(|(&jump, _)| jump));
+        proven.retain(|jump, _| !rejected.contains(jump));
+        if added.is_empty() && targets == branch_targets && known.len() == explored && proven == assumed {
             break (results, modes);
         }
+        assumed = proven;
         known.extend(added);
         branch_targets = targets;
     };
@@ -407,7 +421,7 @@ where
         noreturn.extend(&newly);
         let affected: Vec<u64> =
             results.values().filter(|result| result.reaches(&newly)).map(|result| result.function.address).collect();
-        for result in explore_with(&affected, &known, Some(&branch_targets), &modes, &noreturn) {
+        for result in explore_with(&affected, &known, Some(&branch_targets), &modes, &noreturn, &assumed) {
             results.insert(result.function.address, result);
         }
     }
@@ -448,17 +462,21 @@ struct Explored {
     noreturn_calls: Vec<u64>,
     /// How its paths leave it.
     exits: Exits,
+    /// Register-indirect jumps left without successors.
+    unresolved_jumps: Vec<u64>,
 }
 
 /// Explores the function at `start`. `all_branch_targets`, when given, lists every branch target in the program:
 /// a conditional branch's fall-through keeps the decoder state (AArch64 ADRP pages) of the path into it unless a
-/// branch also lands there.
+/// branch also lands there. A register-indirect jump the run does not resolve dispatches through the table
+/// `assumed` gives it, if any.
 fn explore(
     memory: &impl Memory,
     decoder: &mut dyn Disassembler,
     known: &BTreeSet<u64>,
     all_branch_targets: Option<&[u64]>,
     noreturn: &BTreeSet<u64>,
+    assumed: &Assumed,
     start: u64,
 ) -> Explored {
     decoder.begin_run();
@@ -507,6 +525,7 @@ fn explore(
     let mut mode_hints = Vec::new();
     let mut resolved_flows = Vec::new();
     let mut switches = Vec::new();
+    let mut unresolved_jumps = Vec::new();
     let mut worklist = vec![start];
     // A conditional branch's fall-through is explored next; it keeps the decoder state only when no branch joins
     // it there.
@@ -641,8 +660,11 @@ fn explore(
                     break;
                 }
                 Flow::IndirectJump => {
-                    let resolved = jump_table.and_then(|table| {
-                        let entries = switch_targets(memory, decoder, &table, address, all_branch_targets?)?;
+                    let straight = jump_table.filter(|table| {
+                        all_branch_targets.is_some_and(|joins| !joins_after_guard(table, address, joins))
+                    });
+                    let resolved = straight.or_else(|| assumed.get(&(start, address)).copied()).and_then(|table| {
+                        let entries = switch_targets(memory, decoder, &table)?;
                         Some((table.guard, entries))
                     });
                     if let Some((guard, table)) = resolved {
@@ -662,6 +684,7 @@ fn explore(
                     } else if stops {
                         exits.stops = true;
                     } else {
+                        unresolved_jumps.push(address);
                         exits.returns = true;
                     }
                     address = next;
@@ -708,6 +731,7 @@ fn explore(
         resolved_flows,
         noreturn_calls,
         exits,
+        unresolved_jumps,
     }
 }
 
@@ -731,20 +755,17 @@ struct CodeRefs {
     accessed: Vec<u64>,
 }
 
-/// The entry targets, in table order, of the switch whose register-indirect jump at `jump` dispatches through
-/// `table`, or `None` to leave the jump unresolved. The decoder proved the index bound along the straight-line run
-/// from the comparison, so it holds only if no branch joins that run after the comparison. Every entry must be read
-/// from read-only image data and select an instruction in code.
-fn switch_targets(
-    memory: &impl Memory,
-    decoder: &mut dyn Disassembler,
-    table: &JumpTable,
-    jump: u64,
-    joins: &[u64],
-) -> Option<Vec<u64>> {
+/// Whether a branch joins the straight-line run from `table`'s comparison to the jump at `jump`, along which the
+/// decoder proved the index bound.
+fn joins_after_guard(table: &JumpTable, jump: u64, joins: &[u64]) -> bool {
     let after_guard = joins.partition_point(|&target| target <= table.guard);
-    let joined = joins.get(after_guard).is_some_and(|&target| target <= jump);
-    if joined || table.entries > MAX_JUMP_TABLE_ENTRIES {
+    joins.get(after_guard).is_some_and(|&target| target <= jump)
+}
+
+/// The entry targets, in table order, of a switch that dispatches through `table`, or `None` to leave its jump
+/// unresolved. Every entry must be read from read-only image data and select an instruction in code.
+fn switch_targets(memory: &impl Memory, decoder: &mut dyn Disassembler, table: &JumpTable) -> Option<Vec<u64>> {
+    if table.entries > MAX_JUMP_TABLE_ENTRIES {
         return None;
     }
     (0..table.entries)
@@ -767,6 +788,7 @@ fn split_block(blocks: &mut BTreeMap<u64, u64>, address: u64) {
 
 #[cfg(test)]
 mod tests {
+    mod joined_switch;
     mod literal_pools;
     mod x86_switch;
 
@@ -893,6 +915,10 @@ mod tests {
         }
         fn immediates_may_be_addresses(&self) -> bool {
             false
+        }
+        fn read_pointer(&self, address: u64, size: u8) -> Option<u64> {
+            let (bytes, offset) = self.region(address).filter(|_| address < DATA)?;
+            rampage_arch::bytes::read_uint(bytes, offset, usize::from(size), false)
         }
         fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
             let (bytes, offset) = self.region(address).filter(|_| (RODATA..DATA).contains(&address))?;

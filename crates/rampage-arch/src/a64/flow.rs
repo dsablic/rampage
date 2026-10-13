@@ -14,7 +14,7 @@ use crate::{Flow, JumpTable, MAX_JUMP_TABLE_ENTRIES};
 
 /// Addresses known to be held by general-purpose registers: ADRP pages, and the full addresses an ADD forms
 /// from them.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Addresses {
     valid: u32,
     /// Registers holding a page rather than a full address.
@@ -32,9 +32,11 @@ pub struct Addresses {
     /// Registers holding a switch-table entry, or a target formed from one.
     entries: [Option<Entry>; 31],
     pub memory_changed: bool,
+    /// Registers whose bound the conditional branch just analyzed proved on its fall-through path only.
+    fall_through_bounds: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Compare {
     register: u64,
     limit: u64,
@@ -42,7 +44,7 @@ struct Compare {
     address: u64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Bound {
     max: u64,
     /// Whether the bound covers the whole X register rather than only its W view.
@@ -51,7 +53,7 @@ struct Bound {
 }
 
 /// How a table load extends its entry into the 64-bit register.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Extension {
     Zero,
     Sign,
@@ -59,7 +61,7 @@ enum Extension {
     SignToW,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Entry {
     table: JumpTable,
     load: Extension,
@@ -122,6 +124,65 @@ impl Addresses {
 
     fn entry(&self, register: u64) -> Option<Entry> {
         self.entries.get(usize::try_from(register).ok()?).copied().flatten()
+    }
+
+    /// The facts on the fall-through path of the instruction just analyzed, with nothing kept for registers that
+    /// hold no address.
+    pub fn fall_through(&self) -> Self {
+        let mut facts = Self { fall_through_bounds: 0, ..self.clone() };
+        for register in 0..31 {
+            if facts.valid & (1 << register) == 0 {
+                facts.value[register] = 0;
+            }
+            if facts.derived & (1 << register) == 0 {
+                facts.derived_base[register] = 0;
+            }
+        }
+        facts.page &= facts.valid;
+        facts
+    }
+
+    /// The facts where the conditional branch just analyzed is taken: its bound holds only when it is not.
+    pub fn taken(&self) -> Self {
+        let mut taken = self.fall_through();
+        for register in (0..31).filter(|register| self.fall_through_bounds & (1 << register) != 0) {
+            taken.bounds[register] = None;
+        }
+        taken
+    }
+
+    /// What holds on both of two paths that join.
+    pub fn meet(&self, other: &Self) -> Self {
+        fn equal<T: PartialEq>(a: Option<T>, b: Option<T>) -> Option<T> {
+            if a == b { a } else { None }
+        }
+        let (a, b) = (self.fall_through(), other.fall_through());
+        let valid = a.valid & b.valid & !(a.page ^ b.page);
+        let valid = (0..31)
+            .filter(|&register| a.value[register] == b.value[register])
+            .fold(0, |mask, register| mask | (valid & (1 << register)));
+        let derived = (0..31)
+            .filter(|&register| a.derived_base[register] == b.derived_base[register])
+            .fold(0, |mask, register| mask | (a.derived & b.derived & (1 << register)));
+        // A bound survives only from the one comparison that guards every path, so a switch has a single guard.
+        let bound = |a: Option<Bound>, b: Option<Bound>| {
+            let (a, b) = a.zip(b).filter(|(a, b)| a.guard == b.guard)?;
+            Some(Bound { max: a.max.max(b.max), wide: a.wide && b.wide, guard: a.guard })
+        };
+        Self {
+            valid,
+            page: a.page & valid,
+            value: a.value,
+            derived,
+            derived_base: a.derived_base,
+            upper_zero: a.upper_zero & b.upper_zero,
+            compare: equal(a.compare, b.compare),
+            bounds: std::array::from_fn(|register| bound(a.bounds[register], b.bounds[register])),
+            entries: std::array::from_fn(|register| equal(a.entries[register], b.entries[register])),
+            memory_changed: a.memory_changed || b.memory_changed,
+            fall_through_bounds: 0,
+        }
+        .fall_through()
     }
 }
 
@@ -459,6 +520,7 @@ pub fn analyze(
 ) -> Analysis {
     let info = &INFO[index_of(decoded.encoding)];
     let compare = addresses.compare.take();
+    addresses.fall_through_bounds = 0;
     let direct = |make: fn(u64) -> Flow| relative_target(decoded, address).map_or(Flow::Invalid, make);
     let mut flow = match info.flow {
         FlowClass::Next => Flow::Next,
@@ -608,6 +670,7 @@ pub fn analyze(
     }
     if let Some((register, bound)) = bound {
         addresses.bounds[register as usize] = Some(bound);
+        addresses.fall_through_bounds = 1 << register;
     }
     if matches!(name, "SUBS_32S_addsub_imm" | "SUBS_64S_addsub_imm")
         && decoded.field("Rd") == Some(31)
