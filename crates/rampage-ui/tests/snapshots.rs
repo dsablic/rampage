@@ -268,6 +268,66 @@ fn an_undo_another_client_blocks_offers_to_discard_the_step() {
     std::fs::remove_dir_all(&directory).unwrap();
 }
 
+/// A file the loaders cannot open whole: `prefix` bytes of padding, then the ELF fixture.
+/// The directory is relative to the package, under the target directory, so that snapshots showing the path match
+/// on every machine.
+fn padded_elf(test: &str, prefix: usize) -> (PathBuf, PathBuf) {
+    let directory = PathBuf::from("../../target/rampage-ui-tests").join(test);
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("firmware.bin");
+    let mut bytes = b"FIRMWARE".repeat(prefix / 8);
+    bytes.extend(std::fs::read(fixture("hello-x64.elf")).unwrap());
+    std::fs::write(&path, bytes).unwrap();
+    (directory, path)
+}
+
+#[test]
+fn carve_window_opens_an_embedded_executable() {
+    let (directory, path) = padded_elf("carve", 0x1000);
+    let mut harness = harness(App::blocking());
+    harness.run();
+    let ctx = harness.ctx.clone();
+    harness.state_mut().open(&ctx, path.clone(), None);
+    assert!(harness.state_mut().workspace_mut().is_none());
+    harness.run();
+    assert!(harness.get_all_by_label_contains("cannot parse binary").count() > 0);
+    // The file does not open whole, so the Carve window lists what it embeds.
+    harness.get_by_label("0x1000");
+    harness.snapshot("carve");
+
+    harness.get_by_label("Open").click();
+    harness.run();
+    let workspace = harness.state_mut().workspace_mut().unwrap();
+    assert_eq!(workspace.image.map(rampage_loaders::ImageAt::offset), Some(0x1000));
+    assert_eq!(workspace.project.binary.format, rampage_loaders::Format::Elf);
+    assert!(workspace.project.resolve("main").is_ok());
+    harness.run();
+    // The open image is marked rather than offered again, and the toolbar names its offset.
+    harness.get_by_label("@ 0x1000");
+    harness.get_by_label("Carve 0").click();
+    harness.run();
+    assert!(harness.query_by_label("Open").is_none());
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn an_image_offset_and_length_open_from_the_open_flow() {
+    let (directory, path) = padded_elf("image-offset", 0x800);
+    let ctx = egui::Context::default();
+    let mut app = App::blocking();
+    let length = std::fs::metadata(fixture("hello-x64.elf")).unwrap().len();
+    let image = rampage_loaders::ImageAt::new(0x800, Some(length));
+    app.open_at(&ctx, path.clone(), None, Some(image));
+    let workspace = app.workspace_mut().unwrap();
+    assert_eq!(workspace.image, Some(image));
+    assert!(workspace.project.resolve("main").is_ok());
+    // An offset with nothing there fails with the loader's reason, keeping the open project.
+    app.open_at(&ctx, path, None, Some(rampage_loaders::ImageAt::new(0x10, None)));
+    assert_eq!(app.workspace_mut().unwrap().image, Some(image));
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
 #[test]
 fn discarding_never_forces_away_a_step_undo_can_revert() {
     let (directory, path) = scratch_copy("undo-unblocked", "hello-arm64.macho");

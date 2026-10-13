@@ -12,7 +12,7 @@ use rampage_api::{
     Triage, XrefQuery, XrefRow,
 };
 use rampage_arch::Arch;
-use rampage_loaders::Export;
+use rampage_loaders::{Export, ImageAt};
 
 use crate::listing::Listing;
 
@@ -24,7 +24,7 @@ pub enum Job<T> {
 }
 
 impl<T: Send + 'static> Job<T> {
-    fn start(
+    pub(crate) fn start(
         &mut self,
         blocking: bool,
         ctx: &egui::Context,
@@ -44,7 +44,7 @@ impl<T: Send + 'static> Job<T> {
     }
 
     /// Collects a finished background result. Returns true when it just arrived.
-    fn poll(&mut self) -> bool {
+    pub(crate) fn poll(&mut self) -> bool {
         let Job::Running(receiver) = self else { return false };
         match receiver.try_recv() {
             Ok(result) => {
@@ -84,8 +84,15 @@ const LINEAR_LINES: usize = 400;
 /// How often to pick up names and comments other clients (an AI agent over MCP, the CLI) saved.
 const ANNOTATION_REFRESH: Duration = Duration::from_secs(1);
 
+/// The error with its causes: a load error alone names only the file.
 fn text(error: ApiError) -> String {
-    error.to_string()
+    let mut text = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        text.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    text
 }
 
 /// Case-insensitive (ASCII) substring test that allocates nothing, for filtering hundreds of thousands of rows.
@@ -134,6 +141,8 @@ pub struct Xrefs {
 
 pub struct Workspace {
     pub path: PathBuf,
+    /// The embedded image opened, when not the whole file.
+    pub image: Option<ImageAt>,
     pub project: Arc<Project>,
     blocking: bool,
     pub functions: Job<Vec<FunctionRow>>,
@@ -181,9 +190,18 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Opens `path` and starts analysis. With `blocking`, every background job runs inline instead.
-    pub fn open(path: PathBuf, arch: Option<Arch>, ctx: &egui::Context, blocking: bool) -> Result<Self, String> {
-        let project = Session::default().open(&path, arch).map_err(text)?;
+    /// Opens `path` in `session`, or the executable embedded at `image`, and starts analysis. With `blocking`,
+    /// every background job runs inline instead.
+    pub fn open(
+        session: &Session,
+        path: PathBuf,
+        arch: Option<Arch>,
+        image: Option<ImageAt>,
+        ctx: &egui::Context,
+        blocking: bool,
+    ) -> Result<Self, String> {
+        let image = image.filter(|image| !image.is_whole_file());
+        let project = session.open_at(&path, arch, image).map_err(text)?;
         let imports = project.imports(&ListQuery::default()).items;
         let exports = project.exports(&ListQuery::default()).items;
         let cursor = project
@@ -196,6 +214,7 @@ impl Workspace {
         let address_width = (64 - highest.leading_zeros() as usize).div_ceil(4).max(4);
         let mut workspace = Self {
             path,
+            image,
             project,
             blocking,
             functions: Job::Idle,
@@ -542,7 +561,7 @@ mod tests {
     fn polling_cancels_obsolete_hidden_pseudocode_and_clears_its_cache_key() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
         let ctx = egui::Context::default();
-        let mut workspace = Workspace::open(path, None, &ctx, true).unwrap();
+        let mut workspace = Workspace::open(&Session::default(), path, None, None, &ctx, true).unwrap();
         let add = workspace.project.resolve("add").unwrap();
         let main = workspace.project.resolve("main").unwrap();
         let (_sender, receiver) = channel();

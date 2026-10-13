@@ -3,6 +3,7 @@
 mod about;
 pub mod assistant;
 mod band;
+mod carve;
 mod graph;
 mod listing;
 mod tabs;
@@ -13,14 +14,19 @@ use std::path::PathBuf;
 
 use egui::{Key, Modifiers, RichText, TextEdit, Ui};
 use egui_dock::{DockArea, DockState, NodeIndex, Style};
+use rampage_api::Session;
 use rampage_api::annotations::Field;
 use rampage_arch::Arch;
+use rampage_loaders::ImageAt;
 
 pub use tabs::Tab;
 pub use workspace::Workspace;
 
 pub struct App {
+    session: Session,
     workspace: Option<Workspace>,
+    /// The carving of the file last opened, for opening what it embeds.
+    carve: Option<carve::Carve>,
     error: Option<String>,
     dock: DockState<Tab>,
     /// Run background work inline, for deterministic tests and snapshots.
@@ -44,7 +50,9 @@ fn default_layout() -> DockState<Tab> {
 impl Default for App {
     fn default() -> Self {
         Self {
+            session: Session::default(),
             workspace: None,
+            carve: None,
             error: None,
             dock: default_layout(),
             blocking: false,
@@ -62,12 +70,34 @@ impl App {
     }
 
     pub fn open(&mut self, ctx: &egui::Context, path: PathBuf, arch: Option<Arch>) {
-        match Workspace::open(path, arch, ctx, self.blocking) {
+        self.open_at(ctx, path, arch, None);
+    }
+
+    /// Opens `path`, or the executable embedded at `image` in it, and carves the file for what else it embeds. When
+    /// the file cannot be opened, the Carve window shows what it embeds instead.
+    pub fn open_at(&mut self, ctx: &egui::Context, path: PathBuf, arch: Option<Arch>, image: Option<ImageAt>) {
+        if self.carve.as_ref().is_none_or(|carve| carve.path != path) {
+            self.carve = Some(carve::Carve::start(path.clone(), ctx, self.blocking));
+        }
+        match Workspace::open(&self.session, path, arch, image, ctx, self.blocking) {
             Ok(workspace) => {
                 self.workspace = Some(workspace);
                 self.error = None;
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => {
+                if let Some(carve) = &mut self.carve {
+                    carve.error = image.is_some().then(|| error.clone());
+                    carve.shown = true;
+                }
+                self.error = Some(error);
+            }
+        }
+    }
+
+    /// Shows the Carve window for the file last opened.
+    pub fn show_carve(&mut self) {
+        if let Some(carve) = &mut self.carve {
+            carve.shown = true;
         }
     }
 
@@ -109,6 +139,7 @@ impl App {
         if self.about {
             about::show(&ui.ctx().clone(), &mut self.about);
         }
+        self.carve_window(&ui.ctx().clone());
         let Some(workspace) = &mut self.workspace else {
             egui::CentralPanel::default().show(ui, |ui| self.empty(ui));
             return;
@@ -133,6 +164,19 @@ impl App {
         if self.workspace.as_ref().is_some_and(|workspace| workspace.show_listing) {
             let code_view = if self.graph_in_use(ui.ctx()) { Tab::Graph } else { Tab::Disassembly };
             self.focus_tab(code_view);
+        }
+    }
+
+    fn carve_window(&mut self, ctx: &egui::Context) {
+        let Some(carve) = &mut self.carve else { return };
+        carve.job.poll();
+        if !carve.shown {
+            return;
+        }
+        let current = self.workspace.as_ref().map(|workspace| workspace.image.map_or(0, ImageAt::offset));
+        if let Some(image) = carve::show(ctx, carve, current) {
+            let path = carve.path.clone();
+            self.open_at(ctx, path, None, Some(image));
         }
     }
 
@@ -273,6 +317,10 @@ impl App {
             ui.separator();
             let name = workspace.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             ui.label(RichText::new(name).strong());
+            if let Some(image) = workspace.image {
+                ui.label(RichText::new(format!("@ {:#x}", image.offset())).monospace())
+                    .on_hover_text("The executable embedded at this file offset");
+            }
             ui.label(RichText::new(workspace.project.binary.arch.to_string()).color(theme::DIM));
             ui.separator();
             if ui
@@ -304,6 +352,18 @@ impl App {
             }
             if let Some(error) = &workspace.goto_error {
                 ui.label(RichText::new(error).color(theme::WARNING));
+            }
+            // Offered only when the file embeds something else, so plain binaries keep a plain toolbar.
+            let current = workspace.image.map_or(0, ImageAt::offset);
+            if let Some(carve) = &mut self.carve {
+                let others = carve.others(current);
+                if others > 0 || workspace.image.is_some() {
+                    ui.separator();
+                    let button = ui.button(format!("Carve {others}"));
+                    if button.on_hover_text("Executables and containers embedded in this file").clicked() {
+                        carve.shown = !carve.shown;
+                    }
+                }
             }
         });
     }
@@ -344,6 +404,12 @@ impl App {
             if let Some(error) = &self.error {
                 ui.add_space(8.0);
                 ui.label(RichText::new(error).color(theme::WARNING));
+                if let Some(carve) = &mut self.carve
+                    && !carve.shown
+                    && ui.button("Carve for embedded executables").clicked()
+                {
+                    carve.shown = true;
+                }
             }
         });
     }

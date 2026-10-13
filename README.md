@@ -210,7 +210,7 @@ reported without keeping the others from loading.
 ## Desktop UI
 
 ```
-cargo run --release -p rampage-ui -- <file> [--arch aarch64]
+cargo run --release -p rampage-ui -- <file> [--arch aarch64] [--image-offset 0x1000 [--image-length N]]
 ```
 
 An egui app over the same API: docked functions, strings, imports and exports lists, a disassembly listing with
@@ -220,6 +220,10 @@ comment, Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z redo. Drop a file on the window to op
 background; on Chrome's framework (190,000 functions, 930,000 strings) frames take a few milliseconds. `cargo test
 -p rampage-ui` renders the UI offscreen into `crates/rampage-ui/tests/snapshots`.
 The Pseudocode tab loads decompilation in the background and navigates inline address-linked tokens.
+When a file embeds other executables or containers, a Carve button lists them (`rampage carve`'s scan) and opens a
+validated executable as a project of its own; a file that does not open whole shows the list straight away, and an
+offset and optional length can be typed in. An undo that another client's edit (an agent's, say) blocks shows the
+conflict and offers to discard the step from the undo history, keeping its edits; it never forces.
 
 The Assistant tab talks to Claude about the open binary: the model reads functions, graphs, strings and
 cross-references through rampage's tools, renames and comments what it works out, and points the listing at what it
