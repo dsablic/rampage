@@ -392,8 +392,11 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] NZCV, B.cond, CBZ/CBNZ/TBZ/TBNZ, CSEL/CSINC/CSINV/CSNEG, ADR/ADRP and plain BL/BLR/BR/RET.
 - [x] Common non-wrapping bitfield aliases; 8/16/32/64-bit scalar memory with separate result/access widths.
 - [x] Literal/register/unsigned/unscaled/pre/post addressing; 32/64-bit pairs and signed LDPSW.
-- [ ] Remaining common integer families: carry arithmetic, conditional compares, wrapping bitfields,
-  long/high multiply, extracts and other scalar operations. Add native boundary regressions per family.
+- [x] Remaining common integer families: carry arithmetic (ADC/ADCS/SBC/SBCS, NGC/NGCS), conditional compares
+  (CCMP/CCMN register/immediate), wrapping bitfields (SBFIZ/UBFIZ/BFI/BFXIL/BFC), long/high multiply
+  (S/UMADDL, S/UMSUBL, SMULH/UMULH), EXTR/ROR immediate, CLZ/CLS/RBIT/REV/REV16/REV32, each with native
+  boundary regressions (all 16 NZCV inputs for flag-dependent families, also through SSA/dataflow) and
+  natively recorded expected values that replay on any host. FEAT_CSSC, RMIF and SETF8/16 remain barriers.
 - [x] Valid no-writeback pair loads with base/destination overlap; capture both original addresses before
   assignments for LDP X/W and LDPSW. Writeback overlaps and duplicate destinations remain barriers.
 - [ ] FP/SIMD, atomic/exclusive and selected system semantics, with effects and memory ordering explicit.

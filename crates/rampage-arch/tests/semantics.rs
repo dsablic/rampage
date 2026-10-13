@@ -1,3 +1,5 @@
+mod support;
+
 use rampage_arch::ir::{self, Effect, FlagOperation, LiftedInstruction, Value};
 use rampage_arch::{Arch, Target, decoder};
 
@@ -19,6 +21,9 @@ fn value(value: &Value, registers: &[u64; 31], sp: u64) -> u64 {
         Value::Low32 { value } => self::value(value, registers, sp) & 0xffff_ffff,
         Value::Binary { operation, left, right, bits } => {
             ir::binary(*operation, self::value(left, registers, sp), self::value(right, registers, sp), *bits).unwrap()
+        }
+        Value::Unary { operation, value, bits } => {
+            ir::unary(*operation, self::value(value, registers, sp), *bits).unwrap()
         }
     }
 }
@@ -393,5 +398,53 @@ fn constrained_unpredictable_pair_overlaps_and_invalid_encodings_remain_barriers
         let lifted = lift(word);
         assert!(!lifted.complete, "{word:08x}");
         assert!(matches!(lifted.effects.as_slice(), [Effect::Barrier { .. }]), "{word:08x}");
+    }
+}
+
+#[test]
+fn unsupported_scalar_neighbours_and_reserved_widths_remain_barriers() {
+    // ctz/cnt/abs (FEAT_CSSC), rmif, setf8, and 32-bit bitfield/extract shapes with 6-bit amounts.
+    for word in [0xdac0_1820, 0xdac0_1c20, 0xdac0_2020, 0xba00_0420, 0x3a00_082d, 0x3320_0020, 0x1382_8020] {
+        let lifted = lift(word);
+        assert!(!lifted.complete, "{word:08x}");
+        assert!(matches!(lifted.effects.as_slice(), [Effect::Barrier { .. }]), "{word:08x}");
+    }
+}
+
+#[test]
+fn carry_and_conditional_compare_effects_keep_their_operands_and_immediates() {
+    let lifted = lift(0xfa02_03e0); // ngcs x0, x2
+    assert!(matches!(
+        &lifted.effects[..],
+        [Effect::CarryArithmetic {
+            left: Value::Constant { value: 0 },
+            right: Value::Register { number: 2 },
+            subtract: true,
+            set_flags: true,
+            ..
+        }]
+    ));
+    let lifted = lift(0x7a5f_882f); // ccmp w1, #31, #15, hi
+    assert_eq!(lifted.bits, 32);
+    assert!(matches!(
+        &lifted.effects[..],
+        [Effect::ConditionalFlags {
+            condition: 8,
+            operation: FlagOperation::Subtract,
+            right: Value::Constant { value: 31 },
+            nzcv: 15,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn natively_recorded_integer_family_boundaries_replay_through_the_lifted_effects() {
+    for &(word, inputs, nzcv, result, expected_nzcv) in support::EXPECTED {
+        let mut expected = inputs;
+        if let Some(register) = expected.get_mut((word & 31) as usize) {
+            *register = result;
+        }
+        assert_eq!(support::run(word, inputs, nzcv), (expected, expected_nzcv), "{word:08x} {inputs:x?} {nzcv:04b}");
     }
 }

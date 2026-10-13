@@ -40,6 +40,11 @@ pub enum Value {
         left: Box<Value>,
         right: Box<Value>,
     },
+    Unary {
+        operation: UnaryOperation,
+        value: Box<Value>,
+        bits: u8,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -55,6 +60,21 @@ pub enum Operation {
     Multiply,
     UnsignedDivide,
     SignedDivide,
+    /// Bits 2N-1..N of the full 2N-bit product.
+    UnsignedMultiplyHigh,
+    SignedMultiplyHigh,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaryOperation {
+    CountLeadingZeros,
+    /// Leading bits below the most significant bit that equal it (Arm CLS).
+    CountLeadingSignBits,
+    ReverseBits,
+    ReverseBytes,
+    ReverseBytesInHalfwords,
+    ReverseBytesInWords,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -88,8 +108,36 @@ pub fn binary(operation: Operation, left: u64, right: u64, bits: u8) -> Option<u
             let (left, right) = (signed(left), signed(right));
             if right == 0 { 0 } else { left.wrapping_div(right) as u64 }
         }
+        Operation::UnsignedMultiplyHigh => ((u128::from(left) * u128::from(right)) >> bits) as u64,
+        Operation::SignedMultiplyHigh => ((i128::from(signed(left)) * i128::from(signed(right))) >> bits) as u64,
     };
     Some(value & mask)
+}
+
+pub fn unary(operation: UnaryOperation, value: u64, bits: u8) -> Option<u64> {
+    if !matches!(bits, 32 | 64) {
+        return None;
+    }
+    let value = value & crate::mrs::ones(u32::from(bits));
+    let unused = 64 - u32::from(bits);
+    let reverse_bytes_within = |container: u32| {
+        (0..u32::from(bits)).step_by(container as usize).fold(0, |result, start| {
+            let chunk = (value >> start) & crate::mrs::ones(container);
+            result | (chunk.swap_bytes() >> (64 - container)) << start
+        })
+    };
+    Some(match operation {
+        UnaryOperation::CountLeadingZeros => u64::from((value << unused).leading_zeros().min(u32::from(bits))),
+        UnaryOperation::CountLeadingSignBits => {
+            // Bit k of the XOR compares bits k and k-1; the forced low bit caps the count at N-1.
+            let aligned = value << unused;
+            u64::from((aligned ^ (aligned << 1) | 1 << unused).leading_zeros())
+        }
+        UnaryOperation::ReverseBits => value.reverse_bits() >> unused,
+        UnaryOperation::ReverseBytes => reverse_bytes_within(u32::from(bits)),
+        UnaryOperation::ReverseBytesInHalfwords => reverse_bytes_within(16),
+        UnaryOperation::ReverseBytesInWords => reverse_bytes_within(32),
+    })
 }
 
 /// Packed NZCV in bits 3..0, independent of the architectural system-register bit position.
@@ -146,6 +194,10 @@ pub fn extend(value: u64, from_bits: u8, to_bits: u8, signed: bool) -> Option<u6
     Some(value & crate::mrs::ones(u32::from(to_bits)))
 }
 
+/// Effects of one instruction, applied in order. `CarryArithmetic` is Arm AddWithCarry with the incoming C flag
+/// (`left + right + C`, or `left - right - !C` when `subtract`) and reads its operands and C before writing either
+/// output. `ConditionalFlags` sets the flags to `operation(left, right)` when `condition` holds on the incoming
+/// flags and to the packed `nzcv` immediate otherwise.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Effect {
@@ -156,6 +208,8 @@ pub enum Effect {
     Return { target: Value },
     Select { destination: Value, condition: u8, when_true: Value, when_false: Value },
     SetFlags { operation: FlagOperation, left: Value, right: Value },
+    CarryArithmetic { destination: Value, left: Value, right: Value, subtract: bool, set_flags: bool },
+    ConditionalFlags { condition: u8, operation: FlagOperation, left: Value, right: Value, nzcv: u8 },
     FlagsConditional { condition: u8 },
     Call { target: Value, return_address: u64 },
     Control { inputs: Vec<Value> },
@@ -466,6 +520,60 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
             when_false,
         });
         lifted.complete = true;
+    } else if name.ends_with("_addsub_carry") {
+        lifted.bits = width;
+        lifted.effects.push(Effect::CarryArithmetic {
+            destination: register(rd, false),
+            left: register(rn, false),
+            right: register(((word >> 16) & 31) as u8, false),
+            subtract: word & (1 << 30) != 0,
+            set_flags: word & (1 << 29) != 0,
+        });
+        lifted.complete = true;
+    } else if name.ends_with("_condcmp_reg") || name.ends_with("_condcmp_imm") {
+        lifted.bits = width;
+        let field = ((word >> 16) & 31) as u8;
+        lifted.effects.push(Effect::ConditionalFlags {
+            condition: ((word >> 12) & 15) as u8,
+            operation: if name.starts_with("CCMP") { FlagOperation::Subtract } else { FlagOperation::Add },
+            left: register(rn, false),
+            right: if name.ends_with("_imm") {
+                Value::Constant { value: u64::from(field) }
+            } else {
+                register(field, false)
+            },
+            nzcv: (word & 15) as u8,
+        });
+        lifted.complete = true;
+    } else if name.starts_with("BFM_") {
+        lifted.bits = width;
+        let immr = ((word >> 16) & 63) as u8;
+        let imms = ((word >> 10) & 63) as u8;
+        let source = register(rn, false);
+        // BFXIL copies source bits imms..immr to the bottom; BFI (imms < immr) inserts bits imms..0 at width-immr.
+        let (field, lsb, size) = if imms >= immr {
+            (
+                operation(Operation::ShiftRight, source, Value::Constant { value: u64::from(immr) }, width),
+                0,
+                imms - immr + 1,
+            )
+        } else {
+            (source, width - immr, imms + 1)
+        };
+        let mask = crate::mrs::ones(u32::from(size)) << lsb;
+        let field = if lsb == 0 {
+            field
+        } else {
+            operation(Operation::ShiftLeft, field, Value::Constant { value: u64::from(lsb) }, width)
+        };
+        let value = operation(
+            Operation::Or,
+            operation(Operation::And, register(rd, false), Value::Constant { value: !mask }, width),
+            operation(Operation::And, field, Value::Constant { value: mask }, width),
+            width,
+        );
+        lifted.effects.push(assign(register(rd, false), value));
+        lifted.complete = true;
     } else if name.starts_with("UBFM_") || name.starts_with("SBFM_") {
         lifted.bits = width;
         let immr = ((word >> 16) & 63) as u8;
@@ -500,11 +608,58 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
                 )
             }
         } else {
-            lifted
-                .effects
-                .push(Effect::Barrier { reason: "wrapping bitfield semantics are not implemented".to_owned() });
-            return lifted;
+            // SBFIZ/UBFIZ: the (sign- or zero-extended) low imms+1 bits move up to bit width-immr.
+            let size = imms + 1;
+            let field = if unsigned {
+                operation(Operation::And, source, Value::Constant { value: crate::mrs::ones(u32::from(size)) }, width)
+            } else {
+                let amount = Value::Constant { value: u64::from(width - size) };
+                operation(
+                    Operation::ArithmeticShiftRight,
+                    operation(Operation::ShiftLeft, source, amount.clone(), width),
+                    amount,
+                    width,
+                )
+            };
+            operation(Operation::ShiftLeft, field, Value::Constant { value: u64::from(width - immr) }, width)
         };
+        lifted.effects.push(assign(register(rd, false), value));
+        lifted.complete = true;
+    } else if name.starts_with("EXTR_") {
+        lifted.bits = width;
+        let lsb = ((word >> 10) & 63) as u8;
+        let rm = ((word >> 16) & 31) as u8;
+        let amount = Value::Constant { value: u64::from(lsb) };
+        let value = if lsb == 0 {
+            register(rm, false)
+        } else if rm == rn {
+            operation(Operation::RotateRight, register(rn, false), amount, width)
+        } else {
+            operation(
+                Operation::Or,
+                operation(Operation::ShiftRight, register(rm, false), amount, width),
+                operation(
+                    Operation::ShiftLeft,
+                    register(rn, false),
+                    Value::Constant { value: u64::from(width - lsb) },
+                    width,
+                ),
+                width,
+            )
+        };
+        lifted.effects.push(assign(register(rd, false), value));
+        lifted.complete = true;
+    } else if let Some(unary) = name.strip_suffix("_dp_1src").and_then(|name| match name {
+        "CLZ_32" | "CLZ_64" => Some(UnaryOperation::CountLeadingZeros),
+        "CLS_32" | "CLS_64" => Some(UnaryOperation::CountLeadingSignBits),
+        "RBIT_32" | "RBIT_64" => Some(UnaryOperation::ReverseBits),
+        "REV_32" | "REV_64" => Some(UnaryOperation::ReverseBytes),
+        "REV16_32" | "REV16_64" => Some(UnaryOperation::ReverseBytesInHalfwords),
+        "REV32_64" => Some(UnaryOperation::ReverseBytesInWords),
+        _ => None,
+    }) {
+        lifted.bits = width;
+        let value = Value::Unary { operation: unary, value: Box::new(register(rn, false)), bits: width };
         lifted.effects.push(assign(register(rd, false), value));
         lifted.complete = true;
     } else if name.ends_with("_dp_2src")
@@ -535,6 +690,39 @@ pub fn lift(arch: Arch, bytes: &[u8], insn: &Insn) -> LiftedInstruction {
         } else {
             Value::Add { left: accumulator, right: product }
         };
+        lifted.effects.push(assign(register(rd, false), value));
+        lifted.complete = true;
+    } else if matches!(
+        name,
+        "SMADDL_64WA_dp_3src" | "SMSUBL_64WA_dp_3src" | "UMADDL_64WA_dp_3src" | "UMSUBL_64WA_dp_3src"
+    ) {
+        let word_operand = |number: u8| {
+            let source = register(number, false);
+            if name.starts_with('S') {
+                let amount = Value::Constant { value: 32 };
+                operation(
+                    Operation::ArithmeticShiftRight,
+                    operation(Operation::ShiftLeft, source, amount.clone(), 64),
+                    amount,
+                    64,
+                )
+            } else {
+                Value::Low32 { value: Box::new(source) }
+            }
+        };
+        let product =
+            Box::new(operation(Operation::Multiply, word_operand(rn), word_operand(((word >> 16) & 31) as u8), 64));
+        let accumulator = Box::new(register(((word >> 10) & 31) as u8, false));
+        let value = if name.contains("SUBL") {
+            Value::Subtract { left: accumulator, right: product }
+        } else {
+            Value::Add { left: accumulator, right: product }
+        };
+        lifted.effects.push(assign(register(rd, false), value));
+        lifted.complete = true;
+    } else if matches!(name, "SMULH_64_dp_3src" | "UMULH_64_dp_3src") {
+        let high = if name.starts_with('S') { Operation::SignedMultiplyHigh } else { Operation::UnsignedMultiplyHigh };
+        let value = operation(high, register(rn, false), register(((word >> 16) & 31) as u8, false), 64);
         lifted.effects.push(assign(register(rd, false), value));
         lifted.complete = true;
     } else if matches!(name, "ADR_only_pcreladdr" | "ADRP_only_pcreladdr") {

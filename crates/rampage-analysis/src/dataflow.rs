@@ -126,6 +126,11 @@ pub(crate) fn evaluate(expr: &Expression, values: &[Known]) -> Known {
                 _ => Unknown,
             }
         }
+        Expression::Unary { operation, value, bits } => match evaluate(value, values) {
+            Constant(value) => ir::unary(*operation, value, *bits).map_or(Unknown, Constant),
+            Pending => Pending,
+            _ => Unknown,
+        },
         Expression::Flags { operation, left, right, bits } => match (evaluate(left, values), evaluate(right, values)) {
             (Constant(a), Constant(b)) => ir::flags(*operation, a, b, *bits).map_or(Unknown, Constant),
             (Pending, _) | (_, Pending) => Pending,

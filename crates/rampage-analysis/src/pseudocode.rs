@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use rampage_arch::{
     Flow,
-    ir::{FlagOperation, Operation},
+    ir::{FlagOperation, Operation, UnaryOperation},
 };
 use serde::Serialize;
 
@@ -74,7 +74,9 @@ pub(crate) fn validate(ssa: &Ssa, edges: &[(usize, usize)]) -> Result<(), String
                     stack.push((left, depth + 1));
                     stack.push((right, depth + 1));
                 }
-                Expression::Low32 { value } | Expression::Condition { value, .. } => stack.push((value, depth + 1)),
+                Expression::Low32 { value } | Expression::Condition { value, .. } | Expression::Unary { value, .. } => {
+                    stack.push((value, depth + 1))
+                }
                 Expression::FlagsCondition { flags, .. } if !valid(*flags) => {
                     return Err("invalid flag definition".to_owned());
                 }
@@ -250,8 +252,21 @@ fn expression(expr: &Expression, ssa: &Ssa, remaining: &mut usize) -> Result<Str
                 Operation::Multiply => "mul",
                 Operation::UnsignedDivide => "udiv",
                 Operation::SignedDivide => "sdiv",
+                Operation::UnsignedMultiplyHigh => "umulh",
+                Operation::SignedMultiplyHigh => "smulh",
             };
             format!("{op}{bits}({}, {})", expression(left, ssa, remaining)?, expression(right, ssa, remaining)?)
+        }
+        Expression::Unary { operation, value, bits } => {
+            let op = match operation {
+                UnaryOperation::CountLeadingZeros => "clz",
+                UnaryOperation::CountLeadingSignBits => "cls",
+                UnaryOperation::ReverseBits => "rbit",
+                UnaryOperation::ReverseBytes => "rev",
+                UnaryOperation::ReverseBytesInHalfwords => "rev16_",
+                UnaryOperation::ReverseBytesInWords => "rev32_",
+            };
+            format!("{op}{bits}({})", expression(value, ssa, remaining)?)
         }
         Expression::Flags { operation, left, right, bits } => {
             let op = match operation {

@@ -59,11 +59,15 @@ fn observe(
             Expression::Binary { left, right, bits, operation } => {
                 let signed = matches!(
                     operation,
-                    rampage_arch::ir::Operation::SignedDivide | rampage_arch::ir::Operation::ArithmeticShiftRight
+                    rampage_arch::ir::Operation::SignedDivide
+                        | rampage_arch::ir::Operation::ArithmeticShiftRight
+                        | rampage_arch::ir::Operation::SignedMultiplyHigh
                 );
                 let unsigned = matches!(
                     operation,
-                    rampage_arch::ir::Operation::UnsignedDivide | rampage_arch::ir::Operation::ShiftRight
+                    rampage_arch::ir::Operation::UnsignedDivide
+                        | rampage_arch::ir::Operation::ShiftRight
+                        | rampage_arch::ir::Operation::UnsignedMultiplyHigh
                 );
                 let context = Use { bits: Some(*bits), signed, unsigned, ..context };
                 work.push((left, context));
@@ -77,6 +81,9 @@ fn observe(
                 work.push((right, if count { Use { bits: Some(*bits), ..Default::default() } } else { context }));
             }
             Expression::Low32 { value } => work.push((value, Use { bits: Some(32), ..context })),
+            Expression::Unary { value, bits, .. } => {
+                work.push((value, Use { bits: Some(*bits), ..Default::default() }))
+            }
             Expression::Extend { value, from_bits, signed, .. } => {
                 work.push((value, Use { bits: Some(*from_bits), signed: *signed, unsigned: !signed, ..context }));
             }
