@@ -55,20 +55,25 @@ tools/cfg-benchmark.py target/release/rampage "$(brew --prefix ghidra)/libexec" 
 - rampage side: `rampage export-cfg FILE` (hidden subcommand) writes the same `function_graph` blocks and edges and
   `xrefs --from` references the MCP tools return, without the 60k-character tool-output bound.
 - Normalisation: a rampage jump to another function's entry counts as a call, because Ghidra records tail calls as
-  call references. Ghidra `COMPUTED_CALL` targets count only when rampage found the same call; the rest are listed
-  in their own column. These targets come from memory reads, and some are garbage (see below).
+  call references. Ghidra `COMPUTED_CALL*` targets (every computed-call reference kind) count only when rampage
+  found the same call; the rest are listed in their own column. These targets come from memory reads, and some are
+  garbage (see below).
+- Totals pool items per function, keyed by (function entry, address), so a block or edge that two functions share
+  counts in each of them.
 - `block J` is the Jaccard index of all block starts. `chain J` and `chain edge` merge straight-line chains, where a
   block is its predecessor's only successor, on both sides before comparing. This removes Ghidra's extra splits at
   labelled instructions.
-- `--out DIR` writes each fixture's full report. It lists, per function, blocks, edges and calls found by only one
-  tool. The ten worst functions per fixture also go to stderr. `--ghidra-cache DIR` reuses Ghidra exports, keyed by
-  image SHA-256 and Ghidra version.
+- `--out DIR` writes each fixture's full report, named after the fixture plus a digest of its path. It lists, per
+  function, blocks, edges and calls found by only one tool. The ten worst functions per fixture also go to stderr.
+  `--ghidra-cache DIR` reuses Ghidra exports, keyed by image SHA-256, Ghidra version and a digest of the export
+  script. When the export is missing or truncated, the script exits with the end of Ghidra's output and logs.
+- `python3 -m unittest tools.test_cfg_benchmark` tests the comparison and caching logic without Ghidra.
 
 ### Results
 
-Ghidra 12.1.4 (headless, default analysers, OpenJDK 21.0.12.1); rampage 0.1.0 at `f53d5da` plus `export-cfg`;
-macOS 27.0.1 arm64. Ghidra's analysis takes 5–54 s per fixture, about 4.5 min for all 18 fixtures, so all of them
-are covered. A second uncached run gave the same numbers.
+Ghidra 12.1.4 (headless, default analysers, OpenJDK 21.0.12.1); rampage 0.1.0 at `207c45c`; macOS 27.0.1 arm64.
+Ghidra's analysis takes 4–23 s per fixture, about 2.5 min for all 18 fixtures, so all of them are covered. A second
+run at `af40350` (regenerated signature databases), with Ghidra's exports cached, gave the same numbers.
 
 | binary | funcs G/R/both | same blocks | block J | chain J | edge P / R | chain edge P / R | call P / R | callgraph P / R | G-only computed calls |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
@@ -86,9 +91,9 @@ are covered. A second uncached run gave the same numbers.
 | hello-ppc64le.elf | 7/7/4 | 4/4 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | N/A / N/A | N/A / N/A | 0 |
 | hello-riscv64.elf | 8/9/8 | 5/8 | 57.9% | 100.0% | 0.0% / 0.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
 | eval-ref-x86_64.elf | 176/176/176 | 169/176 | 91.1% | 91.2% | 100.0% / 90.2% | 99.9% / 90.2% | 100.0% / 92.2% | 100.0% / 93.9% | 1 |
-| eval-ref-aarch64.elf | 194/195/194 | 189/194 | 91.2% | 91.3% | 100.0% / 90.1% | 99.9% / 90.1% | 99.8% / 93.2% | 99.7% / 93.3% | 2 |
+| eval-ref-aarch64.elf | 194/195/194 | 189/194 | 99.8% | 100.0% | 98.5% / 98.4% | 100.0% / 100.0% | 99.8% / 100.0% | 99.7% / 100.0% | 2 |
 | musl-static-x86_64.elf | 67/67/67 | 65/67 | 90.9% | 90.8% | 99.8% / 89.6% | 99.7% / 89.4% | 100.0% / 97.8% | 100.0% / 97.7% | 0 |
-| musl-static-aarch64.elf | 82/83/82 | 79/82 | 89.6% | 89.6% | 100.0% / 87.7% | 99.8% / 87.5% | 99.5% / 96.3% | 99.1% / 95.5% | 1 |
+| musl-static-aarch64.elf | 82/83/82 | 79/82 | 99.7% | 100.0% | 98.1% / 97.9% | 100.0% / 100.0% | 99.5% / 100.0% | 99.1% / 100.0% | 1 |
 | hello-go-x64.elf | 1358/1806/1357 | 1322/1357 | 94.9% | 94.9% | 95.8% / 94.2% | 95.6% / 94.3% | 99.6% / 93.9% | 99.4% / 97.1% | 57 |
 
 `N/A` means an empty denominator: the shared functions are single-block, or have no calls. The MIPS, RISC-V and
@@ -98,15 +103,22 @@ small Mach-O/ARM fixtures share only 2–8 functions, so their percentages move 
 
 These come from inspecting the per-function reports (`--out`) and the disassembly at the listed addresses.
 
-- **Unresolved jump tables (rampage misses blocks).** These cause almost all of the missing blocks, edges and calls
-  outside Go. Every Ghidra-only block in hello-x64.exe (239 blocks in 34 functions), eval-ref-x86_64 (328),
-  eval-ref-aarch64 (329), musl-static-x86_64 (82) and musl-static-aarch64 (120) is in a function with a switch
-  dispatch that Ghidra resolved and rampage left as an indirect jump. In Go, such functions hold 934 of the 1245
-  Ghidra-only blocks. The calls inside those unreached cases are what lowers call
-  recall. Forms seen: x86-64 absolute `jmp [rax*8+0x1001a68]` (eval-ref-x86_64 `0x100e148`); MSVC/MinGW-style
-  relative `lea rcx,[table]; movsxd rax,[rcx+rax*4]; add rax,rcx; jmp rax` (hello-x64.exe `0x1400170f4`); AArch64
-  compact tables `adr; ldrb/ldrh; add x, x, w, lsl #2; br` (musl-static-aarch64 `0x10149dc`, eval-ref-aarch64
-  `0x10184a0`); `ldrsw` with an unrelated `movk` scheduled in between (eval-ref-aarch64 `0x102386c`).
+- **Unresolved x86-64 jump tables (rampage misses blocks).** These cause almost all of the missing blocks, edges
+  and calls outside Go. Every Ghidra-only block in hello-x64.exe (239 blocks in 34 functions), eval-ref-x86_64
+  (328) and musl-static-x86_64 (82) is in a function with a switch dispatch that Ghidra resolved and rampage left
+  as an indirect jump. In Go, such functions hold 934 of the 1245 Ghidra-only blocks. The calls inside those
+  unreached cases are what lowers call recall. Forms seen: absolute `jmp [rax*8+0x1001a68]` (eval-ref-x86_64
+  `0x100e148`); MSVC/MinGW-style relative `lea rcx,[table]; movsxd rax,[rcx+rax*4]; add rax,rcx; jmp rax`
+  (hello-x64.exe `0x1400170f4`).
+- **AArch64 jump tables (resolved).** rampage resolves every AArch64 switch in these fixtures under its
+  bounded-switch rule. The index needs an unsigned bound from a `cmp` directly followed by `b.hi`/`b.hs`, no branch
+  may join between that comparison and the `br`, and the table must be read-only data. That covers the compact
+  `adr; ldrb/ldrh; add x, x, w, lsl #2; br` tables (musl-static-aarch64 `0x10149dc`, eval-ref-aarch64 `0x10184a0`)
+  and `ldrsw` with an unrelated `movk` scheduled in between (eval-ref-aarch64 `0x102386c`). Each case gets a
+  `switch` edge from the dispatch block. The remaining Ghidra-only blocks (3 in musl-static-aarch64, 6 in
+  eval-ref-aarch64) are all the `br` itself: Ghidra starts a block at its `switchD` label, so its case edges leave
+  from there, while rampage's leave from the block that ends in the `br`. Chain Jaccard and chain edges, which
+  merge that split, agree completely.
 - **No noreturn knowledge (rampage adds edges).** rampage falls through after every call. Ghidra ends the block at
   calls to non-returning functions. In Go, 896 of rampage's 1321 extra edges are fall-throughs out of a block that
   Ghidra ends with no successor, mostly after `runtime.throw`/`runtime.panic*` (for example `0x409e20`,
@@ -138,12 +150,11 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
 
 ### Analysis follow-ups found by this benchmark
 
-Not fixed here; this task does not change analysis code.
-
 1. Resolve x86-64 jump tables, both the absolute `[reg*8+table]` and the relative `movsxd`+`add` forms. Evidence:
    eval-ref-x86_64 `0x100e148`, hello-x64.exe `0x1400170f4`.
-2. Extend AArch64 jump-table recovery to byte and halfword tables and to scheduled sequences. Evidence:
-   musl-static-aarch64 `0x10149dc`, eval-ref-aarch64 `0x10184a0`, `0x102386c`, `0x101d8e4`.
+2. Extend AArch64 switch recovery to the bounds it does not yet prove: the inverse form, where `b.ls`/`b.lo` jumps
+   to the dispatch and the fall-through is the default, and a `cmp` scheduled away from its conditional branch.
+   None of these fixtures needs either.
 3. Add noreturn analysis: imports (`exit`, `abort`), Go `runtime.throw`/`panic*`, and functions whose every path
    ends in a noreturn call. Evidence: about 900 extra Go edges; hello-x64.exe `0x1400013f7`.
 4. `rampage-arch` `Kind::flow` (`crates/rampage-arch/src/flow.rs`) compares a call target with the address right
