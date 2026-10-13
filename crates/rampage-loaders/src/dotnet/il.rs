@@ -750,8 +750,8 @@ fn decode(code: &[u8], token_text: TokenText, warnings: &mut Warnings) -> (Vec<I
             Operand::Int8 | Operand::Int32 | Operand::Int64 => Some(read_signed(bytes).to_string()),
             Operand::UInt8 | Operand::Arg8 | Operand::Arg16 => Some(read_unsigned(bytes).to_string()),
             Operand::Local8 | Operand::Local16 => Some(format!("V_{}", read_unsigned(bytes))),
-            Operand::Float32 => Some(format!("{:?}", f32::from_bits(read_unsigned(bytes) as u32))),
-            Operand::Float64 => Some(format!("{:?}", f64::from_bits(read_unsigned(bytes)))),
+            Operand::Float32 => Some(float32(read_unsigned(bytes) as u32)),
+            Operand::Float64 => Some(float64(read_unsigned(bytes))),
             Operand::ShortBranch | Operand::Branch => {
                 Some(branch.target(read_signed(bytes), &mut instruction, warnings))
             }
@@ -812,6 +812,18 @@ impl Branch {
         instruction.targets.push(offset);
         label(offset)
     }
+}
+
+/// An `ldc.r4` constant; a NaN as its raw bits, ILDasm style, since its sign and payload would otherwise be lost.
+fn float32(bits: u32) -> String {
+    let value = f32::from_bits(bits);
+    if value.is_nan() { format!("float32({bits:#010x})") } else { format!("{value:?}") }
+}
+
+/// An `ldc.r8` constant, rendered as [`float32`] renders an `ldc.r4` one.
+fn float64(bits: u64) -> String {
+    let value = f64::from_bits(bits);
+    if value.is_nan() { format!("float64({bits:#018x})") } else { format!("{value:?}") }
 }
 
 /// A little-endian unsigned integer of at most 8 bytes.
@@ -913,7 +925,7 @@ mod tests {
     #[test]
     fn every_opcode_byte_has_one_meaning() {
         let one: Vec<u8> = (0..=255u8).filter(|&code| opcode(code).is_some()).collect();
-        // III.1.2.1: 0x00-0xE0 less the 30 unused bytes 0x24, 0x77, 0x78, 0xA6-0xB2, 0xBB-0xC1, 0xC4, 0xC5,
+        // III.1.2.1: 0x00-0xE0 less the 34 unused bytes 0x24, 0x77, 0x78, 0xA6-0xB2, 0xBB-0xC1, 0xC4, 0xC5,
         // 0xC7-0xCF.
         assert_eq!(one.len(), 0xE1 - 1 - 2 - 13 - 7 - 2 - 9);
         let two = (0..=255u8).filter(|&code| extended_opcode(code).is_some()).count();
@@ -954,7 +966,7 @@ mod tests {
                 "IL_0002: ldc.i4 305419896",
                 "IL_0007: ldc.i8 -1",
                 "IL_0010: ldc.r4 1.0",
-                "IL_0015: ldc.r8 NaN",
+                "IL_0015: ldc.r8 float64(0x7ff8000000000000)",
                 "IL_001e: switch (IL_002b, IL_0026)",
                 "IL_002b: .byte 0x24",
                 "IL_002c: .byte 0xfe, 0x08",
@@ -1014,6 +1026,18 @@ mod tests {
         switch.extend(vec![0; (MAX_SWITCH_TARGETS + 2) * 4]);
         let (texts, _, _) = listing(&switch);
         assert!(texts[0].ends_with("IL_400d, ... 2 more)"), "{}", &texts[0][texts[0].len() - 40..]);
+    }
+
+    #[test]
+    fn nans_keep_their_sign_and_payload() {
+        assert_eq!(float32(0xFFC0_0001), "float32(0xffc00001)");
+        assert_eq!(float32(0x7F80_0000), "inf");
+        assert_eq!(float32(0x3F80_0000), "1.0");
+        assert_eq!(float64(0xFFF8_0000_0000_0001), "float64(0xfff8000000000001)");
+        assert_eq!(float64(0x7FF0_0000_0000_0002), "float64(0x7ff0000000000002)");
+        assert_eq!(float64(0x8000_0000_0000_0000), "-0.0");
+        let (texts, _, _) = listing(&[0x22, 0x01, 0x00, 0xC0, 0xFF]);
+        assert_eq!(texts, ["IL_0000: ldc.r4 float32(0xffc00001)"]);
     }
 
     #[test]
