@@ -901,7 +901,8 @@ pub fn tools() -> Vec<Tool> {
             Group::Core,
             "function_graph",
             "The control-flow graph of the function containing an address or name: its basic blocks with \
-             disassembly, and edges (unconditional, taken, not_taken) indexing into the blocks.",
+             disassembly, and edges (unconditional, taken, not_taken, or switch from a register jump to each case \
+             of a bounded switch table) indexing into the blocks.",
             |project, arguments: At| project.function_graph(project.resolve(&arguments.at)?),
         ),
         tool(

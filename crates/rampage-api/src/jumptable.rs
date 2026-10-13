@@ -1,3 +1,4 @@
+use rampage_arch::MAX_JUMP_TABLE_ENTRIES;
 use serde::Serialize;
 
 use crate::{ApiError, Project};
@@ -27,31 +28,38 @@ impl Project {
         count: usize,
         relative_base: Option<u64>,
     ) -> Result<JumpTable, ApiError> {
-        if self.binary.arch != rampage_arch::Arch::Aarch64 || !(1..=4096).contains(&count) {
-            return Err(ApiError::Invalid("jump-table inspection requires ARM64 and 1–4096 entries".to_owned()));
+        if self.binary.arch != rampage_arch::Arch::Aarch64 || !(1..=MAX_JUMP_TABLE_ENTRIES).contains(&(count as u64)) {
+            return Err(ApiError::Invalid(format!(
+                "jump-table inspection requires ARM64 and 1–{MAX_JUMP_TABLE_ENTRIES} entries"
+            )));
         }
         let size = if relative_base.is_some() { 4u8 } else { 8u8 };
         if !address.is_multiple_of(u64::from(size)) {
             return Err(ApiError::Invalid("jump-table address is not aligned to entry size".to_owned()));
         }
+        // The analyst supplies the index range, so there is no bounding comparison.
+        let table = rampage_arch::JumpTable {
+            guard: address,
+            table: address,
+            entry_size: size,
+            entries: count as u64,
+            signed: relative_base.is_some(),
+            base: relative_base,
+            shift: 0,
+            alignment: 4,
+        };
         let mut entries = Vec::with_capacity(count);
-        for index in 0..count {
-            let slot = address
-                .checked_add(index as u64 * u64::from(size))
-                .ok_or_else(|| ApiError::Invalid("jump table overflows address space".to_owned()))?;
+        for index in 0..table.entries {
+            let slot =
+                table.slot(index).ok_or_else(|| ApiError::Invalid("jump table overflows address space".to_owned()))?;
             let raw = self
                 .binary
-                .read_pointer(slot, size)
+                .read_constant(slot, size)
                 .ok_or_else(|| ApiError::Invalid(format!("table slot {slot:#x} is not readable immutable memory")))?;
-            let target = if let Some(base) = relative_base {
-                let offset = raw as u32 as i32 as i64;
-                base.checked_add_signed(offset)
-                    .ok_or_else(|| ApiError::Invalid("relative table target overflows".to_owned()))?
-            } else {
-                raw
-            };
-            if target % 4 != 0
-                || !self.binary.is_code(target)
+            let target = table
+                .target(raw)
+                .ok_or_else(|| ApiError::Invalid(format!("table slot {slot:#x} selects a misaligned target")))?;
+            if !self.binary.is_code(target)
                 || self.binary.read(target, 4).is_none()
                 || self
                     .binary

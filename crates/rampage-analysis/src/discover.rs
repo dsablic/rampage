@@ -23,9 +23,28 @@ pub struct DiscoveredFunction {
     pub address: u64,
     pub blocks: Vec<Block>,
     pub instruction_count: usize,
+    /// Register-indirect jumps resolved through bounded switch tables, sorted by jump address.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub switches: Vec<Switch>,
+}
+
+/// A register-indirect jump whose successors are the cases of a bounded switch table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Switch {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub jump: u64,
+    /// Sorted and distinct. A case may be another function's entry.
+    #[serde(serialize_with = "rampage_arch::hex::addresses")]
+    pub cases: Vec<u64>,
 }
 
 impl DiscoveredFunction {
+    /// The case targets of the switch that the register-indirect jump at `jump` was resolved to, if it was.
+    pub fn switch_cases(&self, jump: u64) -> Option<&[u64]> {
+        let index = self.switches.binary_search_by_key(&jump, |switch| switch.jump).ok()?;
+        Some(&self.switches[index].cases)
+    }
+
     pub fn contains(&self, address: u64) -> bool {
         self.blocks.iter().any(|block| (block.start..block.end).contains(&address))
     }
@@ -319,6 +338,7 @@ fn explore(
     let mut instruction_modes = Vec::new();
     let mut mode_hints = Vec::new();
     let mut resolved_flows = Vec::new();
+    let mut switches = Vec::new();
     let mut worklist = vec![start];
     // A conditional branch's fall-through is explored next; it keeps the decoder state only when no branch joins
     // it there.
@@ -419,12 +439,15 @@ fn explore(
                 Flow::IndirectJump => {
                     let cases = jump_table
                         .and_then(|table| switch_targets(memory, decoder, &table, address, all_branch_targets?));
-                    for target in cases.into_iter().flatten() {
-                        xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
-                        branch_targets.push(target);
-                        if !is_other_function(target) {
-                            worklist.push(target);
+                    if let Some(cases) = cases {
+                        for &target in &cases {
+                            xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
+                            branch_targets.push(target);
+                            if !is_other_function(target) {
+                                worklist.push(target);
+                            }
                         }
+                        switches.push(Switch { jump: address, cases });
                     }
                     address = next;
                     break;
@@ -444,7 +467,8 @@ fn explore(
     jump_targets.sort_unstable();
     jump_targets.dedup();
     let blocks = blocks.into_iter().map(|(start, end)| Block { start, end }).collect();
-    let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len() };
+    switches.sort_unstable_by_key(|switch: &Switch| switch.jump);
+    let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len(), switches };
     // The base an AArch64 switch adds its jump-table offsets to is a label inside the function, not another
     // function's entry. Other code addresses formed inside the extent may be: it can run past a noreturn call.
     let end = function.end();
@@ -692,6 +716,9 @@ mod tests {
             for case in CASES {
                 assert!(program.xrefs.contains(&Xref { to: case, from: 0x24, kind: XrefKind::Jump }));
             }
+            let function = program.function_at(0).unwrap();
+            assert_eq!(function.switch_cases(0x24), Some(&CASES[..]));
+            assert_eq!(function.switch_cases(0x20), None);
         }
         // ldr x11, [x9, w0, uxtw #3]; br x11: absolute entries.
         let absolute = Switch { add: NOP, jump: 0xd61f_0160, ..Switch::new(0xf860_592b, NOP, 0) };

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rampage_api::{Project, tools};
+use rampage_api::{EdgeKind, Project, tools};
 use rampage_arch::Flow;
 use rampage_loaders::Binary;
 
@@ -119,6 +119,53 @@ fn summary_ssa_carries_diamond_definitions_into_the_join() {
     let structured = summary.structured_pseudocode.unwrap();
     assert!(structured.structured);
     assert!(structured.text.contains("} else {") && structured.text.contains("phi_from(predecessor"));
+}
+
+#[test]
+fn a_bounded_switch_connects_its_jump_to_every_case_in_the_graph_and_ssa() {
+    let adr = |rd: u32, from: u64, to: u64| {
+        let offset = to.wrapping_sub(from) as u32;
+        0x1000_0000 | (offset & 3) << 29 | (offset >> 2 & 0x7_ffff) << 5 | rd
+    };
+    // nop; nop; cmp w0, #3; b.hi 0x1038; nop; adr x9, table; adr x10, 0x1028; ldrb w11, [x9, w0, uxtw];
+    // add x10, x10, x11, lsl #2; br x10; then four cases and the default, each a ret.
+    let mut words = vec![0xd503_201f, 0xd503_201f, 0x7100_0c1f, 0x5400_0168, 0xd503_201f];
+    words.extend([adr(9, 0x1014, 0x3000), adr(10, 0x1018, 0x1028), 0x3860_492b, 0x8b0b_094a, 0xd61f_0140]);
+    words.extend([0xd65f_03c0; 5]);
+    let code: Vec<u8> = words.iter().flat_map(|word: &u32| word.to_le_bytes()).collect();
+    let path = std::env::temp_dir().join(format!("rampage-switch-graph-{}.json", std::process::id()));
+    let snapshot = serde_json::json!({
+        "format": "rampage-snapshot-v1", "arch": "aarch64", "provenance": "switch graph fixture",
+        "regions": [
+            {"name": "text", "address": "0x1000", "permissions": "r-x", "bytes": rampage_arch::hex::bytes(&code)},
+            {"name": "table", "address": "0x3000", "permissions": "r--", "bytes": "00010203"}
+        ],
+        "seeds": ["0x1000"], "entry": "0x1000"
+    });
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    serde_json::to_writer(&mut file, &snapshot).unwrap();
+    drop(file);
+    let result = Binary::open(&path);
+    std::fs::remove_file(&path).unwrap();
+    let summary = Project::new(result.unwrap()).function_summary(0x1000).unwrap();
+    let graph = &summary.graph;
+    let index = |address: u64| graph.blocks.iter().position(|block| block.start == address).unwrap();
+    let dispatch = index(0x1010);
+    let mut cases: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.from == dispatch)
+        .map(|edge| {
+            assert_eq!(edge.kind, EdgeKind::Switch);
+            graph.blocks[edge.to].start
+        })
+        .collect();
+    cases.sort_unstable();
+    assert_eq!(cases, [0x1028, 0x102c, 0x1030, 0x1034]);
+    let ssa = summary.ssa.unwrap();
+    assert!(ssa.blocks.iter().all(|block| block.reachable), "{:?}", ssa.blocks);
+    let case = ssa.blocks.iter().find(|block| block.address == 0x1030).unwrap();
+    assert_eq!(case.predecessors, [dispatch]);
 }
 
 #[test]

@@ -25,7 +25,13 @@ from pathlib import Path
 from typing import Any
 
 TOOLS = Path(__file__).resolve().parent
+SCRIPT = TOOLS / "ghidra_cfg_export.java"
 TOP = 10
+
+
+def cache_key(image_sha256: str, version: str, script: Path = SCRIPT) -> str:
+    """Names a cached Ghidra export by the image, the Ghidra version and the export script that produced it."""
+    return f"{image_sha256}-{version}-{hashlib.sha256(script.read_bytes()).hexdigest()[:16]}"
 
 
 def ghidra_version(install: Path) -> str:
@@ -42,22 +48,41 @@ def java_home() -> str:
     return f"{prefix.stdout.strip()}/libexec/openjdk.jdk/Contents/Home"
 
 
+def log_text(path: Path) -> str:
+    return path.read_text(errors="replace") if path.exists() else ""
+
+
+def read_export(out: Path, fixture: Path, logs: list[str]) -> dict[str, Any]:
+    """The export the script wrote, or exit with the tail of Ghidra's output and logs when it is missing or cut short
+    (the script failed part-way, or Ghidra stopped before running it)."""
+    problem = None
+    if not out.exists():
+        problem = "wrote no CFG export"
+    else:
+        try:
+            return json.loads(out.read_text())
+        except json.JSONDecodeError as error:
+            problem = f"wrote a truncated or malformed CFG export ({error})"
+    tails = "\n".join(log[-4000:] for log in logs if log.strip())
+    raise SystemExit(f"ghidra {problem} for {fixture}; its output and logs end:\n{tails}")
+
+
 def ghidra_export(install: Path, fixture: Path, key: str, cache: Path | None) -> tuple[dict[str, Any], float | None]:
     cached = cache / f"{key}.json" if cache else None
     if cached and cached.exists():
         return json.loads(cached.read_text()), None
     with tempfile.TemporaryDirectory() as work:
         out = Path(work) / "cfg.json"
+        logs = [Path(work) / "application.log", Path(work) / "script.log"]
         command = [
             str(install / "support" / "analyzeHeadless"), work, "bench", "-import", str(fixture),
-            "-scriptPath", str(TOOLS), "-postScript", "ghidra_cfg_export.java", str(out), "-deleteProject",
+            "-scriptPath", str(TOOLS), "-postScript", SCRIPT.name, str(out), "-deleteProject",
+            "-log", str(logs[0]), "-scriptlog", str(logs[1]),
         ]
         started = time.monotonic()
         result = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "JAVA_HOME": java_home()})
         elapsed = time.monotonic() - started
-        if not out.exists():
-            raise SystemExit(f"ghidra failed on {fixture}:\n{result.stdout[-2000:]}\n{result.stderr[-2000:]}")
-        data = json.loads(out.read_text())
+        data = read_export(out, fixture, [result.stdout, result.stderr, *(log_text(log) for log in logs)])
     if cached:
         cache.mkdir(parents=True, exist_ok=True)
         cached.write_text(json.dumps(data))
@@ -163,20 +188,26 @@ def compare(ghidra: dict[str, Any], ram: dict[int, Any]) -> dict[str, Any]:
     per_function = []
     for start in common:
         g, r = ghi[start], ram[start]
+
+        # Pooled per function, so a block or edge that two functions share counts in each of them.
+        def owned(items: set[Any]) -> set[tuple[int, Any]]:
+            return {(start, item) for item in items}
+
         for side, function in (("ghidra", g), ("rampage", r)):
-            totals["blocks"][side] |= function["blocks"]
-            totals["edges"][side] |= function["edges"]
+            totals["blocks"][side] |= owned(function["blocks"])
+            totals["edges"][side] |= owned(function["edges"])
             blocks, edges = collapse(start, function["blocks"], function["edges"])
-            totals["chains"][side] |= blocks
-            totals["chain_edges"][side] |= edges
+            totals["chains"][side] |= owned(blocks)
+            totals["chain_edges"][side] |= owned(edges)
             # Ghidra's computed calls carry a target read from memory, which can be an unrelocated GOT slot or
             # header bytes; they count only where rampage resolved the same call.
             counted = {
-                call for call, kind in function["calls"].items() if kind != "COMPUTED_CALL" or call in r["calls"]
+                call for call, kind in function["calls"].items()
+                if not kind.startswith("COMPUTED_CALL") or call in r["calls"]
             }
-            totals["calls"][side] |= counted
+            totals["calls"][side] |= owned(counted)
             totals["call_graph"][side] |= {(start, target) for _, target in counted}
-            totals["computed_calls"][side] |= set(function["calls"]) - counted
+            totals["computed_calls"][side] |= owned(set(function["calls"]) - counted)
         identical += g["blocks"] == r["blocks"]
         union = g["blocks"] | r["blocks"]
         jaccard = len(g["blocks"] & r["blocks"]) / len(union) if union else 1.0
@@ -232,13 +263,22 @@ def pair(metric: dict[str, Any]) -> str:
     return f"{percent(metric['precision'])} / {percent(metric['recall'])}"
 
 
+def report_name(fixture: Path) -> str:
+    """The `--out` file name for a fixture: its name, plus a digest of its full path so that fixtures with the same
+    name in different directories do not overwrite each other's reports."""
+    digest = hashlib.sha256(str(fixture.resolve()).encode()).hexdigest()[:8]
+    return f"{fixture.name}-{digest}.json"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("rampage", type=Path)
     parser.add_argument("ghidra", type=Path, help="Ghidra install directory (contains support/analyzeHeadless)")
     parser.add_argument("fixtures", type=Path, nargs="+")
     parser.add_argument("--out", type=Path, help="write each fixture's full JSON report, disagreements included")
-    parser.add_argument("--ghidra-cache", type=Path, help="reuse Ghidra exports keyed by image and Ghidra version")
+    parser.add_argument(
+        "--ghidra-cache", type=Path, help="reuse Ghidra exports keyed by image, Ghidra version and export script"
+    )
     arguments = parser.parse_args()
 
     version = ghidra_version(arguments.ghidra)
@@ -255,14 +295,14 @@ def main() -> int:
         arguments.out.mkdir(parents=True, exist_ok=True)
     for fixture in arguments.fixtures:
         sha = hashlib.sha256(fixture.read_bytes()).hexdigest()
-        ghidra, seconds = ghidra_export(arguments.ghidra, fixture, f"{sha}-{version}", arguments.ghidra_cache)
+        ghidra, seconds = ghidra_export(arguments.ghidra, fixture, cache_key(sha, version), arguments.ghidra_cache)
         report = compare(ghidra, rampage_functions(arguments.rampage, fixture))
         report.update({
             "fixture": fixture.name, "image_sha256": sha, "ghidra_version": version,
             "rampage_version": rampage_version,
         })
         if arguments.out:
-            (arguments.out / f"{fixture.name}.json").write_text(json.dumps(report, indent=1))
+            (arguments.out / report_name(fixture)).write_text(json.dumps(report, indent=1))
         f, b, k = report["functions"], report["blocks"], report["chains"]
         print(f"| {fixture.name} | {f['ghidra']}/{f['rampage']}/{f['common']} | "
               f"{b['identical_functions']}/{f['common']} | {percent(b['jaccard'])} | {percent(k['jaccard'])} | "

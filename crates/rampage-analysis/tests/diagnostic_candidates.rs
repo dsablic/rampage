@@ -21,7 +21,12 @@ fn sample(address: u64, size: usize, signals: Vec<DecodeSignal>) -> DecodeRegion
 fn evidence_is_sample_scoped_and_does_not_remove_tiny_or_unassessed_candidates() {
     let functions: Vec<_> = [(0x1010, 2), (0x1000, 20), (0x1011, 1), (0x2000, 3)]
         .into_iter()
-        .map(|(address, instruction_count)| DiscoveredFunction { address, instruction_count, blocks: Vec::new() })
+        .map(|(address, instruction_count)| DiscoveredFunction {
+            address,
+            instruction_count,
+            blocks: Vec::new(),
+            switches: Vec::new(),
+        })
         .collect();
     let program = Program { functions, ..Default::default() };
     let original = program.functions.clone();
@@ -43,7 +48,8 @@ fn evidence_is_sample_scoped_and_does_not_remove_tiny_or_unassessed_candidates()
 
 #[test]
 fn overlapping_samples_do_not_double_count_candidate_entries() {
-    let functions = [DiscoveredFunction { address: u64::MAX - 1, instruction_count: 1, blocks: Vec::new() }];
+    let functions =
+        [DiscoveredFunction { address: u64::MAX - 1, instruction_count: 1, blocks: Vec::new(), switches: Vec::new() }];
     let audit = Diagnostics {
         regions: vec![sample(u64::MAX - 3, 3, vec![]), sample(u64::MAX - 2, 2, vec![DecodeSignal::HighInvalidRate])],
         discovery: None,

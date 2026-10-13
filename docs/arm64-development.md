@@ -87,9 +87,18 @@ not declared pointers. Traversal is capped at 100,000 expression visits.
 readable executable code. The target may come from a proven reaching store; no CFG edges or function seeds
 are inserted from this summary evidence, and unresolved/authenticated operations remain explicit.
 
+Automatic dispatch recovery covers bounded switch tables. The index needs an unsigned bound from a `cmp` directly
+followed by `b.hi` or `b.hs`, and no branch may join between that comparison and the `br`. The table must be
+read-only image data loaded by a register-offset `ldr`/`ldrb`/`ldrh`/`ldrs*`, and every entry must select code that
+decodes. Discovery then explores each case, and `function_graph`, summaries, SSA and `export-cfg` carry a `switch`
+edge from the dispatch block to it. Any instruction whose register writes the decoder does not fully model, such
+as an unallocated hint, forgets every bound. The inverse `b.ls`/`b.lo` form and a comparison scheduled away from
+its branch stay unresolved indirect jumps.
+
 The next gates are more scalar/FP/SIMD semantics, alias-aware memory analysis, broader control-flow structuring,
-typed arguments/returns, automatic dispatch recovery and live runtime integration. PAC, exceptions, TLS, varargs,
-platform-specific ABI differences and protection wrappers must not be treated as solved by integer SSA.
+typed arguments/returns, dispatch recovery beyond bounded switch tables and live runtime integration. PAC,
+exceptions, TLS, varargs, platform-specific ABI differences and protection wrappers must not be treated as solved
+by integer SSA.
 Integer conditional selects (CSEL/CSINC/CSINV/CSNEG and their aliases) retain NZCV conditions in SSA.
 Extended-register ADD/SUB preserves signed/unsigned byte, halfword and word extensions and SP/ZR rules;
 reserved shifts remain barriers. Boundary tests compare extended arithmetic with native ARM64 execution.

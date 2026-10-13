@@ -1,7 +1,6 @@
 // Ghidra headless script: writes, for every non-external, non-thunk function, its basic blocks (BasicBlockModel),
-// intra-function successor edges and call references as JSON to the file named in the first script argument. Thunk
-// entries are listed separately so call targets that land on them can be recognised. Used by
-// tools/cfg-benchmark.py to compare rampage's CFG and call graph against Ghidra's.
+// intra-function successor edges and call references as JSON to the file named in the first script argument. Used
+// by tools/cfg-benchmark.py to compare rampage's CFG and call graph against Ghidra's.
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSetView;
@@ -28,20 +27,9 @@ public class ghidra_cfg_export extends GhidraScript {
         String out = getScriptArgs().length > 0 ? getScriptArgs()[0] : "/tmp/ghidra_cfg.json";
         PrintWriter writer = new PrintWriter(new FileWriter(out));
         BasicBlockModel model = new BasicBlockModel(currentProgram);
-        writer.print("{\"thunks\":[");
+        writer.print("{\"functions\":[");
         boolean first = true;
         FunctionIterator functions = currentProgram.getFunctionManager().getFunctions(true);
-        while (functions.hasNext()) {
-            Function function = functions.next();
-            if (function.isExternal() || !function.isThunk()) {
-                continue;
-            }
-            writer.print((first ? "" : ",") + hex(function.getEntryPoint()));
-            first = false;
-        }
-        writer.print("],\"functions\":[");
-        first = true;
-        functions = currentProgram.getFunctionManager().getFunctions(true);
         while (functions.hasNext()) {
             Function function = functions.next();
             if (function.isExternal() || function.isThunk()) {

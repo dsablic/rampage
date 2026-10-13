@@ -597,8 +597,13 @@ impl Binary {
 
     /// Reads a pointer only from readable, non-writable memory; captures do not imply future load invariance.
     pub fn read_pointer(&self, address: u64, size: u8) -> Option<u64> {
+        self.read_constant(address, size).filter(|_| matches!(size, 4 | 8))
+    }
+
+    /// Reads a 1- to 8-byte value only from file-backed, readable, non-writable memory, such as a switch table.
+    pub fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
         let permissions = self.segment_containing(address)?.perms;
-        if !matches!(size, 4 | 8) || !permissions.read || permissions.write {
+        if !permissions.read || permissions.write {
             return None;
         }
         read_uint(self.read(address, u64::from(size))?, 0, usize::from(size), self.big_endian)

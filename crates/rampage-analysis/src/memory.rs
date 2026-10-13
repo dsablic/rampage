@@ -1,4 +1,3 @@
-use rampage_arch::bytes::read_uint;
 use rampage_loaders::Binary;
 
 /// The view of a program's address space that analysis needs.
@@ -32,11 +31,7 @@ impl Memory for Binary {
     }
 
     fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
-        let permissions = self.segment_containing(address)?.perms;
-        if !permissions.read || permissions.write {
-            return None;
-        }
-        read_uint(self.read(address, u64::from(size))?, 0, usize::from(size), self.big_endian)
+        Binary::read_constant(self, address, size)
     }
 
     fn code_from(&self, address: u64) -> Option<&[u8]> {
@@ -85,9 +80,15 @@ impl Memory for FlatMemory {
     fn immediates_may_be_addresses(&self) -> bool {
         self.base >= MIN_IMAGE_BASE_FOR_IMMEDIATES
     }
+}
 
-    fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
-        let offset = usize::try_from(address.checked_sub(self.base)?).ok()?;
-        read_uint(&self.bytes, offset, usize::from(size), false)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_flat_region_has_no_constants_because_nothing_proves_it_read_only() {
+        let memory = FlatMemory { base: 0x1000, bytes: vec![1, 0, 0, 0] };
+        assert_eq!(memory.read_constant(0x1000, 4), None);
     }
 }

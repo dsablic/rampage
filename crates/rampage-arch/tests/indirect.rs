@@ -114,3 +114,45 @@ fn aarch64_describes_the_bounded_switch_table_a_register_jump_dispatches_through
     huge[1] = 0x713f_fd3f;
     assert_eq!(jump_table(&huge, None).map(|table| table.entries), Some(4096));
 }
+
+/// A switch on `w<index>` with `between` after its bounding branch: `sub; cmp; b.hi; between; adr x8; adr x10;
+/// ldrsw x11, [x8, x<index>, lsl #2]; add x10, x10, x11; br x10`.
+fn switch_with(index: u32, between: u32) -> Option<rampage_arch::JumpTable> {
+    let bound = [0x5100_0400 | index << 5 | index, 0x7100_301f | index << 5, 0x5400_07c8];
+    let dispatch = [0x1000_8008, 0x1000_000a, 0xb8a0_790b | index << 16, 0x8b0b_014a, 0xd61f_0140];
+    let words: Vec<u32> = bound.into_iter().chain([between]).chain(dispatch).collect();
+    jump_table(&words, None)
+}
+
+#[test]
+fn instructions_writing_the_index_without_naming_it_forget_its_bound() {
+    const NOP: u32 = 0xd503_201f;
+    for index in [2, 9, 16, 17, 30] {
+        assert!(switch_with(index, NOP).is_some(), "x{index}");
+    }
+    let forms = [
+        (9, 0xf83f_d002, "ld64b x2, [x0] writes x2..x9"),
+        (9, 0x1929_8001, "swpp x1, x9, [x0]"),
+        (9, 0x1929_a001, "rcwswpp x1, x9, [x0]"),
+        (9, 0xd52b_7769, "gcsss2 x9"),
+        (16, 0xd503_251f, "chkfeat x16"),
+        (17, 0xd503_211f, "pacia1716"),
+        (30, 0xd503_233f, "paciasp"),
+        (30, 0xd503_20ff, "xpaclri"),
+        (9, 0xd9c0_0923, "ldapr x3, [x9], #8"),
+        (9, 0xd944_0923, "ldiapp x3, x4, [x9], #16"),
+    ];
+    let kept: Vec<_> = forms.iter().filter(|(index, word, _)| switch_with(*index, *word).is_some()).collect();
+    assert!(kept.is_empty(), "{kept:?}");
+}
+
+#[test]
+fn instructions_with_unmodelled_register_writes_forget_every_bound() {
+    let forms = [(0xd503_2fff, "hint #0x7f"), (0xd4a0_0001, "dcps1"), (0xd4e0_0000, "tenter #0")];
+    let kept: Vec<_> = forms.iter().filter(|(word, _)| switch_with(2, *word).is_some()).collect();
+    assert!(kept.is_empty(), "{kept:?}");
+    // Audited hints and system instructions that write nothing keep it.
+    for (word, form) in [(0xd503_241f, "bti"), (0xd508_7500, "ic iallu"), (0xd503_3fdf, "isb")] {
+        assert!(switch_with(2, word).is_some(), "{form}");
+    }
+}

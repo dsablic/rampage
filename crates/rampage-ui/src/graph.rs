@@ -157,6 +157,7 @@ fn edge_color(kind: EdgeKind) -> Color32 {
         EdgeKind::Taken => Color32::from_rgb(0x6c, 0xc0, 0x6c),
         EdgeKind::NotTaken => Color32::from_rgb(0xe0, 0x70, 0x70),
         EdgeKind::Unconditional => Color32::from_rgb(0x6c, 0x9c, 0xe0),
+        EdgeKind::Switch => Color32::from_rgb(0xd0, 0xa0, 0x50),
     }
 }
 
