@@ -1,6 +1,5 @@
 //! Functions known by name never to return to their caller.
 
-use rampage_capabilities::names::import_stem;
 use rampage_loaders::Binary;
 
 use crate::discover::ReturnFacts;
@@ -8,75 +7,115 @@ use crate::discover::ReturnFacts;
 use crate::functions::{stub_names, thunk_names};
 use crate::language::demangle;
 
-/// Callees that never return, written as lowercase [`import_stem`]s (leading underscores and `@` suffixes dropped,
-/// so `exit` also covers `_exit`, Mach-O `__exit` and `exit@plt`) or demangled qualified names without parameters.
-/// A trailing `*` matches by prefix, but never into a nested item: Go closures (`runtime.gopanic.func1`) and Rust
-/// closures return normally.
+/// Symbol and import names of callees that never return, matched case-sensitively once import decoration is
+/// dropped (`__imp_`, an `@` suffix such as `@plt`, `@GLIBC_2.2.5` or stdcall's `@4`, Go's `.abi0`), as written or
+/// with the one leading underscore Mach-O and 32-bit Windows add (`_exit` names `exit`, `___stack_chk_fail` names
+/// `__stack_chk_fail`). A trailing `*` matches by prefix, but never into a nested item: Go closures
+/// (`runtime.gopanic.func1`) return normally.
 ///
-/// Every entry is declared noreturn by its own documentation or headers: C11/POSIX (`exit`, `_Exit`, `abort`,
-/// `quick_exit`, `longjmp`, `pthread_exit`), BSD `err(3)`, glibc/musl `<assert.h>` and fortify/stack-protector
-/// handlers, the Itanium C++ ABI and libunwind, Microsoft's Win32/CRT docs (`ExitProcess`, `ExitThread`,
-/// `FreeLibraryAndExitThread`, `FatalExit`, `FatalAppExit`, `_CxxThrowException`, `__report_gsfailure`,
-/// `_invalid_parameter_noinfo_noreturn`), Objective-C `objc_exception_throw`, Rust functions returning `!`, and the
-/// Go runtime functions that `throw`, `panic` or end the goroutine. Ghidra's `*FunctionsThatDoNotReturn` lists
-/// served as a cross-check; their entries that can return (`RaiseException`, `TerminateProcess` on another process,
-/// `reboot`, Go `panicCheck1`/`panicCheck2`, Rust `__rust_start_panic`) are left out on purpose.
+/// Every entry is documented never to return to its caller: C11/POSIX (`exit`, `_Exit`, `abort`, `quick_exit`,
+/// `longjmp`, `pthread_exit`), glibc/musl/Apple `<assert.h>` and fortify/stack-protector handlers, the Itanium C++
+/// ABI and libunwind, Microsoft's Win32/CRT docs (`ExitProcess`, `ExitThread`, `FreeLibraryAndExitThread`,
+/// `_CxxThrowException`, `__report_gsfailure`, `_invalid_parameter_noinfo_noreturn`), Objective-C
+/// `objc_exception_throw`, Rust's panic entry points, and the Go runtime functions that `throw`, `panic` or end the
+/// goroutine. Ghidra's `*FunctionsThatDoNotReturn` lists served as a cross-check; entries that can return are left
+/// out on purpose: `RaiseException`, `TerminateProcess` on another process, `FatalExit` and `FatalAppExit` (both
+/// hand control to an attached debugger, which may resume), `reboot`, Go `panicCheck1`/`panicCheck2`, Rust
+/// `__rust_start_panic`.
 const NORETURN: &[&str] = &[
     // C and POSIX.
     "exit",
+    "_exit",
+    "_Exit",
     "abort",
     "quick_exit",
     "thrd_exit",
     "pthread_exit",
     "longjmp",
+    "_longjmp",
     "siglongjmp",
-    "longjmp_chk",
-    "libc_longjmp",
-    "libc_siglongjmp",
-    "err",
-    "errx",
-    "verr",
-    "verrx",
-    "assert_fail",
-    "assert_perror_fail",
-    "assert_rtn",
-    "stack_chk_fail",
-    "stack_chk_fail_local",
-    "fortify_fail",
-    "chk_fail",
-    "libc_fatal",
+    "__longjmp_chk",
+    "__libc_longjmp",
+    "__libc_siglongjmp",
+    "__assert_fail",
+    "__assert_perror_fail",
+    "__assert_rtn",
+    "__stack_chk_fail",
+    "__stack_chk_fail_local",
+    "__fortify_fail",
+    "__chk_fail",
+    "__libc_fatal",
     // C++ runtime (Itanium ABI, libstdc++, libc++abi) and unwinding.
-    "cxa_throw",
-    "cxa_rethrow",
-    "cxa_bad_cast",
-    "cxa_bad_typeid",
-    "cxa_throw_bad_array_new_length",
-    "cxa_pure_virtual",
-    "cxa_deleted_virtual",
-    "cxa_call_unexpected",
-    "unwind_resume",
-    "terminate",
+    "__cxa_throw",
+    "__cxa_rethrow",
+    "__cxa_bad_cast",
+    "__cxa_bad_typeid",
+    "__cxa_throw_bad_array_new_length",
+    "__cxa_pure_virtual",
+    "__cxa_deleted_virtual",
+    "__cxa_call_unexpected",
+    "_Unwind_Resume",
+    "objc_exception_throw",
+    "objc_exception_rethrow",
+    // Windows API and the Microsoft CRT.
+    "ExitProcess",
+    "ExitThread",
+    "FreeLibraryAndExitThread",
+    "RtlExitUserProcess",
+    "RtlExitUserThread",
+    "_CxxThrowException",
+    "__report_gsfailure",
+    "__report_rangecheckfailure",
+    "_invalid_parameter_noinfo_noreturn",
+    "_invoke_watson",
+    // Rust's unmangled panic and allocation-failure entry points.
+    "rust_begin_unwind",
+    "__rust_drop_panic",
+    "__rust_foreign_exception",
+    "__rg_oom",
+    // Go.
+    "runtime.throw",
+    "runtime.fatal",
+    "runtime.fatalthrow",
+    "runtime.fatalpanic",
+    "runtime.abort",
+    "runtime.exit",
+    "runtime.exitThread",
+    "runtime.dieFromSignal",
+    "runtime.goexit",
+    "runtime.goexit0",
+    "runtime.goexit1",
+    "runtime.gopanic",
+    "runtime.goPanic*",
+    "runtime.panicIndex*",
+    "runtime.panicSlice*",
+    "runtime.panicExtend*",
+    "runtime.panicunsafe*",
+    "runtime.panicdottype*",
+    "runtime.panicmakeslice*",
+    "runtime.panicdivide",
+    "runtime.panicshift",
+    "runtime.panicmem",
+    "runtime.panicmemAddr",
+    "runtime.panicnildottype",
+    "runtime.panicoverflow",
+    "runtime.panicfloat",
+    "runtime.panicunaligned",
+    "runtime.panicwrap",
+    "runtime.panicrangestate",
+];
+
+/// Names that count only as imports, because a program's own function of that name may well return: MSVC's CRT
+/// `terminate` and BSD `err(3)`.
+const NORETURN_IMPORTS: &[&str] = &["terminate", "err", "errx", "verr", "verrx"];
+
+/// Demangled C++ and Rust qualified names, without parameters. MSVC's `std::terminate` is the global
+/// `::terminate`, which counts only when MSVC-mangled (`?terminate@@YAXXZ`).
+const NORETURN_DEMANGLED: &[&str] = &[
     "std::terminate",
     "std::__terminate",
     "__cxxabiv1::__terminate",
     "std::__throw_*",
-    "objc_exception_throw",
-    "objc_exception_rethrow",
-    // Windows API and the Microsoft CRT.
-    "exitprocess",
-    "exitthread",
-    "freelibraryandexitthread",
-    "fatalexit",
-    "fatalappexita",
-    "fatalappexitw",
-    "rtlexituserprocess",
-    "rtlexituserthread",
-    "cxxthrowexception",
-    "report_gsfailure",
-    "report_rangecheckfailure",
-    "invalid_parameter_noinfo_noreturn",
-    "invoke_watson",
-    // Rust.
     "core::panicking::*",
     "core::option::unwrap_failed",
     "core::option::expect_failed",
@@ -89,39 +128,6 @@ const NORETURN: &[&str] = &[
     "alloc::alloc::handle_alloc_error",
     "alloc::raw_vec::capacity_overflow",
     "alloc::raw_vec::handle_error",
-    "rust_begin_unwind",
-    "rust_drop_panic",
-    "rust_foreign_exception",
-    "rg_oom",
-    // Go.
-    "runtime.throw",
-    "runtime.fatal",
-    "runtime.fatalthrow",
-    "runtime.fatalpanic",
-    "runtime.abort",
-    "runtime.exit",
-    "runtime.exitthread",
-    "runtime.diefromsignal",
-    "runtime.goexit",
-    "runtime.goexit0",
-    "runtime.goexit1",
-    "runtime.gopanic*",
-    "runtime.panicindex*",
-    "runtime.panicslice*",
-    "runtime.panicextend*",
-    "runtime.panicunsafe*",
-    "runtime.panicdottype*",
-    "runtime.panicmakeslice*",
-    "runtime.panicdivide",
-    "runtime.panicshift",
-    "runtime.panicmem",
-    "runtime.panicmemaddr",
-    "runtime.panicnildottype",
-    "runtime.panicoverflow",
-    "runtime.panicfloat",
-    "runtime.panicunaligned",
-    "runtime.panicwrap",
-    "runtime.panicrangestate",
 ];
 
 /// Functions whose every path ends in a noreturn call or a trap, which nevertheless resume their caller: Go's
@@ -129,16 +135,33 @@ const NORETURN: &[&str] = &[
 /// and `morestack` resumes the function that called it, from its start, on a larger stack.
 const RETURNS_THROUGH_SAVED_CONTEXT: &[&str] = &["runtime.mcall", "runtime.morestack", "runtime.morestack_noctxt"];
 
-/// Whether the raw symbol or import `name` is a function [`NORETURN`] lists.
+/// Whether the raw symbol `name` is a function [`NORETURN`] or [`NORETURN_DEMANGLED`] lists.
 pub fn is_noreturn_name(name: &str) -> bool {
-    listed(NORETURN, name)
+    listed(NORETURN, name) || demangled_listed(name)
+}
+
+/// Whether the import (slot, stub or thunk) `name` never returns: as [`is_noreturn_name`], or [`NORETURN_IMPORTS`].
+pub fn is_noreturn_import(name: &str) -> bool {
+    is_noreturn_name(name) || listed(NORETURN_IMPORTS, name)
+}
+
+/// `name` without import decoration: `__imp_`, an `@` suffix (except in MSVC-mangled names) and Go's `.abi0`.
+fn undecorated(name: &str) -> &str {
+    let name = name.strip_prefix("__imp_").or_else(|| name.strip_prefix("_imp__")).unwrap_or(name);
+    let name = if name.starts_with('?') { name } else { name.split('@').next().unwrap_or(name) };
+    name.strip_suffix(".abi0").unwrap_or(name)
 }
 
 fn listed(table: &[&str], name: &str) -> bool {
-    let stem = import_stem(name);
-    let stem = stem.strip_suffix(".abi0").unwrap_or(&stem);
-    let demangled = demangle(name).map(|display| display.split('(').next().unwrap_or_default().to_ascii_lowercase());
-    std::iter::once(stem).chain(demangled.as_deref()).any(|name| table.iter().any(|&pattern| matches(pattern, name)))
+    let name = undecorated(name);
+    std::iter::once(name).chain(name.strip_prefix('_')).any(|name| table.iter().any(|&pattern| matches(pattern, name)))
+}
+
+fn demangled_listed(name: &str) -> bool {
+    let Some(display) = demangle(name) else { return false };
+    let qualified = display.split('(').next().unwrap_or_default();
+    NORETURN_DEMANGLED.iter().any(|&pattern| matches(pattern, qualified))
+        || name.starts_with('?') && qualified == "terminate"
 }
 
 fn matches(pattern: &str, name: &str) -> bool {
@@ -151,22 +174,24 @@ fn matches(pattern: &str, name: &str) -> bool {
 }
 
 /// The functions, import stubs and thunks, and import slots in `binary` whose names say whether they return: the
-/// ones [`is_noreturn_name`] lists never do (nor does a call through a listed slot), and the ones that resume
-/// their caller through a saved context are never inferred noreturn.
+/// ones [`is_noreturn_name`] (or, for imports, [`is_noreturn_import`]) lists never do, nor does a call through a
+/// listed slot, and the ones that resume their caller through a saved context are never inferred noreturn.
 pub fn return_facts(binary: &Binary) -> ReturnFacts {
-    let symbols = binary.symbols.iter().map(|symbol| (symbol.address, symbol.name.clone()));
-    let exports = binary.exports.iter().map(|export| (export.address, export.name.clone()));
-    let code = symbols.chain(exports).filter(|&(address, _)| binary.is_code(address));
+    let symbols = binary.symbols.iter().map(|symbol| (symbol.address, symbol.name.clone(), false));
+    let exports = binary.exports.iter().map(|export| (export.address, export.name.clone(), false));
+    let code = symbols.chain(exports).filter(|&(address, _, _)| binary.is_code(address));
+    let imports =
+        stub_names(binary).into_iter().chain(thunk_names(binary)).map(|(address, name)| (address, name, true));
     let mut facts = ReturnFacts::default();
-    for (address, name) in code.chain(stub_names(binary)).chain(thunk_names(binary)) {
-        if is_noreturn_name(&name) {
+    for (address, name, import) in code.chain(imports) {
+        if if import { is_noreturn_import(&name) } else { is_noreturn_name(&name) } {
             facts.noreturn.insert(address);
         }
         if listed(RETURNS_THROUGH_SAVED_CONTEXT, &name) {
             facts.returns.insert(address);
         }
     }
-    let slots = binary.import_slots.iter().filter(|slot| is_noreturn_name(&slot.name));
+    let slots = binary.import_slots.iter().filter(|slot| is_noreturn_import(&slot.name));
     facts.noreturn.extend(slots.map(|slot| slot.address));
     facts
 }
@@ -224,8 +249,31 @@ mod tests {
             "_ZN4core9panicking9panic_fmt28_$u7b$$u7b$closure$u7d$$u7d$17h0123456789abcdefE",
             "_ZN4core6option15Option$LT$T$GT$6unwrap17h0123456789abcdefE",
             "__rust_start_panic",
+            // C and Windows names match only in their own case, and FatalExit can return to a debugger.
+            "Exit",
+            "EXIT",
+            "Abort",
+            "exitprocess",
+            "FatalExit",
+            "FatalAppExitA",
+            // Common words count only as imports.
+            "terminate",
+            "err",
+            "ERR",
         ] {
             assert!(!is_noreturn_name(name), "{name}");
+        }
+        // An Itanium-mangled global `terminate` is the program's own function, not `std::terminate`.
+        assert!(!is_noreturn_name("_Z9terminatev"));
+    }
+
+    #[test]
+    fn imported_common_words_are_listed() {
+        for name in ["terminate", "__imp_terminate", "err", "_err", "errx@plt", "exit"] {
+            assert!(is_noreturn_import(name), "{name}");
+        }
+        for name in ["ERR", "Terminate", "error", "FatalExit"] {
+            assert!(!is_noreturn_import(name), "{name}");
         }
     }
 }
