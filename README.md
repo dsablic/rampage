@@ -48,9 +48,15 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   encodings of the fixed-width sets), so the same library function matches across binaries linked at different
   addresses. `rampage identify` applies a bundled starter database (musl libc, for x86-64 and AArch64) out of the
   box, so stripped static library code is named without any setup; build your own from a binary whose functions
-  are named (`rampage signatures`) to overlay on top. x86, x86-64, AArch64, 32-bit ARM (A32 and Thumb),
-  MIPS/MIPS64 and PowerPC/PowerPC64; see [crates/rampage-signatures](crates/rampage-signatures). A database matches
-  only the library build it was made from; regenerate or extend the bundled set with `tools/gen-signatures.sh`.
+  are named (`rampage signatures`) to overlay on top. A database also hashes each function over the extent
+  discovery finds for it in the reference, so a function discovery cuts short (at a jump table it cannot follow)
+  still matches where discovery stops at the same place in the target. Functions whose masked bodies collide
+  (`fprintf`/`sscanf`) are told apart by the names of the functions they call, once those are named; databases keep
+  these callee keys in optional `calls`/`ambiguous_calls` fields, and never use them for bodies too small to pass
+  the confidence gate (a thunk is not named after what it forwards to). x86, x86-64, AArch64, 32-bit ARM (A32
+  and Thumb), MIPS/MIPS64 and PowerPC/PowerPC64; see [crates/rampage-signatures](crates/rampage-signatures). A
+  database matches only the library build it was made from; regenerate or extend the bundled set with
+  `tools/gen-signatures.sh`.
 - Go binaries: stripped Go function names are recovered from the embedded pclntab at load, so they appear in the
   function list, metadata and disassembly even after `-ldflags "-s -w"`.
 - Heuristic databases: one detection layer where each database is data, with permissive defaults bundled and the

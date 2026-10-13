@@ -452,13 +452,19 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "build_signatures",
             "Build a library-function signature database (FLIRT/Function-ID style) from this binary's named \
-             functions and write it to the output path. Use it on a binary with symbols, then identify_functions \
-             on a stripped one.",
+             functions and write it to the output path. Each function is hashed over its symbol size and over the \
+             extent discovery finds for it; functions whose masked bodies collide also get callee keys (the \
+             optional calls/ambiguous_calls fields). Reports function signatures and callee keys separately. Use it \
+             on a binary with symbols, then identify_functions on a stripped one.",
             |project, arguments: SignatureBuildArgs| {
                 let database = project.build_signatures();
                 std::fs::write(&arguments.output, database.to_json())
                     .map_err(|error| ApiError::Invalid(format!("cannot write {}: {error}", arguments.output)))?;
-                Ok(serde_json::json!({ "signatures": database.len(), "output": arguments.output }))
+                Ok(serde_json::json!({
+                    "signatures": database.len(),
+                    "callee_keys": database.callee_keys(),
+                    "output": arguments.output,
+                }))
             },
         ),
         tool(
@@ -466,7 +472,9 @@ pub fn tools() -> Vec<Tool> {
             "Name functions by matching signature databases (FLIRT/Function-ID style), so statically linked \
              library code in a stripped binary gets recognized. Applies the bundled starter database for the \
              architecture; an optional database path is overlaid on top (or used alone with no_bundled=true). \
-             apply=true saves names for unnamed functions.",
+             A function whose masked body collides with another's is named by the names of the functions it \
+             calls, once those are named; thunks too small for the confidence gate are never named. apply=true \
+             saves names for unnamed functions.",
             |project, arguments: IdentifyArgs| {
                 let user = match &arguments.database {
                     Some(path) => {

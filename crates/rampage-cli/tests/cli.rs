@@ -352,6 +352,30 @@ fn triage_imports_and_exports_commands() {
 }
 
 #[test]
+fn signatures_reports_function_signatures_and_callee_keys_apart() {
+    let output = std::env::temp_dir().join(format!("rampage-cli-build-db-{}.json", std::process::id()));
+    let assert = Command::cargo_bin("rampage")
+        .unwrap()
+        .arg("signatures")
+        .arg(fixture("eval-ref-x86_64.elf"))
+        .arg("--output")
+        .arg(&output)
+        .assert()
+        .success();
+    let written: Value = serde_json::from_str(&std::fs::read_to_string(&output).unwrap()).unwrap();
+    std::fs::remove_file(&output).unwrap();
+    let count = |field: &str| written.get(field).and_then(Value::as_object).map_or(0, |map| map.len());
+    assert!(count("calls") > 0);
+    let expected = format!(
+        "wrote {} signatures and {} callee keys to {}\n",
+        count("entries") + count("exact"),
+        count("calls"),
+        output.display()
+    );
+    assert.stdout(expected);
+}
+
+#[test]
 fn rename_and_comment_persist_beside_the_binary() {
     let directory = std::env::temp_dir().join(format!("rampage-cli-annotate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);

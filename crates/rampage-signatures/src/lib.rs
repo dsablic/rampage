@@ -29,11 +29,14 @@
 //! constant padding is rejected). The thresholds are heuristic but conservative -- tuned to keep genuine small
 //! leaf functions while dropping trivial/degenerate bodies.
 //!
-//! Two lookups recover functions the masked hash alone cannot name. [`identify_program`] keys a body the gate
-//! rejects, or one several functions share, by the names of the functions it branches to (x86 and AArch64), which
-//! it names first: `fprintf` and `sscanf` differ only in calling `vfprintf` or `vsscanf`. And a database built with
-//! [`SignatureDb::from_binary_with_extents`] also hashes each function over the extent discovery finds for it,
-//! since identification hashes discovered bodies and discovery stops short of a jump table it cannot follow.
+//! Two lookups recover functions the masked hash alone cannot name. [`identify_program`] keys a body several
+//! functions share by the names of the functions it branches to (x86 and AArch64), which it names first: `fprintf`
+//! and `sscanf` differ only in calling `vfprintf` or `vsscanf`. Only a body that passes the gate, even without its
+//! landing pads and final branch, gets such a key, so a thunk is never named after what it forwards to (a user
+//! `strtod(s, 0)` wrapper is byte-identical to musl's `atof`). And a database built with
+//! [`SignatureDb::from_binary_with_extents`] also hashes each function over the extent discovery finds for it in
+//! the reference: identification hashes discovered bodies and discovery stops short of a jump table it cannot
+//! follow, so this matches a stripped target where discovery stops at the same place in both.
 
 mod bundled;
 
@@ -61,10 +64,6 @@ const MIN_CONTENT_BYTES: usize = 6;
 /// Fewest distinct masked instruction encodings a body must have, so constant padding (an all-nop body is one
 /// repeated word) is rejected even when it is long.
 const MIN_DISTINCT: usize = 3;
-
-/// Fewest instructions a body keyed by its callees' names must have, so a lone branch (an alias in all but name,
-/// such as `__lctrans` jumping to `__lctrans_impl`) is never named after the function it forwards to.
-const MIN_CALLEE_INSTRUCTIONS: u32 = 2;
 
 /// Most rounds of [`identify_program`] that name functions by their callees, each building on the names the
 /// previous one found; real wrapper chains are a few deep.
@@ -144,32 +143,79 @@ impl MaskContext {
 /// yields the hash or `None`. The gate only accepts or rejects: it never changes an accepted body's hash.
 struct Fingerprint {
     hasher: Sha256,
+    measure: Measure,
+    /// The same measures without landing pads (`endbr64`, `bti`) and the last instruction, which
+    /// [`Fingerprint::callee_key`] gates on when that instruction is a branch.
+    core: Measure,
+    /// The last non-landing-pad instruction's fold and content, and whether it is a direct branch: not yet in
+    /// `core`.
+    last: Option<(u64, usize, bool)>,
+    /// Targets of the direct branches and calls, in instruction order (x86 and AArch64 only).
+    branch_targets: Vec<u64>,
+}
+
+/// What the confidence gate measures of a masked instruction stream.
+#[derive(Clone, Default)]
+struct Measure {
     instructions: u32,
     content_bytes: usize,
     /// Folds of distinct masked encodings, stopped once [`MIN_DISTINCT`] is reached so it stays small.
     distinct: BTreeSet<u64>,
-    /// Targets of the direct branches and calls, in instruction order (x86 and AArch64 only).
-    branch_targets: Vec<u64>,
+}
+
+impl Measure {
+    fn add(&mut self, fold: u64, content: usize) {
+        self.instructions += 1;
+        self.content_bytes += content;
+        if self.distinct.len() < MIN_DISTINCT {
+            self.distinct.insert(fold);
+        }
+    }
+
+    fn discriminating(&self) -> bool {
+        self.instructions >= MIN_INSTRUCTIONS && self.has_content()
+    }
+
+    /// The content and distinct-encoding parts of the gate.
+    fn has_content(&self) -> bool {
+        self.content_bytes >= MIN_CONTENT_BYTES && self.distinct.len() >= MIN_DISTINCT
+    }
+}
+
+/// Whether a masked instruction is a branch-target landing pad: x86 `endbr64`/`endbr32` or an AArch64 `bti`. They
+/// carry none of the function's content and make a thunk look like more than a bare branch.
+fn is_landing_pad(masked: &[u8]) -> bool {
+    match *masked {
+        [0xf3, 0x0f, 0x1e, 0xfa | 0xfb] => true,
+        [a, b, c, d] => u32::from_le_bytes([a, b, c, d]) & 0xffff_ff3f == 0xd503_241f,
+        _ => false,
+    }
 }
 
 impl Fingerprint {
     fn new() -> Fingerprint {
         Fingerprint {
             hasher: Sha256::new(),
-            instructions: 0,
-            content_bytes: 0,
-            distinct: BTreeSet::new(),
+            measure: Measure::default(),
+            core: Measure::default(),
+            last: None,
             branch_targets: Vec::new(),
         }
     }
 
-    /// The hash of the masked body together with the names of the functions it branches to outside `body`, for
-    /// bodies the gate rejects or whose masked hash several functions share: `fprintf` and `sscanf`, or the
-    /// tail-call thunks `atof` and `__stdio_seek`, differ only in what they call. `None` unless the body has at
-    /// least [`MIN_CALLEE_INSTRUCTIONS`], branches outside itself at least once, and `name` names every such
-    /// target, so a single bare branch, or a call to anything unnamed, never keys a match.
+    /// The hash of the masked body together with the names of the functions it branches to outside `body`, which
+    /// tells apart bodies whose masked hash several functions share: `fprintf` and `sscanf` differ only in calling
+    /// `vfprintf` or `vsscanf`. `None` unless the body passes the confidence gate, and its content and
+    /// distinct-encoding parts even without its landing pads and final branch (so a thunk such as
+    /// `endbr64; jmp vfprintf`, which any function forwarding there shares, never keys a match, while a frame set up
+    /// around a tail call, as `fmodl` and `__addtf3`, does); it must also branch outside itself at least once, and
+    /// `name` must name every such target.
     fn callee_key<'n>(&self, body: Range<u64>, name: impl Fn(u64) -> Option<&'n str>) -> Option<FunctionHash> {
-        if self.instructions < MIN_CALLEE_INSTRUCTIONS {
+        let mut core = self.core.clone();
+        if let Some((fold, content, false)) = self.last {
+            core.add(fold, content);
+        }
+        if !self.measure.discriminating() || !core.has_content() {
             return None;
         }
         let callees = self.branch_targets.iter().filter(|target| !body.contains(target));
@@ -187,27 +233,30 @@ impl Fingerprint {
         Some(hasher.finalize().into())
     }
 
-    /// Feeds one instruction's masked encoding into the hash and the content measures.
-    fn push(&mut self, masked: &[u8]) {
+    /// Feeds one instruction's masked encoding into the hash and the content measures, with its target when it is
+    /// a direct branch or call.
+    fn push(&mut self, masked: &[u8], branch: Option<u64>) {
         self.hasher.update(masked);
-        self.instructions += 1;
-        self.content_bytes += masked.iter().filter(|&&byte| byte != 0).count();
-        if self.distinct.len() < MIN_DISTINCT {
-            self.distinct.insert(fold(masked));
+        let fold = fold(masked);
+        let content = masked.iter().filter(|&&byte| byte != 0).count();
+        self.measure.add(fold, content);
+        if !is_landing_pad(masked) {
+            if let Some((fold, content, _)) = self.last.take() {
+                self.core.add(fold, content);
+            }
+            self.last = Some((fold, content, branch.is_some()));
         }
+        self.branch_targets.extend(branch);
     }
 
     /// Whether the instruction cap has been reached, so a caller can stop feeding.
     fn full(&self) -> bool {
-        self.instructions >= MAX_INSTRUCTIONS
+        self.measure.instructions >= MAX_INSTRUCTIONS
     }
 
     /// The masked content hash, or `None` when the body fails the confidence gate.
     fn finish(self) -> Option<FunctionHash> {
-        let discriminating = self.instructions >= MIN_INSTRUCTIONS
-            && self.content_bytes >= MIN_CONTENT_BYTES
-            && self.distinct.len() >= MIN_DISTINCT;
-        discriminating.then(|| self.hasher.finalize().into())
+        self.measure.discriminating().then(|| self.hasher.finalize().into())
     }
 }
 
@@ -370,8 +419,7 @@ fn fixed_word_fingerprint(
     let (words, _) = bytes.as_chunks::<4>();
     for (index, word) in words.iter().enumerate() {
         let value = if big_endian { u32::from_be_bytes(*word) } else { u32::from_le_bytes(*word) };
-        fingerprint.push(&mask(value).to_le_bytes());
-        fingerprint.branch_targets.extend(branch(value, address.wrapping_add(index as u64 * 4)));
+        fingerprint.push(&mask(value).to_le_bytes(), branch(value, address.wrapping_add(index as u64 * 4)));
         if fingerprint.full() {
             break;
         }
@@ -453,10 +501,10 @@ fn thumb_fingerprint(bytes: &[u8], big_endian: bool, current: bool) -> Fingerpri
             let mut encoding = [0u8; 4];
             encoding[..2].copy_from_slice(&m1.to_le_bytes());
             encoding[2..].copy_from_slice(&m2.to_le_bytes());
-            fingerprint.push(&encoding);
+            fingerprint.push(&encoding, None);
             index += 4;
         } else {
-            fingerprint.push(&mask_thumb16(hw1, current).to_le_bytes());
+            fingerprint.push(&mask_thumb16(hw1, current).to_le_bytes(), None);
             index += 2;
         }
     }
@@ -518,14 +566,15 @@ fn x86_fingerprint(bitness: u32, bytes: &[u8], address: u64, image: Option<&Mask
             zero_range(&mut masked, offsets.displacement_offset(), offsets.displacement_size());
         }
         // A near branch or call encodes its target as a relative immediate that moves with layout.
+        let mut branch = None;
         if is_relative_branch(&instruction) && offsets.has_immediate() {
             zero_range(&mut masked, offsets.immediate_offset(), offsets.immediate_size());
-            fingerprint.branch_targets.push(instruction.near_branch_target());
+            branch = Some(instruction.near_branch_target());
         }
         if let Some(image) = image {
             mask_absolute(&instruction, &offsets, image, &mut masked);
         }
-        fingerprint.push(&masked);
+        fingerprint.push(&masked, branch);
     }
     fingerprint
 }
@@ -696,8 +745,9 @@ pub struct SignatureDb {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     ambiguous_exact: BTreeSet<String>,
     /// Callee-keyed hash (the masked body plus the names of the functions it branches to, see
-    /// [`identify_program`]) to name, for every function that has one. Consulted only when neither the masked nor
-    /// the exact hash answers: it tells apart bodies the gate rejects or that differ only in what they call.
+    /// [`identify_program`]) to name, kept only for functions whose masked hash is ambiguous. Consulted only for a
+    /// body whose masked hash is ambiguous here and that neither the exact hash nor any entry answers: it tells
+    /// apart bodies that differ only in what they call.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     calls: BTreeMap<String, String>,
     /// Callee-keyed hashes seen with more than one name.
@@ -708,6 +758,10 @@ pub struct SignatureDb {
     /// the file for what only building needs; a loaded entry that becomes ambiguous simply stops answering.
     #[serde(skip)]
     entry_exact: BTreeMap<String, String>,
+    /// The callee keys behind each entry, kept the same way as `entry_exact` for when the masked hash becomes
+    /// ambiguous.
+    #[serde(skip)]
+    entry_calls: BTreeMap<String, Vec<String>>,
 }
 
 fn legacy_scheme() -> u32 {
@@ -740,22 +794,29 @@ impl SignatureDb {
             calls: BTreeMap::new(),
             ambiguous_calls: BTreeSet::new(),
             entry_exact: BTreeMap::new(),
+            entry_calls: BTreeMap::new(),
         }
     }
 
-    /// Records the function `name` with masked hash `hash` and, when known, exact hash `exact`. A masked hash seen
-    /// with a second name is ambiguous for good, and every function behind it falls back to its exact hash.
-    fn add(&mut self, hash: FunctionHash, exact: Option<FunctionHash>, name: &str) {
+    /// Records the function `name` with masked hash `hash` and, when known, exact hash `exact` and callee key
+    /// `callees`. A masked hash seen with a second name is ambiguous for good, and every function behind it falls
+    /// back to its exact hash and callee key.
+    fn add(&mut self, hash: FunctionHash, exact: Option<FunctionHash>, callees: Option<FunctionHash>, name: &str) {
         let hash = hex(&hash);
         let exact = exact.map(|exact| hex(&exact));
+        let callees = callees.map(|key| hex(&key));
         if !self.ambiguous.contains(&hash) {
             match self.entries.get(&hash) {
-                Some(existing) if existing == name => return,
+                Some(existing) if existing == name => {
+                    self.entry_calls.entry(hash).or_default().extend(callees);
+                    return;
+                }
                 Some(_) => self.make_ambiguous(hash),
                 None => {
                     if let Some(exact) = exact {
                         self.entry_exact.insert(hash.clone(), exact);
                     }
+                    self.entry_calls.entry(hash.clone()).or_default().extend(callees);
                     self.entries.insert(hash, name.to_owned());
                     return;
                 }
@@ -764,14 +825,22 @@ impl SignatureDb {
         if let Some(exact) = exact {
             self.add_exact(exact, name.to_owned());
         }
+        if let Some(key) = callees {
+            add_unambiguous(&mut self.calls, &mut self.ambiguous_calls, key, name.to_owned());
+        }
     }
 
-    /// Marks a masked hash ambiguous, moving its entry's function (if any) to the exact fallback.
+    /// Marks a masked hash ambiguous, moving its entry's function (if any) to the exact and callee fallbacks.
     fn make_ambiguous(&mut self, hash: String) {
-        if let Some(name) = self.entries.remove(&hash)
-            && let Some(exact) = self.entry_exact.remove(&hash)
-        {
-            self.add_exact(exact, name);
+        let exact = self.entry_exact.remove(&hash);
+        let callees = self.entry_calls.remove(&hash).unwrap_or_default();
+        if let Some(name) = self.entries.remove(&hash) {
+            if let Some(exact) = exact {
+                self.add_exact(exact, name.clone());
+            }
+            for key in callees {
+                add_unambiguous(&mut self.calls, &mut self.ambiguous_calls, key, name.clone());
+            }
         }
         self.ambiguous.insert(hash);
     }
@@ -796,9 +865,11 @@ impl SignatureDb {
     }
 
     /// [`SignatureDb::from_binary`], also hashing each function over the extent function discovery found for it
-    /// (`extents` maps a start to its exclusive end, as `DiscoveredFunction::end` gives it). Identification hashes
-    /// what discovery finds in the target, and discovery can stop short of a function's symbol size (at a jump
-    /// table it cannot follow), so a database built from symbol sizes alone could never match that function.
+    /// in this reference (`extents` maps a start to its exclusive end, as `DiscoveredFunction::end` gives it).
+    /// Identification hashes what discovery finds in the target, and discovery can stop short of a function's
+    /// symbol size (at a jump table it cannot follow), so a database built from symbol sizes alone could never
+    /// match that function. The reference's extent matches a stripped target's only when discovery stops at the
+    /// same place in both, which it does for the same code but need not where symbols or layout steer it.
     pub fn from_binary_with_extents(binary: &Binary, extents: &BTreeMap<u64, u64>) -> SignatureDb {
         let mut db = SignatureDb::empty(binary.arch, CURRENT_SCHEME);
         db.add_binary(binary, extents);
@@ -820,14 +891,12 @@ impl SignatureDb {
                 let Some(print) = fingerprint_scheme(self.scheme, &target, &image, bytes, symbol.address) else {
                     continue;
                 };
-                if let Some(key) = print.callee_key(symbol.address..end, name) {
-                    add_unambiguous(&mut self.calls, &mut self.ambiguous_calls, hex(&key), symbol.name.clone());
-                }
+                let callees = print.callee_key(symbol.address..end, name);
                 if let Some(hash) = print.finish() {
                     // Under the legacy scheme the masked hash already is the exact one.
                     let exact =
                         (self.scheme != LEGACY_SCHEME).then(|| function_hash(&target, bytes, symbol.address)).flatten();
-                    self.add(hash, exact, &symbol.name);
+                    self.add(hash, exact, callees, &symbol.name);
                 }
             }
         }
@@ -859,6 +928,7 @@ impl SignatureDb {
         for hash in &other.ambiguous {
             self.entries.remove(hash);
             self.entry_exact.remove(hash);
+            self.entry_calls.remove(hash);
             self.ambiguous.insert(hash.clone());
         }
         for (hash, name) in &other.entries {
@@ -866,6 +936,10 @@ impl SignatureDb {
             match other.entry_exact.get(hash) {
                 Some(exact) => self.entry_exact.insert(hash.clone(), exact.clone()),
                 None => self.entry_exact.remove(hash),
+            };
+            match other.entry_calls.get(hash) {
+                Some(keys) => self.entry_calls.insert(hash.clone(), keys.clone()),
+                None => self.entry_calls.remove(hash),
             };
             self.entries.insert(hash.clone(), name.clone());
         }
@@ -931,31 +1005,62 @@ impl SignatureDb {
         address: u64,
         callee: impl Fn(u64) -> Option<&'n str>,
     ) -> Option<&str> {
+        match self.lookup(target, image, bytes, address, callee) {
+            Lookup::Named(name) => Some(name),
+            Lookup::AwaitsCallees | Lookup::Unknown => None,
+        }
+    }
+
+    fn lookup<'n>(
+        &self,
+        target: &Target,
+        image: &MaskContext,
+        bytes: &[u8],
+        address: u64,
+        callee: impl Fn(u64) -> Option<&'n str>,
+    ) -> Lookup<'_> {
         if self.arch != target.arch {
-            return None;
+            return Lookup::Unknown;
         }
-        let print = fingerprint_scheme(self.scheme, target, image, bytes, address)?;
+        let Some(print) = fingerprint_scheme(self.scheme, target, image, bytes, address) else {
+            return Lookup::Unknown;
+        };
         let body = address..address.saturating_add(bytes.len() as u64);
-        let key = (!self.calls.is_empty()).then(|| print.callee_key(body, callee)).flatten();
-        if let Some(hash) = print.finish() {
-            if let Some(name) = self.entries.get(&hex(&hash)) {
-                return Some(name);
-            }
-            let exact = || function_hash(target, bytes, address);
-            if !self.exact.is_empty()
-                && let Some(name) = exact().and_then(|exact| self.exact.get(&hex(&exact)))
-            {
-                return Some(name);
-            }
+        let key = (!self.calls.is_empty()).then(|| print.callee_key(body.clone(), callee)).flatten();
+        let keyable = !self.calls.is_empty() && print.callee_key(body, |_| Some("")).is_some();
+        let Some(hash) = print.finish().map(|hash| hex(&hash)) else { return Lookup::Unknown };
+        if let Some(name) = self.entries.get(&hash) {
+            return Lookup::Named(name);
         }
-        key.and_then(|key| self.calls.get(&hex(&key))).map(String::as_str)
+        let exact = || function_hash(target, bytes, address);
+        if !self.exact.is_empty()
+            && let Some(name) = exact().and_then(|exact| self.exact.get(&hex(&exact)))
+        {
+            return Lookup::Named(name);
+        }
+        // A callee key is evidence only where the body alone is a known collision.
+        if !self.ambiguous.contains(&hash) {
+            return Lookup::Unknown;
+        }
+        match key {
+            Some(key) => self.calls.get(&hex(&key)).map_or(Lookup::Unknown, |name| Lookup::Named(name)),
+            None if keyable => Lookup::AwaitsCallees,
+            None => Lookup::Unknown,
+        }
     }
 
-    /// The number of unambiguous signatures.
+    /// The number of unambiguous function signatures, masked and exact. Callee keys, which name functions those
+    /// cannot tell apart, are counted by [`SignatureDb::callee_keys`].
     pub fn len(&self) -> usize {
-        self.entries.len() + self.exact.len() + self.calls.len()
+        self.entries.len() + self.exact.len()
     }
 
+    /// The number of unambiguous callee keys.
+    pub fn callee_keys(&self) -> usize {
+        self.calls.len()
+    }
+
+    /// Whether the database holds nothing to match: no function signatures and no callee keys.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.exact.is_empty() && self.calls.is_empty()
     }
@@ -995,10 +1100,14 @@ fn add_unambiguous(map: &mut BTreeMap<String, String>, ambiguous: &mut BTreeSet<
 }
 
 /// Names the discovered `functions` of one binary (each its start and its body bytes) against `databases`, the
-/// first database to name a function winning, so a user database can be layered over a bundled one.
+/// first database to name a function winning, so a user database can be layered over a bundled one. Every round
+/// tries each database in order with all its lookups, and a database that could still name a function once its
+/// callees are named holds it back from the databases after it, so a lower-priority database never names a
+/// function a higher one can.
 ///
-/// A function the body alone cannot name -- too small for the confidence gate, or sharing its masked body with
-/// another function -- is then tried with the names of the functions it branches to, from the names found so far
+/// A function the body alone cannot name because its masked body collides with another function's (bodies the
+/// confidence gate rejects are never named) is then tried with the names of the functions it branches to, from the
+/// names found so far
 /// ([`SignatureDb::identify_with_callees`]). This repeats while it finds new names, so a wrapper is named once its
 /// callee is, up to [`MAX_CALLEE_ROUNDS`] rounds. A callee-keyed name rests on its callees' names being right.
 pub fn identify_program<'d>(
@@ -1008,33 +1117,43 @@ pub fn identify_program<'d>(
     functions: &[(u64, &[u8])],
 ) -> BTreeMap<u64, &'d str> {
     let mut names = BTreeMap::new();
-    let mut pending = Vec::new();
-    for &(address, bytes) in functions {
-        match databases.iter().find_map(|database| database.identify_in(target, image, bytes, address)) {
-            Some(name) => {
-                names.insert(address, name);
-            }
-            None => pending.push((address, bytes)),
-        }
-    }
-    for _ in 0..MAX_CALLEE_ROUNDS {
+    let mut pending = functions.to_vec();
+    // A database below one still waiting on a function's callees does not name it, until no round finds more.
+    let mut defer = true;
+    for _ in 0..MAX_CALLEE_ROUNDS + 2 {
         let found: Vec<(u64, &str)> = pending
             .iter()
             .filter_map(|&(address, bytes)| {
                 let callee = |at: u64| names.get(&at).copied();
-                let name = databases
-                    .iter()
-                    .find_map(|database| database.identify_with_callees(target, image, bytes, address, callee))?;
-                Some((address, name))
+                for database in databases {
+                    match database.lookup(target, image, bytes, address, callee) {
+                        Lookup::Named(name) => return Some((address, name)),
+                        Lookup::AwaitsCallees if defer => return None,
+                        Lookup::AwaitsCallees | Lookup::Unknown => {}
+                    }
+                }
+                None
             })
             .collect();
         if found.is_empty() {
-            break;
+            if !defer {
+                break;
+            }
+            defer = false;
+            continue;
         }
         names.extend(found);
         pending.retain(|(address, _)| !names.contains_key(address));
     }
     names
+}
+
+/// What one database says about one body.
+enum Lookup<'a> {
+    Named(&'a str),
+    /// The body collides with others here, and its callee key could name it once all its callees are named.
+    AwaitsCallees,
+    Unknown,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -1162,14 +1281,14 @@ mod tests {
         let mut db = SignatureDb::empty(Arch::X86_64, LEGACY_SCHEME);
         let x64 = target(Arch::X86_64, false);
         let hash = function_hash(&x64, &sample(), 0x1000).unwrap();
-        db.add(hash, None, "first");
-        db.add(hash, None, "first");
+        db.add(hash, None, None, "first");
+        db.add(hash, None, None, "first");
         let mut other = [0u8; 32];
         other[0] = 1;
-        db.add(other, None, "unique");
+        db.add(other, None, None, "unique");
         // A second name for the same hash makes it ambiguous, and a later copy of either name cannot revive it.
-        db.add(hash, None, "second");
-        db.add(hash, None, "first");
+        db.add(hash, None, None, "second");
+        db.add(hash, None, None, "first");
         assert_eq!(db.identify(&x64, &sample(), 0x1000), None);
         assert_eq!(db.len(), 1);
 
@@ -1177,7 +1296,7 @@ mod tests {
         assert_eq!(restored.arch(), Arch::X86_64);
         assert!(db.to_json().starts_with(r#"{"arch":"x86_64","#), "{}", db.to_json());
         assert_eq!(restored.len(), 1);
-        restored.add(hash, None, "second");
+        restored.add(hash, None, None, "second");
         assert_eq!(restored.identify(&x64, &sample(), 0x1000), None);
     }
 
@@ -1193,7 +1312,7 @@ mod tests {
     fn add_function(db: &mut SignatureDb, body: &[u8], name: &str) {
         let x64 = target(Arch::X86_64, false);
         let masked = function_hash_in(&x64, &image(), body, 0x1000).unwrap();
-        db.add(masked, function_hash(&x64, body, 0x1000), name);
+        db.add(masked, function_hash(&x64, body, 0x1000), None, name);
     }
 
     /// The corpus reference keeping only the function symbols named in `names`.
@@ -1692,12 +1811,12 @@ mod tests {
         assert_eq!(SignatureDb::from_json(&current.to_json()).unwrap().scheme(), CURRENT_SCHEME);
         let before = current.len();
         let mut older = SignatureDb::empty(Arch::X86_64, LEGACY_SCHEME);
-        older.add([7; 32], None, "older");
+        older.add([7; 32], None, None, "older");
         assert!(!current.can_merge(&older));
         current.merge(&older);
         assert_eq!(current.len(), before);
         let mut newer = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
-        newer.add([7; 32], None, "newer");
+        newer.add([7; 32], None, None, "newer");
         current.merge(&newer);
         assert_eq!(current.len(), before + 1);
         let unknown = SignatureDb::from_json(r#"{"arch":"x86_64","scheme":99,"entries":{}}"#).unwrap_err();
@@ -1710,8 +1829,8 @@ mod tests {
         let x64 = target(Arch::X86_64, false);
         let body = absolute_sample([0x40_a2c8, 0x40_b000, 0x40_c000, 0x40_d000]);
         let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
-        db.add(function_hash_in(&x64, &image(), &body, 0x1000).unwrap(), None, "uses_globals");
-        db.add(function_hash_in(&x64, &image(), &sample(), 0x1000).unwrap(), None, "leaf");
+        db.add(function_hash_in(&x64, &image(), &body, 0x1000).unwrap(), None, None, "uses_globals");
+        db.add(function_hash_in(&x64, &image(), &sample(), 0x1000).unwrap(), None, None, "leaf");
         assert_eq!(db.identify_in(&x64, &image(), &body, 0x1000), Some("uses_globals"));
         // Without the image's layout the absolute addresses stay in the hash, so it cannot match...
         assert_eq!(db.identify(&x64, &body, 0x1000), None);
@@ -1772,46 +1891,104 @@ mod tests {
     }
 
     #[test]
-    fn callee_names_name_thunks_too_small_for_the_gate() {
+    fn callee_names_name_frame_thunks_but_never_bodies_the_gate_rejects() {
         let reference = Binary::open(fixture("eval-ref-aarch64.elf")).unwrap();
         let (target, image) = (reference.target(), MaskContext::from_binary(&reference));
         let db = SignatureDb::from_binary(&reference);
         let names = identify_own_functions(&db, &reference);
-        // Two- and three-instruction tail calls: `mov x1, xzr; b strtod`, `nop; adr x1, buf; b gmtime_r`, ...
-        for name in ["atof", "gmtime", "localtime", "strftime", "__stdio_seek"] {
+        // Two- and three-instruction tail calls: `mov x1, xzr; b strtod` is also any user `strtod(s, 0)` wrapper.
+        for name in ["atof", "gmtime", "localtime", "strftime", "__stdio_seek", "__lctrans"] {
             let function = symbol(&reference, name);
             let body = reference.read(function.address, function.size).unwrap();
             assert_eq!(function_hash_in(&target, &image, body, function.address), None, "{name} passes the gate");
+            assert_eq!(names.get(&function.address).copied(), None, "{name}");
+        }
+        // `stp x29, x30, [sp, #-16]!; mov x29, sp; ldp x29, x30, [sp], #16; b ...` is shared by both, and names them
+        // by where it goes.
+        for name in ["fmodl", "compiler_rt.addf3.__addtf3"] {
+            let function = symbol(&reference, name);
+            let body = reference.read(function.address, function.size).unwrap();
+            assert_eq!(db.identify_in(&target, &image, body, function.address), None, "{name} alone");
             assert_eq!(names.get(&function.address).copied(), Some(name));
         }
-        // `b dummy`: a lone branch is never named after what it forwards to.
-        assert_eq!(names.get(&symbol(&reference, "__lctrans").address), None);
     }
 
     #[test]
-    fn a_callee_key_needs_every_external_target_named_and_more_than_a_bare_branch() {
+    fn a_callee_key_needs_content_besides_its_branches_and_every_external_target_named() {
         let x64 = target(Arch::X86_64, false);
         let key = |bytes: &[u8], name: &dyn Fn(u64) -> Option<&'static str>| {
             let print = fingerprint(&x64, bytes, 0x1000, Some(&image())).unwrap();
             print.callee_key(0x1000..0x1000 + bytes.len() as u64, name)
         };
-        // call 0x2000; add eax, 0x1234; ret.
-        let call = [0xe8, 0xfb, 0x0f, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0xc3];
+        // call 0x2000; add eax, 0x1234; mov ecx, eax; ret.
+        let call = [0xe8, 0xfb, 0x0f, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xc3];
         let named = |at: u64| (at == 0x2000).then_some("callee");
         let other = |at: u64| (at == 0x2000).then_some("other");
         assert!(key(&call, &named).is_some());
         assert_ne!(key(&call, &named), key(&call, &other));
         assert_eq!(key(&call, &|_| None), None);
-        // jmp 0x2000: a single instruction.
-        assert_eq!(key(&[0xe9, 0xfb, 0x0f, 0, 0], &named), None);
-        // call 0x1005 (the next instruction, inside the body); add; ret: nothing outside to name.
-        assert_eq!(key(&[0xe8, 0, 0, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0xc3], &named), None);
-        // Without the callee lookup a database never uses its callee keys.
+        // endbr64; jmp 0x2000: a thunk whatever forwards there shares.
+        assert_eq!(key(&[0xf3, 0x0f, 0x1e, 0xfa, 0xe9, 0xf7, 0x0f, 0, 0], &named), None);
+        // endbr64; add eax, 0x1234; mov ecx, eax; jmp 0x2000: the body passes the gate only with its landing pad
+        // and final branch.
+        let padded = [0xf3, 0x0f, 0x1e, 0xfa, 0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xe9, 0xf0, 0x0f, 0, 0];
+        assert!(function_hash_in(&x64, &image(), &padded, 0x1000).is_some());
+        assert_eq!(key(&padded, &named), None);
+        // call 0x1005 (the next instruction, inside the body); add; mov; ret: nothing outside to name.
+        assert_eq!(key(&[0xe8, 0, 0, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xc3], &named), None);
+        // A database consults a callee key only through the callee lookup, and only for a body whose masked hash
+        // it knows to be ambiguous.
         let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
         db.calls.insert(hex(&key(&call, &named).unwrap()), "wrapper".to_owned());
+        assert_eq!(db.identify_with_callees(&x64, &image(), &call, 0x1000, named), None);
+        db.ambiguous.insert(hex(&function_hash_in(&x64, &image(), &call, 0x1000).unwrap()));
         assert_eq!(db.identify_in(&x64, &image(), &call, 0x1000), None);
         assert_eq!(db.identify_with_callees(&x64, &image(), &call, 0x1000, named), Some("wrapper"));
         assert_eq!(db.identify_with_callees(&x64, &image(), &call, 0x1000, other), None);
+    }
+
+    #[test]
+    fn only_functions_with_ambiguous_bodies_keep_callee_keys() {
+        let x64 = target(Arch::X86_64, false);
+        let call = [0xe8, 0xfb, 0x0f, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xc3];
+        let print = || fingerprint(&x64, &call, 0x1000, Some(&image())).unwrap();
+        let key = |name: &'static str| print().callee_key(0x1000..0x100d, move |_| Some(name));
+        let hash = print().finish().unwrap();
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        db.add(hash, None, key("vfprintf"), "fprintf");
+        assert!(db.calls.is_empty());
+        // A second name makes the body ambiguous; both functions then answer by their callees.
+        db.add(hash, None, key("vsscanf"), "sscanf");
+        assert_eq!(db.calls.len(), 2);
+        // Callee keys are not function signatures, though they still make the database worth matching against.
+        assert_eq!((db.len(), db.callee_keys(), db.is_empty()), (0, 2, false));
+        let named = |callee: &'static str| move |_: u64| Some(callee);
+        assert_eq!(db.identify_with_callees(&x64, &image(), &call, 0x1000, named("vfprintf")), Some("fprintf"));
+        assert_eq!(db.identify_with_callees(&x64, &image(), &call, 0x1000, named("vsscanf")), Some("sscanf"));
+    }
+
+    #[test]
+    fn a_higher_priority_database_names_by_callees_before_a_lower_one_by_body() {
+        let x64 = target(Arch::X86_64, false);
+        // 0x1000: call 0x2000; add eax, 0x1234; mov ecx, eax; ret. 0x2000: add eax, 0x1234; mov ecx, eax;
+        // mov edx, ecx; ret.
+        let wrapper = [0xe8, 0xfb, 0x0f, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xc3];
+        let leaf = [0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0x89, 0xca, 0xc3];
+        let print = || fingerprint(&x64, &wrapper, 0x1000, Some(&image())).unwrap();
+        let wrapper_hash = print().finish().unwrap();
+        let mut user = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        user.add(wrapper_hash, None, print().callee_key(0x1000..0x100d, |_| Some("callee")), "user_wrapper");
+        user.add(wrapper_hash, None, None, "user_other");
+        let mut bundled = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        bundled.add(wrapper_hash, None, None, "bundled_wrapper");
+        let functions: [(u64, &[u8]); 2] = [(0x1000, &wrapper), (0x2000, &leaf)];
+        let names = identify_program(&[&user, &bundled], &x64, &image(), &functions);
+        assert_eq!(names.get(&0x1000).copied(), Some("bundled_wrapper"), "nothing names the callee");
+
+        bundled.add(function_hash_in(&x64, &image(), &leaf, 0x2000).unwrap(), None, None, "callee");
+        let names = identify_program(&[&user, &bundled], &x64, &image(), &functions);
+        assert_eq!(names.get(&0x1000).copied(), Some("user_wrapper"));
+        assert_eq!(names.get(&0x2000).copied(), Some("callee"));
     }
 
     #[test]
