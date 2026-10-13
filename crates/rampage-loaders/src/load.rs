@@ -24,6 +24,19 @@ pub enum LoadError {
     Malformed(String),
     #[error("unsupported {0}")]
     Unsupported(String),
+    #[error("invalid embedded image location: {0}")]
+    Location(String),
+}
+
+/// Where an image opened with [`Binary::open_at`] lies in the file that holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Embedded {
+    /// The image's first byte in the outer file.
+    pub offset: u64,
+    /// Bytes from `offset` taken as the image (the whole universal binary, for an embedded fat Mach-O).
+    pub size: u64,
+    /// The outer file's size.
+    pub file_size: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +88,9 @@ pub struct Binary {
     pub snapshot_registers: Vec<crate::snapshot::SnapshotRegister>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot_target: Option<crate::snapshot::SnapshotTarget>,
+    /// Set when the image was opened at an offset inside a larger file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedded: Option<Embedded>,
     #[serde(skip)]
     image: Range<usize>,
 }
@@ -141,6 +157,7 @@ impl Binary {
             snapshot_modules: Vec::new(),
             snapshot_registers: Vec::new(),
             snapshot_target: None,
+            embedded: None,
         })
     }
 
@@ -152,25 +169,81 @@ impl Binary {
 
     /// Opens a binary, requiring the given architecture when one is requested.
     pub fn open_with(path: impl AsRef<Path>, wanted: Option<Arch>) -> Result<Self, LoadError> {
-        let resolved = crate::container::resolve_executable(path.as_ref())?;
-        let path = resolved.as_path();
-        let io_error = |source| LoadError::Io { path: path.to_owned(), source };
-        let file = File::open(path).map_err(io_error)?;
-        // SAFETY: the mapping is read-only; a concurrent external truncation of the input is out of scope,
-        // the same assumption every mmap-based binary tool makes.
-        let data = unsafe { Mmap::map(&file) }.map_err(io_error)?;
+        let data = map_executable(path.as_ref())?;
         if data.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') {
             if data.len() > 2 * crate::snapshot::MAX_SNAPSHOT_BYTES + 1024 * 1024 {
                 return Err(LoadError::Malformed("snapshot JSON exceeds size limit".to_owned()));
             }
             return crate::snapshot::load(data.to_vec(), wanted);
         }
-
         let (slices, image) = match object::FileKind::parse(&*data)? {
             object::FileKind::MachOFat32 => select_slice(fat_slices::<FatArch32>(&data)?, wanted)?,
             object::FileKind::MachOFat64 => select_slice(fat_slices::<FatArch64>(&data)?, wanted)?,
             _ => (Vec::new(), 0..data.len()),
         };
+        Self::load(data, image, slices, wanted)
+    }
+
+    /// Opens the ELF, PE or Mach-O image embedded at `offset` in the file at `path`, such as one `carve` found.
+    /// Its header must validate the way carving validates it. The image runs for `length` bytes, or else for the
+    /// extent its header tables give (cut at the end of the file). Addresses and file offsets are the image's own,
+    /// as if it had been extracted; [`Binary::embedded`] records where it lies.
+    pub fn open_at(path: impl AsRef<Path>, offset: u64, length: Option<u64>) -> Result<Self, LoadError> {
+        Self::open_at_with(path, offset, length, None)
+    }
+
+    /// [`Binary::open_at`], requiring the given architecture when one is requested.
+    pub fn open_at_with(
+        path: impl AsRef<Path>,
+        offset: u64,
+        length: Option<u64>,
+        wanted: Option<Arch>,
+    ) -> Result<Self, LoadError> {
+        let data = map_executable(path.as_ref())?;
+        let file_size = data.len() as u64;
+        let start = usize::try_from(offset).ok().filter(|&start| start < data.len()).ok_or_else(|| {
+            LoadError::Location(format!("offset {offset:#x} is past the end of the file ({file_size:#x} bytes)"))
+        })?;
+        let available = file_size - offset;
+        let candidate = crate::carve::executable(&data[start..])
+            .ok_or_else(|| LoadError::Malformed(format!("no ELF, PE or Mach-O header at offset {offset:#x}")))?;
+        if candidate.confidence != crate::carve::Confidence::Validated {
+            let reason = candidate.notes.join("; ");
+            return Err(LoadError::Malformed(format!("{} header at offset {offset:#x}: {reason}", candidate.kind)));
+        }
+        let size = match length {
+            Some(length) if offset.checked_add(length).is_none() => {
+                return Err(LoadError::Location(format!("offset {offset:#x} plus length {length:#x} overflows")));
+            }
+            Some(length) if length == 0 || length > available => {
+                return Err(LoadError::Location(format!(
+                    "length {length:#x} at offset {offset:#x} does not fit the file ({file_size:#x} bytes)"
+                )));
+            }
+            Some(length) => length,
+            None => candidate.extent.map_or(available, |extent| extent.min(available)),
+        };
+        // `size` is at most `available`, so the image ends within the mapping.
+        let image = start..start + size as usize;
+        let (slices, image) = match candidate.kind {
+            crate::carve::Kind::MachOFat => {
+                let fat = &data[image.clone()];
+                let (slices, slice) = match object::FileKind::parse(fat)? {
+                    object::FileKind::MachOFat64 => select_slice(fat_slices::<FatArch64>(fat)?, wanted)?,
+                    _ => select_slice(fat_slices::<FatArch32>(fat)?, wanted)?,
+                };
+                (slices, start + slice.start..start + slice.end)
+            }
+            _ => (Vec::new(), image),
+        };
+        let mut binary = Self::load(data, image, slices, wanted)?;
+        binary.embedded = Some(Embedded { offset, size, file_size });
+        Ok(binary)
+    }
+
+    /// Loads the ELF, PE or Mach-O image at `image` within `data`; `slices` lists a universal binary's
+    /// architectures.
+    fn load(data: Mmap, image: Range<usize>, slices: Vec<Arch>, wanted: Option<Arch>) -> Result<Self, LoadError> {
         let image_bytes = &data[image.clone()];
         let parsed = object::File::parse(image_bytes)?;
 
@@ -344,6 +417,7 @@ impl Binary {
             snapshot_modules: Vec::new(),
             snapshot_registers: Vec::new(),
             snapshot_target: None,
+            embedded: None,
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
@@ -423,7 +497,7 @@ impl Binary {
         image.get(start..start.saturating_add(len).min(image.len()))
     }
 
-    /// The bytes of this image: the whole file, or one slice of a universal binary.
+    /// The bytes of this image: the whole file, one slice of a universal binary, or an embedded image.
     pub fn image_bytes(&self) -> &[u8] {
         &self.data[self.image.clone()]
     }
@@ -567,6 +641,17 @@ impl Binary {
         }
         crate::gopclntab::GoReport::default()
     }
+}
+
+/// Maps the file at `path`, or the executable inside the bundle directory it names.
+fn map_executable(path: &Path) -> Result<Mmap, LoadError> {
+    let resolved = crate::container::resolve_executable(path)?;
+    let path = resolved.as_path();
+    let io_error = |source| LoadError::Io { path: path.to_owned(), source };
+    let file = File::open(path).map_err(io_error)?;
+    // SAFETY: the mapping is read-only; a concurrent external truncation of the input is out of scope,
+    // the same assumption every mmap-based binary tool makes.
+    unsafe { Mmap::map(&file) }.map_err(io_error)
 }
 
 /// Whether a section name is the Go pclntab under any of its spellings. Go's linker names a PIE's relro copy

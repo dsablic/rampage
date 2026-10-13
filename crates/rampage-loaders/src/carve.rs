@@ -240,10 +240,7 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     for offset in 0..scanned {
         let bytes = &data[offset..];
         let found = match bytes[0] {
-            0x7f => elf(bytes),
-            b'M' => pe(bytes),
-            0xfe | 0xce | 0xcf => macho(bytes),
-            0xca => fat(bytes),
+            0x7f | b'M' | 0xfe | 0xce | 0xcf | 0xca => executable(bytes),
             b'P' if offset >= zip_members_until => zip(bytes).map(|(candidate, walked)| {
                 zip_members_until = offset.saturating_add(walked);
                 candidate
@@ -319,6 +316,18 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
         limitations,
         candidate_cap_reached,
         otherwise_truncated,
+    }
+}
+
+/// The executable (ELF, PE, Mach-O or universal Mach-O) whose header starts `bytes`, checked as a scan checks it,
+/// with its offset 0.
+pub fn executable(bytes: &[u8]) -> Option<Candidate> {
+    match bytes.first()? {
+        0x7f => elf(bytes),
+        b'M' => pe(bytes),
+        0xfe | 0xce | 0xcf => macho(bytes),
+        0xca => fat(bytes),
+        _ => None,
     }
 }
 
