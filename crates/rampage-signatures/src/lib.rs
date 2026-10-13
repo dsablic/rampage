@@ -1116,18 +1116,31 @@ pub fn identify_program<'d>(
     image: &MaskContext,
     functions: &[(u64, &[u8])],
 ) -> BTreeMap<u64, &'d str> {
-    let mut names = BTreeMap::new();
+    identify_program_sources(databases, target, image, functions)
+        .into_iter()
+        .map(|(address, (_, name))| (address, name))
+        .collect()
+}
+
+/// [`identify_program`], with the index in `databases` of the database that named each function.
+pub fn identify_program_sources<'d>(
+    databases: &[&'d SignatureDb],
+    target: &Target,
+    image: &MaskContext,
+    functions: &[(u64, &[u8])],
+) -> BTreeMap<u64, (usize, &'d str)> {
+    let mut names: BTreeMap<u64, (usize, &'d str)> = BTreeMap::new();
     let mut pending = functions.to_vec();
     // A database below one still waiting on a function's callees does not name it, until no round finds more.
     let mut defer = true;
     for _ in 0..MAX_CALLEE_ROUNDS + 2 {
-        let found: Vec<(u64, &str)> = pending
+        let found: Vec<(u64, (usize, &str))> = pending
             .iter()
             .filter_map(|&(address, bytes)| {
-                let callee = |at: u64| names.get(&at).copied();
-                for database in databases {
+                let callee = |at: u64| names.get(&at).map(|&(_, name)| name);
+                for (index, database) in databases.iter().enumerate() {
                     match database.lookup(target, image, bytes, address, callee) {
-                        Lookup::Named(name) => return Some((address, name)),
+                        Lookup::Named(name) => return Some((address, (index, name))),
                         Lookup::AwaitsCallees if defer => return None,
                         Lookup::AwaitsCallees | Lookup::Unknown => {}
                     }

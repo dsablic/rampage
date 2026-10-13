@@ -818,7 +818,7 @@ pub fn identify(
     writeln!(out, "{} matched, {} applied", result.matched, result.applied)?;
     for item in result.matches {
         let mark = if item.unnamed { "" } else { " (already named)" };
-        writeln!(out, "{:#x}  {}{}", item.address, item.name, mark)?;
+        writeln!(out, "{:#x}  {}{}  [{}]", item.address, item.name, mark, item.source)?;
     }
     Ok(())
 }

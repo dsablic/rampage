@@ -196,7 +196,7 @@ enum Command {
     /// are told apart by the names of the functions they call
     Identify {
         file: PathBuf,
-        /// A signature database to apply, overlaid on the bundled starter database unless --no-bundled is set
+        /// A signature database to apply first, before data packs' databases and the bundled starter one
         #[arg(long)]
         db: Option<PathBuf>,
         /// Do not apply the bundled starter database (requires --db)

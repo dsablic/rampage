@@ -152,6 +152,8 @@ fn find_main_marks_an_unnamed_startup_target_as_low_confidence() {
     let best = best_candidate(&report);
     assert_eq!(best.address, Some(0x1002b50));
     assert_eq!(best.confidence, FindingConfidence::Low);
+    let provenance = "named by a signature in the bundled starter database";
+    assert!(best.evidence.iter().any(|line| line.contains(provenance)), "{best:#?}");
     assert!(has_observation(section(&report, "Candidate strings"), "another-program-entirely"));
     // Low confidence never earns a rename suggestion.
     assert!(report.next_steps.iter().all(|step| step.tool != "rename"));

@@ -114,11 +114,20 @@ fn a_valid_pack_takes_effect_in_identify_detect_yara_and_capa() {
     let session = session(packs);
     let musl = session.open(&fixture("musl-static-x86_64.elf"), None).unwrap();
     let identified = musl.identify_functions(None, true, false).unwrap();
+    let vfprintf = identified.matches.iter().find(|m| m.name == "pack_vfprintf").unwrap();
+    assert_eq!(vfprintf.source, "valid");
     let names: Vec<String> = identified.matches.into_iter().map(|m| m.name).collect();
-    assert!(names.iter().any(|name| name == "pack_vfprintf"), "{names:?}");
     assert!(!names.iter().any(|name| name == "vfprintf"), "the pack layers before the bundled database: {names:?}");
     // A pack database stands in for a user one when the bundled database is left out.
     assert!(musl.identify_functions(None, false, false).unwrap().matched > 0);
+    // Reports name the pack that named a function, not the bundled database.
+    let report = serde_json::to_string(&musl.triage_report(rampage_api::ReportLimits::new(Some(200))).unwrap());
+    assert!(report.unwrap().contains("in data pack `valid`"));
+    let bundled = session.open(&fixture("musl-static-x86_64.elf"), None).unwrap();
+    let user = rampage_signatures::bundled(Arch::X86_64).unwrap();
+    let sources: std::collections::BTreeSet<String> =
+        bundled.identify_functions(Some(&user), true, false).unwrap().matches.into_iter().map(|m| m.source).collect();
+    assert_eq!(sources, ["user database".to_owned()].into());
 
     let exe = session.open(&fixture("hello-x64.exe"), None).unwrap();
     let detections = exe.detect_tools(None).unwrap().detections;

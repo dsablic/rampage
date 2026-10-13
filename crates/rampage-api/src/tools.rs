@@ -242,11 +242,12 @@ struct SignatureBuildArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct IdentifyArgs {
-    /// Optional file path of a signature database built with build_signatures, overlaid on the bundled starter
-    /// database. Omit it to match against the bundled database alone.
+    /// Optional file path of a signature database built with build_signatures, applied first: before the loaded
+    /// data packs' databases and the bundled starter database. Omit it to match against those alone.
     #[serde(default)]
     database: Option<String>,
-    /// Match against `database` alone, without the bundled starter database (requires `database`).
+    /// Leave out the bundled starter database, matching against `database` and the data packs' databases only
+    /// (needs at least one of them).
     #[serde(default)]
     no_bundled: bool,
     /// Persist matched names for still-unnamed functions as user names (never overwriting existing names).
@@ -570,9 +571,10 @@ pub fn tools() -> Vec<Tool> {
             Group::Detection,
             "identify_functions",
             "Name functions by matching signature databases (FLIRT/Function-ID style), so statically linked \
-             library code in a stripped binary gets recognized. Applies the bundled starter database for the \
-             architecture; an optional database path is overlaid on top (or used alone with no_bundled=true), and \
-             loaded data packs' databases layer between the two, in pack order. \
+             library code in a stripped binary gets recognized. Applies, first match winning: an optional \
+             database path, then loaded data packs' databases in pack order, then the bundled starter database for \
+             the architecture (left out with no_bundled=true). Each match's `source` names the database that named \
+             it: \"user database\", the data pack's name, or \"rampage-builtin\". \
              A function whose masked body collides with another's is named by the names of the functions it \
              calls, once those are named; thunks too small for the confidence gate are never named. apply=true \
              saves names for unnamed functions.",
@@ -600,7 +602,8 @@ pub fn tools() -> Vec<Tool> {
             "triage_report",
             "Guided first look in one bounded report: format and entry, hashes and packing hints, toolchain \
              signatures, capability tags, imports by library, notable strings (URLs, IPs, paths, registry keys), \
-             function count and bundled-signature matches, with suggested next tool calls. Every finding names its \
+             function count and library-signature matches (bundled and data-pack databases), with suggested next \
+             tool calls. Every finding names its \
              source primitive and confidence; evidence, not verdicts.",
             |project, args: ReportArgs| fitted(project.triage_report(ReportLimits::new(args.max_per_section))),
         ),

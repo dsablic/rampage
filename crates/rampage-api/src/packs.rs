@@ -145,7 +145,8 @@ pub struct Packs {
 #[derive(Default)]
 struct Loaded {
     packs: Vec<PackInfo>,
-    signatures: Vec<rampage_signatures::SignatureDb>,
+    /// Each signature database with the name of its pack.
+    signatures: Vec<(String, rampage_signatures::SignatureDb)>,
     peid: rampage_detect::SignatureDb,
     yara: Vec<rampage_yara::Rules>,
     capa: Vec<CapaRuleSet>,
@@ -218,9 +219,10 @@ impl Packs {
         problems
     }
 
-    /// Signature databases for `arch`, in pack order.
-    pub(crate) fn signatures_for(&self, arch: Arch) -> impl Iterator<Item = &rampage_signatures::SignatureDb> {
-        self.get().signatures.iter().filter(move |database| database.arch() == arch)
+    /// Signature databases for `arch`, in pack order, each with the name of its pack.
+    pub(crate) fn signatures_for(&self, arch: Arch) -> impl Iterator<Item = (&str, &rampage_signatures::SignatureDb)> {
+        let databases = self.get().signatures.iter().filter(move |(_, database)| database.arch() == arch);
+        databases.map(|(pack, database)| (pack.as_str(), database))
     }
 
     pub(crate) fn peid(&self) -> &rampage_detect::SignatureDb {
@@ -328,7 +330,7 @@ impl Loaded {
                     database.callee_keys(),
                     database.arch()
                 );
-                self.signatures.push(database);
+                self.signatures.push((pack.to_owned(), database));
                 Ok(detail)
             }
             Kind::Peid => {
