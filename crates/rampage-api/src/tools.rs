@@ -613,8 +613,9 @@ pub fn tools() -> Vec<Tool> {
             "Name functions by matching signature databases (FLIRT/Function-ID style), so statically linked \
              library code in a stripped binary gets recognized. Applies, first match winning: an optional \
              database path, then loaded data packs' databases in pack order, then the bundled starter database for \
-             the architecture (left out with no_bundled=true). Each match's `source` names the database that named \
-             it: \"user database\", the data pack's name, or \"rampage-builtin\". \
+             the architecture (left out with no_bundled=true, which works with a database path, a data pack's \
+             database for the architecture, or both, and is refused with neither). Each match's `source` names \
+             the database that named it: \"user database\", the data pack's name, or \"rampage-builtin\". \
              A function whose masked body collides with another's is named by the names of the functions it \
              calls, once those are named; thunks too small for the confidence gate are never named. apply=true \
              saves names for unnamed functions. `warnings` names data packs or pack signature databases that did \

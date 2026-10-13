@@ -138,3 +138,21 @@ fn packs_check_fails_on_a_content_that_does_not_load_and_analysis_warns() {
     let valid = yara_pack("valid");
     rampage().args(["packs", "check", valid.arg()]).assert().success();
 }
+
+#[test]
+fn identify_without_the_bundled_database_accepts_a_pack_database_alone() {
+    let pack = Pack::new("sigs", "[[contents]]\nkind = \"signatures\"\npath = \"x86_64.json\"\n");
+    pack.write("x86_64.json", r#"{"arch":"x86_64","scheme":2,"entries":{}}"#);
+    rampage()
+        .args(["identify", "--no-bundled", "--pack", pack.arg()])
+        .arg(fixture("hello-x64.elf"))
+        .assert()
+        .success()
+        .stdout(contains("0 matched, 0 applied"));
+    rampage()
+        .args(["identify", "--no-bundled", "--pack", pack.arg()])
+        .arg(fixture("hello-arm64.macho"))
+        .assert()
+        .failure()
+        .stderr(contains("needs a signature database or a pack with one for this architecture"));
+}

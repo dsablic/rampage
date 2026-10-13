@@ -207,8 +207,9 @@ enum Command {
         /// A signature database to apply first, before data packs' databases and the bundled starter one
         #[arg(long)]
         db: Option<PathBuf>,
-        /// Do not apply the bundled starter database (requires --db)
-        #[arg(long, requires = "db")]
+        /// Do not apply the bundled starter database (needs --db or a data pack with a database for the
+        /// architecture)
+        #[arg(long)]
         no_bundled: bool,
         /// Save matched names for still-unnamed functions as user names
         #[arg(long)]

@@ -183,7 +183,7 @@ fn dotnet_shows_signatures_and_attributes() {
 
 #[test]
 fn identify_overlays_or_replaces_the_bundled_database() {
-    rampage(&["identify", "--no-bundled"], "hello-x64.elf").failure().stderr(contains("--db"));
+    rampage(&["identify", "--no-bundled"], "hello-x64.elf").failure().stderr(contains("needs a signature database"));
     let bundled = json(&["--json", "identify"], "hello-x64.elf");
     assert!(bundled["matched"].as_u64().unwrap() > 0, "{bundled}");
     rampage(&["identify"], "hello-x64.elf").success().stdout(contains(" matched, 0 applied"));
