@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_HTTP_TIMEOUT: "60"
+  CARGO_NET_RETRY: "2"
+  RUST_TEST_THREADS: "1"
+  RUST_BACKTRACE: "1"
+  TZ: UTC
+
+jobs:
+  hygiene:
+    name: Formatting and secrets (HEAD + history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Check Rust formatting
+        timeout-minutes: 3
+        run: cargo fmt --all --check
+      - name: Scan with checksum-pinned official Gitleaks release
+        timeout-minutes: 10
+        run: |
+          scratch=$(mktemp -d "$RUNNER_TEMP/rampage-gitleaks.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          archive=gitleaks_8.30.1_linux_x64.tar.gz
+          curl --fail --silent --show-error --location --retry 2 --max-time 120 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$archive" \
+            --output "$scratch/$archive"
+          checksum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          printf '%s  %s\n' "$checksum" "$scratch/$archive" | sha256sum --check --strict
+          tar -xzf "$scratch/$archive" -C "$scratch" gitleaks
+          time bash tools/ci/test-scan-secrets.sh "$scratch/gitleaks"
+          time bash tools/ci/scan-secrets.sh "$scratch/gitleaks"
+
+  macos:
+    name: macOS ARM64 workspace, UI and accuracy
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - name: Require native ARM64 compiler and macOS SDK
+        timeout-minutes: 2
+        run: |
+          test "$(uname -m)" = arm64
+          rustc --version --verbose
+          cargo --version
+          clang --version
+          clang++ --version
+          xcrun --sdk macosx --show-sdk-path
+      - name: Warnings-denied workspace Clippy
+        timeout-minutes: 30
+        run: time cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Build CLI and its required supervised sibling worker
+        timeout-minutes: 15
+        run: |
+          time cargo build --locked -p rampage-cli -p rampage-worker
+          test -x "$PWD/target/debug/rampage"
+          test -x "$PWD/target/debug/rampage-worker"
+      - name: Existing 13-slice accuracy gate and evaluation CLI regressions
+        timeout-minutes: 10
+        run: time cargo test --locked -p rampage-eval
+      - name: Workspace tests including offscreen UI snapshots
+        timeout-minutes: 20
+        run: time cargo test --locked --workspace --exclude rampage-eval
+      - name: Opt-in native compiled fixture and isolated CLI acceptance
+        timeout-minutes: 5
+        run: |
+          time cargo test --locked -p rampage-api --test compiled_arm64 -- --ignored
+          export RAMPAGE_TEST_CLI="$PWD/target/debug/rampage"
+          test -x "$RAMPAGE_TEST_CLI"
+          time cargo test --locked -p rampage-worker --test cli -- --ignored
+
+  linux-core:
+    name: Linux core subset (no UI or YARA/Wasmtime)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - name: Require C/C++ fixture compilers
+        timeout-minutes: 2
+        run: |
+          rustc --version --verbose
+          cargo --version
+          cc --version
+          clang --version
+          clang++ --version
+      - name: Warnings-denied core Clippy and tests
+        timeout-minutes: 20
+        run: bash tools/ci/linux-core.sh
+
+# Step/job timeouts bound CI execution, not individual analysis time or memory.
+# macOS runs the ordinary non-ignored debug workspace suite once, plus the two selected opt-in tests above.
+# Ignored million-point context and Chrome performance tests are not CI coverage; Linux checks only the named core.
+# Metal-backed UI snapshots must pass on macOS; no snapshot updates, skips, or headless Linux UI claims.
