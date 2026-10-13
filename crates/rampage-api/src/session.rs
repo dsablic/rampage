@@ -112,6 +112,9 @@ impl Session {
             }
             log
         } else {
+            if let Some(image) = image.filter(|image| image.length().is_none()) {
+                warn_of_unsuffixed_image_sidecar(path, image, &mut binary, &legacy);
+            }
             legacy
         };
         let annotations = Annotations::open(log).map_err(ApiError::Invalid)?;
@@ -180,8 +183,9 @@ fn can_reuse_ordinary_input(path: &Path) -> Result<bool, ApiError> {
     }
 }
 
-/// `<file>.rampage`, with `@0x<offset>` (and `+0x<length>` when given) for an embedded image and `.<arch>` for one
-/// slice of a universal binary.
+/// `<file>.rampage`, with `.<arch>` for one slice of a universal binary. An embedded image's sidecar is
+/// `<file>@0x<offset>[+0x<length>][.<arch>].rampage-image`: no plain file's sidecar ends that way, and neither the
+/// location nor the architecture can contain the `@` that separates them from the file name.
 fn annotation_path(path: &Path, image: Option<ImageAt>, binary: &Binary) -> PathBuf {
     let mut log = path.as_os_str().to_owned();
     if let Some(image) = image {
@@ -193,6 +197,24 @@ fn annotation_path(path: &Path, image: Option<ImageAt>, binary: &Binary) -> Path
     if binary.slices.len() > 1 {
         log.push(format!(".{}", binary.arch));
     }
-    log.push(".rampage");
+    log.push(if image.is_some() { ".rampage-image" } else { ".rampage" });
     PathBuf::from(log)
+}
+
+/// Embedded images once used `<file>@0x<offset>[.<arch>].rampage`, which is also the sidecar of a file named
+/// `<file>@0x<offset>`. Such a log is left alone; when no file of that name exists, it likely holds this image's
+/// annotations, so say where they now go.
+fn warn_of_unsuffixed_image_sidecar(path: &Path, image: ImageAt, binary: &mut Binary, log: &Path) {
+    let mut owner = path.as_os_str().to_owned();
+    owner.push(format!("@{:#x}", image.offset()));
+    let owner = PathBuf::from(owner);
+    let old = annotation_path(&owner, None, binary);
+    if std::fs::symlink_metadata(&old).is_ok() && std::fs::symlink_metadata(&owner).is_err() {
+        binary.warnings.push(format!(
+            "annotations at {} were not loaded: embedded images now keep theirs in {}; move that log there if it \
+             belongs to this image",
+            old.display(),
+            log.display()
+        ));
+    }
 }

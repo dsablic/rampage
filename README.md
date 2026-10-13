@@ -139,8 +139,8 @@ Addresses accept `0x` hex, decimal, symbol and export names, or `sub_<hex>`. In 
 a `"0x…"` string, because JSON numbers lose precision above 2^53 in common consumers.
 
 Names, comments and typed annotations are saved beside ordinary binaries in `<file>.rampage`
-(`<file>.<arch>.rampage` for a slice of a universal binary, `<file>@0x<offset>.rampage` for an image opened with
-`--image-offset`, or `image_offset` over MCP): an append-only JSON Lines log of edits, each
+(`<file>.<arch>.rampage` for a slice of a universal binary; `<file>@0x<offset>[+0x<length>].rampage-image` for an
+image opened with `--image-offset`, or `image_offset` over MCP): an append-only JSON Lines log of edits, each
 recording the value it replaced, so undo is just another edit and the file is a full history. A batch is written
 under a header line and replayed only once all of its edits are present. Several clients can share it: the UI
 picks up names an agent saves through MCP within a second.

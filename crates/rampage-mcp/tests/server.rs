@@ -267,7 +267,7 @@ async fn image_offset_opens_a_carved_executable_with_its_own_annotations() {
 
     let arguments = json!({ "path": path, "image_offset": offset, "at": "_main", "name": "say_hello" });
     assert_eq!(json_of(&call(&client, "rename", arguments).await)["changed"], true);
-    assert!(directory.join(format!("firmware.bin@{hex}.rampage")).exists());
+    assert!(directory.join(format!("firmware.bin@{hex}.rampage-image")).exists());
     let list = json_of(&call(&client, "list_annotations", json!({ "path": path, "image_offset": hex })).await);
     assert_eq!(list["names"][0]["text"], "say_hello");
     let outer = json_of(&call(&client, "list_annotations", json!({ "path": path })).await);

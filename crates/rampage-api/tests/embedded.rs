@@ -69,7 +69,7 @@ fn annotations_on_an_embedded_image_stay_in_its_own_sidecar() {
     let embedded = session.open_at(&path, None, at(first)).unwrap();
     let main = embedded.resolve("main").unwrap();
     embedded.rename(main, Some("embedded_main")).unwrap();
-    assert!(scratch.0.join(format!("firmware.bin@{first:#x}.rampage")).exists());
+    assert!(scratch.0.join(format!("firmware.bin@{first:#x}.rampage-image")).exists());
     assert!(!scratch.0.join("firmware.bin.rampage").exists());
 
     let reopened = Session::default().open_at(&path, None, at(first)).unwrap();
@@ -119,4 +119,30 @@ fn an_image_length_takes_in_the_overlay_the_header_extent_leaves_out() {
     assert!(Session::default().open_at(&path, None, at(second)).unwrap().annotation_list().names.is_empty());
     let reopened = Session::default().open_at(&path, None, Some(ImageAt::new(second, Some(size + 16)))).unwrap();
     assert_eq!(reopened.function_name(main), "whole_main");
+}
+
+#[test]
+fn an_embedded_image_and_a_file_named_like_its_location_keep_separate_annotations() {
+    let (scratch, path, first, _) = outer_file("collision");
+    let named_like = scratch.0.join(format!("firmware.bin@{first:#x}"));
+    std::fs::copy(fixture("hello-x64-dyn.elf"), &named_like).unwrap();
+    let embedded = Session::default().open_at(&path, None, at(first)).unwrap();
+    let plain = Session::default().open(&named_like, None).unwrap();
+    let main = embedded.resolve("main").unwrap();
+    assert_eq!(plain.resolve("main").unwrap(), main);
+    embedded.rename(main, Some("embedded_main")).unwrap();
+    plain.rename(main, Some("plain_main")).unwrap();
+
+    assert_eq!(Session::default().open_at(&path, None, at(first)).unwrap().function_name(main), "embedded_main");
+    assert_eq!(Session::default().open(&named_like, None).unwrap().function_name(main), "plain_main");
+}
+
+#[test]
+fn an_unsuffixed_embedded_sidecar_is_reported_not_loaded() {
+    let (scratch, path, first, _) = outer_file("unsuffixed");
+    let old = scratch.0.join(format!("firmware.bin@{first:#x}.rampage"));
+    std::fs::write(&old, "").unwrap();
+    let embedded = Session::default().open_at(&path, None, at(first)).unwrap();
+    let warning = format!("annotations at {} were not loaded", old.display());
+    assert!(embedded.binary.warnings.iter().any(|text| text.starts_with(&warning)), "{:?}", embedded.binary.warnings);
 }

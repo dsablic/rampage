@@ -505,7 +505,7 @@ fn image_offset_opens_an_embedded_executable_with_its_own_annotations() {
     assert_eq!(embedded, json(&["--json", "funcs"], "hello-x64-dyn.elf"));
 
     rampage(&["rename", path_text, "main", "embedded_main", "--image-offset", &offset]).success();
-    assert!(directory.join(format!("firmware.bin@{offset}.rampage")).exists());
+    assert!(directory.join(format!("firmware.bin@{offset}.rampage-image")).exists());
     rampage(&["--image-offset", &offset, "annotations", path_text])
         .success()
         .stdout(predicates::str::contains("embedded_main"));
