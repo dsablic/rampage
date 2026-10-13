@@ -20,7 +20,7 @@ use crate::{Decompiler, DecompilerOptions, MemoryRegion, Platform};
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,6 +113,11 @@ pub enum WorkerOperation {
         name: String,
         #[serde(default)]
         optional: bool,
+    },
+    /// Mark a registered function, or an import slot's function, as never returning.
+    NoReturn {
+        address: u64,
+        indirect: bool,
     },
 }
 
@@ -537,6 +542,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
                     None => Err(crate::Error::Ghidra(format!("no runtime prototype for {name:?}"))),
                 }
             }
+            WorkerOperation::NoReturn { address, indirect } => engine.set_noreturn(address, indirect),
         };
         result.map_err(|error| format!("operation {index}: {error}"))?;
     }

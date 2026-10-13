@@ -49,3 +49,17 @@ fn thumb_context_accepts_padding_boundaries_and_exclusive_32_bit_ends() {
         assert!(output.code.contains("return 7;"), "{}", output.code);
     }
 }
+
+/// The decompiler stops at calls to listed (`exit`, `abort`) and inferred (`sub_1400017c0`, which ends in
+/// `__fastfail`) noreturn callees, as discovery does, instead of running on into the code after them.
+#[test]
+fn calls_that_never_return_end_decompiled_control_flow() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.exe");
+    let project = Project::new(Binary::open(path).unwrap());
+    let code = project.decompile(0x1400013f7).unwrap().code;
+    let lines: Vec<_> = code.lines().map(str::trim).collect();
+    for call in ["exit(", "abort(", "sub_1400017c0(8)"] {
+        let at = lines.iter().position(|line| line.starts_with(call)).unwrap_or_else(|| panic!("{call}: {code}"));
+        assert!(lines[at - 1].contains("Subroutine does not return"), "{call}: {code}");
+    }
+}

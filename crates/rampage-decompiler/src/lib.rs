@@ -312,6 +312,7 @@ unsafe extern "C" {
         name: *const c_char,
     ) -> *const c_char;
     fn rampage_decomp_prototype(handle: *mut Opaque, addr: u64, indirect: u8, text: *const c_char) -> *const c_char;
+    fn rampage_decomp_noreturn(handle: *mut Opaque, addr: u64, indirect: u8) -> *const c_char;
     fn rampage_decomp_global(handle: *mut Opaque, addr: u64, text: *const c_char) -> *const c_char;
     fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
@@ -516,6 +517,15 @@ impl Decompiler {
         // SAFETY: valid serialized handle and a live C declaration; the returned error belongs to the handle.
         ffi_result(unsafe { rampage_decomp_prototype(self.handle, address, u8::from(indirect), declaration.as_ptr()) })
     }
+    /// Marks the registered function at `address` (or, when `indirect`, the import slot's function) as never
+    /// returning, so decompiled callers end their control flow at calls to it.
+    pub fn set_noreturn(&mut self, address: u64, indirect: bool) -> Result<(), Error> {
+        self.valid_address(address)?;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle and a checked address; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_noreturn(self.handle, address, u8::from(indirect)) })
+    }
+
     /// Opens a decompiler for `arch` over `segments`. Each segment's bytes stay mapped at its base for the life
     /// of the decompiler, so functions anywhere in the loaded code can be decompiled.
     pub fn open(arch: Arch, big_endian: bool, segments: &[Segment]) -> Result<Decompiler, Error> {

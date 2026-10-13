@@ -65,6 +65,14 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
             optional: true,
         });
     }
+    // Listed and inferred noreturn callees, so decompiled callers stop at calls to them as discovery does.
+    let slots: std::collections::BTreeSet<_> = binary.import_slots.iter().map(|slot| slot.address).collect();
+    for &address in &project.analysis()?.program.noreturn {
+        let indirect = slots.contains(&address);
+        if indirect || identities.contains_key(&address) {
+            operations.push(WorkerOperation::NoReturn { address, indirect });
+        }
+    }
     Ok(operations)
 }
 
@@ -93,6 +101,9 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::Prototype { address, indirect, declaration } => engine
                 .apply_prototype(address, indirect, &declaration)
                 .map_err(|error| failure(address, "apply signature", error))?,
+            WorkerOperation::NoReturn { address, indirect } => {
+                engine.set_noreturn(address, indirect).map_err(|error| failure(address, "mark noreturn", error))?
+            }
             WorkerOperation::Mode { .. } => unreachable!(),
         }
     }

@@ -448,6 +448,21 @@ const char *rampage_decomp_prototype(void *h, uint64_t addr, uint8_t indirect, c
     });
 }
 
+// Marks a function, or the external function an import slot names, as never returning: the decompiler then ends
+// control flow at calls to it.
+const char *rampage_decomp_noreturn(void *h, uint64_t addr, uint8_t indirect) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &nativeMutation) {
+        Address entry(handle->arch->getDefaultCodeSpace(), addr);
+        Scope *global = handle->arch->symboltab->getGlobalScope();
+        Funcdata *function = indirect != 0 ? global->queryExternalRefFunction(entry) : global->queryFunction(entry);
+        if (function == nullptr) throw LowlevelError("Noreturn target is not registered");
+        nativeMutation = true;
+        handle->arch->clearAnalysis(function);
+        function->getFuncProto().setNoReturn(true);
+    });
+}
+
 // Parses C declarations (typedefs, prototypes) into the program's type database, so matching functions get
 const char *rampage_decomp_global(void *h, uint64_t addr, const char *text) noexcept {
     Handle *handle = static_cast<Handle *>(h);
