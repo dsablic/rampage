@@ -7,7 +7,7 @@ use rampage_analysis::functions::{self, Names};
 use rampage_analysis::strings::{self, FoundString};
 use rampage_analysis::triage::{self, Triage};
 use rampage_arch::UnsupportedArch;
-use rampage_loaders::{Binary, Export, LoadError};
+use rampage_loaders::{Binary, Export, ImageAt, LoadError};
 
 use crate::annotations::{Annotations, Edit, Field};
 use crate::rows::{
@@ -62,12 +62,17 @@ impl Project {
     /// The binary at `path` as a peer to compare this one with: the slice of this binary's architecture, with its
     /// annotations in memory only. A file that loads, but not in this architecture, is reported as a mismatch.
     pub fn open_peer(&self, path: &Path) -> Result<Project, ApiError> {
+        self.open_peer_image(path, None)
+    }
+
+    /// [`Project::open_peer`] for the executable embedded in `path` at `image`, or the whole file without one.
+    pub fn open_peer_image(&self, path: &Path, image: Option<ImageAt>) -> Result<Project, ApiError> {
         let arch = self.binary.arch;
-        match Binary::open_with(path, Some(arch)) {
+        match Binary::open_image(path, image, Some(arch)) {
             Ok(binary) => Ok(Project::new(binary)),
-            Err(source @ LoadError::Unsupported(_)) if Binary::open_with(path, None).is_ok() => Err(ApiError::Invalid(
-                format!("{}: {source}; a comparison needs both binaries in {arch}", path.display()),
-            )),
+            Err(source @ LoadError::Unsupported(_)) if Binary::open_image(path, image, None).is_ok() => Err(
+                ApiError::Invalid(format!("{}: {source}; a comparison needs both binaries in {arch}", path.display())),
+            ),
             Err(source) => Err(ApiError::Load { path: path.to_owned(), source }),
         }
     }

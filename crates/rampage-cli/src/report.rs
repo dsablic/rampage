@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use rampage_api::{ReportLimits, WorkflowReport};
+use rampage_loaders::ImageAt;
 
 use crate::commands::{Options, open, write_json};
 
@@ -28,6 +29,8 @@ pub enum Workflow {
 
 pub struct ReportOptions {
     pub other: Option<PathBuf>,
+    /// Where in `other` an embedded image to compare with starts.
+    pub other_image: Option<ImageAt>,
     pub limit: Option<usize>,
     pub no_decompile: bool,
 }
@@ -53,7 +56,7 @@ pub fn report(
         (Workflow::FindCrypto, _) => project.find_crypto(limits)?,
         (Workflow::PersistenceSurface, _) => project.persistence_surface(limits)?,
         (Workflow::StringDecoding, _) => project.string_decoding(limits)?,
-        (Workflow::DiffBuilds, Some(other)) => project.diff_builds(other, limits)?,
+        (Workflow::DiffBuilds, Some(other)) => project.diff_builds_image(other, report_options.other_image, limits)?,
         (Workflow::DiffBuilds, None) => unreachable!("checked before opening the binary"),
     };
     if options.json {

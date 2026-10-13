@@ -236,6 +236,32 @@ async fn every_served_tool_is_in_exactly_one_group() {
 }
 
 #[tokio::test]
+async fn diff_builds_compares_an_embedded_image_in_the_other_file() {
+    let directory = std::env::temp_dir().join(format!("rampage-mcp-diff-embedded-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut file = b"junk!".repeat(9);
+    let offset = file.len() as u64;
+    file.extend(std::fs::read(fixture("hello-x64-dyn.elf")).unwrap());
+    let other = directory.join("firmware.bin");
+    std::fs::write(&other, file).unwrap();
+    let other = other.to_str().unwrap();
+    let client = connect().await;
+    let base = fixture("hello-x64.elf");
+    let direct =
+        json_of(&call(&client, "diff_builds", json!({ "path": base, "other": fixture("hello-x64-dyn.elf") })).await);
+    let arguments = json!({ "path": base, "other": other, "other_image_offset": format!("{offset:#x}") });
+    let embedded = json_of(&call(&client, "diff_builds", arguments).await);
+    assert_eq!(embedded["sections"], direct["sections"]);
+    let arguments = json!({ "path": base, "other": other, "other_image_offset": offset, "other_image_length": 1 });
+    assert_eq!(call(&client, "diff_builds", arguments).await.is_error, Some(true));
+    let lone = call(&client, "diff_builds", json!({ "path": base, "other": other, "other_image_length": 1 })).await;
+    assert!(text(&lone).contains("`other_image_length` needs `other_image_offset`"), "{}", text(&lone));
+    client.cancel().await.unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[tokio::test]
 async fn image_offset_opens_a_carved_executable_with_its_own_annotations() {
     let directory = std::env::temp_dir().join(format!("rampage-mcp-embedded-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);

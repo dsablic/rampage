@@ -535,7 +535,7 @@ fn image_offset_opens_an_embedded_executable_with_its_own_annotations() {
 fn image_offset_is_rejected_by_commands_that_do_not_open_one_image() {
     let file = fixture("hello-x64.elf");
     let file = file.to_str().unwrap();
-    let commands: [&[&str]; 8] = [
+    let commands: [&[&str]; 7] = [
         &["carve", file],
         &["inventory", file],
         &["packs", "list"],
@@ -543,7 +543,6 @@ fn image_offset_is_rejected_by_commands_that_do_not_open_one_image() {
         &["correlate", file, "--original", file, "--module", "m", "--at", "0x0"],
         &["compare-runtime", file, "--original", file, "--module", "m", "--range", "0x0-0x1"],
         &["compare-pointers", file, "--other", file, "--at", "0x0", "--other-at", "0x0"],
-        &["report", "diff-builds", file, "--other", file],
     ];
     for command in commands {
         let mut rampage = assert_cmd::Command::cargo_bin("rampage").unwrap();

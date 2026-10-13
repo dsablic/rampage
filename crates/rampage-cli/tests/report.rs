@@ -80,6 +80,44 @@ fn diff_builds_needs_and_uses_other() {
 }
 
 #[test]
+fn diff_builds_compares_embedded_images_on_both_sides() {
+    let directory = std::env::temp_dir().join(format!("rampage-cli-diff-embedded-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let embed = |name: &str, junk: usize| {
+        let mut file = b"junk".repeat(junk);
+        file.push(b'!');
+        let offset = format!("{:#x}", file.len());
+        file.extend(std::fs::read(fixture(name)).unwrap());
+        let path = directory.join(format!("{name}.bin"));
+        std::fs::write(&path, file).unwrap();
+        (path.to_str().unwrap().to_owned(), offset)
+    };
+    let (base, base_offset) = embed("hello-x64.elf", 10);
+    let (other, other_offset) = embed("hello-x64-dyn.elf", 30);
+    let direct = json(&["diff-builds", &path("hello-x64.elf"), "--other", &path("hello-x64-dyn.elf")]);
+    let embedded = json(&[
+        "diff-builds",
+        &base,
+        "--image-offset",
+        &base_offset,
+        "--other",
+        &other,
+        "--other-image-offset",
+        &other_offset,
+    ]);
+    assert_eq!(embedded["sections"], direct["sections"]);
+    assert_eq!(embedded["other"]["sha256"], direct["other"]["sha256"]);
+    let step = embedded["next_steps"].as_array().unwrap().iter().find(|step| step["arguments"]["path"] == other);
+    assert_eq!(step.unwrap()["arguments"]["image_offset"], other_offset.as_str());
+    report(&["diff-builds", &path("hello-x64.elf"), "--other", &other])
+        .failure()
+        .stderr(predicates::str::contains("hello-x64-dyn.elf.bin"));
+    report(&["diff-builds", &base, "--other-image-length", "0x10", "--other", &other]).failure();
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
 fn other_is_rejected_outside_diff_builds() {
     let exe = path("hello-x64.exe");
     report(&["triage-report", &exe, "--other", &exe]).failure();

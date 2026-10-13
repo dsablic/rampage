@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use rampage_loaders::Binary;
+use rampage_loaders::{Binary, ImageAt};
 use rampage_signatures::{FunctionHash, MaskContext, function_hash_in};
 use serde_json::json;
 
@@ -122,8 +122,31 @@ impl Project {
     /// Compares this binary (the base) with the build at `other_path` (the new one): "added" means present only
     /// in the other build, "removed" only in this one.
     pub fn diff_builds(&self, other_path: &Path, limits: ReportLimits) -> Result<WorkflowReport, ApiError> {
-        let other = self.open_peer(other_path)?;
-        let other_label = other_path.display().to_string();
+        self.diff_builds_image(other_path, None, limits)
+    }
+
+    /// [`Project::diff_builds`] against the executable embedded in `other_path` at `other_image`, or the whole
+    /// file without one.
+    pub fn diff_builds_image(
+        &self,
+        other_path: &Path,
+        other_image: Option<ImageAt>,
+        limits: ReportLimits,
+    ) -> Result<WorkflowReport, ApiError> {
+        let other = self.open_peer_image(other_path, other_image)?;
+        // Suggested steps on the other build name its image too, so they open what was compared.
+        let mut other_target = json!({ "path": other_path.display().to_string() });
+        if let Some(image) = other_image.filter(|image| !image.is_whole_file()) {
+            other_target["image_offset"] = json!(format!("{:#x}", image.offset()));
+            if let Some(length) = image.length() {
+                other_target["image_length"] = json!(length);
+            }
+        }
+        let on_other = |at: &str| {
+            let mut arguments = other_target.clone();
+            arguments["at"] = json!(at);
+            arguments
+        };
         let mut report = WorkflowReport::new("diff_builds", self);
         let other_target = ReportTarget::of(&other);
         if other_target.sha256 == report.target.sha256 {
@@ -354,18 +377,14 @@ impl Project {
         ));
         for name in changed_names.iter().take(SUGGESTED_FUNCTIONS) {
             report.step("decompile", json!({ "at": name }), format!("Read `{name}` as it is in this build."));
-            report.step(
-                "decompile",
-                json!({ "path": other_label, "at": name }),
-                format!("Read `{name}` in the other build and compare."),
-            );
+            report.step("decompile", on_other(name), format!("Read `{name}` in the other build and compare."));
         }
         let first_added =
             new.iter().enumerate().find(|(index, function)| !paired_new.contains(index) && function.named());
         if let Some((_, function)) = first_added {
             report.step(
                 "decompile",
-                json!({ "path": other_label, "at": function.name }),
+                on_other(&function.name),
                 format!("`{}` appears only in the other build.", function.name),
             );
         }

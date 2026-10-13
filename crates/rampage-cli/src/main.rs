@@ -334,6 +334,13 @@ enum Command {
         /// The second binary, for diff-builds
         #[arg(long)]
         other: Option<PathBuf>,
+        /// diff-builds: open the executable embedded in --other at this file offset (hex 0x... or decimal), as
+        /// --image-offset does for <FILE>
+        #[arg(long, value_parser = parse_offset, requires = "other")]
+        other_image_offset: Option<u64>,
+        /// With --other-image-offset, the embedded image's length in bytes; defaults to the extent its headers give
+        #[arg(long, value_parser = parse_offset, requires = "other_image_offset")]
+        other_image_length: Option<u64>,
         /// Findings kept per section (default 25, at most 200)
         #[arg(long)]
         limit: Option<usize>,
@@ -498,8 +505,10 @@ fn main() -> ExitCode {
         Command::CheckNames { file, names } => commands::check_names(&mut out, &file, &names, &options),
         Command::Annotations { file } => commands::annotations(&mut out, &file, &options),
         Command::DebugTypes { file, apply } => commands::debug_types(&mut out, &file, apply, &options),
-        Command::Report { workflow, file, other, limit, no_decompile } => {
-            let report_options = report::ReportOptions { other, limit, no_decompile };
+        Command::Report { workflow, file, other, other_image_offset, other_image_length, limit, no_decompile } => {
+            let other_image =
+                other_image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, other_image_length));
+            let report_options = report::ReportOptions { other, other_image, limit, no_decompile };
             report::report(&mut out, workflow, &file, &report_options, &options)
         }
         Command::Mcp { .. } => unreachable!("handled before opening stdout"),
@@ -532,7 +541,6 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
         Command::Correlate { .. } => "correlate",
         Command::CompareRuntime { .. } => "compare-runtime",
         Command::ComparePointers { .. } => "compare-pointers",
-        Command::Report { workflow: report::Workflow::DiffBuilds, .. } => "report diff-builds",
         _ => return None,
     })
 }

@@ -95,7 +95,7 @@ cargo build --release
 rampage report triage-report <file>          # guided overview with evidence and next steps
 rampage report find-main|network-surface|find-crypto <file>
 rampage report persistence-surface|string-decoding <file>  # autostart indicators; candidate decoding loops
-rampage report diff-builds <file> --other <file>
+rampage report diff-builds <file> --other <file> [--other-image-offset 0x... [--other-image-length N]]
 rampage carve   <file> [--max-candidates N]  # embedded executables/archives by validated header; extracts nothing
 rampage dotnet  <file> [--list types|pinvokes|attributes] [--contains TEXT]  # .NET metadata, one list per page
 rampage dotnet  <file> --il <token|Type::Name> [--at IL_0042 | --offset N]  # one method's CIL, a page at a time
@@ -139,7 +139,8 @@ rampage mcp [--all-tools]                    # MCP server on stdin/stdout (core 
 --arch x86_64|aarch64|arm|...  pick a slice from a universal Mach-O
 --image-offset 0x...   open the ELF/PE/Mach-O embedded at this file offset (e.g. a carve candidate) in place; for
                        a universal Mach-O, its fat header's offset with --arch. Rejected by commands that open
-                       no image or two (carve, inventory, packs, mcp, correlate, compare-*, report diff-builds)
+                       no image or two (carve, inventory, packs, mcp, correlate, compare-*); report diff-builds
+                       takes it for <file> and --other-image-offset/--other-image-length for --other
 --image-length N       with --image-offset, the image's length: bytes past its header extent become its overlay
 --pack <dir>           layer a data pack over the bundled heuristic databases (repeatable; see Data packs)
 ```
