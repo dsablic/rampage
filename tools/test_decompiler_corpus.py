@@ -154,6 +154,151 @@ class CorpusTests(unittest.TestCase):
             "unavailable",
         )
 
+    def test_recovery_gate_rejects_successful_warning_bearing_outputs(self) -> None:
+        result = json.loads(json.dumps(RESULT))
+        result["structure"]["diagnostics"] = {
+            "bad_data": False,
+            "unimplemented": False,
+            "unresolved_calls": 1,
+            "unresolved_indirect_jumps": 2,
+            "partial_jump_tables": 1,
+            "warnings": [{"kind": "body", "address": None, "message": "partial"}],
+        }
+        self.executable.with_suffix(".json").write_text(json.dumps(result))
+        for expectations in [
+            {"status": "no_reported_issues"},
+            {"max_unresolved_calls": 0},
+            {"max_unresolved_indirect_jumps": 1},
+            {"max_partial_jump_tables": 0},
+            {"max_warnings": 0},
+        ]:
+            with self.subTest(expectations=expectations):
+                record = self.run_case(
+                    self.case(assertions={"expected_recovery": expectations})
+                )
+                self.assertTrue(record["success"])
+                self.assertFalse(record["case_passed"])
+                self.assertIs(record["checks"][0]["passed"], False)
+        record = self.run_case(
+            self.case(
+                assertions={
+                    "expected_recovery": {
+                        "status": "warnings",
+                        "bad_data": False,
+                        "unimplemented": False,
+                        "max_unresolved_calls": 1,
+                        "max_unresolved_indirect_jumps": 2,
+                        "max_partial_jump_tables": 1,
+                        "max_warnings": 1,
+                    }
+                }
+            )
+        )
+        self.assertTrue(record["case_passed"])
+
+    def test_recovery_gate_never_defaults_missing_diagnostics_to_zero(self) -> None:
+        record = self.run_case(
+            self.case(assertions={"expected_recovery": {"max_warnings": 0}})
+        )
+        self.assertFalse(record["case_passed"])
+        check = record["checks"][0]
+        self.assertIsNone(check["passed"])
+        self.assertEqual(
+            check["unavailable_reason"], "recovery_diagnostics_unavailable"
+        )
+        summary = corpus.aggregate([record])["assertions_by_category"]["recovery"]
+        self.assertEqual(summary["unavailable"], 1)
+        self.assertEqual(summary["passed_over_total"], 0)
+        record = self.run_case(
+            self.case(assertions={"expected_recovery": {"status": "unavailable"}})
+        )
+        self.assertTrue(record["case_passed"])
+
+    def test_recovery_status_is_derived_not_overridden_by_extra_diagnostic_fields(
+        self,
+    ) -> None:
+        result = json.loads(json.dumps(RESULT))
+        result["structure"]["diagnostics"] = {
+            "bad_data": True,
+            "unimplemented": False,
+            "unresolved_calls": 0,
+            "unresolved_indirect_jumps": 0,
+            "partial_jump_tables": 0,
+            "warnings": [],
+            "status": "no_reported_issues",
+        }
+        self.executable.with_suffix(".json").write_text(json.dumps(result))
+        case = self.case(
+            assertions={"expected_recovery": {"status": "no_reported_issues"}}
+        )
+        baseline = self.baseline_case(case) | {
+            "expected_recovery": {"status": "no_reported_issues"}
+        }
+        record = self.run_case(case, baseline)
+        self.assertTrue(record["success"])
+        self.assertEqual(record["metrics"]["recovery_status"], "incomplete")
+        self.assertFalse(record["case_passed"])
+        gates = [
+            check
+            for check in record["checks"]
+            if check["assertion"] == "expected_recovery"
+        ]
+        self.assertEqual(len(gates), 2)
+        self.assertTrue(all(check["passed"] is False for check in gates))
+
+    def test_elapsed_gate_uses_measurement_instead_of_process_completion(self) -> None:
+        execution = {
+            "stdout": json.dumps(RESULT).encode(),
+            "failure": None,
+            "elapsed_seconds": 2.0,
+            "returncode": 0,
+        }
+        with mock.patch.object(corpus, "run_process", return_value=execution):
+            record = self.run_case(
+                self.case(assertions={"expected_max_elapsed_seconds": 1.5})
+            )
+        self.assertTrue(record["success"])
+        self.assertFalse(record["case_passed"])
+        self.assertIs(record["checks"][0]["passed"], False)
+        execution["stdout"] = json.dumps(RESULT).encode()
+        with mock.patch.object(corpus, "run_process", return_value=execution):
+            record = self.run_case(
+                self.case(assertions={"expected_max_elapsed_seconds": 2.0})
+            )
+        self.assertTrue(record["case_passed"])
+
+    def test_baseline_identity_mismatch_prevents_new_gates_from_passing(self) -> None:
+        case = self.case()
+        baseline = self.baseline_case(case) | {
+            "image_sha256": "0" * 64,
+            "expected_recovery": {"status": "unavailable"},
+            "expected_max_elapsed_seconds": 30,
+        }
+        record = self.run_case(case, baseline)
+        for check in record["checks"]:
+            self.assertIsNone(check["passed"])
+            self.assertEqual(check["unavailable_reason"], "baseline_identity_mismatch")
+
+    def test_new_gates_refuse_invalid_limits_and_unknown_recovery_fields(self) -> None:
+        for value in [True, 0, -1, "1", float("nan"), float("inf"), 10**400]:
+            with self.subTest(value=value), self.assertRaises(corpus.CorpusError):
+                corpus.validate_assertions(
+                    {"expected_max_elapsed_seconds": value}, "case"
+                )
+        for value in [
+            {},
+            {"status": "correct"},
+            {"status": []},
+            {"bad_data": 0},
+            {"unimplemented": "false"},
+            {"max_warnings": True},
+            {"max_warnings": -1},
+            {"max_unresolved_calls": 1.5},
+            {"semantic_equivalence": True},
+        ]:
+            with self.subTest(value=value), self.assertRaises(corpus.CorpusError):
+                corpus.validate_assertions({"expected_recovery": value}, "case")
+
     def test_malformed_or_conflicting_recovery_diagnostics_are_rejected(self) -> None:
         diagnostics = {
             "bad_data": False,

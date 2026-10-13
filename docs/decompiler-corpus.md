@@ -126,6 +126,8 @@ opaque provenance label; the runner neither reads it nor hashes it.
 | `expected_strings` | Literal rendered substrings, including quotes/escapes for C literals. |
 | `expected_switch_targets` | Unsigned addresses (integer or `0x...`); each must occur in a jump table. |
 | `expected_switch_case_values` | Unsigned raw bit patterns; each must occur in recovered table labels. |
+| `expected_recovery` | Nonempty object of recovery status, flags and diagnostic count limits (below). |
+| `expected_max_elapsed_seconds` | Positive finite upper bound on measured end-to-end CLI elapsed seconds. |
 
 Parameter `type` is compared with the engine's `data_type.name`. Addresses are
 compared numerically. Other comparisons are exact literal comparisons. Signature
@@ -140,6 +142,35 @@ They do not penalize extra calls/targets, consume distinct matches, associate
 case values with targets, or prove that a switch is complete. Switch case values
 are not signed labels: interpreting signed values needs operand width and
 signedness not present in this assertion schema.
+
+### Recovery and elapsed-time gates
+
+`expected_recovery` accepts `status` (`incomplete`, `warnings`, `no_reported_issues` or `unavailable`),
+boolean `bad_data` / `unimplemented`, and nonnegative integer limits `max_unresolved_calls`,
+`max_unresolved_indirect_jumps`, `max_partial_jump_tables` and `max_warnings`. Warning limits count structured
+engine warning records, not lines containing `WARNING:`. All declared fields must match for this one assertion
+to pass. A diagnostic count/flag assertion is unavailable when diagnostics are absent; absence never means zero.
+An explicit `status: unavailable` checks missing diagnostics, not successful recovery.
+
+```json
+{
+  "expected_recovery": {
+    "bad_data": false,
+    "unimplemented": false,
+    "max_unresolved_calls": 0,
+    "max_partial_jump_tables": 0
+  },
+  "expected_max_elapsed_seconds": 2.5
+}
+```
+
+The elapsed gate uses the recorded duration, including process startup/loading and output drain. It is distinct
+from `--timeout`, which stops execution. Thresholds require calibration to a declared host/toolchain; the supplied
+controlled manifest asserts recovery status but does not impose a host-independent timing floor. A gate failure
+retains a successful query's result and measurements while failing the case and runner exit status. Missing
+measurements and failed or identity-mismatched cases retain unavailable assertions in aggregate denominators.
+These gates do not measure unsupported-instruction coverage, per-case peak memory or semantic equivalence;
+`no_reported_issues` remains explicitly distinct from correct recovery.
 
 ## Baseline schema and identity scope
 

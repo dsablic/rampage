@@ -44,6 +44,11 @@ jobs:
       - name: Check Rust formatting
         timeout-minutes: 3
         run: cargo fmt --all --check
+      - name: Corpus runner and acceptance-gate regressions
+        timeout-minutes: 3
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest tools.test_decompiler_corpus -v
       - name: Scan with checksum-pinned official Gitleaks release
         timeout-minutes: 10
         run: |
@@ -92,6 +97,13 @@ jobs:
       - name: Existing 13-slice accuracy gate and evaluation CLI regressions
         timeout-minutes: 10
         run: time cargo test --locked -p rampage-eval
+      - name: Controlled supervised decompiler assertions and recovery gates
+        timeout-minutes: 3
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 tools/decompiler_corpus.py "$PWD/target/debug/rampage" \
+            --manifest tests/data/decompiler-corpus.json --isolated --timeout 30
       - name: Workspace tests including offscreen UI snapshots
         timeout-minutes: 20
         run: time cargo test --locked --workspace --exclude rampage-eval

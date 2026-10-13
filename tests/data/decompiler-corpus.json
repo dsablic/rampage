@@ -15,7 +15,8 @@
       "expected_calls": [{"name": "puts@plt", "indirect": false}],
       "expected_strings": ["\"rampage fixture greeting\""],
       "expected_contains": ["return 5;"],
-      "expected_not_contains": ["WARNING:"]
+      "expected_not_contains": ["WARNING:"],
+      "expected_recovery": {"status": "no_reported_issues"}
     },
     {
       "id": "elf-arm64-main",
@@ -26,7 +27,8 @@
       "expected_calls": [{"name": "puts@plt", "indirect": false}],
       "expected_strings": ["\"rampage fixture greeting\""],
       "expected_contains": ["return 5;"],
-      "expected_not_contains": ["WARNING:"]
+      "expected_not_contains": ["WARNING:"],
+      "expected_recovery": {"status": "no_reported_issues"}
     },
     {
       "id": "snapshot-arm-be8",
@@ -34,7 +36,8 @@
       "function": "0x1000",
       "arch": "arm",
       "expected_contains": ["return 7;"],
-      "expected_not_contains": ["WARNING:"]
+      "expected_not_contains": ["WARNING:"],
+      "expected_recovery": {"status": "no_reported_issues"}
     },
     {
       "id": "snapshot-windows-x64",
@@ -42,7 +45,8 @@
       "function": "0x1000",
       "compiler": "windows",
       "expected_params": 2,
-      "expected_not_contains": ["param_3", "WARNING:"]
+      "expected_not_contains": ["param_3", "WARNING:"],
+      "expected_recovery": {"status": "no_reported_issues"}
     }
   ]
 }

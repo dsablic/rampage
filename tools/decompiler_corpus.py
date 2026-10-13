@@ -39,6 +39,15 @@ ASSERTION_CATEGORIES = {
     "expected_strings": "strings",
     "expected_switch_targets": "switch",
     "expected_switch_case_values": "switch",
+    "expected_recovery": "recovery",
+    "expected_max_elapsed_seconds": "performance",
+}
+RECOVERY_STATUSES = {"incomplete", "warnings", "no_reported_issues", "unavailable"}
+RECOVERY_LIMITS = {
+    "max_unresolved_calls": "unresolved_calls",
+    "max_unresolved_indirect_jumps": "unresolved_indirect_jumps",
+    "max_partial_jump_tables": "partial_jump_tables",
+    "max_warnings": "warnings",
 }
 
 
@@ -110,7 +119,20 @@ def validate_assertions(value: dict[str, Any], context: str) -> dict[str, Any]:
     if unknown:
         raise CorpusError(f"{context}: unknown assertions {unknown}")
     for key, expected in assertions.items():
-        if key == "expected_signature":
+        if key == "expected_recovery":
+            validate_recovery_assertion(expected, f"{context}.{key}")
+        elif key == "expected_max_elapsed_seconds":
+            try:
+                valid = (
+                    type(expected) in {int, float}
+                    and math.isfinite(expected)
+                    and expected > 0
+                )
+            except OverflowError:
+                valid = False
+            if not valid:
+                raise CorpusError(f"{context}.{key}: expected positive finite seconds")
+        elif key == "expected_signature":
             if not isinstance(expected, dict) or not expected:
                 raise CorpusError(f"{context}.{key}: expected a nonempty object")
             if set(expected) - {"return_type", "calling_convention", "variadic"}:
@@ -180,6 +202,24 @@ def validate_assertions(value: dict[str, Any], context: str) -> dict[str, Any]:
                 else:
                     require_string(item, f"{context}.{key}")
     return assertions
+
+
+def validate_recovery_assertion(expected: Any, context: str) -> None:
+    if not isinstance(expected, dict) or not expected:
+        raise CorpusError(f"{context}: expected a nonempty recovery object")
+    if set(expected) - (
+        {"status", "bad_data", "unimplemented"} | RECOVERY_LIMITS.keys()
+    ):
+        raise CorpusError(f"{context}: unknown recovery field")
+    for name, value in expected.items():
+        if name == "status":
+            if not isinstance(value, str) or value not in RECOVERY_STATUSES:
+                raise CorpusError(f"{context}.{name}: unknown recovery status")
+        elif name in {"bad_data", "unimplemented"}:
+            if type(value) is not bool:
+                raise CorpusError(f"{context}.{name}: expected a boolean")
+        elif type(value) is not int or value < 0:
+            raise CorpusError(f"{context}.{name}: expected a nonnegative integer")
 
 
 def parse_address(value: Any) -> int:
@@ -666,12 +706,21 @@ def evaluate_assertions(
     result: dict[str, Any] | None,
     source: str,
     unavailable: str | None,
+    elapsed_seconds: float | None = None,
 ) -> list[dict[str, Any]]:
     checks = []
     structure = result["structure"] if result is not None else None
     for key, expected in assertions.items():
         items = (
-            [expected] if key in {"expected_params", "expected_signature"} else expected
+            [expected]
+            if key
+            in {
+                "expected_params",
+                "expected_signature",
+                "expected_recovery",
+                "expected_max_elapsed_seconds",
+            }
+            else expected
         )
         for item in items:
             passed = None
@@ -708,6 +757,28 @@ def evaluate_assertions(
                         observed_signature[name] == value
                         for name, value in item.items()
                     )
+                elif key == "expected_recovery":
+                    diagnostics = structure.get("diagnostics")
+                    if diagnostics is None and set(item) - {"status"}:
+                        unavailable_reason = "recovery_diagnostics_unavailable"
+                    else:
+                        observed_recovery = dict(diagnostics or {})
+                        observed_recovery["status"] = recovery_status(diagnostics)
+                        passed = all(
+                            (
+                                len(observed_recovery[RECOVERY_LIMITS[name]]) <= value
+                                if name == "max_warnings"
+                                else observed_recovery[RECOVERY_LIMITS[name]] <= value
+                            )
+                            if name in RECOVERY_LIMITS
+                            else observed_recovery[name] == value
+                            for name, value in item.items()
+                        )
+                elif key == "expected_max_elapsed_seconds":
+                    if elapsed_seconds is None:
+                        unavailable_reason = "elapsed_seconds_unavailable"
+                    else:
+                        passed = elapsed_seconds <= item
                 elif key == "expected_calls":
                     passed = any(
                         all(
@@ -857,7 +928,9 @@ def run_case(
                     ),
                     "switches": structure["jump_tables"],
                 }
-    checks = evaluate_assertions(case.assertions, result, "fixture", record["failure"])
+    checks = evaluate_assertions(
+        case.assertions, result, "fixture", record["failure"], record["elapsed_seconds"]
+    )
     baseline_status = "not_provided"
     if baseline_case is not None:
         identity = {
@@ -889,6 +962,7 @@ def run_case(
             result,
             "baseline",
             "baseline_identity_mismatch" if mismatches else record["failure"],
+            record["elapsed_seconds"],
         )
     record["baseline_status"] = baseline_status
     record["checks"] = checks
