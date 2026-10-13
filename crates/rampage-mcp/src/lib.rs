@@ -44,20 +44,20 @@ groups. The groups:";
 
 const INSTRUCTIONS_USAGE: &str = "\
 Core: start with triage_report: one bounded overview (layout, triage hints, producing toolchain, capability tags, \
-imports, notable strings, library functions) that ends with concrete next tool calls, each naming its `group`; \
-enable that group first when it is not enabled. The other guided workflows compose the primitives the same way: \
-find_main (the program's own entry logic), network_surface, persistence_surface (autostart locations, service and registry APIs), string_decoding \
-(candidate byte-decoding loops with their call sites and encoded-looking data) and diff_builds; find_crypto \
-(algorithm constants and crypto APIs with the code that uses them) is in detection. Every workflow finding carries \
-its evidence, source tool and confidence, and every report states its limitations: treat findings as evidence, not \
-verdicts. For a single question use triage or binary_info, then list_functions (filter with name_contains, page \
+imports, notable strings, library functions) that ends with concrete next tool calls, each naming its `group`; enable \
+that group first when it is not enabled. The other guided workflows compose the primitives the same way: find_main \
+(the program's own entry logic), network_surface, persistence_surface (autostart locations, service and registry \
+APIs), string_decoding (candidate byte-decoding loops with their call sites and encoded-looking data) and diff_builds; \
+find_crypto (algorithm constants and crypto APIs with the code that uses them) is in detection. Every workflow finding \
+carries its evidence, source tool and confidence, and every report states its limitations: treat findings as evidence, \
+not verdicts. For a single question use triage or binary_info, then list_functions (filter with name_contains, page \
 with offset/limit), then decompile a function to C to understand it (the best starting point; falls back to \
-function_summary, a structural CFG/reference summary, where no decompiler specification is available), or \
-disassemble or function_graph it, and follow references with xrefs. list_imports and list_strings are good \
-starting points for finding behavior. Record findings with rename and set_comment, or many at once with \
-annotate_batch (all or nothing; check_names pre-flights candidate names): they persist beside the binary and every \
-client of the same binary, including the rampage UI, picks them up. undo and redo revert or reapply one step, \
-which may be a whole batch. Memory snapshots and bundle directories use the same tools.
+function_summary, a structural CFG/reference summary, where no decompiler specification is available), or disassemble \
+or function_graph it, and follow references with xrefs. list_imports and list_strings are good starting points for \
+finding behavior. Record findings with rename and set_comment, or many at once with annotate_batch (all or nothing; \
+check_names pre-flights candidate names): they persist beside the binary and every client of the same binary, \
+including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch. Memory \
+snapshots and bundle directories use the same tools.
 
 Detection: detect_tools (packer/compiler/protector), identify_functions (library code by signature, bundled \
 databases applied; build_signatures makes a database from a binary with symbols), capabilities, yara_scan and \
