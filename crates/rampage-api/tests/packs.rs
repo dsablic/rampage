@@ -241,6 +241,21 @@ fn symbolic_links_cannot_escape_the_pack() {
 }
 
 #[test]
+fn pack_yara_rules_cannot_include_files() {
+    let outside = Scratch::new("include-outside");
+    let hidden = outside.write("hidden.yar", "rule outside_secret_line { condition: true }");
+    let pack = Scratch::new("include");
+    pack.write("yara/include.yar", &format!("include \"{}\"\n{YARA_RULE}", hidden.display()));
+    pack.write("yara/zero.yar", &format!("include \"/dev/zero\"\n{YARA_RULE}"));
+    pack.write("rampage-pack.toml", &manifest("include", "[[contents]]\nkind = \"yara\"\npath = \"yara\"\n"));
+    let packs = Packs::load(std::slice::from_ref(&pack.0));
+    let info = &packs.loaded()[0];
+    assert_eq!(statuses(info), [("yara", ContentStatus::Error)]);
+    assert!(info.contents[0].detail.contains("include"), "{info:?}");
+    assert!(!format!("{:?}", packs.problems()).contains("outside_secret_line"), "{:?}", packs.problems());
+}
+
+#[test]
 fn oversized_files_are_rejected() {
     let pack = Scratch::new("oversized");
     let file = std::fs::File::create(pack.0.join("userdb.txt")).unwrap();
