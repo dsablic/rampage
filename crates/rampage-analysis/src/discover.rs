@@ -9,6 +9,10 @@ use serde::Serialize;
 
 use crate::memory::Memory;
 
+mod exits;
+
+use exits::{Exits, never_returning};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Block {
     #[serde(serialize_with = "rampage_arch::hex::address")]
@@ -191,9 +195,11 @@ pub struct ReturnFacts {
 
 /// [`discover`], where a call to an address in `facts.noreturn` (a function, or the import slot an indirect call
 /// goes through) ends its block with no fall-through. A function is inferred not to return when no path through it
-/// returns and at least one ends in a noreturn call or a trap. Anything unknown on a path (an unresolved indirect
-/// jump, undecodable bytes, a tail call to a function that may return) counts as returning, and nothing in
-/// `facts.returns` is inferred.
+/// returns and at least one ends in a noreturn call or a trap; a tail call counts as neither until the callee is
+/// inferred, so functions that only tail-call each other are inferred together (see [`exits::never_returning`],
+/// which also explains why tail-call cycles with no such evidence, infinite loops, are not). Anything unknown on a
+/// path (an unresolved indirect jump, undecodable bytes, a tail call to a function that may return) counts as
+/// returning, and nothing in `facts.returns` is inferred.
 ///
 /// Each discovery infers to a fixpoint by re-exploring only the functions that reach a newly inferred one. Ending
 /// those calls can drop code, and so function starts and branch targets, that the discovery was built on; it is
@@ -393,12 +399,8 @@ where
     // call it, jump to it, point at it or run into it.
     let mut noreturn = noreturn.clone();
     loop {
-        let newly: BTreeSet<u64> = results
-            .values()
-            .filter(|result| result.never_returns)
-            .map(|result| result.function.address)
-            .filter(|address| !returns.contains(address) && !noreturn.contains(address))
-            .collect();
+        let exits = results.iter().map(|(&address, result)| (address, &result.exits)).collect();
+        let newly: BTreeSet<u64> = never_returning(&exits, &noreturn, returns).difference(&noreturn).copied().collect();
         if newly.is_empty() {
             break;
         }
@@ -444,8 +446,8 @@ struct Explored {
     branch_targets: Vec<u64>,
     /// Calls that end their block because the callee never returns.
     noreturn_calls: Vec<u64>,
-    /// No path through the function returns, and at least one ends in a noreturn call or a trap.
-    never_returns: bool,
+    /// How its paths leave it.
+    exits: Exits,
 }
 
 /// Explores the function at `start`. `all_branch_targets`, when given, lists every branch target in the program:
@@ -705,7 +707,7 @@ fn explore(
         instruction_modes,
         resolved_flows,
         noreturn_calls,
-        never_returns: exits.stops && !exits.returns,
+        exits,
     }
 }
 
@@ -727,26 +729,6 @@ impl Explored {
 struct CodeRefs {
     pointers: Vec<u64>,
     accessed: Vec<u64>,
-}
-
-/// How the paths through a function leave it.
-#[derive(Default)]
-struct Exits {
-    /// Some path returns, or leaves through something unknown that may.
-    returns: bool,
-    /// Some path ends in a noreturn call or a trap.
-    stops: bool,
-}
-
-impl Exits {
-    /// A path that runs into, or tail-calls, the function at `target`.
-    fn leave_to(&mut self, target: u64, noreturn: &BTreeSet<u64>) {
-        if noreturn.contains(&target) {
-            self.stops = true;
-        } else {
-            self.returns = true;
-        }
-    }
 }
 
 /// The entry targets, in table order, of the switch whose register-indirect jump at `jump` dispatches through
@@ -1254,6 +1236,35 @@ mod tests {
         let program = run_noreturn(Arch::X86_64, bytes, &[0x10], &[]);
         assert!(program.noreturn.is_empty());
         assert!(program.function_at(0x10).unwrap().contains(0x19));
+    }
+
+    /// f at 0: jmp 0x20 (g). g at 0x20: test esi, esi; jne 0 (f); 24: `g_exit`. c at 0x60: call 0 (f); 65: ret.
+    /// abort at 0x40.
+    fn tail_call_cycle(g_exit: &[u8]) -> Program {
+        let mut bytes = vec![0xcc; 0x70];
+        bytes[0..2].copy_from_slice(&[0xeb, 0x1e]);
+        bytes[0x20..0x24].copy_from_slice(&[0x85, 0xf6, 0x75, 0xdc]);
+        bytes[0x24..0x24 + g_exit.len()].copy_from_slice(g_exit);
+        put_call(&mut bytes, 0x60, 0);
+        bytes[0x65] = 0xc3;
+        run_noreturn(Arch::X86_64, bytes, &[0, 0x20, 0x60], &[0x40])
+    }
+
+    #[test]
+    fn functions_that_only_tail_call_each_other_and_abort_never_return() {
+        // g: call 0x40 (abort)
+        let program = tail_call_cycle(&[0xe8, 0x17, 0, 0, 0]);
+        assert_eq!(program.inferred_noreturn, [0, 0x20, 0x60]);
+        assert_eq!(blocks(&program, 0x60), [(0x60, 0x65)]);
+        assert!(program.noreturn_calls.contains(&0x60));
+    }
+
+    #[test]
+    fn a_return_anywhere_in_a_tail_call_cycle_makes_it_return() {
+        // g: ret
+        let program = tail_call_cycle(&[0xc3]);
+        assert!(program.inferred_noreturn.is_empty());
+        assert_eq!(blocks(&program, 0x60), [(0x60, 0x66)]);
     }
 
     fn arm(words: &[(usize, u32)], size: usize) -> Vec<u8> {

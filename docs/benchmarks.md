@@ -84,7 +84,7 @@ no row changed. They were re-measured again at `41e1224`, from the same cached e
 fixes (conditional calls and returns, resumable traps, incremental inference, case-sensitive names, more get-PC
 idioms); no row changed. Re-measured again, from the same cached exports, after the address a load reads stopped
 counting as a code pointer: only the hello-arm.elf (10 to 8 rampage functions) and hello-thumb.elf (44 to 43) rows
-changed.
+changed. Inferring noreturn through mutual tail calls then changed no row.
 
 | binary | funcs G/R/both | same blocks | block J | chain J | edge P / R | chain edge P / R | call P / R | callgraph P / R | G-only computed calls |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
@@ -154,7 +154,10 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   and semihosting traps (`bkpt`, `hlt`, other `brk`s, MIPS `break`, RISC-V `ebreak`) fall through. Inference
   re-explores only the callers of newly inferred functions, so hello-go-arm64 discovery takes 48 ms instead of
   150 ms (hello-go-x64: 41 instead of 70 ms) with the same CFGs. `function_graph` and `export-cfg` mark each such
-  call `listed` or `inferred`.
+  call `listed` or `inferred`. Functions that only tail-call each other are inferred together, by a greatest
+  fixpoint over the tail-call graph, when some path among them ends in such a call or trap; a tail-call cycle with
+  no such path is an infinite loop, which Ghidra calls non-returning but rampage leaves unknown for lack of
+  evidence.
 - **Get-PC idioms (resolved).** A call whose target is the instruction after it (after the delay slot on MIPS and
   SPARC) reads the PC only when the code there takes the return address: `bal 1f; nop; 1: ... addu $gp, $gp, $ra`
   (hello-mips/mipsel `__start`), `bl 1f; 1: mflr r30`, `bl 1f; 1: mov r0, lr` (ARM, Thumb, AArch64),
