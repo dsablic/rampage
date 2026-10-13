@@ -48,6 +48,10 @@ fn section_contains(name: &str, needle: &str) -> Condition {
     Condition::SectionContains { section: Some(name.to_owned()), needle: needle.as_bytes().to_vec() }
 }
 
+fn symbol(name: &str) -> Condition {
+    Condition::Symbol(name.to_owned())
+}
+
 fn versioned_import(prefix: &str) -> Condition {
     Condition::VersionedImportLibrary(prefix.to_owned())
 }
@@ -147,6 +151,24 @@ fn runtimes() -> Vec<Signature> {
         // (zig cc, llvm-mingw) both link it.
         Signature::new("MinGW-w64", Kind::Runtime, vec![contains("Mingw-w64 runtime failure")])
             .with_note("MinGW-w64 CRT runtime-failure banner"),
+        // Only glibc versions its symbols GLIBC_x.y, and only glibc's soname is libc.so.6 (musl's is libc.so,
+        // uClibc's libc.so.0, Bionic's libc.so); .dynstr holds the version needs and DT_NEEDED names.
+        Signature::new("glibc", Kind::Runtime, vec![section_contains(".dynstr", "GLIBC_2.")])
+            .with_note("GLIBC_2.x symbol-version need"),
+        Signature::new("glibc", Kind::Runtime, vec![section_contains(".dynstr", "libc.so.6")])
+            .with_note("libc.so.6 (glibc soname) needed"),
+        // The head of musl's strerror table (src/errno/__strerror.h); glibc and Bionic say "Success" for 0.
+        Signature::new(
+            "musl",
+            Kind::Runtime,
+            vec![contains("No error information\0Illegal byte sequence\0Domain error\0")],
+        )
+        .with_note("musl strerror message table"),
+        // musl's static TLS setup (src/env/__init_tls.c), linked into every static musl program.
+        Signature::new("musl", Kind::Runtime, vec![symbol("__init_tp"), symbol("__copy_tls")])
+            .with_note("musl TLS initialization symbols"),
+        Signature::new("musl", Kind::Runtime, vec![section_contains(".interp", "/ld-musl-")])
+            .with_note("musl dynamic loader interpreter"),
     ]
 }
 

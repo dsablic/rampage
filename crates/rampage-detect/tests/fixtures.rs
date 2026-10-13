@@ -59,6 +59,46 @@ fn mingw_w64_runtime_is_not_reported_on_msvc_elf_or_macho_fixtures() {
     }
 }
 
+fn runtimes(detections: &[rampage_detect::Detection]) -> Vec<&str> {
+    detections.iter().filter(|d| d.kind == Kind::Runtime).map(|d| d.name.as_str()).collect()
+}
+
+#[test]
+fn dynamic_glibc_programs_report_glibc_from_their_version_needs() {
+    // zig cc -target *-linux-gnu: dynamically linked against glibc, so .dynstr names GLIBC_2.x and libc.so.6.
+    for name in ["hello-x64-dyn.elf", "hello-arm64.elf", "hello-mips.elf", "hello-s390x.elf"] {
+        let detections = detect(name);
+        let glibc = find(&detections, "glibc").unwrap_or_else(|| panic!("{name}: {detections:?}"));
+        assert_eq!((glibc.kind, glibc.confidence), (Kind::Runtime, Confidence::Strong));
+        assert!(glibc.evidence.iter().any(|line| line.contains("GLIBC_2.")), "{name}: {:?}", glibc.evidence);
+        assert_eq!(runtimes(&detections), ["glibc"], "{name}");
+    }
+}
+
+#[test]
+fn static_musl_programs_report_musl_with_or_without_symbols() {
+    // hello-x64.elf keeps its symbol table; musl-static-x86_64.elf is stripped, leaving musl's strerror table.
+    let symbols = detect("hello-x64.elf");
+    let musl = find(&symbols, "musl").expect("musl from symbols");
+    assert!(musl.evidence.contains(&"symbol __init_tp present".to_owned()), "{:?}", musl.evidence);
+    let stripped = detect("musl-static-x86_64.elf");
+    let musl = find(&stripped, "musl").expect("musl from strerror");
+    assert_eq!((musl.kind, musl.confidence), (Kind::Runtime, Confidence::Strong));
+    assert!(musl.evidence[0].contains("No error information"), "{:?}", musl.evidence);
+    for detections in [&symbols, &stripped] {
+        assert_eq!(runtimes(detections), ["musl"]);
+    }
+}
+
+#[test]
+fn no_libc_runtime_is_claimed_without_libc_evidence() {
+    // Go links no libc; objects are not linked; Mach-O programs use libSystem, which no signature names.
+    for name in ["hello-go-x64.elf", "hello-x64-elf.o", "hello-x64.macho", "Microsoft.Bcl.HashCode.dll"] {
+        let detections = detect(name);
+        assert!(runtimes(&detections).is_empty(), "{name}: {detections:?}");
+    }
+}
+
 #[test]
 fn ordinary_binaries_are_not_misreported_as_packed_or_protected() {
     for name in ["hello-x64.elf", "hello-go-x64.elf", "hello-x64.exe"] {

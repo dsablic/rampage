@@ -770,9 +770,9 @@ pub fn tools() -> Vec<Tool> {
             "detect_tools",
             "Identify the tools that likely produced the binary (packer, compiler, protector, installer, linker, \
              runtime: the C runtime linked in) from a bundled heuristic database of entry-point, section, \
-             import, overlay and entropy signatures. Optionally overlay a user-supplied PeID userdb.txt; loaded data packs' PeID signatures are always \
-             overlaid. Returns {detections, warnings}: warnings name the \
-             PeID entries and lines skipped as malformed (the first 20, then a count), then data packs or pack PeID \
+             import, symbol, overlay and entropy signatures. Optionally overlay a user-supplied PeID userdb.txt; \
+             loaded data packs' PeID signatures are always overlaid. Returns {detections, warnings}: warnings \
+             name the PeID entries and lines skipped as malformed (the first 20, then a count), then data packs or pack PeID \
              files that did not load. Confidence is a signal, not proof.",
             |project, args: DetectToolsArgs| {
                 let peid = match &args.peid {

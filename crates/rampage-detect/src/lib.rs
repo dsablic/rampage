@@ -11,7 +11,7 @@
 //! - a required section name, or any of a set of names,
 //! - a byte needle contained in a section (or anywhere in the image), which covers toolchain banners and
 //!   unloaded sections such as `.comment`,
-//! - a required imported library or function,
+//! - a required imported library or function, or a symbol-table name,
 //! - the presence of an overlay,
 //! - a minimum image or section entropy.
 //!
@@ -21,7 +21,7 @@
 //! embedded producer strings, import conventions), never copied from PeID's `userdb.txt`. It covers UPX, ASPack,
 //! MPRESS, PECompact, Petite, NsPack and FSG (packers); VMProtect, Themida/WinLicense and Enigma (protectors);
 //! Go, .NET, MSVC, GCC, Clang/LLVM, Rust, Zig and Delphi/Borland (compilers); LLD, mold and GNU gold (linkers;
-//! GNU ld leaves no mark to key on); MinGW-w64 (runtimes); and NSIS and Inno Setup (installers).
+//! GNU ld leaves no mark to key on); MinGW-w64, glibc and musl (runtimes); and NSIS and Inno Setup (installers).
 //!
 //! # User-supplied databases
 //!

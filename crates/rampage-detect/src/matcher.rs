@@ -26,6 +26,8 @@ pub(crate) trait Image {
     fn import_libraries(&self) -> Vec<&str>;
     /// Whether any imported function matches `name` (compared case-insensitively).
     fn imports_function(&self, name: &str) -> bool;
+    /// The first symbol whose name satisfies `test`.
+    fn find_symbol(&self, test: &dyn Fn(&str) -> bool) -> Option<&str>;
     /// The overlay's size in bytes, when the image has one.
     fn overlay_size(&self) -> Option<u64>;
 }
@@ -181,6 +183,9 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
             imported_library(image, versioned).map(|name| format!("imports from versioned runtime {name}"))
         }
         Condition::ImportFunction(name) => image.imports_function(name).then(|| format!("imports function {name}")),
+        Condition::Symbol(name) => {
+            image.find_symbol(&|symbol| symbol == name).map(|_| format!("symbol {name} present"))
+        }
         Condition::OverlayPresent => image.overlay_size().map(|size| format!("{size} bytes of overlay")),
         Condition::MinImageEntropy(min) => {
             let entropy = shannon_entropy(image.image_bytes());
@@ -269,6 +274,10 @@ impl Image for Binary {
         self.imports.iter().any(|import| import.name.eq_ignore_ascii_case(name))
     }
 
+    fn find_symbol(&self, test: &dyn Fn(&str) -> bool) -> Option<&str> {
+        self.symbols.iter().map(|symbol| symbol.name.as_str()).find(|name| test(name))
+    }
+
     fn overlay_size(&self) -> Option<u64> {
         self.overlay.map(|overlay| overlay.size)
     }
@@ -288,6 +297,7 @@ mod tests {
         sections: Vec<(String, Vec<u8>)>,
         libraries: Vec<String>,
         functions: Vec<String>,
+        symbols: Vec<String>,
         overlay: Option<u64>,
     }
 
@@ -313,6 +323,9 @@ mod tests {
         }
         fn imports_function(&self, name: &str) -> bool {
             self.functions.iter().any(|f| f.eq_ignore_ascii_case(name))
+        }
+        fn find_symbol(&self, test: &dyn Fn(&str) -> bool) -> Option<&str> {
+            self.symbols.iter().map(String::as_str).find(|name| test(name))
         }
         fn overlay_size(&self) -> Option<u64> {
             self.overlay
@@ -538,6 +551,22 @@ mod tests {
         // An MSVC image has neither.
         let msvc = Fake { libraries: vec!["VCRUNTIME140.dll".to_owned()], ..Fake::default() };
         assert!(!identify_image(&msvc, &SignatureDb::bundled()).iter().any(|d| d.kind == Kind::Runtime));
+    }
+
+    #[test]
+    fn musl_needs_both_tls_symbols_or_its_loader() {
+        let db = SignatureDb::bundled();
+        let musl = |image: &Fake| identify_image(image, &db).into_iter().find(|d| d.name == "musl");
+        let symbols =
+            |names: &[&str]| Fake { symbols: names.iter().map(|&n| n.to_owned()).collect(), ..Fake::default() };
+        let both = musl(&symbols(&["main", "__init_tp", "__copy_tls"])).expect("musl from symbols");
+        assert_eq!(both.evidence, ["symbol __init_tp present", "symbol __copy_tls present"]);
+        assert_eq!(both.confidence, Confidence::Strong);
+        assert!(musl(&symbols(&["__init_tp"])).is_none(), "one symbol could be anyone's");
+        let dynamic = Fake::default().with_section(".interp", b"/lib/ld-musl-x86_64.so.1\0");
+        assert_eq!(musl(&dynamic).map(|d| d.kind), Some(Kind::Runtime));
+        let glibc = Fake::default().with_section(".interp", b"/lib64/ld-linux-x86-64.so.2\0");
+        assert!(musl(&glibc).is_none());
     }
 
     #[test]
