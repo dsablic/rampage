@@ -248,8 +248,12 @@ async fn image_offset_opens_a_carved_executable_with_its_own_annotations() {
     let client = connect().await;
 
     let tools = client.list_all_tools().await.unwrap();
-    let rename = tools.iter().find(|tool| tool.name == "rename").unwrap();
-    assert!(rename.input_schema["properties"].get("image_offset").is_some());
+    let binary_tools: Vec<_> =
+        tools.iter().filter(|tool| tool.input_schema["properties"].get("arch").is_some()).collect();
+    assert!(binary_tools.iter().any(|tool| tool.name == "rename"));
+    for tool in binary_tools {
+        assert!(tool.input_schema["properties"].get("image_offset").is_some(), "{}", tool.name);
+    }
 
     let carving = json_of(&call(&client, "carve", json!({ "path": path })).await);
     let candidate = carving["candidates"].as_array().unwrap().iter().find(|candidate| candidate["kind"] == "mach_o");
