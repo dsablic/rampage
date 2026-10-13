@@ -1,8 +1,9 @@
 //! `find_crypto`: cryptographic and data-transformation evidence -- algorithm constants embedded in the image
-//! (from the `rampage-constants` database), crypto library APIs, the functions that reference either, and crypto
-//! capability tags. A constant shows that a table is present, not that the algorithm runs or what it protects.
+//! (from the `rampage-constants` database and any data packs' constants), crypto library APIs, the functions that
+//! reference either, and crypto capability tags. A constant shows that a table is present, not that the algorithm
+//! runs or what it protects.
 
-use rampage_constants::{ConstantDb, Endian, Kind, scan_binary_report};
+use rampage_constants::{Endian, Kind, scan_binary_report};
 use serde_json::{Value, json};
 
 use super::registry::{Workflow, WorkflowOptions, report_options, report_schema};
@@ -124,7 +125,8 @@ impl Project {
         let mut crypto = Section::new("Cryptographic constants", limits);
         let mut transforms = Section::new("Checksum, compression and encoding constants", limits);
         let mut first_constant = None;
-        let scan = scan_binary_report(&self.binary, ConstantDb::bundled());
+        let packs = self.packs();
+        let scan = scan_binary_report(&self.binary, packs.constants());
         for hit in scan.hits {
             first_constant.get_or_insert(hit.address);
             let found = tracer.users(&[hit.address]);
@@ -138,6 +140,9 @@ impl Project {
                 format!("{} bytes at {:#x}{order} ({extent})", hit.length, hit.address),
                 format!("algorithm family: {}", hit.algorithm),
             ];
+            if let Some(pack) = packs.constant_pack(&hit.what) {
+                evidence.push(format!("constant defined by data pack {pack}"));
+            }
             evidence.extend(found.evidence());
             // The bytes are read straight from the image; only a partial table leaves room for coincidence.
             let confidence = if hit.complete { Confidence::Observed } else { Confidence::Medium };
@@ -198,6 +203,9 @@ impl Project {
                  so some constants may be missing.",
                 rampage_constants::MAX_HITS
             ));
+        }
+        for problem in packs.problems_for("constants") {
+            report.limitation(format!("Data pack constants may be missing: {problem}"));
         }
         report.limitation(
             "A constant shows that an algorithm's table is in the image, not that the algorithm runs, which data it \

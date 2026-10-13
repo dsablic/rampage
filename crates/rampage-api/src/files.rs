@@ -14,6 +14,8 @@ pub const MAX_SIGNATURE_DB_BYTES: u64 = 256 * MIB;
 pub const MAX_PEID_BYTES: u64 = 16 * MIB;
 /// The largest single YARA or capa rule file read from a data pack.
 pub const MAX_RULE_FILE_BYTES: u64 = 16 * MIB;
+/// The largest constants database (JSON) read from a data pack.
+pub const MAX_CONSTANTS_BYTES: u64 = 4 * MIB;
 /// The largest data-pack manifest read from a path.
 pub const MAX_PACK_MANIFEST_BYTES: u64 = MIB;
 

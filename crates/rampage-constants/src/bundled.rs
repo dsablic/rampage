@@ -26,6 +26,7 @@ fn signature(
         source: Cow::Borrowed(source),
         pattern,
         min_len,
+        byte_order: None,
     }
 }
 

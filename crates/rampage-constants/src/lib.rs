@@ -14,6 +14,7 @@
 mod bundled;
 pub mod generate;
 mod math;
+mod user;
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -21,6 +22,8 @@ use std::sync::OnceLock;
 
 use rampage_loaders::Binary;
 use serde::Serialize;
+
+pub use user::{MAX_USER_CONSTANT_BYTES, MAX_USER_CONSTANTS, UserConstants};
 
 /// The fewest bytes a signature may require; shorter runs recur by chance in large images.
 pub const MIN_PATTERN_LEN: usize = 16;
@@ -35,7 +38,7 @@ pub const MAX_HITS: usize = 4096;
 
 const ANCHOR_LEN: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     BlockCipher,
@@ -122,6 +125,25 @@ pub struct ConstantSignature {
     /// How many leading bytes of the pattern must match; less than the pattern's length admits a hit on a
     /// table that is truncated, split, or stored with only its head intact.
     pub min_len: usize,
+    /// The one byte order a word table or big integer is looked for in; `None` looks for both.
+    pub byte_order: Option<Endian>,
+}
+
+impl ConstantSignature {
+    /// Checks the information guards every signature must pass: [`MIN_PATTERN_LEN`] required bytes, enough
+    /// distinct values in them, and a byte order the pattern can take.
+    pub fn validate(&self) -> Result<(), InvalidSignature> {
+        validate(self, &self.layouts())
+    }
+
+    /// The byte layouts searched for, restricted to [`ConstantSignature::byte_order`] when set.
+    fn layouts(&self) -> Vec<(Vec<u8>, Option<Endian>)> {
+        let mut layouts = self.pattern.forms();
+        if let Some(order) = self.byte_order {
+            layouts.retain(|(_, endian)| *endian == Some(order));
+        }
+        layouts
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,11 +173,25 @@ pub struct ConstantDb {
 
 impl ConstantDb {
     pub fn new(signatures: Vec<ConstantSignature>) -> Result<Self, InvalidSignature> {
+        for signature in &signatures {
+            signature.validate()?;
+        }
+        Ok(Self::index(signatures))
+    }
+
+    /// The bundled database with user constants (from data packs) added; their names are distinct from the
+    /// bundled ones, so a hit's `what` tells which it came from.
+    pub fn bundled_with(user: &[&UserConstants]) -> Self {
+        let mut signatures = Self::bundled().signatures.clone();
+        signatures.extend(user.iter().flat_map(|constants| constants.signatures().iter().cloned()));
+        Self::index(signatures)
+    }
+
+    /// Indexes signatures already validated.
+    fn index(signatures: Vec<ConstantSignature>) -> Self {
         let mut forms = Vec::new();
         for (index, signature) in signatures.iter().enumerate() {
-            let layouts = signature.pattern.forms();
-            validate(signature, &layouts)?;
-            for (bytes, endian) in layouts {
+            for (bytes, endian) in signature.layouts() {
                 let anchor = best_anchor(&bytes[..signature.min_len]);
                 forms.push(Form { signature: index, bytes, endian, anchor });
             }
@@ -168,7 +204,7 @@ impl ConstantDb {
             let pair = usize::from(u16::from_le_bytes([key[0], key[1]]));
             prefilter[pair >> 6] |= 1 << (pair & 63);
         }
-        Ok(Self { signatures, forms, index, prefilter })
+        Self { signatures, forms, index, prefilter }
     }
 
     /// The database shipped with rampage.
@@ -185,6 +221,10 @@ impl ConstantDb {
 fn validate(signature: &ConstantSignature, layouts: &[(Vec<u8>, Option<Endian>)]) -> Result<(), InvalidSignature> {
     let fail = |reason: String| Err(InvalidSignature { what: signature.what.to_string(), reason });
     let len = signature.pattern.byte_len();
+    if layouts.is_empty() {
+        let order = signature.byte_order.map_or("any", |order| if order == Endian::Little { "little" } else { "big" });
+        return fail(format!("the pattern has no {order}-endian layout"));
+    }
     if signature.min_len < MIN_PATTERN_LEN {
         return fail(format!("min_len {} is below {MIN_PATTERN_LEN}", signature.min_len));
     }
@@ -467,6 +507,7 @@ mod tests {
             source: "test".into(),
             pattern: Pattern::Bytes((0..len).collect()),
             min_len: usize::from(len),
+            byte_order: None,
         };
         let db = ConstantDb::new(vec![signature("short", 16), signature("long", 24)]).unwrap();
         let mut buffer: Vec<u8> = (0..16).chain([0xee; 8]).collect();
@@ -488,6 +529,7 @@ mod tests {
             source: "FIPS 186-4".into(),
             pattern: Pattern::BigInt(p256_prime),
             min_len: 32,
+            byte_order: None,
         };
         assert!(ConstantDb::new(vec![signature.clone()]).is_err());
         let short = ConstantSignature { pattern: Pattern::Bytes((0..12).collect()), min_len: 12, ..signature };

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rampage_api::{ContentStatus, MAX_PEID_BYTES, PackInfo, Packs, Session};
+use rampage_api::{ContentStatus, MAX_CONSTANTS_BYTES, MAX_PEID_BYTES, PackInfo, Packs, ReportLimits, Session};
 use rampage_arch::Arch;
 
 fn fixture(name: &str) -> PathBuf {
@@ -388,7 +388,7 @@ fn a_broken_content_does_not_block_the_others() {
             ("signatures", ContentStatus::Error),
             ("signatures", ContentStatus::Error),
             ("peid", ContentStatus::Error),
-            ("constants", ContentStatus::Unsupported),
+            ("constants", ContentStatus::Error),
             ("capa", ContentStatus::Loaded)
         ]
     );
@@ -406,4 +406,85 @@ fn a_broken_content_does_not_block_the_others() {
     assert!(project.yara_scan_packs().is_err());
     let capabilities = project.detect_capa_packs().unwrap();
     assert!(capabilities.iter().any(|capability| capability.name == "pack console output"), "{capabilities:?}");
+    let crypto = project.find_crypto(ReportLimits::default()).unwrap();
+    assert!(crypto.limitations.iter().any(|text| text.contains("constants constants.bin")), "{crypto:?}");
+}
+
+/// A table no bundled constant matches, as a pack would describe a proprietary cipher's S-box.
+const ACME_SBOX: [u8; 32] = [
+    0x6b, 0x2f, 0x91, 0x0c, 0xd4, 0x37, 0xe8, 0x5a, 0xa2, 0x1d, 0x7f, 0xc6, 0x03, 0xb9, 0x48, 0xf5, 0x8e, 0x22, 0x5d,
+    0x9b, 0x14, 0xe1, 0x76, 0xc0, 0x3a, 0xad, 0x69, 0x07, 0xf2, 0x58, 0xbc, 0x81,
+];
+
+fn constants_json(name: &str, bytes: &[u8]) -> String {
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{{\"constants\": [{{\"name\": \"{name}\", \"algorithm\": \"Acme\", \"kind\": \"block_cipher\", \
+         \"source\": \"Acme cipher specification\", \"bytes\": \"{hex}\"}}]}}"
+    )
+}
+
+fn constants_pack(name: &str, json: &str) -> Scratch {
+    let pack = Scratch::new(name);
+    pack.write("acme.json", json);
+    pack.write("rampage-pack.toml", &manifest(name, "[[contents]]\nkind = \"constants\"\npath = \"acme.json\"\n"));
+    pack
+}
+
+#[test]
+fn find_crypto_reports_a_pack_constant_planted_in_a_binary() {
+    let pack = constants_pack("acme-constants", &constants_json("Acme S-box", &ACME_SBOX));
+    let mut bytes = std::fs::read(fixture("hello-x64.exe")).unwrap();
+    // In `.rdata`, as the cap test in workflows.rs plants its constants.
+    bytes[0x2_8600..0x2_8600 + ACME_SBOX.len()].copy_from_slice(&ACME_SBOX);
+    let binary = pack.write("planted.exe", "");
+    std::fs::write(&binary, &bytes).unwrap();
+
+    let packs = Packs::load(std::slice::from_ref(&pack.0));
+    assert_eq!(statuses(&packs.loaded()[0]), [("constants", ContentStatus::Loaded)]);
+    assert_eq!(packs.loaded()[0].contents[0].detail, "1 crypto and compression constants");
+    let report = session(packs).open(&binary, None).unwrap().find_crypto(ReportLimits::default()).unwrap();
+    let constants = report.sections.iter().find(|section| section.title == "Cryptographic constants").unwrap();
+    let finding = constants.findings.iter().find(|finding| finding.observation.starts_with("Acme S-box"));
+    let finding = finding.unwrap_or_else(|| panic!("{constants:#?}"));
+    assert!(finding.observation.contains("block cipher"), "{finding:?}");
+    assert!(finding.evidence.iter().any(|line| line == "constant defined by data pack acme-constants"), "{finding:?}");
+    assert!(finding.evidence.iter().any(|line| line.starts_with("32 bytes at") && line.contains("complete")));
+
+    // Without the pack the same binary has no constant to report.
+    let plain = Session::default().open(&binary, None).unwrap().find_crypto(ReportLimits::default()).unwrap();
+    assert!(plain.sections.iter().all(|section| section.findings.is_empty()), "{plain:#?}");
+}
+
+#[test]
+fn constants_that_are_malformed_low_information_or_taken_do_not_load() {
+    let cases = [
+        ("constants-json", "{\"constants\": [".to_owned(), "invalid constants JSON"),
+        ("constants-zero", constants_json("Zeros", &[0; 64]), "distinct byte values"),
+        ("constants-short", constants_json("Short", &ACME_SBOX[..12]), "below 16"),
+        ("constants-bundled", constants_json("AES forward S-box", &ACME_SBOX), "taken by a bundled constant"),
+    ];
+    for (name, json, expected) in cases {
+        let pack = constants_pack(name, &json);
+        let packs = Packs::load(std::slice::from_ref(&pack.0));
+        let content = &packs.loaded()[0].contents[0];
+        assert_eq!(content.status, ContentStatus::Error, "{name}: {content:?}");
+        assert!(content.detail.contains(expected), "{name}: {}", content.detail);
+        assert_eq!(packs.problems_for("constants").len(), 1);
+    }
+
+    // A later pack may not reuse an earlier pack's name: hits are told apart by name.
+    let first = constants_pack("constants-first", &constants_json("Acme S-box", &ACME_SBOX));
+    let mut other = ACME_SBOX;
+    other.reverse();
+    let second = constants_pack("constants-second", &constants_json("Acme S-box", &other));
+    let packs = Packs::load(&[first.0.clone(), second.0.clone()]);
+    assert_eq!(packs.loaded()[0].contents[0].status, ContentStatus::Loaded);
+    let content = &packs.loaded()[1].contents[0];
+    assert_eq!(content.status, ContentStatus::Error);
+    assert!(content.detail.contains("already defined by pack constants-first"), "{}", content.detail);
+
+    let oversized = constants_pack("constants-large", &" ".repeat(MAX_CONSTANTS_BYTES as usize + 1));
+    let packs = Packs::load(std::slice::from_ref(&oversized.0));
+    assert!(packs.loaded()[0].contents[0].detail.contains("larger than"), "{:?}", packs.loaded());
 }

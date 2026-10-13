@@ -788,7 +788,7 @@ async fn list_packs_reports_loaded_packs_and_scans_use_their_rules() {
     assert_eq!(listing[0]["name"], "mcp-pack");
     assert_eq!(listing[0]["source"], "https://example.com/mcp-pack");
     assert_eq!(listing[0]["contents"][0]["status"], "loaded");
-    assert_eq!(listing[0]["contents"][1]["status"], "unsupported");
+    assert_eq!(listing[0]["contents"][1]["status"], "error");
 
     let scan = json_of(&call(&client, "yara_scan", json!({ "path": fixture("hello-x64.exe") })).await);
     let matches = &scan["matches"];

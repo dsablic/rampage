@@ -199,13 +199,23 @@ path = "yara"
 ```
 
 Kinds: `signatures` (library identification), `peid` (a PeID `userdb.txt` overlaid for tool detection), `yara`
-(compiled in a namespace named after the pack), `capa` (a capa rule file or directory tree) and `constants`
-(accepted, but reported as unsupported: the crypto-constant database takes no user data yet). For identification
+(compiled in a namespace named after the pack), `capa` (a capa rule file or directory tree) and `constants` (a JSON
+file of crypto, checksum and compression constants that `find_crypto` looks for beside the bundled ones; see below).
+For identification
 the first database to name a function wins: a user database (`--db`), then packs in the order given, then the
 bundled `rampage-builtin` one; each match names its `source`. PeID, YARA and capa contents all run beside the
 bundled and user-supplied ones. Every path must stay inside the pack (symbolic links included), each file is read
 once with a size cap and within per-pack and overall budgets, at most 64 packs load, and a content that fails is
 reported without keeping the others from loading.
+
+A constants file lists `{"constants": [...]}`, each entry with a `name` (distinct from the bundled names and other
+packs'), `algorithm`, `kind` (`block_cipher`, `stream_cipher`, `hash`, `mac`, `checksum`, `compression`,
+`encoding` or `public_key`), an optional `source`, and exactly one of `bytes` (hex, spaces allowed), `u32` or
+`u64` (numbers or `0x` hex strings, with `endian`: `little`, `big` or `both`). An optional `min_len` (bytes, at
+least 16) admits a hit on a table's head. Constants must pass the bundled ones' information guards (at least 16
+required bytes with 8 distinct byte values or 32 distinct 4-byte windows), so all-zero or short runs are refused;
+any invalid entry rejects the file, naming the entry. Files are capped at 4 MiB, constants at 4 KiB, and 10,000
+constants load in all. `find_crypto` names the pack in each hit's evidence.
 
 ## Desktop UI
 

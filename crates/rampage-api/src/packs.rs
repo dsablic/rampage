@@ -1,8 +1,8 @@
 //! Data packs: directories that extend the heuristic databases (function signatures, PeID overlays, YARA rules,
-//! capa rules) and declare in a `rampage-pack.toml` manifest what they hold, under which licence and from where.
-//! A pack is data only: nothing is downloaded or executed. Every path stays inside the pack directory, every file
-//! is read once, with a size cap and within running budgets per pack and for all packs together, and a content that
-//! fails to load is reported without keeping the others from loading.
+//! capa rules, crypto and compression constants) and declare in a `rampage-pack.toml` manifest what they hold,
+//! under which licence and from where. A pack is data only: nothing is downloaded or executed. Every path stays
+//! inside the pack directory, every file is read once, with a size cap and within running budgets per pack and for
+//! all packs together, and a content that fails to load is reported without keeping the others from loading.
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -11,9 +11,12 @@ use std::sync::OnceLock;
 
 use rampage_arch::Arch;
 use rampage_capabilities::CapaRuleSet;
+use rampage_constants::{ConstantDb, UserConstants};
 use serde::{Deserialize, Serialize};
 
-use crate::files::{MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MAX_SIGNATURE_DB_BYTES};
+use crate::files::{
+    MAX_CONSTANTS_BYTES, MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MAX_SIGNATURE_DB_BYTES,
+};
 use crate::files::{read_open_bounded, size_label};
 
 /// The manifest file at the root of every pack directory.
@@ -150,6 +153,10 @@ struct Loaded {
     peid: rampage_detect::SignatureDb,
     yara: Vec<rampage_yara::Rules>,
     capa: Vec<CapaRuleSet>,
+    /// Each constants database with the name of its pack.
+    constants: Vec<(String, UserConstants)>,
+    /// The bundled constants with the packs' added; absent when no pack adds any.
+    constant_db: Option<ConstantDb>,
 }
 
 impl Packs {
@@ -209,9 +216,9 @@ impl Packs {
         self.problems_where(|_| true)
     }
 
-    /// The problems that bear on `kind` contents (`signatures`, `peid`, `yara` or `capa`): each rejected pack, which
-    /// may have held some, and each `kind` content that did not load. Results that consulted the packs for `kind`
-    /// carry these as warnings, so that a partly loaded set is not taken for a complete one.
+    /// The problems that bear on `kind` contents (`signatures`, `peid`, `yara`, `capa` or `constants`): each
+    /// rejected pack, which may have held some, and each `kind` content that did not load. Results that consulted
+    /// the packs for `kind` carry these as warnings, so that a partly loaded set is not taken for a complete one.
     pub fn problems_for(&self, kind: &str) -> Vec<String> {
         self.problems_where(|content| content.kind == kind)
     }
@@ -248,9 +255,25 @@ impl Packs {
     pub(crate) fn capa(&self) -> &[CapaRuleSet] {
         &self.get().capa
     }
+
+    /// The constants database to scan with: the bundled one, with every pack's constants added.
+    pub(crate) fn constants(&self) -> &ConstantDb {
+        self.get().constant_db.as_ref().unwrap_or_else(|| ConstantDb::bundled())
+    }
+
+    /// The pack that supplied the constant named `what`, if a pack did.
+    pub(crate) fn constant_pack(&self, what: &str) -> Option<&str> {
+        self.get().constant_pack(what)
+    }
 }
 
 impl Loaded {
+    fn constant_pack(&self, what: &str) -> Option<&str> {
+        let mut packs = self.constants.iter();
+        let found = packs.find(|(_, constants)| constants.signatures().iter().any(|constant| constant.what == what));
+        found.map(|(pack, _)| pack.as_str())
+    }
+
     fn load(directories: &[PathBuf], pack: Budget, total: Budget) -> Self {
         let mut packs = Self::default();
         let mut names = HashSet::from([BUILTIN_PACK.to_owned()]);
@@ -276,6 +299,10 @@ impl Loaded {
             }
             loading.pack = pack;
             packs.add(directory, &mut names, &mut loading);
+        }
+        if !packs.constants.is_empty() {
+            let user: Vec<&UserConstants> = packs.constants.iter().map(|(_, constants)| constants).collect();
+            packs.constant_db = Some(ConstantDb::bundled_with(&user));
         }
         packs
     }
@@ -315,14 +342,6 @@ impl Loaded {
         loading: &mut Loading,
     ) -> Result<String, (ContentStatus, String)> {
         let error = |text: String| (ContentStatus::Error, text);
-        if entry.kind == Kind::Constants {
-            return Err((
-                ContentStatus::Unsupported,
-                "constants packs are not supported in this version: the crypto-constant database takes no user \
-                 data yet"
-                    .to_owned(),
-            ));
-        }
         let path = contained(root, &entry.path).map_err(error)?;
         match entry.kind {
             Kind::Signatures => {
@@ -382,7 +401,24 @@ impl Loaded {
                 self.capa.push(rules);
                 Ok(detail)
             }
-            Kind::Constants => unreachable!("handled above"),
+            Kind::Constants => {
+                let planned = loading.plan(path, MAX_CONSTANTS_BYTES, "constants database").map_err(error)?;
+                let text = read_planned(root, &planned, "constants database").map_err(error)?;
+                let constants = UserConstants::parse(&text, &format!("data pack {pack}")).map_err(error)?;
+                // Hits are told apart by name, so an earlier pack's name may not be reused.
+                for constant in constants.signatures() {
+                    if let Some(earlier) = self.constant_pack(&constant.what) {
+                        return Err(error(format!(
+                            "constant {:?} is already defined by pack {earlier}",
+                            constant.what
+                        )));
+                    }
+                }
+                loading.keep_constants(constants.len()).map_err(error)?;
+                let detail = format!("{} crypto and compression constants", constants.len());
+                self.constants.push((pack.to_owned(), constants));
+                Ok(detail)
+            }
         }
     }
 }
@@ -397,12 +433,19 @@ struct Budget {
     files: usize,
     directories: usize,
     peid: usize,
+    constants: usize,
 }
 
 const PACK_BUDGET: Budget =
-    Budget { scope: "one pack", bytes: 512 * MIB, files: 10_000, directories: 4_096, peid: 100_000 };
-const TOTAL_BUDGET: Budget =
-    Budget { scope: "all packs together", bytes: 1024 * MIB, files: 50_000, directories: 16_384, peid: 100_000 };
+    Budget { scope: "one pack", bytes: 512 * MIB, files: 10_000, directories: 4_096, peid: 100_000, constants: 10_000 };
+const TOTAL_BUDGET: Budget = Budget {
+    scope: "all packs together",
+    bytes: 1024 * MIB,
+    files: 50_000,
+    directories: 16_384,
+    peid: 100_000,
+    constants: 10_000,
+};
 
 /// Identifies a file however it was reached, so that one file is read once.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -481,6 +524,20 @@ impl Loading {
         }
         for budget in [&mut self.pack, &mut self.total] {
             budget.peid -= signatures;
+        }
+        Ok(())
+    }
+
+    /// Charges keeping `constants` user constants to both budgets; each holds up to
+    /// [`rampage_constants::MAX_USER_CONSTANT_BYTES`] in two byte orders, so their count bounds memory.
+    fn keep_constants(&mut self, constants: usize) -> Result<(), String> {
+        for budget in [&self.pack, &self.total] {
+            if constants > budget.constants {
+                return Err(format!("keeping {constants} constants would exceed the budget of {}", budget.scope));
+            }
+        }
+        for budget in [&mut self.pack, &mut self.total] {
+            budget.constants -= constants;
         }
         Ok(())
     }
