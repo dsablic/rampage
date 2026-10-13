@@ -4442,9 +4442,12 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "clap",
+ "gimli 0.34.0",
  "object 0.40.0",
  "rampage-analysis",
+ "rampage-api",
  "rampage-arch",
+ "rampage-decompiler",
  "rampage-detect",
  "rampage-loaders",
  "rampage-signatures",

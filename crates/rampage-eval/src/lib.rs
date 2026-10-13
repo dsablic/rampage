@@ -11,9 +11,13 @@
 //! - Tool identification ([`score_tools`]): compare the compilers, linkers and packers `detect_tools` names for
 //!   each committed fixture with the toolchain its build script used ([`ToolTruth`]).
 //!
+//! - Type recovery ([`score_types`]): compare the signatures the decompiler infers for a stripped twin with
+//!   the classes its DWARF declares ([`TypeTruth`]), one [`TypeMetric`] per slice.
+//!
 //! Whether a report is acceptable depends on the family, so the pass/fail rule is a separate [`Gate`].
 
 mod toolid;
+mod types;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,6 +29,10 @@ use serde::{Deserialize, Serialize};
 pub use toolid::{
     DetectedTool, ExpectedTool, TOOL_KINDS, ToolBinary, ToolDisagreement, ToolTruth, Toolchain, detected_tools,
     kind_tag, score_tools,
+};
+pub use types::{
+    ProposedSignature, ProposedType, SignatureTruth, TypeClass, TypeMetric, TypeTruth, decompiled_signatures,
+    score_types,
 };
 
 /// Known function names by address, taken from a symbolized twin of the evaluated binary.
@@ -54,11 +62,7 @@ impl Truth {
         let raw: BTreeMap<String, String> = serde_json::from_str(text)?;
         let mut entries = BTreeMap::new();
         for (key, name) in raw {
-            let address = key
-                .strip_prefix("0x")
-                .and_then(|digits| u64::from_str_radix(digits, 16).ok())
-                .ok_or_else(|| serde::de::Error::custom(format!("truth key {key:?} is not a 0x address")))?;
-            entries.insert(address, name);
+            entries.insert(parse_address_key(&key)?, name);
         }
         Ok(Truth(entries))
     }
@@ -73,6 +77,13 @@ impl Truth {
             .collect();
         if lines.is_empty() { "{}\n".to_owned() } else { format!("{{\n{}\n}}\n", lines.join(",\n")) }
     }
+}
+
+/// A truth file's `"0x<address>"` key.
+pub(crate) fn parse_address_key(key: &str) -> Result<u64, serde_json::Error> {
+    key.strip_prefix("0x")
+        .and_then(|digits| u64::from_str_radix(digits, 16).ok())
+        .ok_or_else(|| serde::de::Error::custom(format!("truth key {key:?} is not a 0x address")))
 }
 
 /// Every sized function symbol's name in `binary`, aliases included. Unlike [`Truth::from_binary`] this keeps
@@ -119,6 +130,10 @@ pub struct Report {
     /// binary, kind and name, and bounded like `disagreements`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_disagreements: Vec<ToolDisagreement>,
+    /// How many disagreements of each kind (type recovery: `struct_pointer->pointer`, `fewer`, `value->void`);
+    /// counts every disagreement, including those truncated from the lists.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub disagreement_classes: BTreeMap<String, usize>,
     /// How many disagreements were dropped from the end of the lists; the counts above still cover them.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted: usize,
@@ -146,8 +161,9 @@ impl Report {
     }
 }
 
-/// What a slice's [`Report`] must satisfy. `wrong` must always be zero: a confidently wrong answer misleads.
-/// The default is the library-identification gate: no spurious names either, and no recall floor.
+/// What a slice's [`Report`] must satisfy. `wrong` must be zero unless [`Gate::allow_wrong`]: a confidently
+/// wrong name misleads. The default is the library-identification gate: no spurious names either, and no recall
+/// floor.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Gate {
     /// Spurious answers are tolerated. Function discovery sets this: a binary legitimately contains code with no
@@ -156,6 +172,10 @@ pub struct Gate {
     /// would make the gate fire on correct discoveries, so [`Gate::min_precision`] bounds them instead.
     #[serde(default)]
     pub allow_spurious: bool,
+    /// Wrong answers are tolerated. Type recovery sets this: a recovered `int` where the source has `long` is
+    /// expected of a stripped binary, so wrong answers lower precision and recall and are bounded by their floors.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_wrong: bool,
     /// The committed recall baseline; a measured recall below it fails. Raise it only when a measured
     /// improvement lands.
     #[serde(default)]
@@ -170,7 +190,7 @@ impl Gate {
     /// Why `report` fails this gate; empty when it passes.
     pub fn check(&self, report: &Report) -> Vec<String> {
         let mut failures = Vec::new();
-        if report.wrong > 0 {
+        if report.wrong > 0 && !self.allow_wrong {
             failures.push(format!("{} wrong", report.wrong));
         }
         if report.spurious > 0 && !self.allow_spurious {
@@ -263,6 +283,7 @@ pub fn score(proposals: impl IntoIterator<Item = (u64, Option<String>)>, truth: 
         spurious,
         disagreements,
         tool_disagreements: Vec::new(),
+        disagreement_classes: BTreeMap::new(),
         omitted: 0,
     }
 }
@@ -302,6 +323,7 @@ pub fn score_discovery(starts: impl IntoIterator<Item = u64>, truth: &Truth) -> 
         spurious,
         disagreements,
         tool_disagreements: Vec::new(),
+        disagreement_classes: BTreeMap::new(),
         omitted: 0,
     }
 }
@@ -510,9 +532,9 @@ mod tests {
         let truth = truth(&[(0x10, "a"), (0x20, "b")]);
         let discovery = score_discovery([0x10, 0x15], &truth);
         assert_eq!(Gate::default().check(&discovery), ["1 spurious"]);
-        let tolerant = Gate { allow_spurious: true, min_recall: 0.5, min_precision: 0.5 };
+        let tolerant = Gate { allow_spurious: true, min_recall: 0.5, min_precision: 0.5, ..Gate::default() };
         assert!(tolerant.check(&discovery).is_empty());
-        let raised = Gate { allow_spurious: true, min_recall: 0.75, min_precision: 0.6 };
+        let raised = Gate { allow_spurious: true, min_recall: 0.75, min_precision: 0.6, ..Gate::default() };
         assert_eq!(
             raised.check(&discovery),
             ["recall 0.5000 below baseline 0.7500", "precision 0.5000 below baseline 0.6000"]
@@ -520,6 +542,9 @@ mod tests {
         let tolerant = Gate { min_precision: 0.0, ..tolerant };
         let wrong = score(vec![named(0x10, "z")], &truth);
         assert_eq!(tolerant.check(&wrong), ["1 wrong", "recall 0.0000 below baseline 0.5000"]);
+        let types = Gate { allow_wrong: true, ..tolerant };
+        assert_eq!(types.check(&wrong), ["recall 0.0000 below baseline 0.5000"]);
+        assert!(!serde_json::to_string(&tolerant).unwrap().contains("allow_wrong"));
 
         let mut evaluation = Evaluation::default();
         evaluation.insert("discovery-x".to_owned(), discovery.clone(), tolerant);
