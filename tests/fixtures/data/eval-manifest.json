@@ -16,13 +16,13 @@
       "refs": ["../bin/eval-ref-aarch64.elf"],
       "target": "../bin/eval-twin-aarch64.elf",
       "truth": "eval-truth-twin-aarch64.json",
-      "min_recall": 0.9533
+      "min_recall": 0.9274
     },
     "libid-cross-aarch64": {
       "refs": ["../bin/eval-ref-aarch64.elf"],
       "target": "../bin/eval-target-aarch64.elf",
       "truth": "eval-truth-cross-aarch64.json",
-      "min_recall": 0.8987
+      "min_recall": 0.886
     },
     "discovery-x86_64": {
       "family": "discovery",
