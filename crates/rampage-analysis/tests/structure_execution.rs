@@ -50,6 +50,8 @@ impl Execution {
                     .expect("missing executed phi edge")
                     .definition]
             }
+            // Only the switch bound reads flags, and its check is not modelled.
+            Expression::Flags { .. } => 0,
             _ => panic!("unsupported test expression: {expression:?}"),
         }
     }
@@ -90,6 +92,25 @@ impl Execution {
                 }
                 self.region(ssa, body);
             },
+            Region::Switch { index, cases, .. } => {
+                let value = self.expression(index.as_ref().expect("recovered index"));
+                let case = cases.iter().find(|case| case.values.contains(&value)).expect("value has a case");
+                self.region(ssa, &case.body);
+            }
+        }
+    }
+
+    /// `table` gives the block each switch index dispatches to, for a graph with one switch on register 0.
+    fn graph_with_table(&mut self, ssa: &Ssa, edges: &[(usize, usize)], table: &[usize], index: &Expression) {
+        let mut at = ssa.entry;
+        loop {
+            self.block(ssa, at);
+            let statement = ssa.blocks[at].statements.last().unwrap();
+            at = match statement.flow {
+                Flow::Return => break,
+                Flow::IndirectJump => table[self.expression(index) as usize],
+                _ => edges.iter().find(|&&(from, _)| from == at).unwrap().1,
+            };
         }
     }
 
@@ -203,5 +224,47 @@ fn structured_loop_phi_values_match_cfg_execution_on_every_iteration() {
             assert_eq!(graph.values, structured.values);
             assert_eq!(structured.trace.iter().filter(|&&block| block == 2).count(), argument as usize);
         }
+    }
+}
+
+#[test]
+fn structured_switch_phi_values_match_cfg_execution_for_every_index() {
+    let assign =
+        |value| Effect::Assign { destination: Value::Register { number: 1 }, value: Value::Constant { value } };
+    let compare = Effect::SetFlags {
+        operation: rampage_arch::ir::FlagOperation::Subtract,
+        left: Value::Register { number: 0 },
+        right: Value::Constant { value: 3 },
+    };
+    // 0: cmp x0, #3; 4: br x9 through entries [0x20, 0x30, 0x50, 0x20]; 0x50 joins with a phi of x1.
+    let mut dispatch = instruction(0, Flow::Next, compare);
+    dispatch.instructions.extend(
+        instruction(4, Flow::IndirectJump, Effect::IndirectBranch { target: Value::Register { number: 9 } })
+            .instructions,
+    );
+    let input = [
+        dispatch,
+        instruction(0x20, Flow::Jump(0x50), assign(7)),
+        instruction(0x30, Flow::Jump(0x50), assign(11)),
+        instruction(0x50, Flow::Return, Effect::Control { inputs: vec![Value::Register { number: 1 }] }),
+    ];
+    let edges = [(0, 1), (0, 2), (0, 3), (1, 3), (2, 3)];
+    let ssa = ssa::build(&input, &edges, 0).unwrap();
+    let switch = rampage_analysis::discover::Switch {
+        jump: 4,
+        cases: vec![0x20, 0x30, 0x50],
+        table: vec![0x20, 0x30, 0x50, 0x20],
+        guard: 0,
+    };
+    let structure = structure::analyze_with_switches(&ssa, &edges, &[switch]).unwrap();
+    let Region::Sequence { regions } = &structure.body else { panic!("not sequence") };
+    let Region::Switch { index: Some(index), .. } = &regions[1] else { panic!("no switch: {regions:?}") };
+    for argument in 0..4 {
+        let mut graph = Execution::new(&ssa, argument);
+        graph.graph_with_table(&ssa, &edges, &[1, 2, 3, 1], index);
+        let mut structured = Execution::new(&ssa, argument);
+        structured.region(&ssa, &structure.body);
+        assert_eq!(graph.trace, structured.trace);
+        assert_eq!(graph.values, structured.values);
     }
 }

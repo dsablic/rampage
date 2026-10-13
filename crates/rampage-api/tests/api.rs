@@ -297,6 +297,24 @@ fn a_compiled_arm64_switch_dispatch_block_has_an_edge_to_every_case() {
 }
 
 #[test]
+fn compiled_arm64_switches_print_their_cases_and_stay_flat_when_cases_share_code() {
+    let project = Session::default().open(&fixture("musl-static-aarch64.elf"), None).unwrap();
+    // pop_arg: its 18 entries select nine cases; their stores are tail-merged, so the cases share code.
+    let summary = project.function_summary(0x10149ac).unwrap();
+    let flat = &summary.pseudocode.as_ref().unwrap().text;
+    assert!(flat.contains("switch (zext32(x8_"), "{flat}");
+    assert!(flat.contains("case 0: case 3 ... 5: case 10 ... 15: goto bb2;"), "{flat}");
+    assert!(flat.contains("default: goto bb9;"), "{flat}");
+    assert!(!flat.contains("unknown_target"), "{flat}");
+    assert!(summary.structured_control.is_none());
+    let limitation = "Control structuring omitted: switch cases fall through or do not converge";
+    assert!(summary.limitations.iter().any(|text| text.starts_with(limitation)), "{:?}", summary.limitations);
+    // sysconf
+    let flat = project.function_summary(0x1016144).unwrap().pseudocode.unwrap().text;
+    assert!(flat.contains("case 4: case 10: goto bb10;") && !flat.contains("unknown_target"), "{flat}");
+}
+
+#[test]
 fn decompiles_a_function_to_c_when_ghidra_is_present() {
     // The decompiler needs a local Ghidra install for processor specs; skip cleanly without one.
     if rampage_decompiler::sleigh_home().is_none() {

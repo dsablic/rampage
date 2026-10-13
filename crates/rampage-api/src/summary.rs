@@ -146,23 +146,36 @@ impl Project {
                 None
             }
         };
-        let pseudocode = match ssa.as_ref().map(|ssa| rampage_analysis::pseudocode::render(ssa, &edges)).transpose() {
+        let switches =
+            self.analysis()?.program.function_at(graph.address).map_or(&[][..], |function| &function.switches);
+        let pseudocode = match ssa
+            .as_ref()
+            .map(|ssa| rampage_analysis::pseudocode::render_with_switches(ssa, &edges, switches))
+            .transpose()
+        {
             Ok(pseudocode) => pseudocode,
             Err(error) => {
                 limitations.push(format!("Pseudocode omitted: {error}"));
                 None
             }
         };
-        let structured_control =
-            match ssa.as_ref().map(|ssa| rampage_analysis::structure::analyze(ssa, &edges)).transpose() {
-                Ok(structure) => structure,
-                Err(error) => {
-                    limitations.push(format!("Control structuring omitted: {error}"));
-                    None
-                }
-            };
+        let structured_control = match ssa
+            .as_ref()
+            .map(|ssa| rampage_analysis::structure::analyze_with_switches(ssa, &edges, switches))
+            .transpose()
+        {
+            Ok(structure) => structure,
+            Err(error) => {
+                limitations.push(format!("Control structuring omitted: {error}"));
+                None
+            }
+        };
         let structured_pseudocode = if structured_control.is_some() {
-            match ssa.as_ref().map(|ssa| rampage_analysis::pseudocode::render_structured(ssa, &edges)).transpose() {
+            match ssa
+                .as_ref()
+                .map(|ssa| rampage_analysis::pseudocode::render_structured_with_switches(ssa, &edges, switches))
+                .transpose()
+            {
                 Ok(output) => output,
                 Err(error) => {
                     limitations.push(format!("Structured pseudocode omitted: {error}"));
