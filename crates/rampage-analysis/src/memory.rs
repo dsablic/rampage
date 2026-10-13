@@ -1,3 +1,4 @@
+use rampage_arch::bytes::read_uint;
 use rampage_loaders::Binary;
 
 /// The view of a program's address space that analysis needs.
@@ -16,6 +17,10 @@ pub trait Memory: Sync {
     fn read_pointer(&self, _address: u64, _size: u8) -> Option<u64> {
         None
     }
+    /// A 1-, 2-, 4- or 8-byte value from file-backed memory the program cannot write, such as a switch table.
+    fn read_constant(&self, _address: u64, _size: u8) -> Option<u64> {
+        None
+    }
 }
 
 /// Images whose code starts below this are treated as based at zero.
@@ -25,6 +30,15 @@ impl Memory for Binary {
     fn read_pointer(&self, address: u64, size: u8) -> Option<u64> {
         Binary::read_pointer(self, address, size)
     }
+
+    fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
+        let permissions = self.segment_containing(address)?.perms;
+        if !permissions.read || permissions.write {
+            return None;
+        }
+        read_uint(self.read(address, u64::from(size))?, 0, usize::from(size), self.big_endian)
+    }
+
     fn code_from(&self, address: u64) -> Option<&[u8]> {
         Binary::code_from(self, address)
     }
@@ -70,5 +84,10 @@ impl Memory for FlatMemory {
 
     fn immediates_may_be_addresses(&self) -> bool {
         self.base >= MIN_IMAGE_BASE_FOR_IMMEDIATES
+    }
+
+    fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
+        let offset = usize::try_from(address.checked_sub(self.base)?).ok()?;
+        read_uint(&self.bytes, offset, usize::from(size), false)
     }
 }
