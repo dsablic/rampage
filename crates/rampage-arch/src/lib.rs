@@ -222,6 +222,12 @@ pub struct Insn {
 /// Most entries a switch jump table is read for; a larger proven bound leaves the jump unresolved.
 pub const MAX_JUMP_TABLE_ENTRIES: u64 = 4096;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetWidth {
+    Bits32,
+    Bits64,
+}
+
 /// A switch jump table a register-indirect jump dispatches through, with the index bound that a comparison and
 /// conditional branch before it proved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +245,8 @@ pub struct JumpTable {
     pub shift: u8,
     /// Instruction alignment every target must have.
     pub alignment: u64,
+    /// The width of the target address calculation, independent of the table entry size.
+    pub target_width: TargetWidth,
 }
 
 impl JumpTable {
@@ -254,6 +262,10 @@ impl JumpTable {
         let target = match self.base {
             Some(base) => base.wrapping_add(value.checked_shl(self.shift.into())?),
             None => value,
+        };
+        let target = match self.target_width {
+            TargetWidth::Bits32 => target & 0xffff_ffff,
+            TargetWidth::Bits64 => target,
         };
         target.is_multiple_of(self.alignment.max(1)).then_some(target)
     }

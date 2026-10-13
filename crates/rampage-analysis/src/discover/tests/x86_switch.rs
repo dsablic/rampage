@@ -215,3 +215,162 @@ fn facts_established_before_a_join_ahead_of_the_comparison_do_not_reach_the_jump
     assert!(!resolved(&based(0xb)));
     assert!(resolved(&based(4)));
 }
+
+const PIC_ANCHOR: u64 = 0x4000;
+
+fn memory_add_switch(table: u64, gap: &[u8], base_alias: bool) -> Switch {
+    // call next; pop eax; add eax, anchor - return_address; gap; add eax, [base + edi*4 + displacement]; jmp eax.
+    let return_address = DISPATCH + 5;
+    let setup = [&[0xe8, 0, 0, 0, 0, 0x58, 0x05][..], &((PIC_ANCHOR - return_address) as u32).to_le_bytes()].concat();
+    let sib = if base_alias { 0xbb } else { 0xb8 };
+    let add = [&[0x03, 0x84, sib][..], &(table.wrapping_sub(PIC_ANCHOR) as u32).to_le_bytes()].concat();
+    let dispatch = [&setup[..], gap, &add, &[0xff, 0xe0]].concat();
+    Switch { arch: Arch::X86, gap: [0x90; 2], ..Switch::new(dispatch) }
+}
+
+fn pic_entries() -> Vec<u8> {
+    entries(|case| case.wrapping_sub(PIC_ANCHOR), 4)
+}
+
+#[test]
+fn i386_combined_memory_add_reaches_ordered_cases_with_a_known_base_alias() {
+    for (gap, alias) in [(&[][..], false), (&[0x89, 0xc3][..], true)] {
+        let program = memory_add_switch(RODATA, gap, alias).discover(pic_entries(), vec![]);
+        assert!(resolved(&program));
+        let function = program.function_at(0).unwrap();
+        let switch = &function.switches[0];
+        assert_eq!(switch.table, CASES);
+        assert_eq!(switch.guard, 2);
+        assert_eq!(switch.jump, DISPATCH + 18 + gap.len() as u64);
+        for case in CASES {
+            assert!(program.xrefs.contains(&Xref { to: case, from: switch.jump, kind: XrefKind::Jump }));
+        }
+        assert!(function.contains(0x34));
+    }
+}
+
+#[test]
+fn i386_combined_memory_add_requires_immutable_complete_tables_and_valid_code_targets() {
+    let switch = memory_add_switch(RODATA, &[], false);
+    assert!(resolved(&switch.discover(pic_entries(), vec![])));
+    let writable = memory_add_switch(DATA, &[], false);
+    assert!(!resolved(&writable.discover(vec![], pic_entries())));
+    assert!(!resolved(&switch.discover(pic_entries()[..12].to_vec(), vec![])));
+    let mut outside = pic_entries();
+    outside[12..].copy_from_slice(&0x80u32.wrapping_sub(PIC_ANCHOR as u32).to_le_bytes());
+    assert!(!resolved(&switch.discover(outside, vec![])));
+    let mut data_target = pic_entries();
+    data_target[12..].copy_from_slice(&(RODATA.wrapping_sub(PIC_ANCHOR) as u32).to_le_bytes());
+    assert!(!resolved(&switch.discover(data_target, vec![])));
+    // Absolute pointers must not be interpreted as the relative offsets consumed by add.
+    assert!(!resolved(&switch.discover(entries(|case| case, 4), vec![])));
+    // The first case is now an invalid i386 instruction, even though it lies in executable memory.
+    let mut code = [&switch.prefix[..], &switch.compare, &switch.branch, &switch.gap, &switch.dispatch].concat();
+    code.resize(CASES[0] as usize, 0xcc);
+    code.extend([0xff, 0xff, 0xc3, 0xc3, 0xc3]);
+    assert_eq!(
+        decoder_for(Arch::X86).unwrap().decode(&code[CASES[0] as usize..], CASES[0]).flow,
+        rampage_arch::Flow::Invalid
+    );
+    let image = Image { code, rodata: pic_entries(), data: vec![] };
+    assert!(!resolved(&discover(&image, || decoder_for(Arch::X86).unwrap(), &[0])));
+}
+
+#[test]
+fn i386_combined_memory_add_stays_unresolved_after_fact_clobbers_or_unbounded_joins() {
+    for (gap, alias) in [
+        (&[0x31, 0xc0][..], false),            // Unknown destination and memory base.
+        (&[0x47][..], false),                  // Increment the formerly bounded index.
+        (&[0x89, 0xc3, 0x31, 0xdb][..], true), // Clobber the memory-base alias.
+        (&[0x89, 0xc3, 0x31, 0xc0][..], true), // Keep the table base but lose the destination anchor.
+    ] {
+        assert!(!resolved(&memory_add_switch(RODATA, gap, alias).discover(pic_entries(), vec![])));
+    }
+    let switch = || memory_add_switch(RODATA, &[], false);
+    let unbounded = Switch { compare: NOPS, ..switch() };
+    assert!(!resolved(&unbounded.discover(pic_entries(), vec![])));
+    let signed = Switch { branch: [0x7f, JA[1]], ..switch() };
+    assert!(!resolved(&signed.discover(pic_entries(), vec![])));
+    let other_index = Switch { compare: [0x81, 0xfe, 3, 0, 0, 0], ..switch() };
+    assert!(!resolved(&other_index.discover(pic_entries(), vec![])));
+    // A path entering the setup without the unsigned guard cannot supply a bounded index at dispatch.
+    let joined = Switch { prefix: [0x74, (DISPATCH - 2) as u8], ..switch() };
+    assert!(!resolved(&joined.discover(pic_entries(), vec![])));
+}
+
+struct SparsePicImage {
+    code: Vec<u8>,
+    targets: [u64; 4],
+    rodata: Vec<u8>,
+}
+
+impl crate::memory::Memory for SparsePicImage {
+    fn code_from(&self, address: u64) -> Option<&[u8]> {
+        if self.targets.contains(&address) {
+            Some(&[0xc3])
+        } else {
+            self.code.get(usize::try_from(address).ok()?..).filter(|rest| !rest.is_empty())
+        }
+    }
+
+    fn is_mapped(&self, address: u64) -> bool {
+        self.is_executable(address) || (RODATA..RODATA + self.rodata.len() as u64).contains(&address)
+    }
+
+    fn is_executable(&self, address: u64) -> bool {
+        self.code_from(address).is_some()
+    }
+
+    fn immediates_may_be_addresses(&self) -> bool {
+        false
+    }
+
+    fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
+        let offset = usize::try_from(address.checked_sub(RODATA)?).ok()?;
+        rampage_arch::bytes::read_uint(&self.rodata, offset, usize::from(size), false)
+    }
+}
+
+fn sparse_pic_image(targets: [u64; 4], narrow_jump: bool) -> SparsePicImage {
+    let mut switch = memory_add_switch(RODATA, &[], false);
+    if narrow_jump {
+        switch.dispatch.truncate(switch.dispatch.len() - 2);
+        switch.dispatch.extend([0x66, 0xff, 0xe0]);
+    }
+    let mut code = [&switch.prefix[..], &switch.compare, &switch.branch, &switch.gap, &switch.dispatch].concat();
+    code.resize(0x34, 0xcc);
+    code.push(0xc3);
+    let rodata = targets.iter().flat_map(|&target| (target.wrapping_sub(PIC_ANCHOR) as u32).to_le_bytes()).collect();
+    SparsePicImage { code, targets, rodata }
+}
+
+#[test]
+fn i386_memory_add_discovers_high_bit_and_negative_wrapped_executable_targets() {
+    let targets = [0x8000_5234, 0xffff_c000, 0x1234, 0x4020];
+    let image = sparse_pic_image(targets, false);
+    let program = discover(&image, || decoder_for(Arch::X86).unwrap(), &[0]);
+    let function = program.function_at(0).unwrap();
+    assert_eq!(function.switches.len(), 1);
+    let switch = &function.switches[0];
+    assert_eq!(switch.table, targets);
+    for target in targets {
+        assert!(function.contains(target));
+        assert!(program.xrefs.contains(&Xref { to: target, from: switch.jump, kind: XrefKind::Jump }));
+    }
+}
+
+#[test]
+fn an_i386_word_register_jump_cannot_emit_native_width_case_edges() {
+    let targets = [0x15234, 0x15235, 0x15236, 0x15237];
+    let native = sparse_pic_image(targets, false);
+    let program = discover(&native, || decoder_for(Arch::X86).unwrap(), &[0]);
+    assert_eq!(program.function_at(0).unwrap().switches[0].table, targets);
+    let narrow = sparse_pic_image(targets, true);
+    let program = discover(&narrow, || decoder_for(Arch::X86).unwrap(), &[0]);
+    let function = program.function_at(0).unwrap();
+    assert!(function.switches.is_empty());
+    for target in targets {
+        assert!(!function.contains(target));
+        assert!(!program.xrefs.iter().any(|xref| xref.to == target && xref.kind == XrefKind::Jump));
+    }
+}

@@ -713,11 +713,11 @@ fn explore(
     let blocks = blocks.into_iter().map(|(start, end)| Block { start, end }).collect();
     switches.sort_unstable_by_key(|switch: &Switch| switch.jump);
     let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len(), switches };
-    // The base an AArch64 switch adds its jump-table offsets to is a label inside the function, not another
-    // function's entry. Other code addresses formed inside the extent may be: it can run past a noreturn call.
+    // A switch's relative target base may be its first undecoded case, immediately after the current extent.
+    // Other code addresses formed inside the extent may be function entries after a noreturn call.
     // An address the function also loads from is data, such as a literal pool `adr` points at.
     let end = function.end();
-    let is_local_jump_base = |target: u64| start < target && target < end && jump_bases.contains(&target);
+    let is_local_jump_base = |target: u64| start < target && target <= end && jump_bases.contains(&target);
     let CodeRefs { pointers, accessed } = code_refs;
     new_seeds.extend(pointers.into_iter().filter(|&target| !is_local_jump_base(target) && !accessed.contains(&target)));
     Explored {
@@ -883,6 +883,16 @@ mod tests {
         let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
         let addresses: Vec<_> = program.functions.iter().map(|function| function.address).collect();
         assert_eq!(addresses, [0]);
+    }
+
+    #[test]
+    fn an_ordinary_code_pointer_at_the_decode_frontier_still_seeds_a_function() {
+        // adr x0, 0x8; ret; ret. The adjacent pointer is not an indirect-jump base.
+        let words: [u32; 3] = [0x1000_0040, 0xd65f_03c0, 0xd65f_03c0];
+        let memory = FlatMemory { base: 0, bytes: words.iter().flat_map(|word| word.to_le_bytes()).collect() };
+        let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
+        let addresses: Vec<_> = program.functions.iter().map(|function| function.address).collect();
+        assert_eq!(addresses, [0, 8]);
     }
 
     /// AArch64 code at 0, read-only data at `RODATA` and writable data at `DATA`.

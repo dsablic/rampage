@@ -113,6 +113,7 @@ fn aarch64_describes_the_bounded_switch_table_a_register_jump_dispatches_through
         base: Some(0x1010),
         shift: 0,
         alignment: 4,
+        target_width: rampage_arch::TargetWidth::Bits64,
     };
     assert_eq!(table, expected);
     assert_eq!(table.target(0xffff_fff0), Some(0x1000));

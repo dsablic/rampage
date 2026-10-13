@@ -91,6 +91,24 @@ fn a64_inverse_bounds_resolve_taken_dispatches_and_keep_guard_and_table_order() 
 }
 
 #[test]
+fn a64_inverse_switch_first_case_at_the_decode_frontier_is_not_a_new_function() {
+    let fixture = Fixture::new(0x7100_0c1f, 9, &[], &[]);
+    assert_eq!(fixture.cases[0], fixture.jump + 4);
+    for threads in [1, 4] {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+        let program = pool.install(|| run(&fixture.image));
+        let function = program.function_at(0).unwrap();
+        assert_eq!(function.switch_cases(fixture.jump), Some(fixture.cases.as_slice()));
+        assert!(function.contains(fixture.cases[0]));
+        assert!(program.function_at(fixture.cases[0]).is_none());
+
+        let explicit =
+            pool.install(|| discover(&fixture.image, || decoder_for(Arch::Aarch64).unwrap(), &[0, fixture.cases[0]]));
+        assert!(explicit.function_at(fixture.cases[0]).is_some());
+    }
+}
+
+#[test]
 fn a64_scheduled_comparisons_resolve_but_flags_and_alias_writes_invalidate_them() {
     for condition in [8, 9] {
         assert!(Fixture::new(0x7100_0c1f, condition, &[NOP, 0x9100_0421], &[]).resolved());

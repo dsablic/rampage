@@ -502,6 +502,18 @@ fn table_load(name: &str) -> Option<Extension> {
     }
 }
 
+fn register_move(decoded: &Decoded) -> Option<(u64, u64, bool)> {
+    let wide = match decoded.encoding.name {
+        "ORR_32_log_shift" => false,
+        "ORR_64_log_shift" => true,
+        _ => return None,
+    };
+    if decoded.field("Rn")? != 31 || decoded.field("shift")? != 0 || decoded.field("imm6")? != 0 {
+        return None;
+    }
+    Some((decoded.field("Rd")?, decoded.field("Rm")?, wide))
+}
+
 /// Whether an offset register holding an entry loaded with `load`, extended by `extend` (bits and signedness;
 /// `None` for the whole register), is the entry sign-extended (`true`) or zero-extended (`false`). `None` when it
 /// is neither, such as a sign-extended byte read back zero-extended from 16 bits.
@@ -546,6 +558,7 @@ fn switch_entry(decoded: &Decoded, addresses: &Addresses) -> Option<(u64, Entry)
             base: None,
             shift: 0,
             alignment: 4,
+            target_width: crate::TargetWidth::Bits64,
         };
         return Some((field("Rt")?, Entry { table, load }));
     }
@@ -632,6 +645,13 @@ pub fn analyze(
         .filter(|entry| entry.table.base.is_some() || entry.table.entry_size == 8)
         .map(|entry| entry.table);
     let switch = switch_entry(decoded, addresses);
+    let moved = register_move(decoded).filter(|&(destination, source, _)| destination < 31 && source < 31);
+    let moved_bound = moved.and_then(|(destination, source, wide)| {
+        addresses.bound(source).map(|bound| (destination, Bound { wide: !wide || bound.wide, ..bound }))
+    });
+    let moved_upper_zero = moved
+        .filter(|&(_, source, wide)| !wide || addresses.upper_zero & (1 << source) != 0)
+        .map(|(destination, _, _)| destination);
     // HI/HS bound the fall-through; their inverses LS/LO bound the taken edge instead.
     let bound = compare.filter(|_| name == "B_only_condbranch").and_then(|compare| {
         let (max, taken) = match decoded.field("cond")? {
@@ -735,6 +755,12 @@ pub fn analyze(
     }
     if let (Some(base), Some(rd)) = (offset_from, destination) {
         addresses.set_derived(rd, base);
+    }
+    if let Some((register, bound)) = moved_bound {
+        addresses.bounds[register as usize] = Some(bound);
+    }
+    if let Some(register) = moved_upper_zero {
+        addresses.upper_zero |= 1 << register;
     }
     if let Some((register, entry)) = switch.filter(|&(register, _)| register < 31) {
         addresses.entries[register as usize] = Some(entry);

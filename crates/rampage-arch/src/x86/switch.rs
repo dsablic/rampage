@@ -12,7 +12,7 @@
 
 use iced_x86::{ConditionCode, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind, Register};
 
-use crate::{JumpTable, MAX_JUMP_TABLE_ENTRIES};
+use crate::{JumpTable, MAX_JUMP_TABLE_ENTRIES, TargetWidth};
 
 const REGISTERS: usize = 16;
 
@@ -109,7 +109,7 @@ impl Registers {
         self.fall_through_bounds = 0;
         let jump_table = (instruction.mnemonic() == Mnemonic::Jmp)
             .then(|| match instruction.op0_kind() {
-                OpKind::Register => self
+                OpKind::Register if instruction.op0_register().size() == usize::from(pointer) => self
                     .entries
                     .get(gpr(instruction.op0_register())?)
                     .copied()
@@ -181,6 +181,15 @@ impl Registers {
                 let displacement = instruction.memory_displacement64();
                 known = base.zip(gpr(to)).map(|(base, to)| (to, wrap(base, displacement, bitness)));
             }
+            (Mnemonic::Add, Some(to), None)
+                if bitness == 32 && size(to) == 32 && instruction.op1_kind() == OpKind::Memory =>
+            {
+                entry = gpr(to).and_then(|to| {
+                    let base = self.known[to]?;
+                    let table = self.table_load(instruction, pointer, true)?;
+                    Some((to, JumpTable { base: Some(base), ..table }))
+                });
+            }
             (Mnemonic::Add | Mnemonic::Sub, Some(to), None) if size(to) == bitness => {
                 // PIC i386 code adds the GOT's offset to the PC a get-PC thunk returned.
                 let address = gpr(to).and_then(|index| self.known[index]);
@@ -199,7 +208,6 @@ impl Registers {
             }
             (Mnemonic::Add, Some(to), Some(from)) if size(to) == bitness && size(from) == bitness => {
                 if let (Some(to), Some(from)) = (gpr(to), gpr(from)) {
-                    // 32-bit addition wraps, so a 32-bit entry above the base's distance to 4 GiB is a negative offset.
                     let relative = |entry: Option<JumpTable>, base: Option<u64>| {
                         let table = entry.filter(|table| table.base.is_none())?;
                         Some(JumpTable { base: Some(base?), signed: table.signed || bitness == 32, ..table })
@@ -396,6 +404,7 @@ impl Registers {
             base: None,
             shift: 0,
             alignment: 1,
+            target_width: if pointer == 4 { TargetWidth::Bits32 } else { TargetWidth::Bits64 },
         })
     }
 }

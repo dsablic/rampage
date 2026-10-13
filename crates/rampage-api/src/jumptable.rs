@@ -47,6 +47,7 @@ impl Project {
             base: relative_base,
             shift: 0,
             alignment: 4,
+            target_width: rampage_arch::TargetWidth::Bits64,
         };
         let mut entries = Vec::with_capacity(count);
         for index in 0..table.entries {

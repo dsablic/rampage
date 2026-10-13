@@ -107,6 +107,22 @@
         "installer"
       ]
     },
+    "zig-cc-freestanding-shared": {
+      "how": "tests/fixtures/build-switches.sh: Zig 0.17.0 / Clang and LLD 22.1.8, -O2 -fPIC -nostdlib -shared",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "Clang/LLVM",
+          "why": "zig cc compiles the owned C source; .comment records its Clang producer"
+        },
+        {
+          "kind": "linker",
+          "name": "LLD",
+          "why": "zig links the freestanding shared ELF with LLD, recorded in .comment"
+        }
+      ],
+      "absent": ["runtime", "packer", "protector", "installer"]
+    },
     "zig-cc-freestanding": {
       "how": "zig cc -target <arch>-linux-musl -nostdlib -ffreestanding -static (zig 0.17.0), linked, no libc",
       "expected": [
@@ -196,6 +212,18 @@
     }
   },
   "binaries": {
+    "../bin/switch-pic-i386.so": {
+      "toolchain": "zig-cc-freestanding-shared",
+      "built": "tests/fixtures/build-switches.sh, x86-linux-musl PIC i386 switch"
+    },
+    "../bin/switch-scheduled-arm64.so": {
+      "toolchain": "zig-cc-freestanding-shared",
+      "built": "tests/fixtures/build-switches.sh, aarch64-linux-musl SCHEDULED_GUARD"
+    },
+    "../bin/switch-inverse-arm64.so": {
+      "toolchain": "zig-cc-freestanding-shared",
+      "built": "tests/fixtures/build-switches.sh, aarch64-linux-musl INVERSE_GUARD"
+    },
     "../bin/eval-types-sym-x86_64.elf": {
       "toolchain": "zig-cc-freestanding",
       "built": "tools/eval-corpus.sh --fixtures"
