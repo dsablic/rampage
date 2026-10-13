@@ -1,0 +1,277 @@
+use std::path::PathBuf;
+
+use clap::{Arg, ArgMatches, Subcommand};
+
+use crate::args::{
+    AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
+    ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
+    DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportsArgs, JumpTableArgs, McpArgs,
+    ObserveIndirectBranchArgs, PseudocodeArgs, RenameArgs, ReportArgs, SignaturesArgs, StringsArgs, XrefsArgs,
+    YaraArgs,
+};
+use crate::{Command, PacksCommand};
+
+pub(crate) fn with_pack_arguments(command: clap::Command) -> clap::Command {
+    let pack = command.get_arguments().find(|argument| argument.get_id() == "packs").unwrap().clone();
+    command.mut_subcommands(|command| add_pack_argument(command, &pack))
+}
+
+fn add_pack_argument(command: clap::Command, pack: &Arg) -> clap::Command {
+    command.arg(pack.clone()).mut_subcommands(|command| add_pack_argument(command, pack))
+}
+
+pub(crate) fn pack_paths(matches: &ArgMatches) -> Vec<PathBuf> {
+    std::iter::successors(Some(matches), |matches| matches.subcommand().map(|(_, matches)| matches))
+        .filter_map(|matches| matches.get_many::<PathBuf>("packs"))
+        .flatten()
+        .cloned()
+        .collect()
+}
+
+#[derive(Subcommand)]
+pub(crate) enum RootCommand {
+    /// Inspect, analyze and scan binaries
+    #[command(subcommand)]
+    Binary(BinaryCommand),
+    /// Discover, disassemble, decompile and compare functions
+    #[command(subcommand)]
+    Function(FunctionCommand),
+    /// List strings
+    #[command(subcommand)]
+    String(StringCommand),
+    /// Inspect language metadata
+    #[command(subcommand)]
+    Language(LanguageCommand),
+    /// Inspect and disassemble managed assemblies
+    #[command(subcommand)]
+    Managed(ManagedCommand),
+    /// List and edit user annotations
+    #[command(subcommand)]
+    Annotation(AnnotationCommand),
+    /// Import debug types
+    #[command(subcommand)]
+    Type(TypeCommand),
+    /// Inspect captured runtime state
+    #[command(subcommand)]
+    Runtime(RuntimeCommand),
+    /// List or validate data packs
+    #[command(subcommand)]
+    Pack(PacksCommand),
+    /// Run registered investigation workflows
+    #[command(subcommand)]
+    Workflow(WorkflowCommand),
+    /// Serve AI agents over the Model Context Protocol
+    #[command(subcommand)]
+    Server(ServerCommand),
+    #[command(flatten)]
+    Legacy(Command),
+}
+
+impl RootCommand {
+    pub(crate) fn into_action(self) -> Result<Command, &'static str> {
+        Ok(match self {
+            Self::Binary(BinaryCommand::Inspect(args)) => Command::Info(args),
+            Self::Binary(BinaryCommand::Triage(args)) => Command::Triage(args),
+            Self::Binary(BinaryCommand::Analyze(args)) => Command::Analyze(args),
+            Self::Binary(BinaryCommand::Detect(args)) => Command::Detect(args),
+            Self::Binary(BinaryCommand::Capabilities(args)) => Command::Capabilities(args),
+            Self::Binary(BinaryCommand::Audit(args)) => Command::Audit(args),
+            Self::Binary(BinaryCommand::Carve(args)) => Command::Carve(args),
+            Self::Binary(BinaryCommand::Inventory(args)) => Command::Inventory(args),
+            Self::Binary(BinaryCommand::ListImports(args)) => Command::Imports(args),
+            Self::Binary(BinaryCommand::ListExports(args)) => Command::Exports(args),
+            Self::Binary(BinaryCommand::ScanYara(args)) => Command::Yara(args),
+            Self::Binary(BinaryCommand::ScanCapa(args)) => Command::Capa(args),
+            Self::Function(FunctionCommand::List(args)) => Command::Funcs(args),
+            Self::Function(FunctionCommand::Disassemble(args)) => Command::Disasm(args),
+            Self::Function(FunctionCommand::Decompile(args)) => Command::Decompile(args),
+            Self::Function(FunctionCommand::Summarize(args)) => Command::Summarize(args),
+            Self::Function(FunctionCommand::Pseudocode(args)) => Command::Pseudocode(args),
+            Self::Function(FunctionCommand::Xrefs(args)) => Command::Xrefs(args),
+            Self::Function(FunctionCommand::Identify(args)) => Command::Identify(args),
+            Self::Function(FunctionCommand::BuildSignatures(args)) => Command::Signatures(args),
+            Self::Function(FunctionCommand::Compare(args)) => Command::Compare(args),
+            Self::Function(FunctionCommand::InspectTable(args)) => Command::JumpTable(args),
+            Self::String(StringCommand::List(args)) => Command::Strings(args),
+            Self::Language(LanguageCommand::Inspect(args)) => Command::Metadata(args),
+            Self::Annotation(AnnotationCommand::List(args)) => Command::Annotations(args),
+            Self::Annotation(AnnotationCommand::Rename(args)) => Command::Rename(args),
+            Self::Annotation(AnnotationCommand::Comment(args)) => Command::Comment(args),
+            Self::Annotation(AnnotationCommand::ApplyBatch(args)) => Command::AnnotateBatch(args),
+            Self::Annotation(AnnotationCommand::CheckNames(args)) => Command::CheckNames(args),
+            Self::Type(TypeCommand::ImportDebug(args)) => Command::DebugTypes(args),
+            Self::Runtime(RuntimeCommand::Pointer(PointerCommand::Observe(args))) => Command::ObservePointer(args),
+            Self::Runtime(RuntimeCommand::Pointer(PointerCommand::Compare(args))) => Command::ComparePointers(args),
+            Self::Runtime(RuntimeCommand::Branch(BranchCommand::Inspect(args))) => Command::ObserveIndirectBranch(args),
+            Self::Runtime(RuntimeCommand::Bytes(BytesCommand::Compare(args))) => Command::CompareRuntime(args),
+            Self::Runtime(RuntimeCommand::Module(ModuleCommand::Correlate(args))) => Command::Correlate(args),
+            Self::Pack(action) => Command::Packs { action },
+            Self::Workflow(WorkflowCommand::Run(args)) => Command::Report(args),
+            Self::Server(ServerCommand::Serve(args)) => Command::Mcp(args),
+            Self::Managed(ManagedCommand::Inspect(args)) => {
+                if args.il.is_some() {
+                    return Err(
+                        "managed inspect does not accept --il; use managed disassemble --il for CIL disassembly",
+                    );
+                }
+                Command::Dotnet(args)
+            }
+            Self::Managed(ManagedCommand::Disassemble(args)) => {
+                if args.il.is_none() {
+                    return Err("managed disassemble requires --il <METHOD>");
+                }
+                Command::Dotnet(args)
+            }
+            Self::Legacy(action) => action,
+        })
+    }
+}
+
+#[derive(Subcommand)]
+pub(crate) enum BinaryCommand {
+    /// Show format, architecture, entry point, segments and sections
+    Inspect(FileArgs),
+    /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
+    Triage(FileArgs),
+    /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
+    Analyze(crate::analyze::AnalyzeArgs),
+    /// Identify the producing tools (packer/compiler/protector/installer/linker/runtime) from heuristic signatures
+    Detect(DetectArgs),
+    /// Likely behaviors inferred from imports and strings (triage evidence, not proof)
+    Capabilities(FileArgs),
+    /// Decode coverage and evidence that static disassembly may be unreliable
+    Audit(AuditArgs),
+    /// Scan any file for embedded executables and containers by validated header, without extracting anything
+    Carve(CarveArgs),
+    /// Inventory binaries in a bundle or already-extracted package without executing it
+    Inventory(DirectoryArgs),
+    /// List imported functions with their libraries and import slots
+    ListImports(ImportsArgs),
+    /// List exported symbols
+    ListExports(ExportsArgs),
+    /// Scan with user-supplied YARA rules (a .yar/.yara file or a directory of them) and those of data packs
+    ScanYara(YaraArgs),
+    /// Detect behaviors with a directory of Mandiant capa rules and those of data packs (file-scope feature subset)
+    ScanCapa(CapaArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum FunctionCommand {
+    /// Discover functions by recursive descent from symbols, exports, the entry point and unwind metadata
+    List(FuncsArgs),
+    /// Disassemble instructions
+    Disassemble(DisasmArgs),
+    /// Decompile a function to C with bundled Ghidra specifications
+    Decompile(DecompileArgs),
+    /// Structural CFG and reference summary of a function (not decompiled source)
+    Summarize(AtArgs),
+    /// Partial ARM64 SSA pseudocode with explicit unknowns (not recovered C source)
+    Pseudocode(PseudocodeArgs),
+    /// List code and data cross-references to or from an address, symbol or function
+    Xrefs(XrefsArgs),
+    /// Name functions by matching a signature database (FLIRT/Function-ID style); functions whose bodies collide
+    /// are told apart by the names of the functions they call
+    Identify(IdentifyArgs),
+    /// Build a library-function signature database from a binary whose functions are named, hashing each over its
+    /// symbol size and its discovered extent, with callee keys for functions whose bodies collide
+    BuildSignatures(SignaturesArgs),
+    /// Compare function starts with a versioned, image-hash-matched reference export
+    Compare(CompareArgs),
+    /// Inspect an explicit ARM64 absolute64 or signed-relative32 jump table
+    InspectTable(JumpTableArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum StringCommand {
+    /// List printable ASCII and UTF-16LE strings
+    List(StringsArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LanguageCommand {
+    /// Demangled symbols, named vtables/RTTI and Objective-C selector strings
+    Inspect(FileArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AnnotationCommand {
+    /// List the user's names and comments
+    List(FileArgs),
+    /// Name an address; saved beside ordinary binaries, or in a capture-identity log for snapshots
+    Rename(RenameArgs),
+    /// Comment an address; saved beside ordinary binaries, or in a capture-identity log for snapshots
+    Comment(CommentArgs),
+    /// Apply a JSON array of {at, name?, comment?} as one undo step; nothing is applied if any entry is invalid
+    ApplyBatch(AnnotateBatchArgs),
+    /// Report whether candidate names are valid identifiers, address-shaped, or already used
+    CheckNames(CheckNamesArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TypeCommand {
+    /// Preview embedded DWARF scalar/pointer function signatures, optionally persist them
+    ImportDebug(DebugTypesArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum RuntimeCommand {
+    /// Compare explicit pointer slots in runtime captures
+    #[command(subcommand)]
+    Pointer(PointerCommand),
+    /// Inspect captured indirect branches
+    #[command(subcommand)]
+    Branch(BranchCommand),
+    /// Compare captured runtime bytes
+    #[command(subcommand)]
+    Bytes(BytesCommand),
+    /// Correlate captured modules with an original image
+    #[command(subcommand)]
+    Module(ModuleCommand),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PointerCommand {
+    /// Observe one captured pointer without changing discovery or treating mutable data as proven flow
+    Observe(AtArgs),
+    /// Compare explicit slots in two captures without asserting chronology, correspondence or flow
+    Compare(ComparePointersArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum BranchCommand {
+    /// Link one captured ARM64 indirect branch to a slot load in an explicit bounded window
+    Inspect(ObserveIndirectBranchArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum BytesCommand {
+    /// Compare explicit captured ranges to a UUID-matched original without transferring annotations
+    Compare(CompareRuntimeArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ModuleCommand {
+    /// Correlate a runtime snapshot address with an explicit UUID-matched original Mach-O
+    Correlate(CorrelateArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum WorkflowCommand {
+    /// Run a guided investigation workflow and print its bounded, evidence-backed report
+    Run(ReportArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ManagedCommand {
+    /// .NET metadata: identity, references, entry point, method/property signatures, P/Invoke and attributes
+    Inspect(DotnetArgs),
+    /// Disassemble one method's CIL instructions
+    Disassemble(DotnetArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ServerCommand {
+    /// Serve the Model Context Protocol over stdin/stdout for AI agents. Lists the core tools and enable_tools,
+    /// which adds the other groups; RAMPAGE_MCP_TOOLS=all or a comma-separated list of groups serves more at once
+    Serve(McpArgs),
+}

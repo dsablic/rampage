@@ -20,6 +20,12 @@ pub struct Workflow {
     command: &'static str,
 }
 
+impl Workflow {
+    pub(crate) fn registered(self) -> &'static dyn workflows::Workflow {
+        self.workflow
+    }
+}
+
 impl clap::ValueEnum for Workflow {
     fn value_variants<'a>() -> &'a [Self] {
         static VARIANTS: OnceLock<Vec<Workflow>> = OnceLock::new();

@@ -1,4 +1,7 @@
+mod analyze;
+mod args;
 mod commands;
+mod hierarchy;
 mod report;
 
 use std::io::{self, BufWriter, Write};
@@ -6,11 +9,19 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use rampage_api::{FunctionsQuery, ListQuery, Packs, StringsQuery};
 use rampage_arch::Arch;
 
+use crate::args::{
+    AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
+    ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
+    DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportsArgs, JumpTableArgs, McpArgs,
+    ObserveIndirectBranchArgs, PseudocodeArgs, RenameArgs, ReportArgs, SignaturesArgs, StringsArgs, XrefsArgs,
+    YaraArgs,
+};
 use crate::commands::Options;
+use crate::hierarchy::RootCommand;
 
 #[derive(Parser)]
 #[command(name = "rampage", version, about = "High-performance reverse engineering toolkit")]
@@ -27,14 +38,14 @@ struct Cli {
     image_offset: Option<u64>,
     /// With --image-offset, the embedded image's length in bytes (hex 0x... or decimal); defaults to the extent its
     /// header tables give, so bytes after that (an overlay) are left out
-    #[arg(long, global = true, value_parser = rampage_api::parse_file_offset, requires = "image_offset")]
+    #[arg(long, global = true, value_parser = rampage_api::parse_file_offset)]
     image_length: Option<u64>,
     /// A data pack directory (holding rampage-pack.toml) layered over the bundled heuristic databases; repeatable,
     /// earlier packs take precedence. Directories in RAMPAGE_PACKS (a path list) load after these
-    #[arg(long = "pack", global = true, value_name = "DIR")]
+    #[arg(long = "pack", value_name = "DIR")]
     packs: Vec<PathBuf>,
     #[command(subcommand)]
-    command: Command,
+    command: RootCommand,
 }
 
 #[derive(Subcommand)]
@@ -43,380 +54,200 @@ enum PacksCommand {
     /// content's status
     List,
     /// Validate one pack directory and report each content's status; fails when anything does not load
-    Check { directory: PathBuf },
+    Check(DirectoryArgs),
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
+    #[command(hide = true)]
+    Analyze(analyze::AnalyzeArgs),
     /// Show format, architecture, entry point, segments and sections
-    Info { file: PathBuf },
+    #[command(hide = true)]
+    Info(FileArgs),
     /// Disassemble instructions
-    Disasm {
-        file: PathBuf,
-        /// Start address (hex 0x..., decimal) or symbol name; defaults to the entry point
-        #[arg(long)]
-        at: Option<String>,
-        /// Number of instructions
-        #[arg(long, default_value_t = rampage_api::DEFAULT_INSTRUCTIONS)]
-        count: usize,
-    },
+    #[command(hide = true)]
+    Disasm(DisasmArgs),
     /// List printable ASCII and UTF-16LE strings
-    Strings {
-        file: PathBuf,
-        /// Minimum length in characters
-        #[arg(long, default_value_t = 4)]
-        min_len: usize,
-        /// Only strings containing this text (case-insensitive)
-        #[arg(long)]
-        contains: Option<String>,
-    },
+    #[command(hide = true)]
+    Strings(StringsArgs),
     /// Discover functions by recursive descent from symbols, exports, the entry point and unwind metadata
-    Funcs {
-        file: PathBuf,
-        /// Only list functions named by symbols, exports and the entry point, without analysis
-        #[arg(long)]
-        symbols_only: bool,
-        /// Only functions whose name contains this text (case-insensitive)
-        #[arg(long)]
-        name: Option<String>,
-    },
+    #[command(hide = true)]
+    Funcs(FuncsArgs),
     /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
-    Triage { file: PathBuf },
+    #[command(hide = true)]
+    Triage(FileArgs),
     /// Likely behaviors inferred from imports and strings (triage evidence, not proof)
-    Capabilities { file: PathBuf },
-    /// .NET assembly metadata: identity, references, entry point, types with method signatures, P/Invoke, attributes
-    Dotnet {
-        file: PathBuf,
-        /// The list to page: types, pinvokes or attributes
-        #[arg(long, default_value = "types", value_parser = parse_dotnet_list, conflicts_with = "il")]
-        list: rampage_api::DotNetList,
-        /// Only types whose full name or a method name, P/Invoke imports whose method, DLL or import name, or
-        /// attributes whose type or target contains this text (case-insensitive)
-        #[arg(long)]
-        contains: Option<String>,
-        /// With --list attributes, only those applied to this metadata token (hex with 0x, or decimal)
-        #[arg(long, value_parser = parse_token)]
-        parent_token: Option<u32>,
-        /// List one method's CIL instead: a MethodDef token (0x0600000d) or Namespace.Type::Name; --offset and
-        /// --limit then page its instructions
-        #[arg(long, conflicts_with_all = ["contains", "parent_token"])]
-        il: Option<String>,
-        /// Entries of the list (or instructions with --il) to skip, for paging
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-        /// With --il, start at the instruction containing this IL offset (IL_0042, 0x42 or decimal) instead
-        #[arg(long, requires = "il", conflicts_with = "offset", value_parser = rampage_api::parse_il_offset)]
-        at: Option<u32>,
-        /// Entries per page
-        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
-        limit: u64,
-    },
+    #[command(hide = true)]
+    Capabilities(FileArgs),
+    /// .NET metadata: identity, references, entry point, method/property signatures, P/Invoke and attributes
+    #[command(hide = true)]
+    Dotnet(DotnetArgs),
     /// Identify the producing tools (packer/compiler/protector/installer/linker/runtime) from heuristic signatures
-    Detect {
-        file: PathBuf,
-        /// A user-supplied PeID userdb.txt, overlaid on the bundled database (with any packs' PeID signatures)
-        #[arg(long)]
-        peid: Option<PathBuf>,
-    },
+    #[command(hide = true)]
+    Detect(DetectArgs),
     /// Scan with user-supplied YARA rules (a .yar/.yara file or a directory of them) and those of data packs
-    Yara {
-        file: PathBuf,
-        /// Optional when a data pack holds YARA rules
-        #[arg(long)]
-        rules: Option<PathBuf>,
-    },
+    #[command(hide = true)]
+    Yara(YaraArgs),
     /// Detect behaviors with a directory of Mandiant capa rules and those of data packs (file-scope feature subset)
-    Capa {
-        file: PathBuf,
-        /// Optional when a data pack holds capa rules
-        #[arg(long)]
-        rules: Option<PathBuf>,
-    },
+    #[command(hide = true)]
+    Capa(CapaArgs),
     /// List the data packs in effect, or check one pack directory
+    #[command(hide = true)]
     Packs {
         #[command(subcommand)]
         action: PacksCommand,
     },
     /// Decode coverage and evidence that static disassembly may be unreliable
-    Audit {
-        file: PathBuf,
-        /// Run whole-program discovery and correlate candidates with bounded samples
-        #[arg(long)]
-        include_discovery: bool,
-    },
+    #[command(hide = true)]
+    Audit(AuditArgs),
     /// Demangled symbols, named vtables/RTTI and Objective-C selector strings
-    Metadata { file: PathBuf },
+    #[command(hide = true)]
+    Metadata(FileArgs),
     /// Inventory binaries in a bundle or already-extracted package without executing it
-    Inventory { directory: PathBuf },
+    #[command(hide = true)]
+    Inventory(DirectoryArgs),
     /// Scan any file for embedded executables and containers by validated header, without extracting anything
-    Carve {
-        file: PathBuf,
-        /// Stop after this many candidates (1 to 4096)
-        #[arg(
-            long,
-            default_value_t = rampage_loaders::carve::MAX_CANDIDATES,
-            value_parser = clap::builder::RangedU64ValueParser::<usize>::new()
-                .range(1..=rampage_loaders::carve::MAX_CANDIDATES as u64)
-        )]
-        max_candidates: usize,
-    },
+    #[command(hide = true)]
+    Carve(CarveArgs),
     /// Structural CFG and reference summary of a function (not decompiled source)
-    Summarize {
-        file: PathBuf,
-        #[arg(long)]
-        at: String,
-    },
+    #[command(hide = true)]
+    Summarize(AtArgs),
     /// Decompile a function to C with bundled Ghidra specifications
-    Decompile {
-        file: PathBuf,
-        #[arg(long)]
-        at: String,
-        /// Override the format-selected Ghidra compiler ID (gcc, windows, apcs, macosx, ...)
-        #[arg(long)]
-        compiler: Option<String>,
-        /// Isolate native decompilation in a supervised sibling rampage-worker process
-        #[arg(long)]
-        isolated: bool,
-    },
+    #[command(hide = true)]
+    Decompile(DecompileArgs),
     /// Partial ARM64 SSA pseudocode with explicit unknowns (not recovered C source)
-    Pseudocode {
-        file: PathBuf,
-        #[arg(long)]
-        at: String,
-        #[arg(long)]
-        structured: bool,
-    },
+    #[command(hide = true)]
+    Pseudocode(PseudocodeArgs),
     /// Compare function starts with a versioned, image-hash-matched reference export
-    Compare {
-        file: PathBuf,
-        #[arg(long)]
-        reference: PathBuf,
-    },
+    #[command(hide = true)]
+    Compare(CompareArgs),
     /// Build a library-function signature database from a binary whose functions are named, hashing each over its
     /// symbol size and its discovered extent, with callee keys for functions whose bodies collide
-    Signatures {
-        file: PathBuf,
-        /// Write the database here (JSON); defaults to standard output
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
+    #[command(hide = true)]
+    Signatures(SignaturesArgs),
     /// Name functions by matching a signature database (FLIRT/Function-ID style); functions whose bodies collide
     /// are told apart by the names of the functions they call
-    Identify {
-        file: PathBuf,
-        /// A signature database to apply first, before data packs' databases and the bundled starter one
-        #[arg(long)]
-        db: Option<PathBuf>,
-        /// Do not apply the bundled starter database (needs --db or a data pack with a database for the
-        /// architecture)
-        #[arg(long)]
-        no_bundled: bool,
-        /// Save matched names for still-unnamed functions as user names
-        #[arg(long)]
-        apply: bool,
-    },
+    #[command(hide = true)]
+    Identify(IdentifyArgs),
     /// Inspect an explicit ARM64 absolute64 or signed-relative32 jump table
-    JumpTable {
-        file: PathBuf,
-        #[arg(long)]
-        at: String,
-        #[arg(long)]
-        count: usize,
-        #[arg(long)]
-        relative_base: Option<String>,
-    },
+    #[command(hide = true)]
+    JumpTable(JumpTableArgs),
     /// Correlate a runtime snapshot address with an explicit UUID-matched original Mach-O
-    Correlate {
-        file: PathBuf,
-        #[arg(long)]
-        original: PathBuf,
-        #[arg(long)]
-        module: String,
-        #[arg(long)]
-        at: String,
-    },
+    #[command(hide = true)]
+    Correlate(CorrelateArgs),
     /// Compare explicit captured ranges to a UUID-matched original without transferring annotations
-    CompareRuntime {
-        file: PathBuf,
-        #[arg(long)]
-        original: PathBuf,
-        #[arg(long)]
-        module: String,
-        #[arg(long, required = true)]
-        range: Vec<String>,
-    },
+    #[command(hide = true)]
+    CompareRuntime(CompareRuntimeArgs),
     /// Observe one captured pointer without changing discovery or treating mutable data as proven flow
-    ObservePointer {
-        file: PathBuf,
-        #[arg(long)]
-        at: String,
-    },
+    #[command(hide = true)]
+    ObservePointer(AtArgs),
     /// Compare explicit slots in two captures without asserting chronology, correspondence or flow
-    ComparePointers {
-        file: PathBuf,
-        #[arg(long)]
-        other: PathBuf,
-        #[arg(long)]
-        at: String,
-        #[arg(long)]
-        other_at: String,
-    },
+    #[command(hide = true)]
+    ComparePointers(ComparePointersArgs),
     /// Link one captured ARM64 indirect branch to a slot load in an explicit bounded window
-    ObserveIndirectBranch {
-        file: PathBuf,
-        #[arg(long)]
-        start: String,
-        #[arg(long)]
-        at: String,
-    },
+    #[command(hide = true)]
+    ObserveIndirectBranch(ObserveIndirectBranchArgs),
     /// List imported functions with their libraries and import slots
-    Imports {
-        file: PathBuf,
-        /// Only imports whose name or library contains this text (case-insensitive)
-        #[arg(long)]
-        contains: Option<String>,
-    },
+    #[command(hide = true)]
+    Imports(ImportsArgs),
     /// List exported symbols
-    Exports {
-        file: PathBuf,
-        /// Only exports whose name contains this text (case-insensitive)
-        #[arg(long)]
-        contains: Option<String>,
-    },
+    #[command(hide = true)]
+    Exports(ExportsArgs),
     /// Name an address; saved beside ordinary binaries, or in a capture-identity log for snapshots
-    Rename {
-        file: PathBuf,
-        /// Address or current name
-        at: String,
-        /// The new name
-        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
-        name: Option<String>,
-        /// Remove the user's name instead
-        #[arg(long)]
-        clear: bool,
-    },
+    #[command(hide = true)]
+    Rename(RenameArgs),
     /// Comment an address; saved beside ordinary binaries, or in a capture-identity log for snapshots
-    Comment {
-        file: PathBuf,
-        /// Address or name
-        at: String,
-        /// The comment
-        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
-        text: Option<String>,
-        /// Remove the comment instead
-        #[arg(long)]
-        clear: bool,
-    },
+    #[command(hide = true)]
+    Comment(CommentArgs),
     /// Apply a JSON array of {at, name?, comment?} as one undo step; nothing is applied if any entry is invalid
-    AnnotateBatch {
-        file: PathBuf,
-        /// The JSON file of entries (at most 1000)
-        entries: PathBuf,
-    },
+    #[command(hide = true)]
+    AnnotateBatch(AnnotateBatchArgs),
     /// Report whether candidate names are valid identifiers, address-shaped, or already used
-    CheckNames {
-        file: PathBuf,
-        #[arg(required = true)]
-        names: Vec<String>,
-    },
+    #[command(hide = true)]
+    CheckNames(CheckNamesArgs),
     /// List the user's names and comments
-    Annotations { file: PathBuf },
+    #[command(hide = true)]
+    Annotations(FileArgs),
     /// Preview embedded DWARF scalar/pointer function signatures, optionally persist them
-    DebugTypes {
-        file: PathBuf,
-        #[arg(long)]
-        apply: bool,
-    },
+    #[command(hide = true)]
+    DebugTypes(DebugTypesArgs),
     /// Run a guided investigation workflow and print its bounded, evidence-backed report
-    Report {
-        workflow: report::Workflow,
-        file: PathBuf,
-        /// The second binary, for diff-builds
-        #[arg(long)]
-        other: Option<PathBuf>,
-        /// diff-builds: open the executable embedded in --other at this file offset (hex 0x... or decimal), as
-        /// --image-offset does for <FILE>
-        #[arg(long, value_parser = rampage_api::parse_file_offset, requires = "other")]
-        other_image_offset: Option<u64>,
-        /// With --other-image-offset, the embedded image's length in bytes; defaults to the extent its headers give
-        #[arg(long, value_parser = rampage_api::parse_file_offset, requires = "other_image_offset")]
-        other_image_length: Option<u64>,
-        /// Findings kept per section (default 25, at most 200)
-        #[arg(long)]
-        limit: Option<usize>,
-        /// find-main: skip the decompilation preview
-        #[arg(long)]
-        no_decompile: bool,
-    },
+    #[command(hide = true)]
+    Report(ReportArgs),
     /// Serve the Model Context Protocol over stdin/stdout for AI agents. Lists the core tools and enable_tools,
     /// which adds the other groups; RAMPAGE_MCP_TOOLS=all or a comma-separated list of groups serves more at once
-    Mcp {
-        /// List every tool group from the start, for clients that do not refresh their tool list
-        #[arg(long)]
-        all_tools: bool,
-    },
+    #[command(hide = true)]
+    Mcp(McpArgs),
     /// List code and data cross-references to or from an address, symbol or function
-    #[command(group(clap::ArgGroup::new("direction").required(true)))]
-    Xrefs {
-        file: PathBuf,
-        /// List references to this address or name
-        #[arg(long, group = "direction")]
-        to: Option<String>,
-        /// List references made by this function, or by the instruction at this address
-        #[arg(long, group = "direction")]
-        from: Option<String>,
-    },
+    #[command(hide = true)]
+    Xrefs(XrefsArgs),
     /// Export every function's block starts, CFG edges and outgoing code references as JSON, for comparing
     /// against another tool (tools/cfg-benchmark.py); unlike the MCP tools, the output is never truncated
     #[command(hide = true)]
-    ExportCfg { file: PathBuf },
+    ExportCfg(FileArgs),
 }
 
 fn parse_arch(text: &str) -> Result<Arch, String> {
     text.parse()
 }
 
-fn parse_dotnet_list(text: &str) -> Result<rampage_api::DotNetList, String> {
-    text.parse()
-}
-
-fn parse_token(text: &str) -> Result<u32, String> {
-    let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        Some(hex) => u32::from_str_radix(hex, 16),
-        None => text.parse(),
-    };
-    parsed.map_err(|error| format!("not a metadata token: {error}"))
-}
-
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut parser = hierarchy::with_pack_arguments(Cli::command());
+    let matches = parser.get_matches_mut();
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    cli.packs = hierarchy::pack_paths(&matches);
+    let action = cli.command.into_action();
+    if cli.image_length.is_some() && cli.image_offset.is_none() {
+        parser
+            .error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "--image-length requires --image-offset <IMAGE_OFFSET>",
+            )
+            .exit();
+    }
+    let command = match action {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("rampage: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if cli.arch.is_some() && matches!(&command, Command::Analyze(args) if args.all_architectures) {
+        parser
+            .error(clap::error::ErrorKind::ArgumentConflict, "--all-architectures conflicts with --arch <ARCH>")
+            .exit();
+    }
     if cli.image_offset.is_some()
-        && let Some(command) = without_one_image(&cli.command)
+        && let Some(command) = without_one_image(&command)
     {
         eprintln!("rampage: --image-offset does not apply to {command}, which does not open one embedded image");
         return ExitCode::FAILURE;
     }
     // Loaded on first use, so that commands which consult no heuristic database do not read any pack.
     let packs = Arc::new(Packs::lazy_with_env(&cli.packs));
-    let warn = !matches!(cli.command, Command::Packs { .. });
-    if let Command::Mcp { all_tools } = cli.command {
+    let warn = !matches!(command, Command::Packs { .. });
+    if let Command::Mcp(McpArgs { all_tools }) = command {
         return serve_mcp(all_tools, packs);
     }
     let image = cli.image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, cli.image_length));
     let options = Options { json: cli.json, arch: cli.arch, image, packs: Arc::clone(&packs) };
     let mut out = BufWriter::new(io::stdout().lock());
-    let result = match cli.command {
-        Command::Info { file } => commands::info(&mut out, &file, &options),
-        Command::Disasm { file, at, count } => commands::disasm(&mut out, &file, at.as_deref(), count, &options),
-        Command::Strings { file, min_len, contains } => {
+    let result = match command {
+        Command::Analyze(args) => analyze::analyze(&mut out, &args, &options),
+        Command::Info(FileArgs { file }) => commands::info(&mut out, &file, &options),
+        Command::Disasm(DisasmArgs { file, at, count }) => {
+            commands::disasm(&mut out, &file, at.as_deref(), count, &options)
+        }
+        Command::Strings(StringsArgs { file, min_len, contains }) => {
             let query = StringsQuery { min_len: Some(min_len), contains, ..StringsQuery::default() };
             commands::strings(&mut out, &file, &query, &options)
         }
-        Command::Funcs { file, symbols_only, name } => {
+        Command::Funcs(FuncsArgs { file, symbols_only, name }) => {
             let query = FunctionsQuery { name_contains: name, ..FunctionsQuery::default() };
             commands::funcs(&mut out, &file, symbols_only, &query, &options)
         }
-        Command::Xrefs { file, to, from } => {
+        Command::Xrefs(XrefsArgs { file, to, from }) => {
             let query = match (&to, &from) {
                 (Some(to), _) => commands::XrefTarget::To(to),
                 (_, Some(from)) => commands::XrefTarget::From(from),
@@ -424,10 +255,10 @@ fn main() -> ExitCode {
             };
             commands::xrefs(&mut out, &file, query, &options)
         }
-        Command::ExportCfg { file } => commands::export_cfg(&mut out, &file, &options),
-        Command::Triage { file } => commands::triage(&mut out, &file, &options),
-        Command::Capabilities { file } => commands::capabilities(&mut out, &file, &options),
-        Command::Dotnet { file, il: Some(method), offset, limit, at, .. } => {
+        Command::ExportCfg(FileArgs { file }) => commands::export_cfg(&mut out, &file, &options),
+        Command::Triage(FileArgs { file }) => commands::triage(&mut out, &file, &options),
+        Command::Capabilities(FileArgs { file }) => commands::capabilities(&mut out, &file, &options),
+        Command::Dotnet(DotnetArgs { file, il: Some(method), offset, limit, at, .. }) => {
             let query = rampage_api::DotNetIlQuery {
                 method,
                 offset: at.is_none().then_some(offset),
@@ -436,7 +267,7 @@ fn main() -> ExitCode {
             };
             commands::dotnet_il(&mut out, &file, &query, &options)
         }
-        Command::Dotnet { file, list, contains, parent_token, offset, limit, il: None, .. } => {
+        Command::Dotnet(DotnetArgs { file, list, contains, parent_token, offset, limit, il: None, .. }) => {
             let query = rampage_api::DotNetQuery {
                 list,
                 contains,
@@ -446,64 +277,84 @@ fn main() -> ExitCode {
             };
             commands::dotnet(&mut out, &file, &query, &options)
         }
-        Command::Detect { file, peid } => commands::detect(&mut out, &file, peid.as_deref(), &options),
-        Command::Yara { file, rules } => commands::yara(&mut out, &file, rules.as_deref(), &options),
-        Command::Capa { file, rules } => commands::capa(&mut out, &file, rules.as_deref(), &options),
+        Command::Detect(DetectArgs { file, peid }) => commands::detect(&mut out, &file, peid.as_deref(), &options),
+        Command::Yara(YaraArgs { file, rules }) => commands::yara(&mut out, &file, rules.as_deref(), &options),
+        Command::Capa(CapaArgs { file, rules }) => commands::capa(&mut out, &file, rules.as_deref(), &options),
         Command::Packs { action: PacksCommand::List } => commands::packs_list(&mut out, &options),
-        Command::Packs { action: PacksCommand::Check { directory } } => {
+        Command::Packs { action: PacksCommand::Check(DirectoryArgs { directory }) } => {
             commands::packs_check(&mut out, &directory, &options)
         }
-        Command::Audit { file, include_discovery } => commands::audit(&mut out, &file, include_discovery, &options),
-        Command::Metadata { file } => commands::metadata(&mut out, &file, &options),
-        Command::Inventory { directory } => commands::inventory(&mut out, &directory, &options),
-        Command::Carve { file, max_candidates } => commands::carve(&mut out, &file, max_candidates, &options),
-        Command::Summarize { file, at } => commands::summarize(&mut out, &file, &at, &options),
-        Command::Decompile { file, at, compiler, isolated } => {
+        Command::Audit(AuditArgs { file, include_discovery }) => {
+            commands::audit(&mut out, &file, include_discovery, &options)
+        }
+        Command::Metadata(FileArgs { file }) => commands::metadata(&mut out, &file, &options),
+        Command::Inventory(DirectoryArgs { directory }) => commands::inventory(&mut out, &directory, &options),
+        Command::Carve(CarveArgs { file, max_candidates }) => {
+            commands::carve(&mut out, &file, max_candidates, &options)
+        }
+        Command::Summarize(AtArgs { file, at }) => commands::summarize(&mut out, &file, &at, &options),
+        Command::Decompile(DecompileArgs { file, at, compiler, isolated }) => {
             commands::decompile(&mut out, &file, &at, compiler.as_deref(), isolated, &options)
         }
-        Command::Pseudocode { file, at, structured } => {
+        Command::Pseudocode(PseudocodeArgs { file, at, structured }) => {
             commands::pseudocode(&mut out, &file, &at, structured, &options)
         }
-        Command::Compare { file, reference } => commands::compare(&mut out, &file, &reference, &options),
-        Command::Signatures { file, output } => commands::signatures(&mut out, &file, output.as_deref(), &options),
-        Command::Identify { file, db, no_bundled, apply } => {
+        Command::Compare(CompareArgs { file, reference }) => commands::compare(&mut out, &file, &reference, &options),
+        Command::Signatures(SignaturesArgs { file, output }) => {
+            commands::signatures(&mut out, &file, output.as_deref(), &options)
+        }
+        Command::Identify(IdentifyArgs { file, db, no_bundled, apply }) => {
             commands::identify(&mut out, &file, db.as_deref(), no_bundled, apply, &options)
         }
-        Command::JumpTable { file, at, count, relative_base } => {
+        Command::JumpTable(JumpTableArgs { file, at, count, relative_base }) => {
             commands::jump_table(&mut out, &file, &at, count, relative_base.as_deref(), &options)
         }
-        Command::Correlate { file, original, module, at } => {
+        Command::Correlate(CorrelateArgs { file, original, module, at }) => {
             commands::correlate(&mut out, &file, &original, &module, &at, &options)
         }
-        Command::CompareRuntime { file, original, module, range } => {
+        Command::CompareRuntime(CompareRuntimeArgs { file, original, module, range }) => {
             commands::compare_runtime(&mut out, &file, &original, &module, &range, &options)
         }
-        Command::ObservePointer { file, at } => commands::observe_pointer(&mut out, &file, &at, &options),
-        Command::ComparePointers { file, other, at, other_at } => {
+        Command::ObservePointer(AtArgs { file, at }) => commands::observe_pointer(&mut out, &file, &at, &options),
+        Command::ComparePointers(ComparePointersArgs { file, other, at, other_at }) => {
             commands::compare_pointers(&mut out, &file, &other, &at, &other_at, &options)
         }
-        Command::ObserveIndirectBranch { file, start, at } => {
+        Command::ObserveIndirectBranch(ObserveIndirectBranchArgs { file, start, at }) => {
             commands::observe_indirect_branch(&mut out, &file, &start, &at, &options)
         }
-        Command::Imports { file, contains } => {
+        Command::Imports(ImportsArgs { file, contains }) => {
             commands::imports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
         }
-        Command::Exports { file, contains } => {
+        Command::Exports(ExportsArgs { file, contains }) => {
             commands::exports(&mut out, &file, &ListQuery { contains, ..ListQuery::default() }, &options)
         }
-        Command::Rename { file, at, name, .. } => commands::rename(&mut out, &file, &at, name.as_deref(), &options),
-        Command::Comment { file, at, text, .. } => commands::comment(&mut out, &file, &at, text.as_deref(), &options),
-        Command::AnnotateBatch { file, entries } => commands::annotate_batch(&mut out, &file, &entries, &options),
-        Command::CheckNames { file, names } => commands::check_names(&mut out, &file, &names, &options),
-        Command::Annotations { file } => commands::annotations(&mut out, &file, &options),
-        Command::DebugTypes { file, apply } => commands::debug_types(&mut out, &file, apply, &options),
-        Command::Report { workflow, file, other, other_image_offset, other_image_length, limit, no_decompile } => {
+        Command::Rename(RenameArgs { file, at, name, .. }) => {
+            commands::rename(&mut out, &file, &at, name.as_deref(), &options)
+        }
+        Command::Comment(CommentArgs { file, at, text, .. }) => {
+            commands::comment(&mut out, &file, &at, text.as_deref(), &options)
+        }
+        Command::AnnotateBatch(AnnotateBatchArgs { file, entries }) => {
+            commands::annotate_batch(&mut out, &file, &entries, &options)
+        }
+        Command::CheckNames(CheckNamesArgs { file, names }) => commands::check_names(&mut out, &file, &names, &options),
+        Command::Annotations(FileArgs { file }) => commands::annotations(&mut out, &file, &options),
+        Command::DebugTypes(DebugTypesArgs { file, apply }) => commands::debug_types(&mut out, &file, apply, &options),
+        Command::Report(ReportArgs {
+            workflow,
+            file,
+            other,
+            other_image_offset,
+            other_image_length,
+            limit,
+            no_decompile,
+        }) => {
             let other_image =
                 other_image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, other_image_length));
             let report_options = report::ReportOptions { other, other_image, limit, no_decompile };
             report::report(&mut out, workflow, &file, &report_options, &options)
         }
-        Command::Mcp { .. } => unreachable!("handled before opening stdout"),
+        Command::Mcp(..) => unreachable!("handled before opening stdout"),
     }
     .and_then(|()| out.flush().map_err(Into::into));
 
@@ -526,13 +377,13 @@ fn main() -> ExitCode {
 /// to only one of its files.
 fn without_one_image(command: &Command) -> Option<&'static str> {
     Some(match command {
-        Command::Carve { .. } => "carve",
-        Command::Inventory { .. } => "inventory",
+        Command::Carve(..) => "carve",
+        Command::Inventory(..) => "inventory",
         Command::Packs { .. } => "packs",
-        Command::Mcp { .. } => "mcp (pass image_offset to each tool call instead)",
-        Command::Correlate { .. } => "correlate",
-        Command::CompareRuntime { .. } => "compare-runtime",
-        Command::ComparePointers { .. } => "compare-pointers",
+        Command::Mcp(..) => "mcp (pass image_offset to each tool call instead)",
+        Command::Correlate(..) => "correlate",
+        Command::CompareRuntime(..) => "compare-runtime",
+        Command::ComparePointers(..) => "compare-pointers",
         _ => return None,
     })
 }
