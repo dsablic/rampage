@@ -19,6 +19,17 @@ use crate::{ApiError, Packs};
 /// The shortest string listed unless a query asks for shorter ones.
 const DEFAULT_STRING_LENGTH: usize = 4;
 
+#[derive(Debug, serde::Serialize)]
+pub struct PdbImport {
+    /// Identity-checked PDB names at virtual addresses, including names not eligible for application.
+    pub preview: rampage_loaders::pdb::PdbReport,
+    #[serde(serialize_with = "rampage_arch::hex::addresses")]
+    pub applied: Vec<u64>,
+    /// Addresses left unchanged: already named, not discovered entries, or names used elsewhere.
+    #[serde(serialize_with = "rampage_arch::hex::addresses")]
+    pub preserved: Vec<u64>,
+}
+
 pub struct Project {
     pub binary: Binary,
     names: Names,
@@ -171,6 +182,64 @@ impl Project {
                 .map_err(ApiError::Invalid)
         })?;
         Ok(EditResult { address, field: Field::Name, value, changed })
+    }
+
+    /// Previews names from an explicit matching PDB, or applies them as one undoable annotation batch.
+    /// Only unnamed, already discovered code-function entries are named; symbols, exports and user names win.
+    /// This does not import PDB types, layouts, signatures or undiscovered function starts.
+    pub fn import_pdb_names(&self, path: &Path, apply: bool) -> Result<PdbImport, ApiError> {
+        let preview = rampage_loaders::pdb::matched_symbols(&self.binary, path)
+            .map_err(|error| ApiError::Invalid(error.to_string()))?;
+        let mut names = std::collections::BTreeSet::new();
+        for function in &preview.functions {
+            check_name(&function.name).map_err(ApiError::Invalid)?;
+            if !names.insert(&function.name) {
+                return Err(ApiError::Invalid("ambiguous PDB name at multiple addresses; nothing imported".to_owned()));
+            }
+        }
+        let entries: std::collections::BTreeSet<_> =
+            self.analysis()?.program.functions.iter().map(|function| function.address).collect();
+        let candidates = |annotations: &Annotations| {
+            let mut changes = Vec::new();
+            let mut preserved = Vec::new();
+            for function in &preview.functions {
+                let address = function.address;
+                if !entries.contains(&address)
+                    || annotations.name(address).is_some()
+                    || self.names.get(address).is_some()
+                    || self.address_named(annotations, &function.name).is_some_and(|existing| existing != address)
+                {
+                    preserved.push(address);
+                } else {
+                    changes.push((Field::Name, address, Some(function.name.clone())));
+                }
+            }
+            (changes, preserved)
+        };
+        if !apply {
+            let (_, preserved) = candidates(&self.annotations());
+            return Ok(PdbImport { preview, applied: Vec::new(), preserved });
+        }
+        let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
+        let (applied, preserved) = self.annotations.write().expect("annotations lock").locked(|annotations| {
+            let (changes, preserved) = candidates(annotations);
+            let changed = annotations
+                .set_batch_validated(&changes, |candidate| {
+                    if candidate.globals().is_empty() {
+                        return Ok(());
+                    }
+                    self.validate_annotation_snapshot(&state, &options, candidate)
+                })
+                .map_err(ApiError::Invalid)?;
+            let applied = changes
+                .into_iter()
+                .zip(changed)
+                .filter_map(|((_, address, _), changed)| changed.then_some(address))
+                .collect();
+            Ok((applied, preserved))
+        })?;
+        Ok(PdbImport { preview, applied, preserved })
     }
 
     /// Comments the instruction or data at `address` (`None` or blank text removes the comment).
