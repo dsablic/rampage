@@ -15,7 +15,7 @@ mod undefined;
 
 use crate::mrs::{self, Encoding, State, Syntax};
 
-use crate::{Disassembler, Flow, Insn};
+use crate::{Disassembler, Flow, Insn, JumpTable};
 
 pub use operands::LabelStyle;
 
@@ -72,6 +72,7 @@ pub struct A64Disassembler {
     addresses: flow::Addresses,
     resolved: Option<Flow>,
     jump_base: Option<u64>,
+    jump_table: Option<JumpTable>,
 }
 
 impl Disassembler for A64Disassembler {
@@ -81,12 +82,14 @@ impl Disassembler for A64Disassembler {
         self.addresses.memory_changed = memory_changed;
         self.resolved = None;
         self.jump_base = None;
+        self.jump_table = None;
     }
 
     fn begin_run(&mut self) {
         self.addresses = flow::Addresses::default();
         self.resolved = None;
         self.jump_base = None;
+        self.jump_table = None;
     }
 
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
@@ -96,6 +99,7 @@ impl Disassembler for A64Disassembler {
     fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
         self.resolved = None;
         self.jump_base = None;
+        self.jump_table = None;
         let Some(word) = bytes.first_chunk::<4>().map(|chunk| u32::from_le_bytes(*chunk)) else {
             return Insn {
                 address,
@@ -107,8 +111,9 @@ impl Disassembler for A64Disassembler {
         };
         match decode_word(word) {
             Some(decoded) => {
-                let flow::Analysis { flow, data_ref, jump_base } =
+                let flow::Analysis { flow, data_ref, jump_base, jump_table } =
                     flow::analyze(&decoded, address, &mut self.addresses, read);
+                self.jump_table = jump_table;
                 if matches!(decoded.encoding.name, "BR_64_branch_reg" | "BLR_64_branch_reg") {
                     self.resolved = Some(flow);
                 }
@@ -132,6 +137,10 @@ impl Disassembler for A64Disassembler {
 
     fn indirect_jump_base(&self) -> Option<u64> {
         self.jump_base
+    }
+
+    fn jump_table(&self) -> Option<JumpTable> {
+        self.jump_table
     }
 }
 

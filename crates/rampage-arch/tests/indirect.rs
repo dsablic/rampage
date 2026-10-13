@@ -68,3 +68,49 @@ fn block_resets_do_not_restore_memory_trust_but_new_runs_do() {
         }
     }
 }
+
+/// Decodes `words` from 0x1000 in one run, resetting before the word at `reset`, and returns the switch table the
+/// last one dispatches through.
+fn jump_table(words: &[u32], reset: Option<usize>) -> Option<rampage_arch::JumpTable> {
+    let mut decoder = decoder(&Target::new(Arch::Aarch64)).unwrap();
+    for (index, word) in words.iter().enumerate() {
+        if reset == Some(index) {
+            decoder.reset();
+        }
+        decoder.decode(&word.to_le_bytes(), 0x1000 + index as u64 * 4);
+    }
+    decoder.jump_table()
+}
+
+#[test]
+fn aarch64_describes_the_bounded_switch_table_a_register_jump_dispatches_through() {
+    // sub w9, w9, #1; cmp w9, #12; b.hi 0x1100; adr x8, 0x200c; adr x10, 0x1010; ldrsw x11, [x8, x9, lsl #2];
+    // add x10, x10, x11; br x10
+    let words =
+        [0x5100_0529, 0x7100_313f, 0x5400_07c8, 0x1000_8008, 0x1000_000a, 0xb8a9_790b, 0x8b0b_014a, 0xd61f_0140];
+    let table = jump_table(&words, None).unwrap();
+    let expected = rampage_arch::JumpTable {
+        guard: 0x1004,
+        table: 0x200c,
+        entry_size: 4,
+        entries: 13,
+        signed: true,
+        base: Some(0x1010),
+        shift: 0,
+        alignment: 4,
+    };
+    assert_eq!(table, expected);
+    assert_eq!(table.target(0xffff_fff0), Some(0x1000));
+    assert_eq!(table.target(2), None);
+    assert_eq!(table.slot(12), Some(0x203c));
+    // A join after the conditional branch forgets the bound.
+    assert_eq!(jump_table(&words, Some(3)), None);
+    // Without the subtraction, x9's upper half is unknown and the comparison bounds only w9.
+    assert_eq!(jump_table(&words[1..], None), None);
+    // cmp w9, #4096 allows more entries than are ever read.
+    let mut huge = words;
+    huge[1] = 0x7140_053f;
+    assert_eq!(jump_table(&huge, None), None);
+    huge[1] = 0x713f_fd3f;
+    assert_eq!(jump_table(&huge, None).map(|table| table.entries), Some(4096));
+}

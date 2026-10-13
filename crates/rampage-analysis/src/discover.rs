@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use rampage_arch::{Disassembler, Flow};
+use rampage_arch::{Disassembler, Flow, JumpTable, MAX_JUMP_TABLE_ENTRIES};
 use rampage_loaders::Binary;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -362,6 +362,7 @@ fn explore(
                 resolved_flows.push(ResolvedFlow { function: start, address, flow });
             }
             jump_bases.extend(decoder.indirect_jump_base());
+            let jump_table = decoder.jump_table();
             mode_hints.extend(decoder.code_modes().into_iter().map(|(at, thumb)| (address, at, thumb)));
             if insn.flow == Flow::Invalid {
                 break;
@@ -415,7 +416,20 @@ fn explore(
                     address = next;
                     break;
                 }
-                Flow::IndirectJump | Flow::Return | Flow::Halt | Flow::Invalid => {
+                Flow::IndirectJump => {
+                    let cases = jump_table
+                        .and_then(|table| switch_targets(memory, decoder, &table, address, all_branch_targets?));
+                    for target in cases.into_iter().flatten() {
+                        xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
+                        branch_targets.push(target);
+                        if !is_other_function(target) {
+                            worklist.push(target);
+                        }
+                    }
+                    address = next;
+                    break;
+                }
+                Flow::Return | Flow::Halt | Flow::Invalid => {
                     address = next;
                     break;
                 }
@@ -437,6 +451,35 @@ fn explore(
     let is_local_jump_base = |target: u64| start < target && target < end && jump_bases.contains(&target);
     new_seeds.extend(code_pointers.into_iter().filter(|&target| !is_local_jump_base(target)));
     Explored { function, xrefs, new_seeds, jump_targets, branch_targets, mode_hints, instruction_modes, resolved_flows }
+}
+
+/// The case targets of the switch whose register-indirect jump at `jump` dispatches through `table`, or `None` to
+/// leave the jump unresolved. The decoder proved the index bound along the straight-line run from the comparison,
+/// so it holds only if no branch joins that run after the comparison. Every entry must be read from read-only
+/// image data and select an instruction in code.
+fn switch_targets(
+    memory: &impl Memory,
+    decoder: &mut dyn Disassembler,
+    table: &JumpTable,
+    jump: u64,
+    joins: &[u64],
+) -> Option<Vec<u64>> {
+    let after_guard = joins.partition_point(|&target| target <= table.guard);
+    let joined = joins.get(after_guard).is_some_and(|&target| target <= jump);
+    if joined || table.entries > MAX_JUMP_TABLE_ENTRIES {
+        return None;
+    }
+    let mut targets = (0..table.entries)
+        .map(|index| {
+            let raw = memory.read_constant(table.slot(index)?, table.entry_size)?;
+            let target = table.target(raw)?;
+            let bytes = memory.code_from(target)?;
+            (decoder.decode(bytes, target).flow != Flow::Invalid).then_some(target)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    targets.sort_unstable();
+    targets.dedup();
+    Some(targets)
 }
 
 /// Splits the block containing `address` so that a new block starts there. Misaligned decoding can leave smaller
@@ -531,6 +574,204 @@ mod tests {
         let program = discover(&memory, || decoder_for(Arch::Aarch64).unwrap(), &[0]);
         let addresses: Vec<_> = program.functions.iter().map(|function| function.address).collect();
         assert_eq!(addresses, [0]);
+    }
+
+    /// AArch64 code at 0, read-only data at `RODATA` and writable data at `DATA`.
+    struct Image {
+        code: Vec<u8>,
+        rodata: Vec<u8>,
+        data: Vec<u8>,
+    }
+
+    const RODATA: u64 = 0x10000;
+    const DATA: u64 = 0x20000;
+
+    impl Image {
+        fn region(&self, address: u64) -> Option<(&[u8], usize)> {
+            [(0, &self.code), (RODATA, &self.rodata), (DATA, &self.data)].into_iter().find_map(|(base, bytes)| {
+                let offset = usize::try_from(address.checked_sub(base)?).ok()?;
+                (offset < bytes.len()).then_some((bytes.as_slice(), offset))
+            })
+        }
+    }
+
+    impl Memory for Image {
+        fn code_from(&self, address: u64) -> Option<&[u8]> {
+            self.code.get(usize::try_from(address).ok()?..).filter(|rest| !rest.is_empty())
+        }
+        fn is_mapped(&self, address: u64) -> bool {
+            self.region(address).is_some()
+        }
+        fn is_executable(&self, address: u64) -> bool {
+            self.code_from(address).is_some()
+        }
+        fn immediates_may_be_addresses(&self) -> bool {
+            false
+        }
+        fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
+            let (bytes, offset) = self.region(address).filter(|_| (RODATA..DATA).contains(&address))?;
+            rampage_arch::bytes::read_uint(bytes, offset, usize::from(size), false)
+        }
+    }
+
+    const NOP: u32 = 0xd503_201f;
+    const RET: u32 = 0xd65f_03c0;
+    /// cmp w0, #3; b.hi 0x38 (the default case, from 0xc)
+    const BOUND: [u32; 2] = [0x7100_0c1f, 0x5400_0168];
+    const CASES: [u64; 4] = [0x28, 0x2c, 0x30, 0x34];
+    const DEFAULT: u64 = 0x38;
+
+    fn adr(rd: u32, from: u64, to: u64) -> u32 {
+        let offset = to.wrapping_sub(from) as u32;
+        0x1000_0000 | (offset & 3) << 29 | (offset >> 2 & 0x7_ffff) << 5 | rd
+    }
+
+    /// A switch on w0: `0: prefix; 8: bound; 10: gap; 14: adr x9, table; 18: adr x10, anchor; 1c: load; 20: add;
+    /// 24: br; 28..38: four cases; 38: default`. Every case and the default is a `ret`.
+    struct Switch {
+        prefix: [u32; 2],
+        bound: [u32; 2],
+        gap: u32,
+        table: u64,
+        anchor: u64,
+        load: u32,
+        add: u32,
+        jump: u32,
+    }
+
+    impl Switch {
+        fn new(load: u32, add: u32, anchor: u64) -> Switch {
+            Switch { prefix: [NOP, NOP], bound: BOUND, gap: NOP, table: RODATA, anchor, load, add, jump: 0xd61f_0140 }
+        }
+
+        fn discover(&self, rodata: Vec<u8>, data: Vec<u8>) -> Program {
+            let mut words = vec![self.prefix[0], self.prefix[1], self.bound[0], self.bound[1], self.gap];
+            words.extend([adr(9, 0x14, self.table), adr(10, 0x18, self.anchor), self.load, self.add, self.jump]);
+            words.extend([RET; 5]);
+            let code = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            let image = Image { code, rodata, data };
+            discover(&image, || decoder_for(Arch::Aarch64).unwrap(), &[0])
+        }
+    }
+
+    fn resolved(program: &Program) -> bool {
+        let function = program.function_at(0).unwrap();
+        let reached = CASES.iter().filter(|&&case| function.contains(case)).count();
+        assert!(reached == 0 || reached == CASES.len(), "{function:?}");
+        reached == CASES.len()
+    }
+
+    /// Entries for `CASES` relative to `anchor`, scaled down by `shift`, as `size`-byte little-endian values.
+    fn relative_entries(anchor: u64, shift: u32, size: usize) -> Vec<u8> {
+        let entry = |case: u64| (case.wrapping_sub(anchor) as i64 >> shift).to_le_bytes();
+        CASES.iter().flat_map(|&case| entry(case)[..size].to_vec()).collect()
+    }
+
+    #[test]
+    fn bounded_switch_tables_of_every_entry_form_reach_their_cases() {
+        const ADD_LSL2: u32 = 0x8b0b_094a;
+        const ADD: u32 = 0x8b0b_014a;
+        // (load, add, anchor, entry shift, entry size): unsigned forms use the first case as the anchor, signed
+        // forms the default after the cases, so their entries are negative.
+        let forms = [
+            (0x3860_492b, ADD_LSL2, CASES[0], 2, 1),   // ldrb w11, [x9, w0, uxtw]
+            (0x38a0_492b, ADD_LSL2, DEFAULT, 2, 1),    // ldrsb x11, [x9, w0, uxtw]
+            (0x3860_492b, 0x8b2b_894a, DEFAULT, 2, 1), // ldrb w11, ...; add x10, x10, w11, sxtb #2
+            (0x7860_592b, ADD_LSL2, CASES[0], 2, 2),   // ldrh w11, [x9, w0, uxtw #1]
+            (0x78a0_592b, ADD_LSL2, DEFAULT, 2, 2),    // ldrsh x11, [x9, w0, uxtw #1]
+            (0x7860_592b, 0x8b2b_a94a, DEFAULT, 2, 2), // ldrh w11, ...; add x10, x10, w11, sxth #2
+            (0xb860_592b, ADD, CASES[0], 0, 4),        // ldr w11, [x9, w0, uxtw #2]
+            (0xb8a0_592b, ADD, DEFAULT, 0, 4),         // ldrsw x11, [x9, w0, uxtw #2]
+            (0xb8a0_592b, 0x8b2b_c14a, DEFAULT, 0, 4), // ldrsw x11, ...; add x10, x10, w11, sxtw
+        ];
+        for (load, add, anchor, shift, size) in forms {
+            let program = Switch::new(load, add, anchor).discover(relative_entries(anchor, shift, size), vec![]);
+            assert!(resolved(&program), "{load:#x} {add:#x}");
+            let addresses: Vec<_> = program.functions.iter().map(|function| function.address).collect();
+            assert_eq!(addresses, [0]);
+            for case in CASES {
+                assert!(program.xrefs.contains(&Xref { to: case, from: 0x24, kind: XrefKind::Jump }));
+            }
+        }
+        // ldr x11, [x9, w0, uxtw #3]; br x11: absolute entries.
+        let absolute = Switch { add: NOP, jump: 0xd61f_0160, ..Switch::new(0xf860_592b, NOP, 0) };
+        assert!(resolved(&absolute.discover(relative_entries(0, 0, 8), vec![])));
+        // ldrsb x11; add x10, x10, w11, uxtb #2 zero-extends the entries again, selecting addresses past the code.
+        let mismatched = Switch::new(0x38a0_492b, 0x8b2b_094a, DEFAULT);
+        assert!(!resolved(&mismatched.discover(relative_entries(DEFAULT, 2, 1), vec![])));
+    }
+
+    #[test]
+    fn a_switch_needs_a_bound_proven_on_every_path_to_its_jump() {
+        let ldrb = 0x3860_492b;
+        let entries = relative_entries(CASES[0], 2, 1);
+        let switch = || Switch::new(ldrb, 0x8b0b_094a, CASES[0]);
+        assert!(resolved(&switch().discover(entries.clone(), vec![])));
+        // No comparison.
+        let unbounded = Switch { bound: [NOP, NOP], ..switch() };
+        assert!(!resolved(&unbounded.discover(entries.clone(), vec![])));
+        // cmp w1, #3 bounds another register.
+        let other = Switch { bound: [0x7100_0c3f, BOUND[1]], ..switch() };
+        assert!(!resolved(&other.discover(entries.clone(), vec![])));
+        // b.ne proves no upper bound.
+        let inequality = Switch { bound: [BOUND[0], 0x5400_0161], ..switch() };
+        assert!(!resolved(&inequality.discover(entries.clone(), vec![])));
+        // cbz w1, 0x14 joins the run after the comparison, on a path where w0 is unbounded.
+        let joined = Switch { prefix: [0x3400_00a1, NOP], ..switch() };
+        assert!(!resolved(&joined.discover(entries.clone(), vec![])));
+        // add x0, x0, #1 redefines the index after the comparison.
+        let redefined = Switch { gap: 0x9100_0400, ..switch() };
+        assert!(!resolved(&redefined.discover(entries.clone(), vec![])));
+        // b.hs bounds the index below its limit: cmp w0, #4; b.hs 0x38.
+        let below = Switch { bound: [0x7100_101f, 0x5400_0162], ..switch() };
+        assert!(resolved(&below.discover(entries.clone(), vec![])));
+    }
+
+    #[test]
+    fn a_32_bit_bound_covers_an_x_index_only_when_its_upper_half_is_zero() {
+        // ldrb w11, [x9, x0]: the comparison bounds w0, but x0's upper half is whatever it held on entry.
+        let switch = Switch::new(0x3860_692b, 0x8b0b_094a, CASES[0]);
+        let entries = relative_entries(CASES[0], 2, 1);
+        assert!(!resolved(&switch.discover(entries.clone(), vec![])));
+        // mov w0, w0 zeroes it.
+        let zeroed = Switch { prefix: [0x2a00_03e0, NOP], ..switch };
+        assert!(resolved(&zeroed.discover(entries, vec![])));
+    }
+
+    #[test]
+    fn switch_tables_must_be_read_only_data_selecting_code() {
+        let switch = || Switch::new(0x3860_492b, 0x8b0b_094a, CASES[0]);
+        let entries = relative_entries(CASES[0], 2, 1);
+        // The same table in writable data.
+        let writable = Switch { table: DATA, ..switch() };
+        assert!(!resolved(&writable.discover(vec![], entries.clone())));
+        // A table one entry short of the bound.
+        assert!(!resolved(&switch().discover(entries[..3].to_vec(), vec![])));
+        // An entry pointing past the end of the code.
+        let mut outside = entries.clone();
+        outside[3] = 0x40;
+        assert!(!resolved(&switch().discover(outside, vec![])));
+        // An absolute entry selecting the word at 4, which does not decode (0: b 0x8).
+        let absolute = Switch { add: NOP, jump: 0xd61f_0160, ..Switch::new(0xf860_592b, NOP, 0) };
+        assert!(resolved(&absolute.discover(relative_entries(0, 0, 8), vec![])));
+        let undecodable = Switch { prefix: [0x1400_0002, 0xffff_ffff], ..absolute };
+        let mut entries = relative_entries(0, 0, 8);
+        entries[24] = 4;
+        assert!(!resolved(&undecodable.discover(entries, vec![])));
+    }
+
+    #[test]
+    fn a_hostile_switch_bound_is_capped() {
+        // ldrb with a byte table of 4097 entries, all selecting the first case.
+        let switch =
+            |bound: u32| Switch { bound: [bound, BOUND[1]], ..Switch::new(0x3860_492b, 0x8b0b_094a, CASES[0]) };
+        let entries = vec![0; MAX_JUMP_TABLE_ENTRIES as usize + 1];
+        // cmp w0, #0xfff: exactly the most entries read.
+        let largest = switch(0x713f_fc1f).discover(entries.clone(), vec![]);
+        assert!(largest.function_at(0).unwrap().contains(CASES[0]));
+        // cmp w0, #1, lsl #12: one more is left unresolved.
+        let hostile = switch(0x7140_041f).discover(entries, vec![]);
+        assert!(!hostile.function_at(0).unwrap().contains(CASES[0]));
     }
 
     #[test]
