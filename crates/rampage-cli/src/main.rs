@@ -329,6 +329,10 @@ enum Command {
         #[arg(long, group = "direction")]
         from: Option<String>,
     },
+    /// Export every function's block starts, CFG edges and outgoing code references as JSON, for comparing
+    /// against another tool (tools/cfg-benchmark.py); unlike the MCP tools, the output is never truncated
+    #[command(hide = true)]
+    ExportCfg { file: PathBuf },
 }
 
 fn parse_arch(text: &str) -> Result<Arch, String> {
@@ -381,6 +385,7 @@ fn main() -> ExitCode {
             };
             commands::xrefs(&mut out, &file, query, &options)
         }
+        Command::ExportCfg { file } => commands::export_cfg(&mut out, &file, &options),
         Command::Triage { file } => commands::triage(&mut out, &file, &options),
         Command::Capabilities { file } => commands::capabilities(&mut out, &file, &options),
         Command::Dotnet { file, il: Some(method), offset, limit, .. } => {

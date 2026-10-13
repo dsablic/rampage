@@ -535,6 +535,37 @@ pub fn xrefs(out: &mut impl Write, path: &Path, target: XrefTarget, options: &Op
     Ok(())
 }
 
+/// Every function's block starts, intra-function edges and outgoing call and jump references, as JSON.
+pub fn export_cfg(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let project = open(path, options)?;
+    let hex = |address: u64| format!("{address:#x}");
+    let mut functions = Vec::new();
+    for row in project.functions(&FunctionsQuery::default())?.items {
+        // A start whose first instruction does not decode has no blocks, and so no graph.
+        if row.blocks == 0 {
+            functions.push(serde_json::json!({
+                "address": hex(row.address), "blocks": [], "edges": [], "references": [],
+            }));
+            continue;
+        }
+        let graph = project.function_graph(row.address)?;
+        let blocks: Vec<_> = graph.blocks.iter().map(|block| hex(block.start)).collect();
+        let edges: Vec<_> =
+            graph.edges.iter().map(|edge| serde_json::json!([blocks[edge.from], blocks[edge.to], edge.kind])).collect();
+        let references: Vec<_> = project
+            .xrefs(XrefQuery::From(row.address), None, None)?
+            .items
+            .into_iter()
+            .filter(|xref| xref.kind != rampage_analysis::discover::XrefKind::Data)
+            .map(|xref| serde_json::json!([hex(xref.from), hex(xref.to), xref.kind]))
+            .collect();
+        functions.push(serde_json::json!({
+            "address": hex(row.address), "blocks": blocks, "edges": edges, "references": references,
+        }));
+    }
+    write_json(out, &functions)
+}
+
 /// One character per entropy point, from blank (0 bits per byte) to `@` (8).
 fn profile_text(profile: &[f64]) -> String {
     const SHADES: &[u8] = b" .:-=+*#%@";

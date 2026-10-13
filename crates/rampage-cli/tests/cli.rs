@@ -278,6 +278,31 @@ fn xrefs_from_main_include_the_call_to_puts() {
 }
 
 #[test]
+fn export_cfg_lists_blocks_edges_and_calls_of_every_function() {
+    let functions = json(&["export-cfg"], "hello-x64.elf");
+    let functions = functions.as_array().unwrap();
+    assert_eq!(functions.len(), 41);
+    let find = |address: &str| functions.iter().find(|function| function["address"] == address).unwrap();
+    let main = find("0x1001910");
+    assert_eq!(main["blocks"], serde_json::json!(["0x1001910"]));
+    let references = main["references"].as_array().unwrap();
+    assert!(references.iter().any(|reference| reference[1] == "0x1001e21" && reference[2] == "call"), "{main}");
+    let puts = find("0x1001e21");
+    let blocks = puts["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 12);
+    let edges = puts["edges"].as_array().unwrap();
+    assert!(!edges.is_empty());
+    assert!(edges.iter().all(|edge| blocks.contains(&edge[0]) && blocks.contains(&edge[1])), "{puts}");
+}
+
+#[test]
+fn export_cfg_keeps_a_function_whose_start_does_not_decode() {
+    let functions = json(&["export-cfg"], "hello-arm.elf");
+    let empty = functions.as_array().unwrap().iter().find(|function| function["address"] == "0x2036c").unwrap();
+    assert_eq!(empty["blocks"], serde_json::json!([]));
+}
+
+#[test]
 fn xrefs_requires_a_direction() {
     rampage(&["xrefs"], "hello-x64.elf").failure();
 }
