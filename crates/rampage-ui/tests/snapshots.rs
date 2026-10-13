@@ -217,3 +217,69 @@ fn clicking_the_brand_opens_about() {
     harness.run();
     harness.get_by_label("Third-party notices");
 }
+
+/// A copy of `name` in a fresh temporary directory, so its annotation sidecar starts empty.
+fn scratch_copy(test: &str, name: &str) -> (PathBuf, PathBuf) {
+    let directory = std::env::temp_dir().join(format!("rampage-ui-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(name);
+    std::fs::copy(fixture(name), &path).unwrap();
+    (directory, path)
+}
+
+fn comment(workspace: &mut rampage_ui::Workspace, address: u64, text: &str) {
+    workspace.select(address);
+    workspace.begin_comment();
+    workspace.editing.as_mut().unwrap().text = text.into();
+    workspace.finish_edit();
+}
+
+#[test]
+fn an_undo_another_client_blocks_offers_to_discard_the_step() {
+    let (directory, path) = scratch_copy("undo-blocked", "hello-arm64.macho");
+    let mut harness = harness(App::blocking());
+    harness.run();
+    let ctx = harness.ctx.clone();
+    let app = harness.state_mut();
+    app.open(&ctx, path.clone(), None);
+    let workspace = app.workspace_mut().unwrap();
+    workspace.goto_text("_main");
+    comment(workspace, 0x1_0000_0474, "earlier step");
+    comment(workspace, 0x1_0000_0468, "blocked step");
+    // Another client, such as an agent over MCP, comments the same address.
+    let agent = rampage_api::Session::default().open(&path, None).unwrap();
+    agent.comment(0x1_0000_0468, Some("the agent's comment")).unwrap();
+    workspace.undo();
+    assert!(workspace.blocked_undo.as_deref().unwrap().contains("edited by another client"));
+    harness.run();
+    harness.snapshot("undo-blocked");
+
+    harness.get_by_label("Discard step").click();
+    harness.run();
+    let workspace = harness.state_mut().workspace_mut().unwrap();
+    assert!(workspace.blocked_undo.is_none());
+    assert!(workspace.notice.as_deref().unwrap().contains("its edit stays in effect"), "{:?}", workspace.notice);
+    assert_eq!(workspace.project.comment_at(0x1_0000_0468).as_deref(), Some("the agent's comment"));
+    // The earlier step is no longer stuck behind the blocked one.
+    workspace.undo();
+    assert!(workspace.blocked_undo.is_none());
+    assert_eq!(workspace.project.comment_at(0x1_0000_0474), None);
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn discarding_never_forces_away_a_step_undo_can_revert() {
+    let (directory, path) = scratch_copy("undo-unblocked", "hello-arm64.macho");
+    let ctx = egui::Context::default();
+    let mut app = App::blocking();
+    app.open(&ctx, path, None);
+    let workspace = app.workspace_mut().unwrap();
+    comment(workspace, 0x1_0000_0474, "still undoable");
+    workspace.blocked_undo = Some("stale".to_owned());
+    workspace.discard_blocked_undo();
+    assert!(workspace.notice.as_deref().unwrap().contains("force"), "{:?}", workspace.notice);
+    workspace.undo();
+    assert_eq!(workspace.project.comment_at(0x1_0000_0474), None);
+    std::fs::remove_dir_all(&directory).unwrap();
+}

@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use rampage_analysis::strings::FoundString;
-use rampage_api::annotations::{Edit, Field};
+use rampage_api::annotations::{DISCARD_HINT, Edit, Field};
 use rampage_api::{
     ApiError, FunctionListing, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Project, Session, StringsQuery,
     Triage, XrefQuery, XrefRow,
@@ -168,6 +168,8 @@ pub struct Workspace {
     pub edit_error: Option<String>,
     /// A problem for the status bar: an undo that could not apply, or other clients' edits that cannot be read.
     pub notice: Option<String>,
+    /// An undo another client's edits block: the refusal, shown with the offer to discard the step.
+    pub blocked_undo: Option<String>,
     pub band: crate::band::Cache,
     /// The graph of the listing's function, keyed by its address.
     pub graph: Option<(u64, Result<crate::graph::Layout, String>)>,
@@ -221,6 +223,7 @@ impl Workspace {
             editing: None,
             edit_error: None,
             notice: None,
+            blocked_undo: None,
             band: crate::band::Cache::default(),
             graph: None,
             graph_zoom: 1.0,
@@ -391,8 +394,30 @@ impl Workspace {
     }
 
     pub fn undo(&mut self) {
-        let result = self.project.undo();
-        self.step_changed(result);
+        match self.project.undo() {
+            Err(ApiError::Invalid(message)) if message.ends_with(DISCARD_HINT) => {
+                let reason = message.trim_end_matches(DISCARD_HINT).to_owned();
+                self.notice = Some(format!("Undo blocked: {reason}"));
+                self.blocked_undo = Some(reason);
+                // The refused undo read the other client's edits; show them.
+                self.annotations_changed(None);
+            }
+            result => self.step_changed(result),
+        }
+    }
+
+    /// Drops the blocked step from the undo history, keeping its edits, so earlier steps can be undone. Never
+    /// forced: if the step is no longer blocked, the refusal is shown and undo can revert it again.
+    pub fn discard_blocked_undo(&mut self) {
+        self.blocked_undo = None;
+        self.notice = match self.project.discard_undo_step(false) {
+            Ok(edits) if edits.is_empty() => None,
+            Ok(edits) if edits.len() == 1 => {
+                Some("Discarded the blocked undo step; its edit stays in effect".to_owned())
+            }
+            Ok(edits) => Some(format!("Discarded the blocked undo step; its {} edits stay in effect", edits.len())),
+            Err(error) => Some(error.to_string()),
+        };
     }
 
     pub fn redo(&mut self) {

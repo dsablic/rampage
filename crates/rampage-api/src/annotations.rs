@@ -92,8 +92,9 @@ fn batch_id() -> String {
     format!("{:x}-{nanos:x}-{count:x}", std::process::id())
 }
 
-/// Appended to an undo's refusal over another client's edits, which repeats until the step is undone or discarded.
-const DISCARD_HINT: &str =
+/// Appended to an undo's refusal over another client's edits, which repeats until the step is undone or discarded;
+/// a refusal ending with it is one [`Annotations::discard_undo_step`] can clear.
+pub const DISCARD_HINT: &str =
     "; discard_undo drops this step from the undo history (its edits stay in effect) so earlier ones can be undone";
 
 /// Why replaying a step changed nothing.

@@ -127,6 +127,7 @@ impl App {
         });
         if let Some(workspace) = &mut self.workspace {
             Self::edit_dialog(&ui.ctx().clone(), workspace);
+            Self::undo_dialog(&ui.ctx().clone(), workspace);
         }
         self.shortcuts(ui.ctx());
         if self.workspace.as_ref().is_some_and(|workspace| workspace.show_listing) {
@@ -226,6 +227,37 @@ impl App {
             workspace.editing = None;
         } else if done {
             workspace.finish_edit();
+        }
+    }
+
+    /// Offers to discard an undo step another client's edits block. Discarding is never forced, so a step that is
+    /// no longer blocked stays undoable.
+    fn undo_dialog(ctx: &egui::Context, workspace: &mut Workspace) {
+        let Some(reason) = &workspace.blocked_undo else { return };
+        let (mut discard, mut keep) = (false, false);
+        egui::Window::new("Undo blocked")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 120.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(460.0);
+                ui.label(RichText::new(reason).color(theme::WARNING));
+                ui.add_space(4.0);
+                ui.label(
+                    "Another client changed what this step would revert, so it cannot be undone, and it blocks every \
+                     earlier step. Discarding drops it from the undo history: its edits stay in effect and earlier \
+                     steps can be undone.",
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    discard = ui.button("Discard step").clicked();
+                    keep = ui.button("Keep").clicked();
+                });
+            });
+        if discard {
+            workspace.discard_blocked_undo();
+        } else if keep {
+            workspace.blocked_undo = None;
         }
     }
 
