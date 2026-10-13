@@ -386,6 +386,12 @@ fn parse_token(text: &str) -> Result<u32, String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if cli.image_offset.is_some()
+        && let Some(command) = without_one_image(&cli.command)
+    {
+        eprintln!("rampage: --image-offset does not apply to {command}, which does not open one embedded image");
+        return ExitCode::FAILURE;
+    }
     let packs = Arc::new(Packs::load_with_env(&cli.packs));
     if !matches!(cli.command, Command::Packs { .. }) {
         for problem in packs.problems() {
@@ -505,6 +511,22 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The name of a command that opens no image, or more than one, so that --image-offset would be ignored or apply
+/// to only one of its files.
+fn without_one_image(command: &Command) -> Option<&'static str> {
+    Some(match command {
+        Command::Carve { .. } => "carve",
+        Command::Inventory { .. } => "inventory",
+        Command::Packs { .. } => "packs",
+        Command::Mcp { .. } => "mcp (pass image_offset to each tool call instead)",
+        Command::Correlate { .. } => "correlate",
+        Command::CompareRuntime { .. } => "compare-runtime",
+        Command::ComparePointers { .. } => "compare-pointers",
+        Command::Report { workflow: report::Workflow::DiffBuilds, .. } => "report diff-builds",
+        _ => return None,
+    })
 }
 
 fn serve_mcp(all_tools: bool, packs: Arc<Packs>) -> ExitCode {

@@ -532,6 +532,32 @@ fn image_offset_opens_an_embedded_executable_with_its_own_annotations() {
 }
 
 #[test]
+fn image_offset_is_rejected_by_commands_that_do_not_open_one_image() {
+    let file = fixture("hello-x64.elf");
+    let file = file.to_str().unwrap();
+    let commands: [&[&str]; 8] = [
+        &["carve", file],
+        &["inventory", file],
+        &["packs", "list"],
+        &["mcp"],
+        &["correlate", file, "--original", file, "--module", "m", "--at", "0x0"],
+        &["compare-runtime", file, "--original", file, "--module", "m", "--range", "0x0-0x1"],
+        &["compare-pointers", file, "--other", file, "--at", "0x0", "--other-at", "0x0"],
+        &["report", "diff-builds", file, "--other", file],
+    ];
+    for command in commands {
+        let mut rampage = assert_cmd::Command::cargo_bin("rampage").unwrap();
+        rampage
+            .args(["--image-offset", "0x10"])
+            .args(command)
+            .write_stdin("")
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("--image-offset does not apply to"));
+    }
+}
+
+#[test]
 fn image_length_keeps_an_embedded_overlay_the_header_extent_leaves_out() {
     let directory = std::env::temp_dir().join(format!("rampage-cli-embedded-length-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);

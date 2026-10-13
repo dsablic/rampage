@@ -132,7 +132,10 @@ rampage mcp [--all-tools]                    # MCP server on stdin/stdout (core 
 # global flags
 --json                 machine-readable output for every command
 --arch x86_64|aarch64|arm|...  pick a slice from a universal Mach-O
---image-offset 0x...   open the ELF/PE/Mach-O embedded at this file offset (e.g. a carve candidate) in place
+--image-offset 0x...   open the ELF/PE/Mach-O embedded at this file offset (e.g. a carve candidate) in place; for
+                       a universal Mach-O, its fat header's offset with --arch. Rejected by commands that open
+                       no image or two (carve, inventory, packs, mcp, correlate, compare-*, report diff-builds)
+--image-length N       with --image-offset, the image's length: bytes past its header extent become its overlay
 ```
 
 Addresses accept `0x` hex, decimal, symbol and export names, or `sub_<hex>`. In JSON output every address is
