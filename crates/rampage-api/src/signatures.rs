@@ -47,6 +47,9 @@ pub struct SignatureApplication {
     pub matched: usize,
     pub applied: usize,
     pub matches: Vec<SignatureMatch>,
+    /// Data-pack problems bearing on signatures (a rejected pack, a signature database that did not load), so that
+    /// a partly loaded set of databases is not taken for a complete one.
+    pub warnings: Vec<String>,
 }
 
 impl Project {
@@ -77,7 +80,7 @@ impl Project {
         apply: bool,
     ) -> Result<SignatureApplication, ApiError> {
         if databases.is_empty() {
-            return Ok(SignatureApplication { matched: 0, applied: 0, matches: Vec::new() });
+            return Ok(SignatureApplication { matched: 0, applied: 0, matches: Vec::new(), warnings: Vec::new() });
         }
         let analysis = self.analysis()?;
         let bodies: Vec<(u64, &[u8])> = analysis
@@ -109,7 +112,7 @@ impl Project {
                 }
             }
         }
-        Ok(SignatureApplication { matched: matches.len(), applied, matches })
+        Ok(SignatureApplication { matched: matches.len(), applied, matches, warnings: Vec::new() })
     }
 
     /// The starter signature database bundled for this binary's architecture, or `None` when none ships for it.
@@ -150,6 +153,8 @@ impl Project {
         let user = user.map(|database| (USER_SIGNATURES, database));
         let bundled = bundled.as_ref().map(|database| (BUILTIN_PACK, database));
         let databases: Vec<(&str, &SignatureDb)> = user.into_iter().chain(packed).chain(bundled).collect();
-        self.apply_layered_signatures(&databases, apply)
+        let mut application = self.apply_layered_signatures(&databases, apply)?;
+        application.warnings = packs.problems_for("signatures");
+        Ok(application)
     }
 }

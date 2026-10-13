@@ -82,10 +82,21 @@ file (firmware, installer, archive) for embedded executables and containers by v
 header-estimated extents; it extracts and decompresses nothing. Pass an executable candidate's offset as \
 image_offset to any binary tool to analyze it in place, with annotations kept apart from the outer file's.";
 
-fn instructions() -> String {
+fn instructions(packs: &Packs) -> String {
     let groups: String =
         Group::ALL.iter().map(|group| format!("\n- {}: {}", group.name(), group.description())).collect();
-    format!("{INSTRUCTIONS_INTRO}{groups}\n\n{INSTRUCTIONS_USAGE}")
+    let mut text = format!("{INSTRUCTIONS_INTRO}{groups}\n\n{INSTRUCTIONS_USAGE}");
+    // Only a server given packs loads them here; the problem count must be known before any tool runs.
+    if packs.configured() {
+        let problems = packs.problems().len();
+        text.push_str(&format!(
+            "\n\nData packs: {} loaded, {problems} problems (packs rejected or contents that did not load). \
+             Detection results that consult packs (identify_functions, detect_tools, yara_scan, capa_detect) list \
+             the problems bearing on them in `warnings`; list_packs (detection) shows each pack's status.",
+            packs.loaded().iter().filter(|pack| pack.error.is_none()).count()
+        ));
+    }
+    text
 }
 
 /// The groups to serve from the start: every group with `all_tools`, else those `env` names (`all` or a
@@ -334,7 +345,7 @@ impl ServerHandler for RampageServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tool_list_changed().build())
             .with_server_info(Implementation::new("rampage", env!("CARGO_PKG_VERSION")))
-            .with_instructions(instructions())
+            .with_instructions(instructions(&self.packs))
     }
 
     async fn list_tools(

@@ -206,13 +206,25 @@ impl Packs {
 
     /// One line for each rejected pack and each content that failed or is unsupported.
     pub fn problems(&self) -> Vec<String> {
+        self.problems_where(|_| true)
+    }
+
+    /// The problems that bear on `kind` contents (`signatures`, `peid`, `yara` or `capa`): each rejected pack, which
+    /// may have held some, and each `kind` content that did not load. Results that consulted the packs for `kind`
+    /// carry these as warnings, so that a partly loaded set is not taken for a complete one.
+    pub fn problems_for(&self, kind: &str) -> Vec<String> {
+        self.problems_where(|content| content.kind == kind)
+    }
+
+    fn problems_where(&self, bears: impl Fn(&ContentInfo) -> bool) -> Vec<String> {
         let mut problems = Vec::new();
         for pack in self.loaded() {
             let directory = pack.directory.as_deref().unwrap_or(Path::new("")).display();
             if let Some(error) = &pack.error {
                 problems.push(format!("pack {directory}: {error}"));
             }
-            for content in pack.contents.iter().filter(|content| content.status != ContentStatus::Loaded) {
+            let failed = pack.contents.iter().filter(|content| content.status != ContentStatus::Loaded);
+            for content in failed.filter(|content| bears(content)) {
                 problems.push(format!("pack {directory}: {} {}: {}", content.kind, content.path, content.detail));
             }
         }

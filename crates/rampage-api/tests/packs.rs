@@ -397,6 +397,12 @@ fn a_broken_content_does_not_block_the_others() {
     assert_eq!(packs.problems().len(), 5, "{:?}", packs.problems());
 
     let project = session(packs).open(&fixture("hello-x64.exe"), None).unwrap();
+    // Results that consult the packs carry the problems bearing on them.
+    let identified = project.identify_functions(None, true, false).unwrap();
+    assert_eq!(identified.warnings.len(), 2, "{:?}", identified.warnings);
+    assert!(identified.warnings.iter().all(|warning| warning.contains("signatures")), "{:?}", identified.warnings);
+    let detected = project.detect_tools(None).unwrap();
+    assert!(detected.warnings.len() == 1 && detected.warnings[0].contains("missing.txt"), "{detected:?}");
     assert!(project.yara_scan_packs().is_err());
     let capabilities = project.detect_capa_packs().unwrap();
     assert!(capabilities.iter().any(|capability| capability.name == "pack console output"), "{capabilities:?}");

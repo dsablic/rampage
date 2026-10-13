@@ -312,6 +312,20 @@ struct CapaArgs {
     rules_dir: Option<String>,
 }
 
+/// A YARA scan's matches with the data-pack problems bearing on YARA rules.
+#[derive(Serialize)]
+struct YaraScan {
+    matches: Vec<rampage_yara::YaraMatch>,
+    warnings: Vec<String>,
+}
+
+/// A capa evaluation's capabilities with the data-pack problems bearing on capa rules.
+#[derive(Serialize)]
+struct CapaScan {
+    capabilities: Vec<rampage_capabilities::Capability>,
+    warnings: Vec<String>,
+}
+
 #[derive(serde::Deserialize, JsonSchema)]
 struct ReportArgs {
     /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
@@ -577,7 +591,8 @@ pub fn tools() -> Vec<Tool> {
              it: \"user database\", the data pack's name, or \"rampage-builtin\". \
              A function whose masked body collides with another's is named by the names of the functions it \
              calls, once those are named; thunks too small for the confidence gate are never named. apply=true \
-             saves names for unnamed functions.",
+             saves names for unnamed functions. `warnings` names data packs or pack signature databases that did \
+             not load.",
             |project, arguments: IdentifyArgs| {
                 let user = match &arguments.database {
                     Some(path) => {
@@ -725,8 +740,8 @@ pub fn tools() -> Vec<Tool> {
              from a bundled heuristic database of entry-point, section, import, overlay and entropy signatures. \
              Optionally overlay a user-supplied PeID userdb.txt; loaded data packs' PeID signatures are always \
              overlaid. Returns {detections, warnings}: warnings name the \
-             PeID entries and lines skipped as malformed (the first 20, then a count). Confidence is a signal, not \
-             proof.",
+             PeID entries and lines skipped as malformed (the first 20, then a count), then data packs or pack PeID \
+             files that did not load. Confidence is a signal, not proof.",
             |project, args: DetectToolsArgs| {
                 let peid = match &args.peid {
                     Some(path) => {
@@ -742,10 +757,15 @@ pub fn tools() -> Vec<Tool> {
             "yara_scan",
             "Compile the given YARA rule source and scan the binary's image bytes, returning matching rules with \
              their tags, metadata and bounded matched-string offsets. Rules are user-supplied; the rules of loaded \
-             data packs (see list_packs) run too, in a namespace named after their pack.",
-            |project, args: YaraArgs| match &args.rules {
-                Some(rules) => project.yara_scan(rules),
-                None => project.yara_scan_packs(),
+             data packs (see list_packs) run too, in a namespace named after their pack. Returns {matches, \
+             warnings}: warnings name data packs or pack rule files that did not load. include statements are \
+             refused.",
+            |project, args: YaraArgs| {
+                let matches = match &args.rules {
+                    Some(rules) => project.yara_scan(rules)?,
+                    None => project.yara_scan_packs()?,
+                };
+                Ok(YaraScan { matches, warnings: project.packs().problems_for("yara") })
             },
         ),
         tool(
@@ -753,10 +773,14 @@ pub fn tools() -> Vec<Tool> {
             "capa_detect",
             "Evaluate a directory of Mandiant capa rules, plus those of loaded data packs (see list_packs), against \
              the binary's imports, exports and strings, returning the behaviors whose file-scope features match. A \
-             partial capa evaluator (no disassembly features); triage evidence, not proof.",
-            |project, args: CapaArgs| match &args.rules_dir {
-                Some(directory) => project.detect_capa(std::path::Path::new(directory)),
-                None => project.detect_capa_packs(),
+             partial capa evaluator (no disassembly features); triage evidence, not proof. Returns \
+             {capabilities, warnings}: warnings name data packs or pack rule sets that did not load.",
+            |project, args: CapaArgs| {
+                let capabilities = match &args.rules_dir {
+                    Some(directory) => project.detect_capa(std::path::Path::new(directory))?,
+                    None => project.detect_capa_packs()?,
+                };
+                Ok(CapaScan { capabilities, warnings: project.packs().problems_for("capa") })
             },
         ),
         tool(
