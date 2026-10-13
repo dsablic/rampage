@@ -221,6 +221,7 @@ impl Project {
             format: binary.format,
             arch: binary.arch,
             slices: &binary.slices,
+            embedded: binary.embedded,
             entry: binary.entry,
             segments: &binary.segments,
             sections: &binary.sections,

@@ -1,7 +1,7 @@
 //! A first look at a binary: hashes, entropy, overlay, and hints of packing or weak hardening.
 
 use md5::{Digest, Md5};
-use rampage_loaders::{Binary, Details, Format, SectionKind};
+use rampage_loaders::{Binary, Details, Embedded, Format, SectionKind};
 use serde::Serialize;
 use sha1::Sha1;
 use sha2::Sha256;
@@ -13,12 +13,15 @@ const HIGH_ENTROPY: f64 = 7.2;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Triage {
-    /// The image: the whole file, or one slice of a universal binary.
+    /// The image: the whole file, one slice of a universal binary, or an image embedded in a larger file.
     pub image_size: u64,
     pub image_hashes: Hashes,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_identity: Option<crate::capture_identity::CaptureIdentity>,
-    /// The whole file's size and hashes, when the image is one slice of it.
+    /// Where the image lies in the outer file, when it was opened at an offset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedded: Option<Embedded>,
+    /// The whole file's size and hashes, when the image is part of it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -155,6 +158,7 @@ pub fn triage(binary: &Binary) -> Triage {
         image_size: image.len() as u64,
         image_hashes,
         capture_identity: crate::capture_identity::capture_identity(binary),
+        embedded: binary.embedded,
         file_size: sliced.then_some(file.len() as u64),
         file_hashes,
         entropy: image_entropy,
@@ -174,6 +178,12 @@ pub fn triage(binary: &Binary) -> Triage {
 
 fn hints(binary: &Binary, triage: &Triage) -> Vec<String> {
     let mut hints = Vec::new();
+    if let Some(embedded) = binary.embedded {
+        hints.push(format!(
+            "embedded image at offset {:#x} of a {}-byte file: the image hashes cover only the image",
+            embedded.offset, embedded.file_size
+        ));
+    }
     for section in &triage.sections {
         let executable = section.perms.contains('x') || section.kind == SectionKind::Code;
         if executable && section.file_size >= 512 && section.entropy > HIGH_ENTROPY {

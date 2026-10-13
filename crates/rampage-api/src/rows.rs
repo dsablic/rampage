@@ -107,6 +107,9 @@ pub struct Summary<'a> {
     pub format: Format,
     pub arch: Arch,
     pub slices: &'a [Arch],
+    /// Where the image lies in the outer file, when it was opened at an offset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedded: Option<rampage_loaders::Embedded>,
     #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub entry: Option<u64>,
     pub segments: &'a [Segment],
