@@ -129,7 +129,9 @@ pub fn file_tools() -> Vec<FileTool> {
                       Android boot images. Each candidate has its offset, kind, validated header facts (arch, bits, \
                       endianness, declared size) and an extent estimated from headers, with confidence validated or \
                       magic_only. Read-only and bounded: nothing is extracted, decompressed or executed, and the \
-                      scan stops at 4096 candidates, saying so. Paginated with offset/limit.",
+                      scan stops at 4096 candidates, saying so. Paginated with offset/limit: each page scans only \
+                      as far as the candidate after it and reports `more` (whether another page follows) rather \
+                      than a total.",
         input_schema: schema::<CarveArgs>(),
         handler: |input| {
             let args: CarveArgs =

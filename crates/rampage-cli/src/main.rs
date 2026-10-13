@@ -115,8 +115,13 @@ enum Command {
     /// Scan any file for embedded executables and containers by validated header, without extracting anything
     Carve {
         file: PathBuf,
-        /// Stop after this many candidates
-        #[arg(long, default_value_t = rampage_loaders::carve::MAX_CANDIDATES)]
+        /// Stop after this many candidates (1 to 4096)
+        #[arg(
+            long,
+            default_value_t = rampage_loaders::carve::MAX_CANDIDATES,
+            value_parser = clap::builder::RangedU64ValueParser::<usize>::new()
+                .range(1..=rampage_loaders::carve::MAX_CANDIDATES as u64)
+        )]
         max_candidates: usize,
     },
     /// Structural CFG and reference summary of a function (not decompiled source)

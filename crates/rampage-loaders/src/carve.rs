@@ -16,6 +16,9 @@ use crate::LoadError;
 pub const MAX_CANDIDATES: usize = 4096;
 /// The longest prefix of a file one scan reads.
 pub const MAX_SCAN_BYTES: u64 = 4 << 30;
+/// The most bytes one scan searches for the end of gzip header fields, whose terminator can be far from the header
+/// that names them; past it, gzip headers carrying such fields are no longer checked.
+pub const MAX_PROBE_BYTES: u64 = 64 << 20;
 /// The most table entries (ELF program and section headers, Mach-O load commands, fat slices, archive members)
 /// read for one candidate.
 const MAX_TABLE_ENTRIES: usize = 4096;
@@ -27,11 +30,12 @@ const MAX_FAT_SLICES: u64 = 64;
 pub struct Limits {
     pub max_candidates: usize,
     pub max_scan_bytes: u64,
+    pub max_probe_bytes: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_candidates: MAX_CANDIDATES, max_scan_bytes: MAX_SCAN_BYTES }
+        Self { max_candidates: MAX_CANDIDATES, max_scan_bytes: MAX_SCAN_BYTES, max_probe_bytes: MAX_PROBE_BYTES }
     }
 }
 
@@ -185,6 +189,23 @@ pub struct Carving {
     /// Whether a limit cut the scan short; `limitations` says which.
     pub truncated: bool,
     pub limitations: Vec<String>,
+    /// Whether a candidate past `Limits::max_candidates` stopped the scan; its limitation comes first.
+    #[serde(skip)]
+    candidate_cap_reached: bool,
+    /// Whether a limit other than the candidate cap cut the scan short.
+    #[serde(skip)]
+    otherwise_truncated: bool,
+}
+
+impl Carving {
+    /// For a caller that set the candidate cap to end a page rather than to limit the scan: drops the cap's
+    /// limitation, keeping `truncated` only for the other limits.
+    pub fn treat_candidate_cap_as_page_end(&mut self) {
+        if std::mem::take(&mut self.candidate_cap_reached) {
+            self.limitations.remove(0);
+            self.truncated = self.otherwise_truncated;
+        }
+    }
 }
 
 /// Carves the regular file at `path`, mapping it read-only.
@@ -209,10 +230,13 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     let scanned = data.len().min(usize::try_from(limits.max_scan_bytes).unwrap_or(usize::MAX));
     let mut candidates = Vec::new();
     let mut limitations = Vec::new();
-    let mut truncated = false;
+    let mut otherwise_truncated = false;
+    let mut candidate_cap_reached = false;
     // Archive member headers inside an archive already reported are part of it, not new archives.
     let mut zip_members_until = 0;
     let mut cpio_members_until = 0;
+    let mut probe = Probe { left: limits.max_probe_bytes, exhausted: false };
+    let mut probe_exhausted_at = None;
     for offset in 0..scanned {
         let bytes = &data[offset..];
         let found = match bytes[0] {
@@ -224,7 +248,13 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
                 zip_members_until = offset.saturating_add(walked);
                 candidate
             }),
-            0x1f => gzip(bytes),
+            0x1f => {
+                let found = gzip(bytes, &mut probe);
+                if probe.exhausted {
+                    probe_exhausted_at.get_or_insert(offset);
+                }
+                found
+            }
             0xfd => xz(bytes),
             0x28 => zstd(bytes),
             0x5d => lzma(bytes),
@@ -239,7 +269,7 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
         };
         let Some(mut candidate) = found else { continue };
         if candidates.len() >= limits.max_candidates {
-            truncated = true;
+            candidate_cap_reached = true;
             limitations.push(format!(
                 "stopped at the candidate cap ({}) at offset {offset:#x}; later offsets were not scanned",
                 limits.max_candidates
@@ -260,15 +290,36 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
         candidates.push(candidate);
     }
     if scanned < data.len() {
-        truncated = true;
+        otherwise_truncated = true;
         limitations.push(format!("scanned only the first {scanned:#x} of {:#x} bytes", data.len()));
+    }
+    if let Some(offset) = probe_exhausted_at {
+        otherwise_truncated = true;
+        limitations.push(format!(
+            "the search for gzip header name and comment ends ran out of its {:#x}-byte budget at offset \
+             {offset:#x}; gzip streams carrying those fields from there on were not reported",
+            limits.max_probe_bytes
+        ));
     }
     limitations.push(
         "candidates are found by magic and header checks only: nothing is extracted, decompressed or executed, \
          and compressed streams have no extent unless their header records one"
             .to_owned(),
     );
-    Carving { file_size: data.len() as u64, scanned_bytes: scanned as u64, candidates, truncated, limitations }
+    limitations.push(
+        "zip and cpio headers inside a reported archive, up to its end or its last member header read, are taken \
+         as its members: an archive stored inside another archive's members is not reported separately"
+            .to_owned(),
+    );
+    Carving {
+        file_size: data.len() as u64,
+        scanned_bytes: scanned as u64,
+        candidates,
+        truncated: candidate_cap_reached || otherwise_truncated,
+        limitations,
+        candidate_cap_reached,
+        otherwise_truncated,
+    }
 }
 
 fn end_of(offset: u64, size: u64) -> Option<u64> {
@@ -361,10 +412,12 @@ fn elf(bytes: &[u8]) -> Option<Candidate> {
     candidate.bits = Some(bits);
     candidate.arch = Some(elf_arch(machine, bits));
     let mut end = ehsize.max(if phnum == 0 { 0 } else { ph_end }).max(if shnum == 0 { 0 } else { sh_end });
+    let overflow = || Some(Candidate::magic_only(Kind::Elf, "an ELF segment or section ends past 2^64"));
     for index in 0..phnum.min(MAX_TABLE_ENTRIES as u64) {
         let entry = phoff + index * phentsize;
         let (offset, size) = (read(entry + at(4, 8), word)?, read(entry + at(16, 32), word)?);
-        end = end.max(end_of(offset, size).unwrap_or(u64::MAX));
+        let Some(segment_end) = end_of(offset, size) else { return overflow() };
+        end = end.max(segment_end);
     }
     for index in 0..shnum.min(MAX_TABLE_ENTRIES as u64) {
         let entry = shoff + index * shentsize;
@@ -372,7 +425,8 @@ fn elf(bytes: &[u8]) -> Option<Candidate> {
             continue;
         }
         let (offset, size) = (read(entry + at(16, 24), word)?, read(entry + at(20, 32), word)?);
-        end = end.max(end_of(offset, size).unwrap_or(u64::MAX));
+        let Some(section_end) = end_of(offset, size) else { return overflow() };
+        end = end.max(section_end);
     }
     candidate.notes.extend(table_note("program headers", phnum));
     candidate.notes.extend(table_note("section headers", shnum));
@@ -496,19 +550,27 @@ fn macho(bytes: &[u8]) -> Option<Candidate> {
     let mut end = commands_end;
     let mut at = header_size;
     for _ in 0..commands.min(MAX_TABLE_ENTRIES as u64) {
-        let (command, size) = (read(at, 4)?, read(at + 4, 4)?);
+        let Some((command, size)) = read(at, 4).zip(read(at + 4, 4)) else {
+            return Some(Candidate::magic_only(Kind::MachO, "Mach-O load commands are truncated"));
+        };
         if size < 8 || !size.is_multiple_of(4) || at + size > commands_end {
             return Some(Candidate::magic_only(Kind::MachO, "Mach-O load command sizes are inconsistent"));
         }
-        let range = match command {
-            0x1 => Some((read(at + 32, 4)?, read(at + 36, 4)?)),
-            0x19 => Some((read(at + 40, 8)?, read(at + 48, 8)?)),
-            0x2 => Some((read(at + 16, 4)?, read(at + 20, 4)?)),
-            0x1d => Some((read(at + 8, 4)?, read(at + 12, 4)?)),
+        let fields = match command {
+            0x1 => Some((32, 36, 4)),
+            0x19 => Some((40, 48, 8)),
+            0x2 => Some((16, 20, 4)),
+            0x1d => Some((8, 12, 4)),
             _ => None,
         };
-        if let Some((offset, size)) = range {
-            end = end.max(end_of(offset, size).unwrap_or(u64::MAX));
+        if let Some((offset_at, size_at, width)) = fields {
+            let Some((offset, size)) = read(at + offset_at, width).zip(read(at + size_at, width)) else {
+                return Some(Candidate::magic_only(Kind::MachO, "Mach-O load commands are truncated"));
+            };
+            let Some(range_end) = end_of(offset, size) else {
+                return Some(Candidate::magic_only(Kind::MachO, "a Mach-O segment or table ends past 2^64"));
+            };
+            end = end.max(range_end);
         }
         at += size;
     }
@@ -560,8 +622,11 @@ fn fat(bytes: &[u8]) -> Option<Candidate> {
 }
 
 const ZIP_METHODS: [u64; 13] = [0, 1, 6, 8, 9, 12, 14, 19, 93, 95, 96, 97, 98];
+/// The most records (local and central directory headers) one zip walk reads.
+const MAX_ZIP_RECORDS: usize = 2 * MAX_TABLE_ENTRIES;
 
-/// A zip archive at its first local file header, and how many bytes of member headers the walk covered.
+/// A zip archive at its first local file header, and how many bytes from it the scan takes as the archive's own:
+/// through its end when that is known, else through the last record header read whole.
 fn zip(bytes: &[u8]) -> Option<(Candidate, usize)> {
     if !bytes.starts_with(b"PK\x03\x04") {
         return None;
@@ -575,64 +640,119 @@ fn zip(bytes: &[u8]) -> Option<(Candidate, usize)> {
         return Some((Candidate::magic_only(Kind::Zip, "zip local header fields are inconsistent"), 4));
     }
     let mut candidate = Candidate::new(Kind::Zip).endian(false);
-    let (mut at, mut members) = (0usize, 0u64);
-    let mut stop = None;
-    for _ in 0..2 * MAX_TABLE_ENTRIES {
-        let Some(signature) = read(at, 4) else {
-            stop = Some("the archive runs past the end of the file");
-            break;
-        };
-        let next = match signature {
-            0x0403_4b50 => {
-                let fields = (|| Some([read(at + 6, 2)?, read(at + 18, 4)?, read(at + 26, 2)?, read(at + 28, 2)?]))();
-                let Some([flags, compressed, name, extra]) = fields else {
-                    stop = Some("the archive runs past the end of the file");
-                    break;
-                };
-                if flags & 8 != 0 || compressed == 0xffff_ffff {
-                    stop = Some("a member's size is recorded after its data (data descriptor or zip64)");
-                    break;
+    let past_end = "the archive runs past the end of the file";
+    // `covered` ends the last record header read whole: a declared member size is not trusted past it.
+    let (mut at, mut covered, mut members) = (0usize, 4usize, 0u64);
+    let walk = 'walk: {
+        for _ in 0..MAX_ZIP_RECORDS {
+            let Some(signature) = read(at, 4) else { break 'walk Walk::Stopped(past_end) };
+            let (header_end, data) = match signature {
+                0x0403_4b50 => {
+                    let fields =
+                        (|| Some([read(at + 6, 2)?, read(at + 18, 4)?, read(at + 26, 2)?, read(at + 28, 2)?]))();
+                    let Some([flags, compressed, name, extra]) = fields else { break 'walk Walk::Stopped(past_end) };
+                    if flags & 8 != 0 || compressed == 0xffff_ffff {
+                        break 'walk Walk::Stopped(
+                            "a member's size is recorded after its data (data descriptor or zip64)",
+                        );
+                    }
+                    (at + 30 + (name + extra) as usize, compressed as usize)
                 }
-                members += 1;
-                at.checked_add(30 + (name + extra + compressed) as usize)
+                0x0201_4b50 => {
+                    let fields = (|| Some([read(at + 28, 2)?, read(at + 30, 2)?, read(at + 32, 2)?]))();
+                    let Some([name, extra, comment]) = fields else { break 'walk Walk::Stopped(past_end) };
+                    (at + 46 + (name + extra + comment) as usize, 0)
+                }
+                0x0605_4b50 => {
+                    let Some(comment) = read(at + 20, 2) else { break 'walk Walk::Stopped(past_end) };
+                    let end = at + 22 + comment as usize;
+                    candidate = candidate.extent(end as u64, "zip member headers and end of central directory");
+                    covered = end.min(bytes.len());
+                    break 'walk Walk::Ended;
+                }
+                _ => break 'walk Walk::Stopped("an unrecognized record follows the members"),
+            };
+            if header_end > bytes.len() {
+                break 'walk Walk::Stopped(past_end);
             }
-            0x0201_4b50 => {
-                let fields = (|| Some([read(at + 28, 2)?, read(at + 30, 2)?, read(at + 32, 2)?]))();
-                let Some([name, extra, comment]) = fields else {
-                    stop = Some("the archive runs past the end of the file");
-                    break;
-                };
-                at.checked_add(46 + (name + extra + comment) as usize)
+            members += u64::from(signature == 0x0403_4b50);
+            covered = header_end;
+            at = header_end.saturating_add(data);
+        }
+        Walk::Capped
+    };
+    match walk {
+        Walk::Ended => {}
+        Walk::Stopped(reason) => candidate.notes.push(format!("no extent: {reason}")),
+        Walk::Capped => match zip_end(bytes, at.min(bytes.len())) {
+            Some(end) => {
+                candidate = candidate.extent(end as u64, "end of central directory found past the member walk's cap");
+                candidate.notes.push(format!("the member walk stopped at its cap ({MAX_ZIP_RECORDS} records)"));
+                covered = end.min(bytes.len());
             }
-            0x0605_4b50 => {
-                let Some(comment) = read(at + 20, 2) else {
-                    stop = Some("the archive runs past the end of the file");
-                    break;
-                };
-                candidate =
-                    candidate.extent(at as u64 + 22 + comment, "zip member headers and end of central directory");
-                at += 22;
-                break;
+            None => {
+                candidate.notes.push(format!(
+                    "no extent: the member walk stopped at its cap ({MAX_ZIP_RECORDS} records) and no end of central \
+                     directory follows; zip headers in the rest of the file are taken as its members"
+                ));
+                covered = bytes.len();
             }
-            _ => {
-                stop = Some("an unrecognized record follows the members");
-                break;
-            }
-        };
-        let Some(next) = next else { break };
-        at = next;
-    }
-    if candidate.extent.is_none() {
-        candidate.notes.push(format!("no extent: {}", stop.unwrap_or("the member walk hit its cap")));
+        },
     }
     candidate.notes.push(format!("{members} members walked"));
-    Some((candidate, at.max(4)))
+    Some((candidate, covered))
 }
 
-/// The longest zero-terminated gzip header field (original name, comment) read.
-const MAX_GZIP_FIELD: usize = 4096;
+/// The end of the first end-of-central-directory record from `from` on whose central directory ends right
+/// before it, with offsets relative to the archive at the start of `bytes`.
+fn zip_end(bytes: &[u8], mut from: usize) -> Option<usize> {
+    while let Some(found) = bytes.get(from..)?.windows(4).position(|window| window == b"PK\x05\x06") {
+        let record = from + found;
+        let read = |at: usize, width: usize| read_uint(bytes, record + at, width, false);
+        if let (Some(size), Some(start), Some(comment)) = (read(12, 4), read(16, 4), read(20, 2))
+            && size + start == record as u64
+        {
+            return Some(record + 22 + comment as usize);
+        }
+        from = record + 1;
+    }
+    None
+}
 
-fn gzip(bytes: &[u8]) -> Option<Candidate> {
+/// How an archive's member walk ended.
+enum Walk {
+    /// At the archive's terminating record, which gave the extent.
+    Ended,
+    Stopped(&'static str),
+    Capped,
+}
+
+/// The longest zero-terminated gzip header field (original name, comment) read, terminator included: a file name
+/// fits in it on common file systems, and a header with a longer field is not reported.
+const MAX_GZIP_FIELD: usize = 256;
+
+/// The bytes left for searching gzip header fields, so that a file of repeated plausible headers costs no more
+/// than `Limits::max_probe_bytes` in all.
+struct Probe {
+    left: u64,
+    exhausted: bool,
+}
+
+impl Probe {
+    /// Where the first NUL in `field`'s first `MAX_GZIP_FIELD` bytes is, charging the bytes examined.
+    fn nul(&mut self, field: &[u8]) -> Option<usize> {
+        let allowed = usize::try_from(self.left).unwrap_or(usize::MAX).min(MAX_GZIP_FIELD);
+        let window = &field[..field.len().min(allowed)];
+        let end = window.iter().position(|&byte| byte == 0);
+        self.left -= end.map_or(window.len(), |end| end + 1) as u64;
+        if end.is_none() && window.len() < field.len().min(MAX_GZIP_FIELD) {
+            self.exhausted = true;
+        }
+        end
+    }
+}
+
+fn gzip(bytes: &[u8], probe: &mut Probe) -> Option<Candidate> {
     // Three magic bytes are too common to report alone: the reserved flag bits, the extra-flags and OS bytes and
     // the first deflate block header must also check out, or nothing is reported.
     if !bytes.starts_with(&[0x1f, 0x8b, 0x08]) {
@@ -650,8 +770,7 @@ fn gzip(bytes: &[u8]) -> Option<Candidate> {
     for (flag, what) in [(0x08, "original name"), (0x10, "comment")] {
         if flags & flag != 0 {
             let field = bytes.get(at..)?;
-            let field = &field[..field.len().min(MAX_GZIP_FIELD)];
-            let end = field.iter().position(|&byte| byte == 0)?;
+            let end = probe.nul(field)?;
             if flag == 0x08 {
                 candidate.notes.push(format!("{what} {:?}", String::from_utf8_lossy(&field[..end])));
             }
@@ -772,7 +891,8 @@ fn squashfs(bytes: &[u8]) -> Option<Candidate> {
     Some(candidate.extent(used, "squashfs superblock bytes_used"))
 }
 
-/// A cpio (newc) archive at its first header, and how many bytes of member headers the walk covered.
+/// A cpio (newc) archive at its first header, and how many bytes from it the scan takes as the archive's own:
+/// through its end when that is known, else through the last member header read whole.
 fn cpio(bytes: &[u8]) -> Option<(Candidate, usize)> {
     if !(bytes.starts_with(b"070701") || bytes.starts_with(b"070702")) {
         return None;
@@ -795,26 +915,66 @@ fn cpio(bytes: &[u8]) -> Option<(Candidate, usize)> {
     // Six ASCII digits alone are too common to report.
     header(0)?;
     let align = |at: usize| at.checked_add(3).map(|at| at & !3);
-    let mut candidate = Candidate::new(Kind::Cpio);
-    let (mut at, mut members) = (0usize, 0u64);
-    for _ in 0..MAX_TABLE_ENTRIES {
-        let magic = bytes.get(at..at + 6);
-        let Some((size, name)) = header(at).filter(|_| magic == Some(b"070701") || magic == Some(b"070702")) else {
-            candidate.notes.push("no extent: a member header is missing or malformed".to_owned());
-            break;
-        };
+    // A member at `at`: its name, where its data starts and where the next member starts.
+    let member = |at: usize| -> Option<(&[u8], usize, usize)> {
+        let magic = bytes.get(at..at + 6)?;
+        let (size, name) = header(at).filter(|_| magic == b"070701" || magic == b"070702")?;
         let data = align(at + 110 + name.len() + 1)?;
-        let next = align(data.checked_add(usize::try_from(size).ok()?)?)?;
-        if name == b"TRAILER!!!" {
-            candidate = candidate.extent(next as u64, "cpio member headers through TRAILER!!!");
+        Some((name, data, align(data.checked_add(usize::try_from(size).ok()?)?)?))
+    };
+    let mut candidate = Candidate::new(Kind::Cpio);
+    // `covered` ends the last member header read whole: a declared member size is not trusted past it.
+    let (mut at, mut covered, mut members) = (0usize, 6usize, 0u64);
+    let walk = 'walk: {
+        for _ in 0..MAX_TABLE_ENTRIES {
+            let Some((name, data, next)) = member(at) else {
+                break 'walk Walk::Stopped("a member header is missing or malformed");
+            };
+            covered = data.min(bytes.len());
+            if name == b"TRAILER!!!" {
+                candidate = candidate.extent(next as u64, "cpio member headers through TRAILER!!!");
+                covered = next.min(bytes.len());
+                break 'walk Walk::Ended;
+            }
+            members += 1;
             at = next;
-            break;
         }
-        members += 1;
-        at = next;
+        Walk::Capped
+    };
+    match walk {
+        Walk::Ended => {}
+        Walk::Stopped(reason) => candidate.notes.push(format!("no extent: {reason}")),
+        Walk::Capped => {
+            // The trailer is the first member named TRAILER!!! after the cap, found by its name.
+            let mut from = at.min(bytes.len());
+            let trailer = loop {
+                let Some(found) = bytes[from..].windows(11).position(|window| window == b"TRAILER!!!\0") else {
+                    break None;
+                };
+                let name_at = from + found;
+                if let Some((b"TRAILER!!!", _, next)) = name_at.checked_sub(110).and_then(member) {
+                    break Some(next);
+                }
+                from = name_at + 1;
+            };
+            match trailer {
+                Some(end) => {
+                    candidate = candidate.extent(end as u64, "TRAILER!!! header found past the member walk's cap");
+                    candidate.notes.push(format!("the member walk stopped at its cap ({MAX_TABLE_ENTRIES} members)"));
+                    covered = end.min(bytes.len());
+                }
+                None => {
+                    candidate.notes.push(format!(
+                        "no extent: the member walk stopped at its cap ({MAX_TABLE_ENTRIES} members) and no \
+                         TRAILER!!! header follows; cpio headers in the rest of the file are taken as its members"
+                    ));
+                    covered = bytes.len();
+                }
+            }
+        }
     }
     candidate.notes.push(format!("{members} members walked"));
-    Some((candidate, at.max(6)))
+    Some((candidate, covered))
 }
 
 fn uimage(bytes: &[u8]) -> Option<Candidate> {

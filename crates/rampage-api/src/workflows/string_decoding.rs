@@ -22,6 +22,10 @@ const MAX_FUNCTION_INSTRUCTIONS: usize = 4_000;
 const MAX_SCANNED_INSTRUCTIONS: usize = 2_000_000;
 /// Direct call sites read per candidate.
 const MAX_CALL_SITES: usize = 200;
+/// Candidates whose call sites are traced, XOR and rotate loops first.
+const MAX_TRACED_CANDIDATES: usize = 64;
+/// Instructions decoded over all call-site tracing before it stops.
+const MAX_TRACED_INSTRUCTIONS: usize = 500_000;
 /// Instructions before a call searched for data pointers passed as arguments.
 const ARGUMENT_WINDOW: usize = 8;
 /// Blobs kept per candidate.
@@ -44,11 +48,25 @@ const X86_BYTE_REGISTERS: [&str; 20] = [
     "al", "bl", "cl", "dl", "ah", "bh", "ch", "dh", "sil", "dil", "bpl", "spl", "r8b", "r9b", "r10b", "r11b", "r12b",
     "r13b", "r14b", "r15b",
 ];
-/// Byte loads, byte stores, XORs and rotates on the fixed-width architectures, by mnemonic.
-const BYTE_LOADS: [&str; 10] = ["ldrb", "ldrsb", "ldurb", "ldursb", "lb", "lbu", "lbz", "lbzx", "lbzu", "lbzux"];
-const BYTE_STORES: [&str; 7] = ["strb", "sturb", "sb", "stb", "stbx", "stbu", "stbux"];
-const XORS: [&str; 5] = ["eor", "eors", "xor", "xori", "xoris"];
-const ROTATES: [&str; 6] = ["ror", "rors", "rol", "rori", "rotlwi", "rotrwi"];
+/// Byte loads, byte stores, XORs and rotates on AArch64, ARM, MIPS, PowerPC, RISC-V, SPARC and s390x, by
+/// mnemonic (x86 and m68k carry operand sizes instead).
+const BYTE_LOADS: [&str; 19] = [
+    "ldrb", "ldrsb", "ldurb", "ldursb", "lb", "lbu", "lbz", "lbzx", "lbzu", "lbzux", "ldub", "ldsb", "lduba", "ldsba",
+    "llc", "llgc", "lgb", "ic", "icy",
+];
+const BYTE_STORES: [&str; 10] = ["strb", "sturb", "sb", "stb", "stbx", "stbu", "stbux", "stba", "stc", "stcy"];
+const XORS: [&str; 17] = [
+    "eor", "eors", "xor", "xori", "xoris", "xorcc", "xnor", "xnorcc", "x", "xr", "xg", "xgr", "xrk", "xgrk", "xy",
+    "xilf", "xihf",
+];
+const ROTATES: [&str; 8] = ["ror", "rors", "rol", "rori", "rotlwi", "rotrwi", "rll", "rllg"];
+/// s390x XORs of an immediate into a byte of memory, which load, transform and store at once.
+const BYTE_XORS_IN_MEMORY: [&str; 2] = ["xi", "xiy"];
+/// ARM condition codes, which A32 and T32 (in IT blocks) append to a mnemonic.
+const ARM_CONDITIONS: [&str; 16] =
+    ["eq", "ne", "cs", "hs", "cc", "lo", "mi", "pl", "vs", "vc", "hi", "ls", "ge", "lt", "gt", "le"];
+/// The architectures whose byte operations are recognized, for the report's limitations.
+const RECOGNIZED_ARCHITECTURES: &str = "x86, AArch64, 32-bit ARM, MIPS, PowerPC, RISC-V, SPARC, s390x and m68k";
 
 /// What one loop instruction does to bytes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -111,17 +129,52 @@ fn parse(text: &str) -> (String, Vec<String>) {
 /// What `text`, one instruction on `arch`, does to bytes.
 fn classify(arch: Arch, text: &str) -> ByteOps {
     let (mnemonic, operands) = parse(text);
-    if matches!(arch, Arch::X86 | Arch::X86_64) {
-        return classify_x86(&mnemonic, &operands);
+    match arch {
+        Arch::X86 | Arch::X86_64 => return classify_x86(&mnemonic, &operands),
+        Arch::M68k => return classify_m68k(&mnemonic, &operands),
+        _ => {}
     }
     let base = mnemonic.split('.').next().unwrap_or(&mnemonic);
+    // A conditional ARM form (`ldrbne`, `eorsne`) is its base mnemonic plus a condition; the suffix is only taken
+    // off when what remains is a known mnemonic, so `bls` or `teq` never read as one.
+    let unconditional =
+        (arch == Arch::Arm).then(|| ARM_CONDITIONS.iter().find_map(|condition| base.strip_suffix(condition))).flatten();
+    let is = |table: &[&str]| table.contains(&base) || unconditional.is_some_and(|stripped| table.contains(&stripped));
+    if is(&BYTE_XORS_IN_MEMORY) && arch == Arch::S390x {
+        return ByteOps { load: true, store: true, xor: true, ..ByteOps::default() };
+    }
     ByteOps {
-        load: BYTE_LOADS.contains(&base),
-        store: BYTE_STORES.contains(&base),
-        xor: XORS.contains(&base) && !same_operands(&operands),
-        rotate: ROTATES.contains(&base),
+        load: is(&BYTE_LOADS),
+        store: is(&BYTE_STORES),
+        xor: is(&XORS) && !same_operands(&operands),
+        rotate: is(&ROTATES),
         add_sub: false,
     }
+}
+
+/// m68k gives the operand size as a mnemonic suffix (`move.b`), and its operands run source first.
+fn classify_m68k(mnemonic: &str, operands: &[String]) -> ByteOps {
+    let (base, size) = mnemonic.split_once('.').unwrap_or((mnemonic, ""));
+    let byte = size == "b";
+    let memory = |operand: Option<&String>| operand.is_some_and(|operand| operand.contains('('));
+    let (source_memory, destination_memory) = (memory(operands.first()), memory(operands.last()));
+    let mut ops = ByteOps::default();
+    match base {
+        "move" => {
+            ops.load = byte && source_memory;
+            ops.store = byte && destination_memory;
+        }
+        "eor" | "eori" | "add" | "addi" | "addq" | "sub" | "subi" | "subq" => {
+            // A memory destination is read, transformed and written back.
+            ops.load = byte && (source_memory || destination_memory);
+            ops.store = byte && destination_memory;
+            ops.xor = base.starts_with("eor") && !same_operands(operands);
+            ops.add_sub = byte && !base.starts_with("eor");
+        }
+        "rol" | "ror" | "roxl" | "roxr" => ops.rotate = true,
+        _ => {}
+    }
+    ops
 }
 
 /// x86 has no byte-specific mnemonics: an operand's size comes from a `byte ptr` or an 8-bit register.
@@ -166,6 +219,8 @@ struct Candidate {
     ops: ByteOps,
     /// `address: text` of the loop's byte-moving and transforming instructions.
     quoted: Vec<String>,
+    /// Whether its call sites were looked up at all.
+    traced: bool,
     call_sites: Vec<CallSite>,
     /// Whether some call sites were left unread.
     call_sites_cut: bool,
@@ -184,6 +239,16 @@ struct CallSite {
     at: u64,
     caller: Option<(u64, String)>,
     blobs: Vec<u64>,
+    /// Why the arguments were not read, when they were not.
+    unread: Option<&'static str>,
+}
+
+/// What call-site tracing left out, for the report's limitations.
+#[derive(Default)]
+struct Tracing {
+    decoded: usize,
+    untraced_candidates: usize,
+    unread_sites: usize,
 }
 
 #[derive(Clone)]
@@ -253,6 +318,7 @@ impl Project {
         let mut candidates = Vec::new();
         let mut scan_stopped = false;
         let mut skipped_large = 0;
+        let mut tracing = Tracing::default();
         let decoder = self.binary.decoder();
         if let Err(error) = &decoder {
             report.limitation(format!("Instructions cannot be decoded ({error}); no loops were looked for."));
@@ -277,9 +343,8 @@ impl Project {
                     candidates.push(candidate);
                 }
             }
-            for candidate in &mut candidates {
-                self.trace_call_sites(decoder.as_mut(), candidate, &analysis.program.xrefs);
-            }
+            candidates.sort_by_key(|candidate| (!(candidate.ops.xor || candidate.ops.rotate), candidate.address));
+            tracing = self.trace_call_sites(decoder.as_mut(), &mut candidates, &analysis.program.xrefs);
         }
         candidates.sort_by(|a, b| {
             b.confidence()
@@ -299,7 +364,9 @@ impl Project {
                 candidate.loop_start
             )];
             evidence.extend(candidate.quoted.iter().cloned());
-            let site_count = if candidate.call_sites_cut {
+            let site_count = if !candidate.traced {
+                "call sites not traced".to_owned()
+            } else if candidate.call_sites_cut {
                 format!("at least {} direct call sites (read up to {MAX_CALL_SITES})", candidate.call_sites.len())
             } else {
                 format!("{} direct call sites", candidate.call_sites.len())
@@ -329,7 +396,9 @@ impl Project {
                 );
                 let mut evidence = vec![format!("direct call at {:#x} from {caller}", site.at)];
                 evidence.extend(site.blobs.iter().map(|blob| format!("passes the data blob at {blob:#x}")));
-                if site.blobs.is_empty() {
+                if let Some(unread) = site.unread {
+                    evidence.push(unread.to_owned());
+                } else if site.blobs.is_empty() {
                     evidence.push(format!(
                         "no data pointer to a non-printable or high-entropy blob in the {ARGUMENT_WINDOW} \
                          instructions before the call"
@@ -418,11 +487,26 @@ impl Project {
                 "{skipped_large} functions over {MAX_FUNCTION_INSTRUCTIONS} instructions were not scanned for loops."
             ));
         }
+        if tracing.untraced_candidates > 0 {
+            report.limitation(format!(
+                "Call sites were traced for the first {MAX_TRACED_CANDIDATES} candidates only (XOR and rotate loops \
+                 first); {} candidates were not traced and stay at low confidence.",
+                tracing.untraced_candidates
+            ));
+        }
+        if tracing.unread_sites > 0 {
+            report.limitation(format!(
+                "Call-site tracing stopped after decoding {MAX_TRACED_INSTRUCTIONS} instructions; the arguments of {} \
+                 call sites were not read.",
+                tracing.unread_sites
+            ));
+        }
         report.limitation(format!(
             "Loops are found from backward branches within one function, at most {MAX_LOOP_INSTRUCTIONS} \
              instructions long, and read by mnemonic: vectorized, table-driven, multi-byte or unrolled-without-branch \
              decoders, decoders split across functions, and inlined decoders without a call site are missed. Byte \
-             ADD/SUB is recognized only on x86, where operand sizes are visible."
+             operations are recognized on {RECOGNIZED_ARCHITECTURES}; byte ADD/SUB only on x86 and m68k, where \
+             operand sizes are visible."
         ));
         report.limitation(format!(
             "Arguments are data pointers in the {ARGUMENT_WINDOW} instructions before a direct call; pointers built \
@@ -444,6 +528,10 @@ impl Project {
         function: &DiscoveredFunction,
         instructions: &[(Insn, &[u8])],
     ) -> Option<Candidate> {
+        // Each instruction is formatted at most once, however many loops it lies in, so formatting costs no more
+        // than the decoding already counted against MAX_SCANNED_INSTRUCTIONS. The text is kept for quoting only
+        // when the instruction does something to bytes.
+        let mut classified: Vec<Option<(ByteOps, Option<String>)>> = vec![None; instructions.len()];
         for (insn, _) in instructions {
             let (Flow::ConditionalJump(target) | Flow::Jump(target)) = insn.flow else { continue };
             if target > insn.address || !function.contains(target) {
@@ -456,13 +544,19 @@ impl Project {
             }
             let mut ops = ByteOps::default();
             let mut quoted = Vec::new();
-            for (other, bytes) in &instructions[first..last] {
-                let text = decoder.format(bytes, other.address);
-                let found = classify(self.binary.arch, &text);
-                if found != ByteOps::default() && quoted.len() < QUOTED_INSTRUCTIONS {
+            for index in first..last {
+                let (other, bytes) = &instructions[index];
+                let (found, text) = classified[index].get_or_insert_with(|| {
+                    let text = decoder.format(bytes, other.address);
+                    let found = classify(self.binary.arch, &text);
+                    (found, (found != ByteOps::default()).then_some(text))
+                });
+                if let Some(text) = text
+                    && quoted.len() < QUOTED_INSTRUCTIONS
+                {
                     quoted.push(format!("{:#x}: {text}", other.address));
                 }
-                ops.merge(found);
+                ops.merge(*found);
             }
             if ops.load && ops.store && ops.transforms() {
                 return Some(Candidate {
@@ -471,6 +565,7 @@ impl Project {
                     loop_start: target,
                     ops,
                     quoted,
+                    traced: false,
                     call_sites: Vec::new(),
                     call_sites_cut: false,
                     blobs: BTreeMap::new(),
@@ -480,45 +575,89 @@ impl Project {
         None
     }
 
-    /// Fills `candidate`'s direct call sites and the encoded-looking data blobs their arguments point at.
+    /// Fills the direct call sites of the first `MAX_TRACED_CANDIDATES` candidates and the encoded-looking data
+    /// blobs their arguments point at. Each caller block is decoded once, up to its last traced call, and at most
+    /// `MAX_TRACED_INSTRUCTIONS` instructions are decoded in all.
     fn trace_call_sites(
         &self,
         decoder: &mut dyn Disassembler,
-        candidate: &mut Candidate,
+        candidates: &mut [Candidate],
         xrefs: &[rampage_analysis::discover::Xref],
-    ) {
-        let Ok(page) = self.xrefs(XrefQuery::To(candidate.address), None, Some(MAX_CALL_SITES)) else { return };
-        candidate.call_sites_cut = page.total > page.items.len();
+    ) -> Tracing {
+        let mut tracing = Tracing::default();
+        // (candidate index, call address, caller, start of the caller's block holding the call)
+        let mut sites = Vec::new();
+        for (index, candidate) in candidates.iter_mut().enumerate() {
+            if index >= MAX_TRACED_CANDIDATES {
+                tracing.untraced_candidates += 1;
+                continue;
+            }
+            let Ok(page) = self.xrefs(XrefQuery::To(candidate.address), None, Some(MAX_CALL_SITES)) else { continue };
+            candidate.traced = true;
+            candidate.call_sites_cut = page.total > page.items.len();
+            for row in page.items.iter().filter(|row| row.kind == XrefKind::Call) {
+                let caller = self.function_containing(row.from).ok().flatten();
+                let block = caller.and_then(|caller| self.block_start(caller, row.from));
+                sites.push((index, row.from, caller, block));
+            }
+        }
+
+        let mut by_block: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+        for (site, &(.., block)) in sites.iter().enumerate() {
+            if let Some(block) = block {
+                by_block.entry(block).or_default().push(site);
+            }
+        }
         // In an image based at zero, small constants (lengths, keys) would read as addresses.
         let immediates_are_addresses = self.binary.segments.iter().all(|segment| segment.address > 0);
-        for row in page.items.iter().filter(|row| row.kind == XrefKind::Call) {
-            let caller = self.function_containing(row.from).ok().flatten();
+        let mut arguments: Vec<Option<Vec<u64>>> = vec![None; sites.len()];
+        for (&start, members) in &by_block {
+            if tracing.decoded >= MAX_TRACED_INSTRUCTIONS {
+                tracing.unread_sites += members.len();
+                continue;
+            }
+            let end = members.iter().map(|&site| sites[site].1).max().unwrap_or(start);
+            let instructions = block_instructions(self, decoder, start, end);
+            tracing.decoded += instructions.len();
+            for &site in members {
+                let before = instructions.partition_point(|(insn, _)| insn.address < sites[site].1);
+                let window = &instructions[before.saturating_sub(ARGUMENT_WINDOW)..before];
+                let pointers = window
+                    .iter()
+                    .filter_map(|(insn, _)| insn.data_ref.or(insn.immediate.filter(|_| immediates_are_addresses)));
+                arguments[site] = Some(pointers.collect());
+            }
+        }
+
+        for ((index, at, caller, block), pointers) in sites.into_iter().zip(arguments) {
+            let candidate = &mut candidates[index];
+            let unread = match (block, &pointers) {
+                (None, _) => {
+                    Some("the call lies outside the caller's discovered blocks, so its arguments were not read")
+                }
+                (Some(_), None) => Some("its arguments were not read: call-site tracing ran out of its decode budget"),
+                (Some(_), Some(_)) => None,
+            };
             let mut site =
-                CallSite { at: row.from, caller: caller.map(|at| (at, self.function_name(at))), blobs: vec![] };
-            let block_start = caller.and_then(|caller| self.block_start(caller, row.from));
-            if let Some(start) = block_start {
-                let before = block_instructions(self, decoder, start, row.from);
-                let window = &before[before.len().saturating_sub(ARGUMENT_WINDOW)..];
-                for (insn, _) in window {
-                    let immediate = insn.immediate.filter(|_| immediates_are_addresses);
-                    let Some(address) = insn.data_ref.or(immediate) else { continue };
-                    if candidate.blobs.contains_key(&address) {
-                        site.blobs.push(address);
-                        candidate.blobs.get_mut(&address).expect("checked").passed_from.push(row.from);
-                        continue;
-                    }
-                    if candidate.blobs.len() >= MAX_BLOBS || site.blobs.contains(&address) {
-                        continue;
-                    }
-                    if let Some(mut blob) = self.blob_at(address, xrefs).filter(Blob::reads_as_encoded) {
-                        blob.passed_from.push(row.from);
-                        candidate.blobs.insert(address, blob);
-                        site.blobs.push(address);
-                    }
+                CallSite { at, caller: caller.map(|at| (at, self.function_name(at))), blobs: vec![], unread };
+            for address in pointers.unwrap_or_default() {
+                if let Some(blob) = candidate.blobs.get_mut(&address) {
+                    site.blobs.push(address);
+                    blob.passed_from.push(at);
+                    continue;
+                }
+                if candidate.blobs.len() >= MAX_BLOBS || site.blobs.contains(&address) {
+                    continue;
+                }
+                if let Some(mut blob) = self.blob_at(address, xrefs).filter(Blob::reads_as_encoded) {
+                    blob.passed_from.push(at);
+                    candidate.blobs.insert(address, blob);
+                    site.blobs.push(address);
                 }
             }
             candidate.call_sites.push(site);
         }
+        tracing
     }
 
     /// The start of the block of `function` that contains `address`.
@@ -593,5 +732,124 @@ mod tests {
     fn operands_keep_bracketed_commas() {
         assert_eq!(parse("strb wzr, [x0, x8]"), ("strb".to_owned(), vec!["wzr".to_owned(), "[x0, x8]".to_owned()]));
         assert_eq!(parse("ret"), ("ret".to_owned(), vec![]));
+    }
+
+    /// Decoded instructions, as each architecture's disassembler formats them, and what they do to bytes.
+    #[test]
+    fn byte_operations_are_read_from_decoded_instructions() {
+        let none = ByteOps::default();
+        let load = ByteOps { load: true, ..none };
+        let store = ByteOps { store: true, ..none };
+        let xor = ByteOps { xor: true, ..none };
+        let rotate = ByteOps { rotate: true, ..none };
+        let cases: &[(Arch, &[u8], &str, ByteOps)] = &[
+            (Arch::Arm, &[0x01, 0x30, 0xd1, 0xd4], "ldrble r3, [r1], #1", load),
+            (Arch::Arm, &[0x01, 0x30, 0xc0, 0x14], "strbne r3, [r0], #1", store),
+            (Arch::Arm, &[0x02, 0x30, 0x23, 0x10], "eorne r3, r3, r2", xor),
+            (Arch::Arm, &[0x02, 0x30, 0x33, 0x10], "eorsne r3, r3, r2", xor),
+            (Arch::Sparc, &[0xc2, 0x0a, 0x40, 0x00], "ldub [%o1], %g1", load),
+            (Arch::Sparc, &[0xc2, 0x4a, 0x40, 0x00], "ldsb [%o1], %g1", load),
+            (Arch::Sparc, &[0xc2, 0x2a, 0x00, 0x00], "stb %g1, [%o0]", store),
+            (Arch::Sparc, &[0x82, 0x18, 0x40, 0x02], "xor %g1, %g2, %g1", xor),
+            (Arch::S390x, &[0xe3, 0x10, 0x20, 0x00, 0x00, 0x94], "llc %r1, 0(%r2)", load),
+            (Arch::S390x, &[0x43, 0x10, 0x30, 0x00], "ic %r1, 0(%r3)", load),
+            (Arch::S390x, &[0x42, 0x10, 0x30, 0x00], "stc %r1, 0(%r3)", store),
+            (Arch::S390x, &[0x17, 0x12], "xr %r1, %r2", xor),
+            (Arch::S390x, &[0x97, 0x5a, 0x10, 0x00], "xi 0(%r1), 0x5a", ByteOps { load: true, store: true, ..xor }),
+            (Arch::S390x, &[0xeb, 0x12, 0x00, 0x03, 0x00, 0x1d], "rll %r1, %r2, 3", rotate),
+            (Arch::M68k, &[0x10, 0x18], "move.b (a0)+, d0", load),
+            (Arch::M68k, &[0x12, 0xc0], "move.b d0, (a1)+", store),
+            (Arch::M68k, &[0xb3, 0x00], "eor.b d1, d0", xor),
+            (Arch::M68k, &[0x0a, 0x00, 0x00, 0x5a], "eori.b #$5a, d0", xor),
+            (Arch::M68k, &[0xe3, 0x18], "rol.b #$1, d0", rotate),
+            (Arch::M68k, &[0xd0, 0x01], "add.b d1, d0", ByteOps { add_sub: true, ..none }),
+        ];
+        for &(arch, bytes, text, expected) in cases {
+            let formatted = rampage_arch::decoder_for(arch).unwrap().format(bytes, 0x1000);
+            assert_eq!(formatted, text, "{arch:?} {bytes:02x?}");
+            assert_eq!(classify(arch, &formatted), expected, "{arch:?} {formatted}");
+        }
+    }
+
+    /// A decoder counting the instructions it decodes and formats.
+    struct Counting {
+        inner: Box<dyn Disassembler>,
+        decoded: usize,
+        formatted: usize,
+    }
+
+    impl Disassembler for Counting {
+        fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
+            self.decoded += 1;
+            self.inner.decode(bytes, address)
+        }
+        fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
+            self.decoded += 1;
+            self.inner.decode_with_memory(bytes, address, read)
+        }
+        fn reset(&mut self) {
+            self.inner.reset();
+        }
+        fn format(&mut self, bytes: &[u8], address: u64) -> String {
+            self.formatted += 1;
+            self.inner.format(bytes, address)
+        }
+    }
+
+    fn project(path: &str) -> Project {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        Project::new(rampage_loaders::Binary::open(path).unwrap())
+    }
+
+    #[test]
+    fn loops_format_each_instruction_at_most_once() {
+        let project = project("../../tests/fixtures/bin/hello-go-x64.elf");
+        let mut decoder = Counting { inner: project.binary.decoder().unwrap(), decoded: 0, formatted: 0 };
+        let analysis = project.analysis().unwrap();
+        for function in analysis.program.functions.iter().filter(|f| f.instruction_count <= MAX_FUNCTION_INSTRUCTIONS) {
+            let instructions = function_instructions(&project, &mut decoder, function);
+            decoder.formatted = 0;
+            project.byte_loop(&mut decoder, function, &instructions);
+            assert!(decoder.formatted <= instructions.len(), "{:#x}", function.address);
+        }
+    }
+
+    #[test]
+    fn call_sites_decode_each_caller_block_once_for_a_bounded_set_of_candidates() {
+        let project = project("tests/fixtures/decode-x64.elf");
+        let analysis = project.analysis().unwrap();
+        let decode = project.resolve("decode").unwrap();
+        let main = analysis.program.function_at(project.resolve("main").unwrap()).unwrap();
+        let function = analysis.program.function_at(decode).unwrap();
+        let mut decoder = Counting { inner: project.binary.decoder().unwrap(), decoded: 0, formatted: 0 };
+        let instructions = function_instructions(&project, &mut decoder, function);
+        let found = project.byte_loop(&mut decoder, function, &instructions).unwrap();
+        // The same routine many times over: every copy's three call sites sit in `main`'s one block.
+        let mut candidates: Vec<Candidate> = (0..MAX_TRACED_CANDIDATES + 6)
+            .map(|_| Candidate {
+                name: found.name.clone(),
+                quoted: found.quoted.clone(),
+                call_sites: Vec::new(),
+                blobs: BTreeMap::new(),
+                ..found
+            })
+            .collect();
+        decoder.decoded = 0;
+        let tracing = project.trace_call_sites(&mut decoder, &mut candidates, &analysis.program.xrefs);
+        assert!(decoder.decoded <= main.instruction_count, "{} > {}", decoder.decoded, main.instruction_count);
+        assert_eq!((tracing.decoded, tracing.untraced_candidates, tracing.unread_sites), (decoder.decoded, 6, 0));
+        assert!(candidates[..MAX_TRACED_CANDIDATES].iter().all(|candidate| candidate.blobs.len() == 3));
+        assert!(candidates[MAX_TRACED_CANDIDATES..].iter().all(|candidate| !candidate.traced));
+    }
+
+    #[test]
+    fn arm_conditions_come_off_only_known_mnemonics() {
+        for text in ["bls #0x40", "teq r0, r1", "blo #0x40", "movne r0, r1", "lsls r0, r0, #1"] {
+            assert_eq!(classify(Arch::Arm, text), ByteOps::default(), "{text}");
+        }
+        assert!(classify(Arch::Arm, "ldrbeq.w r3, [r1]").load);
+        assert!(!classify(Arch::Aarch64, "strbne w0, [x1]").store, "conditions are stripped only on ARM");
+        assert!(!classify(Arch::M68k, "move.l (a0)+, d0").load, "a long move is not a byte load");
+        assert!(!classify(Arch::S390x, "xr %r1, %r1").xor);
     }
 }

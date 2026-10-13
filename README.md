@@ -62,9 +62,10 @@ decompiler. See [the design](docs/plans/2026-10-10-rampage-design.md) for the ro
   signal, not proof. Also exposed as the `detect_tools`, `yara_scan` and `capa_detect` tools. A
   spec-derived constant database (AES, DES, Blowfish, SHA/MD5, ChaCha, CRC, Deflate, Base64, curve parameters)
   locates algorithm tables in the image.
-- Guided investigation workflows: `triage_report`, `find_main`, `network_surface`, `find_crypto` and `diff_builds`
-  compose the primitives into one bounded report. Each finding carries its evidence, source tool and confidence;
-  each report ends with concrete next tool calls and states its limitations. MCP tools, or `rampage report`.
+- Guided investigation workflows: `triage_report`, `find_main`, `network_surface`, `find_crypto`,
+  `persistence_surface`, `string_decoding` and `diff_builds` compose the primitives into one bounded report.
+  Each finding carries its evidence, source tool and confidence; each report ends with concrete next tool calls
+  and states its limitations. MCP tools, or `rampage report`.
 - Measured accuracy: `rampage-eval` scores library identification (on a stripped copy of the reference and on a
   different program linking the same library) and function discovery (against symbol starts): precision, recall
   and a disagreement set per architecture slice, gated on no wrong names and committed recall floors -- the
@@ -84,7 +85,9 @@ cargo build --release
 
 rampage report triage-report <file>          # guided overview with evidence and next steps
 rampage report find-main|network-surface|find-crypto <file>
+rampage report persistence-surface|string-decoding <file>  # autostart indicators; candidate decoding loops
 rampage report diff-builds <file> --other <file>
+rampage carve   <file> [--max-candidates N]  # embedded executables/archives by validated header; extracts nothing
 rampage dotnet  <file> [--list types|pinvokes|attributes] [--contains TEXT]  # .NET metadata, one list per page
 rampage triage  <file>                       # hashes, entropy, format details, overlay, packing hints
 rampage detect  <file> [--peid <userdb.txt>]  # producing packer/compiler/...; warns on skipped PeID entries
@@ -115,8 +118,8 @@ rampage funcs   <file> [--name TEXT]         # recursive-descent function discov
 rampage xrefs   <file> --to|--from <addr|name>
 rampage rename  <file> <addr|name> <new name|--clear>
 rampage comment <file> <addr|name> <text|--clear>
-rampage annotate-batch <file> <entries.json> # many names and comments, all or nothing, as one undo step
-rampage check-names <file> <name>...         # pre-flight: valid, address-shaped, or already used
+rampage annotate-batch <file> <entries.json> # [{at, name?, comment?}] as one undo step, all or nothing
+rampage check-names <file> <name>...         # valid identifier? address-shaped? already used?
 rampage annotations <file>                   # names, comments, signatures, types and globals
 rampage mcp                                  # MCP server on stdin/stdout
 
@@ -164,7 +167,10 @@ are sent to Anthropic's API.
 `set_signature`, `set_types`, `set_global`, `import_debug_signatures`,
 `class_evidence`, `observe_pointer`, `observe_indirect_branch`, `compare_runtime_bytes`,
 `compare_pointer_observations`, `undo`, `redo`
-and `list_annotations`. `undo` and `redo` revert or reapply one step, which may be a whole batch.
+and `list_annotations`, plus one tool per guided workflow (`triage_report`, `persistence_surface`,
+`string_decoding`, ...). `undo` and `redo` revert or reapply one step, which may be a whole batch. `carve` takes
+any file path rather than a binary: it pages candidates with `offset`/`limit` and reports `more` instead of a
+total, scanning only as far as the candidate after the page.
 Agents' annotations land in the same log the
 UI and CLI use, and the UI shows them as they arrive. Analysis runs once per binary and is cached for the session.
 `observe_pointer` exposes captured slot evidence without modifying discovery.
