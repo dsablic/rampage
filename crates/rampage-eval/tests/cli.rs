@@ -344,6 +344,7 @@ fn tool_truth_covers_every_committed_fixture() {
     // Each fixture directory, and how the truth file (in tests/fixtures/data) spells it.
     let directories = [
         ("tests/fixtures/bin", "../bin"),
+        ("tests/fixtures/malformed", "../malformed"),
         ("crates/rampage-api/tests/fixtures", "../../../crates/rampage-api/tests/fixtures"),
     ];
     let mut unknown = Vec::new();
