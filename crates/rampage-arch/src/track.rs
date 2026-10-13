@@ -31,6 +31,8 @@ struct Value {
 pub(crate) struct Found {
     /// An address the instruction reads, writes or forms.
     pub data_ref: Option<u64>,
+    /// The instruction loads from or stores to `data_ref` rather than forming it.
+    pub accesses: bool,
     /// A constant it forms that may be an address.
     pub immediate: Option<u64>,
     /// The target of an indirect branch through a known register (RISC-V `auipc`/`jalr`).
@@ -112,6 +114,7 @@ impl Tracker {
                 && let Some(base) = self.get(base)
             {
                 found.data_ref = Some(self.wrap(base.value.wrapping_add(disp as u64)));
+                found.accesses = true;
             }
         }
         let result = self.result(mnemonic, operands, address, &mut found);
@@ -213,6 +216,7 @@ impl Tracker {
                 };
                 found.branch_target = Some(offset(self.get(base)?, disp).value);
                 found.data_ref = None;
+                found.accesses = false;
                 None
             }
 
@@ -239,9 +243,12 @@ impl Tracker {
                 &[_, I(value)],
             ) => {
                 found.data_ref = Some(value as u64);
+                found.accesses = true;
                 None
             }
             (Arch::S390x, "la" | "lay", &[R(rd), M { base, index: 0, disp }]) => {
+                // Load address forms its operand's address without reading it.
+                found.accesses = false;
                 Some((rd, offset(self.get(base)?, disp)))
             }
             (Arch::S390x, "aghi" | "agfi", &[R(rd), I(value)]) => Some((rd, offset(self.get(rd)?, value))),

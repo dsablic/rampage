@@ -127,13 +127,14 @@ impl Disassembler for A64Disassembler {
                 len: bytes.len().clamp(1, 4) as u8,
                 flow: Flow::Invalid,
                 data_ref: None,
+                accesses: false,
                 immediate: None,
                 conditional: false,
             };
         };
         match decode_word(word) {
             Some(decoded) => {
-                let flow::Analysis { mut flow, data_ref, jump_base, jump_table } =
+                let flow::Analysis { mut flow, data_ref, accesses, immediate, jump_base, jump_table } =
                     flow::analyze(&decoded, address, &mut self.addresses, read);
                 if flow == Flow::Call(address.wrapping_add(4)) && reads_link(&bytes[4..]) {
                     flow = Flow::Next;
@@ -143,9 +144,17 @@ impl Disassembler for A64Disassembler {
                     self.resolved = Some(flow);
                 }
                 self.jump_base = jump_base;
-                Insn { address, len: 4, flow, data_ref, immediate: None, conditional: false }
+                Insn { address, len: 4, flow, data_ref, accesses, immediate, conditional: false }
             }
-            None => Insn { address, len: 4, flow: Flow::Invalid, data_ref: None, immediate: None, conditional: false },
+            None => Insn {
+                address,
+                len: 4,
+                flow: Flow::Invalid,
+                data_ref: None,
+                accesses: false,
+                immediate: None,
+                conditional: false,
+            },
         }
     }
 

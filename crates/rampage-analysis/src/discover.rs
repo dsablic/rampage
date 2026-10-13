@@ -478,14 +478,18 @@ fn explore(
     };
     let trust_immediates = memory.immediates_may_be_addresses();
     let delay_slots = decoder.delay_slots();
-    // Data references and code pointers an instruction contributes.
-    let record_refs = |insn: &rampage_arch::Insn, xrefs: &mut Vec<Xref>, code_pointers: &mut Vec<u64>| {
+    // Data references and code pointers an instruction contributes. Memory it loads or stores is data, even in a
+    // literal pool inside code; an address it forms, or a constant it moves or loads, may point at code.
+    let record_refs = |insn: &rampage_arch::Insn, xrefs: &mut Vec<Xref>, refs: &mut CodeRefs| {
         let immediate = insn.immediate.filter(|_| trust_immediates);
+        let accessed = insn.data_ref.filter(|_| insn.accesses);
         for target in insn.data_ref.into_iter().chain(immediate).filter(|&target| memory.is_mapped(target)) {
             xrefs.push(Xref { to: target, from: insn.address, kind: XrefKind::Data });
             let code = memory.code_address(target);
-            if memory.is_executable(code) {
-                code_pointers.push(code);
+            if Some(target) == accessed {
+                refs.accessed.push(code);
+            } else if memory.is_executable(code) {
+                refs.pointers.push(code);
             }
         }
     };
@@ -493,7 +497,7 @@ fn explore(
     let mut instructions: BTreeSet<u64> = BTreeSet::new();
     let mut xrefs = Vec::new();
     let mut new_seeds = Vec::new();
-    let mut code_pointers = Vec::new();
+    let mut code_refs = CodeRefs::default();
     let mut jump_bases = Vec::new();
     let mut jump_targets = Vec::new();
     let mut branch_targets = Vec::new();
@@ -581,11 +585,11 @@ fn explore(
                         break;
                     }
                     instructions.insert(next);
-                    record_refs(&slot, &mut xrefs, &mut code_pointers);
+                    record_refs(&slot, &mut xrefs, &mut code_refs);
                     next = next.saturating_add(u64::from(slot.len));
                 }
             }
-            record_refs(&insn, &mut xrefs, &mut code_pointers);
+            record_refs(&insn, &mut xrefs, &mut code_refs);
             let stops = never_returns(&insn, resolved);
             match insn.flow {
                 Flow::Next => {
@@ -686,9 +690,11 @@ fn explore(
     let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len(), switches };
     // The base an AArch64 switch adds its jump-table offsets to is a label inside the function, not another
     // function's entry. Other code addresses formed inside the extent may be: it can run past a noreturn call.
+    // An address the function also loads from is data, such as a literal pool `adr` points at.
     let end = function.end();
     let is_local_jump_base = |target: u64| start < target && target < end && jump_bases.contains(&target);
-    new_seeds.extend(code_pointers.into_iter().filter(|&target| !is_local_jump_base(target)));
+    let CodeRefs { pointers, accessed } = code_refs;
+    new_seeds.extend(pointers.into_iter().filter(|&target| !is_local_jump_base(target) && !accessed.contains(&target)));
     Explored {
         function,
         xrefs,
@@ -714,6 +720,13 @@ impl Explored {
             })
             || self.function.blocks.iter().any(|block| functions.contains(&block.end))
     }
+}
+
+/// The code pointers a function's instructions form or load, and the addresses they load from or store to.
+#[derive(Default)]
+struct CodeRefs {
+    pointers: Vec<u64>,
+    accessed: Vec<u64>,
 }
 
 /// How the paths through a function leave it.
@@ -772,6 +785,7 @@ fn split_block(blocks: &mut BTreeMap<u64, u64>, address: u64) {
 
 #[cfg(test)]
 mod tests {
+    mod literal_pools;
     mod x86_switch;
 
     use rampage_arch::{Arch, decoder_for};

@@ -441,6 +441,10 @@ fn switch_entry(decoded: &Decoded, addresses: &Addresses) -> Option<(u64, Entry)
 pub struct Analysis {
     pub flow: Flow,
     pub data_ref: Option<u64>,
+    /// The instruction loads from or stores to `data_ref` rather than forming it.
+    pub accesses: bool,
+    /// The pointer a 64-bit literal load reads from read-only memory, which may be a code pointer.
+    pub immediate: Option<u64>,
     /// For BR: the full address its register holds or was offset from, such as a switch's jump-table base.
     pub jump_base: Option<u64>,
     /// For BR: the bounded switch table its register was loaded from.
@@ -545,6 +549,8 @@ pub fn analyze(
             base().map(|base| base.wrapping_add(offset))
         }
     };
+    let accesses = matches!(info.effect, Effect::LoadLiteral | Effect::ScaledOffset(_)) && data_ref.is_some();
+    let immediate = data_ref.filter(|_| name == "LDR_64_loadlit").and_then(|slot| read(slot, 8));
     let mut destination = decoded.field("Rd");
     if matches!(name, "LDR_64_ldst_pos" | "LDR_64_loadlit") {
         destination = decoded.field("Rt");
@@ -612,5 +618,5 @@ pub fn analyze(
         let wide = decoded.field("sf") == Some(1);
         addresses.compare = Some(Compare { register, limit, wide, address });
     }
-    Analysis { flow, data_ref, jump_base, jump_table }
+    Analysis { flow, data_ref, accesses, immediate, jump_base, jump_table }
 }

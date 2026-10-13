@@ -39,7 +39,15 @@ impl Disassembler for X86Disassembler {
         let instruction = self.decode_raw(bytes, address);
         if instruction.is_invalid() {
             self.jump_table = None;
-            return Insn { address, len: 1, flow: Flow::Invalid, data_ref: None, immediate: None, conditional: false };
+            return Insn {
+                address,
+                len: 1,
+                flow: Flow::Invalid,
+                data_ref: None,
+                accesses: false,
+                immediate: None,
+                conditional: false,
+            };
         }
         self.jump_table = self.registers.step(&instruction, self.bitness, &mut self.info);
         let mut flow = flow_of(&instruction);
@@ -51,11 +59,14 @@ impl Disassembler for X86Disassembler {
         {
             flow = Flow::Next;
         }
+        let data_ref = memory_ref_of(&instruction);
         Insn {
             address,
             len: instruction.len() as u8,
             flow,
-            data_ref: memory_ref_of(&instruction),
+            data_ref,
+            // `lea` forms its memory operand's address without reading it.
+            accesses: data_ref.is_some() && !matches!(instruction.mnemonic(), Mnemonic::Lea | Mnemonic::Nop),
             immediate: pointer_immediate_of(&instruction),
             conditional: false,
         }
@@ -241,6 +252,14 @@ mod tests {
     fn rip_relative_operand_is_a_data_ref() {
         let insn = &decode_all(&[0x48, 0x8d, 0x05, 0x10, 0, 0, 0], 0x1000)[0];
         assert_eq!(insn.data_ref, Some(0x1017));
+    }
+
+    #[test]
+    fn memory_read_is_accessed_but_lea_forms_its_address() {
+        let lea = &decode_all(&[0x48, 0x8d, 0x05, 0x10, 0, 0, 0], 0x1000)[0];
+        let mov = &decode_all(&[0x48, 0x8b, 0x05, 0x10, 0, 0, 0], 0x1000)[0];
+        assert_eq!((lea.data_ref, lea.accesses), (Some(0x1017), false), "lea rax, [rip+0x10]");
+        assert_eq!((mov.data_ref, mov.accesses), (Some(0x1017), true), "mov rax, [rip+0x10]");
     }
 
     #[test]

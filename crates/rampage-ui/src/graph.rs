@@ -307,6 +307,7 @@ mod tests {
                     text: "x".repeat(5 + index as usize * 9),
                     flow: Flow::Next,
                     data_ref: None,
+                    accesses: false,
                     immediate: None,
                     label: None,
                     comment: None,

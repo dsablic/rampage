@@ -183,6 +183,8 @@ struct Value {
 #[derive(Default)]
 struct Found {
     data_ref: Option<u64>,
+    /// The instruction loads from or stores to `data_ref` rather than forming it.
+    accesses: bool,
     immediate: Option<u64>,
 }
 
@@ -320,6 +322,7 @@ impl Aarch32Disassembler {
         {
             if let Some(slot) = label_target(decoded, address) {
                 found.data_ref = Some(slot);
+                found.accesses = true;
                 if name.starts_with("LDR_l") {
                     let value = literal(slot);
                     found.immediate = value;
@@ -401,6 +404,7 @@ impl Aarch32Disassembler {
                         base.value.wrapping_add(offset)
                     };
                     found.data_ref = Some(at & 0xffff_ffff);
+                    found.accesses = true;
                     if mnemonic == "LDR" {
                         let entry =
                             self.target.got.as_ref().and_then(|got: &Got| got.entry(at, 4)).filter(|&entry| entry != 0);
@@ -507,6 +511,7 @@ impl Disassembler for Aarch32Disassembler {
             len: self.unit(address),
             flow: Flow::Invalid,
             data_ref: None,
+            accesses: false,
             immediate: None,
             conditional: false,
         };
@@ -573,6 +578,7 @@ impl Disassembler for Aarch32Disassembler {
             len: decoded.size(),
             flow,
             data_ref: found.data_ref,
+            accesses: found.accesses,
             immediate: found.immediate,
             conditional: conditional_transfer,
         }

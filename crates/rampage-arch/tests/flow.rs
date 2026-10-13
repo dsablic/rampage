@@ -352,6 +352,41 @@ fn run(target: Target, hex: &str, lengths: &[usize]) -> Vec<(Flow, Option<u64>, 
     results
 }
 
+/// Each instruction's data reference and whether it loads from or stores to it, rather than forming it.
+fn accesses(target: Target, hex: &str, lengths: &[usize]) -> Vec<(Option<u64>, bool)> {
+    let mut decoder = decoder(&target).unwrap();
+    let code = bytes(hex);
+    let mut offset = 0;
+    let mut results = Vec::new();
+    for &len in lengths {
+        let insn = decoder.decode(&code[offset..], AT + offset as u64);
+        results.push((insn.data_ref, insn.accesses));
+        offset += len;
+    }
+    results
+}
+
+#[test]
+fn loads_and_stores_access_their_address_while_formed_addresses_may_be_code() {
+    // A32: ldr r0, [pc, #4]; adr r1, 0x1010; str r2, [r1, #4]; .word 0x2000, the value the load reads
+    let target = Target::new(Arch::Arm);
+    assert_eq!(
+        accesses(target.clone(), "04009fe504108fe2042081e500200000", &[4, 4, 4]),
+        [(Some(0x100c), true), (Some(0x1010), false), (Some(0x1014), true)]
+    );
+    assert_eq!(run(target, "04009fe504108fe2042081e500200000", &[4])[0].2, Some(0x2000));
+    // Thumb: ldr r0, [pc, #4]; add r0, pc (a pool offset made an address)
+    assert_eq!(accesses(thumb(), "0148784400bf00bf00010000", &[2, 2]), [(Some(0x1008), true), (Some(0x1106), false)]);
+    // lui $2, 0x41; lw $3, 8($2)
+    assert_eq!(accesses(big_endian(Arch::Mips), "3c0200418c430008", &[4, 4])[1], (Some(0x41_0008), true));
+    // auipc a0, 1; addi a0, a0, 16; ld a1, 8(a0)
+    let results = accesses(Target::new(Arch::Riscv64), "171500001305050183358500", &[4, 4, 4]);
+    assert_eq!(results[1..], [(Some(0x2010), false), (Some(0x2018), true)]);
+    // larl %r2, 0x1010; lgrl %r2, 0x1010
+    let results = accesses(big_endian(Arch::S390x), "c02000000008c42800000008", &[6, 6]);
+    assert_eq!(results, [(Some(0x1010), false), (Some(0x1016), true)]);
+}
+
 #[test]
 fn arm_plt_entries_resolve_their_got_slot() {
     // add ip, pc, #0, #12; add ip, ip, #0x11000; ldr pc, [ip, #0xbe8]!

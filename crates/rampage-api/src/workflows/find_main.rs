@@ -265,7 +265,9 @@ impl Project {
             let mut follow = None;
             for line in self.disassemble(Some(&format!("{at:#x}")), STUB_INSTRUCTIONS)? {
                 if destination(&line.text).is_some_and(|register| registers.contains(&register)) {
-                    let value = line.data_ref.or(line.immediate).filter(|&value| self.binary.is_code(value));
+                    // A load's own address is data; the value it loads (`ldr r0, =main`) may be main.
+                    let formed = line.data_ref.filter(|_| !line.accesses);
+                    let value = formed.or(line.immediate).filter(|&value| self.binary.is_code(value));
                     loaded = value.map(|value| (value, describe(&line)));
                     continue;
                 }

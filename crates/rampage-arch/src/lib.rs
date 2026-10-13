@@ -198,11 +198,17 @@ pub struct Insn {
     pub address: u64,
     pub len: u8,
     pub flow: Flow,
-    /// Absolute address of a memory operand (RIP-relative or absolute displacement).
+    /// Absolute address of a memory operand (RIP-relative or absolute displacement), or an address the
+    /// instruction forms (`lea`, `adr`, ADRP plus ADD).
     #[serde(serialize_with = "crate::hex::optional_address")]
     pub data_ref: Option<u64>,
-    /// An address-sized immediate that the instruction moves or pushes, which may be a pointer. Only callers that
-    /// know immediates are meaningful as addresses (images not based at zero) should treat it as one.
+    /// The instruction loads from or stores to `data_ref` rather than forming it. Memory accessed is data, even in
+    /// a literal pool inside code; only a formed address may be a code pointer.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub accesses: bool,
+    /// An address-sized constant that the instruction moves, pushes or loads from a PC-relative literal pool in
+    /// read-only memory (ARM `ldr r0, =func`), which may be a pointer. Only callers that know immediates are
+    /// meaningful as addresses (images not based at zero) should treat it as one.
     #[serde(serialize_with = "crate::hex::optional_address")]
     pub immediate: Option<u64>,
     /// The call, return or register-indirect jump the instruction makes happens only when a condition holds, so

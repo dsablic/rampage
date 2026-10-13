@@ -17,6 +17,9 @@ pub struct DisassemblyLine {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub data_ref: Option<u64>,
+    /// The instruction loads from or stores to `data_ref` rather than forming it, so it is data, not code.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub accesses: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub immediate: Option<u64>,
@@ -118,6 +121,7 @@ impl Project {
                 text: decoder.format(bytes, address),
                 flow: insn.flow,
                 data_ref: insn.data_ref,
+                accesses: insn.accesses,
                 immediate: insn.immediate,
                 label: self.name_at(address),
                 note: self.comment_at(address),

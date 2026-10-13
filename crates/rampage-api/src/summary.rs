@@ -46,6 +46,7 @@ impl Project {
                 len: bytes.len() as u8,
                 flow: line.flow,
                 data_ref: line.data_ref,
+                accesses: line.accesses,
                 immediate: line.immediate,
                 conditional: false,
             };

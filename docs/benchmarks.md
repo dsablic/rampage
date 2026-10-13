@@ -27,8 +27,8 @@ versions or corpora are interpreted.
 | hello-x64-dyn.elf | x86_64   |      6 |       6 |       5 |  83.3% |
 | hello-x64.exe     | x86_64   |    497 |     525 |     497 | 100.0% |
 | hello-arm64.elf   | aarch64  |      6 |       8 |       5 |  83.3% |
-| hello-arm.elf     | arm      |      4 |      10 |       4 | 100.0% |
-| hello-thumb.elf   | arm      |     44 |      44 |      43 |  97.7% |
+| hello-arm.elf     | arm      |      4 |       8 |       4 | 100.0% |
+| hello-thumb.elf   | arm      |     44 |      43 |      43 |  97.7% |
 | hello-mips.elf    | mips     |      3 |       5 |       3 | 100.0% |
 | hello-ppc.elf     | powerpc  |     42 |      42 |      42 | 100.0% |
 | hello-riscv64.elf | riscv64  |      8 |       8 |       8 | 100.0% |
@@ -82,7 +82,9 @@ row below was last re-measured at `7c03e5c`, from the same cached exports, after
 forgetting facts at joins ahead of the comparison and stopped accepting 16-bit `movsxd` and non-contiguous masks;
 no row changed. They were re-measured again at `41e1224`, from the same cached exports, after the noreturn review
 fixes (conditional calls and returns, resumable traps, incremental inference, case-sensitive names, more get-PC
-idioms); no row changed.
+idioms); no row changed. Re-measured again, from the same cached exports, after the address a load reads stopped
+counting as a code pointer: only the hello-arm.elf (10 to 8 rampage functions) and hello-thumb.elf (44 to 43) rows
+changed.
 
 | binary | funcs G/R/both | same blocks | block J | chain J | edge P / R | chain edge P / R | call P / R | callgraph P / R | G-only computed calls |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
@@ -92,8 +94,8 @@ idioms); no row changed.
 | hello-x64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
 | hello-arm64.elf | 6/9/6 | 6/6 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
 | hello-arm64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
-| hello-arm.elf | 4/10/4 | 4/4 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
-| hello-thumb.elf | 44/44/43 | 36/43 | 96.3% | 97.9% | 95.9% / 94.9% | 97.8% / 99.6% | 100.0% / 100.0% | 100.0% / 100.0% | 2 |
+| hello-arm.elf | 4/8/4 | 4/4 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
+| hello-thumb.elf | 44/43/43 | 36/43 | 96.3% | 97.9% | 95.9% / 94.9% | 97.8% / 99.6% | 100.0% / 100.0% | 100.0% / 100.0% | 2 |
 | hello-mips.elf | 3/3/3 | 2/3 | 80.0% | 100.0% | 50.0% / 33.3% | 100.0% / 100.0% | N/A / N/A | N/A / N/A | 2 |
 | hello-mipsel.elf | 3/3/3 | 2/3 | 80.0% | 100.0% | 50.0% / 33.3% | 100.0% / 100.0% | N/A / N/A | N/A / N/A | 2 |
 | hello-ppc.elf | 42/42/42 | 42/42 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
@@ -160,6 +162,13 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   and every other call to the next instruction as a call, so `bl _Exit` (hello-thumb `0x20800`) and `bl _start_c`
   (hello-ppc `0x2078c`) keep their call edges. Ghidra instead treats MIPS `bal 1f` as a branch and starts a block
   at `0x203fc`. That is the remaining MIPS block and edge difference; chain Jaccard and chain edges agree.
+- **Literal pools (resolved).** Every decoder says whether an instruction loads from or stores to its data
+  reference or only forms it (`lea`, `adr`, ADRP plus ADD, the MIPS, RISC-V, PowerPC and SPARC address pairs,
+  s390x `larl`). Memory read or written is a data reference and never a code pointer, even in a literal pool
+  inside code; a formed address into code may be one, as may the word an ARM or AArch64 PC-relative literal load
+  reads from read-only memory (`ldr r0, =func`). An address a function forms and also loads from is data, as
+  `_start`'s `adr r3` to its own pool shows. hello-arm.elf `sub_20338` and `sub_2033c` (`_start`'s literals, which
+  happen to decode) are no longer functions, nor is one rampage-only start in hello-thumb.elf.
 - **Tail jumps to import thunks (resolved).** PE `jmp [slot]` thunks that follow padding or another thunk are
   functions, so `jmp 0x140028d50` (`fflush`) at hello-x64.exe `0x140001447` is a tail call rather than a block of
   its only caller. ELF PLT and Mach-O stubs were already functions. Unreferenced thunks are now listed too, which
@@ -186,9 +195,6 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
 2. Extend AArch64 switch recovery to the bounds it does not yet prove: the inverse form, where `b.ls`/`b.lo` jumps
    to the dispatch and the fall-through is the default, and a `cmp` scheduled away from its conditional branch.
    None of these fixtures needs either.
-3. ARM `ldr rN, [pc, #off]` literal-pool words become functions: discovery treats every data reference into
-   executable memory as a code pointer, including the address a load reads. Evidence: hello-arm.elf `sub_20338`
-   and `sub_2033c` (`_start`'s literals). A literal whose word does not decode (`0x2036c`) is no longer a function.
 
 ## Decompilation
 

@@ -334,6 +334,7 @@ impl Disassembler for CapstoneDisassembler {
             len: self.minimum_length(),
             flow: Flow::Invalid,
             data_ref: None,
+            accesses: false,
             immediate: None,
             conditional: false,
         };
@@ -370,6 +371,7 @@ impl Disassembler for CapstoneDisassembler {
             len: insn.len() as u8,
             flow,
             data_ref: found.data_ref,
+            accesses: found.accesses,
             immediate: found.immediate,
             // A get-PC call is no call at all.
             conditional: conditional && (classified == Flow::Next || flow != Flow::Next),

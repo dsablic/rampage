@@ -49,6 +49,21 @@ fn vector_stores_invalidate_memory_inference() {
 }
 
 #[test]
+fn aarch64_literal_loads_access_their_slot_and_yield_the_constant_read_there() {
+    let mut decoder = decoder(&Target::new(Arch::Aarch64)).unwrap();
+    let read = |at: u64, size: u8| (at == 0x1008 && size == 8).then_some(0x4000);
+    // ldr x0, 0x1008; adr x0, 0x100c; ldr x1, [x0, #8]
+    let insns: Vec<_> = [0x5800_0040u32, 0x1000_0040, 0xf940_0401]
+        .iter()
+        .enumerate()
+        .map(|(index, word)| decoder.decode_with_memory(&word.to_le_bytes(), 0x1000 + index as u64 * 4, &read))
+        .collect();
+    assert_eq!((insns[0].data_ref, insns[0].accesses, insns[0].immediate), (Some(0x1008), true, Some(0x4000)));
+    assert_eq!((insns[1].data_ref, insns[1].accesses, insns[1].immediate), (Some(0x100c), false, None));
+    assert_eq!((insns[2].data_ref, insns[2].accesses), (Some(0x1014), true));
+}
+
+#[test]
 fn block_resets_do_not_restore_memory_trust_but_new_runs_do() {
     let mut decoder = decoder(&Target::new(Arch::Aarch64)).unwrap();
     decoder.decode(&0xf900_0109u32.to_le_bytes(), 0x1000);
