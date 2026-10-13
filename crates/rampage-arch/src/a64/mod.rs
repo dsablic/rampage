@@ -199,7 +199,12 @@ mod tests {
         assert_eq!(decode(&mut d, 0xd65f_03c0, 0x1000).flow, Flow::Return);
         assert_eq!(decode(&mut d, 0xd61f_0200, 0x1000).flow, Flow::IndirectJump);
         assert_eq!(decode(&mut d, 0xd63f_0100, 0x1000).flow, Flow::IndirectCall);
-        assert_eq!(decode(&mut d, 0xd420_0020, 0x1000).flow, Flow::Halt);
+        assert_eq!(decode(&mut d, 0xd420_0020, 0x1000).flow, Flow::Halt); // brk #1
+        assert_eq!(decode(&mut d, 0xd420_7d00, 0x1000).flow, Flow::Halt); // brk #0x3e8
+        assert_eq!(decode(&mut d, 0x0000_0000, 0x1000).flow, Flow::Halt); // udf #0
+        // A debugger resumes from other breakpoints and from semihosting calls.
+        assert_eq!(decode(&mut d, 0xd43e_0000, 0x1000).flow, Flow::Next); // brk #0xf000
+        assert_eq!(decode(&mut d, 0xd45e_0000, 0x1000).flow, Flow::Next); // hlt #0xf000
         assert_eq!(decode(&mut d, 0xffff_ffff, 0x1000).flow, Flow::Invalid);
         // b.al always branches.
         assert_eq!(decode(&mut d, 0x5400_004e, 0x1000).flow, Flow::Jump(0x1008));

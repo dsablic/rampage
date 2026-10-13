@@ -147,7 +147,8 @@ fn kind(decoded: &Decoded, address: u64) -> Kind {
         {
             Kind::Jump(None)
         }
-        "UDF" | "HLT" | "BKPT" => Kind::Halt,
+        // BKPT and HLT are debugger or semihosting calls, which resume at the next instruction.
+        "UDF" => Kind::Halt,
         "ERET" | "RFE" | "RFEIA" | "RFEDA" | "RFEDB" | "RFEIB" => Kind::Return,
         _ => Kind::Next,
     }

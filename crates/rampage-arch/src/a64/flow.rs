@@ -193,7 +193,8 @@ fn info_for(encoding: &Encoding) -> Info {
         "BLR" | "BLRAA" | "BLRAAZ" | "BLRAB" | "BLRABZ" => FlowClass::IndirectCall,
         "RET" | "RETAA" | "RETAB" | "RETAASPPC" | "RETABSPPC" | "RETAASPPCR" | "RETABSPPCR" | "ERET" | "ERETAA"
         | "ERETAB" | "DRPS" | "TEXIT" => FlowClass::Return,
-        "BRK" | "HLT" | "UDF" => FlowClass::Halt,
+        // HLT is a debugger or semihosting call, which resumes at the next instruction.
+        "BRK" | "UDF" => FlowClass::Halt,
         _ => FlowClass::Next,
     };
     let effect = if name.starts_with("ADRP") {
@@ -464,6 +465,13 @@ pub fn analyze(
         FlowClass::IndirectJump => Flow::IndirectJump,
         FlowClass::IndirectCall => Flow::IndirectCall,
         FlowClass::Return => Flow::Return,
+        // `brk #1` (LLVM) and `brk #0x3e8` (GCC) are `__builtin_trap`; any other BRK is a breakpoint a debugger
+        // resumes from.
+        FlowClass::Halt
+            if decoded.encoding.name.starts_with("BRK") && !matches!(decoded.field("imm16"), Some(1 | 0x3e8)) =>
+        {
+            Flow::Next
+        }
         FlowClass::Halt => Flow::Halt,
     };
     let name = decoded.encoding.name;

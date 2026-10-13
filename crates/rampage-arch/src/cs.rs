@@ -119,7 +119,6 @@ fn mips(mnemonic: &str, operands: &str, is_branch: bool) -> Option<Branch> {
         "jalr" | "jalr.hb" | "jalrc" | "jialc" => INDIRECT_CALL,
         "j" | "b" | "bc" => JUMP,
         "jr" | "jr.hb" | "jrc" | "jic" => INDIRECT_JUMP,
-        "break" | "sdbbp" => Kind::Halt,
         _ if is_branch => return branch(JUMP, true),
         _ => return None,
     };
@@ -161,7 +160,8 @@ fn riscv(mnemonic: &str, operands: &str) -> Option<Branch> {
         "jal" | "c.jal" => JUMP,
         "jalr" | "c.jalr" if links => INDIRECT_CALL,
         "jalr" | "c.jalr" => INDIRECT_JUMP,
-        "ebreak" | "c.ebreak" | "unimp" | "c.unimp" => Kind::Halt,
+        // `ebreak` (like MIPS `break` and `sdbbp`) is a breakpoint a debugger resumes from.
+        "unimp" | "c.unimp" => Kind::Halt,
         _ if mnemonic.starts_with('b') || mnemonic.starts_with("c.b") => return branch(JUMP, true),
         _ => return None,
     };

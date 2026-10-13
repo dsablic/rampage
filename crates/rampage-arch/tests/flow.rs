@@ -47,6 +47,8 @@ fn arm() {
             ("04f09fe5", IndirectJump),            // ldr pc, [pc, #4]
             ("04f09de4", Return),                  // ldr pc, [sp], #4
             ("f000f0e7", Halt),                    // udf
+            ("7b0a20e1", Next),                    // bkpt #0xab
+            ("70000fe1", Next),                    // hlt #0xf000
         ],
     );
 }
@@ -189,7 +191,7 @@ fn mips() {
             ("10800002", ConditionalJump(0x100c)), // beqz $4
             ("10000002", Jump(0x100c)),            // b
             ("04910002", Call(0x100c)),            // bgezal $4
-            ("0000000d", Halt),                    // break
+            ("0000000d", Next),                    // break
             ("08000402", Jump(0x1008)),            // j
             ("00800008", IndirectJump),            // jr $4
         ],
@@ -233,12 +235,13 @@ fn riscv() {
             ("67030e00", IndirectJump),            // jalr t1, t3, 0 (a PLT stub passing t1)
             ("67800000", Return),                  // ret
             ("6304b500", ConditionalJump(0x1008)), // beq a0, a1, 8
-            ("73001000", Halt),                    // ebreak
+            ("73001000", Next),                    // ebreak
+            ("731000c0", Halt),                    // unimp
             ("21a0", Jump(0x1008)),                // c.j 8
             ("8280", Return),                      // c.jr ra
             ("0295", IndirectCall),                // c.jalr a0
             ("0285", IndirectJump),                // c.jr a0
-            ("0290", Halt),                        // c.ebreak
+            ("0290", Next),                        // c.ebreak
         ],
     );
     // Zero padding must not decode as code that continues.

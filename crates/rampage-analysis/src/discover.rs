@@ -1176,6 +1176,21 @@ mod tests {
     }
 
     #[test]
+    fn debugger_and_semihosting_traps_resume() {
+        // f at 0: bkpt #0xab; 4: bx lr. g at 0x20: bl 0; 24: mov r0, #1; 28: bx lr
+        let words = [(0, 0xe120_0a7b), (4, 0xe12f_ff1e), (0x20, 0xebff_fff6), (0x24, 0xe3a0_0001), (0x28, 0xe12f_ff1e)];
+        let program = run_noreturn(Arch::Arm, arm(&words, 0x2c), &[0x20], &[]);
+        assert!(program.noreturn.is_empty());
+        assert_eq!(blocks(&program, 0), [(0, 8)]);
+        assert_eq!(blocks(&program, 0x20), [(0x20, 0x2c)]);
+        // 0: hlt #0xf000; 4: ret. 10: brk #0xf000; 14: ret
+        let words = [(0, 0xd45e_0000), (4, RET), (0x10, 0xd43e_0000), (0x14, RET)];
+        let program = run_noreturn(Arch::Aarch64, arm(&words, 0x18), &[0, 0x10], &[]);
+        assert!(program.noreturn.is_empty());
+        assert_eq!(blocks(&program, 0x10), [(0x10, 0x18)]);
+    }
+
+    #[test]
     fn aarch64_calls_to_noreturn_callees_and_trapping_wrappers_end_their_blocks() {
         let bl = |from: u32, to: u32| 0x9400_0000 | ((to.wrapping_sub(from) / 4) & 0x3ff_ffff);
         // 0: bl 0x40 (exit); 4: ret. 10: bl 0x20; 14: ret. 20: brk #1. 40: ret
