@@ -84,13 +84,15 @@ no row changed. They were re-measured again at `41e1224`, from the same cached e
 fixes (conditional calls and returns, resumable traps, incremental inference, case-sensitive names, more get-PC
 idioms); no row changed. Re-measured again, from the same cached exports, after the address a load reads stopped
 counting as a code pointer: only the hello-arm.elf (10 to 8 rampage functions) and hello-thumb.elf (44 to 43) rows
-changed. Inferring noreturn through mutual tail calls then changed no row.
+changed. Inferring noreturn through mutual tail calls then changed no row. Resolving switches whose facts are set up
+in an earlier block (measured against `77d6709` from the same cached exports) changed only the hello-x64.exe,
+eval-ref-x86_64 and musl-static-x86_64 rows; every other fixture's functions, blocks and switches are identical.
 
 | binary | funcs G/R/both | same blocks | block J | chain J | edge P / R | chain edge P / R | call P / R | callgraph P / R | G-only computed calls |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
 | hello-x64.elf | 41/41/41 | 41/41 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
 | hello-x64-dyn.elf | 6/7/6 | 6/6 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
-| hello-x64.exe | 497/537/497 | 463/497 | 99.2% | 99.8% | 98.0% / 97.3% | 100.0% / 99.7% | 100.0% / 99.8% | 100.0% / 100.0% | 1 |
+| hello-x64.exe | 497/537/497 | 463/497 | 99.4% | 100.0% | 97.9% / 97.5% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
 | hello-x64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
 | hello-arm64.elf | 6/9/6 | 6/6 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
 | hello-arm64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
@@ -101,9 +103,9 @@ changed. Inferring noreturn through mutual tail calls then changed no row.
 | hello-ppc.elf | 42/42/42 | 42/42 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
 | hello-ppc64le.elf | 7/7/4 | 4/4 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | N/A / N/A | N/A / N/A | 0 |
 | hello-riscv64.elf | 8/9/8 | 5/8 | 57.9% | 100.0% | 0.0% / 0.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 3 |
-| eval-ref-x86_64.elf | 176/176/176 | 171/176 | 99.8% | 99.9% | 99.0% / 98.8% | 100.0% / 99.8% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
+| eval-ref-x86_64.elf | 176/176/176 | 172/176 | 99.9% | 100.0% | 99.0% / 99.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
 | eval-ref-aarch64.elf | 194/195/194 | 189/194 | 99.8% | 100.0% | 98.5% / 98.4% | 100.0% / 100.0% | 99.8% / 100.0% | 99.7% / 100.0% | 2 |
-| musl-static-x86_64.elf | 67/67/67 | 66/67 | 99.6% | 99.6% | 100.0% / 99.3% | 100.0% / 99.3% | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
+| musl-static-x86_64.elf | 67/67/67 | 67/67 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
 | musl-static-aarch64.elf | 82/83/82 | 79/82 | 99.7% | 100.0% | 98.1% / 97.9% | 100.0% / 100.0% | 99.5% / 100.0% | 99.1% / 100.0% | 1 |
 | hello-go-x64.elf | 1358/1806/1357 | 1321/1357 | 98.6% | 98.8% | 99.3% / 96.9% | 100.0% / 97.7% | 99.7% / 97.9% | 99.5% / 98.5% | 57 |
 
@@ -114,7 +116,7 @@ small Mach-O/ARM fixtures share only 2–8 functions, so their percentages move 
 
 These come from inspecting the per-function reports (`--out`) and the disassembly at the listed addresses.
 
-- **x86-64 jump tables (mostly resolved).** rampage resolves an x86 switch under the same bounded-switch rule as
+- **x86-64 jump tables (resolved).** rampage resolves an x86 switch under the same bounded-switch rule as
   AArch64. The index needs an unsigned bound, from a `cmp` directly followed by `ja`/`jae` or from an
   `and r, mask`, covering the whole register (a 32-bit write or `mov e, e` zero-extends it). No branch may join
   the straight-line run that proves the bound, the zero extension and the table base, and the table must be
@@ -123,10 +125,23 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   `lea rcx,[table]; movsxd rax,[rcx+rax*4]; add rax,rcx; jmp rax` (hello-x64.exe `0x1400170f4`, bounded by
   `and eax, 3`). Ghidra-only blocks fell from 239 to 44 in hello-x64.exe, 328 to 8 in eval-ref-x86_64, 82 to 4 in
   musl-static-x86_64 and 1245 to 330 in Go. Most of what remains is the jump itself: as on AArch64, Ghidra starts a
-  block at its `switchD` label, which also accounts for the lower raw edge precision. The switches still unresolved
-  take their index or table register from another block, which the straight-line tracking does not follow:
-  `printf_core` compares `r12d` and jumps through `r13` (eval-ref-x86_64 `0x1008e60`), and hello-x64.exe
-  `0x140001aca` uses a table base loaded into `r15` before its loop.
+  block at its `switchD` label, which also accounts for the lower raw edge precision.
+
+  Switches whose facts are set up in an earlier block are resolved by carrying the decoder's register facts across
+  the function's blocks: a must-dataflow whose facts at a block's start are only those that hold at the end of every
+  edge into it, with nothing known at the entry or where a branch from another function lands. It also tracks
+  register copies, so `printf_core`'s bound on `r12d` holds for `r13`, the copy it jumps through
+  (eval-ref-x86_64 `0x1008e60`, musl-static-x86_64 `0x1003d75`), and keeps the registers every x86 calling convention
+  preserves across calls, so hello-x64.exe `0x140001aca` finds the table base loaded into `r15` before its loop. A
+  bound holds only on the fall-through of the `ja` that proved it, and two paths keep a bound only from the same
+  comparison. A table found this way adds case edges that may join the paths it was proven on, so discovery explores
+  the function again assuming it and drops it for good unless the larger graph still proves the same table. That
+  took Ghidra-only blocks from 44 to 34 in hello-x64.exe, 8 to 4 in eval-ref-x86_64 and 4 to 0 in
+  musl-static-x86_64; chain Jaccard and chain edges now agree completely on all three, and no other fixture changed.
+  hello-x64.exe discovery takes about 24 ms instead of 18 (the extra exploration), hello-go-x64 57 instead of 53. The
+  same dataflow carries AArch64 facts, and PIC i386 tables (`call __x86.get_pc_thunk.bx` or `call 1f; 1: pop ebx`,
+  `add ebx, GOT`, `mov eax, [ebx + eax*4 + off]; add eax, ebx; jmp eax`) resolve through it; no fixture has
+  either.
 - **AArch64 jump tables (resolved).** rampage resolves every AArch64 switch in these fixtures under its
   bounded-switch rule. The index needs an unsigned bound from a `cmp` directly followed by `b.hi`/`b.hs`, no branch
   may join between that comparison and the `br`, and the table must be read-only data. That covers the compact
@@ -192,10 +207,7 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
 
 ### Analysis follow-ups found by this benchmark
 
-1. Resolve the x86-64 switches whose index copy or table base comes from another block (a bounded `r12d` copied
-   to `r13`, a table base loaded before a loop). Evidence: eval-ref-x86_64 `0x1008e60`, hello-x64.exe
-   `0x140001aca`.
-2. Extend AArch64 switch recovery to the bounds it does not yet prove: the inverse form, where `b.ls`/`b.lo` jumps
+1. Extend AArch64 switch recovery to the bounds it does not yet prove: the inverse form, where `b.ls`/`b.lo` jumps
    to the dispatch and the fall-through is the default, and a `cmp` scheduled away from its conditional branch.
    None of these fixtures needs either.
 
