@@ -265,8 +265,13 @@ unsandboxed native code. Three layers instead, in this order:
   their `source`; pack problems reach detection `warnings` and the MCP instructions.
 - [ ] Packs: a constants pack format; pack loading in the UI; `identify --no-bundled` should accept a pack database
   instead of requiring `--db`; `detect` prints pack PeID problems twice (output and stderr).
-- [ ] Internal trait registries: built-ins register through `Loader`, `Detector`, `Workflow` and `ToolProvider`
-  traits instead of hand-wired match arms and tool lists. Prerequisite for anything external.
+- [x] Internal trait registries: guided workflows implement `Workflow` and are listed once in `WORKFLOWS`; the
+  tool list (MCP, assistant) and `rampage report` enumerate it, with tests that each is unique, a tool of its group,
+  served by MCP, named in the instructions and parsed by the CLI (docs/plugins.md). CLI and MCP output unchanged
+  byte for byte. Not done, because nothing hand-dispatches over them: `Detector` (detectors take different inputs
+  and return different evidence; packs extend them), `Loader` (ELF/PE/Mach-O already load through `object`; worth
+  it when a format `object` cannot parse arrives) and a separate `ToolProvider` (workflows contribute their tools
+  through their registry).
 - [ ] WASM component plugins (wasmtime is already a dependency via yara-x): sandboxed, language-agnostic code for
   detectors, format loaders and workflows behind a WIT interface; bytes plus read-only analysis queries in,
   findings out. The output schema enforces the evidence/confidence/limitations contract.
