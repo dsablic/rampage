@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 
 use rampage_arch::Arch;
 use rampage_capabilities::CapaRuleSet;
@@ -133,9 +134,16 @@ pub enum ContentStatus {
     Unsupported,
 }
 
-/// The data packs in effect, in load order, with the databases they contributed.
+/// The data packs in effect, in load order, with the databases they contributed. Packs made with [`Packs::lazy`]
+/// load on first use, so that a command that never consults them does not pay for reading them.
 #[derive(Default)]
 pub struct Packs {
+    directories: Vec<PathBuf>,
+    loaded: OnceLock<Loaded>,
+}
+
+#[derive(Default)]
+struct Loaded {
     packs: Vec<PackInfo>,
     signatures: Vec<rampage_signatures::SignatureDb>,
     peid: rampage_detect::SignatureDb,
@@ -147,10 +155,89 @@ impl Packs {
     /// Loads the packs in `directories`, in order; a directory given again (by any path) is loaded once, where it
     /// first appears. Problems are recorded in each pack's info, never returned.
     pub fn load(directories: &[PathBuf]) -> Self {
-        Self::load_within(directories, PACK_BUDGET, TOTAL_BUDGET)
+        let packs = Self::lazy(directories);
+        packs.get();
+        packs
     }
 
-    fn load_within(directories: &[PathBuf], pack: Budget, total: Budget) -> Self {
+    /// The packs in `directories`, loaded as [`Packs::load`] does when first consulted.
+    pub fn lazy(directories: &[PathBuf]) -> Self {
+        Self { directories: directories.to_vec(), loaded: OnceLock::new() }
+    }
+
+    /// The packs in `directories`, then those [`PACKS_VARIABLE`] lists, loaded when first consulted.
+    pub fn lazy_with_env(directories: &[PathBuf]) -> Self {
+        let mut all = directories.to_vec();
+        if let Some(value) = std::env::var_os(PACKS_VARIABLE) {
+            all.extend(std::env::split_paths(&value).filter(|path| !path.as_os_str().is_empty()));
+        }
+        Self::lazy(&all)
+    }
+
+    /// Loads one pack on its own, reporting what loads and what does not.
+    pub fn check(directory: &Path) -> PackInfo {
+        Loaded::load(&[directory.to_owned()], PACK_BUDGET, TOTAL_BUDGET).packs.remove(0)
+    }
+
+    /// Whether any pack directory was given, loaded or not.
+    pub fn configured(&self) -> bool {
+        !self.directories.is_empty()
+    }
+
+    /// Whether the packs have been loaded, by [`Packs::load`] or by a first use.
+    pub fn is_loaded(&self) -> bool {
+        self.loaded.get().is_some()
+    }
+
+    fn get(&self) -> &Loaded {
+        self.loaded.get_or_init(|| Loaded::load(&self.directories, PACK_BUDGET, TOTAL_BUDGET))
+    }
+
+    /// The loaded packs, in load order, without the built-in one.
+    pub fn loaded(&self) -> &[PackInfo] {
+        &self.get().packs
+    }
+
+    /// The built-in pack followed by every loaded pack.
+    pub fn listing(&self) -> Vec<PackInfo> {
+        std::iter::once(builtin()).chain(self.loaded().iter().cloned()).collect()
+    }
+
+    /// One line for each rejected pack and each content that failed or is unsupported.
+    pub fn problems(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        for pack in self.loaded() {
+            let directory = pack.directory.as_deref().unwrap_or(Path::new("")).display();
+            if let Some(error) = &pack.error {
+                problems.push(format!("pack {directory}: {error}"));
+            }
+            for content in pack.contents.iter().filter(|content| content.status != ContentStatus::Loaded) {
+                problems.push(format!("pack {directory}: {} {}: {}", content.kind, content.path, content.detail));
+            }
+        }
+        problems
+    }
+
+    /// Signature databases for `arch`, in pack order.
+    pub(crate) fn signatures_for(&self, arch: Arch) -> impl Iterator<Item = &rampage_signatures::SignatureDb> {
+        self.get().signatures.iter().filter(move |database| database.arch() == arch)
+    }
+
+    pub(crate) fn peid(&self) -> &rampage_detect::SignatureDb {
+        &self.get().peid
+    }
+
+    pub(crate) fn yara(&self) -> &[rampage_yara::Rules] {
+        &self.get().yara
+    }
+
+    pub(crate) fn capa(&self) -> &[CapaRuleSet] {
+        &self.get().capa
+    }
+}
+
+impl Loaded {
+    fn load(directories: &[PathBuf], pack: Budget, total: Budget) -> Self {
         let mut packs = Self::default();
         let mut names = HashSet::from([BUILTIN_PACK.to_owned()]);
         let mut seen = HashSet::new();
@@ -177,62 +264,6 @@ impl Packs {
             packs.add(directory, &mut names, &mut loading);
         }
         packs
-    }
-
-    /// Loads the packs in `directories`, then those [`PACKS_VARIABLE`] lists.
-    pub fn load_with_env(directories: &[PathBuf]) -> Self {
-        let mut all = directories.to_vec();
-        if let Some(value) = std::env::var_os(PACKS_VARIABLE) {
-            all.extend(std::env::split_paths(&value).filter(|path| !path.as_os_str().is_empty()));
-        }
-        Self::load(&all)
-    }
-
-    /// Loads one pack on its own, reporting what loads and what does not.
-    pub fn check(directory: &Path) -> PackInfo {
-        Self::load(&[directory.to_owned()]).packs.remove(0)
-    }
-
-    /// The loaded packs, in load order, without the built-in one.
-    pub fn loaded(&self) -> &[PackInfo] {
-        &self.packs
-    }
-
-    /// The built-in pack followed by every loaded pack.
-    pub fn listing(&self) -> Vec<PackInfo> {
-        std::iter::once(builtin()).chain(self.packs.iter().cloned()).collect()
-    }
-
-    /// One line for each rejected pack and each content that failed or is unsupported.
-    pub fn problems(&self) -> Vec<String> {
-        let mut problems = Vec::new();
-        for pack in &self.packs {
-            let directory = pack.directory.as_deref().unwrap_or(Path::new("")).display();
-            if let Some(error) = &pack.error {
-                problems.push(format!("pack {directory}: {error}"));
-            }
-            for content in pack.contents.iter().filter(|content| content.status != ContentStatus::Loaded) {
-                problems.push(format!("pack {directory}: {} {}: {}", content.kind, content.path, content.detail));
-            }
-        }
-        problems
-    }
-
-    /// Signature databases for `arch`, in pack order.
-    pub(crate) fn signatures_for(&self, arch: Arch) -> impl Iterator<Item = &rampage_signatures::SignatureDb> {
-        self.signatures.iter().filter(move |database| database.arch() == arch)
-    }
-
-    pub(crate) fn peid(&self) -> &rampage_detect::SignatureDb {
-        &self.peid
-    }
-
-    pub(crate) fn yara(&self) -> &[rampage_yara::Rules] {
-        &self.yara
-    }
-
-    pub(crate) fn capa(&self) -> &[CapaRuleSet] {
-        &self.capa
     }
 
     fn add(&mut self, directory: &Path, names: &mut HashSet<String>, loading: &mut Loading) {
@@ -740,6 +771,13 @@ mod tests {
 
     const PEID: &str = "[Unit DOS Header]\nsignature = 4D 5A\nep_only = false\n";
 
+    impl Packs {
+        fn within(directories: &[PathBuf], pack: Budget, total: Budget) -> Self {
+            let loaded = OnceLock::from(Loaded::load(directories, pack, total));
+            Self { directories: directories.to_vec(), loaded }
+        }
+    }
+
     fn detail(packs: &Packs, pack: usize) -> (ContentStatus, &str) {
         let content = &packs.loaded()[pack].contents[0];
         (content.status, content.detail.as_str())
@@ -805,7 +843,7 @@ mod tests {
         }
         pack.write("rules/rule.yml", "rule: {}");
         let budget = Budget { directories: 4, ..PACK_BUDGET };
-        let packs = Packs::load_within(std::slice::from_ref(&pack.0), budget, TOTAL_BUDGET);
+        let packs = Packs::within(std::slice::from_ref(&pack.0), budget, TOTAL_BUDGET);
         let (status, text) = detail(&packs, 0);
         assert_eq!(status, ContentStatus::Error);
         assert!(text.contains("directory budget of one pack"), "{text}");
@@ -822,18 +860,18 @@ mod tests {
         let one_pack = manifest + PEID.len() as u64;
         let total = Budget { bytes: one_pack * 2 - 1, ..TOTAL_BUDGET };
         let directories = [first.0.clone(), second.0.clone()];
-        let packs = Packs::load_within(&directories, PACK_BUDGET, total);
+        let packs = Packs::within(&directories, PACK_BUDGET, total);
         assert_eq!(detail(&packs, 0).0, ContentStatus::Loaded);
         let (status, text) = detail(&packs, 1);
         assert_eq!(status, ContentStatus::Error);
         assert!(text.contains("read budget of all packs together"), "{text}");
 
         let files = Budget { files: 3, ..TOTAL_BUDGET };
-        let packs = Packs::load_within(&directories, PACK_BUDGET, files);
+        let packs = Packs::within(&directories, PACK_BUDGET, files);
         assert!(packs.loaded()[1].contents[0].detail.contains("all packs together"), "{:?}", packs.loaded());
 
         let peid = Budget { peid: 1, ..TOTAL_BUDGET };
-        let packs = Packs::load_within(&directories, PACK_BUDGET, peid);
+        let packs = Packs::within(&directories, PACK_BUDGET, peid);
         assert_eq!(detail(&packs, 0).0, ContentStatus::Loaded);
         let (status, text) = detail(&packs, 1);
         assert_eq!(status, ContentStatus::Error);

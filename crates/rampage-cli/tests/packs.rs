@@ -132,6 +132,8 @@ fn packs_check_fails_on_a_content_that_does_not_load_and_analysis_warns() {
         .success()
         .stdout(contains("] Pack MZ ("))
         .stderr(contains("rampage: warning: pack ").and(contains("yara broken.yar")));
+    // A command that consults no heuristic database does not load packs, so it has nothing to warn about.
+    rampage().args(["info", "--pack", pack.arg()]).arg(fixture("hello-x64.exe")).assert().success().stderr("");
 
     let valid = yara_pack("valid");
     rampage().args(["packs", "check", valid.arg()]).assert().success();

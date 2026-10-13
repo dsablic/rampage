@@ -381,16 +381,13 @@ fn parse_token(text: &str) -> Result<u32, String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let packs = Arc::new(Packs::load_with_env(&cli.packs));
-    if !matches!(cli.command, Command::Packs { .. }) {
-        for problem in packs.problems() {
-            eprintln!("rampage: warning: {problem}");
-        }
-    }
+    // Loaded on first use, so that commands which consult no heuristic database do not read any pack.
+    let packs = Arc::new(Packs::lazy_with_env(&cli.packs));
+    let warn = !matches!(cli.command, Command::Packs { .. });
     if let Command::Mcp { all_tools } = cli.command {
         return serve_mcp(all_tools, packs);
     }
-    let options = Options { json: cli.json, arch: cli.arch, offset: cli.image_offset, packs };
+    let options = Options { json: cli.json, arch: cli.arch, offset: cli.image_offset, packs: Arc::clone(&packs) };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match cli.command {
         Command::Info { file } => commands::info(&mut out, &file, &options),
@@ -491,6 +488,11 @@ fn main() -> ExitCode {
     }
     .and_then(|()| out.flush().map_err(Into::into));
 
+    if warn && packs.is_loaded() {
+        for problem in packs.problems() {
+            eprintln!("rampage: warning: {problem}");
+        }
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) if is_broken_pipe(&error) => ExitCode::SUCCESS,

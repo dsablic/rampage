@@ -333,6 +333,23 @@ fn packs_past_the_cap_are_reported_without_being_read() {
 }
 
 #[test]
+fn lazy_packs_load_only_when_a_heuristic_database_is_consulted() {
+    let pack = Scratch::new("lazy");
+    pack.write("userdb.txt", PEID);
+    pack.write("rampage-pack.toml", &manifest("lazy", "[[contents]]\nkind = \"peid\"\npath = \"userdb.txt\"\n"));
+    let packs = Arc::new(Packs::lazy(std::slice::from_ref(&pack.0)));
+    assert!(packs.configured() && !packs.is_loaded());
+    let session = Session::default().with_packs(Arc::clone(&packs));
+    let project = session.open(&fixture("hello-x64.exe"), None).unwrap();
+    project.summary();
+    project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    assert!(!packs.is_loaded());
+    let detections = project.detect_tools(None).unwrap().detections;
+    assert!(packs.is_loaded());
+    assert!(detections.iter().any(|detection| detection.name == "Pack DOS Header"), "{detections:?}");
+}
+
+#[test]
 fn a_broken_content_does_not_block_the_others() {
     let pack = Scratch::new("broken");
     pack.write("yara/broken.yar", "rule broken {");
