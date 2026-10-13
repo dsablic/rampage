@@ -6,6 +6,7 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 _SPEC = importlib.util.spec_from_file_location("cfg_benchmark", Path(__file__).with_name("cfg-benchmark.py"))
 assert _SPEC and _SPEC.loader
@@ -23,6 +24,39 @@ class CacheKeyTest(unittest.TestCase):
             script.write_text("second")
             self.assertNotEqual(first, benchmark.cache_key("abc", "12.0", script))
         self.assertTrue(benchmark.cache_key("abc", "12.0").startswith("abc-12.0-"))
+
+
+def ghidra_function(start: int, blocks: dict[int, list[int]], calls: list[tuple[int, int, str]]) -> dict[str, Any]:
+    return {
+        "address": hex(start), "noreturn": False,
+        "blocks": [
+            {"start": hex(block), "successors": [[hex(target), "FALL_THROUGH"] for target in targets]}
+            for block, targets in blocks.items()
+        ],
+        "calls": [[hex(source), hex(target), kind] for source, target, kind in calls],
+    }
+
+
+def rampage_function(blocks: dict[int, list[int]], calls: dict[tuple[int, int], str]) -> dict[str, Any]:
+    edges = {(block, target) for block, targets in blocks.items() for target in targets}
+    return {"blocks": set(blocks), "edges": edges, "calls": calls}
+
+
+class CompareTest(unittest.TestCase):
+    def test_a_block_shared_by_two_functions_counts_in_each(self) -> None:
+        # Both functions end in the shared tail at 0x50 for Ghidra; rampage keeps it only in the first.
+        ghidra = {"functions": [
+            ghidra_function(0x10, {0x10: [0x50], 0x50: []}, []),
+            ghidra_function(0x30, {0x30: [0x50], 0x50: []}, []),
+        ]}
+        rampage = {
+            0x10: rampage_function({0x10: [0x50], 0x50: []}, {}),
+            0x30: rampage_function({0x30: []}, {}),
+        }
+        report = benchmark.compare(ghidra, rampage)
+        self.assertEqual(report["blocks"]["matched"], 3)
+        self.assertEqual(report["blocks"]["recall"], 3 / 4)
+        self.assertEqual(report["edges"]["recall"], 1 / 2)
 
 
 if __name__ == "__main__":

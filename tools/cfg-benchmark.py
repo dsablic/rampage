@@ -169,20 +169,25 @@ def compare(ghidra: dict[str, Any], ram: dict[int, Any]) -> dict[str, Any]:
     per_function = []
     for start in common:
         g, r = ghi[start], ram[start]
+
+        # Pooled per function, so a block or edge that two functions share counts in each of them.
+        def owned(items: set[Any]) -> set[tuple[int, Any]]:
+            return {(start, item) for item in items}
+
         for side, function in (("ghidra", g), ("rampage", r)):
-            totals["blocks"][side] |= function["blocks"]
-            totals["edges"][side] |= function["edges"]
+            totals["blocks"][side] |= owned(function["blocks"])
+            totals["edges"][side] |= owned(function["edges"])
             blocks, edges = collapse(start, function["blocks"], function["edges"])
-            totals["chains"][side] |= blocks
-            totals["chain_edges"][side] |= edges
+            totals["chains"][side] |= owned(blocks)
+            totals["chain_edges"][side] |= owned(edges)
             # Ghidra's computed calls carry a target read from memory, which can be an unrelocated GOT slot or
             # header bytes; they count only where rampage resolved the same call.
             counted = {
                 call for call, kind in function["calls"].items() if kind != "COMPUTED_CALL" or call in r["calls"]
             }
-            totals["calls"][side] |= counted
+            totals["calls"][side] |= owned(counted)
             totals["call_graph"][side] |= {(start, target) for _, target in counted}
-            totals["computed_calls"][side] |= set(function["calls"]) - counted
+            totals["computed_calls"][side] |= owned(set(function["calls"]) - counted)
         identical += g["blocks"] == r["blocks"]
         union = g["blocks"] | r["blocks"]
         jaccard = len(g["blocks"] & r["blocks"]) / len(union) if union else 1.0
