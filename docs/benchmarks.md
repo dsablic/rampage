@@ -77,7 +77,10 @@ run at `af40350` (regenerated signature databases), with Ghidra's exports cached
 rows (hello-x64.exe, eval-ref-x86_64, musl-static-x86_64, hello-go-x64) were re-measured with x86 switch tables
 resolved, from the same cached exports; the other x86-64 rows did not change. The hello-x64.exe, ARM, Thumb, MIPS,
 PPC and RISC-V rows were re-measured the same way after the get-PC, import-thunk and undecodable-start fixes.
-Adding noreturn analysis changed only the hello-x64.exe and hello-go-x64 rows (re-measured the same way).
+Adding noreturn analysis changed only the hello-x64.exe and hello-go-x64 rows (re-measured the same way). Every
+row below was last re-measured at `7c03e5c`, from the same cached exports, after switch resolution started
+forgetting facts at joins ahead of the comparison and stopped accepting 16-bit `movsxd` and non-contiguous masks;
+no row changed.
 
 | binary | funcs G/R/both | same blocks | block J | chain J | edge P / R | chain edge P / R | call P / R | callgraph P / R | G-only computed calls |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
