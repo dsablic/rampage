@@ -391,6 +391,22 @@
     "../bin/Microsoft.Bcl.HashCode.dll": {
       "toolchain": "dotnet",
       "built": "nuget.org Microsoft.Bcl.HashCode 1.1.1"
+    },
+    "../bin/objc-arm64.macho": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh (clang -fobjc-arc)"
+    },
+    "../bin/objc-arm64-stripped.macho": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh (clang -fobjc-arc, strip)"
+    },
+    "../bin/objc-arm64e-stripped.macho": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh (clang -arch arm64e -fobjc-arc, strip)"
+    },
+    "../bin/objc-x64-stripped.macho": {
+      "toolchain": "apple-clang-macho",
+      "built": "tests/fixtures/build.sh (clang -fobjc-arc, macOS 10.14, strip)"
     }
   },
   "excluded": {
