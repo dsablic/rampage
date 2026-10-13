@@ -164,6 +164,17 @@ fn earlier_packs_take_precedence_for_signatures() {
     assert_eq!(named(&[&second, &first]), "second_vfprintf");
 }
 
+#[test]
+fn a_pack_given_twice_loads_once() {
+    let pack = Scratch::new("twice");
+    pack.write("userdb.txt", PEID);
+    pack.write("rampage-pack.toml", &manifest("twice", "[[contents]]\nkind = \"peid\"\npath = \"userdb.txt\"\n"));
+    let packs = Packs::load(&[pack.0.clone(), pack.0.join("."), pack.0.clone()]);
+    assert!(packs.problems().is_empty(), "{:?}", packs.problems());
+    assert_eq!(packs.loaded().len(), 1);
+    assert_eq!(packs.loaded()[0].directory.as_deref(), Some(pack.0.as_path()));
+}
+
 fn rejected(name: &str, contents: &str) -> String {
     let pack = Scratch::new(name);
     pack.write("db.json", "{}");

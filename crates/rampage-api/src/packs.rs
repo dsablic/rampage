@@ -140,11 +140,18 @@ pub struct Packs {
 }
 
 impl Packs {
-    /// Loads the packs in `directories`, in order. Problems are recorded in each pack's info, never returned.
+    /// Loads the packs in `directories`, in order; a directory given again (by any path) is loaded once, where it
+    /// first appears. Problems are recorded in each pack's info, never returned.
     pub fn load(directories: &[PathBuf]) -> Self {
         let mut packs = Self::default();
         let mut names = HashSet::from([BUILTIN_PACK.to_owned()]);
+        let mut seen = HashSet::new();
         for directory in directories {
+            if let Ok(canonical) = directory.canonicalize()
+                && !seen.insert(canonical)
+            {
+                continue;
+            }
             packs.add(directory, &mut names);
         }
         packs

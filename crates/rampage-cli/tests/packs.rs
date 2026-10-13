@@ -71,6 +71,19 @@ fn yara_runs_pack_rules_without_rules_of_its_own() {
 }
 
 #[test]
+fn a_pack_in_both_the_flag_and_the_environment_loads_once_without_warning() {
+    let pack = yara_pack("both");
+    rampage()
+        .env("RAMPAGE_PACKS", pack.arg())
+        .args(["yara", "--pack", pack.arg()])
+        .arg(fixture("hello-x64.exe"))
+        .assert()
+        .success()
+        .stdout(contains("pack_pe [format]"))
+        .stderr("");
+}
+
+#[test]
 fn packs_list_shows_the_builtin_pack_then_flag_then_environment_packs() {
     let flagged = yara_pack("flagged");
     let ambient = yara_pack("ambient");
