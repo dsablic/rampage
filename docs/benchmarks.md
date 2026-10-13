@@ -77,12 +77,13 @@ run at `af40350` (regenerated signature databases), with Ghidra's exports cached
 rows (hello-x64.exe, eval-ref-x86_64, musl-static-x86_64, hello-go-x64) were re-measured with x86 switch tables
 resolved, from the same cached exports; the other x86-64 rows did not change. The hello-x64.exe, ARM, Thumb, MIPS,
 PPC and RISC-V rows were re-measured the same way after the get-PC, import-thunk and undecodable-start fixes.
+Adding noreturn analysis changed only the hello-x64.exe and hello-go-x64 rows (re-measured the same way).
 
 | binary | funcs G/R/both | same blocks | block J | chain J | edge P / R | chain edge P / R | call P / R | callgraph P / R | G-only computed calls |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|
 | hello-x64.elf | 41/41/41 | 41/41 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
 | hello-x64-dyn.elf | 6/7/6 | 6/6 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
-| hello-x64.exe | 497/537/497 | 463/497 | 99.2% | 99.8% | 97.9% / 97.3% | 99.9% / 99.7% | 100.0% / 99.8% | 100.0% / 100.0% | 1 |
+| hello-x64.exe | 497/537/497 | 463/497 | 99.2% | 99.8% | 98.0% / 97.3% | 100.0% / 99.7% | 100.0% / 99.8% | 100.0% / 100.0% | 1 |
 | hello-x64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
 | hello-arm64.elf | 6/9/6 | 6/6 | 100.0% | 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 100.0% / 100.0% | 1 |
 | hello-arm64.macho | 2/3/2 | 2/2 | 100.0% | 100.0% | N/A / N/A | N/A / N/A | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
@@ -97,7 +98,7 @@ PPC and RISC-V rows were re-measured the same way after the get-PC, import-thunk
 | eval-ref-aarch64.elf | 194/195/194 | 189/194 | 99.8% | 100.0% | 98.5% / 98.4% | 100.0% / 100.0% | 99.8% / 100.0% | 99.7% / 100.0% | 2 |
 | musl-static-x86_64.elf | 67/67/67 | 66/67 | 99.6% | 99.6% | 100.0% / 99.3% | 100.0% / 99.3% | 100.0% / 100.0% | 100.0% / 100.0% | 0 |
 | musl-static-aarch64.elf | 82/83/82 | 79/82 | 99.7% | 100.0% | 98.1% / 97.9% | 100.0% / 100.0% | 99.5% / 100.0% | 99.1% / 100.0% | 1 |
-| hello-go-x64.elf | 1358/1806/1357 | 1322/1357 | 98.6% | 98.7% | 95.3% / 98.0% | 95.8% / 98.7% | 99.7% / 97.9% | 99.4% / 98.5% | 57 |
+| hello-go-x64.elf | 1358/1806/1357 | 1321/1357 | 98.6% | 98.8% | 99.3% / 96.9% | 100.0% / 97.7% | 99.7% / 97.9% | 99.5% / 98.5% | 57 |
 
 `N/A` means an empty denominator: the shared functions are single-block, or have no calls. The MIPS, RISC-V and
 small Mach-O/ARM fixtures share only 2–8 functions, so their percentages move a lot with a single decision.
@@ -127,12 +128,18 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   eval-ref-aarch64) are all the `br` itself: Ghidra starts a block at its `switchD` label, so its case edges leave
   from there, while rampage's leave from the block that ends in the `br`. Chain Jaccard and chain edges, which
   merge that split, agree completely.
-- **No noreturn knowledge (rampage adds edges).** rampage falls through after every call. Ghidra ends the block at
-  calls to non-returning functions. In Go, 896 of rampage's 1321 extra edges are fall-throughs out of a block that
-  Ghidra ends with no successor, mostly after `runtime.throw`/`runtime.panic*` (for example `0x409e20`,
-  `0x4337e0`). In hello-x64.exe, rampage adds edges after `exit`, `abort` and the MinGW error reporter `0x140001d20`
-  (`0x1400013f7`, `0x1400013fc`, `0x140001cdd`). This is a precision loss in the CFG, and it also lets bodies run
-  into the following code.
+- **Noreturn calls (resolved; Ghidra now adds edges).** rampage ends a block at a call to a function that never
+  returns: one in its curated list (`exit`, `abort`, `__stack_chk_fail`, `_CxxThrowException`, Rust
+  `core::panicking::*`, Go `runtime.throw`/`runtime.gopanic`/`runtime.panic*`, ...), called directly, through a
+  PLT/IAT stub or through an import slot, or one inferred because every path through it ends in such a call or a
+  trap. Before, rampage fell through after every call. Go's rampage-only edges drop from 1536 to 206 (edge
+  precision 95.3% to 99.3%), and hello-x64.exe loses its 7 fall-throughs after `exit`, `abort` and the MinGW error
+  reporter `0x140001d20` (`0x1400013f7`, `0x1400013fc`, `0x140001cdd`). Go edge recall falls from 98.0% to 96.9%:
+  330 edges Ghidra keeps after calls that never return, such as `runtime.gopanic`, `runtime.panicshift`,
+  `runtime.panicunsafeslicelen` and the dead code after `runtime.fatalthrow` in `runtime.fatal` (`0x444054`).
+  Ghidra lists most of these callees as non-returning itself but does not end every such block. Go's
+  `runtime.mcall` and `runtime.morestack*` end every path in a trap or a noreturn call yet resume their caller
+  through a saved context, so they are never inferred noreturn.
 - **Get-PC idioms (resolved).** A call whose target is the instruction after it (after the delay slot on MIPS and
   SPARC) reads the PC only when the code there takes the return address: `bal 1f; nop; 1: ... addu $gp, $gp, $ra`
   (hello-mips/mipsel `__start`), `bl 1f; 1: mflr r30`, `call 1f; 1: pop ebx`. rampage treats those as plain flow
@@ -165,9 +172,7 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
 2. Extend AArch64 switch recovery to the bounds it does not yet prove: the inverse form, where `b.ls`/`b.lo` jumps
    to the dispatch and the fall-through is the default, and a `cmp` scheduled away from its conditional branch.
    None of these fixtures needs either.
-3. Add noreturn analysis: imports (`exit`, `abort`), Go `runtime.throw`/`panic*`, and functions whose every path
-   ends in a noreturn call. Evidence: about 900 extra Go edges; hello-x64.exe `0x1400013f7`.
-4. ARM `ldr rN, [pc, #off]` literal-pool words become functions: discovery treats every data reference into
+3. ARM `ldr rN, [pc, #off]` literal-pool words become functions: discovery treats every data reference into
    executable memory as a code pointer, including the address a load reads. Evidence: hello-arm.elf `sub_20338`
    and `sub_2033c` (`_start`'s literals). A literal whose word does not decode (`0x2036c`) is no longer a function.
 
