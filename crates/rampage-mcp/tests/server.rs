@@ -345,6 +345,12 @@ async fn dotnet_il_lists_a_method_by_name() {
     assert_eq!(il["method"], "System.HashCode::MixFinal");
     assert_eq!(il["instructions"]["items"][0]["opcode"], "ldarg.0");
     assert_eq!(il["instructions"]["items"].as_array().unwrap().len(), 2);
+    let arguments = json!({ "path": path, "method": "0x0600000d", "at": "IL_000c", "limit": 1 });
+    let page = json_of(&call(&client, "dotnet_il", arguments).await);
+    assert_eq!(page["instructions"]["offset"], 5);
+    assert_eq!(page["instructions"]["items"][0]["offset"], 11);
+    let bad = call(&client, "dotnet_il", json!({ "path": path, "method": "0x0600000d", "at": "IL_zz" })).await;
+    assert_eq!(bad.is_error, Some(true));
     let ambiguous = call(&client, "dotnet_il", json!({ "path": path, "method": "System.HashCode::Combine" })).await;
     assert_eq!(ambiguous.is_error, Some(true));
     assert!(text(&ambiguous).contains("0x0600000d"), "{}", text(&ambiguous));

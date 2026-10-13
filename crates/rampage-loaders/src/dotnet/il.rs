@@ -21,11 +21,19 @@ use crate::LoadError;
 pub const MAX_INSTRUCTIONS: usize = 131_072;
 /// Targets kept from one `switch`; the rest are counted, not listed.
 const MAX_SWITCH_TARGETS: usize = 4096;
+/// Switch targets kept across one listing, which bounds its label text as [`MAX_OPERAND_TEXT`] bounds its
+/// token text; later switches are counted, not listed.
+const MAX_LISTING_SWITCH_TARGETS: usize = 1 << 18;
 /// UTF-16 units of an `ldstr` literal shown; a longer literal is cut and its length given.
 const MAX_LITERAL_UNITS: usize = 512;
+/// Local variable type text kept from one LocalVarSig; up to 65,535 locals of up to 8 KiB each would otherwise
+/// fill every page of the listing. Later locals are counted, not listed.
+pub const MAX_LOCALS_TEXT: usize = 64 << 10;
 /// Rendered operand text of one listing; past it tokens show as hex, since every instruction naming a
 /// long signature would otherwise repeat it.
 const MAX_OPERAND_TEXT: usize = 16 << 20;
+/// Overloads an ambiguous-name error lists; the rest are counted.
+const MAX_CANDIDATES: usize = 50;
 const MAX_EH_SECTIONS: usize = 64;
 const MAX_CLAUSES: usize = 4096;
 
@@ -46,18 +54,42 @@ pub enum MethodSelector<'s> {
     Name(&'s str),
 }
 
+impl std::fmt::Display for MethodSelector<'_> {
+    /// The selector as a user writes it: a hex token or the name.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Token(token) => write!(formatter, "{token:#010x}"),
+            Self::Name(name) => formatter.write_str(name),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum IlError {
     #[error(transparent)]
     Load(#[from] LoadError),
     #[error("no method {0} in the assembly")]
     NotFound(String),
-    #[error("{name} names {} methods; select one by token: {}", candidates.len(), candidates.join("; "))]
-    Ambiguous { name: String, candidates: Vec<String> },
+    #[error("{name} names {total} methods; select one by token: {}{}", candidates.join("; "), more(*total, candidates))]
+    Ambiguous {
+        name: String,
+        /// Every method the name matches.
+        total: usize,
+        /// The first [`MAX_CANDIDATES`] of them as `token Type::Name signature`.
+        candidates: Vec<String>,
+    },
     #[error("{method} has no IL body (its body is {body:?})")]
     NoBody { method: String, body: BodyKind },
     #[error("{method}: {reason}")]
     Unreadable { method: String, reason: String },
+}
+
+/// `; ... N more` for the candidates an ambiguous-name error leaves out.
+fn more(total: usize, listed: &[String]) -> String {
+    match total.saturating_sub(listed.len()) {
+        0 => String::new(),
+        left => format!("; ... {left} more"),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -70,8 +102,13 @@ pub struct MethodIl {
     pub body: IlBody,
     /// Whether the fat header asks for zero-initialized locals (`.locals init`).
     pub init_locals: bool,
-    /// Local variable types by index, from the LocalVarSig; empty when there are none or it is unreadable.
+    /// Local variable types by index, from the LocalVarSig; empty when there are none or it is unreadable. Only
+    /// the first [`MAX_LOCALS_TEXT`] bytes of type text are kept.
     pub locals: Vec<String>,
+    /// Locals the LocalVarSig declares, listed or not.
+    pub locals_total: usize,
+    /// Whether `locals` stops before `locals_total`.
+    pub locals_truncated: bool,
     pub exception_clauses: Vec<ExceptionClause>,
     pub instructions: Vec<Instruction>,
     /// Whether the listing stops early: at the instruction cap, a cut-off operand, or a body shorter than its
@@ -442,6 +479,8 @@ struct Names<'d, 't, 'a> {
     cache: HashMap<u32, Option<String>>,
     spent: usize,
     spent_reported: bool,
+    /// Whether the warning that the signature budget ran out has been given.
+    budget_reported: bool,
 }
 
 impl<'d, 't, 'a> Names<'d, 't, 'a> {
@@ -451,7 +490,16 @@ impl<'d, 't, 'a> Names<'d, 't, 'a> {
             let members = ty.methods.iter().map(|method| method.token);
             owners.extend(members.chain(ty.fields.iter().map(|field| field.token)).map(|token| (token, row)));
         }
-        Self { decoder, owners, cache: HashMap::new(), spent: 0, spent_reported: false }
+        Self { decoder, owners, cache: HashMap::new(), spent: 0, spent_reported: false, budget_reported: false }
+    }
+
+    /// Whether the signature budget is spent, warning of it once; a signature that fails then is not malformed.
+    fn budget_spent(&mut self, warnings: &mut Warnings) -> bool {
+        let spent = self.decoder.budget.get() == 0;
+        if spent && !std::mem::replace(&mut self.budget_reported, true) {
+            warnings.push(super::BUDGET_EXHAUSTED.to_owned());
+        }
+        spent
     }
 
     /// The operand text of `token`: its name and signature, or `<token 0x...>` when it does not resolve or the
@@ -468,6 +516,7 @@ impl<'d, 't, 'a> Names<'d, 't, 'a> {
             Some(text) => text.clone(),
             None => {
                 let text = self.resolve(token);
+                self.budget_spent(warnings);
                 self.cache.insert(token, text.clone());
                 text
             }
@@ -615,11 +664,13 @@ pub(super) fn disassemble<'a>(
     let init_locals =
         body.header == super::IlHeader::Fat && read_u16(bytes, 0).is_some_and(|f| f & CORILMETHOD_INIT_LOCALS != 0);
     let method_row = method.token & tables::MAX_ROWS;
-    let locals = locals(decoder, body.local_var_sig_token, owner, method_row, &mut warnings);
     let mut names = Names::new(decoder, metadata);
+    let (locals, locals_total) = locals(&mut names, body.local_var_sig_token, owner, method_row, &mut warnings);
     let (instructions, cut) = decode(code, &mut |token, warnings| names.operand(token, warnings), &mut warnings);
     let exception_clauses = if body.more_sections && code.len() == body.code_size as usize {
-        exception_clauses(bytes, method.rva, declared_end, &mut names, &mut warnings)
+        let clauses = exception_clauses(bytes, method.rva, declared_end, &mut names, &mut warnings);
+        check_clause_ranges(&clauses, body.code_size, &mut warnings);
+        clauses
     } else {
         Vec::new()
     };
@@ -630,7 +681,9 @@ pub(super) fn disassemble<'a>(
         rva: method.rva,
         body,
         init_locals,
+        locals_truncated: locals.len() < locals_total,
         locals,
+        locals_total,
         exception_clauses,
         instructions,
         truncated: truncated || cut,
@@ -647,7 +700,7 @@ fn select<'m>(
     let methods = metadata.types.iter().zip(1..).flat_map(|(ty, row)| ty.methods.iter().map(move |m| (m, row)));
     let (wanted, matched): (String, Vec<_>) = match selector {
         MethodSelector::Token(token) => {
-            (format!("{token:#010x}"), methods.filter(|(method, _)| method.token == token).collect())
+            (selector.to_string(), methods.filter(|(method, _)| method.token == token).collect())
         }
         MethodSelector::Name(name) if name.contains("::") => (
             name.to_owned(),
@@ -658,23 +711,28 @@ fn select<'m>(
     match matched.as_slice() {
         [] => Err(IlError::NotFound(wanted)),
         [one] => Ok(*one),
-        many => Err(IlError::Ambiguous {
-            name: wanted,
-            candidates: many
-                .iter()
-                .map(|(method, _)| {
-                    let owner = owners.get(&method.token).map_or("", |owner| owner.as_str());
-                    format!("{:#010x} {owner} {}", method.token, method.signature)
-                })
-                .collect(),
-        }),
+        many => Err(ambiguous(
+            wanted,
+            many.iter().map(|(method, _)| {
+                let owner = owners.get(&method.token).map_or("", |owner| owner.as_str());
+                format!("{:#010x} {owner} {}", method.token, method.signature)
+            }),
+        )),
     }
 }
 
-/// The local variable types of a LocalVarSig StandAloneSig token, in the method's generic context.
-fn locals(decoder: &Decoder, token: u32, owner: u32, method: u32, warnings: &mut Warnings) -> Vec<String> {
+/// The error for a name matching every method of `candidates`, listing the first [`MAX_CANDIDATES`].
+fn ambiguous(name: String, candidates: impl ExactSizeIterator<Item = String>) -> IlError {
+    let total = candidates.len();
+    IlError::Ambiguous { name, total, candidates: candidates.take(MAX_CANDIDATES).collect() }
+}
+
+/// The local variable types of a LocalVarSig StandAloneSig token, in the method's generic context, up to
+/// [`MAX_LOCALS_TEXT`] of their text, with how many it declares.
+fn locals(names: &mut Names, token: u32, owner: u32, method: u32, warnings: &mut Warnings) -> (Vec<String>, usize) {
+    let decoder = names.decoder;
     if token == 0 {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
     let blob = ((token >> 24) as u8 == tables::STAND_ALONE_SIG)
         .then(|| decoder.tables.cell(tables::STAND_ALONE_SIG, token & tables::MAX_ROWS, 0))
@@ -686,10 +744,30 @@ fn locals(decoder: &Decoder, token: u32, owner: u32, method: u32, warnings: &mut
     };
     let locals = blob.and_then(|blob| Reader::new(decoder, generics, &decoder.budget).locals(blob));
     match locals {
-        Some(locals) => locals.into_iter().map(|ty| ty.text).collect(),
+        Some(locals) => {
+            let total = locals.len();
+            let mut text = 0;
+            let kept: Vec<String> = locals
+                .into_iter()
+                .map(|ty| ty.text)
+                .take_while(|ty| {
+                    text += ty.len();
+                    text <= MAX_LOCALS_TEXT
+                })
+                .collect();
+            if kept.len() < total {
+                warnings.push(format!(
+                    "only the first {} of {total} locals are listed ({MAX_LOCALS_TEXT} bytes of type text)",
+                    kept.len()
+                ));
+            }
+            (kept, total)
+        }
         None => {
-            warnings.push(format!("local variable signature {token:#010x} is unreadable"));
-            Vec::new()
+            if !names.budget_spent(warnings) {
+                warnings.push(format!("local variable signature {token:#010x} is unreadable"));
+            }
+            (Vec::new(), 0)
         }
     }
 }
@@ -701,6 +779,7 @@ type TokenText<'n> = &'n mut dyn FnMut(u32, &mut Warnings) -> String;
 fn decode(code: &[u8], token_text: TokenText, warnings: &mut Warnings) -> (Vec<Instruction>, bool) {
     let mut instructions = Vec::new();
     let mut at = 0usize;
+    let (mut switch_targets_left, mut switch_cap_reported) = (MAX_LISTING_SWITCH_TARGETS, false);
     while at < code.len() {
         if instructions.len() == MAX_INSTRUCTIONS {
             warnings.push(format!("listing stops at {MAX_INSTRUCTIONS} instructions"));
@@ -750,8 +829,8 @@ fn decode(code: &[u8], token_text: TokenText, warnings: &mut Warnings) -> (Vec<I
             Operand::Int8 | Operand::Int32 | Operand::Int64 => Some(read_signed(bytes).to_string()),
             Operand::UInt8 | Operand::Arg8 | Operand::Arg16 => Some(read_unsigned(bytes).to_string()),
             Operand::Local8 | Operand::Local16 => Some(format!("V_{}", read_unsigned(bytes))),
-            Operand::Float32 => Some(format!("{:?}", f32::from_bits(read_unsigned(bytes) as u32))),
-            Operand::Float64 => Some(format!("{:?}", f64::from_bits(read_unsigned(bytes)))),
+            Operand::Float32 => Some(float32(read_unsigned(bytes) as u32)),
+            Operand::Float64 => Some(float64(read_unsigned(bytes))),
             Operand::ShortBranch | Operand::Branch => {
                 Some(branch.target(read_signed(bytes), &mut instruction, warnings))
             }
@@ -762,8 +841,16 @@ fn decode(code: &[u8], token_text: TokenText, warnings: &mut Warnings) -> (Vec<I
             }
             Operand::Switch => {
                 let count = bytes.len() / 4 - 1;
+                let kept = count.min(MAX_SWITCH_TARGETS);
+                if kept > switch_targets_left && !std::mem::replace(&mut switch_cap_reported, true) {
+                    warnings.push(format!(
+                        "listing keeps {MAX_LISTING_SWITCH_TARGETS} switch targets; later ones are counted, not listed"
+                    ));
+                }
+                let kept = kept.min(switch_targets_left);
+                switch_targets_left -= kept;
                 let mut labels = Vec::new();
-                for chunk in bytes[4..].as_chunks::<4>().0.iter().take(MAX_SWITCH_TARGETS) {
+                for chunk in bytes[4..].as_chunks::<4>().0.iter().take(kept) {
                     labels.push(branch.target(i64::from(i32::from_le_bytes(*chunk)), &mut instruction, warnings));
                 }
                 if count > labels.len() {
@@ -812,6 +899,18 @@ impl Branch {
         instruction.targets.push(offset);
         label(offset)
     }
+}
+
+/// An `ldc.r4` constant; a NaN as its raw bits, ILDasm style, since its sign and payload would otherwise be lost.
+fn float32(bits: u32) -> String {
+    let value = f32::from_bits(bits);
+    if value.is_nan() { format!("float32({bits:#010x})") } else { format!("{value:?}") }
+}
+
+/// An `ldc.r8` constant, rendered as [`float32`] renders an `ldc.r4` one.
+fn float64(bits: u64) -> String {
+    let value = f64::from_bits(bits);
+    if value.is_nan() { format!("float64({bits:#018x})") } else { format!("{value:?}") }
 }
 
 /// A little-endian unsigned integer of at most 8 bytes.
@@ -873,6 +972,28 @@ fn exception_clauses(
     clauses
 }
 
+/// Warns of each clause range that leaves the `code_length` bytes of IL, as branch targets past the body are.
+fn check_clause_ranges(clauses: &[ExceptionClause], code_length: u32, warnings: &mut Warnings) {
+    for (clause, number) in clauses.iter().zip(1..) {
+        let ranges = [("try", clause.try_start, clause.try_end), ("handler", clause.handler_start, clause.handler_end)];
+        for (what, start, end) in ranges {
+            if start >= code_length || end > code_length {
+                warnings.push(format!(
+                    "exception clause {number} {what} {} to {} runs past the {code_length}-byte body",
+                    label(start),
+                    label(end)
+                ));
+            }
+        }
+        if let Some(filter) = clause.filter_start.filter(|&filter| filter >= code_length) {
+            warnings.push(format!(
+                "exception clause {number} filter {} lies past the {code_length}-byte body",
+                label(filter)
+            ));
+        }
+    }
+}
+
 fn exception_clause(clause: &[u8], fat: bool, names: &mut Names, warnings: &mut Warnings) -> ExceptionClause {
     // Small clauses (II.25.4.6) pack 2-byte offsets and 1-byte lengths; fat ones use 4 bytes for each.
     let fields: [u32; 6] = if fat {
@@ -913,7 +1034,7 @@ mod tests {
     #[test]
     fn every_opcode_byte_has_one_meaning() {
         let one: Vec<u8> = (0..=255u8).filter(|&code| opcode(code).is_some()).collect();
-        // III.1.2.1: 0x00-0xE0 less the 30 unused bytes 0x24, 0x77, 0x78, 0xA6-0xB2, 0xBB-0xC1, 0xC4, 0xC5,
+        // III.1.2.1: 0x00-0xE0 less the 34 unused bytes 0x24, 0x77, 0x78, 0xA6-0xB2, 0xBB-0xC1, 0xC4, 0xC5,
         // 0xC7-0xCF.
         assert_eq!(one.len(), 0xE1 - 1 - 2 - 13 - 7 - 2 - 9);
         let two = (0..=255u8).filter(|&code| extended_opcode(code).is_some()).count();
@@ -954,7 +1075,7 @@ mod tests {
                 "IL_0002: ldc.i4 305419896",
                 "IL_0007: ldc.i8 -1",
                 "IL_0010: ldc.r4 1.0",
-                "IL_0015: ldc.r8 NaN",
+                "IL_0015: ldc.r8 float64(0x7ff8000000000000)",
                 "IL_001e: switch (IL_002b, IL_0026)",
                 "IL_002b: .byte 0x24",
                 "IL_002c: .byte 0xfe, 0x08",
@@ -1014,6 +1135,80 @@ mod tests {
         switch.extend(vec![0; (MAX_SWITCH_TARGETS + 2) * 4]);
         let (texts, _, _) = listing(&switch);
         assert!(texts[0].ends_with("IL_400d, ... 2 more)"), "{}", &texts[0][texts[0].len() - 40..]);
+    }
+
+    #[test]
+    fn ambiguous_names_list_the_first_candidates() {
+        let error = ambiguous("M".to_owned(), (0..70).map(|index| format!("c{index}")));
+        let text = error.to_string();
+        assert!(text.starts_with("M names 70 methods; select one by token: c0; c1; "), "{text}");
+        assert!(text.ends_with("; c49; ... 20 more"), "{text}");
+        let IlError::Ambiguous { total, candidates, .. } = error else { panic!() };
+        assert_eq!((total, candidates.len()), (70, MAX_CANDIDATES));
+        assert!(
+            ambiguous("M".to_owned(), ["a".to_owned(), "b".to_owned()].into_iter()).to_string().ends_with(": a; b")
+        );
+    }
+
+    #[test]
+    fn clause_ranges_past_the_body_are_reported() {
+        let inside = ExceptionClause {
+            kind: ClauseKind::Filter,
+            flags: 1,
+            try_start: 0,
+            try_end: 4,
+            handler_start: 6,
+            handler_end: 8,
+            filter_start: Some(4),
+            catch_token: None,
+            catch_type: None,
+        };
+        let past = ExceptionClause { try_start: 8, try_end: 8, filter_start: Some(9), ..inside.clone() };
+        let mut warnings = Warnings::default();
+        check_clause_ranges(&[inside.clone(), past], 8, &mut warnings);
+        assert_eq!(
+            warnings.0,
+            [
+                "exception clause 2 try IL_0008 to IL_0008 runs past the 8-byte body",
+                "exception clause 2 filter IL_0009 lies past the 8-byte body",
+            ]
+        );
+        check_clause_ranges(&[inside], 7, &mut warnings);
+        assert_eq!(warnings.0[2], "exception clause 1 handler IL_0006 to IL_0008 runs past the 7-byte body");
+    }
+
+    #[test]
+    fn nans_keep_their_sign_and_payload() {
+        assert_eq!(float32(0xFFC0_0001), "float32(0xffc00001)");
+        assert_eq!(float32(0x7F80_0000), "inf");
+        assert_eq!(float32(0x3F80_0000), "1.0");
+        assert_eq!(float64(0xFFF8_0000_0000_0001), "float64(0xfff8000000000001)");
+        assert_eq!(float64(0x7FF0_0000_0000_0002), "float64(0x7ff0000000000002)");
+        assert_eq!(float64(0x8000_0000_0000_0000), "-0.0");
+        let (texts, _, _) = listing(&[0x22, 0x01, 0x00, 0xC0, 0xFF]);
+        assert_eq!(texts, ["IL_0000: ldc.r4 float32(0xffc00001)"]);
+    }
+
+    #[test]
+    fn switch_targets_are_capped_per_listing() {
+        let switches = MAX_LISTING_SWITCH_TARGETS / MAX_SWITCH_TARGETS + 6;
+        let mut code = Vec::new();
+        for _ in 0..switches {
+            code.push(0x45);
+            code.extend((MAX_SWITCH_TARGETS as u32).to_le_bytes());
+            code.extend(vec![0; MAX_SWITCH_TARGETS * 4]);
+        }
+        let mut warnings = Warnings::default();
+        let (instructions, cut) = decode(&code, &mut |_, _| String::new(), &mut warnings);
+        assert_eq!((instructions.len(), cut), (switches, false));
+        let targets: usize = instructions.iter().map(|instruction| instruction.targets.len()).sum();
+        assert_eq!(targets, MAX_LISTING_SWITCH_TARGETS);
+        let text: usize =
+            instructions.iter().filter_map(|instruction| instruction.operand.as_ref()).map(String::len).sum();
+        assert!(text < MAX_LISTING_SWITCH_TARGETS * 10, "{text} bytes of switch labels");
+        assert_eq!(instructions.last().unwrap().operand.as_deref(), Some("(... 4096 more)"));
+        let capped = warnings.0.iter().filter(|warning| warning.contains("switch targets")).count();
+        assert_eq!(capped, 1, "{:?}", warnings.0);
     }
 
     #[test]

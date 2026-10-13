@@ -940,6 +940,9 @@ pub fn dotnet_il(
         let init = if il.init_locals { "init " } else { "" };
         writeln!(out, ".locals {init}({})", locals.join(", "))?;
     }
+    if il.locals_truncated {
+        writeln!(out, "... {} more locals not listed", il.locals_total - il.locals.len())?;
+    }
     for clause in &il.exception_clauses {
         writeln!(out, "{}", clause.text())?;
     }

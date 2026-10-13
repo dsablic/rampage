@@ -259,12 +259,16 @@ struct DotNetIlArgs {
     /// A MethodDef token (`0x0600000d`) or `Namespace.Type::Name` (nested types as `Outer/Inner`) naming one
     /// method; dotnet_metadata lists them.
     method: String,
-    /// Instructions to skip, for paging.
+    /// Instructions to skip, for paging: an instruction index, not an IL byte offset (use `at` for those).
     #[serde(default)]
     offset: Option<usize>,
     /// Instructions per page (default 100, at most 1000).
     #[serde(default)]
     limit: Option<usize>,
+    /// Start the page at the instruction containing this IL byte offset instead of at `offset`: an `IL_0042`
+    /// label, `0x42`, or decimal.
+    #[serde(default)]
+    at: Option<String>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -708,10 +712,16 @@ pub fn tools() -> Vec<Tool> {
              targets as IL_xxxx labels, the local variable types and the exception clauses (try/handler/filter \
              ranges, catch type). `method` is a MethodDef token (`0x0600000d`) or `Namespace.Type::Name`; an \
              overloaded name is refused with each overload's token and signature. Instructions are paged with \
-             offset/limit; bytes that are no opcode show as `.byte`. Returns null for a native image.",
+             offset/limit (offset counts instructions), or start at an IL label with `at` (`IL_0042`); bytes that \
+             are no opcode show as `.byte`. Returns null for a native image.",
             |project, args: DotNetIlArgs| {
-                let query =
-                    crate::DotNetIlQuery { method: args.method, offset: args.offset, limit: page_limit(args.limit) };
+                let at = args.at.as_deref().map(crate::parse_il_offset).transpose().map_err(ApiError::Invalid)?;
+                let query = crate::DotNetIlQuery {
+                    method: args.method,
+                    offset: args.offset,
+                    limit: page_limit(args.limit),
+                    at,
+                };
                 project.dotnet_il(&query)
             },
         ),

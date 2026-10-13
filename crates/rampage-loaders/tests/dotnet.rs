@@ -40,6 +40,12 @@ struct Spec {
     pad_scope: Option<u32>,
     /// Replaces the base type of Inner (TypeRef 1).
     inner_extends: Option<u32>,
+    /// Replaces Compute's LocalVarSig blob.
+    compute_locals: Option<Vec<u8>>,
+    /// Replaces the name of TypeRef 1 (`Object`).
+    object_name: Option<String>,
+    /// Replaces the signature of MemberRef 1, the attribute constructor.
+    ctor_signature: Option<Vec<u8>>,
 }
 
 const SECTION_RVA: u32 = 0x2000;
@@ -64,10 +70,18 @@ impl Heap {
 
     fn blob(&mut self, data: &[u8]) -> u32 {
         let offset = self.bytes.len() as u32;
-        assert!(data.len() < 0x80, "builder writes only 1-byte blob lengths");
-        self.bytes.push(data.len() as u8);
+        self.bytes.extend_from_slice(&compressed(data.len() as u32));
         self.bytes.extend_from_slice(data);
         offset
+    }
+}
+
+/// An ECMA-335 compressed unsigned integer (II.23.2).
+fn compressed(value: u32) -> Vec<u8> {
+    match value {
+        0..0x80 => vec![value as u8],
+        0x80..0x4000 => (value as u16 | 0x8000).to_be_bytes().to_vec(),
+        _ => (value | 0xC000_0000).to_be_bytes().to_vec(),
     }
 }
 
@@ -101,12 +115,12 @@ fn build(spec: &Spec) -> Vec<u8> {
     let helper_signature = blobs.blob(&[0x00, 0, 0x01]);
     let run_signature = blobs.blob(&[0x00, 1, 0x08, 0x18]);
     // Object::.ctor(string, int32) as an instance method, and an attribute value calling it with ("abc", 42).
-    let ctor_signature = blobs.blob(&[0x20, 2, 0x01, 0x0E, 0x08]);
+    let ctor_signature = blobs.blob(spec.ctor_signature.as_deref().unwrap_or(&[0x20, 2, 0x01, 0x0E, 0x08]));
     let attribute_value =
         blobs.blob(spec.attribute_value.as_deref().unwrap_or(&[0x01, 0x00, 3, b'a', b'b', b'c', 42, 0, 0, 0, 0, 0]));
     let token_blob = blobs.blob(&[0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a]);
     // Compute's locals (int32, T) and the instantiation Compute<int32>.
-    let locals_signature = blobs.blob(&[0x07, 2, 0x08, 0x1E, 0]);
+    let locals_signature = blobs.blob(spec.compute_locals.as_deref().unwrap_or(&[0x07, 2, 0x08, 0x1E, 0]));
     let instantiation = blobs.blob(&[0x0A, 1, 0x08]);
     let guids: Vec<u8> = (1..=16).collect();
     let mut user_strings = vec![0u8, 11];
@@ -136,7 +150,8 @@ fn build(spec: &Spec) -> Vec<u8> {
     let module_name = strings.string("Demo.dll");
     tables.put(0, 2).put(module_name, s).put(1, g).put(0, g).put(0, g);
     // TypeRef: row 1 is System.Object in AssemblyRef 1 (ResolutionScope tag 2).
-    let (object_name, system) = (strings.string("Object"), strings.string("System"));
+    let (object_name, system) =
+        (strings.string(spec.object_name.as_deref().unwrap_or("Object")), strings.string("System"));
     tables.put((1 << 2) | 2, scope).put(object_name, s).put(system, s);
     let pad_name = strings.string("Pad");
     for _ in 0..spec.extra_type_refs {
@@ -861,12 +876,84 @@ fn resolves_method_specs_and_generic_locals() {
     let compute = listing(&image, MethodSelector::Name("Demo.Program::Compute"));
     assert_eq!(texts(&compute), ["IL_0000: call int32 Demo.Program::Compute<int32>(!!0, !!0)"]);
     assert_eq!(compute.locals, ["int32", "T"]);
+    assert_eq!((compute.locals_total, compute.locals_truncated), (2, false));
     assert_eq!(compute.instructions[0].token, Some(0x2B00_0001));
     let main = listing(&image, MethodSelector::Token(0x0600_0001));
     assert_eq!(texts(&main), ["IL_0000: ldc.i4.0", "IL_0001: pop", "IL_0002: ret"]);
     for (method, body) in [("Helper", BodyKind::Native), ("Run", BodyKind::None)] {
         let error = dotnet::image_method_il(&image, MethodSelector::Name(method)).unwrap_err();
         assert!(matches!(error, IlError::NoBody { body: found, .. } if found == body), "{error}");
+    }
+}
+
+#[test]
+fn locals_are_listed_up_to_a_text_cap() {
+    // 12,000 `string` locals: 72,000 bytes of type text.
+    let count = 12_000u32;
+    let mut signature = vec![0x07];
+    signature.extend(compressed(count));
+    signature.extend(vec![0x0E; count as usize]);
+    let image = build(&Spec { compute_locals: Some(signature), ..Spec::default() });
+    let compute = listing(&image, MethodSelector::Name("Demo.Program::Compute"));
+    let kept = dotnet::MAX_LOCALS_TEXT / "string".len();
+    assert_eq!((compute.locals.len(), compute.locals_total, compute.locals_truncated), (kept, 12_000, true));
+    assert!(compute.locals.iter().all(|local| local == "string"));
+    let warning = format!("only the first {kept} of 12000 locals are listed (65536 bytes of type text)");
+    assert_eq!(compute.warnings, [warning]);
+}
+
+#[test]
+fn a_listing_has_its_own_signature_budget() {
+    // 10,000 attributes whose constructor takes seven parameters of a 1,000-character type: each renders ~7 KB,
+    // which spends the image's 64 MiB signature budget while the metadata decodes.
+    let mut ctor = vec![0x20, 7, 0x01];
+    ctor.extend([0x12, 0x05].repeat(7));
+    let spec = Spec {
+        object_name: Some("O".repeat(1000)),
+        ctor_signature: Some(ctor),
+        attribute_parents: vec![(1 << 5) | 7; 10_000],
+        ..Spec::default()
+    };
+    let image = build(&spec);
+    let compute = listing(&image, MethodSelector::Name("Demo.Program::Compute"));
+    assert_eq!(compute.locals, ["int32", "T"]);
+    assert_eq!(texts(&compute), ["IL_0000: call int32 Demo.Program::Compute<int32>(!!0, !!0)"]);
+    assert!(compute.warnings.is_empty(), "{:?}", compute.warnings);
+}
+
+#[test]
+fn a_spent_listing_budget_is_reported_not_blamed_on_the_signature() {
+    // A LocalVarSig of 65,535 locals of a generic instance over a 1,000-character type, ~3 KB of text each:
+    // each is well-formed, but together they render more than the listing's 64 MiB budget.
+    let count = 65_535u32;
+    let mut signature = vec![0x07];
+    signature.extend(compressed(count));
+    signature.extend([0x15, 0x12, 0x05, 2, 0x12, 0x05, 0x12, 0x05].repeat(count as usize));
+    let spec = Spec {
+        object_name: Some("O".repeat(1000)),
+        compute_locals: Some(signature),
+        wide_blobs: true,
+        ..Spec::default()
+    };
+    let compute = listing(&build(&spec), MethodSelector::Name("Demo.Program::Compute"));
+    assert!(compute.locals.is_empty());
+    assert_eq!(compute.warnings, ["signature text budget exhausted; remaining signatures not rendered"]);
+}
+
+#[test]
+fn unreadable_tables_name_the_method_as_given() {
+    let mut image = build(&Spec::default());
+    let stream = image.windows(3).position(|name| name == b"#~\0").unwrap();
+    image[stream + 1] = b'X';
+    let selectors = [
+        (MethodSelector::Token(0x0600_0002), "0x06000002"),
+        (MethodSelector::Name("Demo.Program::Compute"), "Demo.Program::Compute"),
+    ];
+    for (selector, shown) in selectors {
+        let error = dotnet::image_method_il(&image, selector).unwrap_err();
+        let IlError::Unreadable { method, reason } = &error else { panic!("{error}") };
+        assert_eq!(method, shown);
+        assert!(reason.contains("no #~ table stream"), "{reason}");
     }
 }
 
@@ -909,7 +996,14 @@ fn decodes_crafted_operands_and_exception_sections() {
             "IL_002a: br.s IL_00ab",
         ]
     );
-    assert_eq!(il.warnings, ["br.s at IL_002a targets IL_00ab past the body"]);
+    assert_eq!(
+        il.warnings,
+        [
+            "br.s at IL_002a targets IL_00ab past the body",
+            "exception clause 2 try IL_0020 to IL_0030 runs past the 44-byte body",
+            "exception clause 2 handler IL_0030 to IL_0038 runs past the 44-byte body",
+        ]
+    );
     let clauses: Vec<String> = il.exception_clauses.iter().map(dotnet::ExceptionClause::text).collect();
     assert_eq!(
         clauses,

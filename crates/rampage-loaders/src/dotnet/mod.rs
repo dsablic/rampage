@@ -35,7 +35,9 @@ use serde::Serialize;
 use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 use heaps::Heaps;
-pub use il::{ClauseKind, ExceptionClause, IlError, Instruction, MAX_INSTRUCTIONS, MethodIl, MethodSelector};
+pub use il::{
+    ClauseKind, ExceptionClause, IlError, Instruction, MAX_INSTRUCTIONS, MAX_LOCALS_TEXT, MethodIl, MethodSelector,
+};
 pub use signatures::UNREADABLE;
 use signatures::{Generics, Reader};
 use tables::{Coded as C, Tables};
@@ -344,7 +346,7 @@ pub fn image_method_il(image: &[u8], method: MethodSelector) -> Result<Option<Me
         (None, _) => Ok(None),
         (Some(_), Some(listing)) => listing.map(Some),
         (Some(metadata), None) => Err(IlError::Unreadable {
-            method: format!("{method:?}"),
+            method: method.to_string(),
             reason: format!("the metadata tables are unreadable: {}", metadata.warnings.join("; ")),
         }),
     }
@@ -580,6 +582,9 @@ fn parse_root(
             Some(tables) => {
                 let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
                 decoder.decode(&mut metadata);
+                // The visitor gets a budget of its own: a metadata-heavy image must not leave it nothing.
+                decoder.budget.set(signatures::TOTAL_BUDGET);
+                decoder.budget_reported = false;
                 visit(&decoder, &metadata);
             }
             None => warnings.push("table stream header is unreadable".to_owned()),

@@ -42,7 +42,7 @@ pub use correlation::RuntimeCorrelation;
 pub use debug_import::DebugImport;
 pub use decompile::Decompilation;
 pub use detect::ToolDetections;
-pub use dotnet::{DotNetCounts, DotNetIl, DotNetIlQuery, DotNetList, DotNetQuery, DotNetSummary};
+pub use dotnet::{DotNetCounts, DotNetIl, DotNetIlQuery, DotNetList, DotNetQuery, DotNetSummary, parse_il_offset};
 pub use files::{MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MAX_SIGNATURE_DB_BYTES, read_bounded};
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
 pub use jumptable::{JumpTable, JumpTableEntry};
