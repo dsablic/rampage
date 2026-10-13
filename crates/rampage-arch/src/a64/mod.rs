@@ -44,6 +44,27 @@ impl Decoded {
     }
 }
 
+/// How many instructions after a call to the next instruction are searched for a read of the return address.
+const LINK_READ_WINDOW: usize = 4;
+
+/// Whether the code in `bytes`, which a `bl` links to, takes the return address in x30 as a value (the get-PC idiom
+/// `bl 1f; 1: mov x0, x30`) before anything saves, overwrites or branches: a callee's prologue saves it instead.
+fn reads_link(bytes: &[u8]) -> bool {
+    const LINK: u64 = 30;
+    for chunk in bytes.as_chunks::<4>().0.iter().take(LINK_READ_WINDOW) {
+        let Some(decoded) = decode_word(u32::from_le_bytes(*chunk)) else { return false };
+        let name = decoded.encoding.name;
+        let is = |field: &str| decoded.field(field) == Some(LINK);
+        if name.contains("branch") || is("Rd") || is("Rt") || is("Rt2") {
+            return false;
+        }
+        if is("Rn") || is("Rm") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Finds the encoding of `word`, or `None` when it is unallocated.
 pub fn lookup(word: u32) -> Option<&'static Encoding> {
     spec::TABLES.lookup(word, State::default())
@@ -112,8 +133,11 @@ impl Disassembler for A64Disassembler {
         };
         match decode_word(word) {
             Some(decoded) => {
-                let flow::Analysis { flow, data_ref, jump_base, jump_table } =
+                let flow::Analysis { mut flow, data_ref, jump_base, jump_table } =
                     flow::analyze(&decoded, address, &mut self.addresses, read);
+                if flow == Flow::Call(address.wrapping_add(4)) && reads_link(&bytes[4..]) {
+                    flow = Flow::Next;
+                }
                 self.jump_table = jump_table;
                 if matches!(decoded.encoding.name, "BR_64_branch_reg" | "BLR_64_branch_reg") {
                     self.resolved = Some(flow);
@@ -200,6 +224,16 @@ mod tests {
         assert_eq!(decode(&mut d, 0xd61f_0200, 0x1000).flow, Flow::IndirectJump);
         assert_eq!(decode(&mut d, 0xd63f_0100, 0x1000).flow, Flow::IndirectCall);
         assert_eq!(decode(&mut d, 0xd420_0020, 0x1000).flow, Flow::Halt); // brk #1
+        // bl 0x1004 reads the PC when the code there takes x30 as a value, and calls a following function that
+        // saves it (stp x29, x30, [sp, #-16]!).
+        let call = |next: u32| {
+            let bytes: Vec<u8> = [0x9400_0001, next].iter().flat_map(|word: &u32| word.to_le_bytes()).collect();
+            A64Disassembler::default().decode(&bytes, 0x1000).flow
+        };
+        assert_eq!(call(0xaa1e_03e0), Flow::Next); // mov x0, x30
+        assert_eq!(call(0x9100_23c1), Flow::Next); // add x1, x30, #8
+        assert_eq!(call(0xa9bf_7bfd), Flow::Call(0x1004)); // stp x29, x30, [sp, #-16]!
+        assert_eq!(decode(&mut d, 0x9400_0001, 0x1000).flow, Flow::Call(0x1004));
         assert_eq!(decode(&mut d, 0xd420_7d00, 0x1000).flow, Flow::Halt); // brk #0x3e8
         assert_eq!(decode(&mut d, 0x0000_0000, 0x1000).flow, Flow::Halt); // udf #0
         // A debugger resumes from other breakpoints and from semihosting calls.

@@ -95,6 +95,10 @@ fn a_call_to_the_next_instruction_is_a_call_unless_the_code_there_reads_the_link
     let cases = [
         (thumb(), "00f000f880b5", Flow::Call(0x1004)), // bl; push {r7, lr}
         (Target::new(Arch::Arm), "ffffffeb", Flow::Call(0x1004)), // bl
+        (Target::new(Arch::Arm), "ffffffeb0e00a0e1", Flow::Next), // bl; mov r0, lr
+        (Target::new(Arch::Arm), "ffffffeb04e02de5", Flow::Call(0x1004)), // bl; str lr, [sp, #-4]!
+        (thumb(), "00f000f87046", Flow::Next),         // bl; mov r0, lr
+        (thumb(), "00f000f800bf7046", Flow::Next),     // bl; nop; mov r0, lr
         (big_endian(Arch::PowerPc), "480000057c0802a6", Flow::Call(0x1004)), // bl; mflr r0
         (big_endian(Arch::PowerPc), "480000057fc802a6", Flow::Next), // bl; mflr r30
         (big_endian(Arch::PowerPc), "4800000560000000", Flow::Call(0x1004)), // bl; nop
@@ -113,8 +117,10 @@ fn a_call_past_its_delay_slot_is_to_the_next_instruction() {
     let cases = [
         (big_endian(Arch::Mips), "0411000100000000", "3c1c0002279c80b4039fe021", Flow::Next),
         (big_endian(Arch::Mips), "0411000100000000", "27bdffe0afbf001c", Flow::Call(0x1008)), // sw $ra, 0x1c($sp)
-        (big_endian(Arch::Sparc), "4000000201000000", "ae03c017", Flow::Next),                // add %o7, %l7, %l7
-        (big_endian(Arch::Sparc), "4000000201000000", "9de3bfa0", Flow::Call(0x1008)),        // save %sp, -0x60, %sp
+        (big_endian(Arch::Mips), "0411000100000000", "8ffc0000", Flow::Next),                 // lw $gp, 0($ra)
+        (big_endian(Arch::Mips), "04110001", "03e0e02127bdffe0", Flow::Next), // delay slot: addu $gp, $ra, $zero
+        (big_endian(Arch::Sparc), "4000000201000000", "ae03c017", Flow::Next), // add %o7, %l7, %l7
+        (big_endian(Arch::Sparc), "4000000201000000", "9de3bfa0", Flow::Call(0x1008)), // save %sp, -0x60, %sp
     ];
     for (target, call, after, expected) in cases {
         let mut decoder = decoder(&target).unwrap();

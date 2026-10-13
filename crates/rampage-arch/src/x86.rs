@@ -43,10 +43,11 @@ impl Disassembler for X86Disassembler {
         }
         self.jump_table = self.registers.step(&instruction, self.bitness, &mut self.info);
         let mut flow = flow_of(&instruction);
-        // `call 1f; 1: pop reg` reads the PC; a callee would not start by popping its own return address.
+        // `call 1f; 1: pop reg` and `call 1f; 1: mov reg, [esp]` read the PC; a callee would not start by taking
+        // its own return address.
         if flow == Flow::Call(instruction.next_ip())
             && let Some(following) = bytes.get(instruction.len()..)
-            && self.decode_raw(following, instruction.next_ip()).mnemonic() == Mnemonic::Pop
+            && reads_return_address(&self.decode_raw(following, instruction.next_ip()))
         {
             flow = Flow::Next;
         }
@@ -110,6 +111,22 @@ fn flow_of(instruction: &Instruction) -> Flow {
         FlowControl::IndirectCall => Flow::IndirectCall,
         FlowControl::Return => Flow::Return,
         FlowControl::Exception => Flow::Halt,
+    }
+}
+
+/// Whether `instruction`, at a call's target, takes the return address the call pushed: `pop reg`, or a `mov` of
+/// the word at the stack pointer into a register.
+fn reads_return_address(instruction: &Instruction) -> bool {
+    match instruction.mnemonic() {
+        Mnemonic::Pop => true,
+        Mnemonic::Mov => {
+            instruction.op0_kind() == OpKind::Register
+                && instruction.op1_kind() == OpKind::Memory
+                && matches!(instruction.memory_base(), Register::ESP | Register::RSP)
+                && instruction.memory_index() == Register::None
+                && instruction.memory_displacement64() == 0
+        }
+        _ => false,
     }
 }
 
@@ -193,6 +210,10 @@ mod tests {
         let mut decoder = decoder_for(Arch::X86).unwrap();
         // call 0x1005; pop ebx
         assert_eq!(decoder.decode(&[0xe8, 0, 0, 0, 0, 0x5b], 0x1000).flow, Flow::Next);
+        // call 0x1005; mov eax, [esp]
+        assert_eq!(decoder.decode(&[0xe8, 0, 0, 0, 0, 0x8b, 0x04, 0x24], 0x1000).flow, Flow::Next);
+        // call 0x1005; mov eax, [esp + 4]: an argument, not the return address.
+        assert_eq!(decoder.decode(&[0xe8, 0, 0, 0, 0, 0x8b, 0x44, 0x24, 0x04], 0x1000).flow, Flow::Call(0x1005));
         // call 0x1005; push ebp: a function that happens to follow.
         assert_eq!(decoder.decode(&[0xe8, 0, 0, 0, 0, 0x55], 0x1000).flow, Flow::Call(0x1005));
     }

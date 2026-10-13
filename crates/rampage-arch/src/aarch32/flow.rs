@@ -13,6 +13,9 @@ const PC: u64 = 15;
 const LR: u64 = 14;
 const SP: u64 = 13;
 
+/// How many instructions after a call to the next instruction are searched for a read of the return address.
+const LINK_READ_WINDOW: usize = 4;
+
 fn register(decoded: &Decoded, name: &str) -> Option<u64> {
     let operand = decoded.syntax.operands.iter().find(|operand| {
         operand.name.strip_prefix('<').and_then(|name| name.strip_suffix('>')) == Some(name)
@@ -247,6 +250,30 @@ impl Aarch32Disassembler {
     fn halfword(&self, bytes: &[u8], offset: usize) -> Option<u16> {
         let pair: [u8; 2] = bytes.get(offset..offset + 2)?.try_into().ok()?;
         Some(if self.target.big_endian { u16::from_be_bytes(pair) } else { u16::from_le_bytes(pair) })
+    }
+
+    /// Whether the code after `call`, a `bl` to the next instruction at the start of `bytes`, takes the return
+    /// address in LR as a value (the get-PC idiom `bl 1f; 1: mov r0, lr`) before anything saves, overwrites or
+    /// branches: a callee's prologue pushes it instead.
+    fn reads_link(&self, bytes: &[u8], call: &Decoded) -> bool {
+        let mut offset = usize::from(call.size());
+        for _ in 0..LINK_READ_WINDOW {
+            let Some(decoded) =
+                bytes.get(offset..).and_then(|rest| self.decode_in_mode(rest, call.set, ItState::default()))
+            else {
+                return false;
+            };
+            let is_link = |name| register(&decoded, name) == Some(LR);
+            let saves = loaded_registers(&decoded) & (1 << LR) != 0;
+            if kind(&decoded, 0) != Kind::Next || destination(&decoded) == Some(LR) || is_link("Rt") || saves {
+                return false;
+            }
+            if is_link("Rn") || is_link("Rm") {
+                return true;
+            }
+            offset += usize::from(decoded.size());
+        }
+        false
     }
 
     fn decode_at(&self, bytes: &[u8], address: u64, it: ItState) -> Option<Decoded> {
@@ -515,6 +542,9 @@ impl Disassembler for Aarch32Disassembler {
             conditional_transfer = false;
             self.modes.entry(pointer & !1).or_insert(pointer & 1 != 0);
             self.switches.insert(pointer & !1, pointer & 1 != 0);
+        }
+        if decoded.mnemonic() == "BL" && flow == Flow::Call(next) && self.reads_link(bytes, &decoded) {
+            flow = Flow::Next;
         }
         let thumb = decoded.set != Set::A32;
         if let Flow::Call(target) | Flow::Jump(target) | Flow::ConditionalJump(target) = flow {

@@ -57,11 +57,12 @@ impl CapstoneDisassembler {
         }
     }
 
-    /// Whether the code at `target`, which a call at `address` (whose bytes start `bytes`) links to, takes the
-    /// return address as a value: the get-PC idioms `bal 1f; nop; 1: addu $gp, $gp, $ra`, `bl 1f; 1: mflr r30`
-    /// and `call 1f; nop; 1: add %o7, %l7, %l7`. A callee saves it instead, or returns through it.
-    fn reads_link(&self, bytes: &[u8], address: u64, target: u64) -> bool {
-        let mut at = target;
+    /// Whether the code after the call at `address` (whose bytes start `bytes`, and which links to the instruction
+    /// after it and its delay slot) takes the return address as a value: the get-PC idioms `bal 1f; nop; 1: addu
+    /// $gp, $gp, $ra`, `bl 1f; 1: mflr r30` and `call 1f; nop; 1: add %o7, %l7, %l7`. The delay slot counts, as
+    /// it runs with the link register already set. A callee saves it instead, or returns through it.
+    fn reads_link(&self, bytes: &[u8], address: u64, length: usize) -> bool {
+        let mut at = address.wrapping_add(length as u64);
         for _ in 0..LINK_READ_WINDOW {
             let offset = at.checked_sub(address).and_then(|offset| usize::try_from(offset).ok());
             let Some(code) = offset.and_then(|offset| bytes.get(offset..)) else { return false };
@@ -316,7 +317,11 @@ fn link_use(arch: Arch, mnemonic: &str, operands: &str) -> LinkUse {
     if mnemonic == "save" {
         return LinkUse::Clobber;
     }
-    let Some(position) = operands.iter().position(|operand| *operand == link) else { return LinkUse::Neither };
+    // A memory operand based on the link register reads it as an address: `lw $gp, 0($ra)`, `ld [%o7 + 8], %l0`.
+    let based = |operand: &&str| operand.contains(&format!("({link})")) || operand.contains(&format!("[{link}"));
+    let Some(position) = operands.iter().position(|operand| *operand == link) else {
+        return if operands.iter().any(based) { LinkUse::Read } else { LinkUse::Neither };
+    };
     let is_store = mnemonic.starts_with('s') && operands.iter().any(|operand| operand.contains(['(', '[']));
     let destination = if destination_last { operands.len() - 1 } else { 0 };
     if is_store || position == destination { LinkUse::Clobber } else { LinkUse::Read }
@@ -348,7 +353,7 @@ impl Disassembler for CapstoneDisassembler {
             {
                 Flow::Next
             }
-            Flow::Call(target) if target == next && self.reads_link(bytes, address, target) => Flow::Next,
+            Flow::Call(target) if target == next && self.reads_link(bytes, address, insn.len()) => Flow::Next,
             flow => flow,
         };
         let operands = track::operands(&detail);
