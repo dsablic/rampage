@@ -35,18 +35,32 @@ opening that same view; see [annotation persistence](cli-reference.md#persistenc
 | `;` | Comment |
 | Ctrl/Cmd+Z | Undo |
 | Shift+Ctrl/Cmd+Z | Redo |
+| Ctrl/Cmd+D | Open the local read-only debugger window |
 
 An undo blocked by another client's edit shows the conflict and offers to discard that step from undo history
 without reverting its edits. It does not force an undo through the conflict. Data packs from `--pack` or
 `RAMPAGE_PACKS` use CLI precedence; About lists content status and the status bar counts problems. See
 [data packs](data-packs.md) and [MCP edit behavior](mcp.md#edits-and-session-state).
 
+## Local debugger observations
+
+The brand's context menu or Ctrl/Cmd+D opens **Read-only debugger**, even without a loaded binary. Opening the
+window does not connect. Enter an explicit local Unix socket and request, then select **Query**. The LLDB operator
+must start the stopped-session endpoint separately; the window cannot attach, launch, resume, evaluate expressions
+or write target memory. The five read-only request templates correspond to the [LLDB protocol](lldb-query.md).
+
+Session tokens are copied into follow-up requests explicitly; stale tokens are not refreshed or retried.
+Responses and backend errors remain local to this window, separate from the loaded project's addresses and
+annotations. They are not applied to navigation or sent to the assistant/provider. **Clear local data** clears
+inputs, results and editor undo state. Memory observations are non-atomic, and a client timeout does not prove an
+LLDB SDK operation stopped.
+
 ## Assistant and data disclosure
 
 The Assistant tab talks to Claude about the open project. It reads functions, graphs, strings and references
 through rampage tools, can save names/comments and typed annotations, and can point the listing at what it
-discusses. It offers binary tools from every group, plus interactive `show_address`, but not `carve` or
-`list_packs`. See the [MCP tool groups](mcp.md#tool-groups) for the shared tool names.
+discusses. It offers binary tools from every group, plus interactive `show_address`, but not `carve`,
+`list_packs` or `query_debugger`. See the [MCP tool groups](mcp.md#tool-groups) for the shared tool names.
 
 Set `ANTHROPIC_API_KEY` through your environment to use the assistant; `RAMPAGE_MODEL` optionally selects the
 model. Keep API credentials out of command-line examples, source control and shared logs. Enter submits a

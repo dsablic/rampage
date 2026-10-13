@@ -18,6 +18,9 @@ See the [CLI reference](cli-reference.md) for commands and [MCP reference](mcp.m
 - Runtime snapshots and bundle directories use the same query surfaces. Snapshots contain validated sparse
   memory, virtual addresses, explicit seeds and provenance; missing memory is unavailable, not fabricated zeros.
   See [runtime snapshots](runtime-snapshots.md) for capture, persistence and format limits.
+- Read-only stopped-session [LLDB queries](lldb-query.md) are available through an explicitly operator-started
+  local Unix socket, CLI/MCP requests and a local desktop query window. They do not attach, control execution,
+  evaluate expressions or write target memory; observations remain non-atomic and separate from snapshot identity.
 
 The previously reported decoder comparisons sampled words across every encoding: A32 matched `llvm-mc` on
 97.95%, 16-bit Thumb on 100%, and 32-bit Thumb on 97.49%. AArch64 matched every instruction sampled from
@@ -68,6 +71,9 @@ and dependency-checked undo/redo. Embedded DWARF scalar/pointer signatures can b
 without replacing analyst signatures. Named Itanium and MSVC vtables provide bounded class evidence, including
 the C++ class name, not inferred object layouts. For stripped binaries, Itanium and MSVC RTTI scanning recovers
 class names and base-class edges. See [debug signature import](debug-signatures.md).
+An explicit [PDB name import API](pdb-symbols.md) matches PE/PDB GUID and age, then previews or applies names to
+already-discovered unnamed entries without replacing existing labels. PDB types/layouts and undiscovered starts
+are not imported; no PDB sidecar is opened automatically.
 
 ## Triage and detection
 
@@ -164,6 +170,6 @@ Test fixtures live in `tests/fixtures`; `tests/fixtures/build.sh` rebuilds them 
 `tools/install.sh [ROOT] [--ui]` builds and installs the CLI and worker together, optionally with the UI.
 See [extension points](plugins.md): registries are internal, not a stable public plugin API or dynamic loader.
 The [LLDB query bridge](lldb-query.md) provides bounded read-only queries in an existing authorized stopped
-session; it is not an attach/resume controller or an MCP/UI debugger transport.
+session through explicit CLI/MCP requests and a local UI window; it is not an attach/resume controller.
 
 [arm-spec]: https://developer.arm.com/Architectures/A-Profile%20Architecture

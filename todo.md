@@ -31,8 +31,9 @@
 
 ### Pending follow-ups from this wave
 
-- [ ] Apply PDB names in the API (VA = RVA + PE ImageBase, name only unnamed functions). Deferred: unverifiable
-  without a real `.pdb` fixture, and no `lld-link` locally to generate one. Wire + test once a PDB fixture exists.
+- [x] Explicit PDB name preview/apply API with matching PE/PDB GUID and age, checked RVA/VA arithmetic and
+  readable executable backing. Names only discovered unnamed entries, preserving labels in one undoable batch;
+  real owned LLVM/LLD PE/PDB fixture. OMAP, types/layouts and CLI/MCP/UI import exposure remain separate.
 - [x] Bundled starter signature databases: `rampage identify` applies a bundled musl libc database for the
   binary's architecture (x86-64, aarch64) out of the box; a user `--db` overlays on top, `--no-bundled` opts out.
   Generated reproducibly by `tools/gen-signatures.sh` (pinned zig). Follow-ups: more libs (libstdc++/libc++),
@@ -177,8 +178,9 @@ on held-out, per-slice improvement with provenance and rollback.
 - [x] Cross-block switch facts: must-dataflow carries only facts agreed on by every incoming edge; added cases
   are revalidated against the expanded graph. The earlier eval-ref-x86_64 and hello-x64.exe dispatches resolve
   (`e8622fd`); the updated x86-64 chain-block/edge benchmark agrees with Ghidra on the affected fixtures.
-- [ ] Compiled PIC i386 switch-table acceptance fixture. The implementation recognises its get-PC/GOT forms,
-  but the current benchmark corpus has no such fixture.
+- [x] Real compiler-generated PIC i386 acceptance fixture, including combined memory-source addition,
+  native-width dispatch and modulo-32-bit target arithmetic. Case-order/default and malformed-table regressions
+  pass; this is not acceptance of all compiler or dispatch variants.
 - [x] Noreturn analysis: a curated, case-sensitive list (C/POSIX, C++ ABI, Win32/CRT, Rust, Go; stubs, thunks and
   slots by name) plus incremental all-paths inference; conditional calls/returns and resumable traps handled; noreturn
   calls are terminal in structure/pseudocode, marked for the decompiler, and carry `listed`/`inferred` evidence in
@@ -409,14 +411,31 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   the decompiler, now cached. Suite is green with the decompiler integrated.
 - [x] Final formatting/diff checks, line-length cleanup and commit of this increment.
 
-### Latest todo-wave validation
+### Previous todo-wave validation (`ffc84e7`)
 
 - [x] Ordinary release workspace suite, including CLI hierarchy, UI snapshots and the unchanged evaluation gate.
 - [x] Focused debug API/CLI and core regressions, plus controlled LLDB query/capture tests and merge-history
   secret-scanner regression. Ignored scale/performance gates are not implied by an ordinary suite pass.
-- [ ] Complete the standard full debug workspace rerun on this host: one generated test artifact stalls at
-  `_dyld_start` before the test harness. Its release counterpart passes and byte-identical copied artifacts
-  enumerate tests, but the standard-path launch remains a host validation blocker; no security settings changed.
+- [x] Hosted CI at `ffc84e7`: formatting/full-history secrets, Linux core subset and ordinary macOS debug
+  workspace/UI/accuracy gates, including both selected opt-ins. This does not cover later uncommitted work.
+- [x] Standard full debug workspace rerun completed after artifact regeneration with the smaller profiles.
+  The earlier artifact stalled at `_dyld_start`; the underlying host launch-policy/cache cause is not established.
+  No security settings changed. The current run includes unchanged UI snapshots and the 13-slice gate with its
+  newly raised tool-ID floor.
+
+### Build footprint and current validation
+
+- [x] Dev/test debug information and incremental compilation disabled without disabling assertions or overflow
+  checks. One coordinated target directory is used; 10 completed, clean, integrated old agent worktrees retired.
+  Their reported build caches totaled about 190 GiB; branches, commits and source work were preserved.
+- [x] Cold CLI/worker/UI build passed; its target directory measured 2.9 GiB afterward. This is an observation,
+  not a disk quota or full-workspace size guarantee.
+- [x] Ordinary debug workspace suite, warnings-denied Clippy, Rust formatting, and selected corpus regressions.
+- [x] Controlled live transport plus complete Python suite: 571 tests and 108 subtests passed; scoped Ruff/ty pass.
+  Actual Rust CLI queries also passed against a stopped owned native fixture, with target identity unchanged.
+- [x] Full ordinary release workspace suite, including PDB arithmetic/corruption, compiled switch routing,
+  debugger API/CLI/MCP/UI and unchanged UI snapshots. Ignored scale/performance tests are separate gates.
+- [x] Selected opt-ins: native compiled ARM64 fixture and isolated CLI/worker acceptance passed on the final source.
 
 ### Validation and external blockers
 
@@ -506,9 +525,15 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   signature recovery. The committed 13-slice baseline gate passes at `6122f64`.
 - [ ] Broader compiler/optimization/ABI coverage with instruction/stack/semantic and time/memory metrics.
 - [x] Pinned read-only CI workflow: format, warnings-denied Clippy, ordinary macOS workspace/UI tests and selected
-  opt-ins, the unchanged evaluation gate, an explicit Linux core subset, and redacted HEAD/full merge-history
-  secret scans that cannot silently inherit repository allowlists. Hosted execution is not yet verified locally.
+  opt-ins, the 13-slice evaluation gate, an explicit Linux core subset, and redacted HEAD/full merge-history
+  secret scans that cannot silently inherit repository allowlists. Hosted gates passed at `ffc84e7`.
 - [ ] Quantitative unsupported-coverage and per-analysis time/memory gates; CI job/step timeouts are not substitutes.
+  - [x] Explicit corpus recovery-status/flag/count assertions and configurable elapsed-time assertions, with missing
+    diagnostics/measurements and identity mismatches retained as unavailable. Controlled fixture recovery gates
+    and runner regressions are wired into CI; these do not measure unsupported coverage or per-case peak memory.
+  - [x] Three owned compiled-switch fixtures are included in tool-ID truth. The expanded slice measures 129/163
+    correct expected tools (recall 0.791411, precision 1.0); its floor is raised to 0.7914, not weakened. This is a
+    corpus-denominator change, not a detector improvement or a rewrite of historical measurements.
 - [x] Ghidra exports compare function starts, blocks, CFG edges and calls on 18 fixtures; reference output is
   not ground truth, and normalized chain agreement is not decompiler or semantic equivalence.
 - [ ] IDA exports/comparisons once an installation is available.
@@ -666,7 +691,10 @@ arbitrary debugger control and multi-module runtime resolution must not be infer
    - [x] In-session `rampage-query` foundation for session/module/thread, fresh-register and raw-memory queries,
      with bounded JSON, stale stop tokens, exact known permissions and honest endian/stop evidence. Controlled
      owned-fixture acceptance covers Apple LLDB; no command passthrough, attach/resume/evaluation/writes/listener.
-   - [ ] CLI/MCP/UI transport integration, module-qualified navigation and broader SDK/platform acceptance.
+    - [x] Explicit local Unix transport, typed API/CLI/MCP and local-only UI window, with reviewed cancellation safety;
+      EOF before querying, bounded framing/I/O, stale tokens and structured errors retained. Endpoint paths remain
+      for operator cleanup; no automatic attach/resume/expression/target-write controls.
+    - [ ] Module-qualified navigation and broader SDK/platform acceptance.
      Query observations remain non-atomic and external-plugin runtime acceptance remains blocked on an authorized host.
 
 Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,

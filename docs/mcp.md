@@ -26,7 +26,8 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `class_evidence`,
   `language_metadata`.
-- `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`.
+- `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
+  `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `carve`: `carve`.
@@ -38,7 +39,8 @@ nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a
 `detection,types` also selects startup groups. `core` is always served.
 
 Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
-without group gating, plus the interactive `show_address`; it does not offer file tools `carve`/`list_packs`.
+without group gating, plus the interactive `show_address`; it does not offer file tools
+`carve`/`list_packs`/`query_debugger`.
 `show_address` is not an MCP tool because the server has no interactive listing to navigate.
 
 ## Inputs, paging and decompiler tokens
@@ -70,6 +72,12 @@ not a total; scanning stops at the candidate after the page. It extracts/decompr
 `observe_pointer` exposes a captured slot without modifying discovery or asserting a call edge. See
 [runtime snapshots](runtime-snapshots.md) for runtime evidence limits and [data packs](data-packs.md) for pack warnings.
 
+`query_debugger` accepts an explicit local Unix socket and typed read-only request without opening a binary or
+annotation sidecar. An LLDB operator must start the stopped-session endpoint; this tool cannot attach, resume,
+evaluate expressions or write target memory. Initial session queries return a token required for subsequent
+queries. Stale tokens fail without automatic refresh. Responses retain the backend's error/observation envelope
+and remain non-atomic. See [LLDB queries](lldb-query.md) for request operations, endpoint policy and limits.
+
 ## Edits and session state
 
 Analysis runs once per binary when first needed and is cached for the session. Annotations share the
@@ -94,3 +102,5 @@ results, strings, disassembly, decompiled code and annotations to its configured
 to disclose that material before connecting a remote model; local analysis permission is not necessarily upload
 permission. The [desktop assistant](desktop-ui.md#assistant-and-data-disclosure) specifically uses Anthropic's API.
 These tools analyze data and explicit annotations, not arbitrary shell commands or execution of the target.
+Debugger queries can expose process bytes, registers and module paths to the MCP client. Authorization to inspect
+that process is not authorization to upload its contents to a model provider.

@@ -128,6 +128,10 @@ directory by default. Legacy unscoped snapshot logs are not automatically loaded
 
 ## Captured runtime evidence
 
+Live read-only debugger queries use `runtime debugger query --socket PATH --request JSON` without an image
+operand. They require an operator-started local endpoint in an authorized stopped LLDB session, not attachment
+or execution control. See the [LLDB protocol and local transport](lldb-query.md).
+
 | Primary route and operands | Compatibility spelling |
 | --- | --- |
 | `runtime pointer observe SNAPSHOT --at SLOT` | `observe-pointer` |

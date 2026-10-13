@@ -2,7 +2,7 @@
 
 The bridge operates inside an already authorized, stopped LLDB process. It registers `rampage-query` and accepts
 bounded JSON requests; it does not attach, launch, resume, insert breakpoints, evaluate target expressions, write
-target memory, expose a network listener or publish capture files. MCP/UI transport integration remains separate.
+target memory, expose an IP/network listener or publish capture files.
 
 ```text
 command script import /path/to/rampage/tools/lldb_bridge.py
@@ -15,6 +15,57 @@ Copy the returned `token` into `expected_token` for every operation except initi
 The token contains backend/session identity, process unique ID, target index and stop ID including expression
 stops. Stale tokens or changes observed during a query return an error without partial data. Tokens identify
 debugger context, not capture content or process authenticity.
+
+## Explicit local transport
+
+The operator can serve the same five read-only operations over a local Unix-domain socket from the stopped
+LLDB command thread. Serving is explicit: clients do not start LLDB, discover endpoints or control execution.
+The endpoint must be an absolute path in a preexisting same-user private directory (mode `0700`), without
+symlinked components. Existing endpoints are refused, not replaced; the new socket uses mode `0600`.
+
+```text
+rampage-query-serve --socket /absolute/private-directory/query.sock --max-requests 32 --idle-timeout-ms 60000
+```
+
+The serve command occupies the LLDB command thread until its request limit, idle deadline or interruption.
+It does not access LLDB from a background transport thread. Each connection carries one UTF-8 JSON request
+and one JSON response, each terminated by a newline, then closes. The client must write-half-close after its
+request; the server validates EOF before querying LLDB, rejecting trailing or incomplete input. Existing query
+byte limits apply to the JSON payload, excluding that newline. Operations remain enumerated; debugger commands
+and expressions are not inputs.
+
+The default request limit is 32 (allowed 1–256); malformed connections consume it too. The default idle
+timeout is 60,000 ms (allowed 1–300,000). Each connection has a shared 3,000 ms request/response I/O deadline.
+These limits do not forcibly interrupt an LLDB SDK call; a client timeout is not proof that SDK work has stopped.
+
+Socket permissions restrict local access; they do not establish process authenticity or atomic observations.
+Keep the endpoint directory private and do not replace its contents while serving. Binding uses a bind-only helper
+process with the validated directory FD, its own working directory and restrictive umask; the helper has no LLDB
+access and does not change the debugger's working directory or umask. Helper IPC/wait deadlines do not establish
+a hard bound while the platform is creating the interpreter process itself.
+Serving requires Python's main thread and a restorable Python SIGINT handler (or an ignored SIGINT policy);
+unsupported embeddings refuse launch. Resource ownership transitions defer interruption, restore the prior
+handler and then deliver cancellation; the service does not alter the debugger's signal mask.
+
+Shutdown closes owned descriptors but **retains the endpoint pathname**. The server never chmods or unlinks
+published pathnames: a same-user process could replace one between a check and a pathname operation. The operator
+must clean up the endpoint after serving, or choose a new name. Retained endpoints are not overwritten on restart.
+Same-user namespace manipulation remains possible; private-directory permissions are not endpoint authentication.
+
+### CLI and MCP clients
+
+```sh
+rampage runtime debugger query --socket /absolute/private-directory/query.sock \
+  --request '{"version":1,"operation":"describe_session"}'
+```
+
+The CLI requires an explicit socket and request. Follow-ups copy the returned `token` into request `expected_token`,
+just as the in-session command does. The client deadline includes connection and request/response I/O; stale tokens
+are not automatically refreshed or retried. Responses retain backend errors and non-atomic observation evidence.
+
+MCP exposes `query_debugger` in the `runtime` tool group without requiring a loaded image. Socket paths are
+explicit inputs, not environment defaults. Runtime bytes and register values returned to an MCP caller can be
+sensitive: use an authorized local client and do not share responses externally without permission.
 
 | Operation | Additional fields |
 | --- | --- |
