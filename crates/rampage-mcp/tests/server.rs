@@ -85,6 +85,7 @@ async fn lists_all_tools_with_instructions() {
         "detect_tools",
         "diff_builds",
         "disassemble",
+        "dotnet_il",
         "dotnet_metadata",
         "enable_tools",
         "find_crypto",
@@ -331,6 +332,21 @@ async fn explores_a_binary_end_to_end() {
 
     let strings = json_of(&call(&client, "list_strings", json!({ "path": path, "contains": "greeting" })).await);
     assert_eq!(strings["total"], 1);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn dotnet_il_lists_a_method_by_name() {
+    let client = connect().await;
+    let path = fixture("Microsoft.Bcl.HashCode.dll");
+    let arguments = json!({ "path": path, "method": "System.HashCode::MixFinal", "limit": 2 });
+    let il = json_of(&call(&client, "dotnet_il", arguments).await);
+    assert_eq!(il["method"], "System.HashCode::MixFinal");
+    assert_eq!(il["instructions"]["items"][0]["opcode"], "ldarg.0");
+    assert_eq!(il["instructions"]["items"].as_array().unwrap().len(), 2);
+    let ambiguous = call(&client, "dotnet_il", json!({ "path": path, "method": "System.HashCode::Combine" })).await;
+    assert_eq!(ambiguous.is_error, Some(true));
+    assert!(text(&ambiguous).contains("0x0600000d"), "{}", text(&ambiguous));
     client.cancel().await.unwrap();
 }
 

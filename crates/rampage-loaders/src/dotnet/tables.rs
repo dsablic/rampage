@@ -22,6 +22,7 @@ pub(super) const PARAM_PTR: u8 = 0x07;
 pub(super) const PARAM: u8 = 0x08;
 pub(super) const MEMBER_REF: u8 = 0x0A;
 pub(super) const CUSTOM_ATTRIBUTE: u8 = 0x0C;
+pub(super) const STAND_ALONE_SIG: u8 = 0x11;
 pub(super) const EVENT_MAP: u8 = 0x12;
 pub(super) const EVENT_PTR: u8 = 0x13;
 pub(super) const EVENT: u8 = 0x14;
@@ -36,6 +37,7 @@ pub(super) const ASSEMBLY_REF: u8 = 0x23;
 pub(super) const FILE: u8 = 0x26;
 pub(super) const NESTED_CLASS: u8 = 0x29;
 pub(super) const GENERIC_PARAM: u8 = 0x2A;
+pub(super) const METHOD_SPEC: u8 = 0x2B;
 
 pub(super) const TABLE_NAMES: [&str; TABLE_COUNT] = [
     "Module",

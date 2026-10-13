@@ -46,6 +46,17 @@ impl<'a> Heaps<'a> {
         tail.get(header..header.checked_add(length)?)
     }
 
+    /// The `#US` entry at `offset`, what `ldstr` loads: at most `cap` of its UTF-16 code units, and its full
+    /// length in units. `None` when the offset or the entry's length lies outside the heap.
+    pub(super) fn user_string(&self, offset: u32, cap: usize) -> Option<(Vec<u16>, usize)> {
+        let tail = self.user_strings.get(usize::try_from(offset).ok()?..)?;
+        let (length, header) = compressed_length(tail)?;
+        let body = tail.get(header..header.checked_add(length)?)?;
+        // The odd byte at the end of a well-formed entry is a flag, not text.
+        let units = body.as_chunks::<2>().0;
+        Some((units.iter().take(cap).map(|&pair| u16::from_le_bytes(pair)).collect(), units.len()))
+    }
+
     /// Every literal in `#US`, in heap order. Each entry is a compressed length, UTF-16LE text and one trailing
     /// flag byte (II.24.2.4); a malformed entry ends the walk.
     pub(super) fn user_string_literals(&self) -> (Vec<String>, bool) {
@@ -130,5 +141,10 @@ mod tests {
         assert_eq!(heaps.user_string_literals(), (vec!["hi".to_owned()], true));
         let truncated = Heaps { user_strings: &[0, 9, b'h', 0], ..Heaps::default() };
         assert_eq!(truncated.user_string_literals(), (vec![], false));
+        assert_eq!(heaps.user_string(1, 8), Some((vec![u16::from(b'h'), u16::from(b'i')], 2)));
+        assert_eq!(heaps.user_string(1, 1), Some((vec![u16::from(b'h')], 2)));
+        assert_eq!(heaps.user_string(0, 8), Some((vec![], 0)));
+        assert_eq!(truncated.user_string(1, 8), None);
+        assert_eq!(heaps.user_string(u32::MAX, 8), None);
     }
 }

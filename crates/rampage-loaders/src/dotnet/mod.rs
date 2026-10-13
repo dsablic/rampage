@@ -14,10 +14,13 @@
 //!
 //! Method, field and member-reference signatures are rendered as ILAsm-style text, P/Invoke imports are read
 //! from ImplMap, and custom attributes are listed with their fixed constructor arguments when those are
-//! primitives, strings or types. Not decoded: named or enum/array/boxed attribute arguments, local variable
-//! and MethodSpec signatures, resources, and the exception-handling sections that follow a fat method body.
+//! primitives, strings or types. Not decoded: named or enum/array/boxed attribute arguments and resources.
+//!
+//! [`method_il`] disassembles one method's CIL on request, with its locals and exception clauses; that is a
+//! listing for a reader, never a source of native analysis.
 
 mod heaps;
+mod il;
 mod signatures;
 mod tables;
 
@@ -32,6 +35,7 @@ use serde::Serialize;
 use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 use heaps::Heaps;
+pub use il::{ClauseKind, ExceptionClause, IlError, Instruction, MAX_INSTRUCTIONS, MethodIl, MethodSelector};
 pub use signatures::UNREADABLE;
 use signatures::{Generics, Reader};
 use tables::{Coded as C, Tables};
@@ -319,14 +323,45 @@ pub fn metadata(binary: &Binary) -> Result<Option<DotNetMetadata>, LoadError> {
 
 /// [`metadata`] for raw PE file bytes.
 pub fn parse_image(image: &[u8]) -> Result<Option<DotNetMetadata>, LoadError> {
+    parse_image_with(image, &mut |_, _, _| {})
+}
+
+/// The CIL listing of one method, or `None` when the image is not a managed PE.
+pub fn method_il(binary: &Binary, method: MethodSelector) -> Result<Option<MethodIl>, IlError> {
+    if binary.format != Format::Pe {
+        return Ok(None);
+    }
+    image_method_il(binary.image_bytes(), method)
+}
+
+/// [`method_il`] for raw PE file bytes.
+pub fn image_method_il(image: &[u8], method: MethodSelector) -> Result<Option<MethodIl>, IlError> {
+    let mut listing = None;
+    let parsed = parse_image_with(image, &mut |decoder, metadata, read_rva| {
+        listing = Some(il::disassemble(decoder, metadata, read_rva, method));
+    })?;
+    match (parsed, listing) {
+        (None, _) => Ok(None),
+        (Some(_), Some(listing)) => listing.map(Some),
+        (Some(metadata), None) => Err(IlError::Unreadable {
+            method: format!("{method:?}"),
+            reason: format!("the metadata tables are unreadable: {}", metadata.warnings.join("; ")),
+        }),
+    }
+}
+
+/// Called with the decoded metadata while its tables are still open, and with the image's RVA reader.
+type Visit<'v, 'a> = &'v mut dyn FnMut(&Decoder, &DotNetMetadata, &dyn Fn(u32) -> Option<&'a [u8]>);
+
+fn parse_image_with<'a>(image: &'a [u8], visit: Visit<'_, 'a>) -> Result<Option<DotNetMetadata>, LoadError> {
     match object::FileKind::parse(image) {
-        Ok(object::FileKind::Pe32) => from_pe::<object::pe::ImageNtHeaders32>(image),
-        Ok(object::FileKind::Pe64) => from_pe::<object::pe::ImageNtHeaders64>(image),
+        Ok(object::FileKind::Pe32) => from_pe::<object::pe::ImageNtHeaders32>(image, visit),
+        Ok(object::FileKind::Pe64) => from_pe::<object::pe::ImageNtHeaders64>(image, visit),
         _ => Ok(None),
     }
 }
 
-fn from_pe<Pe: ImageNtHeaders>(image: &[u8]) -> Result<Option<DotNetMetadata>, LoadError> {
+fn from_pe<'a, Pe: ImageNtHeaders>(image: &'a [u8], visit: Visit<'_, 'a>) -> Result<Option<DotNetMetadata>, LoadError> {
     let file = PeFile::<Pe>::parse(image)?;
     let Some(directory) = file.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR) else {
         return Ok(None);
@@ -337,12 +372,16 @@ fn from_pe<Pe: ImageNtHeaders>(image: &[u8]) -> Result<Option<DotNetMetadata>, L
     }
     let sections = file.section_table();
     let read_rva = |rva: u32| sections.pe_data_at(image, rva);
-    parse_cli(rva, &read_rva).map(Some)
+    parse_cli(rva, &read_rva, visit).map(Some)
 }
 
 /// Parses everything reachable from the CLI header at `cli_rva`. `read_rva` returns the file bytes from an RVA
 /// to the end of its section.
-fn parse_cli<'a>(cli_rva: u32, read_rva: &dyn Fn(u32) -> Option<&'a [u8]>) -> Result<DotNetMetadata, LoadError> {
+fn parse_cli<'a>(
+    cli_rva: u32,
+    read_rva: &dyn Fn(u32) -> Option<&'a [u8]>,
+    visit: Visit<'_, 'a>,
+) -> Result<DotNetMetadata, LoadError> {
     let malformed = |what: &str| LoadError::Malformed(format!(".NET {what}"));
     // II.25.3.3: the CLI header is 72 bytes.
     let header =
@@ -370,7 +409,7 @@ fn parse_cli<'a>(cli_rva: u32, read_rva: &dyn Fn(u32) -> Option<&'a [u8]>) -> Re
         warnings.push(format!("metadata declares {wanted} bytes but only {} are mapped", mapped.len()));
     }
     let root = &mapped[..mapped.len().min(wanted)];
-    let mut metadata = parse_root(root, cli, warnings)?;
+    let mut metadata = parse_root(root, cli, warnings, &mut |decoder, metadata| visit(decoder, metadata, read_rva))?;
     read_bodies(&mut metadata, read_rva);
     Ok(metadata)
 }
@@ -433,7 +472,13 @@ fn il_body(bytes: &[u8]) -> Option<IlBody> {
 }
 
 /// Parses the metadata root (II.24.2.1), its stream headers (II.24.2.2), and the tables.
-fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<DotNetMetadata, LoadError> {
+/// `visit` sees the decoded metadata while its tables are open; it is not called when they are unreadable.
+fn parse_root(
+    root: &[u8],
+    cli: CliHeader,
+    mut warnings: Warnings,
+    visit: &mut dyn FnMut(&Decoder, &DotNetMetadata),
+) -> Result<DotNetMetadata, LoadError> {
     let malformed = |what: &str| LoadError::Malformed(format!(".NET metadata root {what}"));
     if read_u32(root, 0) != Some(METADATA_SIGNATURE) {
         return Err(malformed("has no BSJB signature"));
@@ -532,7 +577,11 @@ fn parse_root(root: &[u8], cli: CliHeader, mut warnings: Warnings) -> Result<Dot
     };
     match table_stream {
         Some(stream) => match Tables::parse(stream, uncompressed && jtd, &mut warnings) {
-            Some(tables) => Decoder::new(&tables, heaps, &mut warnings).decode(&mut metadata),
+            Some(tables) => {
+                let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+                decoder.decode(&mut metadata);
+                visit(&decoder, &metadata);
+            }
             None => warnings.push("table stream header is unreadable".to_owned()),
         },
         None => warnings.push("metadata has no #~ table stream".to_owned()),

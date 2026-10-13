@@ -69,7 +69,7 @@ enum Command {
     Dotnet {
         file: PathBuf,
         /// The list to page: types, pinvokes or attributes
-        #[arg(long, default_value = "types", value_parser = parse_dotnet_list)]
+        #[arg(long, default_value = "types", value_parser = parse_dotnet_list, conflicts_with = "il")]
         list: rampage_api::DotNetList,
         /// Only types whose full name or a method name, P/Invoke imports whose method, DLL or import name, or
         /// attributes whose type or target contains this text (case-insensitive)
@@ -78,7 +78,11 @@ enum Command {
         /// With --list attributes, only those applied to this metadata token (hex with 0x, or decimal)
         #[arg(long, value_parser = parse_token)]
         parent_token: Option<u32>,
-        /// Entries of the list to skip, for paging
+        /// List one method's CIL instead: a MethodDef token (0x0600000d) or Namespace.Type::Name; --offset and
+        /// --limit then page its instructions
+        #[arg(long, conflicts_with_all = ["contains", "parent_token"])]
+        il: Option<String>,
+        /// Entries of the list (or instructions with --il) to skip, for paging
         #[arg(long, default_value_t = 0)]
         offset: usize,
         /// Entries per page
@@ -379,7 +383,15 @@ fn main() -> ExitCode {
         }
         Command::Triage { file } => commands::triage(&mut out, &file, &options),
         Command::Capabilities { file } => commands::capabilities(&mut out, &file, &options),
-        Command::Dotnet { file, list, contains, parent_token, offset, limit } => {
+        Command::Dotnet { file, il: Some(method), offset, limit, .. } => {
+            let query = rampage_api::DotNetIlQuery {
+                method,
+                offset: Some(offset),
+                limit: Some(usize::try_from(limit).unwrap_or(usize::MAX)),
+            };
+            commands::dotnet_il(&mut out, &file, &query, &options)
+        }
+        Command::Dotnet { file, list, contains, parent_token, offset, limit, il: None } => {
             let query = rampage_api::DotNetQuery {
                 list,
                 contains,

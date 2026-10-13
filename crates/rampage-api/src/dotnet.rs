@@ -1,12 +1,14 @@
 //! .NET (ECMA-335) metadata of a managed assembly, from `rampage_loaders::dotnet`: the assembly identity, its
 //! references and entry point, the size of each list, and one page of one list -- its types with their methods
 //! and signatures, its P/Invoke imports, or its custom attributes -- filterable because a real assembly can hold
-//! thousands of entries. Method bodies are CIL bytecode and are reported, never analyzed as native code.
+//! thousands of entries. Method bodies are CIL bytecode and are reported, never analyzed as native code; one
+//! method's CIL can be listed, a page at a time, by [`Project::dotnet_il`].
 
 use std::str::FromStr;
 
 use rampage_loaders::dotnet::{
-    self, Assembly, AssemblyRef, BodyKind, CliHeader, CustomAttribute, EntryPoint, Module, PInvoke, TypeDef,
+    self, Assembly, AssemblyRef, BodyKind, CliHeader, CustomAttribute, EntryPoint, ExceptionClause, IlBody, IlError,
+    Instruction, MethodSelector, Module, PInvoke, TypeDef,
 };
 use serde::{Deserialize, Serialize};
 
@@ -85,7 +87,71 @@ pub struct DotNetSummary {
     pub warnings: Vec<String>,
 }
 
+/// One page of a managed method's CIL listing. `method` is a MethodDef token (`0x0600000d`, or decimal) or a
+/// `Namespace.Type::Name` (nested types as `Outer/Inner`; a bare method name also works) naming exactly one
+/// method; an overloaded name is refused with the candidates' tokens.
+#[derive(Debug, Default, Clone)]
+pub struct DotNetIlQuery {
+    pub method: String,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+/// A method's CIL: its header facts, locals and exception clauses in full, and one page of its instructions.
+#[derive(Debug, Serialize)]
+pub struct DotNetIl {
+    pub token: u32,
+    /// `Namespace.Type::Name`.
+    pub method: String,
+    pub signature: String,
+    pub rva: u32,
+    pub body: IlBody,
+    pub init_locals: bool,
+    /// Local variable types by index (`V_0`, `V_1`, ...).
+    pub locals: Vec<String>,
+    pub exception_clauses: Vec<ExceptionClause>,
+    pub instructions: Page<Instruction>,
+    /// Whether the listing stops before the end of the body (instruction cap, cut-off operand, short body).
+    pub truncated: bool,
+    pub warnings: Vec<String>,
+}
+
+/// A MethodDef token in hex (`0x...`) or decimal, else a method name.
+fn method_selector(method: &str) -> MethodSelector<'_> {
+    let token = match method.strip_prefix("0x").or_else(|| method.strip_prefix("0X")) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+        None => method.parse().ok(),
+    };
+    token.map_or(MethodSelector::Name(method), MethodSelector::Token)
+}
+
 impl Project {
+    /// The CIL of one managed method, or `None` when the image has no CLI header.
+    pub fn dotnet_il(&self, query: &DotNetIlQuery) -> Result<Option<DotNetIl>, ApiError> {
+        let method = query.method.trim();
+        if method.is_empty() {
+            return Err(ApiError::Invalid("method is required: a MethodDef token or Type::Method name".to_owned()));
+        }
+        let listing = dotnet::method_il(&self.binary, method_selector(method)).map_err(|error| match error {
+            IlError::Load(error) => ApiError::Invalid(format!("malformed .NET metadata: {error}")),
+            IlError::NotFound(_) => ApiError::NotFound(error.to_string()),
+            _ => ApiError::Invalid(error.to_string()),
+        })?;
+        Ok(listing.map(|il| DotNetIl {
+            token: il.token,
+            method: il.method,
+            signature: il.signature,
+            rva: il.rva,
+            body: il.body,
+            init_locals: il.init_locals,
+            locals: il.locals,
+            exception_clauses: il.exception_clauses,
+            instructions: Page::of(il.instructions, query.offset, query.limit),
+            truncated: il.truncated,
+            warnings: il.warnings,
+        }))
+    }
+
     /// The .NET metadata of a managed assembly, or `None` when the image has no CLI header.
     pub fn dotnet_metadata(&self, query: &DotNetQuery) -> Result<Option<DotNetSummary>, ApiError> {
         if query.parent_token.is_some() && query.list != DotNetList::Attributes {

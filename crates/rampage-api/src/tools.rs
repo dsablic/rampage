@@ -63,7 +63,7 @@ impl Group {
                  bytes against the original Mach-O, ARM64 indirect-branch windows."
             }
             Group::Diagnostics => "Decode coverage and unreliable-code evidence, and explicit ARM64 jump-table checks.",
-            Group::DotNet => "Managed (.NET) assembly metadata: types, methods, P/Invokes and custom attributes.",
+            Group::DotNet => "Managed (.NET) assembly metadata (types, methods, P/Invokes, attributes) and method CIL.",
             Group::Carve => "Scan any file (firmware, installer, archive) for embedded executables and containers.",
         }
     }
@@ -252,6 +252,19 @@ struct IdentifyArgs {
     /// Persist matched names for still-unnamed functions as user names (never overwriting existing names).
     #[serde(default)]
     apply: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct DotNetIlArgs {
+    /// A MethodDef token (`0x0600000d`) or `Namespace.Type::Name` (nested types as `Outer/Inner`) naming one
+    /// method; dotnet_metadata lists them.
+    method: String,
+    /// Instructions to skip, for paging.
+    #[serde(default)]
+    offset: Option<usize>,
+    /// Instructions per page (default 100, at most 1000).
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -669,7 +682,8 @@ pub fn tools() -> Vec<Tool> {
              flags), `pinvokes` (DLL and export per P/Invoke method) or `attributes` (custom attribute type, \
              target, primitive/string/type constructor arguments; `parent_token` keeps one target's). Filter \
              with `contains`, page with offset/limit. Method bodies are CIL bytecode, not native code: \
-             disassemble and decompile do not apply to them. Returns null for a native image.",
+             disassemble and decompile do not apply to them; list one with dotnet_il. Returns null for a native \
+             image.",
             |project, args: DotNetArgs| {
                 let query = crate::DotNetQuery {
                     list: args.list,
@@ -679,6 +693,21 @@ pub fn tools() -> Vec<Tool> {
                     limit: page_limit(args.limit),
                 };
                 project.dotnet_metadata(&query)
+            },
+        ),
+        tool(
+            Group::DotNet,
+            "dotnet_il",
+            "For a managed (.NET) assembly: the CIL of one method, ILDasm style (`IL_0000: ldarg.0`), with call, \
+             field and type tokens resolved to names and signatures, `ldstr` literals escaped, branch and switch \
+             targets as IL_xxxx labels, the local variable types and the exception clauses (try/handler/filter \
+             ranges, catch type). `method` is a MethodDef token (`0x0600000d`) or `Namespace.Type::Name`; an \
+             overloaded name is refused with each overload's token and signature. Instructions are paged with \
+             offset/limit; bytes that are no opcode show as `.byte`. Returns null for a native image.",
+            |project, args: DotNetIlArgs| {
+                let query =
+                    crate::DotNetIlQuery { method: args.method, offset: args.offset, limit: page_limit(args.limit) };
+                project.dotnet_il(&query)
             },
         ),
         tool(

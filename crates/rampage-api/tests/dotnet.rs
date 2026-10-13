@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rampage_api::{ApiError, DetectionConfidence, DotNetList, DotNetQuery, ReportLimits, Session};
+use rampage_api::{ApiError, DetectionConfidence, DotNetIlQuery, DotNetList, DotNetQuery, ReportLimits, Session};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -64,6 +64,33 @@ fn dotnet_metadata_reports_signatures_and_filters_attributes() {
     assert!(on_equals.items.iter().all(|attribute| attribute.parent_token == equals));
     let query = DotNetQuery { parent_token: Some(equals), ..DotNetQuery::default() };
     assert!(matches!(project.dotnet_metadata(&query), Err(ApiError::Invalid(_))), "parent_token needs attributes");
+}
+
+#[test]
+fn dotnet_il_pages_one_method_by_token_or_name() {
+    let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();
+    let query = |method: &str, offset, limit| DotNetIlQuery { method: method.to_owned(), offset, limit };
+    let by_token = project.dotnet_il(&query("0x0600000d", Some(5), Some(3))).unwrap().expect("managed assembly");
+    assert_eq!(by_token.method, "System.HashCode::Combine");
+    let page = &by_token.instructions;
+    assert_eq!((page.offset, page.items.len()), (5, 3));
+    assert!(page.total > 50);
+    assert_eq!(page.items[0].text(), "IL_000b: ldarga.s 0");
+    assert_eq!(by_token.locals.len(), 10);
+    let decimal = project.dotnet_il(&query(&0x0600_000D_u32.to_string(), None, Some(1))).unwrap().unwrap();
+    assert_eq!(decimal.token, by_token.token);
+
+    let by_name = project.dotnet_il(&query("System.SR::GetResourceString", None, None)).unwrap().unwrap();
+    assert_eq!(by_name.exception_clauses.len(), 1);
+    assert_eq!(by_name.instructions.items.len(), by_name.instructions.total);
+
+    let ambiguous = project.dotnet_il(&query("System.HashCode::Combine", None, None)).unwrap_err();
+    assert!(matches!(&ambiguous, ApiError::Invalid(text) if text.contains("0x0600000d")), "{ambiguous}");
+    let missing = project.dotnet_il(&query("System.HashCode::Missing", None, None)).unwrap_err();
+    assert!(matches!(missing, ApiError::NotFound(_)), "{missing}");
+    assert!(matches!(project.dotnet_il(&query(" ", None, None)), Err(ApiError::Invalid(_))));
+    let native = Session::default().open(&fixture("hello-x64.exe"), None).unwrap();
+    assert!(native.dotnet_il(&query("0x06000001", None, None)).unwrap().is_none());
 }
 
 #[test]
