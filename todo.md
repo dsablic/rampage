@@ -156,8 +156,11 @@ on held-out, per-slice improvement with provenance and rollback.
 - [x] AArch64 switch jump tables resolved in discovery: a `cmp` immediately followed by `b.hi`/`b.hs` bounds the
   index; byte/half/word/doubleword tables (signed and unsigned) through `adr`/`adrp+add` with lsl/extends, plus the
   absolute 64-bit form; entries only from read-only file-backed data; every target aligned decodable code; at most
-  4096 entries; no branch may join between the `cmp` and the `br`. Cases are CFG edges and jump xrefs, not seeds.
-  aarch64 reference extents equal to symbol size: 188 -> 193 of 193.
+  4096 entries; no branch may join between the `cmp` and the `br`. Cases are `switch` CFG edges (function_graph,
+  SSA, summaries, export-cfg) and jump xrefs, not seeds. Bounds survive only instructions whose register writes are
+  fully modelled. aarch64 reference extents equal to symbol size: 188 -> 193 of 193; AArch64 chain agreement with
+  Ghidra 100% on blocks and edges.
+- [ ] Structure switch regions in the native SSA pseudocode (it still prints `goto unknown_target` there).
 - [ ] AArch64 switch forms still unresolved: the `b.ls`/`b.lo` inverse (bound on the taken path) and a `cmp` not
   immediately before the conditional branch.
 - [ ] x86-64 jump tables (absolute `[reg*8+table]` and relative `movsxd`+`add`), found by the Ghidra CFG benchmark
@@ -210,7 +213,10 @@ in UX/workflow ideas, not the multi-engine dispatch:
   facts, header-derived extents, validated or magic-only confidence and a 4096-candidate cap.
 - [x] Open an embedded executable: `Binary::open_at`, `Session::open_at`, global `--image-offset` / MCP
   `image_offset`, offset-keyed sidecars, triage reports the image's own hashes and where it sits.
-- [ ] Open an embedded image in the UI. APK (JADX) and Electron unpacking are larger, lower-priority follow-ons.
+  `--image-length`/`image_length`, `Embedded.trailing` with a triage hint, `.rampage-image` sidecars that cannot
+  collide with plain ones, offset 0 without a length is the plain file.
+- [ ] Open an embedded image in the UI; per-path image offsets for two-file commands (diff-builds); sessions do not
+  notice an ordinary binary changing on disk. APK (JADX) and Electron unpacking are lower-priority follow-ons.
 - [x] .NET: ECMA-335 blob signatures (method/field/MemberRef, TypeSpec, GenericParam names) rendered ILAsm-style
   with depth/node/text caps and an `<unreadable>` fallback; ImplMap P/Invoke (DLL + import per method);
   CustomAttribute rows with type, target and primitive/string/Type fixed arguments; nested types as `Outer/Inner`.
@@ -242,7 +248,11 @@ unsandboxed native code. Three layers instead, in this order:
 - [x] Data packs: `rampage-pack.toml` packs (signatures/peid/yara/capa) loaded strictly with contained paths and
   size caps via `--pack`/`RAMPAGE_PACKS`; applied to identify (before bundled, in pack order), detect, yara and
   capa; `rampage packs list|check` and MCP `list_packs` with licence/provenance and per-content status.
-- [ ] Packs: a constants pack format; pack loading in the UI.
+  Review fixes: YARA `include` refused in every rule set; files opened without following links and checked against
+  what was budgeted; running per-pack and overall budgets, at most 64 packs, lazy loading; signature matches carry
+  their `source`; pack problems reach detection `warnings` and the MCP instructions.
+- [ ] Packs: a constants pack format; pack loading in the UI; `identify --no-bundled` should accept a pack database
+  instead of requiring `--db`; `detect` prints pack PeID problems twice (output and stderr).
 - [ ] Internal trait registries: built-ins register through `Loader`, `Detector`, `Workflow` and `ToolProvider`
   traits instead of hand-wired match arms and tool lists. Prerequisite for anything external.
 - [ ] WASM component plugins (wasmtime is already a dependency via yara-x): sandboxed, language-agnostic code for
