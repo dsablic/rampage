@@ -50,6 +50,17 @@ impl Session {
         Arc::clone(&self.packs)
     }
 
+    /// The directory chosen with [`Session::with_capture_annotations`], if any.
+    pub fn capture_annotations(&self) -> Option<&Path> {
+        self.capture_annotations.as_deref()
+    }
+
+    /// A session with this one's settings (snapshot annotation directory, packs) and none of its projects, for
+    /// changing a setting of a session that is shared and so cannot be taken apart.
+    pub fn unloaded_copy(&self) -> Self {
+        Self { capture_annotations: self.capture_annotations.clone(), packs: self.packs(), ..Self::default() }
+    }
+
     pub fn open(&self, path: &Path, arch: Option<Arch>) -> Result<Arc<Project>, ApiError> {
         self.open_at(path, arch, None)
     }

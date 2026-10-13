@@ -53,8 +53,8 @@ groups. The groups:";
 const INSTRUCTIONS_USAGE: &str = "\
 Core: start with triage_report: one bounded overview (layout, triage hints, producing toolchain, capability tags, \
 imports, notable strings, library functions) that ends with concrete next tool calls, each naming its `group`; \
-enable that group first when it is not enabled. The other guided workflows compose the primitives the same way: find_main (the program's own entry \
-logic), network_surface, persistence_surface (autostart locations, service and registry APIs), string_decoding \
+enable that group first when it is not enabled. The other guided workflows compose the primitives the same way: \
+find_main (the program's own entry logic), network_surface, persistence_surface (autostart locations, service and registry APIs), string_decoding \
 (candidate byte-decoding loops with their call sites and encoded-looking data) and diff_builds; find_crypto \
 (algorithm constants and crypto APIs with the code that uses them) is in detection. Every workflow finding carries \
 its evidence, source tool and confidence, and every report states its limitations: treat findings as evidence, not \
@@ -164,13 +164,24 @@ fn enable_tools_schema() -> Map<String, Value> {
     schema.as_object().cloned().unwrap_or_default()
 }
 
-#[derive(Clone)]
+/// One MCP connection's server. The loaded binaries are shared with its clones; the enabled groups are not, so a
+/// clone serving another connection starts from the groups enabled when it was cloned.
 pub struct RampageServer {
     session: Arc<Session>,
     tools: Arc<Vec<Tool>>,
     file_tools: Arc<Vec<FileTool>>,
-    enabled: Arc<Mutex<BTreeSet<Group>>>,
-    packs: Arc<Packs>,
+    enabled: Mutex<BTreeSet<Group>>,
+}
+
+impl Clone for RampageServer {
+    fn clone(&self) -> Self {
+        Self {
+            session: Arc::clone(&self.session),
+            tools: Arc::clone(&self.tools),
+            file_tools: Arc::clone(&self.file_tools),
+            enabled: Mutex::new(self.enabled()),
+        }
+    }
 }
 
 impl Default for RampageServer {
@@ -189,14 +200,24 @@ impl RampageServer {
             session: Arc::default(),
             tools: Arc::new(tools),
             file_tools: Arc::new(tools::file_tools()),
-            enabled: Arc::new(Mutex::new(enabled)),
-            packs: Arc::default(),
+            enabled: Mutex::new(enabled),
         }
     }
 
-    /// This server with `packs` layered over the bundled databases of its heuristic-database tools.
+    /// This server opening binaries in `session`, with its settings.
+    pub fn with_session(self, session: Session) -> Self {
+        Self { session: Arc::new(session), ..self }
+    }
+
+    /// This server with `packs` layered over the bundled databases of its heuristic-database tools, keeping its
+    /// session's other settings.
     pub fn with_packs(self, packs: Arc<Packs>) -> Self {
-        Self { session: Arc::new(Session::default().with_packs(Arc::clone(&packs))), packs, ..self }
+        let session = Arc::try_unwrap(self.session).unwrap_or_else(|shared| shared.unloaded_copy());
+        Self { session: Arc::new(session.with_packs(packs)), ..self }
+    }
+
+    fn packs(&self) -> Arc<Packs> {
+        self.session.packs()
     }
 
     fn enabled(&self) -> BTreeSet<Group> {
@@ -267,7 +288,7 @@ impl RampageServer {
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
     fn run(&self, name: &str, mut arguments: Map<String, Value>) -> CallToolResult {
         if name == LIST_PACKS {
-            return match serde_json::to_string(&self.packs.listing()) {
+            return match serde_json::to_string(&self.packs().listing()) {
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output)]),
                 Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
             };
@@ -299,7 +320,7 @@ impl RampageServer {
                     None => rampage_loaders::Binary::open_with(path, arch),
                 };
                 let project = Project::new(binary.map_err(|error| error_text(&error))?);
-                project.set_packs(Arc::clone(&self.packs));
+                project.set_packs(self.packs());
                 Arc::new(project)
             };
             match tools::call(&self.tools, &project, name, Value::Object(arguments)) {
@@ -345,7 +366,7 @@ impl ServerHandler for RampageServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tool_list_changed().build())
             .with_server_info(Implementation::new("rampage", env!("CARGO_PKG_VERSION")))
-            .with_instructions(instructions(&self.packs))
+            .with_instructions(instructions(&self.packs()))
     }
 
     async fn list_tools(
@@ -416,6 +437,24 @@ pub async fn serve_stdio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packs_keep_the_session_settings_and_clones_keep_their_own_groups() {
+        let directory = std::env::temp_dir();
+        let packs = Arc::new(Packs::default());
+        let server = RampageServer::default().with_session(Session::with_capture_annotations(directory.clone()));
+        let shared = server.clone();
+        for server in [server.with_packs(Arc::clone(&packs)), shared.with_packs(Arc::clone(&packs))] {
+            assert_eq!(server.session.capture_annotations(), Some(directory.as_path()));
+            assert!(Arc::ptr_eq(&server.packs(), &packs));
+        }
+
+        let first = RampageServer::default();
+        let second = first.clone();
+        first.enable(json!({ "groups": ["detection"] }).as_object().unwrap()).unwrap();
+        assert!(first.enabled().contains(&Group::Detection));
+        assert_eq!(second.enabled(), BTreeSet::from([Group::Core]));
+    }
 
     #[test]
     fn initial_groups_come_from_the_flag_then_the_environment() {
