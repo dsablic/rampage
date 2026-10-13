@@ -156,3 +156,14 @@ fn identify_without_the_bundled_database_accepts_a_pack_database_alone() {
         .failure()
         .stderr(contains("needs a signature database or a pack with one for this architecture"));
 }
+
+#[test]
+fn detect_reports_a_pack_peid_problem_once() {
+    let pack = Pack::new("peid", "[[contents]]\nkind = \"peid\"\npath = \"missing.txt\"\n");
+    let output = rampage().args(["detect", "--pack", pack.arg()]).arg(fixture("hello-x64.exe")).assert().success();
+    let output = output.get_output();
+    let all = [output.stdout.as_slice(), output.stderr.as_slice()].concat();
+    let all = String::from_utf8_lossy(&all);
+    assert_eq!(all.matches("peid missing.txt").count(), 1, "{all}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("rampage: warning: pack "), "{all}");
+}

@@ -1057,7 +1057,9 @@ pub fn detect(out: &mut impl Write, path: &Path, peid: Option<&Path>, options: &
         let (kind, confidence) = (label(&detection.kind), label(&detection.confidence));
         writeln!(out, "[{kind}] {} ({confidence}): {}", detection.name, detection.evidence.join(", "))?;
     }
-    for warning in &found.warnings {
+    // Pack problems already go to stderr with every other command's; only the PeID file's own are shown here.
+    let pack_problems = options.packs.problems_for("peid");
+    for warning in found.warnings.iter().filter(|warning| !pack_problems.contains(warning)) {
         writeln!(out, "warning: {warning}")?;
     }
     Ok(())
