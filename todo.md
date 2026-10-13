@@ -163,15 +163,21 @@ on held-out, per-slice improvement with provenance and rollback.
 - [ ] Structure switch regions in the native SSA pseudocode (it still prints `goto unknown_target` there).
 - [ ] AArch64 switch forms still unresolved: the `b.ls`/`b.lo` inverse (bound on the taken path) and a `cmp` not
   immediately before the conditional branch.
-- [ ] x86-64 jump tables (absolute `[reg*8+table]` and relative `movsxd`+`add`), found by the Ghidra CFG benchmark
-  (eval-ref-x86_64 `0x100e148`, hello-x64.exe `0x1400170f4`).
-- [ ] Noreturn analysis: discovery falls through after calls that never return (~900 extra edges on Go after
-  `runtime.throw`/`panic*`; hello-x64.exe `0x1400013f7`).
-- [ ] `flow.rs` "call to the next instruction" check: delay-slot aware (MIPS `bal` makes a bogus `sub_203fc` in
-  `__start`), and keep real calls whose callee is next (hello-thumb `0x20800`, hello-ppc `0x2078c`).
-- [ ] A tail jump to an import thunk with a single caller is absorbed into the caller (hello-x64.exe `0x140001447`).
-- [ ] hello-arm.elf lists a function at `0x2036c` whose first word does not decode (no blocks; function_graph fails).
-- [ ] Display: RISC-V compressed branches print a relative offset instead of the target (`0x10015d0`).
+- [x] x86/x86-64 switch jump tables: absolute `jmp [reg*8+table]` (i386 `[reg*4+table]`), `mov`+`jmp`, relative
+  `lea`/`movsxd`/`add`, MSVC image-base form; bounds from unsigned `cmp`+`ja`/`jae` or a low-bits `and` mask; the
+  same join, read-only-table and 4096-entry rules. Register facts are forgotten where a branch joins the run
+  (`Disassembler::join`, all architectures). Ghidra-only blocks: eval-ref-x86_64 328 -> 8, hello-x64.exe 239 -> 44.
+- [ ] Switches whose index copy or table base is set up in an earlier block (eval-ref-x86_64 `0x1008e60`,
+  hello-x64.exe `0x140001aca`); PIC i386 tables.
+- [x] Noreturn analysis: a curated, case-sensitive list (C/POSIX, C++ ABI, Win32/CRT, Rust, Go; stubs, thunks and
+  slots by name) plus incremental all-paths inference; conditional calls/returns and resumable traps handled; noreturn
+  calls are terminal in structure/pseudocode, marked for the decompiler, and carry `listed`/`inferred` evidence in
+  function_graph and export-cfg. Go edge precision vs Ghidra 95.3% -> 99.3%; go-arm64 structured functions 578 -> 755.
+- [ ] Noreturn: inference through mutual tail calls.
+- [x] Get-PC call-to-next only when the following code reads the return address (delay-slot aware; x86, MIPS, PPC,
+  SPARC, ARM/Thumb/AArch64); PE import thunks seeded so tail jumps stay tail calls; undecodable starts dropped in
+  discovery phase 2; RISC-V branch targets rendered absolute.
+- [ ] ARM `ldr` literal-pool addresses are treated as code pointers (hello-arm `sub_20338`, `sub_2033c`).
 - [x] Library-ID misses explained and mostly fixed: signatures also hash the extent discovery finds (it stops at
   unresolved jump tables), and callee-name keys (`identify_program`, iterated) separate bodies that differ only in
   their callee (`mbstowcs`/`wcstombs`, `fprintf`/`sscanf`, `fmodl`/`__addtf3`). Callee keys apply only to bodies
@@ -185,9 +191,13 @@ on held-out, per-slice improvement with provenance and rollback.
 - [ ] Masking for 32-bit ARM literal pools and MIPS `lui`/`addiu` pairs, once a cross-program fixture exists.
 - [x] Tool-identification slice (`toolid`, `tests/fixtures/data/eval-truth-toolid.json`): `detect_tools` against
   the build-script toolchains of 46 committed fixtures; recall 0.4397, precision 0.9538.
-- [ ] Tool-ID flywheel candidates from that slice: Zig on `zig cc` builds (30 misses), a runtime kind (musl/glibc/
-  MinGW-w64), MinGW/GCC reclassified as the MinGW-w64 runtime on clang-built PEs (the 3 spurious), LLD on PE
-  ("LLD PDB."), Apple ld from `LC_BUILD_VERSION`, Clang on Mach-O (hardest: no producer record).
+- [x] Tool-ID flywheel turn 1: a runtime kind (MinGW-w64/glibc/musl), MinGW/GCC -> MinGW-w64 runtime, LLD on PE from
+  the CodeView record, Apple ld/LLD from Mach-O `LC_BUILD_VERSION`, Zig from `compiler_rt.` symbols. Rules are scoped
+  to their format and region (no whole-file strong matches; overlay excluded; PeID entries PE-only). toolid recall
+  0.4397 -> 0.7872, precision 0.9538 -> 1.0; out of sample (1,354 system binaries) no implausible strong detection.
+- [ ] Tool-ID remaining: Zig on stripped builds and PEs, Clang on Mach-O/PE (no producer record), the whole-file
+  "rustc version" rule (tentative; scope or drop), real NSIS/Inno Setup installer fixtures, a Zig-language Mach-O
+  fixture.
 - [ ] Later phases: a type-recovery (DWARF/PDB) slice; the proposal/gate/promote loop on top.
 
 ## Ideas from adjacent projects (REA, Ghidra-MCP)
@@ -215,8 +225,8 @@ in UX/workflow ideas, not the multi-engine dispatch:
   `image_offset`, offset-keyed sidecars, triage reports the image's own hashes and where it sits.
   `--image-length`/`image_length`, `Embedded.trailing` with a triage hint, `.rampage-image` sidecars that cannot
   collide with plain ones, offset 0 without a length is the plain file.
-- [ ] Open an embedded image in the UI; per-path image offsets for two-file commands (diff-builds); sessions do not
-  notice an ordinary binary changing on disk. APK (JADX) and Electron unpacking are lower-priority follow-ons.
+- [ ] Open an embedded image in the UI. APK (JADX) and Electron unpacking are lower-priority follow-ons. (Done:
+  diff-builds `--other-image-offset`; sessions reload binaries changed on disk.)
 - [x] .NET: ECMA-335 blob signatures (method/field/MemberRef, TypeSpec, GenericParam names) rendered ILAsm-style
   with depth/node/text caps and an `<unreadable>` fallback; ImplMap P/Invoke (DLL + import per method);
   CustomAttribute rows with type, target and primitive/string/Type fixed arguments; nested types as `Outer/Inner`.
@@ -231,7 +241,9 @@ in UX/workflow ideas, not the multi-engine dispatch:
   outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits. Name
   checks run under the cross-process log lock; batches are logged under a header line and replay all-or-nothing;
   undo/redo refuse to restore a name another client has taken.
-- [ ] An undo step blocked by another client's edit blocks every earlier step; offer a way to drop it.
+- [x] `discard_undo` drops an undo step another client blocks (refuses unblocked steps unless forced). Reloads keep
+  undo history; annotation logs record the image SHA-256 and warn when annotations were made on different bytes.
+- [ ] A UI action for discarding a blocked undo step; per-path image offsets for compare-pointers/compare-runtime.
 - [x] MCP tool groups: every registry tool has a group; `rampage mcp` lists core + `enable_tools` (lists groups,
   enables them, sends tools/list_changed); `--all-tools` / `RAMPAGE_MCP_TOOLS` for clients without list_changed;
   calls to disabled tools error naming the group. The in-app agent and UI assistant still offer every tool.
