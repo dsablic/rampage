@@ -158,6 +158,10 @@ recording the value it replaced, so undo is just another edit and the file is a 
 under a header line and replayed only once all of its edits are present. Several clients can share it: the UI
 picks up names an agent saves through MCP within a second. The UI opens whole files and universal-binary slices,
 not embedded images, so an embedded image's annotations are shared by the CLI and MCP only.
+Edits follow a line naming the SHA-256 of the image they were made on; when the binary beside the log is rebuilt or
+replaced, its annotations still apply by address, with a warning (in the binary's warnings and `list_annotations`)
+that some were made on another image. Logs written before identity lines carry a note until the next edit. Replace a
+binary by renaming a new file over it rather than truncating it in place: it is memory-mapped while open.
 Snapshot annotations use a capture-identity log instead, sharing edits only across equal analysis identities
 in the same directory by default. Legacy unscoped snapshot logs are not automatically loaded or migrated;
 see [runtime snapshots](docs/runtime-snapshots.md) for persistence and explicit cross-directory reuse.

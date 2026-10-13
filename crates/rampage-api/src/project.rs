@@ -234,6 +234,7 @@ impl Project {
             map.iter().map(|(&address, text)| Annotation { address, text: text.clone() }).collect()
         };
         AnnotationList {
+            warnings: annotations.warnings(),
             names: rows(annotations.names()),
             comments: rows(annotations.comments()),
             signatures: rows(annotations.signatures()),
