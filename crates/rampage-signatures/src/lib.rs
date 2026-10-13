@@ -1002,24 +1002,48 @@ impl SignatureDb {
         address: u64,
         callee: impl Fn(u64) -> Option<&'n str>,
     ) -> Option<&str> {
-        if self.arch != target.arch {
-            return None;
+        match self.lookup(target, image, bytes, address, callee) {
+            Lookup::Named(name) => Some(name),
+            Lookup::AwaitsCallees | Lookup::Unknown => None,
         }
-        let print = fingerprint_scheme(self.scheme, target, image, bytes, address)?;
+    }
+
+    fn lookup<'n>(
+        &self,
+        target: &Target,
+        image: &MaskContext,
+        bytes: &[u8],
+        address: u64,
+        callee: impl Fn(u64) -> Option<&'n str>,
+    ) -> Lookup<'_> {
+        if self.arch != target.arch {
+            return Lookup::Unknown;
+        }
+        let Some(print) = fingerprint_scheme(self.scheme, target, image, bytes, address) else {
+            return Lookup::Unknown;
+        };
         let body = address..address.saturating_add(bytes.len() as u64);
-        let key = (!self.calls.is_empty()).then(|| print.callee_key(body, callee)).flatten();
-        let hash = hex(&print.finish()?);
+        let key = (!self.calls.is_empty()).then(|| print.callee_key(body.clone(), callee)).flatten();
+        let keyable = !self.calls.is_empty() && print.callee_key(body, |_| Some("")).is_some();
+        let Some(hash) = print.finish().map(|hash| hex(&hash)) else { return Lookup::Unknown };
         if let Some(name) = self.entries.get(&hash) {
-            return Some(name);
+            return Lookup::Named(name);
         }
         let exact = || function_hash(target, bytes, address);
         if !self.exact.is_empty()
             && let Some(name) = exact().and_then(|exact| self.exact.get(&hex(&exact)))
         {
-            return Some(name);
+            return Lookup::Named(name);
         }
         // A callee key is evidence only where the body alone is a known collision.
-        key.filter(|_| self.ambiguous.contains(&hash)).and_then(|key| self.calls.get(&hex(&key))).map(String::as_str)
+        if !self.ambiguous.contains(&hash) {
+            return Lookup::Unknown;
+        }
+        match key {
+            Some(key) => self.calls.get(&hex(&key)).map_or(Lookup::Unknown, |name| Lookup::Named(name)),
+            None if keyable => Lookup::AwaitsCallees,
+            None => Lookup::Unknown,
+        }
     }
 
     /// The number of unambiguous signatures.
@@ -1066,7 +1090,10 @@ fn add_unambiguous(map: &mut BTreeMap<String, String>, ambiguous: &mut BTreeSet<
 }
 
 /// Names the discovered `functions` of one binary (each its start and its body bytes) against `databases`, the
-/// first database to name a function winning, so a user database can be layered over a bundled one.
+/// first database to name a function winning, so a user database can be layered over a bundled one. Every round
+/// tries each database in order with all its lookups, and a database that could still name a function once its
+/// callees are named holds it back from the databases after it, so a lower-priority database never names a
+/// function a higher one can.
 ///
 /// A function the body alone cannot name because its masked body collides with another function's (bodies the
 /// confidence gate rejects are never named) is then tried with the names of the functions it branches to, from the
@@ -1080,33 +1107,43 @@ pub fn identify_program<'d>(
     functions: &[(u64, &[u8])],
 ) -> BTreeMap<u64, &'d str> {
     let mut names = BTreeMap::new();
-    let mut pending = Vec::new();
-    for &(address, bytes) in functions {
-        match databases.iter().find_map(|database| database.identify_in(target, image, bytes, address)) {
-            Some(name) => {
-                names.insert(address, name);
-            }
-            None => pending.push((address, bytes)),
-        }
-    }
-    for _ in 0..MAX_CALLEE_ROUNDS {
+    let mut pending = functions.to_vec();
+    // A database below one still waiting on a function's callees does not name it, until no round finds more.
+    let mut defer = true;
+    for _ in 0..MAX_CALLEE_ROUNDS + 2 {
         let found: Vec<(u64, &str)> = pending
             .iter()
             .filter_map(|&(address, bytes)| {
                 let callee = |at: u64| names.get(&at).copied();
-                let name = databases
-                    .iter()
-                    .find_map(|database| database.identify_with_callees(target, image, bytes, address, callee))?;
-                Some((address, name))
+                for database in databases {
+                    match database.lookup(target, image, bytes, address, callee) {
+                        Lookup::Named(name) => return Some((address, name)),
+                        Lookup::AwaitsCallees if defer => return None,
+                        Lookup::AwaitsCallees | Lookup::Unknown => {}
+                    }
+                }
+                None
             })
             .collect();
         if found.is_empty() {
-            break;
+            if !defer {
+                break;
+            }
+            defer = false;
+            continue;
         }
         names.extend(found);
         pending.retain(|(address, _)| !names.contains_key(address));
     }
     names
+}
+
+/// What one database says about one body.
+enum Lookup<'a> {
+    Named(&'a str),
+    /// The body collides with others here, and its callee key could name it once all its callees are named.
+    AwaitsCallees,
+    Unknown,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -1916,6 +1953,30 @@ mod tests {
         let named = |callee: &'static str| move |_: u64| Some(callee);
         assert_eq!(db.identify_with_callees(&x64, &image(), &call, 0x1000, named("vfprintf")), Some("fprintf"));
         assert_eq!(db.identify_with_callees(&x64, &image(), &call, 0x1000, named("vsscanf")), Some("sscanf"));
+    }
+
+    #[test]
+    fn a_higher_priority_database_names_by_callees_before_a_lower_one_by_body() {
+        let x64 = target(Arch::X86_64, false);
+        // 0x1000: call 0x2000; add eax, 0x1234; mov ecx, eax; ret. 0x2000: add eax, 0x1234; mov ecx, eax;
+        // mov edx, ecx; ret.
+        let wrapper = [0xe8, 0xfb, 0x0f, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xc3];
+        let leaf = [0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0x89, 0xca, 0xc3];
+        let print = || fingerprint(&x64, &wrapper, 0x1000, Some(&image())).unwrap();
+        let wrapper_hash = print().finish().unwrap();
+        let mut user = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        user.add(wrapper_hash, None, print().callee_key(0x1000..0x100d, |_| Some("callee")), "user_wrapper");
+        user.add(wrapper_hash, None, None, "user_other");
+        let mut bundled = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        bundled.add(wrapper_hash, None, None, "bundled_wrapper");
+        let functions: [(u64, &[u8]); 2] = [(0x1000, &wrapper), (0x2000, &leaf)];
+        let names = identify_program(&[&user, &bundled], &x64, &image(), &functions);
+        assert_eq!(names.get(&0x1000).copied(), Some("bundled_wrapper"), "nothing names the callee");
+
+        bundled.add(function_hash_in(&x64, &image(), &leaf, 0x2000).unwrap(), None, None, "callee");
+        let names = identify_program(&[&user, &bundled], &x64, &image(), &functions);
+        assert_eq!(names.get(&0x1000).copied(), Some("user_wrapper"));
+        assert_eq!(names.get(&0x2000).copied(), Some("callee"));
     }
 
     #[test]
