@@ -26,6 +26,8 @@ const MAX_LITERAL_UNITS: usize = 512;
 /// Rendered operand text of one listing; past it tokens show as hex, since every instruction naming a
 /// long signature would otherwise repeat it.
 const MAX_OPERAND_TEXT: usize = 16 << 20;
+/// Overloads an ambiguous-name error lists; the rest are counted.
+const MAX_CANDIDATES: usize = 50;
 const MAX_EH_SECTIONS: usize = 64;
 const MAX_CLAUSES: usize = 4096;
 
@@ -52,12 +54,26 @@ pub enum IlError {
     Load(#[from] LoadError),
     #[error("no method {0} in the assembly")]
     NotFound(String),
-    #[error("{name} names {} methods; select one by token: {}", candidates.len(), candidates.join("; "))]
-    Ambiguous { name: String, candidates: Vec<String> },
+    #[error("{name} names {total} methods; select one by token: {}{}", candidates.join("; "), more(*total, candidates))]
+    Ambiguous {
+        name: String,
+        /// Every method the name matches.
+        total: usize,
+        /// The first [`MAX_CANDIDATES`] of them as `token Type::Name signature`.
+        candidates: Vec<String>,
+    },
     #[error("{method} has no IL body (its body is {body:?})")]
     NoBody { method: String, body: BodyKind },
     #[error("{method}: {reason}")]
     Unreadable { method: String, reason: String },
+}
+
+/// `; ... N more` for the candidates an ambiguous-name error leaves out.
+fn more(total: usize, listed: &[String]) -> String {
+    match total.saturating_sub(listed.len()) {
+        0 => String::new(),
+        left => format!("; ... {left} more"),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -658,17 +674,20 @@ fn select<'m>(
     match matched.as_slice() {
         [] => Err(IlError::NotFound(wanted)),
         [one] => Ok(*one),
-        many => Err(IlError::Ambiguous {
-            name: wanted,
-            candidates: many
-                .iter()
-                .map(|(method, _)| {
-                    let owner = owners.get(&method.token).map_or("", |owner| owner.as_str());
-                    format!("{:#010x} {owner} {}", method.token, method.signature)
-                })
-                .collect(),
-        }),
+        many => Err(ambiguous(
+            wanted,
+            many.iter().map(|(method, _)| {
+                let owner = owners.get(&method.token).map_or("", |owner| owner.as_str());
+                format!("{:#010x} {owner} {}", method.token, method.signature)
+            }),
+        )),
     }
+}
+
+/// The error for a name matching every method of `candidates`, listing the first [`MAX_CANDIDATES`].
+fn ambiguous(name: String, candidates: impl ExactSizeIterator<Item = String>) -> IlError {
+    let total = candidates.len();
+    IlError::Ambiguous { name, total, candidates: candidates.take(MAX_CANDIDATES).collect() }
 }
 
 /// The local variable types of a LocalVarSig StandAloneSig token, in the method's generic context.
@@ -1026,6 +1045,19 @@ mod tests {
         switch.extend(vec![0; (MAX_SWITCH_TARGETS + 2) * 4]);
         let (texts, _, _) = listing(&switch);
         assert!(texts[0].ends_with("IL_400d, ... 2 more)"), "{}", &texts[0][texts[0].len() - 40..]);
+    }
+
+    #[test]
+    fn ambiguous_names_list_the_first_candidates() {
+        let error = ambiguous("M".to_owned(), (0..70).map(|index| format!("c{index}")));
+        let text = error.to_string();
+        assert!(text.starts_with("M names 70 methods; select one by token: c0; c1; "), "{text}");
+        assert!(text.ends_with("; c49; ... 20 more"), "{text}");
+        let IlError::Ambiguous { total, candidates, .. } = error else { panic!() };
+        assert_eq!((total, candidates.len()), (70, MAX_CANDIDATES));
+        assert!(
+            ambiguous("M".to_owned(), ["a".to_owned(), "b".to_owned()].into_iter()).to_string().ends_with(": a; b")
+        );
     }
 
     #[test]
