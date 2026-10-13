@@ -506,3 +506,36 @@ fn a_truncated_image_keeps_the_head_of_its_last_section() {
     assert_eq!(binary.section_file_bytes(section(".pdata")), Some(&bytes[0x3_4000..]));
     assert_eq!(binary.section_file_bytes(section(".reloc")), None, "starts past the end of the image");
 }
+
+fn codeview(binary: &Binary) -> Option<rampage_loaders::CodeView> {
+    let rampage_loaders::Details::Pe(details) = &binary.details else { panic!("{:?}", binary.details) };
+    details.codeview.clone()
+}
+
+#[test]
+fn the_pe_codeview_record_is_read_from_the_debug_directory() {
+    let record = codeview(&Binary::open(fixture("hello-x64.exe")).unwrap()).expect("RSDS record");
+    assert_eq!(&record.guid[8..], b"LLD PDB.");
+    assert_eq!((record.age, record.path.as_str()), (1, "hello-x64.pdb"));
+    let microsoft = codeview(&Binary::open(fixture("Microsoft.Bcl.HashCode.dll")).unwrap()).expect("RSDS record");
+    assert!(microsoft.path.ends_with(".pdb"), "{microsoft:?}");
+    let stripped = fixture("../../../crates/rampage-api/tests/fixtures/persist-x64.exe");
+    assert_eq!(codeview(&Binary::open(stripped).unwrap()), None, "linked -s: no debug directory");
+}
+
+#[test]
+fn a_codeview_record_pointing_outside_the_file_is_dropped_without_panicking() {
+    let original = std::fs::read(fixture("hello-x64.exe")).unwrap();
+    let record = original.windows(4).position(|window| window == b"RSDS").unwrap() as u32;
+    // The debug directory entry's PointerToRawData holds the record's file offset.
+    let pointer = original.windows(4).position(|window| window == record.to_le_bytes()).unwrap();
+    let path = std::env::temp_dir().join(format!("rampage-codeview-{}.exe", std::process::id()));
+    for target in [original.len() as u32 - 8, original.len() as u32 + 0x100, u32::MAX - 4] {
+        let mut bytes = original.clone();
+        bytes[pointer..pointer + 4].copy_from_slice(&target.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+        let binary = Binary::open(&path).unwrap();
+        assert_eq!(codeview(&binary), None, "record at {target:#x}");
+    }
+    std::fs::remove_file(&path).unwrap();
+}

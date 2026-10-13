@@ -13,10 +13,12 @@
 //! says whether the pattern is anchored at the entry point. Blank lines, `;` comments (whole-line or trailing a
 //! value) and a leading byte-order mark are ignored, as are keys we do not model (such as `section_start`). PeID
 //! does not categorize its entries, so every parsed signature gets [`Kind::Unknown`]; the entry name usually
-//! carries the real tool and version.
+//! carries the real tool and version. PeID describes PE images only, so every entry also requires one.
 //!
 //! Real-world databases are hand-edited and rarely clean, so one bad entry never rejects the file: it is
 //! skipped and reported as a [`PeidWarning`].
+
+use rampage_loaders::Format;
 
 use crate::model::{Condition, Kind, Signature};
 use crate::pattern::{BytePattern, PatternError};
@@ -78,8 +80,8 @@ impl Parsed {
             return;
         }
         let Some(pattern) = entry.signature else { return };
-        let condition = Condition::Entry { pattern, ep_only: entry.ep_only };
-        self.signatures.push(Signature::new(name, Kind::Unknown, vec![condition]).with_note("PeID userdb entry"));
+        let conditions = vec![Condition::Entry { pattern, ep_only: entry.ep_only }, Condition::Format(Format::Pe)];
+        self.signatures.push(Signature::new(name, Kind::Unknown, conditions).with_note("PeID userdb entry"));
     }
 }
 

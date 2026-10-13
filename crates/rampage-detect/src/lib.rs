@@ -7,14 +7,20 @@
 //! A [`Signature`] names one tool, carries a [`Kind`] (packer, compiler, protector, installer, linker or
 //! runtime), and holds a list of [`Condition`]s that must all hold (logical AND) for it to match. Conditions test:
 //!
+//! - the container format (PE, ELF, Mach-O), which narrows the others but is no evidence itself,
 //! - an entry-point byte pattern (hex with `?` nibble and `??` byte wildcards; see [`BytePattern`]),
 //! - a required section name, or any of a set of names,
-//! - a byte needle contained in a section (or anywhere in the image), which covers toolchain banners and
-//!   unloaded sections such as `.comment`,
+//! - a byte needle contained in a section (or anywhere in the image but its overlay), which covers toolchain
+//!   banners and unloaded sections such as `.comment`; in a DWARF debug section; or in the overlay,
+//! - the GUID of a PE's CodeView debug record,
 //! - a required imported library or function, or a symbol-table name,
 //! - a Mach-O `LC_BUILD_VERSION` tool entry (the linker that wrote the image),
 //! - the presence of an overlay,
 //! - a minimum image or section entropy.
+//!
+//! A search of bytes the image need not own (anywhere in it, or its overlay) can only make a detection strong
+//! in a signature that also names its format: files carry other programs, and a detector carries its own
+//! signature strings.
 //!
 //! # The bundled database
 //!

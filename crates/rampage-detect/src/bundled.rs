@@ -5,6 +5,8 @@
 //! collide, and it reports evidence rather than a verdict. The rules are plain [`Signature`] builder calls that
 //! [`bundled`] collects, so there is no file to parse and no runtime format to trust.
 
+use rampage_loaders::Format;
+
 use crate::model::{Condition, Kind, Signature, SignatureDb};
 use crate::pattern::BytePattern;
 
@@ -27,9 +29,12 @@ fn ep(pattern: &str) -> Condition {
     Condition::Entry { pattern: BytePattern::parse(pattern).expect("bundled pattern parses"), ep_only: true }
 }
 
-/// A byte pattern that may sit anywhere in the image, also a crate constant.
-fn anywhere(pattern: &str) -> Condition {
-    Condition::Entry { pattern: BytePattern::parse(pattern).expect("bundled pattern parses"), ep_only: false }
+fn format(format: Format) -> Condition {
+    Condition::Format(format)
+}
+
+fn codeview_guid(pattern: &str) -> Condition {
+    Condition::CodeViewGuid(BytePattern::parse(pattern).expect("bundled pattern parses"))
 }
 
 fn section(name: &str) -> Condition {
@@ -50,7 +55,25 @@ fn contains(needle: &str) -> Condition {
 }
 
 fn section_contains(name: &str, needle: &str) -> Condition {
-    Condition::SectionContains { section: Some(name.to_owned()), needle: needle.as_bytes().to_vec() }
+    section_bytes(name, needle.as_bytes().to_vec())
+}
+
+fn section_bytes(name: &str, needle: Vec<u8>) -> Condition {
+    Condition::SectionContains { section: Some(name.to_owned()), needle }
+}
+
+/// Strings joined by NULs, as a C string table stores them. Building the needle at run time keeps the joined
+/// bytes out of any program that links this database, so the detector does not detect itself.
+fn nul_separated(strings: &[&str]) -> Vec<u8> {
+    strings.iter().flat_map(|string| string.bytes().chain([0])).collect()
+}
+
+fn debug_contains(needle: &str) -> Condition {
+    Condition::DebugContains(needle.as_bytes().to_vec())
+}
+
+fn overlay_contains(needle: Vec<u8>) -> Condition {
+    Condition::OverlayContains(needle)
 }
 
 fn symbol(name: &str) -> Condition {
@@ -98,7 +121,11 @@ fn compilers() -> Vec<Signature> {
         // Go keeps its program-counter line table in a dedicated section under either platform's spelling.
         Signature::new("Go", Kind::Compiler, vec![unique_section(&[".gopclntab", "__gopclntab"])])
             .with_note("Go pclntab section"),
-        Signature::new("Go", Kind::Compiler, vec![contains("Go build ID:")]).with_note("Go build ID string"),
+        // Outside ELF, Go's linker opens the text section with the build ID, framed by 0xff bytes.
+        Signature::new("Go", Kind::Compiler, vec![format(Format::MachO), section_bytes("__text", go_build_id())])
+            .with_note("Go build ID at the start of __text"),
+        Signature::new("Go", Kind::Compiler, vec![format(Format::Pe), section_bytes(".text", go_build_id())])
+            .with_note("Go build ID at the start of .text"),
         // .NET assemblies run through the CLR shim; native code and a CLI header both betray them.
         Signature::new(".NET", Kind::Compiler, vec![Condition::ImportFunction("_CorExeMain".to_owned())])
             .with_note("mscoree _CorExeMain import"),
@@ -134,12 +161,13 @@ fn compilers() -> Vec<Signature> {
         Signature::new("Zig", Kind::Compiler, vec![Condition::SymbolPrefix("compiler_rt.".to_owned())])
             .with_note("Zig compiler_rt symbols"),
         // Debug info naming the libc sources zig compiles from its own tree (lib/zig/libc/ where a package
-        // manager installs it; a release tarball's lib/libc/ is not matched). Only a path, so it corroborates.
-        Signature::new("Zig", Kind::Compiler, vec![contains("/lib/zig/libc/")])
+        // manager installs it; a release tarball's lib/libc/ is not matched). Only a path, so it corroborates,
+        // and only in DWARF: the same text in data is just a string.
+        Signature::new("Zig", Kind::Compiler, vec![debug_contains("/lib/zig/libc/")])
             .with_note("zig bundled libc source path in debug info")
             .corroborating(),
         // Delphi/Borland name their code and data segments in upper case and tag the toolchain vendor.
-        Signature::new("Delphi/Borland", Kind::Compiler, vec![contains("Embarcadero Delphi")])
+        Signature::new("Delphi/Borland", Kind::Compiler, vec![format(Format::Pe), contains("Embarcadero Delphi")])
             .with_note("Embarcadero banner"),
         Signature::new("Delphi/Borland", Kind::Compiler, vec![section("CODE"), section("DATA")])
             .with_note("upper-case CODE and DATA sections"),
@@ -150,14 +178,10 @@ fn linkers() -> Vec<Signature> {
     vec![
         Signature::new("LLD", Kind::Linker, vec![section_contains(".comment", "LLD")])
             .with_note(".comment LLD linker tag"),
-        // lld-link brands the CodeView record of a build-id debug directory (RSDS, then a GUID whose second half
-        // is "LLD PDB."). An image linked without a debug directory (-s) has no such record.
-        Signature::new(
-            "LLD",
-            Kind::Linker,
-            vec![anywhere("52 53 44 53 ?? ?? ?? ?? ?? ?? ?? ?? 4C 4C 44 20 50 44 42 2E")],
-        )
-        .with_note("lld-link CodeView build-id record"),
+        // lld-link brands the CodeView record of a build-id debug directory with a GUID whose second half is
+        // "LLD PDB.". An image linked without a debug directory (-s) has no such record.
+        Signature::new("LLD", Kind::Linker, vec![codeview_guid("?? ?? ?? ?? ?? ?? ?? ?? 4C 4C 44 20 50 44 42 2E")])
+            .with_note("lld-link CodeView build-id record"),
         // A Mach-O linker records itself as an LC_BUILD_VERSION tool: Apple's ld (ld64 and ld-prime) as tool 3,
         // LLVM's ld64.lld as tool 4. Objects and LC_VERSION_MIN_* images carry no tool entry.
         Signature::new("Apple ld", Kind::Linker, vec![Condition::BuildTool("ld".to_owned())])
@@ -175,21 +199,32 @@ fn linkers() -> Vec<Signature> {
 
 fn runtimes() -> Vec<Signature> {
     vec![
-        // The MinGW-w64 CRT's runtime-failure banner. It names the C runtime, not the compiler: GCC and Clang
-        // (zig cc, llvm-mingw) both link it.
-        Signature::new("MinGW-w64", Kind::Runtime, vec![contains("Mingw-w64 runtime failure")])
-            .with_note("MinGW-w64 CRT runtime-failure banner"),
+        // The MinGW-w64 CRT's runtime-failure banner, in the PE's own read-only data. It names the C runtime, not
+        // the compiler: GCC and Clang (zig cc, llvm-mingw) both link it.
+        Signature::new(
+            "MinGW-w64",
+            Kind::Runtime,
+            vec![format(Format::Pe), section_contains(".rdata", "Mingw-w64 runtime failure")],
+        )
+        .with_note("MinGW-w64 CRT runtime-failure banner"),
         // Only glibc versions its symbols GLIBC_x.y, and only glibc's soname is libc.so.6 (musl's is libc.so,
         // uClibc's libc.so.0, Bionic's libc.so); .dynstr holds the version needs and DT_NEEDED names.
         Signature::new("glibc", Kind::Runtime, vec![section_contains(".dynstr", "GLIBC_2.")])
             .with_note("GLIBC_2.x symbol-version need"),
         Signature::new("glibc", Kind::Runtime, vec![section_contains(".dynstr", "libc.so.6")])
             .with_note("libc.so.6 (glibc soname) needed"),
-        // The head of musl's strerror table (src/errno/__strerror.h); glibc and Bionic say "Success" for 0.
+        // The head of musl's strerror table (src/errno/__strerror.h), in the ELF's own read-only data; glibc and
+        // Bionic say "Success" for 0.
         Signature::new(
             "musl",
             Kind::Runtime,
-            vec![contains("No error information\0Illegal byte sequence\0Domain error\0")],
+            vec![
+                format(Format::Elf),
+                section_bytes(
+                    ".rodata",
+                    nul_separated(&["No error information", "Illegal byte sequence", "Domain error"]),
+                ),
+            ],
         )
         .with_note("musl strerror message table"),
         // musl's static TLS setup (src/env/__init_tls.c), linked into every static musl program.
@@ -202,10 +237,34 @@ fn runtimes() -> Vec<Signature> {
 
 fn installers() -> Vec<Signature> {
     vec![
-        Signature::new("NSIS", Kind::Installer, vec![contains("NullsoftInst")]).with_note("NSIS overlay signature"),
-        Signature::new("NSIS", Kind::Installer, vec![section(".ndata")]).with_note("NSIS .ndata section"),
-        Signature::new("Inno Setup", Kind::Installer, vec![contains("Inno Setup")]).with_note("Inno Setup banner"),
+        // An NSIS installer is its PE stub, which reserves an uninitialized .ndata section, with the compressed
+        // script and files appended: the overlay opens with a header carrying 0xDEADBEEF and "NullsoftInst".
+        Signature::new(
+            "NSIS",
+            Kind::Installer,
+            vec![format(Format::Pe), section(".ndata"), overlay_contains(nsis_header())],
+        )
+        .with_note("NSIS stub .ndata section and appended NullsoftInst header"),
+        Signature::new("NSIS", Kind::Installer, vec![format(Format::Pe), section(".ndata")])
+            .with_note("NSIS .ndata section"),
+        // Inno Setup's loader appends the setup data, which opens with its versioned banner.
+        Signature::new(
+            "Inno Setup",
+            Kind::Installer,
+            vec![format(Format::Pe), overlay_contains(b"Inno Setup Setup Data (".to_vec())],
+        )
+        .with_note("appended Inno Setup setup data"),
     ]
+}
+
+/// The head of the build ID Go's linker writes at the start of the text section.
+fn go_build_id() -> Vec<u8> {
+    b"\xff Go build ID: \"".to_vec()
+}
+
+/// NSIS's first header signature: the 0xDEADBEEF marker, then the installer magic.
+fn nsis_header() -> Vec<u8> {
+    [0xdead_beef_u32.to_le_bytes().as_slice(), b"NullsoftInst"].concat()
 }
 
 #[cfg(test)]

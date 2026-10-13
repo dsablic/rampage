@@ -38,6 +38,27 @@ pub struct PeDetails {
     pub imphash: Option<String>,
     /// A .NET assembly (it has a CLR runtime header); its code is IL, not native.
     pub dotnet: bool,
+    /// The debug directory's first CodeView (RSDS) record: the PDB the linker named and the GUID that ties it to
+    /// this build. `None` when the image has no debug directory or no well-formed record.
+    pub codeview: Option<CodeView>,
+}
+
+/// A PE CodeView RSDS record, read from the debug directory with every offset and length bounds-checked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CodeView {
+    /// The GUID's 16 bytes as stored, in hex (no byte-order shuffling into the textual GUID form).
+    #[serde(serialize_with = "hex_guid")]
+    pub guid: [u8; 16],
+    pub age: u32,
+    /// The PDB path, lossily decoded and cut at [`MAX_CODEVIEW_PATH`] bytes.
+    pub path: String,
+}
+
+/// Longer than any real PDB path; a hostile record cannot grow the details past it.
+pub const MAX_CODEVIEW_PATH: usize = 1024;
+
+fn hex_guid<S: serde::Serializer>(guid: &[u8; 16], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&rampage_arch::hex::bytes(guid))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -311,7 +332,16 @@ fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>)
     let dotnet = file
         .data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR)
         .is_some_and(|directory| directory.virtual_address.get(LE) != 0);
+    let codeview = file.pdb_info().ok().flatten().map(|record| {
+        let path = record.path();
+        CodeView {
+            guid: record.guid(),
+            age: record.age(),
+            path: String::from_utf8_lossy(&path[..path.len().min(MAX_CODEVIEW_PATH)]).into_owned(),
+        }
+    });
     PeDetails {
+        codeview,
         imphash: imphash(file),
         dotnet,
         timestamp,
