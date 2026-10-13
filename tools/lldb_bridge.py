@@ -901,5 +901,31 @@ def query(
     result.AppendMessage(query_json(debugger, command))
 
 
+def serve(
+    debugger: Any, command: str, result: Any, internal_dict: dict[str, Any]
+) -> None:
+    """Serve bounded local read-only queries only when explicitly started by the LLDB operator."""
+    specification = importlib.util.spec_from_file_location(
+        "_rampage_bridge_transport", Path(__file__).with_name("lldb_transport.py")
+    )
+    if specification is None or specification.loader is None:
+        result.SetError("cannot load LLDB local query transport")
+        return
+    transport = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(transport)
+
+    def preflight(current: Any) -> None:
+        context = QueryContext(current, importlib.import_module("lldb"), None)
+        context.verify()
+
+    try:
+        transport.serve_command(debugger, command, result, query_json, preflight)
+    except QueryError as error:
+        result.SetError(f"rampage-query-serve: {error}")
+
+
 def __lldb_init_module(debugger: Any, internal_dict: dict[str, Any]) -> None:
     debugger.HandleCommand("command script add -f lldb_bridge.query rampage-query")
+    debugger.HandleCommand(
+        "command script add -f lldb_bridge.serve rampage-query-serve"
+    )

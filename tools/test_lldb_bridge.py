@@ -1467,7 +1467,10 @@ def test_registration_is_the_only_command_and_queries_never_execute_target_code(
     environment.bridge.__lldb_init_module(
         SimpleNamespace(HandleCommand=commands.append), {}
     )
-    assert commands == ["command script add -f lldb_bridge.query rampage-query"]
+    assert commands == [
+        "command script add -f lldb_bridge.query rampage-query",
+        "command script add -f lldb_bridge.serve rampage-query-serve",
+    ]
 
     def forbidden(*arguments: Any, **options: Any) -> None:
         pytest.fail("bridge invoked a non-read-only API")
