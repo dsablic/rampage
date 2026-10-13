@@ -145,14 +145,16 @@ enum Command {
         #[arg(long)]
         reference: PathBuf,
     },
-    /// Build a library-function signature database from a binary whose functions are named
+    /// Build a library-function signature database from a binary whose functions are named, hashing each over its
+    /// symbol size and its discovered extent, with callee keys for functions whose bodies collide
     Signatures {
         file: PathBuf,
         /// Write the database here (JSON); defaults to standard output
         #[arg(long)]
         output: Option<PathBuf>,
     },
-    /// Name functions by matching a signature database (FLIRT/Function-ID style)
+    /// Name functions by matching a signature database (FLIRT/Function-ID style); functions whose bodies collide
+    /// are told apart by the names of the functions they call
     Identify {
         file: PathBuf,
         /// A signature database to apply, overlaid on the bundled starter database unless --no-bundled is set
