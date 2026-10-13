@@ -27,6 +27,10 @@ const MAX_ARGUMENT_BYTES: usize = 1024;
 const ELEMENT_STRING: u8 = 0x0E;
 const ELEMENT_SENTINEL: u8 = 0x41;
 const FIELD_SIGNATURE: u8 = 0x06;
+const LOCAL_SIGNATURE: u8 = 0x07;
+const GENERIC_INSTANTIATION: u8 = 0x0A;
+/// `ldloc` takes a 16-bit index (III.3.43), so a method has at most this many locals.
+const MAX_LOCALS: u32 = 0xFFFF;
 const SIGNATURE_GENERIC: u8 = 0x10;
 const SIGNATURE_HAS_THIS: u8 = 0x20;
 const SIGNATURE_EXPLICIT_THIS: u8 = 0x40;
@@ -207,6 +211,40 @@ impl<'r> Reader<'r> {
     /// A TypeSpec blob (II.23.2.14), which is a single type.
     pub(super) fn type_spec(&mut self, blob: &[u8]) -> Option<Ty> {
         self.read(blob, |reader, cursor| reader.ty(cursor, 0))
+    }
+
+    /// The local variable types of a LocalVarSig (II.23.2.6). Each local is capped as one signature would be.
+    pub(super) fn locals(&mut self, blob: &[u8]) -> Option<Vec<Ty>> {
+        self.read(blob, |reader, cursor| {
+            if cursor.byte()? != LOCAL_SIGNATURE {
+                return None;
+            }
+            let count = cursor.compressed()?;
+            if count > MAX_LOCALS {
+                return None;
+            }
+            let mut locals = Vec::new();
+            // Every local consumes at least one byte, so a declared count past the blob fails at its end.
+            for _ in 0..count {
+                (reader.nodes, reader.text) = (0, 0);
+                locals.push(reader.ty(cursor, 0)?);
+            }
+            Some(locals)
+        })
+    }
+
+    /// The type arguments of a MethodSpec instantiation (II.23.2.15).
+    pub(super) fn method_spec(&mut self, blob: &[u8]) -> Option<Vec<Ty>> {
+        self.read(blob, |reader, cursor| {
+            if cursor.byte()? != GENERIC_INSTANTIATION {
+                return None;
+            }
+            let count = cursor.compressed()?;
+            if count == 0 || count > MAX_ARITY {
+                return None;
+            }
+            (0..count).map(|_| reader.ty(cursor, 0)).collect()
+        })
     }
 
     /// Runs `decode` over `blob` and charges the bytes it read to the image-wide budget, whether or not it
@@ -644,6 +682,34 @@ mod tests {
         assert_eq!(attribute_arguments(&params[..1], &[1, 0, 9, b'a']), None, "string past the blob");
         assert_eq!(attribute_arguments(&[ty(Kind::Other)], &[1, 0, 0, 0, 0, 0]), None, "enum or array");
         assert_eq!(attribute_arguments(&[ty(Kind::Element(0x1C))], &[1, 0, 0x08, 1, 0, 0, 0]), None, "boxed");
+    }
+
+    #[test]
+    fn decodes_locals_and_method_instantiations() {
+        let fake = Fake(Vec::new());
+        let names = [(0, "T".to_owned())];
+        let generics = Generics { type_params: &[], method_params: &names };
+        let budget = Cell::new(TOTAL_BUDGET);
+        let texts = |types: Option<Vec<Ty>>| types.map(|types| types.into_iter().map(|ty| ty.text).collect::<Vec<_>>());
+        // int32, a pinned byref to T, a typedref, an object with a custom modifier.
+        let blob = [0x07, 4, 0x08, 0x45, 0x10, 0x1E, 0, 0x16, 0x20, OBJECT, 0x1C];
+        let locals = texts(Reader::new(&fake, generics, &budget).locals(&blob));
+        assert_eq!(locals.unwrap(), ["int32", "T& pinned", "typedref", "object modopt(System.Object)"]);
+        assert_eq!(texts(Reader::new(&fake, generics, &budget).locals(&[0x07, 0])), Some(vec![]));
+        for malformed in [&[0x06, 1, 0x08][..], &[0x07, 3, 0x08], &[0x07, 0xC0, 0x01, 0, 0, 0x08], &[]] {
+            assert_eq!(texts(Reader::new(&fake, generics, &budget).locals(malformed)), None, "{malformed:02x?}");
+        }
+        // Each local has its own node cap: 600 locals are more nodes than one signature may have.
+        let mut many = vec![0x07, 0x82, 0x58];
+        many.extend([0x08; 600]);
+        assert_eq!(Reader::new(&fake, generics, &budget).locals(&many).map(|locals| locals.len()), Some(600));
+
+        let instantiation = texts(Reader::new(&fake, generics, &budget).method_spec(&[0x0A, 2, 0x08, 0x1D, 0x0E]));
+        assert_eq!(instantiation.unwrap(), ["int32", "string[]"]);
+        for malformed in [&[0x0A, 0][..], &[0x0A, 2, 0x08], &[0x07, 1, 0x08], &[0x0A, 0x41, 0x08]] {
+            let decoded = texts(Reader::new(&fake, generics, &budget).method_spec(malformed));
+            assert_eq!(decoded, None, "{malformed:02x?}");
+        }
     }
 
     #[test]

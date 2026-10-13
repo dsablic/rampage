@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rampage_loaders::dotnet::{self, BodyKind, EntryPoint, IlHeader};
+use rampage_loaders::dotnet::{self, BodyKind, ClauseKind, EntryPoint, IlError, IlHeader, MethodSelector};
 use rampage_loaders::{Binary, LoadError};
 
 fn fixture(name: &str) -> PathBuf {
@@ -105,6 +105,9 @@ fn build(spec: &Spec) -> Vec<u8> {
     let attribute_value =
         blobs.blob(spec.attribute_value.as_deref().unwrap_or(&[0x01, 0x00, 3, b'a', b'b', b'c', 42, 0, 0, 0, 0, 0]));
     let token_blob = blobs.blob(&[0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a]);
+    // Compute's locals (int32, T) and the instantiation Compute<int32>.
+    let locals_signature = blobs.blob(&[0x07, 2, 0x08, 0x1E, 0]);
+    let instantiation = blobs.blob(&[0x0A, 1, 0x08]);
     let guids: Vec<u8> = (1..=16).collect();
     let mut user_strings = vec![0u8, 11];
     for unit in "hello".encode_utf16() {
@@ -123,7 +126,8 @@ fn build(spec: &Spec) -> Vec<u8> {
     let tiny_rva = SECTION_RVA + 72;
     let tiny = [0x0E, 0x16, 0x26, 0x2A];
     let fat_rva = tiny_rva + 4;
-    let fat = [0x13, 0x30, 0x02, 0x00, 0x05, 0, 0, 0, 0x01, 0, 0, 0x11, 0x00, 0x00, 0x00, 0x00, 0x2A];
+    // Fat, locals StandAloneSig 1, code `call Compute<int32>` (MethodSpec 1).
+    let fat = [0x13, 0x30, 0x02, 0x00, 0x05, 0, 0, 0, 0x01, 0, 0, 0x11, 0x28, 0x01, 0x00, 0x00, 0x2B];
     let native_rva = fat_rva + 20;
     let metadata_rva = native_rva + 4;
 
@@ -172,6 +176,8 @@ fn build(spec: &Spec) -> Vec<u8> {
     for &parent in &attribute_parents {
         tables.put(parent, hca).put((1 << 3) | 3, i).put(attribute_value, b);
     }
+    // StandAloneSig: Compute's locals.
+    tables.put(locals_signature, b);
     // EventMap and PropertyMap give Program (TypeDef 2) the event Changed (of type Object) and the property Count.
     let (changed, count) = (strings.string("Changed"), strings.string("Count"));
     tables.put(2, i).put(1, i);
@@ -193,8 +199,10 @@ fn build(spec: &Spec) -> Vec<u8> {
     // GenericParam: Compute's T (TypeOrMethodDef tag 1 = MethodDef 2).
     let t = strings.string("T");
     tables.put(0, 2).put(0, 2).put((2 << 1) | 1, i).put(t, s);
+    // MethodSpec: Compute (MethodDefOrRef tag 0 = MethodDef 2) instantiated with int32.
+    tables.put(2 << 1, i).put(instantiation, b);
 
-    let present: [(u8, u32); 18] = [
+    let present: [(u8, u32); 20] = [
         (0x00, 1),
         (0x01, type_refs),
         (0x02, spec.declared_type_defs.unwrap_or(3)),
@@ -203,6 +211,7 @@ fn build(spec: &Spec) -> Vec<u8> {
         (0x08, 4),
         (0x0A, 1),
         (0x0C, attribute_parents.len() as u32),
+        (0x11, 1),
         (0x12, 1),
         (0x14, 1),
         (0x15, 1),
@@ -213,6 +222,7 @@ fn build(spec: &Spec) -> Vec<u8> {
         (0x23, 1),
         (0x29, 1),
         (0x2A, 1),
+        (0x2B, 1),
     ];
     let heap_sizes = u8::from(spec.wide_strings) | (u8::from(spec.wide_guids) << 1) | (u8::from(spec.wide_blobs) << 2);
     let mut table_stream = vec![0, 0, 0, 0, 2, 0, heap_sizes, 1];
@@ -740,5 +750,234 @@ fn reads_a_real_assembly() {
         let address = image_base + u64::from(method.rva);
         assert!(!binary.function_starts.contains(&address), "{} seeded as a function start", method.name);
         assert!(binary.symbols.iter().all(|symbol| symbol.address != address), "{} named as a symbol", method.name);
+    }
+}
+
+const HASH_CODE: &str = "Microsoft.Bcl.HashCode.dll";
+/// HashCode.Combine<T1..T5>: fat header at file offset 0x504 (RVA 0x2304), 225 bytes of code from 0x510.
+const COMBINE5: u32 = 0x0600_000D;
+const COMBINE5_HEADER: usize = 0x504;
+/// The fixture's one section maps RVA 0x2000 at file offset 0x200.
+const FIXTURE_RVA_TO_FILE: usize = 0x1E00;
+
+fn listing(image: &[u8], method: MethodSelector) -> dotnet::MethodIl {
+    dotnet::image_method_il(image, method).unwrap().expect("a managed image")
+}
+
+fn texts(il: &dotnet::MethodIl) -> Vec<String> {
+    il.instructions.iter().map(dotnet::Instruction::text).collect()
+}
+
+#[test]
+fn disassembles_real_methods() {
+    let image = std::fs::read(fixture(HASH_CODE)).unwrap();
+    // Hand-decoded from the bytes at 0x510 (III.1.2.1 opcodes, branch targets relative to the next instruction):
+    // 02 | 8C 1B000001 | 2D 03 | 16 | 2B 0D | 0F 00 | FE16 1B000001 | 6F 0A00001C | 0A
+    let combine = listing(&image, MethodSelector::Token(COMBINE5));
+    assert_eq!(combine.method, "System.HashCode::Combine");
+    assert_eq!(combine.signature, "int32 Combine<T1, T2, T3, T4, T5>(T1, T2, T3, T4, T5)");
+    assert_eq!(
+        texts(&combine)[..9],
+        [
+            "IL_0000: ldarg.0",
+            "IL_0001: box !!0",
+            "IL_0006: brtrue.s IL_000b",
+            "IL_0008: ldc.i4.0",
+            "IL_0009: br.s IL_0018",
+            "IL_000b: ldarga.s 0",
+            "IL_000d: constrained. !!0",
+            "IL_0013: callvirt instance int32 System.Object::GetHashCode()",
+            "IL_0018: stloc.0",
+        ]
+    );
+    assert_eq!(combine.instructions[2].targets, [0x0B]);
+    assert_eq!(combine.instructions[7].token, Some(0x0A00_001C));
+    assert_eq!(texts(&combine).last().unwrap(), "IL_00e0: ret");
+    assert!(combine.init_locals && !combine.truncated && combine.warnings.is_empty(), "{:?}", combine.warnings);
+    assert_eq!(combine.locals, vec!["uint32"; 10]);
+
+    let ctor = listing(&image, MethodSelector::Name("Microsoft.CodeAnalysis.EmbeddedAttribute::.ctor"));
+    let expected = ["IL_0000: ldarg.0", "IL_0001: call instance void System.Attribute::.ctor()", "IL_0006: ret"];
+    assert_eq!(texts(&ctor), expected);
+    assert_eq!(ctor.body.header, IlHeader::Tiny);
+
+    let signature = "instance void Add<T>(T, System.Collections.Generic.IEqualityComparer<T>)";
+    let metadata = dotnet::parse_image(&image).unwrap().unwrap();
+    let methods = metadata.types.iter().flat_map(|ty| &ty.methods);
+    let token = methods.filter(|method| method.signature == signature).map(|method| method.token).next().unwrap();
+    let add = listing(&image, MethodSelector::Token(token));
+    let call = "IL_0020: callvirt instance int32 System.Collections.Generic.IEqualityComparer<!!0>::GetHashCode(!0)";
+    assert!(texts(&add).contains(&call.to_owned()), "{:#?}", texts(&add));
+
+    let seed = listing(&image, MethodSelector::Name("get_UseNonRandomizedHashSeed"));
+    assert_eq!(
+        texts(&seed)[..2],
+        [
+            "IL_0000: ldstr \"Switch.System.Data.UseNonRandomizedHashSeed\"",
+            "IL_0005: ldsflda int32 System.LocalAppContextSwitches::s_useNonRandomizedHashSeed",
+        ]
+    );
+
+    // Exception sections checked against the bytes: 01 10 0000 | 0000 1000 0E 1E00 03 1E000001 at 0xCD4.
+    let resource = listing(&image, MethodSelector::Name("System.SR::GetResourceString"));
+    assert_eq!(resource.locals, ["string"]);
+    let clauses: Vec<String> = resource.exception_clauses.iter().map(dotnet::ExceptionClause::text).collect();
+    assert_eq!(
+        clauses,
+        [".try IL_0010 to IL_001e catch System.Resources.MissingManifestResourceException handler IL_001e to IL_0021"]
+    );
+    assert_eq!(resource.exception_clauses[0].catch_token, Some(0x0100_001E));
+    // 01 10 0000 | 0200 0D00 1E 2B00 0A at 0x2E4: a finally around the RandomNumberGenerator.
+    let random = listing(&image, MethodSelector::Name("Interop::GetRandomBytes"));
+    let finally = &random.exception_clauses[0];
+    assert_eq!((finally.kind, finally.try_start, finally.try_end), (ClauseKind::Finally, 0x0D, 0x2B));
+    assert_eq!((finally.handler_start, finally.handler_end), (0x2B, 0x35));
+    assert_eq!(random.locals, ["System.Security.Cryptography.RandomNumberGenerator", "uint8[]"]);
+    serde_json::to_string(&random).unwrap();
+}
+
+#[test]
+fn selects_methods_by_token_or_unambiguous_name() {
+    let image = std::fs::read(fixture(HASH_CODE)).unwrap();
+    let error = dotnet::image_method_il(&image, MethodSelector::Name("System.HashCode::Combine")).unwrap_err();
+    let IlError::Ambiguous { candidates, .. } = &error else { panic!("{error}") };
+    assert_eq!(candidates.len(), 8);
+    let five = "0x0600000d System.HashCode::Combine int32 Combine<T1, T2, T3, T4, T5>(T1, T2, T3, T4, T5)";
+    assert!(candidates.contains(&five.to_owned()), "{candidates:#?}");
+    assert_eq!(listing(&image, MethodSelector::Name("MixFinal")).method, "System.HashCode::MixFinal");
+    let missing =
+        [MethodSelector::Name("System.HashCode::Nope"), MethodSelector::Token(0x0600_0100), MethodSelector::Token(1)];
+    for selector in missing {
+        let result = dotnet::image_method_il(&image, selector);
+        assert!(matches!(result, Err(IlError::NotFound(_))), "{selector:?}");
+    }
+    let native = Binary::open(fixture("hello-x64.exe")).unwrap();
+    assert!(dotnet::method_il(&native, MethodSelector::Token(0x0600_0001)).unwrap().is_none());
+}
+
+#[test]
+fn resolves_method_specs_and_generic_locals() {
+    let image = build(&Spec::default());
+    let compute = listing(&image, MethodSelector::Name("Demo.Program::Compute"));
+    assert_eq!(texts(&compute), ["IL_0000: call int32 Demo.Program::Compute<int32>(!!0, !!0)"]);
+    assert_eq!(compute.locals, ["int32", "T"]);
+    assert_eq!(compute.instructions[0].token, Some(0x2B00_0001));
+    let main = listing(&image, MethodSelector::Token(0x0600_0001));
+    assert_eq!(texts(&main), ["IL_0000: ldc.i4.0", "IL_0001: pop", "IL_0002: ret"]);
+    for (method, body) in [("Helper", BodyKind::Native), ("Run", BodyKind::None)] {
+        let error = dotnet::image_method_il(&image, MethodSelector::Name(method)).unwrap_err();
+        assert!(matches!(error, IlError::NoBody { body: found, .. } if found == body), "{error}");
+    }
+}
+
+#[test]
+fn decodes_crafted_operands_and_exception_sections() {
+    let mut image = std::fs::read(fixture(HASH_CODE)).unwrap();
+    let ldstr = listing(&image, MethodSelector::Name("get_UseNonRandomizedHashSeed")).instructions[0].token.unwrap();
+    let mut code = vec![0x1F, 0xFE, 0x22, 0x00, 0x00, 0x80, 0x3F, 0x45, 2, 0, 0, 0, 0, 0, 0, 0, 0xFB, 0xFF, 0xFF, 0xFF];
+    code.extend([0x24, 0xFE, 0x08, 0xFE, 0x0C, 0x03, 0x01, 0x72]);
+    code.extend(ldstr.to_le_bytes());
+    code.extend([0x28, 0xFF, 0xFF, 0xFF, 0x0A, 0xD0, 0x01, 0x00, 0x00, 0x1B, 0x2B, 0x7F]);
+    let header = COMBINE5_HEADER;
+    // Set MoreSects (0x08) in the fat flags and shrink the code.
+    image[header] |= 0x08;
+    image[header + 4..header + 8].copy_from_slice(&(code.len() as u32).to_le_bytes());
+    image[header + 12..header + 12 + code.len()].copy_from_slice(&code);
+    // At the next 4-byte aligned RVA after the code: a small EH section (one catch of TypeRef 1) chained to a fat
+    // one (a filter and a fault).
+    let mut sections = vec![0x81, 16, 0, 0, 0, 0, 0, 0, 0x10, 0x10, 0x00, 0x08, 0x01, 0x00, 0x00, 0x01];
+    sections.extend([0x41, 52, 0, 0]);
+    for value in [1u32, 0x20, 0x10, 0x30, 0x08, 0x2B, 4, 0, 4, 4, 4, 0] {
+        sections.extend(value.to_le_bytes());
+    }
+    let start = (0x2304 + 12 + code.len()).next_multiple_of(4) - 0x2304 + header;
+    image[start..start + sections.len()].copy_from_slice(&sections);
+
+    let il = listing(&image, MethodSelector::Token(COMBINE5));
+    assert_eq!(
+        texts(&il),
+        [
+            "IL_0000: ldc.i4.s -2",
+            "IL_0002: ldc.r4 1.0",
+            "IL_0007: switch (IL_0014, IL_000f)",
+            "IL_0014: .byte 0x24",
+            "IL_0015: .byte 0xfe, 0x08",
+            "IL_0017: ldloc V_259",
+            "IL_001b: ldstr \"Switch.System.Data.UseNonRandomizedHashSeed\"",
+            "IL_0020: call <token 0x0affffff>",
+            "IL_0025: ldtoken !!0",
+            "IL_002a: br.s IL_00ab",
+        ]
+    );
+    assert_eq!(il.warnings, ["br.s at IL_002a targets IL_00ab past the body"]);
+    let clauses: Vec<String> = il.exception_clauses.iter().map(dotnet::ExceptionClause::text).collect();
+    assert_eq!(
+        clauses,
+        [
+            ".try IL_0000 to IL_0010 catch System.Runtime.CompilerServices.CompilationRelaxationsAttribute handler \
+             IL_0010 to IL_0018",
+            ".try IL_0020 to IL_0030 filter IL_002b handler IL_0030 to IL_0038",
+            ".try IL_0000 to IL_0004 fault handler IL_0004 to IL_0008",
+        ]
+    );
+}
+
+/// Every IL method of the fixture with the file offset of its body header.
+fn fixture_bodies(image: &[u8]) -> Vec<(u32, usize, dotnet::IlBody)> {
+    let metadata = dotnet::parse_image(image).unwrap().unwrap();
+    let methods = metadata.types.iter().flat_map(|ty| &ty.methods);
+    methods.map(|method| (method.token, method.rva as usize - FIXTURE_RVA_TO_FILE, method.il.unwrap())).collect()
+}
+
+#[test]
+fn every_truncated_body_disassembles_without_panicking() {
+    let image = std::fs::read(fixture(HASH_CODE)).unwrap();
+    // Each cut re-parses the whole image, so the methods run on their own threads.
+    std::thread::scope(|scope| {
+        for (token, header, body) in fixture_bodies(&image) {
+            let image = &image;
+            scope.spawn(move || {
+                let mut cut = image.clone();
+                for length in 0..body.code_size {
+                    match body.header {
+                        IlHeader::Tiny => cut[header] = ((length as u8) << 2) | 0x02,
+                        IlHeader::Fat => cut[header + 4..header + 8].copy_from_slice(&length.to_le_bytes()),
+                    }
+                    let il = listing(&cut, MethodSelector::Token(token));
+                    assert!(il.instructions.len() <= length as usize, "{token:#x} cut to {length}");
+                    assert!(il.warnings.len() <= 256);
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn random_body_corruption_is_survived() {
+    let image = std::fs::read(fixture(HASH_CODE)).unwrap();
+    let bodies = fixture_bodies(&image);
+    let start = bodies.iter().map(|&(_, header, _)| header).min().unwrap();
+    let end = bodies.iter().map(|&(_, header, body)| header + (body.header_size + body.code_size) as usize).max();
+    let span = end.unwrap() + 64 - start;
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for _ in 0..300 {
+        let mut mutated = image.clone();
+        for _ in 0..1 + next() % 16 {
+            mutated[start + next() as usize % span] = next() as u8;
+        }
+        for _ in 0..3 {
+            let (token, _, _) = bodies[next() as usize % bodies.len()];
+            if let Ok(Some(il)) = dotnet::image_method_il(&mutated, MethodSelector::Token(token)) {
+                assert!(il.instructions.len() <= dotnet::MAX_INSTRUCTIONS);
+                assert!(il.warnings.len() <= 256);
+                serde_json::to_string(&il).unwrap();
+            }
+        }
     }
 }
