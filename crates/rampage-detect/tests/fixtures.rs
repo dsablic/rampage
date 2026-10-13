@@ -80,6 +80,35 @@ fn apple_ld_is_named_by_the_build_version_tool_it_records() {
     }
 }
 
+fn api_fixture(name: &str) -> Vec<rampage_detect::Detection> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rampage-api/tests/fixtures").join(name);
+    identify(&Binary::open(path).expect("fixture loads"), &SignatureDb::bundled())
+}
+
+#[test]
+fn zig_is_named_by_its_compiler_rt_symbols_or_tentatively_by_its_libc_tree() {
+    for name in ["hello-x64.elf", "hello-thumb.elf", "hello-ppc.elf", "hello-arm.elf"] {
+        let detections = detect(name);
+        let zig = find(&detections, "Zig").unwrap_or_else(|| panic!("{name}: {detections:?}"));
+        assert_eq!((zig.kind, zig.confidence), (Kind::Compiler, Confidence::Strong), "{name}");
+        assert!(zig.evidence.iter().any(|line| line.contains("(prefix compiler_rt.)")), "{:?}", zig.evidence);
+    }
+    // net-client-x64.elf keeps debug info for the glibc start files zig compiled, but no compiler_rt symbol.
+    let debug = api_fixture("net-client-x64.elf");
+    let zig = find(&debug, "Zig").expect("Zig from the libc source path");
+    assert_eq!(zig.confidence, Confidence::Tentative);
+    // Its stripped twin keeps neither: no general marker is left, so Zig stays unreported.
+    assert!(!named(&api_fixture("net-client-x64-stripped.elf"), "Zig"));
+}
+
+#[test]
+fn zig_is_not_reported_for_other_toolchains_or_unlinked_objects() {
+    for name in ["hello-go-x64.elf", "hello-x64.macho", "hello-x64.o", "hello-x64-elf.o", "Microsoft.Bcl.HashCode.dll"]
+    {
+        assert!(!named(&detect(name), "Zig"), "{name}");
+    }
+}
+
 #[test]
 fn mingw_w64_runtime_is_not_reported_on_msvc_elf_or_macho_fixtures() {
     for name in ["Microsoft.Bcl.HashCode.dll", "hello-x64.elf", "hello-x64-dyn.elf", "hello-x64.macho"] {

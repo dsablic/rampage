@@ -57,6 +57,8 @@ pub enum Condition {
     ImportFunction(String),
     /// A symbol (from the symbol table, so a stripped image has none) with exactly this name is present.
     Symbol(String),
+    /// A symbol whose name starts with this prefix (and goes on past it) is present.
+    SymbolPrefix(String),
     /// A Mach-O `LC_BUILD_VERSION` lists this tool (`ld`, `lld`, `clang`, `swift`), as the loader names it.
     BuildTool(String),
     /// The image has an overlay (data appended past everything its structures describe).
@@ -78,6 +80,7 @@ impl Condition {
             | Self::ImportFunction(_)
             | Self::UniqueSectionName(_)
             | Self::Symbol(_)
+            | Self::SymbolPrefix(_)
             | Self::BuildTool(_) => true,
             _ => false,
         }

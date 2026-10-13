@@ -193,6 +193,9 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
         Condition::Symbol(name) => {
             image.find_symbol(&|symbol| symbol == name).map(|_| format!("symbol {name} present"))
         }
+        Condition::SymbolPrefix(prefix) => image
+            .find_symbol(&|symbol| symbol.len() > prefix.len() && symbol.starts_with(prefix.as_str()))
+            .map(|symbol| format!("symbol {symbol} (prefix {prefix})")),
         Condition::OverlayPresent => image.overlay_size().map(|size| format!("{size} bytes of overlay")),
         Condition::MinImageEntropy(min) => {
             let entropy = shannon_entropy(image.image_bytes());
@@ -587,6 +590,17 @@ mod tests {
         assert_eq!(musl(&dynamic).map(|d| d.kind), Some(Kind::Runtime));
         let glibc = Fake::default().with_section(".interp", b"/lib64/ld-linux-x86-64.so.2\0");
         assert!(musl(&glibc).is_none());
+    }
+
+    #[test]
+    fn a_symbol_prefix_needs_a_name_that_goes_on_past_it() {
+        let sig = Signature::new("Zig", Kind::Compiler, vec![Condition::SymbolPrefix("compiler_rt.".to_owned())]);
+        let symbols =
+            |names: &[&str]| Fake { symbols: names.iter().map(|&n| n.to_owned()).collect(), ..Fake::default() };
+        let hit = evaluate(&symbols(&["main", "compiler_rt.memcpy.memcpyFast"]), &sig).expect("prefix match");
+        assert_eq!(hit.evidence, ["symbol compiler_rt.memcpy.memcpyFast (prefix compiler_rt.)"]);
+        assert_eq!(hit.confidence, Confidence::Strong);
+        assert!(evaluate(&symbols(&["compiler_rt.", "compiler_rt_init", "__udivti3"]), &sig).is_none());
     }
 
     #[test]

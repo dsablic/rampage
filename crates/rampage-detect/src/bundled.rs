@@ -129,6 +129,15 @@ fn compilers() -> Vec<Signature> {
             .with_note(".comment rustc producer"),
         Signature::new("Zig", Kind::Compiler, vec![section_contains(".comment", "zig")])
             .with_note(".comment zig producer"),
+        // Zig links its own compiler_rt, written in Zig, whose symbols carry Zig's module paths
+        // (compiler_rt.memcpy.memcpyFast); LLVM's and GCC's runtime libraries use bare C names. Needs symbols.
+        Signature::new("Zig", Kind::Compiler, vec![Condition::SymbolPrefix("compiler_rt.".to_owned())])
+            .with_note("Zig compiler_rt symbols"),
+        // Debug info naming the libc sources zig compiles from its own tree (lib/zig/libc/ where a package
+        // manager installs it; a release tarball's lib/libc/ is not matched). Only a path, so it corroborates.
+        Signature::new("Zig", Kind::Compiler, vec![contains("/lib/zig/libc/")])
+            .with_note("zig bundled libc source path in debug info")
+            .corroborating(),
         // Delphi/Borland name their code and data segments in upper case and tag the toolchain vendor.
         Signature::new("Delphi/Borland", Kind::Compiler, vec![contains("Embarcadero Delphi")])
             .with_note("Embarcadero banner"),
