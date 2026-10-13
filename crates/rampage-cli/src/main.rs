@@ -21,9 +21,14 @@ struct Cli {
     /// Architecture slice to load from a universal binary (x86, x86_64, aarch64, arm, mips, powerpc, riscv64, ...)
     #[arg(long, global = true, value_parser = parse_arch)]
     arch: Option<Arch>,
-    /// Open the executable embedded at this file offset (hex 0x... or decimal), such as one `carve` found
+    /// Open the executable embedded at this file offset (hex 0x... or decimal), such as one `carve` found; for a
+    /// universal Mach-O, the offset of its fat header, with --arch for the slice. Offset 0 alone opens the file
     #[arg(long, global = true, value_parser = parse_offset)]
     image_offset: Option<u64>,
+    /// With --image-offset, the embedded image's length in bytes (hex 0x... or decimal); defaults to the extent its
+    /// header tables give, so bytes after that (an overlay) are left out
+    #[arg(long, global = true, value_parser = parse_offset, requires = "image_offset")]
+    image_length: Option<u64>,
     /// A data pack directory (holding rampage-pack.toml) layered over the bundled heuristic databases; repeatable,
     /// earlier packs take precedence. Directories in RAMPAGE_PACKS (a path list) load after these
     #[arg(long = "pack", global = true, value_name = "DIR")]
@@ -367,7 +372,7 @@ fn parse_offset(text: &str) -> Result<u64, String> {
         Some(hex) => u64::from_str_radix(hex, 16),
         None => text.parse(),
     };
-    parsed.map_err(|error| format!("not a file offset: {error}"))
+    parsed.map_err(|error| format!("not a file offset or length: {error}"))
 }
 
 fn parse_dotnet_list(text: &str) -> Result<rampage_api::DotNetList, String> {
@@ -384,6 +389,12 @@ fn parse_token(text: &str) -> Result<u32, String> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if cli.image_offset.is_some()
+        && let Some(command) = without_one_image(&cli.command)
+    {
+        eprintln!("rampage: --image-offset does not apply to {command}, which does not open one embedded image");
+        return ExitCode::FAILURE;
+    }
     let packs = Arc::new(Packs::load_with_env(&cli.packs));
     if !matches!(cli.command, Command::Packs { .. }) {
         for problem in packs.problems() {
@@ -393,7 +404,8 @@ fn main() -> ExitCode {
     if let Command::Mcp { all_tools } = cli.command {
         return serve_mcp(all_tools, packs);
     }
-    let options = Options { json: cli.json, arch: cli.arch, offset: cli.image_offset, packs };
+    let image = cli.image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, cli.image_length));
+    let options = Options { json: cli.json, arch: cli.arch, image, packs };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match cli.command {
         Command::Info { file } => commands::info(&mut out, &file, &options),
@@ -503,6 +515,22 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The name of a command that opens no image, or more than one, so that --image-offset would be ignored or apply
+/// to only one of its files.
+fn without_one_image(command: &Command) -> Option<&'static str> {
+    Some(match command {
+        Command::Carve { .. } => "carve",
+        Command::Inventory { .. } => "inventory",
+        Command::Packs { .. } => "packs",
+        Command::Mcp { .. } => "mcp (pass image_offset to each tool call instead)",
+        Command::Correlate { .. } => "correlate",
+        Command::CompareRuntime { .. } => "compare-runtime",
+        Command::ComparePointers { .. } => "compare-pointers",
+        Command::Report { workflow: report::Workflow::DiffBuilds, .. } => "report diff-builds",
+        _ => return None,
+    })
 }
 
 fn serve_mcp(all_tools: bool, packs: Arc<Packs>) -> ExitCode {

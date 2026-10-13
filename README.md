@@ -136,18 +136,22 @@ rampage mcp [--all-tools]                    # MCP server on stdin/stdout (core 
 # global flags
 --json                 machine-readable output for every command
 --arch x86_64|aarch64|arm|...  pick a slice from a universal Mach-O
---image-offset 0x...   open the ELF/PE/Mach-O embedded at this file offset (e.g. a carve candidate) in place
+--image-offset 0x...   open the ELF/PE/Mach-O embedded at this file offset (e.g. a carve candidate) in place; for
+                       a universal Mach-O, its fat header's offset with --arch. Rejected by commands that open
+                       no image or two (carve, inventory, packs, mcp, correlate, compare-*, report diff-builds)
+--image-length N       with --image-offset, the image's length: bytes past its header extent become its overlay
 ```
 
 Addresses accept `0x` hex, decimal, symbol and export names, or `sub_<hex>`. In JSON output every address is
 a `"0x…"` string, because JSON numbers lose precision above 2^53 in common consumers.
 
 Names, comments and typed annotations are saved beside ordinary binaries in `<file>.rampage`
-(`<file>.<arch>.rampage` for a slice of a universal binary, `<file>@0x<offset>.rampage` for an image opened with
-`--image-offset`, or `image_offset` over MCP): an append-only JSON Lines log of edits, each
+(`<file>.<arch>.rampage` for a slice of a universal binary; `<file>@0x<offset>[+0x<length>].rampage-image` for an
+image opened with `--image-offset`, or `image_offset` over MCP): an append-only JSON Lines log of edits, each
 recording the value it replaced, so undo is just another edit and the file is a full history. A batch is written
 under a header line and replayed only once all of its edits are present. Several clients can share it: the UI
-picks up names an agent saves through MCP within a second.
+picks up names an agent saves through MCP within a second. The UI opens whole files and universal-binary slices,
+not embedded images, so an embedded image's annotations are shared by the CLI and MCP only.
 Snapshot annotations use a capture-identity log instead, sharing edits only across equal analysis identities
 in the same directory by default. Legacy unscoped snapshot logs are not automatically loaded or migrated;
 see [runtime snapshots](docs/runtime-snapshots.md) for persistence and explicit cross-directory reuse.

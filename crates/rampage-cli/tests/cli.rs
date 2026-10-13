@@ -505,7 +505,7 @@ fn image_offset_opens_an_embedded_executable_with_its_own_annotations() {
     assert_eq!(embedded, json(&["--json", "funcs"], "hello-x64-dyn.elf"));
 
     rampage(&["rename", path_text, "main", "embedded_main", "--image-offset", &offset]).success();
-    assert!(directory.join(format!("firmware.bin@{offset}.rampage")).exists());
+    assert!(directory.join(format!("firmware.bin@{offset}.rampage-image")).exists());
     rampage(&["--image-offset", &offset, "annotations", path_text])
         .success()
         .stdout(predicates::str::contains("embedded_main"));
@@ -528,5 +528,68 @@ fn image_offset_opens_an_embedded_executable_with_its_own_annotations() {
         .failure()
         .stderr(predicates::str::contains("past the end of the file"));
     rampage(&["--image-offset", "nope", "info", path_text]).failure();
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn image_offset_is_rejected_by_commands_that_do_not_open_one_image() {
+    let file = fixture("hello-x64.elf");
+    let file = file.to_str().unwrap();
+    let commands: [&[&str]; 8] = [
+        &["carve", file],
+        &["inventory", file],
+        &["packs", "list"],
+        &["mcp"],
+        &["correlate", file, "--original", file, "--module", "m", "--at", "0x0"],
+        &["compare-runtime", file, "--original", file, "--module", "m", "--range", "0x0-0x1"],
+        &["compare-pointers", file, "--other", file, "--at", "0x0", "--other-at", "0x0"],
+        &["report", "diff-builds", file, "--other", file],
+    ];
+    for command in commands {
+        let mut rampage = assert_cmd::Command::cargo_bin("rampage").unwrap();
+        rampage
+            .args(["--image-offset", "0x10"])
+            .args(command)
+            .write_stdin("")
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("--image-offset does not apply to"));
+    }
+}
+
+#[test]
+fn image_length_keeps_an_embedded_overlay_the_header_extent_leaves_out() {
+    let directory = std::env::temp_dir().join(format!("rampage-cli-embedded-length-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let malformed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/malformed/overlay.exe");
+    let image = std::fs::read(malformed).unwrap();
+    let mut file = b"junk!".repeat(200);
+    file.push(b'!');
+    file.extend(&image);
+    let path = directory.join("installer.bin");
+    std::fs::write(&path, &file).unwrap();
+    let path_text = path.to_str().unwrap();
+    let length = image.len().to_string();
+    let triage = |args: &[&str]| -> Value {
+        let mut command = assert_cmd::Command::cargo_bin("rampage").unwrap();
+        let output = command.args(["--json", "--image-offset", "1001"]).args(args).args(["triage", path_text]);
+        serde_json::from_slice(&output.assert().success().get_output().stdout).unwrap()
+    };
+
+    let cut = triage(&[]);
+    assert!(cut["overlay"].is_null(), "{cut}");
+    let trailing = cut["embedded"]["trailing"].as_u64().unwrap();
+    assert!(trailing > 0);
+    let hints = cut["hints"].to_string();
+    assert!(hints.contains(&format!("{trailing} bytes follow the image in the outer file")), "{hints}");
+
+    let whole = triage(&["--image-length", &length]);
+    assert_eq!(whole["overlay"]["size"].as_u64(), Some(trailing), "{whole}");
+    assert_eq!(whole["embedded"]["trailing"], 0);
+    assert!(whole["hints"].to_string().contains("bytes of overlay data"));
+
+    let mut command = assert_cmd::Command::cargo_bin("rampage").unwrap();
+    command.args(["--image-length", &length, "triage", path_text]).assert().failure();
     std::fs::remove_dir_all(&directory).unwrap();
 }

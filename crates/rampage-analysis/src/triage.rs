@@ -183,6 +183,14 @@ fn hints(binary: &Binary, triage: &Triage) -> Vec<String> {
             "embedded image at offset {:#x} of a {}-byte file: the image hashes cover only the image",
             embedded.offset, embedded.file_size
         ));
+        if embedded.trailing > 0 {
+            hints.push(format!(
+                "{} bytes follow the image in the outer file and were not examined; an image length of {:#x} \
+                 (--image-length, or image_length over MCP) takes them in as overlay",
+                embedded.trailing,
+                embedded.size + embedded.trailing
+            ));
+        }
     }
     for section in &triage.sections {
         let executable = section.perms.contains('x') || section.kind == SectionKind::Code;

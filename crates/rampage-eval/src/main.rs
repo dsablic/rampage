@@ -353,3 +353,47 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
     println!("{}", serde_json::to_string_pretty(&evaluation).map_err(|error| error.to_string())?);
     Ok(if evaluation.passes_gate() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
+
+#[cfg(test)]
+mod tests {
+    use rampage_eval::{DetectedTool, score_tools};
+
+    use super::*;
+
+    const TRUTH: &str = r#"{
+        "toolchains": {
+            "cc": {
+                "how": "cc hello.c",
+                "expected": [
+                    {"kind": "compiler", "name": "GCC", "why": "cc is GCC"},
+                    {"kind": "linker", "name": "GNU ld", "why": "GCC links with GNU ld"}
+                ],
+                "absent": ["packer"]
+            }
+        },
+        "binaries": {"a.elf": {"toolchain": "cc", "built": "build.sh"}},
+        "excluded": {}
+    }"#;
+
+    fn tool(kind: &str, name: &str) -> DetectedTool {
+        DetectedTool { kind: kind.to_owned(), name: name.to_owned(), evidence: vec![format!("{name} evidence")] }
+    }
+
+    #[test]
+    fn the_toolid_gate_bounds_spurious_tools_by_precision_and_missed_ones_by_recall() {
+        let truth = ToolTruth::from_json(TRUTH).unwrap();
+        let detections = BTreeMap::from([(
+            "a.elf".to_owned(),
+            vec![tool("compiler", "GCC"), tool("linker", "GNU ld"), tool("compiler", "MinGW")],
+        )]);
+        let report = score_tools(&detections, &truth);
+        assert_eq!((report.correct, report.missed, report.spurious), (2, 0, 1));
+        assert!(Family::Toolid.gate(1.0, 0.6).check(&report).is_empty(), "spurious tools only lower precision");
+        assert_eq!(Family::Toolid.gate(0.0, 1.0).check(&report), ["precision 0.6667 below baseline 1.0000"]);
+
+        let partial = BTreeMap::from([("a.elf".to_owned(), vec![tool("compiler", "GCC")])]);
+        let report = score_tools(&partial, &truth);
+        assert!(Family::Toolid.gate(0.5, 1.0).check(&report).is_empty());
+        assert_eq!(Family::Toolid.gate(0.75, 0.0).check(&report), ["recall 0.5000 below baseline 0.7500"]);
+    }
+}

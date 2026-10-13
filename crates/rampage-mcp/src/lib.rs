@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use rampage_api::tools::{self, FileTool, Group, Tool};
 use rampage_api::{Packs, Project, Session};
 use rampage_arch::Arch;
+use rampage_loaders::ImageAt;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig,
@@ -125,8 +126,17 @@ fn with_binary_arguments(schema: &Value) -> Map<String, Value> {
             json!({
                 "type": ["string", "integer", "null"],
                 "description": "Open the ELF, PE or Mach-O image embedded at this file offset (hex \"0x...\" or \
-                                decimal), such as a carve candidate's offset. Its annotations are kept apart from \
-                                the outer file's."
+                                decimal), such as a carve candidate's offset; for a universal Mach-O, its fat \
+                                header's offset, with arch for the slice. Its annotations are kept apart from the \
+                                outer file's; offset 0 without image_length is the file itself."
+            }),
+        );
+        properties.insert(
+            "image_length".to_owned(),
+            json!({
+                "type": ["string", "integer", "null"],
+                "description": "With image_offset, the embedded image's length in bytes (hex or decimal). Defaults \
+                                to the extent its header tables give, which leaves out bytes after it (an overlay)."
             }),
         );
     }
@@ -269,23 +279,27 @@ impl RampageServer {
         let path = arguments.remove("path");
         let arch = arguments.remove("arch");
         let image_offset = arguments.remove("image_offset");
+        let image_length = arguments.remove("image_length");
         let outcome = (|| -> Result<String, String> {
             let tool =
                 self.tools.iter().find(|tool| tool.name == name).ok_or_else(|| format!("unknown tool {name}"))?;
             let path = path.as_ref().and_then(Value::as_str).ok_or("`path` is required")?;
             let arch = arch.as_ref().and_then(Value::as_str).map(str::parse::<Arch>).transpose()?;
-            let offset = image_offset.as_ref().map(file_offset).transpose()?.flatten();
+            let offset = image_offset.as_ref().map(|value| file_offset("image_offset", value)).transpose()?.flatten();
+            let length = image_length.as_ref().map(|value| file_offset("image_length", value)).transpose()?.flatten();
+            let image = match (offset, length) {
+                (Some(offset), length) => Some(ImageAt::new(offset, length)),
+                (None, Some(_)) => return Err("`image_length` needs `image_offset`".to_owned()),
+                (None, None) => None,
+            };
             let project = if tool.reads_annotations {
                 let project =
-                    self.session.open_at(&PathBuf::from(path), arch, offset).map_err(|error| error_text(&error))?;
+                    self.session.open_at(&PathBuf::from(path), arch, image).map_err(|error| error_text(&error))?;
                 // Other clients (the UI, the CLI) may have saved names since the last call.
                 project.refresh_annotations().map_err(|error| error_text(&error))?;
                 project
             } else {
-                let binary = match offset {
-                    Some(offset) => rampage_loaders::Binary::open_at_with(path, offset, None, arch),
-                    None => rampage_loaders::Binary::open_with(path, arch),
-                };
+                let binary = rampage_loaders::Binary::open_image(path, image, arch);
                 let project = Project::new(binary.map_err(|error| error_text(&error))?);
                 project.set_packs(Arc::clone(&self.packs));
                 Arc::new(project)
@@ -302,9 +316,9 @@ impl RampageServer {
     }
 }
 
-/// An `image_offset` argument: a hex string with `0x`, a decimal string, or an integer.
-fn file_offset(value: &Value) -> Result<Option<u64>, String> {
-    let invalid = || format!("`image_offset` must be a file offset such as \"0x1000\", not {value}");
+/// An `image_offset` or `image_length` argument: a hex string with `0x`, a decimal string, or an integer.
+fn file_offset(name: &str, value: &Value) -> Result<Option<u64>, String> {
+    let invalid = || format!("`{name}` must be a byte count or file offset such as \"0x1000\", not {value}");
     match value {
         Value::Null => Ok(None),
         Value::Number(number) => number.as_u64().map(Some).ok_or_else(invalid),

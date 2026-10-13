@@ -12,7 +12,7 @@ mod warnings;
 
 pub use details::{Details, ElfDetails, MachODetails, Overlay, PeDetails, RichEntry};
 pub use entropy::shannon_entropy;
-pub use load::{Binary, Embedded, LoadError};
+pub use load::{Binary, Embedded, ImageAt, LoadError};
 pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
 pub mod debug;
 pub mod dotnet;
