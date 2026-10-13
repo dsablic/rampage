@@ -27,7 +27,7 @@ fn triage_report_renders_text_and_json() {
     report(&["triage-report", &exe])
         .success()
         .stdout(predicates::str::contains("== Toolchain"))
-        .stdout(predicates::str::contains("MinGW/GCC"))
+        .stdout(predicates::str::contains("MinGW-w64"))
         .stdout(predicates::str::contains("limitations:"));
     let value = json(&["triage-report", &exe, "--limit", "1"]);
     assert_eq!(value["workflow"], "triage_report");

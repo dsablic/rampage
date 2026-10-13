@@ -53,11 +53,11 @@ impl Drop for Scratch {
 
 #[test]
 fn detect_labels_kind_and_confidence_as_the_json_does() {
-    rampage(&["detect"], "hello-x64.exe").success().stdout(contains("[compiler] MinGW/GCC (strong): "));
+    rampage(&["detect"], "hello-x64.exe").success().stdout(contains("[runtime] MinGW-w64 (strong): "));
     let detections = json(&["--json", "detect"], "hello-x64.exe");
     let mingw =
-        detections["detections"].as_array().unwrap().iter().find(|detection| detection["name"] == "MinGW/GCC").unwrap();
-    assert_eq!((mingw["kind"].as_str(), mingw["confidence"].as_str()), (Some("compiler"), Some("strong")));
+        detections["detections"].as_array().unwrap().iter().find(|detection| detection["name"] == "MinGW-w64").unwrap();
+    assert_eq!((mingw["kind"].as_str(), mingw["confidence"].as_str()), (Some("runtime"), Some("strong")));
 }
 
 #[test]

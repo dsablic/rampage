@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use aho_corasick::AhoCorasick;
-use rampage_loaders::{Binary, shannon_entropy};
+use rampage_loaders::{Binary, Details, shannon_entropy};
 
 use crate::model::{Condition, Confidence, Detection, Signature, SignatureDb};
 use crate::pattern::BytePattern;
@@ -26,6 +26,10 @@ pub(crate) trait Image {
     fn import_libraries(&self) -> Vec<&str>;
     /// Whether any imported function matches `name` (compared case-insensitively).
     fn imports_function(&self, name: &str) -> bool;
+    /// The first symbol whose name satisfies `test`.
+    fn find_symbol(&self, test: &dyn Fn(&str) -> bool) -> Option<&str>;
+    /// The Mach-O build-version tools, as (tool, version) pairs; empty for other formats.
+    fn build_tools(&self) -> Vec<(&str, &str)>;
     /// The overlay's size in bytes, when the image has one.
     fn overlay_size(&self) -> Option<u64>;
 }
@@ -181,6 +185,17 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
             imported_library(image, versioned).map(|name| format!("imports from versioned runtime {name}"))
         }
         Condition::ImportFunction(name) => image.imports_function(name).then(|| format!("imports function {name}")),
+        Condition::BuildTool(wanted) => image
+            .build_tools()
+            .into_iter()
+            .find(|(tool, _)| tool == wanted)
+            .map(|(tool, version)| format!("LC_BUILD_VERSION records {tool} {version}")),
+        Condition::Symbol(name) => {
+            image.find_symbol(&|symbol| symbol == name).map(|_| format!("symbol {name} present"))
+        }
+        Condition::SymbolPrefix(prefix) => image
+            .find_symbol(&|symbol| symbol.len() > prefix.len() && symbol.starts_with(prefix.as_str()))
+            .map(|symbol| format!("symbol {symbol} (prefix {prefix})")),
         Condition::OverlayPresent => image.overlay_size().map(|size| format!("{size} bytes of overlay")),
         Condition::MinImageEntropy(min) => {
             let entropy = shannon_entropy(image.image_bytes());
@@ -269,6 +284,19 @@ impl Image for Binary {
         self.imports.iter().any(|import| import.name.eq_ignore_ascii_case(name))
     }
 
+    fn find_symbol(&self, test: &dyn Fn(&str) -> bool) -> Option<&str> {
+        self.symbols.iter().map(|symbol| symbol.name.as_str()).find(|name| test(name))
+    }
+
+    fn build_tools(&self) -> Vec<(&str, &str)> {
+        match &self.details {
+            Details::MachO(macho) => {
+                macho.build_tools.iter().map(|entry| (entry.tool.as_str(), entry.version.as_str())).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn overlay_size(&self) -> Option<u64> {
         self.overlay.map(|overlay| overlay.size)
     }
@@ -288,6 +316,8 @@ mod tests {
         sections: Vec<(String, Vec<u8>)>,
         libraries: Vec<String>,
         functions: Vec<String>,
+        symbols: Vec<String>,
+        tools: Vec<(String, String)>,
         overlay: Option<u64>,
     }
 
@@ -313,6 +343,12 @@ mod tests {
         }
         fn imports_function(&self, name: &str) -> bool {
             self.functions.iter().any(|f| f.eq_ignore_ascii_case(name))
+        }
+        fn find_symbol(&self, test: &dyn Fn(&str) -> bool) -> Option<&str> {
+            self.symbols.iter().map(String::as_str).find(|name| test(name))
+        }
+        fn build_tools(&self) -> Vec<(&str, &str)> {
+            self.tools.iter().map(|(tool, version)| (tool.as_str(), version.as_str())).collect()
         }
         fn overlay_size(&self) -> Option<u64> {
             self.overlay
@@ -520,6 +556,51 @@ mod tests {
         assert_eq!(found("Clang/LLVM"), Some(Confidence::Strong));
         assert_eq!(found("mold"), Some(Confidence::Strong));
         assert_eq!(found("GNU ld"), None);
+    }
+
+    #[test]
+    fn a_gcc_producer_in_pe_rdata_is_tentative_gcc_and_the_crt_banner_is_a_runtime() {
+        let rdata = b"GCC: (GNU) 13.2.0\0Mingw-w64 runtime failure:\n\0";
+        let image = Fake { image: rdata.to_vec(), ..Fake::default() }.with_section(".rdata", rdata);
+        let detections = identify_image(&image, &SignatureDb::bundled());
+        let found = |name: &str| detections.iter().find(|d| d.name == name).map(|d| (d.kind, d.confidence));
+        assert_eq!(found("GCC"), Some((Kind::Compiler, Confidence::Tentative)));
+        assert_eq!(found("MinGW-w64"), Some((Kind::Runtime, Confidence::Strong)));
+        // The banner alone says nothing about the compiler.
+        let banner = b"Mingw-w64 runtime failure:\n\0";
+        let clang = Fake { image: banner.to_vec(), ..Fake::default() }.with_section(".rdata", banner);
+        let detections = identify_image(&clang, &SignatureDb::bundled());
+        assert!(detections.iter().all(|d| d.kind == Kind::Runtime), "{detections:?}");
+        // An MSVC image has neither.
+        let msvc = Fake { libraries: vec!["VCRUNTIME140.dll".to_owned()], ..Fake::default() };
+        assert!(!identify_image(&msvc, &SignatureDb::bundled()).iter().any(|d| d.kind == Kind::Runtime));
+    }
+
+    #[test]
+    fn musl_needs_both_tls_symbols_or_its_loader() {
+        let db = SignatureDb::bundled();
+        let musl = |image: &Fake| identify_image(image, &db).into_iter().find(|d| d.name == "musl");
+        let symbols =
+            |names: &[&str]| Fake { symbols: names.iter().map(|&n| n.to_owned()).collect(), ..Fake::default() };
+        let both = musl(&symbols(&["main", "__init_tp", "__copy_tls"])).expect("musl from symbols");
+        assert_eq!(both.evidence, ["symbol __init_tp present", "symbol __copy_tls present"]);
+        assert_eq!(both.confidence, Confidence::Strong);
+        assert!(musl(&symbols(&["__init_tp"])).is_none(), "one symbol could be anyone's");
+        let dynamic = Fake::default().with_section(".interp", b"/lib/ld-musl-x86_64.so.1\0");
+        assert_eq!(musl(&dynamic).map(|d| d.kind), Some(Kind::Runtime));
+        let glibc = Fake::default().with_section(".interp", b"/lib64/ld-linux-x86-64.so.2\0");
+        assert!(musl(&glibc).is_none());
+    }
+
+    #[test]
+    fn a_symbol_prefix_needs_a_name_that_goes_on_past_it() {
+        let sig = Signature::new("Zig", Kind::Compiler, vec![Condition::SymbolPrefix("compiler_rt.".to_owned())]);
+        let symbols =
+            |names: &[&str]| Fake { symbols: names.iter().map(|&n| n.to_owned()).collect(), ..Fake::default() };
+        let hit = evaluate(&symbols(&["main", "compiler_rt.memcpy.memcpyFast"]), &sig).expect("prefix match");
+        assert_eq!(hit.evidence, ["symbol compiler_rt.memcpy.memcpyFast (prefix compiler_rt.)"]);
+        assert_eq!(hit.confidence, Confidence::Strong);
+        assert!(evaluate(&symbols(&["compiler_rt.", "compiler_rt_init", "__udivti3"]), &sig).is_none());
     }
 
     #[test]

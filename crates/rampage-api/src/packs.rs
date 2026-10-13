@@ -720,7 +720,8 @@ fn builtin() -> PackInfo {
         })
         .collect();
     let tools = rampage_detect::SignatureDb::bundled().signatures.len();
-    let detail = format!("{tools} producing-tool signatures (packers, compilers, protectors, installers, linkers)");
+    let detail =
+        format!("{tools} producing-tool signatures (packers, compilers, protectors, installers, linkers, runtimes)");
     contents.push(loaded("detect", "bundled:tools".to_owned(), None, detail));
     let constants = rampage_constants::ConstantDb::bundled().signatures().len();
     contents.push(loaded("constants", "bundled:crypto".to_owned(), None, format!("{constants} crypto constants")));

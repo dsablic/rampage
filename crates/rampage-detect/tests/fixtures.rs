@@ -36,11 +36,125 @@ fn clang_static_elf_reports_clang_and_lld() {
     assert!(named(&detections, "LLD"), "expected LLD linker in {detections:?}");
 }
 
+fn find<'a>(detections: &'a [rampage_detect::Detection], name: &str) -> Option<&'a rampage_detect::Detection> {
+    detections.iter().find(|d| d.name == name)
+}
+
 #[test]
-fn mingw_pe_is_detected() {
-    // hello-x64.exe is built with MinGW-w64; its runtime banner is embedded in read-only data.
+fn mingw_w64_crt_is_a_runtime_not_a_gcc_compiler() {
+    // hello-x64.exe is `zig cc -target x86_64-windows-gnu`: Clang against the MinGW-w64 CRT, whose runtime-failure
+    // banner sits in read-only data. That banner names the C runtime; nothing GCC-specific is in the image.
     let detections = detect("hello-x64.exe");
-    assert!(named(&detections, "MinGW/GCC"), "expected MinGW/GCC in {detections:?}");
+    let mingw = find(&detections, "MinGW-w64").expect("MinGW-w64 runtime");
+    assert_eq!((mingw.kind, mingw.confidence), (Kind::Runtime, Confidence::Strong));
+    assert!(!named(&detections, "GCC"), "no GCC producer string in a Clang-built PE: {detections:?}");
+    assert!(!detections.iter().any(|d| d.kind == Kind::Compiler && d.name.contains("MinGW")), "{detections:?}");
+}
+
+#[test]
+fn lld_link_is_named_by_its_codeview_build_id_record_when_one_is_present() {
+    let detections = detect("hello-x64.exe");
+    let lld = find(&detections, "LLD").expect("LLD from the debug directory");
+    assert_eq!((lld.kind, lld.confidence), (Kind::Linker, Confidence::Strong));
+    // Microsoft's link.exe writes an RSDS record too, without lld's brand.
+    assert!(!named(&detect("Microsoft.Bcl.HashCode.dll"), "LLD"));
+    // persist-x64.exe is linked with -s, which drops the debug directory: nothing is left to key on.
+    let stripped = Binary::open(fixture("../../../crates/rampage-api/tests/fixtures/persist-x64.exe")).unwrap();
+    assert!(!named(&identify(&stripped, &SignatureDb::bundled()), "LLD"));
+}
+
+#[test]
+fn apple_ld_is_named_by_the_build_version_tool_it_records() {
+    for name in ["hello-x64.macho", "hello-arm64.macho", "hello-x64.dylib", "hello-x64-stripped.macho"] {
+        let detections = detect(name);
+        let ld = find(&detections, "Apple ld").unwrap_or_else(|| panic!("{name}: {detections:?}"));
+        assert_eq!((ld.kind, ld.confidence), (Kind::Linker, Confidence::Strong));
+        assert!(ld.evidence[0].starts_with("LC_BUILD_VERSION records ld "), "{:?}", ld.evidence);
+        assert!(!named(&detections, "LLD"), "{name}");
+    }
+    // ld64.lld records itself as tool 4; an object, never linked, records no tool; ELF and PE have none.
+    assert!(named(&detect("debug-x64.macho"), "LLD"));
+    assert!(!named(&detect("debug-x64.macho"), "Apple ld"));
+    for name in ["hello-x64.o", "hello-x64.elf", "hello-x64.exe"] {
+        assert!(!named(&detect(name), "Apple ld"), "{name}");
+    }
+}
+
+fn api_fixture(name: &str) -> Vec<rampage_detect::Detection> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rampage-api/tests/fixtures").join(name);
+    identify(&Binary::open(path).expect("fixture loads"), &SignatureDb::bundled())
+}
+
+#[test]
+fn zig_is_named_by_its_compiler_rt_symbols_or_tentatively_by_its_libc_tree() {
+    for name in ["hello-x64.elf", "hello-thumb.elf", "hello-ppc.elf", "hello-arm.elf"] {
+        let detections = detect(name);
+        let zig = find(&detections, "Zig").unwrap_or_else(|| panic!("{name}: {detections:?}"));
+        assert_eq!((zig.kind, zig.confidence), (Kind::Compiler, Confidence::Strong), "{name}");
+        assert!(zig.evidence.iter().any(|line| line.contains("(prefix compiler_rt.)")), "{:?}", zig.evidence);
+    }
+    // net-client-x64.elf keeps debug info for the glibc start files zig compiled, but no compiler_rt symbol.
+    let debug = api_fixture("net-client-x64.elf");
+    let zig = find(&debug, "Zig").expect("Zig from the libc source path");
+    assert_eq!(zig.confidence, Confidence::Tentative);
+    // Its stripped twin keeps neither: no general marker is left, so Zig stays unreported.
+    assert!(!named(&api_fixture("net-client-x64-stripped.elf"), "Zig"));
+}
+
+#[test]
+fn zig_is_not_reported_for_other_toolchains_or_unlinked_objects() {
+    for name in ["hello-go-x64.elf", "hello-x64.macho", "hello-x64.o", "hello-x64-elf.o", "Microsoft.Bcl.HashCode.dll"]
+    {
+        assert!(!named(&detect(name), "Zig"), "{name}");
+    }
+}
+
+#[test]
+fn mingw_w64_runtime_is_not_reported_on_msvc_elf_or_macho_fixtures() {
+    for name in ["Microsoft.Bcl.HashCode.dll", "hello-x64.elf", "hello-x64-dyn.elf", "hello-x64.macho"] {
+        let detections = detect(name);
+        assert!(!named(&detections, "MinGW-w64"), "{name}: {detections:?}");
+    }
+}
+
+fn runtimes(detections: &[rampage_detect::Detection]) -> Vec<&str> {
+    detections.iter().filter(|d| d.kind == Kind::Runtime).map(|d| d.name.as_str()).collect()
+}
+
+#[test]
+fn dynamic_glibc_programs_report_glibc_from_their_version_needs() {
+    // zig cc -target *-linux-gnu: dynamically linked against glibc, so .dynstr names GLIBC_2.x and libc.so.6.
+    for name in ["hello-x64-dyn.elf", "hello-arm64.elf", "hello-mips.elf", "hello-s390x.elf"] {
+        let detections = detect(name);
+        let glibc = find(&detections, "glibc").unwrap_or_else(|| panic!("{name}: {detections:?}"));
+        assert_eq!((glibc.kind, glibc.confidence), (Kind::Runtime, Confidence::Strong));
+        assert!(glibc.evidence.iter().any(|line| line.contains("GLIBC_2.")), "{name}: {:?}", glibc.evidence);
+        assert_eq!(runtimes(&detections), ["glibc"], "{name}");
+    }
+}
+
+#[test]
+fn static_musl_programs_report_musl_with_or_without_symbols() {
+    // hello-x64.elf keeps its symbol table; musl-static-x86_64.elf is stripped, leaving musl's strerror table.
+    let symbols = detect("hello-x64.elf");
+    let musl = find(&symbols, "musl").expect("musl from symbols");
+    assert!(musl.evidence.contains(&"symbol __init_tp present".to_owned()), "{:?}", musl.evidence);
+    let stripped = detect("musl-static-x86_64.elf");
+    let musl = find(&stripped, "musl").expect("musl from strerror");
+    assert_eq!((musl.kind, musl.confidence), (Kind::Runtime, Confidence::Strong));
+    assert!(musl.evidence[0].contains("No error information"), "{:?}", musl.evidence);
+    for detections in [&symbols, &stripped] {
+        assert_eq!(runtimes(detections), ["musl"]);
+    }
+}
+
+#[test]
+fn no_libc_runtime_is_claimed_without_libc_evidence() {
+    // Go links no libc; objects are not linked; Mach-O programs use libSystem, which no signature names.
+    for name in ["hello-go-x64.elf", "hello-x64-elf.o", "hello-x64.macho", "Microsoft.Bcl.HashCode.dll"] {
+        let detections = detect(name);
+        assert!(runtimes(&detections).is_empty(), "{name}: {detections:?}");
+    }
 }
 
 #[test]

@@ -77,6 +77,19 @@ pub struct MachODetails {
     pub code_signature: bool,
     /// LC_ENCRYPTION_INFO with a nonzero cryptid (App Store encryption).
     pub encrypted: bool,
+    /// The tools LC_BUILD_VERSION records (the linker adds itself), at most [`MAX_BUILD_TOOLS`].
+    pub build_tools: Vec<BuildTool>,
+}
+
+/// More tool entries than any toolchain writes; a hostile count cannot grow the details past this.
+pub const MAX_BUILD_TOOLS: usize = 16;
+
+/// One LC_BUILD_VERSION tool entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BuildTool {
+    /// clang, swift, ld, lld or metal; any other id as `tool <n>`.
+    pub tool: String,
+    pub version: String,
 }
 
 /// Bytes past the last byte the image's headers, segments and sections account for.
@@ -485,16 +498,27 @@ fn macho_details(parsed: &object::File) -> MachODetails {
         uuid: parsed.mach_uuid().ok().flatten().map(|uuid| rampage_arch::hex::bytes(&uuid)),
         code_signature: false,
         encrypted: false,
+        build_tools: Vec::new(),
     };
     let Some((mut commands, endian)) = macho::load_commands(parsed) else { return details };
     while let Ok(Some(command)) = commands.next() {
         let string = |name| command.string(endian, name).ok().map(|bytes| String::from_utf8_lossy(bytes).into_owned());
         match command.variant() {
             Ok(LoadCommandVariant::Rpath(rpath)) => details.rpaths.extend(string(rpath.path)),
-            Ok(LoadCommandVariant::BuildVersion(build, _)) => {
+            Ok(LoadCommandVariant::BuildVersion(build, data)) => {
                 details.platform = Some(platform(build.platform.get(endian).0));
                 details.min_os = Some(version(build.minos.get(endian).0));
                 details.sdk = Some(version(build.sdk.get(endian).0));
+                // A count past the command's own bytes is refused whole rather than read beyond it.
+                let tools = build.tools(endian, data).unwrap_or_default();
+                details.build_tools = tools
+                    .iter()
+                    .take(MAX_BUILD_TOOLS)
+                    .map(|entry| BuildTool {
+                        tool: build_tool(entry.tool.get(endian).0),
+                        version: version(entry.version.get(endian).0),
+                    })
+                    .collect();
             }
             Ok(LoadCommandVariant::VersionMin(minimum)) if details.min_os.is_none() => {
                 details.platform = Some(
@@ -516,6 +540,18 @@ fn macho_details(parsed: &object::File) -> MachODetails {
         }
     }
     details
+}
+
+/// `TOOL_*` from `<mach-o/loader.h>`; 4 (lld) is newer than the `object` crate's constants.
+fn build_tool(value: u32) -> String {
+    match value {
+        1 => "clang".to_owned(),
+        2 => "swift".to_owned(),
+        3 => "ld".to_owned(),
+        4 => "lld".to_owned(),
+        1024 => "metal".to_owned(),
+        other => format!("tool {other}"),
+    }
 }
 
 fn platform(value: u32) -> String {

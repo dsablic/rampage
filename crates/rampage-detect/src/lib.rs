@@ -1,17 +1,18 @@
-//! Packer, compiler, protector, installer and linker identification from heuristic signatures: the DIE/PeID
-//! niche. Given a loaded [`rampage_loaders::Binary`], [`identify`] reports which tools likely produced it, each
-//! with the evidence that fired and a confidence that is a signal, not a proof.
+//! Packer, compiler, protector, installer, linker and runtime identification from heuristic signatures: the
+//! DIE/PeID niche. Given a loaded [`rampage_loaders::Binary`], [`identify`] reports which tools likely produced it,
+//! each with the evidence that fired and a confidence that is a signal, not a proof.
 //!
 //! # What a signature is
 //!
-//! A [`Signature`] names one tool, carries a [`Kind`] (packer, compiler, protector, installer or linker), and
-//! holds a list of [`Condition`]s that must all hold (logical AND) for it to match. Conditions test:
+//! A [`Signature`] names one tool, carries a [`Kind`] (packer, compiler, protector, installer, linker or
+//! runtime), and holds a list of [`Condition`]s that must all hold (logical AND) for it to match. Conditions test:
 //!
 //! - an entry-point byte pattern (hex with `?` nibble and `??` byte wildcards; see [`BytePattern`]),
 //! - a required section name, or any of a set of names,
 //! - a byte needle contained in a section (or anywhere in the image), which covers toolchain banners and
 //!   unloaded sections such as `.comment`,
-//! - a required imported library or function,
+//! - a required imported library or function, or a symbol-table name,
+//! - a Mach-O `LC_BUILD_VERSION` tool entry (the linker that wrote the image),
 //! - the presence of an overlay,
 //! - a minimum image or section entropy.
 //!
@@ -20,8 +21,9 @@
 //! [`SignatureDb::bundled`] returns a starter database authored here from public knowledge (section layouts,
 //! embedded producer strings, import conventions), never copied from PeID's `userdb.txt`. It covers UPX, ASPack,
 //! MPRESS, PECompact, Petite, NsPack and FSG (packers); VMProtect, Themida/WinLicense and Enigma (protectors);
-//! Go, .NET, MSVC, MinGW/GCC, GCC, Clang/LLVM, Rust, Zig and Delphi/Borland (compilers); LLD, mold and GNU
-//! gold (linkers; GNU ld leaves no mark to key on); and NSIS and Inno Setup (installers).
+//! Go, .NET, MSVC, GCC, Clang/LLVM, Rust, Zig and Delphi/Borland (compilers); LLD, Apple ld, mold and GNU gold
+//! (linkers; GNU ld leaves no mark to key on); MinGW-w64, glibc and musl (runtimes); and NSIS and Inno Setup
+//! (installers).
 //!
 //! # User-supplied databases
 //!

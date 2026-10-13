@@ -16,6 +16,7 @@ pub(crate) fn bundled() -> SignatureDb {
     db.extend(protectors());
     db.extend(compilers());
     db.extend(linkers());
+    db.extend(runtimes());
     db.extend(installers());
     db
 }
@@ -24,6 +25,11 @@ pub(crate) fn bundled() -> SignatureDb {
 /// this file, caught by [`tests::bundled_patterns_parse`], never a runtime input.
 fn ep(pattern: &str) -> Condition {
     Condition::Entry { pattern: BytePattern::parse(pattern).expect("bundled pattern parses"), ep_only: true }
+}
+
+/// A byte pattern that may sit anywhere in the image, also a crate constant.
+fn anywhere(pattern: &str) -> Condition {
+    Condition::Entry { pattern: BytePattern::parse(pattern).expect("bundled pattern parses"), ep_only: false }
 }
 
 fn section(name: &str) -> Condition {
@@ -45,6 +51,10 @@ fn contains(needle: &str) -> Condition {
 
 fn section_contains(name: &str, needle: &str) -> Condition {
     Condition::SectionContains { section: Some(name.to_owned()), needle: needle.as_bytes().to_vec() }
+}
+
+fn symbol(name: &str) -> Condition {
+    Condition::Symbol(name.to_owned())
 }
 
 fn versioned_import(prefix: &str) -> Condition {
@@ -102,12 +112,15 @@ fn compilers() -> Vec<Signature> {
         Signature::new("MSVC", Kind::Compiler, vec![versioned_import("vcruntime")]).with_note("VCRUNTIME import"),
         Signature::new("MSVC", Kind::Compiler, vec![versioned_import("msvcr")]).with_note("MSVCR runtime import"),
         Signature::new("MSVC", Kind::Compiler, vec![versioned_import("msvcp")]).with_note("MSVCP C++ runtime import"),
-        // MinGW embeds its runtime-failure banner in read-only data.
-        Signature::new("MinGW/GCC", Kind::Compiler, vec![contains("Mingw-w64")]).with_note("Mingw-w64 banner"),
         // GCC and Clang stamp a producer string into .comment. "GCC:" alone is weak: glibc's crt1.o/crti.o and
         // libgcc's crtbegin.o carry it too, so Clang- and Rust-built glibc programs show it as well.
         Signature::new("GCC", Kind::Compiler, vec![section_contains(".comment", "GCC:")])
             .with_note(".comment GCC producer (also stamped by glibc/libgcc startup objects)")
+            .corroborating(),
+        // A PE has no .comment: GNU ld folds GCC's .rdata$zzz producer strings into .rdata. A GCC-built
+        // MinGW-w64 CRT brings its own, so a Clang build against that CRT shows them too.
+        Signature::new("GCC", Kind::Compiler, vec![section_contains(".rdata", "GCC: (")])
+            .with_note(".rdata GCC producer (also stamped by GCC-built MinGW-w64 CRT objects)")
             .corroborating(),
         Signature::new("Clang/LLVM", Kind::Compiler, vec![section_contains(".comment", "clang")])
             .with_note(".comment clang producer"),
@@ -116,6 +129,15 @@ fn compilers() -> Vec<Signature> {
             .with_note(".comment rustc producer"),
         Signature::new("Zig", Kind::Compiler, vec![section_contains(".comment", "zig")])
             .with_note(".comment zig producer"),
+        // Zig links its own compiler_rt, written in Zig, whose symbols carry Zig's module paths
+        // (compiler_rt.memcpy.memcpyFast); LLVM's and GCC's runtime libraries use bare C names. Needs symbols.
+        Signature::new("Zig", Kind::Compiler, vec![Condition::SymbolPrefix("compiler_rt.".to_owned())])
+            .with_note("Zig compiler_rt symbols"),
+        // Debug info naming the libc sources zig compiles from its own tree (lib/zig/libc/ where a package
+        // manager installs it; a release tarball's lib/libc/ is not matched). Only a path, so it corroborates.
+        Signature::new("Zig", Kind::Compiler, vec![contains("/lib/zig/libc/")])
+            .with_note("zig bundled libc source path in debug info")
+            .corroborating(),
         // Delphi/Borland name their code and data segments in upper case and tag the toolchain vendor.
         Signature::new("Delphi/Borland", Kind::Compiler, vec![contains("Embarcadero Delphi")])
             .with_note("Embarcadero banner"),
@@ -128,12 +150,53 @@ fn linkers() -> Vec<Signature> {
     vec![
         Signature::new("LLD", Kind::Linker, vec![section_contains(".comment", "LLD")])
             .with_note(".comment LLD linker tag"),
+        // lld-link brands the CodeView record of a build-id debug directory (RSDS, then a GUID whose second half
+        // is "LLD PDB."). An image linked without a debug directory (-s) has no such record.
+        Signature::new(
+            "LLD",
+            Kind::Linker,
+            vec![anywhere("52 53 44 53 ?? ?? ?? ?? ?? ?? ?? ?? 4C 4C 44 20 50 44 42 2E")],
+        )
+        .with_note("lld-link CodeView build-id record"),
+        // A Mach-O linker records itself as an LC_BUILD_VERSION tool: Apple's ld (ld64 and ld-prime) as tool 3,
+        // LLVM's ld64.lld as tool 4. Objects and LC_VERSION_MIN_* images carry no tool entry.
+        Signature::new("Apple ld", Kind::Linker, vec![Condition::BuildTool("ld".to_owned())])
+            .with_note("LC_BUILD_VERSION tool ld"),
+        Signature::new("LLD", Kind::Linker, vec![Condition::BuildTool("lld".to_owned())])
+            .with_note("LC_BUILD_VERSION tool lld"),
         // GNU ld (BFD) writes no tag at all. mold's tag reads "mold x.y (...; compatible with GNU ld)", so it
         // must be matched by its own name, not by "GNU ld".
         Signature::new("mold", Kind::Linker, vec![section_contains(".comment", "mold ")])
             .with_note(".comment mold linker tag"),
         Signature::new("GNU gold", Kind::Linker, vec![unique_section(&[".note.gnu.gold-version"])])
             .with_note("gold version note"),
+    ]
+}
+
+fn runtimes() -> Vec<Signature> {
+    vec![
+        // The MinGW-w64 CRT's runtime-failure banner. It names the C runtime, not the compiler: GCC and Clang
+        // (zig cc, llvm-mingw) both link it.
+        Signature::new("MinGW-w64", Kind::Runtime, vec![contains("Mingw-w64 runtime failure")])
+            .with_note("MinGW-w64 CRT runtime-failure banner"),
+        // Only glibc versions its symbols GLIBC_x.y, and only glibc's soname is libc.so.6 (musl's is libc.so,
+        // uClibc's libc.so.0, Bionic's libc.so); .dynstr holds the version needs and DT_NEEDED names.
+        Signature::new("glibc", Kind::Runtime, vec![section_contains(".dynstr", "GLIBC_2.")])
+            .with_note("GLIBC_2.x symbol-version need"),
+        Signature::new("glibc", Kind::Runtime, vec![section_contains(".dynstr", "libc.so.6")])
+            .with_note("libc.so.6 (glibc soname) needed"),
+        // The head of musl's strerror table (src/errno/__strerror.h); glibc and Bionic say "Success" for 0.
+        Signature::new(
+            "musl",
+            Kind::Runtime,
+            vec![contains("No error information\0Illegal byte sequence\0Domain error\0")],
+        )
+        .with_note("musl strerror message table"),
+        // musl's static TLS setup (src/env/__init_tls.c), linked into every static musl program.
+        Signature::new("musl", Kind::Runtime, vec![symbol("__init_tp"), symbol("__copy_tls")])
+            .with_note("musl TLS initialization symbols"),
+        Signature::new("musl", Kind::Runtime, vec![section_contains(".interp", "/ld-musl-")])
+            .with_note("musl dynamic loader interpreter"),
     ]
 }
 

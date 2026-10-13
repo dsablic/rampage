@@ -53,11 +53,11 @@ fn triage_report_on_a_mingw_pe_names_the_toolchain_and_imports() {
     assert_well_formed(&report);
     assert_eq!(report.workflow, "triage_report");
     let toolchain = section(&report, "Toolchain");
-    assert!(has_observation(toolchain, "MinGW/GCC"), "{:?}", observations(toolchain));
+    assert!(has_observation(toolchain, "MinGW-w64"), "{:?}", observations(toolchain));
     let imports = section(&report, "Imports by library");
     assert!(!imports.findings.is_empty());
     assert!(has_observation(imports, "api-ms-win-crt-runtime-l1-1-0.dll"), "{:?}", observations(imports));
-    assert!(report.summary.iter().any(|line| line.contains("MinGW/GCC")), "{:?}", report.summary);
+    assert!(report.summary.iter().any(|line| line.contains("MinGW-w64")), "{:?}", report.summary);
     assert!(report.next_steps.iter().any(|step| step.tool == "find_main"));
     // Shared-hash signature matches are reported as likely stubs, never as a confident identification.
     let functions = section(&report, "Functions");

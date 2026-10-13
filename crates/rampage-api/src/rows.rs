@@ -98,6 +98,7 @@ mod tests {
     fn labels_match_the_json() {
         assert_eq!(super::label(&rampage_loaders::dotnet::BodyKind::Il), "il");
         assert_eq!(super::label(&rampage_detect::Kind::Packer), "packer");
+        assert_eq!(super::label(&rampage_detect::Kind::Runtime), "runtime");
         assert_eq!(super::label(&3), "3");
     }
 }

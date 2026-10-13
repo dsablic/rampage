@@ -111,7 +111,7 @@ enum Command {
         #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
         limit: u64,
     },
-    /// Identify the producing tool (packer/compiler/protector/installer) from heuristic signatures
+    /// Identify the producing tools (packer/compiler/protector/installer/linker/runtime) from heuristic signatures
     Detect {
         file: PathBuf,
         /// A user-supplied PeID userdb.txt, overlaid on the bundled database (with any packs' PeID signatures)

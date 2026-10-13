@@ -15,9 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Outcome, Report, ratio};
 
-/// The kinds a tool truth may name: every [`Kind`] a build can be known to involve, plus `runtime` (the libc or
-/// language runtime linked in), which no bundled signature reports yet. A truth may expect it all the same: the
-/// misses are what a runtime signature would have to find.
+/// The kinds a tool truth may name: every [`Kind`] a build can be known to involve (all but `unknown`).
 pub const TOOL_KINDS: [&str; 6] = ["compiler", "linker", "runtime", "packer", "protector", "installer"];
 
 /// One tool a build is known to have used, and how that is known.
@@ -115,6 +113,7 @@ pub fn kind_tag(kind: Kind) -> &'static str {
         Kind::Protector => "protector",
         Kind::Installer => "installer",
         Kind::Linker => "linker",
+        Kind::Runtime => "runtime",
         Kind::Unknown => "unknown",
     }
 }
@@ -358,7 +357,9 @@ mod tests {
 
     #[test]
     fn kind_tags_are_the_detection_json_spelling() {
-        for kind in [Kind::Packer, Kind::Compiler, Kind::Protector, Kind::Installer, Kind::Linker, Kind::Unknown] {
+        for kind in
+            [Kind::Packer, Kind::Compiler, Kind::Protector, Kind::Installer, Kind::Linker, Kind::Runtime, Kind::Unknown]
+        {
             assert_eq!(serde_json::to_value(kind).unwrap(), kind_tag(kind));
         }
     }

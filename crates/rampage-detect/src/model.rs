@@ -13,6 +13,9 @@ pub enum Kind {
     Protector,
     Installer,
     Linker,
+    /// A C or language runtime linked into the image (musl, glibc, the MinGW-w64 CRT): it says which libc the
+    /// program uses, not which compiler built it.
+    Runtime,
     /// A user-supplied signature we cannot categorize, such as a parsed PeID entry.
     Unknown,
 }
@@ -52,6 +55,12 @@ pub enum Condition {
     VersionedImportLibrary(String),
     /// An imported function with this exact name (case-insensitive) is present.
     ImportFunction(String),
+    /// A symbol (from the symbol table, so a stripped image has none) with exactly this name is present.
+    Symbol(String),
+    /// A symbol whose name starts with this prefix (and goes on past it) is present.
+    SymbolPrefix(String),
+    /// A Mach-O `LC_BUILD_VERSION` lists this tool (`ld`, `lld`, `clang`, `swift`), as the loader names it.
+    BuildTool(String),
     /// The image has an overlay (data appended past everything its structures describe).
     OverlayPresent,
     /// The whole image's Shannon entropy is at least this many bits per byte.
@@ -67,7 +76,12 @@ impl Condition {
     pub(crate) fn is_distinctive(&self) -> bool {
         match self {
             Self::Entry { pattern, .. } => pattern.fixed_nibbles() >= MIN_DISTINCTIVE_NIBBLES,
-            Self::SectionContains { .. } | Self::ImportFunction(_) | Self::UniqueSectionName(_) => true,
+            Self::SectionContains { .. }
+            | Self::ImportFunction(_)
+            | Self::UniqueSectionName(_)
+            | Self::Symbol(_)
+            | Self::SymbolPrefix(_)
+            | Self::BuildTool(_) => true,
             _ => false,
         }
     }
