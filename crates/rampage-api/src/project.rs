@@ -204,9 +204,11 @@ impl Project {
 
     /// Drops the last edit or batch from this project's undo history without reverting it: the way past a step
     /// another client's edits block from undoing, which otherwise blocks every earlier step. Its edits stay in
-    /// effect and the log is not rewritten. Returns its edits; empty when there was nothing to undo.
-    pub fn discard_undo_step(&self) -> Vec<Edit> {
-        self.annotations.write().expect("annotations lock").discard_undo_step()
+    /// effect and the log is not rewritten. Refuses, unless `force`, a step no other client's edit blocks, since
+    /// undo can still revert it and clients sharing this project share its history. Returns its edits; empty when
+    /// there was nothing to undo.
+    pub fn discard_undo_step(&self, force: bool) -> Result<Vec<Edit>, ApiError> {
+        self.annotations.write().expect("annotations lock").discard_undo_step(force).map_err(ApiError::Invalid)
     }
 
     /// Reapplies the last undone edit or batch. Returns its edits; empty when there was nothing to redo.

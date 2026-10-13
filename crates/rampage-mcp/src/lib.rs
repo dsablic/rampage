@@ -59,7 +59,8 @@ finding behavior. Record findings with rename and set_comment, or many at once w
 check_names pre-flights candidate names): they persist beside the binary and every client of the same binary, \
 including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch; when \
 another client's edit blocks undoing a step, discard_undo drops it from the undo history (its edits stay) so earlier \
-steps can be undone. Memory snapshots and bundle directories use the same tools.
+steps can be undone; it refuses a step undo could still revert unless force is true, since the user's UI may share \
+that history. Memory snapshots and bundle directories use the same tools.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code \
 by signature, bundled databases applied; build_signatures makes a database from a binary with symbols), \

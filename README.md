@@ -245,13 +245,13 @@ from the start, and `RAMPAGE_MCP_TOOLS=all` or `RAMPAGE_MCP_TOOLS=detection,type
 (`core` is always served). The UI's assistant offers every tool that works on the open binary (all but `carve`
 and `list_packs`). Workflow reports name each suggested tool's `group`, so an agent knows which to enable.
 
-`undo` and `redo` revert or reapply one step, which may be a whole batch. When another client's edit blocks undoing
-a step, `discard_undo` drops it from the session's undo history, leaving its edits in effect and the log unchanged,
-so earlier steps can be undone. `carve` takes any file path rather than
-a binary: it pages candidates with `offset`/`limit` and reports `more` instead of a total, scanning only as far as
-the candidate after the page. Agents' annotations land in the same log the UI and CLI use, and the UI shows them as
-they arrive. Analysis runs once per binary and is cached for the session. `observe_pointer` exposes captured slot
-evidence without modifying discovery.
+`undo` and `redo` revert or reapply one step, which may be a whole batch. When another client's edit blocks undoing a
+step, `discard_undo` drops it from the session's undo history, leaving its edits in effect and the log unchanged, so
+earlier steps can be undone; it refuses a step undo could still revert unless given `force: true`. `carve` takes any
+file path rather than a binary: it pages candidates with `offset`/`limit` and reports `more` instead of a total,
+scanning only as far as the candidate after the page. Agents' annotations land in the same log the UI and CLI use, and
+the UI shows them as they arrive. Analysis runs once per binary and is cached for the session. `observe_pointer` exposes
+captured slot evidence without modifying discovery.
 To add it to Claude Code:
 
 ```

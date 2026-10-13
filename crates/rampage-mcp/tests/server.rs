@@ -685,7 +685,11 @@ async fn agents_rename_and_comment() {
     assert_eq!(undone[0]["field"], "comment");
     let redone = json_of(&call(&client, "redo", json!({ "path": path })).await);
     assert_eq!(redone[0]["value"], "entry");
-    let discarded = json_of(&call(&client, "discard_undo", json!({ "path": path })).await);
+    // Nothing blocks undoing the comment, so dropping it from the history takes force.
+    let refused = call(&client, "discard_undo", json!({ "path": path })).await;
+    assert_eq!(refused.is_error, Some(true));
+    assert!(text(&refused).contains("force"), "{}", text(&refused));
+    let discarded = json_of(&call(&client, "discard_undo", json!({ "path": path, "force": true })).await);
     assert_eq!(discarded[0]["value"], "entry");
     let undone = json_of(&call(&client, "undo", json!({ "path": path })).await);
     assert_eq!(undone[0]["field"], "name");

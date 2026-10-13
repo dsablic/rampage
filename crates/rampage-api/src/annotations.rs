@@ -393,9 +393,21 @@ impl Annotations {
 
     /// Drops the last step from this instance's undo history without reverting it, for a step another client's
     /// edits block from undoing, which would otherwise block every earlier step too. Its edits stay in effect, and
-    /// the log is untouched. Returns the dropped step's edits; empty when there is nothing to undo.
-    pub fn discard_undo_step(&mut self) -> Vec<Edit> {
-        self.done.pop().unwrap_or_default()
+    /// the log is untouched. Unless `force` is set, it refuses a step that undo could still revert: one client
+    /// (such as an assistant sharing the user's project) must not silently take away another's undo. Returns the
+    /// dropped step's edits; empty when there is nothing to undo.
+    pub fn discard_undo_step(&mut self, force: bool) -> Result<Vec<Edit>, String> {
+        let Some(step) = self.done.last() else { return Ok(Vec::new()) };
+        if !force {
+            let inverses: Vec<Edit> = step.iter().rev().map(Edit::inverse).collect();
+            self.refresh()?;
+            if self.snapshot().blocked(&inverses).is_none() {
+                return Err("no other client's edit blocks undoing the last step, so undo can still revert it; \
+                            discard it anyway only with force"
+                    .to_owned());
+            }
+        }
+        Ok(self.done.pop().unwrap_or_default())
     }
 
     /// Reapplies the last undone step. Returns its edits; empty when there is nothing to redo.
@@ -723,14 +735,37 @@ mod tests {
         assert!(ui.undo().is_err());
         let log = std::fs::read_to_string(&path).unwrap();
 
-        let discarded = ui.discard_undo_step();
+        let discarded = ui.discard_undo_step(false).unwrap();
         assert_eq!(discarded.len(), 1);
         assert_eq!((discarded[0].address, discarded[0].value.as_deref()), (0x10, Some("a")));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), log);
         assert_eq!(ui.name(0x10), Some("b"));
         assert_eq!(ui.undo().unwrap()[0].address, 0x20);
         assert_eq!(ui.comment(0x20), None);
-        assert!(ui.discard_undo_step().is_empty());
+        assert!(ui.discard_undo_step(false).unwrap().is_empty());
+        cleanup(path);
+    }
+
+    #[test]
+    fn discarding_refuses_a_step_undo_could_still_revert_unless_forced() {
+        let path = temporary_log("discard-unblocked");
+        let mut user = Annotations::open(path.clone()).unwrap();
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        user.set(Field::Name, 0x10, Some("parse".into())).unwrap();
+        // Another client's edit elsewhere does not block it.
+        agent.set(Field::Name, 0x20, Some("other".into())).unwrap();
+        let error = user.discard_undo_step(false).unwrap_err();
+        assert!(error.contains("force"), "{error}");
+        assert_eq!(user.undo().unwrap()[0].address, 0x10, "the step is still there to undo");
+        user.redo().unwrap();
+        let dropped = user.discard_undo_step(true).unwrap();
+        assert_eq!((dropped[0].address, user.name(0x10)), (0x10, Some("parse")));
+        assert!(user.undo().unwrap().is_empty());
+        // A name another client has since taken blocks it as much as an edit to the same address.
+        user.set(Field::Name, 0x30, Some("first".into())).unwrap();
+        user.set(Field::Name, 0x30, Some("second".into())).unwrap();
+        agent.set(Field::Name, 0x40, Some("first".into())).unwrap();
+        assert_eq!(user.discard_undo_step(false).unwrap()[0].value.as_deref(), Some("second"));
         cleanup(path);
     }
 
@@ -740,6 +775,7 @@ mod tests {
         annotations.set(Field::Signature, 0x10, Some("int4 f(void);".into())).unwrap();
         let error = annotations.undo_validated(|_| Err("the decompiler rejects it".to_owned())).unwrap_err();
         assert_eq!(error, "the decompiler rejects it");
+        assert!(annotations.discard_undo_step(false).is_err(), "a validation failure is no other client's block");
 
         let path = temporary_log("undo-io");
         let mut writer = Annotations::open(path.clone()).unwrap();

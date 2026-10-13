@@ -406,6 +406,13 @@ impl FileOffset {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct DiscardUndoArgs {
+    /// Drop the step even though undo could still revert it (no other client's edit blocks it).
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 struct DiagnosticsArgs {
     /// Explicitly run whole-program discovery; otherwise reuse cached discovery or sample bytes only.
     #[serde(default)]
@@ -1076,8 +1083,9 @@ pub fn tools() -> Vec<Tool> {
             "discard_undo",
             "Drop the last edit or batch from this session's undo history without reverting it, when another \
              client's edits block undoing it (which blocks every earlier step too). Its edits stay in effect; the \
-             annotation log is not rewritten. Returns the dropped edits; empty if there was none.",
-            |project, _: Nothing| Ok(project.discard_undo_step()),
+             annotation log is not rewritten. Refuses a step undo could still revert unless force is true. Returns \
+             the dropped edits; empty if there was none.",
+            |project, arguments: DiscardUndoArgs| project.discard_undo_step(arguments.force),
         ),
         tool(
             Group::Core,
