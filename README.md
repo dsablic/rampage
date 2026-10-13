@@ -146,7 +146,8 @@ Names, comments and typed annotations are saved beside ordinary binaries in `<fi
 image opened with `--image-offset`, or `image_offset` over MCP): an append-only JSON Lines log of edits, each
 recording the value it replaced, so undo is just another edit and the file is a full history. A batch is written
 under a header line and replayed only once all of its edits are present. Several clients can share it: the UI
-picks up names an agent saves through MCP within a second.
+picks up names an agent saves through MCP within a second. The UI opens whole files and universal-binary slices,
+not embedded images, so an embedded image's annotations are shared by the CLI and MCP only.
 Snapshot annotations use a capture-identity log instead, sharing edits only across equal analysis identities
 in the same directory by default. Legacy unscoped snapshot logs are not automatically loaded or migrated;
 see [runtime snapshots](docs/runtime-snapshots.md) for persistence and explicit cross-directory reuse.
