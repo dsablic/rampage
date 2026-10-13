@@ -16,6 +16,7 @@ mod files;
 mod graph;
 mod jumptable;
 mod listing;
+mod offset;
 pub mod packs;
 mod pointer_compare;
 mod pointer_observation;
@@ -47,6 +48,7 @@ pub use files::{MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MA
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
 pub use jumptable::{JumpTable, JumpTableEntry};
 pub use listing::{DisassemblyLine, FunctionListing};
+pub use offset::{FileOffset, parse_file_offset};
 pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
 pub use pointer_compare::{PointerChange, PointerComparison};
 pub use pointer_observation::{PointerAssessment, PointerObservation};

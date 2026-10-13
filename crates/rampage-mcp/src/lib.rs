@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rampage_api::tools::{self, FileTool, Group, Tool};
-use rampage_api::{Packs, Project, Session};
+use rampage_api::{FileOffset, Packs, Project, Session};
 use rampage_arch::Arch;
 use rampage_loaders::ImageAt;
 use rmcp::model::{
@@ -337,20 +337,14 @@ impl RampageServer {
     }
 }
 
-/// An `image_offset` or `image_length` argument: a hex string with `0x`, a decimal string, or an integer.
+/// An `image_offset` or `image_length` argument (see [`FileOffset`]); `null` means none.
 fn file_offset(name: &str, value: &Value) -> Result<Option<u64>, String> {
-    let invalid = || format!("`{name}` must be a byte count or file offset such as \"0x1000\", not {value}");
-    match value {
-        Value::Null => Ok(None),
-        Value::Number(number) => number.as_u64().map(Some).ok_or_else(invalid),
-        Value::String(text) => match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-            Some(hex) => u64::from_str_radix(hex, 16),
-            None => text.parse(),
-        }
-        .map(Some)
-        .map_err(|_| invalid()),
-        _ => Err(invalid()),
+    if value.is_null() {
+        return Ok(None);
     }
+    serde_json::from_value::<FileOffset>(value.clone())
+        .map(|offset| Some(offset.0))
+        .map_err(|error| format!("`{name}`: {error}"))
 }
 
 fn error_text(error: &dyn std::error::Error) -> String {

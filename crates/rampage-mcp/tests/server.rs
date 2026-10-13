@@ -308,6 +308,17 @@ async fn image_offset_opens_a_carved_executable_with_its_own_annotations() {
     assert!(text(&unannotated).contains("no ELF, PE or Mach-O header"), "{}", text(&unannotated));
     let malformed = call(&client, "binary_info", json!({ "path": path, "image_offset": "x" })).await;
     assert_eq!(malformed.is_error, Some(true));
+    // Every offset argument, at the server or in a tool, takes the same spellings and says so when refused.
+    for value in [json!(-1), json!(1.5), json!("x")] {
+        let refused = call(&client, "binary_info", json!({ "path": path, "image_offset": value })).await;
+        assert!(text(&refused).starts_with("`image_offset`: "), "{}", text(&refused));
+        assert!(text(&refused).contains("hex (\"0x1000\") or decimal"), "{}", text(&refused));
+        let arguments = json!({ "path": path, "other": path, "other_image_offset": value });
+        let refused = call(&client, "diff_builds", arguments).await;
+        assert_eq!(refused.is_error, Some(true));
+        assert!(text(&refused).contains("hex (\"0x1000\") or decimal"), "{}", text(&refused));
+        assert!(!text(&refused).contains("untagged"), "{}", text(&refused));
+    }
 
     let size = std::fs::metadata(fixture("hello-arm64.macho")).unwrap().len();
     let mut longer = std::fs::read(path).unwrap();
