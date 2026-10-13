@@ -126,8 +126,9 @@ fn with_binary_arguments(schema: &Value) -> Map<String, Value> {
             json!({
                 "type": ["string", "integer", "null"],
                 "description": "Open the ELF, PE or Mach-O image embedded at this file offset (hex \"0x...\" or \
-                                decimal), such as a carve candidate's offset. Its annotations are kept apart from \
-                                the outer file's."
+                                decimal), such as a carve candidate's offset; for a universal Mach-O, its fat \
+                                header's offset, with arch for the slice. Its annotations are kept apart from the \
+                                outer file's; offset 0 without image_length is the file itself."
             }),
         );
         properties.insert(

@@ -21,7 +21,8 @@ struct Cli {
     /// Architecture slice to load from a universal binary (x86, x86_64, aarch64, arm, mips, powerpc, riscv64, ...)
     #[arg(long, global = true, value_parser = parse_arch)]
     arch: Option<Arch>,
-    /// Open the executable embedded at this file offset (hex 0x... or decimal), such as one `carve` found
+    /// Open the executable embedded at this file offset (hex 0x... or decimal), such as one `carve` found; for a
+    /// universal Mach-O, the offset of its fat header, with --arch for the slice. Offset 0 alone opens the file
     #[arg(long, global = true, value_parser = parse_offset)]
     image_offset: Option<u64>,
     /// With --image-offset, the embedded image's length in bytes (hex 0x... or decimal); defaults to the extent its

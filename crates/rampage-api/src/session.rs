@@ -55,8 +55,10 @@ impl Session {
     }
 
     /// Opens the binary at `path`, or with an `image` location, the executable embedded there (see
-    /// [`Binary::open_at`]). An embedded image is a project of its own, with its own annotation sidecar.
+    /// [`Binary::open_at`]). An embedded image is a project of its own, with its own annotation sidecar; a location
+    /// that [is the whole file](ImageAt::is_whole_file) is the project [`Session::open`] gives.
     pub fn open_at(&self, path: &Path, arch: Option<Arch>, image: Option<ImageAt>) -> Result<Arc<Project>, ApiError> {
+        let image = image.filter(|image| !image.is_whole_file());
         let executable = rampage_loaders::container::resolve_executable(path)
             .map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
         let path = executable.as_path();

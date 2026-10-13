@@ -61,6 +61,11 @@ impl ImageAt {
     pub fn length(self) -> Option<u64> {
         self.length
     }
+
+    /// Whether this is the whole file as [`Binary::open`] takes it, overlay included: offset 0 and no length.
+    pub fn is_whole_file(self) -> bool {
+        self.offset == 0 && self.length.is_none()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -212,14 +217,18 @@ impl Binary {
     /// Its header must validate the way carving validates it. The image runs for `length` bytes, or else for the
     /// extent its header tables give (cut at the end of the file); only bytes within it can be overlay, and
     /// [`Embedded::trailing`] counts those after it. Addresses and file offsets are the image's own, as if it had
-    /// been extracted; [`Binary::embedded`] records where it lies.
+    /// been extracted; [`Binary::embedded`] records where it lies. For an embedded universal Mach-O, give the offset
+    /// of its fat header and choose the slice with [`Binary::open_at_with`]; a slice's own offset opens that thin
+    /// image alone, as a different image.
     pub fn open_at(path: impl AsRef<Path>, offset: u64, length: Option<u64>) -> Result<Self, LoadError> {
         Self::open_at_with(path, offset, length, None)
     }
 
-    /// [`Binary::open_with`] the whole file, or with `image`, [`Binary::open_at_with`] the image there.
+    /// [`Binary::open_with`] the whole file, or with `image`, [`Binary::open_at_with`] the image there. A location
+    /// that [is the whole file](ImageAt::is_whole_file) opens it as [`Binary::open_with`] does, so that one image
+    /// has one identity.
     pub fn open_image(path: impl AsRef<Path>, image: Option<ImageAt>, wanted: Option<Arch>) -> Result<Self, LoadError> {
-        match image {
+        match image.filter(|image| !image.is_whole_file()) {
             Some(image) => Self::open_at_with(path, image.offset, image.length, wanted),
             None => Self::open_with(path, wanted),
         }

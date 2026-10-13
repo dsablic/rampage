@@ -138,6 +138,25 @@ fn an_embedded_image_and_a_file_named_like_its_location_keep_separate_annotation
 }
 
 #[test]
+fn offset_zero_without_a_length_is_the_file_itself() {
+    let (scratch, path, _, _) = outer_file("zero");
+    let session = Session::default();
+    let zero = session.open_at(&path, None, at(0)).unwrap();
+    let plain = session.open(&path, None).unwrap();
+    assert!(Arc::ptr_eq(&zero, &plain));
+    assert_eq!(zero.binary.embedded, None);
+    let main = zero.resolve("main").unwrap();
+    zero.rename(main, Some("outer_main")).unwrap();
+    assert!(scratch.0.join("firmware.bin.rampage").exists());
+    assert_eq!(Session::default().open(&path, None).unwrap().function_name(main), "outer_main");
+
+    let length = std::fs::metadata(fixture("hello-x64.elf")).unwrap().len();
+    let explicit = session.open_at(&path, None, Some(ImageAt::new(0, Some(length)))).unwrap();
+    assert!(!Arc::ptr_eq(&explicit, &plain));
+    assert!(explicit.binary.embedded.is_some());
+}
+
+#[test]
 fn an_unsuffixed_embedded_sidecar_is_reported_not_loaded() {
     let (scratch, path, first, _) = outer_file("unsuffixed");
     let old = scratch.0.join(format!("firmware.bin@{first:#x}.rampage"));

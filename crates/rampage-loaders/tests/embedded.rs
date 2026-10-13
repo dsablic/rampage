@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use rampage_arch::Arch;
-use rampage_loaders::{Binary, Embedded, LoadError};
+use rampage_loaders::{Binary, Embedded, ImageAt, LoadError};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -102,6 +102,19 @@ fn bytes_after_the_header_extent_are_counted_and_an_explicit_length_keeps_them_a
         );
         assert_eq!(whole.embedded.unwrap().trailing, 0, "{name}");
     }
+}
+
+#[test]
+fn opening_offset_zero_without_a_length_is_an_ordinary_open() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/malformed/overlay.exe");
+    let direct = Binary::open(&path).unwrap();
+    let zero = Binary::open_image(&path, Some(ImageAt::new(0, None)), None).unwrap();
+    assert_eq!(serde_json::to_value(&zero).unwrap(), serde_json::to_value(&direct).unwrap());
+    assert!(zero.overlay.is_some() && zero.embedded.is_none());
+    let length = std::fs::metadata(&path).unwrap().len();
+    let explicit = Binary::open_image(&path, Some(ImageAt::new(0, Some(length))), None).unwrap();
+    assert_eq!(explicit.overlay, direct.overlay);
+    assert_eq!(explicit.embedded.map(|embedded| embedded.size), Some(length));
 }
 
 #[test]
