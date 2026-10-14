@@ -55,6 +55,9 @@ const MAX_MEMBER_ACCESSORS: usize = 64;
 const BUDGET_EXHAUSTED: &str = "signature text budget exhausted; remaining signatures not rendered";
 pub const MAX_RESOURCE_ROWS: u32 = 100_000;
 pub const MAX_RESOURCE_TEXT_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_ENUM_CONSTANT_ROWS: u32 = 100_000;
+pub const MAX_ENUM_CONSTANTS: usize = 10_000;
+pub const MAX_ENUM_CONSTANT_WORK_BYTES: usize = 4 * 1024 * 1024;
 const RESOURCE_NAME_TRUNCATED: &str = "<truncated>";
 
 /// CLI header flags (II.25.3.3.1).
@@ -318,6 +321,17 @@ pub struct FieldDef {
     pub flags: u16,
     /// The field's type and name, e.g. `uint32 _queue1`, or `<unreadable>` for a malformed signature blob.
     pub signature: String,
+    /// Exact Constant-table evidence for a literal declared by a verified local enum, not a runtime value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enum_constant: Option<EnumConstant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnumConstant {
+    /// IL integral type verified from the enum's sole instance field, `value__`.
+    pub underlying_integral_type: &'static str,
+    /// Decimal integer text, including the full unsigned 64-bit range; never a JSON number.
+    pub value: String,
 }
 
 impl TypeDef {
@@ -823,6 +837,7 @@ struct Decoder<'t, 'a> {
     member_types: MemberTypes,
     enum_underlying: HashMap<u32, u8>,
     named_enums: HashMap<String, Option<u8>>,
+    enum_constants: HashMap<u32, EnumConstant>,
 }
 
 /// `Namespace.Type::member` for each method and field token.
@@ -833,6 +848,12 @@ type MemberTypes = HashMap<(u8, u32), u32>;
 struct ResourceBudget {
     remaining: usize,
     exhausted: bool,
+}
+
+fn charge_enum_work(budget: &Cell<usize>, bytes: usize) -> Option<()> {
+    let left = budget.get().checked_sub(bytes);
+    budget.set(left.unwrap_or(0));
+    left.map(|_| ())
 }
 
 impl ResourceBudget {
@@ -905,6 +926,7 @@ impl<'t, 'a> Decoder<'t, 'a> {
             member_types: HashMap::new(),
             enum_underlying: HashMap::new(),
             named_enums: HashMap::new(),
+            enum_constants: HashMap::new(),
         }
     }
 }
@@ -1280,6 +1302,7 @@ impl Decoder<'_, '_> {
         let field_lists = self.member_lists(table, 4, tables::FIELD, tables::FIELD_PTR);
         let method_lists = self.member_lists(table, 5, tables::METHOD_DEF, tables::METHOD_PTR);
         self.index_enums(&field_lists);
+        self.index_enum_constants(&field_lists);
         let (member_types, property_lists, event_lists) = self.property_and_event_types();
         self.member_types = member_types;
         let mut accessors = self.member_accessors(&method_lists);
@@ -1354,35 +1377,13 @@ impl Decoder<'_, '_> {
             if self.budget.get() == 0 {
                 break;
             }
-            let base = self.tables.cell(tables::TYPE_DEF, row, 3).and_then(|value| C::TypeDefOrRef.decode(value));
-            let Some((tables::TYPE_REF, base)) = base else { continue };
             let identifier = |table, row, column| self.enum_identifier(table, row, column);
-            let scope = self.tables.cell(tables::TYPE_REF, base, 0).and_then(|value| C::ResolutionScope.decode(value));
-            let valid_scope = scope.is_some_and(|(table, row)| {
-                table == tables::ASSEMBLY_REF && row != 0 && row <= self.tables.rows(table)
-            });
-            if !valid_scope
-                || identifier(tables::TYPE_REF, base, 1) != Some("Enum")
-                || identifier(tables::TYPE_REF, base, 2) != Some("System")
-            {
+            if self.verified_enum_base(row, identifier).is_none() {
                 continue;
             }
-            let mut instances = fields
-                .iter()
-                .copied()
-                .filter(|&field| self.tables.cell(tables::FIELD, field, 0).is_some_and(|flags| flags & 0x0010 == 0));
-            let Some(field) = instances.next() else { continue };
-            if instances.next().is_some() {
-                continue;
+            if let Some(underlying) = self.enum_value_field_underlying(fields, identifier) {
+                self.enum_underlying.insert(row, underlying);
             }
-            let flags = self.tables.cell(tables::FIELD, field, 0).unwrap_or(0);
-            let name = identifier(tables::FIELD, field, 1);
-            let blob = self.tables.cell(tables::FIELD, field, 2).and_then(|offset| self.heaps.blob(offset));
-            let Some(&[0x06, underlying @ 0x04..=0x0B]) = blob else { continue };
-            if name != Some("value__") || flags & 0x0600 != 0x0600 {
-                continue;
-            }
-            self.enum_underlying.insert(row, underlying);
         }
         if self.enum_underlying.is_empty() {
             return;
@@ -1399,6 +1400,200 @@ impl Decoder<'_, '_> {
                 self.named_enums.entry(name).and_modify(|kind| *kind = None).or_insert(underlying);
             }
         }
+    }
+
+    fn verified_enum_base<'s>(
+        &'s self,
+        row: u32,
+        identifier: impl Fn(u8, u32, usize) -> Option<&'s str>,
+    ) -> Option<()> {
+        let base = self.tables.cell(tables::TYPE_DEF, row, 3).and_then(|value| C::TypeDefOrRef.decode(value));
+        let (tables::TYPE_REF, base) = base? else { return None };
+        let scope = self.tables.cell(tables::TYPE_REF, base, 0).and_then(|value| C::ResolutionScope.decode(value));
+        let valid_scope = scope
+            .is_some_and(|(table, row)| table == tables::ASSEMBLY_REF && row != 0 && row <= self.tables.rows(table));
+        if !valid_scope
+            || identifier(tables::TYPE_REF, base, 1) != Some("Enum")
+            || identifier(tables::TYPE_REF, base, 2) != Some("System")
+        {
+            return None;
+        }
+        Some(())
+    }
+
+    fn enum_value_field_underlying<'s>(
+        &'s self,
+        fields: &[u32],
+        identifier: impl Fn(u8, u32, usize) -> Option<&'s str>,
+    ) -> Option<u8> {
+        let mut instances = fields
+            .iter()
+            .copied()
+            .filter(|&field| self.tables.cell(tables::FIELD, field, 0).is_some_and(|flags| flags & 0x0010 == 0));
+        let field = instances.next()?;
+        if instances.next().is_some() {
+            return None;
+        }
+        let flags = self.tables.cell(tables::FIELD, field, 0)?;
+        let blob = self.tables.cell(tables::FIELD, field, 2).and_then(|offset| self.heaps.blob(offset));
+        let &[0x06, underlying @ 0x04..=0x0B] = blob? else { return None };
+        (identifier(tables::FIELD, field, 1) == Some("value__") && flags & 0x8650 == 0x0600).then_some(underlying)
+    }
+
+    fn constant_identifier(&self, table: u8, row: u32, column: usize, budget: &Cell<usize>) -> Option<&str> {
+        // Reserve the maximum scan before touching an identifier, including failed lookups.
+        let reservation = heaps::MAX_NAME_BYTES + 1;
+        charge_enum_work(budget, reservation)?;
+        let text = self.heaps.exact_string(self.tables.cell(table, row, column)?);
+        if let Some(text) = text {
+            budget.set(budget.get() + reservation - text.len() - 1);
+        }
+        text
+    }
+
+    fn index_enum_constants(&mut self, field_lists: &[Vec<u32>]) {
+        let table = tables::CONSTANT;
+        let rows = self.tables.rows(table);
+        if self.tables.declared[usize::from(table)] == 0 {
+            return;
+        }
+        // An unseen suffix could duplicate an earlier parent. A partial index proves no unique parents.
+        if rows > MAX_ENUM_CONSTANT_ROWS || rows != self.tables.declared[usize::from(table)] {
+            self.warnings.push("Constant evidence unavailable: table incomplete or row limit exceeded".to_owned());
+            return;
+        }
+        let budget = Cell::new(MAX_ENUM_CONSTANT_WORK_BYTES);
+        let mut parents = HashMap::new();
+        for row in 1..=rows {
+            if charge_enum_work(&budget, 16).is_none() {
+                self.warnings.push("Constant evidence unavailable: index work budget exhausted".to_owned());
+                return;
+            }
+            let parent = self.tables.cell(table, row, 1).and_then(|raw| C::HasConstant.decode(raw));
+            let Some((kind, field)) = parent else {
+                self.warnings.push(format!("Constant row {row}: reserved HasConstant parent tag"));
+                continue;
+            };
+            if field == 0 || field > self.tables.rows(kind) {
+                self.warnings.push(format!("Constant row {row}: invalid HasConstant parent row {field}"));
+                continue;
+            }
+            if kind != tables::FIELD {
+                self.warnings.push(format!(
+                    "Constant row {row}: {} constants are unsupported; not enum-field evidence",
+                    tables::TABLE_NAMES[usize::from(kind)]
+                ));
+                continue;
+            }
+            match parents.entry(field) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(Some(row));
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.insert(None);
+                    self.warnings
+                        .push(format!("Constant row {row}: duplicate Field parent {field}; evidence rejected"));
+                }
+            }
+        }
+        let mut visited = 0usize;
+        let mut limited = false;
+        'owners: for (fields, owner) in field_lists.iter().zip(1..) {
+            let work_rows = fields.len().saturating_add(1);
+            visited = visited.saturating_add(work_rows);
+            if visited > MAX_ENUM_CONSTANT_ROWS as usize
+                || charge_enum_work(&budget, work_rows.saturating_mul(16)).is_none()
+            {
+                limited = true;
+                break;
+            }
+            let identifier = |table, row, column| self.constant_identifier(table, row, column, &budget);
+            let enum_base = self.verified_enum_base(owner, identifier);
+            let underlying = enum_base.and_then(|()| self.enum_value_field_underlying(fields, identifier));
+            if budget.get() == 0 {
+                limited = true;
+                break;
+            }
+            if enum_base.is_none() {
+                continue;
+            }
+            for &field in fields {
+                let Some(Some(row)) = parents.get(&field).copied() else { continue };
+                if self.enum_constants.len() == MAX_ENUM_CONSTANTS {
+                    limited = true;
+                    break 'owners;
+                }
+                let evidence =
+                    underlying.and_then(|underlying| self.enum_constant(field, owner, row, underlying, &budget));
+                if let Some(evidence) = evidence {
+                    self.enum_constants.insert(field, evidence);
+                } else {
+                    self.warnings.push(format!("Constant row {row}: unverified local enum literal; evidence rejected"));
+                }
+                if budget.get() == 0 {
+                    limited = true;
+                    break 'owners;
+                }
+            }
+        }
+        if limited {
+            self.warnings.push(format!(
+                "enum Constant evidence budget exhausted ({} retained; limits {MAX_ENUM_CONSTANTS} constants, \
+                 {MAX_ENUM_CONSTANT_ROWS} work rows, {MAX_ENUM_CONSTANT_WORK_BYTES} work/text bytes)",
+                self.enum_constants.len()
+            ));
+        }
+    }
+
+    fn enum_constant(
+        &self,
+        field: u32,
+        owner: u32,
+        row: u32,
+        underlying: u8,
+        budget: &Cell<usize>,
+    ) -> Option<EnumConstant> {
+        charge_enum_work(budget, 32)?;
+        let flags = self.tables.cell(tables::FIELD, field, 0)?;
+        if flags & 0x8050 != 0x8050 || flags & 0x0020 != 0 {
+            return None;
+        }
+        let signature = self.heaps.blob(self.tables.cell(tables::FIELD, field, 2)?)?;
+        let [0x06, 0x11, target @ ..] = signature else { return None };
+        let (target_row, used) = heaps::compressed_length(target)?;
+        let target_row = u32::try_from(target_row).ok()?;
+        if used != target.len() || C::TypeDefOrRef.decode(target_row) != Some((tables::TYPE_DEF, owner)) {
+            return None;
+        }
+        // The high byte is the Constant row's required zero padding, not part of its element type.
+        if self.tables.cell(tables::CONSTANT, row, 0)? != u32::from(underlying) {
+            return None;
+        }
+        let blob = self.heaps.blob(self.tables.cell(tables::CONSTANT, row, 2)?)?;
+        let (name, width) = match underlying {
+            0x04 => ("int8", 1),
+            0x05 => ("uint8", 1),
+            0x06 => ("int16", 2),
+            0x07 => ("uint16", 2),
+            0x08 => ("int32", 4),
+            0x09 => ("uint32", 4),
+            0x0A => ("int64", 8),
+            0x0B => ("uint64", 8),
+            _ => return None,
+        };
+        if blob.len() != width {
+            return None;
+        }
+        let field_name = self.constant_identifier(tables::FIELD, field, 1, budget)?;
+        charge_enum_work(budget, field_name.len() + name.len() + 20)?;
+        let value = read_uint(blob, 0, width, false)?;
+        let value = if underlying & 1 == 0 {
+            let shift = 64 - width * 8;
+            (((value << shift) as i64) >> shift).to_string()
+        } else {
+            value.to_string()
+        };
+        Some(EnumConstant { underlying_integral_type: name, value })
     }
 
     fn enum_identifier(&self, table: u8, row: u32, column: usize) -> Option<&str> {
@@ -1486,6 +1681,7 @@ impl Decoder<'_, '_> {
             signature: self.signature(tables::FIELD, row, &name, Some(owner)),
             name,
             flags: self.tables.cell(tables::FIELD, row, 0).unwrap_or(0) as u16,
+            enum_constant: self.enum_constants.remove(&row),
         }
     }
 

@@ -123,6 +123,13 @@ fn boxed_attribute_image() -> Vec<u8> {
     let attribute = name("BoxedAttribute");
     let namespace = name("Demo");
     let ctor = name(".ctor");
+    let enum_name = name("Enum");
+    let system = name("System");
+    let mode = name("Mode");
+    let value_field = name("value__");
+    let all = name("All");
+    let alias = name("Alias");
+    let mscorlib = name("mscorlib");
     let mut value = vec![1, 0, 0x08, 42, 0, 0, 0, 2, 0, 0, 0, 0x0E, 2, b'4', b'2'];
     value.extend([0x1D, 0x08, 2, 0, 0, 0]);
     value.extend((-2i32).to_le_bytes());
@@ -138,15 +145,37 @@ fn boxed_attribute_image() -> Vec<u8> {
     assert!(value.len() < 0x80);
     blobs.push(value.len() as u8);
     blobs.extend(value);
-    let valid = (1u64 << 1) | (1 << 10) | (1 << 12);
+    let value_signature = blobs.len() as u16;
+    blobs.extend([2, 0x06, 0x0B]);
+    let literal_signature = blobs.len() as u16;
+    blobs.extend([3, 0x06, 0x11, 4]);
+    let constant_value = blobs.len() as u16;
+    blobs.push(8);
+    blobs.extend(u64::MAX.to_le_bytes());
+    let present = [(1, 2u32), (2, 1), (4, 3), (10, 1), (11, 2), (12, 1), (35, 1)];
+    let valid = present.iter().fold(0u64, |mask, &(table, _)| mask | (1 << table));
     let mut tables = vec![0, 0, 0, 0, 2, 0, 0, 1];
     tables.extend(valid.to_le_bytes());
     tables.extend(0u64.to_le_bytes());
-    for _ in 0..3 {
-        tables.extend(1u32.to_le_bytes());
+    for &(_, rows) in &present {
+        tables.extend(rows.to_le_bytes());
     }
-    for column in [0, attribute, namespace, 9, ctor, 1, 34, 11, 8] {
-        tables.extend(column.to_le_bytes());
+    for row in [
+        vec![0, attribute, namespace],
+        vec![6, enum_name, system],
+        vec![1, 0, mode, namespace, 9, 1, 1],
+        vec![0x0606, value_field, value_signature],
+        vec![0x8056, all, literal_signature],
+        vec![0x8056, alias, literal_signature],
+        vec![9, ctor, 1],
+        vec![0x0B, 8, constant_value],
+        vec![0x0B, 12, constant_value],
+        vec![34, 11, 8],
+        vec![4, 0, 0, 0, 0, 0, 0, mscorlib, 0, 0],
+    ] {
+        for column in row {
+            tables.extend(column.to_le_bytes());
+        }
     }
     let streams: [(&str, &[u8]); 3] = [("#~", &tables), ("#Strings", &strings), ("#Blob", &blobs)];
     let version = b"v4.0.30319\0\0";
@@ -210,6 +239,41 @@ fn dotnet_renders_typed_boxed_fixed_and_named_values_in_text_and_json() {
     assert_eq!(attribute["named_arguments"][0]["argument_type"], "object");
     assert_eq!(attribute["named_arguments"][0]["value"], "box(System.Type, typeof(Demo.Target))");
     assert_eq!(attribute["named_arguments"][1]["value"], "[box(string, null), box(bool, true)]");
+}
+
+#[test]
+fn dotnet_types_render_only_verified_enum_constant_metadata_and_exact_json() {
+    let scratch = Scratch::new("dotnet-enum-constants");
+    let path = scratch.0.join("enums.dll");
+    std::fs::write(&path, boxed_attribute_image()).unwrap();
+    Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["dotnet", "--list", "types", "--contains", "mode"])
+        .arg(&path)
+        .assert()
+        .success()
+        .stdout(contains("metadata enum constant All (token 0x04000002): uint64 18446744073709551615"))
+        .stdout(contains("metadata enum constant Alias (token 0x04000003): uint64 18446744073709551615"))
+        .stdout(contains("value__").not());
+    let output = Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["--json", "dotnet", "--list", "types"])
+        .arg(&path)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let fields = &json["types"]["items"][0]["fields"];
+    assert!(fields[0].get("enum_constant").is_none());
+    assert_eq!(
+        fields[1]["enum_constant"],
+        serde_json::json!({
+            "underlying_integral_type": "uint64", "value": "18446744073709551615"
+        })
+    );
+    assert_eq!(fields[2]["enum_constant"], fields[1]["enum_constant"]);
 }
 
 #[test]

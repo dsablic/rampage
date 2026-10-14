@@ -68,6 +68,13 @@ struct Spec {
     field_lists: Option<[u32; 3]>,
     duplicate_enum_name: bool,
     inner_name: Option<String>,
+    enum_literals: Vec<(String, u16, Vec<u8>)>,
+    constants: Vec<(u16, u32, Vec<u8>)>,
+    field_ptrs: Vec<u32>,
+    no_attributes: bool,
+    constant_table_cut: Option<usize>,
+    constant_blob_index: Option<u32>,
+    enum_value_signature: Option<Vec<u8>>,
 }
 
 const SECTION_RVA: u32 = 0x2000;
@@ -131,7 +138,8 @@ fn build(spec: &Spec) -> Vec<u8> {
     let mut strings = Heap::new();
     let mut blobs = Heap::new();
     let field_signature = blobs.blob(&[0x06, 0x08]);
-    let enum_signature = blobs.blob(&[0x06, spec.enum_underlying.unwrap_or(0x08)]);
+    let enum_signature =
+        blobs.blob(spec.enum_value_signature.as_deref().unwrap_or(&[0x06, spec.enum_underlying.unwrap_or(0x08)]));
     let property_signatures: Vec<_> = if spec.property_signatures.is_empty() {
         vec![blobs.blob(&[0x28, 0, 0x08])]
     } else {
@@ -216,12 +224,20 @@ fn build(spec: &Spec) -> Vec<u8> {
         .put(inner_extends, tdor)
         .put(field_lists[2], i)
         .put(method_lists[2], i);
+    for &field in &spec.field_ptrs {
+        tables.put(field, i);
+    }
     // Field
     let counter = strings.string("counter");
     tables.put(0x0001, 2).put(counter, s).put(field_signature, b);
     if spec.enum_underlying.is_some() {
         let value = strings.string(spec.enum_field_name.as_deref().unwrap_or("value__"));
         tables.put(u32::from(spec.enum_field_flags.unwrap_or(0x0606)), 2).put(value, s).put(enum_signature, b);
+    }
+    for (name, flags, signature) in &spec.enum_literals {
+        let name = strings.string(name);
+        let signature = blobs.blob(signature);
+        tables.put(u32::from(*flags), 2).put(name, s).put(signature, b);
     }
     // MethodDef: Main (tiny IL), Compute (fat IL), Helper (native), Run (abstract, no body).
     let main = if spec.bad_method_name { 0xFFFF } else { strings.string("Main") };
@@ -243,9 +259,20 @@ fn build(spec: &Spec) -> Vec<u8> {
     // MemberRef: Object::.ctor (MemberRefParent tag 1 = TypeRef).
     let ctor = strings.string(".ctor");
     tables.put((1 << 3) | 1, mrp).put(ctor, s).put(ctor_signature, b);
+    for (kind, parent, value) in &spec.constants {
+        let blob = blobs.blob(value);
+        let width = wide(2 + spec.enum_literals.len() >= 0x4000);
+        tables.put(u32::from(*kind), 2).put(*parent, width).put(spec.constant_blob_index.unwrap_or(blob), b);
+    }
+    let constant_end = tables.bytes.len();
     // CustomAttribute on the Module (HasCustomAttribute tag 7) by default, constructed by MemberRef 1 (tag 3).
-    let attribute_parents =
-        if spec.attribute_parents.is_empty() { vec![(1 << 5) | 7] } else { spec.attribute_parents.clone() };
+    let attribute_parents = if spec.no_attributes {
+        Vec::new()
+    } else if spec.attribute_parents.is_empty() {
+        vec![(1 << 5) | 7]
+    } else {
+        spec.attribute_parents.clone()
+    };
     for &parent in &attribute_parents {
         tables.put(parent, hca).put((1 << 3) | 3, i).put(attribute_value, b);
     }
@@ -310,10 +337,12 @@ fn build(spec: &Spec) -> Vec<u8> {
         (0x00, 1),
         (0x01, type_refs),
         (0x02, spec.declared_type_defs.unwrap_or(3)),
-        (0x04, 1 + u32::from(spec.enum_underlying.is_some())),
+        (0x03, spec.field_ptrs.len() as u32),
+        (0x04, 1 + u32::from(spec.enum_underlying.is_some()) + spec.enum_literals.len() as u32),
         (0x06, 4 + spec.extra_methods),
         (0x08, 4),
         (0x0A, 1),
+        (0x0B, spec.constants.len() as u32),
         (0x0C, attribute_parents.len() as u32),
         (0x11, 1),
         (0x12, event_maps.len() as u32),
@@ -341,7 +370,9 @@ fn build(spec: &Spec) -> Vec<u8> {
     for &(_, rows) in &present {
         table_stream.extend_from_slice(&rows.to_le_bytes());
     }
-    if let Some(cut) = spec.event_table_cut {
+    if let Some(cut) = spec.constant_table_cut {
+        table_stream.extend_from_slice(&tables.bytes[..constant_end - cut]);
+    } else if let Some(cut) = spec.event_table_cut {
         table_stream.extend_from_slice(&tables.bytes[..event_end - cut]);
     } else {
         table_stream.extend_from_slice(&tables.bytes);
@@ -1822,6 +1853,273 @@ fn custom_attributes_decode_named_primitives_types_and_arrays() {
     assert_eq!(json["named_arguments"][1]["kind"], "property");
 }
 
+fn enum_constant_spec(underlying: u8, bytes: Vec<u8>) -> Spec {
+    Spec {
+        enum_underlying: Some(underlying),
+        enum_literals: vec![("RawName".to_owned(), 0x8056, vec![0x06, 0x11, 12])],
+        constants: vec![(u16::from(underlying), 3 << 2, bytes)],
+        no_attributes: true,
+        ..Spec::default()
+    }
+}
+
+fn enum_evidence(metadata: &dotnet::DotNetMetadata) -> Vec<&dotnet::FieldDef> {
+    metadata.types.iter().flat_map(|ty| &ty.fields).filter(|field| field.enum_constant.is_some()).collect()
+}
+
+#[test]
+fn enum_constants_preserve_all_integral_widths_extrema_and_aliases_without_attributes() {
+    for (kind, integral_type, width, min, max) in [
+        (0x04, "int8", 1, "-128", "127"),
+        (0x05, "uint8", 1, "0", "255"),
+        (0x06, "int16", 2, "-32768", "32767"),
+        (0x07, "uint16", 2, "0", "65535"),
+        (0x08, "int32", 4, "-2147483648", "2147483647"),
+        (0x09, "uint32", 4, "0", "4294967295"),
+        (0x0A, "int64", 8, "-9223372036854775808", "9223372036854775807"),
+        (0x0B, "uint64", 8, "0", "18446744073709551615"),
+    ] {
+        for (wide, jtd) in [(false, false), (true, false), (false, true)] {
+            let mut spec = enum_constant_spec(kind, Vec::new());
+            spec.wide_strings = wide;
+            spec.wide_blobs = wide;
+            spec.jtd = jtd;
+            spec.enum_literals = ["Minimum", "Maximum", "Alias", "FlagsLike"]
+                .map(|name| (name.to_owned(), 0x8056, vec![0x06, 0x11, 12]))
+                .to_vec();
+            spec.constants = [min, max, max, "3"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, number)| {
+                    let bits =
+                        number.parse::<i64>().map(|value| value as u64).or_else(|_| number.parse::<u64>()).unwrap();
+                    (u16::from(kind), ((index as u32 + 3) << 2), bits.to_le_bytes()[..width].to_vec())
+                })
+                .collect();
+            let metadata = parse(&spec).unwrap().unwrap();
+            assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+            assert!(metadata.custom_attributes.is_empty());
+            let fields = enum_evidence(&metadata);
+            assert_eq!(
+                fields.iter().map(|field| field.name.as_str()).collect::<Vec<_>>(),
+                ["Minimum", "Maximum", "Alias", "FlagsLike"]
+            );
+            for (field, number) in fields.iter().zip([min, max, max, "3"]) {
+                let constant = field.enum_constant.as_ref().unwrap();
+                assert_eq!(constant.underlying_integral_type, integral_type);
+                assert_eq!(constant.value, number);
+                let json = serde_json::to_value(field).unwrap();
+                assert_eq!(json["enum_constant"]["value"].as_str(), Some(number));
+            }
+            let json = serde_json::to_value(&metadata.types[2].fields[0]).unwrap();
+            assert!(json.get("enum_constant").is_none(), "value__ is not a literal");
+        }
+    }
+}
+
+#[test]
+fn enum_constants_require_exact_owner_flags_kind_padding_and_blob_width() {
+    let valid = enum_constant_spec(0x08, 3i32.to_le_bytes().to_vec());
+    let mut invalid = vec![
+        Spec { enum_field_name: Some("not_value__".to_owned()), ..valid.clone() },
+        Spec { enum_field_flags: Some(0x0616), ..valid.clone() },
+        Spec { enum_field_flags: Some(0x8646), ..valid.clone() },
+        Spec { enum_underlying: Some(0x02), ..valid.clone() },
+        Spec { enum_value_signature: Some(vec![0x06]), ..valid.clone() },
+        Spec { enum_value_signature: Some(vec![0x06, 0x08, 0]), ..valid.clone() },
+        Spec { constant_blob_index: Some(0), ..valid.clone() },
+        Spec { constant_blob_index: Some(0xFFFF), ..valid.clone() },
+        Spec { inner_extends: Some(5), ..valid.clone() },
+        Spec { field_lists: Some([1, 1, 1]), ..valid.clone() },
+        Spec { field_lists: Some([1, 4, 2]), ..valid.clone() },
+    ];
+    for flags in [0x8046, 0x8016, 0x0056, 0x8076, 0x0006] {
+        let mut spec = valid.clone();
+        spec.enum_literals[0].1 = flags;
+        invalid.push(spec);
+    }
+    for signature in [
+        vec![0x06, 0x08],
+        vec![0x06, 0x11, 8],
+        vec![0x06, 0x11, 13],
+        vec![0x06, 0x11, 12, 0],
+        vec![0x06, 0x11],
+        vec![0x07, 0x11, 12],
+    ] {
+        let mut spec = valid.clone();
+        spec.enum_literals[0].2 = signature;
+        invalid.push(spec);
+    }
+    for (kind, parent, bytes) in [
+        (0x0108, 12, vec![3, 0, 0, 0]),
+        (0x09, 12, vec![3, 0, 0, 0]),
+        (0x08, 12, vec![3, 0, 0]),
+        (0x08, 12, vec![3, 0, 0, 0, 0]),
+        (0x08, 0, vec![3, 0, 0, 0]),
+        (0x08, 400, vec![3, 0, 0, 0]),
+        (0x08, 7, vec![3, 0, 0, 0]),
+        (0x08, 5, vec![3, 0, 0, 0]),
+        (0x08, 6, vec![3, 0, 0, 0]),
+        (0x08, 8, vec![3, 0, 0, 0]),
+    ] {
+        invalid.push(Spec { constants: vec![(kind, parent, bytes)], ..valid.clone() });
+    }
+    for spec in invalid {
+        let metadata = parse(&spec).unwrap().unwrap();
+        assert!(enum_evidence(&metadata).is_empty(), "{spec:?}");
+    }
+    assert_eq!(enum_evidence(&parse(&valid).unwrap().unwrap()).len(), 1);
+    let mut class_signature = valid;
+    class_signature.enum_literals[0].2 = vec![0x06, 0x12, 12];
+    let metadata = parse(&class_signature).unwrap().unwrap();
+    assert!(metadata.types[2].fields[1].enum_constant.is_none());
+    assert!(enum_evidence(&metadata).is_empty());
+    assert!(
+        metadata
+            .warnings
+            .iter()
+            .any(|warning| { warning.contains("Constant row 1: unverified local enum literal; evidence rejected") })
+    );
+}
+
+#[test]
+fn ordinary_non_enum_literal_fields_remain_unchanged_without_spurious_warnings() {
+    let spec = Spec {
+        enum_literals: vec![("Ordinary".to_owned(), 0x8056, vec![0x06, 0x08])],
+        constants: vec![(0x08, 2 << 2, 3i32.to_le_bytes().to_vec())],
+        no_attributes: true,
+        ..Spec::default()
+    };
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert!(enum_evidence(&metadata).is_empty());
+    assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+    let field = &metadata.types[2].fields[0];
+    assert_eq!(field.name, "Ordinary");
+    assert_eq!(field.signature, "int32 Ordinary");
+    assert!(serde_json::to_value(field).unwrap().get("enum_constant").is_none());
+}
+
+#[test]
+fn constant_parent_kinds_do_not_alias_fields_and_invalid_rows_preserve_other_evidence() {
+    let mut spec = enum_constant_spec(0x08, 3i32.to_le_bytes().to_vec());
+    spec.constants.extend([
+        (0x08, 5, vec![3, 0, 0, 0]),
+        (0x08, 6, vec![3, 0, 0, 0]),
+        (0x08, 7, vec![3, 0, 0, 0]),
+        (0x08, 0xFFFC, vec![3, 0, 0, 0]),
+    ]);
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert_eq!(enum_evidence(&metadata).len(), 1);
+    for expected in [
+        "Param constants are unsupported",
+        "Property constants are unsupported",
+        "reserved HasConstant",
+        "invalid HasConstant",
+    ] {
+        assert!(metadata.warnings.iter().any(|warning| warning.contains(expected)), "{:?}", metadata.warnings);
+    }
+}
+
+#[test]
+fn constant_parent_indexes_widen_at_the_field_tag_threshold() {
+    let mut spec = enum_constant_spec(0x09, u32::MAX.to_le_bytes().to_vec());
+    spec.wide_strings = true;
+    spec.wide_blobs = true;
+    spec.enum_literals = (0..0x4000).map(|index| (format!("Value{index}"), 0x8056, vec![0x06, 0x11, 12])).collect();
+    let field = spec.enum_literals.len() as u32 + 2;
+    spec.constants[0].1 = field << 2;
+    let metadata = parse(&spec).unwrap().unwrap();
+    let fields = enum_evidence(&metadata);
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].token, 0x0400_0000 | field);
+    assert_eq!(fields[0].enum_constant.as_ref().unwrap().value, "4294967295");
+}
+
+#[test]
+fn duplicate_constant_parents_reject_only_that_field_and_field_ptr_order_is_unique() {
+    for second in [3i32, 7] {
+        let mut spec = enum_constant_spec(0x08, 3i32.to_le_bytes().to_vec());
+        spec.enum_literals.push(("Unaffected".to_owned(), 0x8056, vec![0x06, 0x11, 12]));
+        spec.constants.push((0x08, 12, second.to_le_bytes().to_vec()));
+        spec.constants.push((0x08, 16, 3i32.to_le_bytes().to_vec()));
+        spec.field_ptrs = vec![1, 4, 2, 3, 4, 3];
+        spec.field_lists = Some([1, 1, 2]);
+        let metadata = parse(&spec).unwrap().unwrap();
+        let fields = enum_evidence(&metadata);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "Unaffected");
+        assert_eq!(fields[0].token, 0x0400_0004);
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("duplicate Field parent")));
+        assert_eq!(metadata.types[2].fields.len(), 3, "duplicate pointers cannot duplicate fields");
+    }
+}
+
+#[test]
+fn truncated_constant_tables_never_prove_a_unique_parent_or_panic() {
+    for jtd in [false, true] {
+        for cut in 1..=12 {
+            let mut spec = enum_constant_spec(0x0B, u64::MAX.to_le_bytes().to_vec());
+            spec.jtd = jtd;
+            spec.constants.push((0x0B, 12, 0u64.to_le_bytes().to_vec()));
+            spec.constant_table_cut = Some(cut);
+            let metadata = parse(&spec).unwrap().unwrap();
+            assert!(enum_evidence(&metadata).is_empty());
+            assert!(metadata.warnings.iter().any(|warning| warning.contains("Constant")));
+        }
+    }
+}
+
+#[test]
+fn enum_constant_metadata_never_substitutes_names_into_numeric_boxed_attributes() {
+    let mut spec = enum_constant_spec(0x08, 3i32.to_le_bytes().to_vec());
+    spec.no_attributes = false;
+    spec.ctor_signature = Some(vec![0x20, 1, 0x01, 0x1C]);
+    let mut value = vec![1, 0, 0x55];
+    value.extend(ser_text("Demo.Program+Inner"));
+    value.extend(3i32.to_le_bytes());
+    value.extend([0, 0]);
+    spec.attribute_value = Some(value);
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert_eq!(enum_evidence(&metadata).len(), 1);
+    assert_eq!(
+        metadata.custom_attributes[0].arguments,
+        Some(vec!["box(Demo.Program+Inner, Demo.Program+Inner(3))".to_owned()])
+    );
+}
+
+#[test]
+fn enum_constant_inventory_caps_rows_retained_values_and_name_work() {
+    let mut spec = enum_constant_spec(0x08, 3i32.to_le_bytes().to_vec());
+    spec.wide_strings = true;
+    spec.wide_blobs = true;
+    spec.enum_literals =
+        (0..=dotnet::MAX_ENUM_CONSTANTS).map(|index| (format!("Value{index}"), 0x8056, vec![0x06, 0x11, 12])).collect();
+    spec.constants = (0..spec.enum_literals.len())
+        .map(|index| (0x08, (index as u32 + 3) << 2, 3i32.to_le_bytes().to_vec()))
+        .collect();
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert_eq!(enum_evidence(&metadata).len(), dotnet::MAX_ENUM_CONSTANTS);
+    assert!(metadata.warnings.iter().any(|warning| warning.contains("enum Constant evidence budget exhausted")));
+
+    spec.enum_literals.iter_mut().for_each(|literal| literal.0 = "x".repeat(1024));
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert!(!enum_evidence(&metadata).is_empty());
+    assert!(enum_evidence(&metadata).len() < dotnet::MAX_ENUM_CONSTANTS);
+    assert!(metadata.warnings.len() <= 256);
+
+    spec.enum_literals.iter_mut().for_each(|literal| literal.0.push('x'));
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert!(enum_evidence(&metadata).is_empty(), "truncated display names cannot become constant evidence");
+    assert!(metadata.warnings.iter().any(|warning| warning.contains("warning limit reached")));
+    assert!(metadata.warnings.len() <= 256);
+
+    spec.enum_literals.truncate(1);
+    spec.constants = vec![(0x08, 12, vec![3, 0, 0, 0]); dotnet::MAX_ENUM_CONSTANT_ROWS as usize + 1];
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert!(enum_evidence(&metadata).is_empty());
+    assert!(metadata.warnings.iter().any(|warning| warning.contains("row limit exceeded")));
+}
+
 #[test]
 fn verified_local_enum_widths_and_signedness_drive_attribute_values() {
     for (underlying, bytes, number) in [
@@ -2177,7 +2475,14 @@ fn reads_a_real_assembly() {
     // Microsoft.Bcl.HashCode 1.1.1, lib/netstandard2.0 (MIT; provenance in the .LICENSE.txt beside it).
     let binary = Binary::open(fixture("Microsoft.Bcl.HashCode.dll")).unwrap();
     let metadata = dotnet::metadata(&binary).unwrap().expect("a managed assembly");
-    assert!(metadata.warnings.is_empty(), "unexpected warnings: {:?}", metadata.warnings);
+    assert!(
+        metadata.warnings.iter().all(|warning| {
+            warning.starts_with("Constant row ")
+                && warning.ends_with("Param constants are unsupported; not enum-field evidence")
+        }),
+        "unexpected warnings: {:?}",
+        metadata.warnings
+    );
     assert_eq!(metadata.runtime_version, "v4.0.30319");
     assert_eq!(metadata.cli.flag_names, ["il_only", "strong_name_signed"]);
     assert_eq!(metadata.entry_point, None, "a library has no entry point");

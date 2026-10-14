@@ -431,6 +431,13 @@ fn boxed_attribute_image() -> Vec<u8> {
     let attribute = name("BoxedAttribute");
     let namespace = name("Demo");
     let ctor = name(".ctor");
+    let enum_name = name("Enum");
+    let system = name("System");
+    let mode = name("Mode");
+    let value_field = name("value__");
+    let all = name("All");
+    let alias = name("Alias");
+    let mscorlib = name("mscorlib");
     let mut value = vec![1, 0, 0x08, 42, 0, 0, 0, 2, 0, 0, 0, 0x0E, 2, b'4', b'2'];
     value.extend([0x1D, 0x08, 2, 0, 0, 0]);
     value.extend((-2i32).to_le_bytes());
@@ -446,15 +453,37 @@ fn boxed_attribute_image() -> Vec<u8> {
     assert!(value.len() < 0x80);
     blobs.push(value.len() as u8);
     blobs.extend(value);
-    let valid = (1u64 << 1) | (1 << 10) | (1 << 12);
+    let value_signature = blobs.len() as u16;
+    blobs.extend([2, 0x06, 0x0B]);
+    let literal_signature = blobs.len() as u16;
+    blobs.extend([3, 0x06, 0x11, 4]);
+    let constant_value = blobs.len() as u16;
+    blobs.push(8);
+    blobs.extend(u64::MAX.to_le_bytes());
+    let present = [(1, 2u32), (2, 1), (4, 3), (10, 1), (11, 2), (12, 1), (35, 1)];
+    let valid = present.iter().fold(0u64, |mask, &(table, _)| mask | (1 << table));
     let mut tables = vec![0, 0, 0, 0, 2, 0, 0, 1];
     tables.extend(valid.to_le_bytes());
     tables.extend(0u64.to_le_bytes());
-    for _ in 0..3 {
-        tables.extend(1u32.to_le_bytes());
+    for &(_, rows) in &present {
+        tables.extend(rows.to_le_bytes());
     }
-    for column in [0, attribute, namespace, 9, ctor, 1, 34, 11, 8] {
-        tables.extend(column.to_le_bytes());
+    for row in [
+        vec![0, attribute, namespace],
+        vec![6, enum_name, system],
+        vec![1, 0, mode, namespace, 9, 1, 1],
+        vec![0x0606, value_field, value_signature],
+        vec![0x8056, all, literal_signature],
+        vec![0x8056, alias, literal_signature],
+        vec![9, ctor, 1],
+        vec![0x0B, 8, constant_value],
+        vec![0x0B, 12, constant_value],
+        vec![34, 11, 8],
+        vec![4, 0, 0, 0, 0, 0, 0, mscorlib, 0, 0],
+    ] {
+        for column in row {
+            tables.extend(column.to_le_bytes());
+        }
     }
     let streams: [(&str, &[u8]); 3] = [("#~", &tables), ("#Strings", &strings), ("#Blob", &blobs)];
     let version = b"v4.0.30319\0\0";
@@ -519,6 +548,41 @@ async fn dotnet_metadata_transports_typed_boxed_values_through_the_existing_sche
         ])
     );
     assert!(attribute.get("arguments_error").is_none_or(Value::is_null));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn dotnet_metadata_transports_enum_constant_evidence_through_the_existing_types_selector() {
+    struct EnumImage(PathBuf);
+    impl Drop for EnumImage {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let scratch = EnumImage(std::env::temp_dir().join(format!("rampage-mcp-dotnet-enums-{}.dll", std::process::id())));
+    std::fs::write(&scratch.0, boxed_attribute_image()).unwrap();
+    let client = connect().await;
+    let result = call(
+        &client,
+        "dotnet_metadata",
+        json!({"path": scratch.0.to_str().unwrap(), "list": "types", "contains": "mode", "limit": 1}),
+    )
+    .await;
+    let json = json_of(&result);
+    assert_eq!(json["types"]["total"], 1);
+    let fields = json["types"]["items"][0]["fields"].as_array().unwrap();
+    assert!(fields[0].get("enum_constant").is_none());
+    for (field, name, token) in [(&fields[1], "All", 0x0400_0002), (&fields[2], "Alias", 0x0400_0003)] {
+        assert_eq!(field["name"], name);
+        assert_eq!(field["token"], token);
+        assert_eq!(
+            field["enum_constant"],
+            json!({
+                "underlying_integral_type": "uint64", "value": "18446744073709551615"
+            })
+        );
+    }
+    assert!(json.get("custom_attributes").is_none());
     client.cancel().await.unwrap();
 }
 

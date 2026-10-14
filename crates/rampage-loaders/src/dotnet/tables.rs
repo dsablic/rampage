@@ -21,6 +21,7 @@ pub(super) const METHOD_DEF: u8 = 0x06;
 pub(super) const PARAM_PTR: u8 = 0x07;
 pub(super) const PARAM: u8 = 0x08;
 pub(super) const MEMBER_REF: u8 = 0x0A;
+pub(super) const CONSTANT: u8 = 0x0B;
 pub(super) const CUSTOM_ATTRIBUTE: u8 = 0x0C;
 pub(super) const STAND_ALONE_SIG: u8 = 0x11;
 pub(super) const EVENT_MAP: u8 = 0x12;

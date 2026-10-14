@@ -945,6 +945,8 @@ pub fn tools() -> Vec<Tool> {
              payload or external resource is read. Supported attribute values include primitives, \
              strings, types, single-dimensional arrays, verified local enums and boxed values/vectors in object[]; \
              unsupported values report errors. \
+             Type fields can retain verified local enum constants as exact numeric strings; attribute numeric \
+             values are not replaced by symbolic names. \
              Property/event accessor tokens are metadata bindings, not inferred behavior. Filter with contains; \
              offset/limit page the list and parent_token selects an attribute target. Bodies are CIL, listed by \
              dotnet_il, not native code for decompile/disassemble. Returns null for a native image.",

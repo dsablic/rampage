@@ -1202,6 +1202,15 @@ fn dotnet_types(out: &mut impl Write, types: &rampage_api::Page<rampage_loaders:
     for ty in &types.items {
         let base = ty.extends.as_deref().map(|base| format!(" : {base}")).unwrap_or_default();
         writeln!(out, "\n{}{base}", ty.full_name())?;
+        for field in &ty.fields {
+            if let Some(constant) = &field.enum_constant {
+                writeln!(
+                    out,
+                    "  metadata enum constant {} (token {:#010x}): {} {}",
+                    field.name, field.token, constant.underlying_integral_type, constant.value
+                )?;
+            }
+        }
         for method in &ty.methods {
             let body = match &method.il {
                 Some(il) => format!("{} bytes of IL at {:#x}", il.code_size, method.rva),
