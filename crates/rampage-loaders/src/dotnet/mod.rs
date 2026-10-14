@@ -15,8 +15,8 @@
 //! Method, field, property and member-reference signatures and event types are rendered as ILAsm-style text.
 //! Properties and events include bounded MethodSemantics bindings; P/Invoke imports come from ImplMap.
 //! Custom attributes decode fixed and named primitive/string/type arguments, single-dimensional arrays and enums
-//! verified in this image. External enum underlying types remain unknown. Boxed attribute arguments and resources
-//! are not decoded.
+//! verified in this image. External enum underlying types remain unknown. Resource rows describe metadata links
+//! and embedded location readability only; resource lengths, payloads and boxed attribute arguments are not decoded.
 //!
 //! [`method_il`] disassembles one method's CIL on request, with its locals and exception clauses; that is a
 //! listing for a reader, never a source of native analysis.
@@ -53,6 +53,9 @@ const METADATA_SIGNATURE: u32 = 0x424A_5342;
 const MAX_NESTING: u32 = 16;
 const MAX_MEMBER_ACCESSORS: usize = 64;
 const BUDGET_EXHAUSTED: &str = "signature text budget exhausted; remaining signatures not rendered";
+pub const MAX_RESOURCE_ROWS: u32 = 100_000;
+pub const MAX_RESOURCE_TEXT_BYTES: usize = 4 * 1024 * 1024;
+const RESOURCE_NAME_TRUNCATED: &str = "<truncated>";
 
 /// CLI header flags (II.25.3.3.1).
 const COMIMAGE_FLAGS_NATIVE_ENTRYPOINT: u32 = 0x10;
@@ -89,6 +92,8 @@ pub struct DotNetMetadata {
     /// Methods implemented in a native DLL (P/Invoke), from ImplMap.
     pub pinvokes: Vec<PInvoke>,
     pub custom_attributes: Vec<CustomAttribute>,
+    pub resources: Vec<ManifestResource>,
+    pub resource_counts: ResourceCounts,
     /// Literals from `#US` (what `ldstr` loads), capped.
     pub user_strings: Vec<String>,
     /// Declared row count of each table present, standard or not.
@@ -147,6 +152,94 @@ pub struct AssemblyRef {
     /// Hex of the public key token, or of the full key when `full_public_key` is set.
     pub public_key_or_token: Option<String>,
     pub full_public_key: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ResourceCounts {
+    pub declared: u32,
+    /// False when the header does not establish a count; `declared` is then only a zero placeholder.
+    pub declared_known: bool,
+    pub readable: u32,
+    pub retained: usize,
+    /// Rows or name text were omitted by a bound or a truncated metadata table.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ManifestResource {
+    pub token: u32,
+    pub name: Option<String>,
+    pub name_truncated: bool,
+    pub flags: u32,
+    /// Directory-relative location for embedded resources, not a payload size.
+    pub offset: u32,
+    pub implementation_raw: u32,
+    pub implementation: ResourceImplementation,
+    pub availability: ResourceAvailability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResourceImplementation {
+    Embedded,
+    File {
+        row: u32,
+        token: Option<u32>,
+        status: ResourceReferenceStatus,
+        name: Option<String>,
+        name_truncated: bool,
+        flags: Option<u32>,
+    },
+    AssemblyRef {
+        row: u32,
+        token: Option<u32>,
+        status: ResourceReferenceStatus,
+        name: Option<String>,
+        name_truncated: bool,
+    },
+    ExportedType {
+        row: u32,
+        token: Option<u32>,
+        status: ResourceReferenceStatus,
+    },
+    Invalid {
+        tag: u8,
+        row: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceReferenceStatus {
+    Readable,
+    NullRow,
+    OutOfRange,
+    Unreadable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResourceAvailability {
+    /// The declared directory must fit one section's backed file span. No length prefix or payload is read.
+    Embedded {
+        rva: Option<u32>,
+        status: EmbeddedResourceStatus,
+    },
+    /// A metadata-only File/AssemblyRef link; the target is not resolved or read.
+    External,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddedResourceStatus {
+    ReadableLocation,
+    DirectoryAbsent,
+    DirectoryOverflow,
+    OutsideDirectory,
+    RvaOverflow,
+    Unmapped,
+    DirectoryUnreadable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -438,7 +531,19 @@ fn from_pe<'a, Pe: ImageNtHeaders>(image: &'a [u8], visit: Visit<'_, 'a>) -> Res
     }
     let sections = file.section_table();
     let read_rva = |rva: u32| sections.pe_data_at(image, rva);
-    parse_cli(rva, &read_rva, visit).map(Some)
+    let mut metadata = parse_cli(rva, &read_rva, visit)?;
+    let directory_status = |rva: u32, size: u32| {
+        let Some((offset, remaining)) = sections.pe_file_range_at(rva) else {
+            return EmbeddedResourceStatus::Unmapped;
+        };
+        if size > remaining || u64::from(offset) + u64::from(size) > image.len() as u64 {
+            EmbeddedResourceStatus::DirectoryUnreadable
+        } else {
+            EmbeddedResourceStatus::ReadableLocation
+        }
+    };
+    read_resource_locations(&mut metadata, &directory_status);
+    Ok(Some(metadata))
 }
 
 /// Parses everything reachable from the CLI header at `cli_rva`. `read_rva` returns the file bytes from an RVA
@@ -501,6 +606,37 @@ fn read_bodies<'a>(metadata: &mut DotNetMetadata, read_rva: &dyn Fn(u32) -> Opti
             }
             None => warnings.push(format!("method {:#010x} has an invalid IL body header", method.token)),
         }
+    }
+    metadata.warnings = warnings.0;
+}
+
+fn read_resource_locations(
+    metadata: &mut DotNetMetadata,
+    directory_status: &dyn Fn(u32, u32) -> EmbeddedResourceStatus,
+) {
+    let mut warnings = Warnings(std::mem::take(&mut metadata.warnings));
+    let cli = &metadata.cli;
+    let mapped = directory_status(cli.resources_rva, cli.resources_size);
+    for resource in &mut metadata.resources {
+        if resource.implementation != ResourceImplementation::Embedded {
+            continue;
+        }
+        let rva = (cli.resources_rva != 0).then(|| cli.resources_rva.checked_add(resource.offset)).flatten();
+        let status = if cli.resources_rva == 0 || cli.resources_size == 0 {
+            EmbeddedResourceStatus::DirectoryAbsent
+        } else if rva.is_none() {
+            EmbeddedResourceStatus::RvaOverflow
+        } else if cli.resources_rva.checked_add(cli.resources_size).is_none() {
+            EmbeddedResourceStatus::DirectoryOverflow
+        } else if resource.offset >= cli.resources_size {
+            EmbeddedResourceStatus::OutsideDirectory
+        } else {
+            mapped
+        };
+        if status != EmbeddedResourceStatus::ReadableLocation {
+            warnings.push(format!("ManifestResource {:#010x}: embedded location {status:?}", resource.token));
+        }
+        resource.availability = ResourceAvailability::Embedded { rva, status };
     }
     metadata.warnings = warnings.0;
 }
@@ -637,6 +773,8 @@ fn parse_root(
         member_refs: Vec::new(),
         pinvokes: Vec::new(),
         custom_attributes: Vec::new(),
+        resources: Vec::new(),
+        resource_counts: ResourceCounts { truncated: true, ..ResourceCounts::default() },
         user_strings,
         tables: Vec::new(),
         warnings: Vec::new(),
@@ -651,7 +789,15 @@ fn parse_root(
                 decoder.budget_reported = false;
                 visit(&decoder, &metadata);
             }
-            None => warnings.push("table stream header is unreadable".to_owned()),
+            None => {
+                if let Some(declared) = Tables::declared_count(stream, tables::MANIFEST_RESOURCE) {
+                    metadata.resource_counts.declared = declared;
+                    metadata.resource_counts.declared_known = true;
+                    warnings
+                        .push("ManifestResource declared count recovered from an incomplete table header".to_owned());
+                }
+                warnings.push("table stream header is unreadable".to_owned());
+            }
         },
         None => warnings.push("metadata has no #~ table stream".to_owned()),
     }
@@ -683,6 +829,27 @@ struct Decoder<'t, 'a> {
 type MemberOwners = HashMap<u32, String>;
 /// Owning TypeDef row by `(table, row)` of a mapped Property or Event.
 type MemberTypes = HashMap<(u8, u32), u32>;
+
+struct ResourceBudget {
+    remaining: usize,
+    exhausted: bool,
+}
+
+impl ResourceBudget {
+    fn charge(&mut self, bytes: usize) -> bool {
+        match self.remaining.checked_sub(bytes) {
+            Some(left) => {
+                self.remaining = left;
+                true
+            }
+            None => {
+                self.remaining = 0;
+                self.exhausted = true;
+                false
+            }
+        }
+    }
+}
 
 impl signatures::Resolve for Decoder<'_, '_> {
     fn type_name(&self, table: u8, row: u32) -> Option<String> {
@@ -768,6 +935,182 @@ impl Decoder<'_, '_> {
         metadata.pinvokes = self.pinvokes(&owners);
         metadata.custom_attributes = self.custom_attributes(&owners);
         metadata.entry_point = self.entry_point(&metadata.cli, &owners);
+        self.resources(metadata);
+    }
+
+    fn resources(&mut self, metadata: &mut DotNetMetadata) {
+        let table = tables::MANIFEST_RESOURCE;
+        let readable = self.tables.rows(table);
+        let mut budget = ResourceBudget { remaining: MAX_RESOURCE_TEXT_BYTES, exhausted: false };
+        let mut names_truncated = false;
+        for row in 1..=readable.min(MAX_RESOURCE_ROWS) {
+            if budget.exhausted {
+                break;
+            }
+            let cell = |column| self.tables.cell(table, row, column).unwrap_or(0);
+            let (offset, flags, name_index, implementation_raw) = (cell(0), cell(1), cell(2), cell(3));
+            let (name, name_truncated) = self.resource_name(name_index, row, "name", &mut budget);
+            let (implementation, availability, link_truncated) =
+                self.resource_implementation(implementation_raw, row, &mut budget);
+            names_truncated |= name_truncated || link_truncated;
+            metadata.resources.push(ManifestResource {
+                token: token(table, row),
+                name,
+                name_truncated,
+                flags,
+                offset,
+                implementation_raw,
+                implementation,
+                availability,
+            });
+        }
+        metadata.resource_counts = ResourceCounts {
+            declared: self.tables.declared[usize::from(table)],
+            declared_known: true,
+            readable,
+            retained: metadata.resources.len(),
+            truncated: names_truncated
+                || budget.exhausted
+                || metadata.resources.len() as u32 != self.tables.declared[usize::from(table)],
+        };
+        if metadata.resources.len() as u32 != readable || budget.exhausted {
+            self.warnings.push(format!(
+                "ManifestResource inventory budget exhausted: retained {} of {readable} readable rows \
+                 (limit {MAX_RESOURCE_ROWS} rows, {MAX_RESOURCE_TEXT_BYTES} name-work bytes)",
+                metadata.resources.len()
+            ));
+        }
+    }
+
+    fn resource_name(
+        &mut self,
+        index: u32,
+        row: u32,
+        label: &str,
+        budget: &mut ResourceBudget,
+    ) -> (Option<String>, bool) {
+        let invalid = |warnings: &mut Warnings, reason: &str| {
+            warnings.push(format!("ManifestResource row {row}: {label} #Strings offset {index:#x} {reason}"));
+            (None, false)
+        };
+        if !budget.charge(1) {
+            return (None, true);
+        }
+        let Some(tail) = usize::try_from(index).ok().and_then(|index| self.heaps.strings.get(index..)) else {
+            return invalid(self.warnings, "is outside the heap");
+        };
+        let mut length = 0;
+        let mut terminated = false;
+        while length <= heaps::MAX_NAME_BYTES {
+            if !budget.charge(1) {
+                break;
+            }
+            match tail.get(length) {
+                Some(0) => {
+                    terminated = true;
+                    break;
+                }
+                Some(_) if length < heaps::MAX_NAME_BYTES => length += 1,
+                Some(_) => break,
+                None => return invalid(self.warnings, "is unterminated"),
+            }
+        }
+        let truncated = !terminated;
+        let bytes = &tail[..length];
+        let text = match std::str::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(error) if truncated && error.error_len().is_none() => {
+                let Ok(text) = std::str::from_utf8(&bytes[..error.valid_up_to()]) else {
+                    return invalid(self.warnings, "has invalid UTF-8");
+                };
+                text
+            }
+            Err(_) => return invalid(self.warnings, "has invalid UTF-8"),
+        };
+        if truncated {
+            self.warnings.push(format!("ManifestResource row {row}: {label} truncated by the name/work limit"));
+            if !budget.charge(RESOURCE_NAME_TRUNCATED.len()) {
+                return (None, true);
+            }
+            (Some(format!("{text}{RESOURCE_NAME_TRUNCATED}")), true)
+        } else {
+            (Some(text.to_owned()), false)
+        }
+    }
+
+    fn resource_implementation(
+        &mut self,
+        raw: u32,
+        resource_row: u32,
+        budget: &mut ResourceBudget,
+    ) -> (ResourceImplementation, ResourceAvailability, bool) {
+        if raw == 0 {
+            return (
+                ResourceImplementation::Embedded,
+                ResourceAvailability::Embedded { rva: None, status: EmbeddedResourceStatus::DirectoryAbsent },
+                false,
+            );
+        }
+        let Some((table, row)) = C::Implementation.decode(raw) else {
+            self.warnings.push(format!("ManifestResource row {resource_row}: reserved Implementation tag {}", raw & 3));
+            return (
+                ResourceImplementation::Invalid { tag: (raw & 3) as u8, row: raw >> 2 },
+                ResourceAvailability::Unavailable,
+                false,
+            );
+        };
+        let status = if row == 0 {
+            ResourceReferenceStatus::NullRow
+        } else if row > tables::MAX_ROWS || row > self.tables.declared[usize::from(table)] {
+            ResourceReferenceStatus::OutOfRange
+        } else if row > self.tables.rows(table) {
+            ResourceReferenceStatus::Unreadable
+        } else {
+            ResourceReferenceStatus::Readable
+        };
+        let target_token = matches!(status, ResourceReferenceStatus::Readable | ResourceReferenceStatus::Unreadable)
+            .then(|| token(table, row));
+        if status != ResourceReferenceStatus::Readable {
+            self.warnings.push(format!(
+                "ManifestResource row {resource_row}: Implementation {} row {row} is {status:?}",
+                tables::TABLE_NAMES[usize::from(table)]
+            ));
+        }
+        if table == tables::EXPORTED_TYPE {
+            self.warnings.push(format!(
+                "ManifestResource row {resource_row}: ExportedType Implementation is unsupported for resource links"
+            ));
+            return (
+                ResourceImplementation::ExportedType { row, token: target_token, status },
+                ResourceAvailability::Unavailable,
+                false,
+            );
+        }
+        let (name, name_truncated) = if status == ResourceReferenceStatus::Readable {
+            let column = if table == tables::FILE { 1 } else { 6 };
+            let index = self.tables.cell(table, row, column).unwrap_or(0);
+            self.resource_name(index, resource_row, "Implementation name", budget)
+        } else {
+            (None, false)
+        };
+        let implementation = if table == tables::FILE {
+            ResourceImplementation::File {
+                row,
+                token: target_token,
+                status,
+                name,
+                name_truncated,
+                flags: (status == ResourceReferenceStatus::Readable).then(|| self.tables.cell(table, row, 0)).flatten(),
+            }
+        } else {
+            ResourceImplementation::AssemblyRef { row, token: target_token, status, name, name_truncated }
+        };
+        let availability = if status == ResourceReferenceStatus::Readable {
+            ResourceAvailability::External
+        } else {
+            ResourceAvailability::Unavailable
+        };
+        (implementation, availability, name_truncated)
     }
 
     fn string(&mut self, table: u8, row: u32, column: usize) -> String {
@@ -1538,6 +1881,47 @@ mod tests {
         assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
         assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
         assert_eq!(warnings.0, [BUDGET_EXHAUSTED]);
+    }
+
+    #[test]
+    fn resource_name_budget_charges_failed_lookups_and_exact_boundaries() {
+        let stream = table_stream(&[]);
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: b"\0M\0\xff\0", ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        let mut budget = ResourceBudget { remaining: 4, exhausted: false };
+        assert_eq!(decoder.resource_name(u32::MAX, 1, "name", &mut budget), (None, false));
+        assert_eq!(budget.remaining, 3);
+        assert_eq!(decoder.resource_name(1, 2, "name", &mut budget), (Some("M".to_owned()), false));
+        assert_eq!(budget.remaining, 0);
+        assert!(!budget.exhausted);
+        assert_eq!(decoder.resource_name(1, 3, "name", &mut budget), (None, true));
+        assert!(budget.exhausted);
+        let mut budget = ResourceBudget { remaining: 3, exhausted: false };
+        assert_eq!(decoder.resource_name(3, 4, "name", &mut budget), (None, false));
+        assert_eq!(budget.remaining, 0, "invalid UTF-8 still costs the lookup and inspected bytes");
+    }
+
+    #[test]
+    fn resource_implementation_does_not_claim_unavailable_declared_rows_are_readable() {
+        let stream = table_stream(&[(tables::FILE, 1)]);
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let mut decoder = Decoder::new(&tables, Heaps::default(), &mut warnings);
+        let mut budget = ResourceBudget { remaining: 1, exhausted: false };
+        let (implementation, availability, _) = decoder.resource_implementation(4, 1, &mut budget);
+        assert!(matches!(
+            implementation,
+            ResourceImplementation::File {
+                row: 1,
+                token: Some(0x2600_0001),
+                status: ResourceReferenceStatus::Unreadable,
+                name: None,
+                ..
+            }
+        ));
+        assert_eq!(availability, ResourceAvailability::Unavailable);
     }
 
     #[test]

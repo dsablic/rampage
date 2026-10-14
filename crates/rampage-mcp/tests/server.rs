@@ -418,6 +418,46 @@ async fn dotnet_il_lists_a_method_by_name() {
 }
 
 #[tokio::test]
+async fn dotnet_resources_select_the_independent_metadata_page_and_counts() {
+    let client = connect().await;
+    let path = fixture("Microsoft.Bcl.HashCode.dll");
+    let schema =
+        client.list_all_tools().await.unwrap().into_iter().find(|tool| tool.name == "dotnet_metadata").unwrap();
+    let schema = Value::Object((*schema.input_schema).clone());
+    let list = &schema["properties"]["list"];
+    let list = list
+        .get("$ref")
+        .and_then(Value::as_str)
+        .map(|reference| schema.pointer(reference.strip_prefix('#').unwrap()).unwrap())
+        .unwrap_or(list);
+    let permits_resources = list["enum"].as_array().is_some_and(|values| values.contains(&json!("resources")))
+        || list["oneOf"]
+            .as_array()
+            .is_some_and(|variants| variants.iter().any(|variant| variant["const"] == "resources"));
+    assert!(permits_resources, "{schema}");
+    let resources = json_of(
+        &call(
+            &client,
+            "dotnet_metadata",
+            json!({ "path": path, "list": "resources", "contains": "absent", "offset": 7, "limit": 1 }),
+        )
+        .await,
+    );
+    assert_eq!(resources["list"], "resources");
+    assert_eq!(resources["resource_counts"]["declared_known"], true);
+    assert_eq!(resources["resources"]["items"], json!([]));
+    assert_eq!(resources["resource_counts"]["returned"], 0);
+    assert_eq!(resources["counts"]["resources"], resources["resource_counts"]["retained"]);
+    assert!(resources.get("types").is_none());
+    assert!(resources.get("custom_attributes").is_none());
+    let types = json_of(&call(&client, "dotnet_metadata", json!({ "path": path, "limit": 1 })).await);
+    assert_eq!(types["list"], "types");
+    assert!(types.get("resources").is_none());
+    assert_eq!(types["resource_counts"]["returned"], 0);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn function_summary_exposes_ssa_through_the_shared_registry() {
     let client = connect().await;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

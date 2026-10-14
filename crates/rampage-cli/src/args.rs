@@ -348,11 +348,12 @@ pub(crate) struct ReportArgs {
 #[derive(Args)]
 pub(crate) struct DotnetArgs {
     pub(crate) file: PathBuf,
-    /// The list to page: types, pinvokes or attributes
+    /// The list to page: types, pinvokes, attributes or resources (metadata links only, never payloads)
     #[arg(long, default_value = "types", value_parser = parse_dotnet_list, conflicts_with = "il")]
     pub(crate) list: rampage_api::DotNetList,
     /// Only types whose full name or method/property name, P/Invoke imports whose method, DLL or import name, or
-    /// attributes whose type or target contains this text (case-insensitive)
+    /// attributes whose type or target, or resources whose name or File/AssemblyRef name contains this text
+    /// (case-insensitive)
     #[arg(long)]
     pub(crate) contains: Option<String>,
     /// With --list attributes, only those applied to this metadata token (hex with 0x, or decimal)

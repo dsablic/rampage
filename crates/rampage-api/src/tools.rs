@@ -501,11 +501,12 @@ struct DotNetIlArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct DotNetArgs {
-    /// The list to page: `types` (default), `pinvokes` or `attributes`.
+    /// The list to page: `types` (default), `pinvokes`, `attributes` or `resources`.
     #[serde(default)]
     list: crate::DotNetList,
     /// Case-insensitive filter on the selected list: types whose full name (Namespace.Name) or a method name
-    /// or property name contains this text, P/Invoke imports by method/DLL/import, attributes by type or target.
+    /// or property/event name contains this text, P/Invoke imports by method/DLL/import, attributes by type or
+    /// target, resources by name or linked File/AssemblyRef name.
     #[serde(default)]
     contains: Option<String>,
     /// With `list: attributes`, only the attributes applied to this metadata token (e.g. 0x06000001 for
@@ -874,12 +875,14 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::DotNet,
             "dotnet_metadata",
-            "Managed assembly identity and a bounded page chosen by `list`: types with method/property signatures, \
-             pinvokes with DLL/exports, or attributes with fixed/named values. Supported values include primitives, \
+            "Managed assembly identity and a bounded page chosen by `list`: types with method/property signatures \
+             and event types, pinvokes with DLL/exports, attributes with fixed/named values, or resources with \
+             metadata-only offset/reference evidence. Resource locations are not validated payload extents; no \
+             payload or external resource is read. Supported attribute values include primitives, \
              strings, types, single-dimensional arrays and verified local enums; unsupported values report errors. \
-             Property accessor tokens are metadata bindings, not inferred behavior. Filter with contains and page \
-             with offset/limit; parent_token selects an attribute target. Bodies are CIL, listed by dotnet_il, \
-             not native code for decompile/disassemble. Returns null for a native image.",
+             Property/event accessor tokens are metadata bindings, not inferred behavior. Filter with contains; \
+             offset/limit page the list and parent_token selects an attribute target. Bodies are CIL, listed by \
+             dotnet_il, not native code for decompile/disassemble. Returns null for a native image.",
             |project, args: DotNetArgs| {
                 let query = crate::DotNetQuery {
                     list: args.list,

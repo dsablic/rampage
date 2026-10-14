@@ -1044,9 +1044,17 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
         writeln!(out, "references {} {}", reference.name, reference.version)?;
     }
     let counts = &summary.counts;
+    let resource_count = dotnet_resource_count_text(
+        counts.resources,
+        summary.resource_counts.declared_known,
+        summary.resource_counts.truncated,
+    );
     writeln!(
         out,
-        "{} types, {} methods ({} IL, {} native), {} properties, {} events, {} P/Invoke imports, {} attributes",
+        concat!(
+            "{} types, {} methods ({} IL, {} native), {} properties, {} events, ",
+            "{} P/Invoke imports, {} attributes, {}"
+        ),
         counts.types,
         counts.methods,
         counts.il_methods,
@@ -1054,7 +1062,8 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
         counts.properties,
         counts.events,
         counts.pinvokes,
-        counts.custom_attributes
+        counts.custom_attributes,
+        resource_count
     )?;
     let list = label(&summary.list);
     if let Some(types) = &summary.types {
@@ -1068,6 +1077,11 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
     if let Some(attributes) = &summary.custom_attributes {
         dotnet_attributes(out, attributes)?;
         more_hint(out, attributes, "attributes", &list)?;
+    }
+    if let Some(resources) = &summary.resources {
+        dotnet_resource_inventory(out, &summary)?;
+        dotnet_resources(out, resources)?;
+        more_hint(out, resources, "resources", &list)?;
     }
     for warning in &summary.warnings {
         writeln!(out, "warning: {warning}")?;
@@ -1240,6 +1254,294 @@ fn dotnet_attributes(
         }
     }
     Ok(())
+}
+
+fn dotnet_resource_count_text(retained: usize, declared_known: bool, truncated: bool) -> String {
+    if !declared_known {
+        format!("{retained} retained resource rows (declared count unknown)")
+    } else if truncated {
+        format!("{retained} retained resource rows (inventory truncated)")
+    } else {
+        format!("{retained} resources")
+    }
+}
+
+fn dotnet_resource_inventory(out: &mut impl Write, summary: &rampage_api::DotNetSummary) -> Result<()> {
+    let counts = &summary.resource_counts;
+    let declared = if counts.declared_known { counts.declared.to_string() } else { "unknown".to_owned() };
+    writeln!(
+        out,
+        "\nresource metadata: {declared} declared, {} readable rows, {} retained, {} returned",
+        counts.readable, counts.retained, counts.returned
+    )?;
+    if counts.truncated {
+        writeln!(out, "resource inventory or name text truncated by metadata/work limits")?;
+    }
+    Ok(())
+}
+
+fn dotnet_resources(
+    out: &mut impl Write,
+    resources: &rampage_api::Page<rampage_loaders::dotnet::ManifestResource>,
+) -> Result<()> {
+    use rampage_loaders::dotnet::ResourceAvailability;
+
+    writeln!(out, "metadata links only; resource lengths/payload extents not validated; no external files read")?;
+    if resources.items.is_empty() {
+        writeln!(out, "no retained resource rows on this page")?;
+    }
+    for resource in &resources.items {
+        let name = resource.name.as_deref().unwrap_or("<unreadable name>");
+        writeln!(
+            out,
+            "resource {:#010x} {}: flags {:#x}, offset {:#x}, implementation_raw {:#x}",
+            resource.token,
+            serde_json::to_string(name)?,
+            resource.flags,
+            resource.offset,
+            resource.implementation_raw
+        )?;
+        if resource.name_truncated {
+            writeln!(out, "  resource name truncated")?;
+        }
+        dotnet_resource_implementation(out, &resource.implementation)?;
+        match &resource.availability {
+            ResourceAvailability::Embedded { rva, status } => {
+                let rva = rva.map(|rva| format!("{rva:#x}")).unwrap_or_else(|| "unavailable".to_owned());
+                writeln!(out, "  availability embedded: RVA {rva}, status {} (location evidence only)", label(status))?;
+            }
+            ResourceAvailability::External => writeln!(out, "  availability external: metadata link; target not read")?,
+            ResourceAvailability::Unavailable => writeln!(out, "  availability unavailable")?,
+        }
+    }
+    Ok(())
+}
+
+fn dotnet_resource_implementation(
+    out: &mut impl Write,
+    implementation: &rampage_loaders::dotnet::ResourceImplementation,
+) -> Result<()> {
+    use rampage_loaders::dotnet::ResourceImplementation;
+
+    match implementation {
+        ResourceImplementation::Embedded => writeln!(out, "  implementation embedded")?,
+        ResourceImplementation::File { row, token, status, name, name_truncated, .. }
+        | ResourceImplementation::AssemblyRef { row, token, status, name, name_truncated } => {
+            let kind =
+                if matches!(implementation, ResourceImplementation::File { .. }) { "file" } else { "assembly_ref" };
+            let token = token.map(|token| format!("{token:#010x}")).unwrap_or_else(|| "unresolved".to_owned());
+            let name = name.as_deref().unwrap_or("<unreadable target name>");
+            writeln!(
+                out,
+                "  implementation {kind}: row {row}, token {token}, status {}, target {}",
+                label(status),
+                serde_json::to_string(name)?
+            )?;
+            if *name_truncated {
+                writeln!(out, "  target name truncated")?;
+            }
+            if let ResourceImplementation::File { flags, .. } = implementation {
+                match flags {
+                    Some(flags) => writeln!(out, "  target File flags {flags:#x}")?,
+                    None => writeln!(out, "  target File flags unreadable")?,
+                }
+            }
+        }
+        ResourceImplementation::ExportedType { row, token, status } => {
+            let token = token.map(|token| format!("{token:#010x}")).unwrap_or_else(|| "unresolved".to_owned());
+            writeln!(
+                out,
+                "  implementation exported_type: row {row}, token {token}, status {} (unsupported resource link)",
+                label(status)
+            )?;
+        }
+        ResourceImplementation::Invalid { tag, row } => {
+            writeln!(out, "  implementation invalid: reserved tag {tag}, row {row}")?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod dotnet_resource_tests {
+    use rampage_loaders::dotnet::{
+        EmbeddedResourceStatus, ManifestResource, ResourceAvailability, ResourceImplementation, ResourceReferenceStatus,
+    };
+
+    use super::{dotnet_resource_count_text, dotnet_resource_inventory, dotnet_resources, more_hint};
+
+    #[test]
+    fn unknown_declared_resources_are_distinct_from_known_zero_and_keep_truncation_visible() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/bin/Microsoft.Bcl.HashCode.dll");
+        let project = rampage_api::Project::new(rampage_loaders::Binary::open(path).unwrap());
+        let query = rampage_api::DotNetQuery { list: rampage_api::DotNetList::Resources, ..Default::default() };
+        let mut summary = project.dotnet_metadata(&query).unwrap().unwrap();
+        let page = rampage_api::Page { total: 0, offset: 0, items: Vec::new() };
+        for (declared, declared_known, truncated, expected) in
+            [(0, false, true, "unknown declared"), (0, true, false, "0 declared"), (17, true, true, "17 declared")]
+        {
+            let counts = &mut summary.resource_counts;
+            counts.declared = declared;
+            counts.declared_known = declared_known;
+            counts.readable = 0;
+            counts.retained = 0;
+            counts.returned = 0;
+            counts.truncated = truncated;
+            let mut output = Vec::new();
+            dotnet_resource_inventory(&mut output, &summary).unwrap();
+            dotnet_resources(&mut output, &page).unwrap();
+            let text = String::from_utf8(output).unwrap();
+            assert!(text.contains(expected), "{text}");
+            assert!(text.contains("0 readable rows, 0 retained, 0 returned"), "{text}");
+            assert_eq!(text.contains("resource inventory or name text truncated"), truncated, "{text}");
+            assert!(text.contains("no retained resource rows on this page"), "{text}");
+            assert!(!text.contains("no resources match"), "{text}");
+            let count_text = dotnet_resource_count_text(0, declared_known, truncated);
+            if !declared_known {
+                assert_eq!(count_text, "0 retained resource rows (declared count unknown)");
+                assert!(!text.contains("0 declared"), "{text}");
+            } else {
+                let expected_count =
+                    if truncated { "0 retained resource rows (inventory truncated)" } else { "0 resources" };
+                assert_eq!(count_text, expected_count);
+                assert!(!text.contains("unknown declared"), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn human_resource_rows_keep_raw_metadata_typed_links_missing_names_and_truncation_visible() {
+        let cases: &[(ResourceImplementation, ResourceAvailability, u32, &[&str])] = &[
+            (
+                ResourceImplementation::Embedded,
+                ResourceAvailability::Embedded { rva: Some(0x1234), status: EmbeddedResourceStatus::ReadableLocation },
+                0,
+                &["implementation embedded", "RVA 0x1234", "status readable_location", "location evidence only"],
+            ),
+            (
+                ResourceImplementation::File {
+                    row: 1,
+                    token: Some(0x2600_0001),
+                    status: ResourceReferenceStatus::Readable,
+                    name: Some("Part.netmodule".to_owned()),
+                    name_truncated: true,
+                    flags: Some(1),
+                },
+                ResourceAvailability::External,
+                4,
+                &[
+                    "implementation file: row 1",
+                    "token 0x26000001",
+                    "Part.netmodule",
+                    "target name truncated",
+                    "target File flags 0x1",
+                    "availability external: metadata link; target not read",
+                ],
+            ),
+            (
+                ResourceImplementation::AssemblyRef {
+                    row: 2,
+                    token: None,
+                    status: ResourceReferenceStatus::OutOfRange,
+                    name: None,
+                    name_truncated: false,
+                },
+                ResourceAvailability::Unavailable,
+                9,
+                &[
+                    "implementation assembly_ref: row 2",
+                    "token unresolved",
+                    "status out_of_range",
+                    "<unreadable target name>",
+                    "availability unavailable",
+                ],
+            ),
+            (
+                ResourceImplementation::ExportedType {
+                    row: 1,
+                    token: Some(0x2700_0001),
+                    status: ResourceReferenceStatus::Readable,
+                },
+                ResourceAvailability::Unavailable,
+                6,
+                &["implementation exported_type", "token 0x27000001", "unsupported resource link"],
+            ),
+            (
+                ResourceImplementation::Invalid { tag: 3, row: 0 },
+                ResourceAvailability::Unavailable,
+                3,
+                &["implementation invalid: reserved tag 3, row 0", "availability unavailable"],
+            ),
+        ];
+        for (implementation, availability, raw, evidence) in cases {
+            let page = rampage_api::Page {
+                total: 3,
+                offset: 1,
+                items: vec![ManifestResource {
+                    token: 0x2800_0002,
+                    name: None,
+                    name_truncated: true,
+                    flags: 2,
+                    offset: 8,
+                    implementation_raw: *raw,
+                    implementation: implementation.clone(),
+                    availability: availability.clone(),
+                }],
+            };
+            let mut output = Vec::new();
+            dotnet_resources(&mut output, &page).unwrap();
+            more_hint(&mut output, &page, "resources", "resources").unwrap();
+            let text = String::from_utf8(output).unwrap();
+            for phrase in [
+                "0x28000002",
+                "<unreadable name>",
+                "flags 0x2, offset 0x8",
+                "resource name truncated",
+                "resource lengths/payload extents not validated",
+                "--list resources --offset 2",
+            ]
+            .iter()
+            .chain(evidence.iter())
+            {
+                assert!(text.contains(*phrase), "{phrase}: {text}");
+            }
+            assert!(text.contains(&format!("implementation_raw {raw:#x}")), "{text}");
+        }
+    }
+
+    #[test]
+    fn human_embedded_resource_statuses_do_not_turn_location_evidence_into_validated_payloads() {
+        for (status, expected) in [
+            (EmbeddedResourceStatus::DirectoryAbsent, "directory_absent"),
+            (EmbeddedResourceStatus::DirectoryOverflow, "directory_overflow"),
+            (EmbeddedResourceStatus::OutsideDirectory, "outside_directory"),
+            (EmbeddedResourceStatus::RvaOverflow, "rva_overflow"),
+            (EmbeddedResourceStatus::Unmapped, "unmapped"),
+            (EmbeddedResourceStatus::DirectoryUnreadable, "directory_unreadable"),
+        ] {
+            let page = rampage_api::Page {
+                total: 1,
+                offset: 0,
+                items: vec![ManifestResource {
+                    token: 0x2800_0001,
+                    name: Some("Name".to_owned()),
+                    name_truncated: false,
+                    flags: 1,
+                    offset: 0,
+                    implementation_raw: 0,
+                    implementation: ResourceImplementation::Embedded,
+                    availability: ResourceAvailability::Embedded { rva: None, status },
+                }],
+            };
+            let mut output = Vec::new();
+            dotnet_resources(&mut output, &page).unwrap();
+            let text = String::from_utf8(output).unwrap();
+            assert!(text.contains(&format!("RVA unavailable, status {expected} (location evidence only)")), "{text}");
+            assert!(text.contains("payload extents not validated"), "{text}");
+            assert!(!text.contains("readable_location"), "{text}");
+        }
+    }
 }
 
 /// The `... N more` line for a page of `--list {list}` that does not reach the end of its list.

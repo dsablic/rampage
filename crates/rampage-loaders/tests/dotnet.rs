@@ -479,6 +479,428 @@ fn parse(spec: &Spec) -> Result<Option<dotnet::DotNetMetadata>, LoadError> {
     dotnet::parse_image(&build(spec))
 }
 
+struct ResourceSpec {
+    wide: bool,
+    strings: Vec<u8>,
+    file_names: Vec<u32>,
+    assembly_names: Vec<u32>,
+    exported_types: u32,
+    rows: Vec<(u32, u32, u32, u32)>,
+    declared: Option<u32>,
+    cut: usize,
+    rva: u32,
+    size: u32,
+}
+
+impl Default for ResourceSpec {
+    fn default() -> Self {
+        Self {
+            wide: false,
+            strings: b"\0Data\0Part.netmodule\0OtherAssembly\0".to_vec(),
+            file_names: Vec::new(),
+            assembly_names: Vec::new(),
+            exported_types: 0,
+            rows: vec![(0, 1, 1, 0)],
+            declared: None,
+            cut: 0,
+            rva: SECTION_RVA,
+            size: 72,
+        }
+    }
+}
+
+fn resource_image(spec: &ResourceSpec) -> Vec<u8> {
+    let width = if spec.wide { 4 } else { 2 };
+    let implementation_width = if spec.wide
+        || spec.file_names.len().max(spec.assembly_names.len()).max(spec.exported_types as usize) >= 0x4000
+    {
+        4
+    } else {
+        2
+    };
+    let present = [
+        (0x23, spec.assembly_names.len() as u32),
+        (0x26, spec.file_names.len() as u32),
+        (0x27, spec.exported_types),
+        (0x28, spec.declared.unwrap_or(spec.rows.len() as u32)),
+    ];
+    let present: Vec<_> = present.into_iter().filter(|&(_, count)| count > 0).collect();
+    let mut stream = vec![0, 0, 0, 0, 2, 0, 0, 1];
+    let valid = present.iter().fold(0u64, |mask, &(table, _)| mask | (1 << table));
+    stream.extend_from_slice(&valid.to_le_bytes());
+    stream.extend_from_slice(&0u64.to_le_bytes());
+    for &(_, count) in &present {
+        stream.extend_from_slice(&count.to_le_bytes());
+    }
+    let mut rows = Rows { bytes: Vec::new() };
+    for &name in &spec.assembly_names {
+        rows.put(1, 2).put(2, 2).put(3, 2).put(4, 2).put(0, 4);
+        rows.put(0, width).put(name, width).put(0, width).put(0, width);
+    }
+    for &name in &spec.file_names {
+        rows.put(1, 4).put(name, width).put(0, width);
+    }
+    for _ in 0..spec.exported_types {
+        rows.put(0, 4).put(1, 4).put(1, width).put(0, width).put(0, implementation_width);
+    }
+    for &(offset, flags, name, implementation) in &spec.rows {
+        rows.put(offset, 4).put(flags, 4).put(name, width).put(implementation, implementation_width);
+    }
+    stream.extend_from_slice(&rows.bytes[..rows.bytes.len() - spec.cut]);
+    let mut streams = vec![(if spec.wide { "#-" } else { "#~" }, stream.as_slice()), ("#Strings", &spec.strings)];
+    if spec.wide {
+        streams.push(("#JTD", &[]));
+    }
+    let version = b"v4.0.30319\0\0";
+    let mut root = Vec::new();
+    root.extend_from_slice(&0x424A_5342u32.to_le_bytes());
+    root.extend_from_slice(&[1, 0, 1, 0, 0, 0, 0, 0]);
+    root.extend_from_slice(&(version.len() as u32).to_le_bytes());
+    root.extend_from_slice(version);
+    root.extend_from_slice(&[0, 0]);
+    root.extend_from_slice(&(streams.len() as u16).to_le_bytes());
+    let mut offset =
+        root.len() + streams.iter().map(|(name, _)| 8 + (name.len() + 1).next_multiple_of(4)).sum::<usize>();
+    for (name, data) in &streams {
+        root.extend_from_slice(&(offset as u32).to_le_bytes());
+        root.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        root.extend_from_slice(name.as_bytes());
+        root.push(0);
+        pad4(&mut root);
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in &streams {
+        root.extend_from_slice(data);
+        pad4(&mut root);
+    }
+    let mut section = vec![0; 72];
+    section[..4].copy_from_slice(&72u32.to_le_bytes());
+    section[4..8].copy_from_slice(&[2, 0, 5, 0]);
+    section[8..12].copy_from_slice(&(SECTION_RVA + 72).to_le_bytes());
+    section[12..16].copy_from_slice(&(root.len() as u32).to_le_bytes());
+    section[24..28].copy_from_slice(&spec.rva.to_le_bytes());
+    section[28..32].copy_from_slice(&spec.size.to_le_bytes());
+    section.extend_from_slice(&root);
+    section.resize(section.len().next_multiple_of(0x200), 0);
+    pe32(&section, SECTION_RVA)
+}
+
+fn resource_metadata(spec: &ResourceSpec) -> dotnet::DotNetMetadata {
+    dotnet::parse_image(&resource_image(spec)).unwrap().unwrap()
+}
+
+#[test]
+fn manifest_resources_decode_narrow_and_jtd_links_without_resolving_external_data() {
+    use dotnet::{EmbeddedResourceStatus, ResourceAvailability, ResourceImplementation, ResourceReferenceStatus};
+    for wide in [false, true] {
+        let spec = ResourceSpec {
+            wide,
+            file_names: vec![6],
+            assembly_names: vec![21],
+            exported_types: 1,
+            rows: vec![(71, 0x8000_0001, 1, 0), (999, 2, 1, 4), (u32::MAX, 1, 1, 5), (0, 1, 1, 6)],
+            ..Default::default()
+        };
+        let metadata = resource_metadata(&spec);
+        assert_eq!(
+            metadata.resource_counts,
+            dotnet::ResourceCounts { declared: 4, declared_known: true, readable: 4, retained: 4, truncated: false }
+        );
+        let rows = &metadata.resources;
+        assert_eq!((rows[0].token, rows[0].name.as_deref(), rows[0].flags), (0x2800_0001, Some("Data"), 0x8000_0001));
+        assert_eq!(
+            rows[0].availability,
+            ResourceAvailability::Embedded {
+                rva: Some(SECTION_RVA + 71),
+                status: EmbeddedResourceStatus::ReadableLocation,
+            }
+        );
+        assert_eq!(rows[1].implementation_raw, 4);
+        assert_eq!(
+            rows[1].implementation,
+            ResourceImplementation::File {
+                row: 1,
+                token: Some(0x2600_0001),
+                status: ResourceReferenceStatus::Readable,
+                name: Some("Part.netmodule".to_owned()),
+                name_truncated: false,
+                flags: Some(1),
+            }
+        );
+        assert_eq!(
+            rows[2].implementation,
+            ResourceImplementation::AssemblyRef {
+                row: 1,
+                token: Some(0x2300_0001),
+                status: ResourceReferenceStatus::Readable,
+                name: Some("OtherAssembly".to_owned()),
+                name_truncated: false,
+            }
+        );
+        assert_eq!(rows[1].availability, ResourceAvailability::External);
+        assert_eq!(rows[2].availability, ResourceAvailability::External);
+        assert_eq!(
+            rows[3].implementation,
+            ResourceImplementation::ExportedType {
+                row: 1,
+                token: Some(0x2700_0001),
+                status: ResourceReferenceStatus::Readable,
+            }
+        );
+        assert_eq!(rows[3].availability, ResourceAvailability::Unavailable);
+        assert!(metadata.warnings.iter().any(|text| text.contains("ExportedType Implementation is unsupported")));
+        assert!(!metadata.warnings.iter().any(|text| text.contains("embedded location")));
+    }
+}
+
+#[test]
+fn manifest_resources_keep_invalid_tags_and_dangling_rows_as_evidence() {
+    use dotnet::{ResourceAvailability, ResourceImplementation, ResourceReferenceStatus};
+    let spec = ResourceSpec {
+        wide: true,
+        rows: vec![(0, 1, 1, 1), (0, 1, 1, 2), (0, 1, 1, 3), (0, 1, 1, 4), (0, 1, 1, u32::MAX - 2)],
+        ..Default::default()
+    };
+    let metadata = resource_metadata(&spec);
+    assert!(matches!(
+        metadata.resources[0].implementation,
+        ResourceImplementation::AssemblyRef { row: 0, token: None, status: ResourceReferenceStatus::NullRow, .. }
+    ));
+    assert!(matches!(
+        metadata.resources[1].implementation,
+        ResourceImplementation::ExportedType { row: 0, token: None, status: ResourceReferenceStatus::NullRow }
+    ));
+    assert_eq!(metadata.resources[2].implementation, ResourceImplementation::Invalid { tag: 3, row: 0 });
+    assert!(matches!(
+        metadata.resources[3].implementation,
+        ResourceImplementation::File { row: 1, token: None, status: ResourceReferenceStatus::OutOfRange, .. }
+    ));
+    assert!(matches!(
+        metadata.resources[4].implementation,
+        ResourceImplementation::AssemblyRef { token: None, status: ResourceReferenceStatus::OutOfRange, .. }
+    ));
+    assert!(metadata.resources.iter().all(|row| row.availability == ResourceAvailability::Unavailable));
+    assert!(metadata.warnings.iter().any(|text| text.contains("reserved Implementation tag 3")));
+    assert!(metadata.warnings.iter().any(|text| text.contains("NullRow")));
+    assert!(metadata.warnings.iter().any(|text| text.contains("OutOfRange")));
+}
+
+#[test]
+fn manifest_resource_implementation_width_changes_at_the_declared_table_boundary() {
+    for count in [0x3fffu32, 0x4000] {
+        let spec = ResourceSpec {
+            file_names: vec![6; count as usize],
+            rows: vec![(0x1234, 0x8000_0002, 1, count << 2)],
+            ..Default::default()
+        };
+        let metadata = resource_metadata(&spec);
+        assert_eq!((metadata.resources[0].offset, metadata.resources[0].flags), (0x1234, 0x8000_0002));
+        assert!(matches!(metadata.resources[0].implementation,
+            dotnet::ResourceImplementation::File { row, status: dotnet::ResourceReferenceStatus::Readable, .. }
+                if row == count));
+    }
+}
+
+#[test]
+fn manifest_resource_location_checks_directory_mapping_offsets_and_overflow() {
+    use dotnet::{EmbeddedResourceStatus as Status, ResourceAvailability};
+    let cases = [
+        (0, 72, 0, Status::DirectoryAbsent),
+        (SECTION_RVA, 0, 0, Status::DirectoryAbsent),
+        (SECTION_RVA, 72, 72, Status::OutsideDirectory),
+        (SECTION_RVA, 72, 73, Status::OutsideDirectory),
+        (0x7000_0000, 72, 0, Status::Unmapped),
+        (SECTION_RVA, 0x1000, 0, Status::DirectoryUnreadable),
+        (SECTION_RVA, u32::MAX, 0, Status::DirectoryOverflow),
+        (u32::MAX - 1, 1, 2, Status::RvaOverflow),
+        (SECTION_RVA, 72, u32::MAX, Status::RvaOverflow),
+    ];
+    for (rva, size, offset, expected) in cases {
+        let metadata =
+            resource_metadata(&ResourceSpec { rva, size, rows: vec![(offset, 1, 1, 0)], ..Default::default() });
+        assert!(
+            matches!(metadata.resources[0].availability,
+            ResourceAvailability::Embedded { status, .. } if status == expected),
+            "{rva:#x}/{size}/{offset}"
+        );
+        assert!(metadata.warnings.iter().any(|text| text.contains("embedded location")));
+    }
+}
+
+#[test]
+fn manifest_resource_directory_mapping_does_not_require_unrelated_section_tail() {
+    use dotnet::{EmbeddedResourceStatus, ResourceAvailability};
+
+    for (rva, size, expected) in [
+        (0x5000, 8, EmbeddedResourceStatus::ReadableLocation),
+        (0x50ff, 1, EmbeddedResourceStatus::ReadableLocation),
+        (0x5000, 0x101, EmbeddedResourceStatus::DirectoryUnreadable),
+        (0x5100, 1, EmbeddedResourceStatus::DirectoryUnreadable),
+        (0x5000, 0x1001, EmbeddedResourceStatus::DirectoryUnreadable),
+    ] {
+        let mut image = resource_image(&ResourceSpec { rva, size, ..Default::default() });
+        image[0x46..0x48].copy_from_slice(&2u16.to_le_bytes());
+        image[0x90..0x94].copy_from_slice(&0x6000u32.to_le_bytes());
+        let raw_offset = image.len() as u32;
+        let mut section = b".rsrc\0\0\0".to_vec();
+        for value in [0x1000u32, 0x5000, 0x1000, raw_offset, 0, 0, 0, 0x4000_0040] {
+            section.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(section.len(), 40);
+        image[0x160..0x188].copy_from_slice(&section);
+        image.extend(std::iter::repeat_n(0xff, 0x100));
+        let metadata = dotnet::parse_image(&image).unwrap().unwrap();
+        assert_eq!(metadata.runtime_version, "v4.0.30319");
+        assert_eq!(metadata.resources[0].name.as_deref(), Some("Data"));
+        assert_eq!(
+            metadata.resources[0].availability,
+            ResourceAvailability::Embedded { rva: Some(rva), status: expected }
+        );
+    }
+}
+
+#[test]
+fn manifest_resources_count_only_entire_metadata_rows() {
+    let spec = ResourceSpec { rows: vec![(0, 1, 1, 0), (4, 2, 1, 0)], cut: 1, ..Default::default() };
+    let metadata = resource_metadata(&spec);
+    assert_eq!(
+        (metadata.resource_counts.declared, metadata.resource_counts.readable, metadata.resource_counts.retained),
+        (2, 1, 1)
+    );
+    assert!(metadata.resource_counts.truncated);
+    assert_eq!(metadata.resources[0].flags, 1);
+    let metadata = resource_metadata(&ResourceSpec { declared: Some(u32::MAX), ..Default::default() });
+    assert_eq!(metadata.resource_counts.readable, 1);
+    assert_eq!(metadata.resource_counts.declared, u32::MAX);
+    assert!(metadata.resource_counts.truncated);
+    let metadata = resource_metadata(&ResourceSpec { file_names: vec![6], cut: 13, ..Default::default() });
+    assert_eq!(
+        (metadata.resource_counts.declared, metadata.resource_counts.readable, metadata.resource_counts.retained),
+        (1, 0, 0)
+    );
+    assert!(metadata.resource_counts.truncated);
+    let mut image = resource_image(&ResourceSpec::default());
+    let stream_size = SECTION_FILE + 72 + 32 + 4;
+    image[stream_size..stream_size + 4].copy_from_slice(&20u32.to_le_bytes());
+    let metadata = dotnet::parse_image(&image).unwrap().unwrap();
+    assert!(metadata.resources.is_empty() && metadata.resource_counts.truncated);
+    assert!(!metadata.resource_counts.declared_known);
+    assert!(metadata.warnings.iter().any(|text| text.contains("table stream header is unreadable")));
+}
+
+#[test]
+fn manifest_resource_partial_table_headers_preserve_only_known_declared_counts() {
+    for count_available in [false, true] {
+        let mut image = resource_image(&ResourceSpec::default());
+        let table_header = SECTION_FILE + 72 + 32;
+        let relative = u32::from_le_bytes(image[table_header..table_header + 4].try_into().unwrap()) as usize;
+        let stream = SECTION_FILE + 72 + relative;
+        let valid = (1u64 << 40) | (1 << 42);
+        image[stream + 8..stream + 16].copy_from_slice(&valid.to_le_bytes());
+        image[stream + 24..stream + 28].copy_from_slice(&17u32.to_le_bytes());
+        let size = if count_available { 28u32 } else { 24 };
+        image[table_header + 4..table_header + 8].copy_from_slice(&size.to_le_bytes());
+        let metadata = dotnet::parse_image(&image).unwrap().unwrap();
+        assert_eq!(metadata.resource_counts.declared_known, count_available);
+        assert_eq!(metadata.resource_counts.declared, if count_available { 17 } else { 0 });
+        assert_eq!((metadata.resource_counts.readable, metadata.resource_counts.retained), (0, 0));
+        assert!(metadata.resource_counts.truncated && metadata.resources.is_empty() && metadata.tables.is_empty());
+        assert!(metadata.warnings.iter().any(|text| text.contains("table stream header is unreadable")));
+    }
+}
+
+#[test]
+fn manifest_resource_names_reject_lossy_unterminated_and_invalid_indexes() {
+    let cases = [(vec![0, 0xff, 0], 1), (b"\0unterminated".to_vec(), 1), (vec![0], u32::MAX)];
+    for (strings, name) in cases {
+        let metadata =
+            resource_metadata(&ResourceSpec { wide: true, strings, rows: vec![(0, 1, name, 0)], ..Default::default() });
+        assert_eq!(metadata.resources[0].name, None);
+        assert!(!metadata.resources[0].name_truncated);
+        assert!(metadata.warnings.iter().any(|text| text.contains("#Strings offset")));
+    }
+    let mut strings = vec![0];
+    strings.extend_from_slice("a".repeat(1023).as_bytes());
+    strings.extend_from_slice("éend\0".as_bytes());
+    let metadata = resource_metadata(&ResourceSpec { strings, ..Default::default() });
+    let name = metadata.resources[0].name.as_deref().unwrap();
+    assert_eq!(name, format!("{}<truncated>", "a".repeat(1023)));
+    assert!(metadata.resources[0].name_truncated && metadata.resource_counts.truncated);
+    let mut strings = vec![0];
+    strings.extend_from_slice("a".repeat(1024).as_bytes());
+    strings.push(0);
+    let metadata = resource_metadata(&ResourceSpec { strings, ..Default::default() });
+    assert_eq!(metadata.resources[0].name.as_ref().unwrap().len(), 1024);
+    assert!(!metadata.resources[0].name_truncated && !metadata.resource_counts.truncated);
+    let metadata = resource_metadata(&ResourceSpec {
+        wide: true,
+        file_names: vec![u32::MAX],
+        rows: vec![(0, 1, 1, 4)],
+        ..Default::default()
+    });
+    assert!(matches!(
+        metadata.resources[0].implementation,
+        dotnet::ResourceImplementation::File { name: None, name_truncated: false, .. }
+    ));
+    assert!(metadata.warnings.iter().any(|text| text.contains("Implementation name #Strings offset")));
+}
+
+#[test]
+fn manifest_resource_budgets_bound_aliased_names_failed_work_and_row_attempts() {
+    for count in [dotnet::MAX_RESOURCE_ROWS - 1, dotnet::MAX_RESOURCE_ROWS] {
+        let metadata =
+            resource_metadata(&ResourceSpec { rows: vec![(0, 1, 1, 0); count as usize], ..Default::default() });
+        assert_eq!(metadata.resource_counts.retained, count as usize);
+        assert!(!metadata.resource_counts.truncated);
+    }
+    let count = dotnet::MAX_RESOURCE_ROWS + 1;
+    let metadata = resource_metadata(&ResourceSpec { rows: vec![(0, 1, 1, 0); count as usize], ..Default::default() });
+    assert_eq!(metadata.resource_counts.retained, dotnet::MAX_RESOURCE_ROWS as usize);
+    assert_eq!(metadata.resource_counts.readable, count);
+    assert!(metadata.resource_counts.truncated);
+    let mut strings = vec![0];
+    strings.extend_from_slice("x".repeat(1024).as_bytes());
+    strings.push(0);
+    let metadata =
+        resource_metadata(&ResourceSpec { strings, rows: vec![(0, 1, 1, 0); count as usize], ..Default::default() });
+    assert!(metadata.resource_counts.retained < dotnet::MAX_RESOURCE_ROWS as usize);
+    let retained_bytes: usize = metadata.resources.iter().filter_map(|row| row.name.as_ref()).map(String::len).sum();
+    assert!(retained_bytes <= dotnet::MAX_RESOURCE_TEXT_BYTES);
+    assert!(metadata.resource_counts.truncated);
+    assert!(metadata.warnings.iter().any(|text| text.contains("inventory budget exhausted")));
+    let mut strings = vec![0];
+    strings.extend(std::iter::repeat_n(0xff, 1024));
+    strings.push(0);
+    let metadata =
+        resource_metadata(&ResourceSpec { strings, rows: vec![(0, 1, 1, 0); count as usize], ..Default::default() });
+    assert!(metadata.resource_counts.retained < dotnet::MAX_RESOURCE_ROWS as usize);
+    assert!(metadata.resources.iter().all(|row| row.name.is_none()));
+    assert!(metadata.resource_counts.truncated);
+    let mut strings = b"\0Data\0".to_vec();
+    strings.extend_from_slice("x".repeat(1024).as_bytes());
+    strings.push(0);
+    let metadata = resource_metadata(&ResourceSpec {
+        strings,
+        file_names: vec![6],
+        rows: vec![(0, 1, 1, 4); count as usize],
+        ..Default::default()
+    });
+    assert!(metadata.resource_counts.retained < dotnet::MAX_RESOURCE_ROWS as usize);
+    let retained_bytes: usize = metadata
+        .resources
+        .iter()
+        .map(|row| {
+            let target = match &row.implementation {
+                dotnet::ResourceImplementation::File { name, .. } => name.as_ref().map_or(0, String::len),
+                _ => 0,
+            };
+            row.name.as_ref().map_or(0, String::len) + target
+        })
+        .sum();
+    assert!(retained_bytes <= dotnet::MAX_RESOURCE_TEXT_BYTES);
+    assert!(metadata.resource_counts.truncated);
+}
+
 fn program(metadata: &dotnet::DotNetMetadata) -> &dotnet::TypeDef {
     metadata.types.iter().find(|ty| ty.name == "Program").expect("Program type")
 }

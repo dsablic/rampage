@@ -9,7 +9,7 @@ use std::str::FromStr;
 
 use rampage_loaders::dotnet::{
     self, Assembly, AssemblyRef, BodyKind, CliHeader, CustomAttribute, EntryPoint, ExceptionClause, IlBody, IlError,
-    Instruction, MethodSelector, Module, PInvoke, TypeDef,
+    Instruction, ManifestResource, MethodSelector, Module, PInvoke, ResourceImplementation, TypeDef,
 };
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,8 @@ pub enum DotNetList {
     Pinvokes,
     /// Custom attributes with their targets, constructor arguments and named field/property arguments.
     Attributes,
+    /// ManifestResource rows and metadata links, without reading resource lengths or payloads.
+    Resources,
 }
 
 impl FromStr for DotNetList {
@@ -37,14 +39,15 @@ impl FromStr for DotNetList {
             "types" => Ok(Self::Types),
             "pinvokes" => Ok(Self::Pinvokes),
             "attributes" => Ok(Self::Attributes),
-            _ => Err(format!("unknown list `{text}` (expected types, pinvokes or attributes)")),
+            "resources" => Ok(Self::Resources),
+            _ => Err(format!("unknown list `{text}` (expected types, pinvokes, attributes or resources)")),
         }
     }
 }
 
 /// One page of `list`, case-insensitively matching `contains`: types by full name (`Namespace.Name`) or a method
 /// or property/event name, P/Invoke imports by method, DLL or import name, custom attributes by attribute type or
-/// target.
+/// target; resources by name or linked File/AssemblyRef name.
 /// `parent_token` keeps only the attributes applied to that metadata token.
 #[derive(Debug, Default, Clone)]
 pub struct DotNetQuery {
@@ -68,10 +71,23 @@ pub struct DotNetCounts {
     pub user_strings: usize,
     pub pinvokes: usize,
     pub custom_attributes: usize,
+    pub resources: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DotNetResourceCounts {
+    pub declared: u32,
+    /// False means the declared count is unknown, not an established zero.
+    pub declared_known: bool,
+    pub readable: u32,
+    pub retained: usize,
+    pub returned: usize,
+    /// Inventory/name truncation, independently of filtering and pagination.
+    pub truncated: bool,
 }
 
 /// The assembly-level metadata, the size of every list, and one page of the list the query selected; the other
-/// two lists are absent.
+/// lists are absent.
 #[derive(Debug, Serialize)]
 pub struct DotNetSummary {
     pub cli: CliHeader,
@@ -88,6 +104,9 @@ pub struct DotNetSummary {
     pub pinvokes: Option<Page<PInvoke>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_attributes: Option<Page<CustomAttribute>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<Page<ManifestResource>>,
+    pub resource_counts: DotNetResourceCounts,
     pub warnings: Vec<String>,
 }
 
@@ -219,10 +238,12 @@ impl Project {
             user_strings: metadata.user_strings.len(),
             pinvokes: metadata.pinvokes.len(),
             custom_attributes: metadata.custom_attributes.len(),
+            resources: metadata.resources.len(),
         };
         let matcher = Matcher::new(query.contains.as_deref());
         let any = |texts: [Option<&str>; 3]| texts.into_iter().flatten().any(|text| matcher.matches(text));
         let (mut types, mut pinvokes, mut custom_attributes) = (None, None, None);
+        let mut resources = None;
         match query.list {
             DotNetList::Types => {
                 let wanted = |ty: &TypeDef| {
@@ -247,7 +268,26 @@ impl Project {
                 let attributes = metadata.custom_attributes.into_iter().filter(wanted);
                 custom_attributes = Some(Page::of(attributes, query.offset, query.limit));
             }
+            DotNetList::Resources => {
+                let wanted = |resource: &ManifestResource| {
+                    let target = match &resource.implementation {
+                        ResourceImplementation::File { name, .. }
+                        | ResourceImplementation::AssemblyRef { name, .. } => name.as_deref(),
+                        _ => None,
+                    };
+                    matcher.is_everything() || any([resource.name.as_deref(), target, None])
+                };
+                resources = Some(Page::of(metadata.resources.into_iter().filter(wanted), query.offset, query.limit));
+            }
         }
+        let resource_counts = DotNetResourceCounts {
+            declared: metadata.resource_counts.declared,
+            declared_known: metadata.resource_counts.declared_known,
+            readable: metadata.resource_counts.readable,
+            retained: metadata.resource_counts.retained,
+            returned: resources.as_ref().map_or(0, |page| page.items.len()),
+            truncated: metadata.resource_counts.truncated,
+        };
         Ok(Some(DotNetSummary {
             cli: metadata.cli,
             runtime_version: metadata.runtime_version,
@@ -260,6 +300,8 @@ impl Project {
             types,
             pinvokes,
             custom_attributes,
+            resources,
+            resource_counts,
             warnings: metadata.warnings,
         }))
     }

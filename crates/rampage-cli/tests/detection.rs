@@ -119,9 +119,10 @@ fn dotnet_pages_types_and_shows_the_module_and_entry_point() {
         .stdout(contains("assembly   Microsoft.Bcl.HashCode 1.0.0.0"))
         .stdout(contains("module     Microsoft.Bcl.HashCode.dll (mvid "))
         .stdout(contains("entry      none"))
-        .stdout(contains(
-            "11 types, 48 methods (48 IL, 0 native), 4 properties, 0 events, 0 P/Invoke imports, 76 attributes",
-        ))
+        .stdout(contains(concat!(
+            "11 types, 48 methods (48 IL, 0 native), 4 properties, 0 events, ",
+            "0 P/Invoke imports, 76 attributes, "
+        )))
         .stdout(contains("... 9 more types (page with --list types --offset 2, or filter with --contains)"))
         .stdout(contains("attribute  ").not());
     rampage(&["dotnet", "--limit", "0"], ASSEMBLY).failure().stderr(contains("--limit"));
@@ -181,6 +182,51 @@ fn dotnet_shows_signatures_and_attributes() {
     assert!(!items.is_empty() && items.iter().all(|item| item["parent_token"] == token));
     rampage(&["dotnet", "--list", "pinvokes"], ASSEMBLY).success().stdout(contains("no P/Invoke imports match"));
     rampage(&["dotnet", "--list", "fields"], ASSEMBLY).failure().stderr(contains("unknown list"));
+}
+
+#[test]
+fn dotnet_resources_selects_an_independent_metadata_only_page_and_preserves_native_empty_output() {
+    let resources = json(&["--json", "dotnet", "--list", "resources", "--limit", "1"], ASSEMBLY);
+    assert_eq!(resources["list"], "resources");
+    assert!(resources.get("types").is_none());
+    assert!(resources.get("pinvokes").is_none());
+    assert!(resources.get("custom_attributes").is_none());
+    let counts = &resources["resource_counts"];
+    let items = resources["resources"]["items"].as_array().unwrap();
+    assert!(items.len() <= 1);
+    assert_eq!(counts["returned"], items.len());
+    assert_eq!(counts["retained"], resources["counts"]["resources"]);
+    assert_eq!(resources["resources"]["total"], counts["retained"]);
+    assert!(counts["declared"].is_u64() && counts["readable"].is_u64() && counts["truncated"].is_boolean());
+    assert_eq!(counts["declared_known"], true);
+    let inventory = format!(
+        "resource metadata: {} declared, {} readable rows, {} retained, {} returned",
+        counts["declared"], counts["readable"], counts["retained"], counts["returned"]
+    );
+    rampage(&["dotnet", "--list", "resources", "--limit", "1"], ASSEMBLY)
+        .success()
+        .stdout(contains(inventory))
+        .stdout(contains(format!(", {} resources", resources["counts"]["resources"])));
+    for item in items {
+        assert!(item.get("size").is_none() && item.get("payload").is_none());
+        assert!(item["implementation"]["kind"].is_string());
+        assert!(item["availability"]["kind"].is_string());
+    }
+    let filter = "rampage-definitely-absent-resource-name";
+    let empty = json(&["--json", "dotnet", "--list", "resources", "--contains", filter], ASSEMBLY);
+    assert_eq!(empty["resources"]["total"], 0);
+    assert_eq!(empty["resource_counts"]["returned"], 0);
+    assert_eq!(empty["counts"], resources["counts"]);
+    rampage(&["dotnet", "--list", "resources", "--contains", filter], ASSEMBLY)
+        .success()
+        .stdout(contains("resource metadata:"))
+        .stdout(contains("metadata links only"))
+        .stdout(contains("resource lengths/payload extents not validated"))
+        .stdout(contains("no retained resource rows on this page"));
+    assert_eq!(json(&["--json", "dotnet", "--list", "resources"], "hello-x64.exe"), serde_json::Value::Null);
+    rampage(&["dotnet", "--list", "resources"], "hello-x64.exe")
+        .success()
+        .stdout(contains("not a .NET assembly (no CLI header)"));
 }
 
 #[test]

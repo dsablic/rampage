@@ -82,7 +82,7 @@ enum Command {
     /// Likely behaviors inferred from imports and strings (triage evidence, not proof)
     #[command(hide = true)]
     Capabilities(FileArgs),
-    /// .NET metadata: identity, references, entry point, method/property signatures, P/Invoke and attributes
+    /// .NET metadata: identity, references, entry point, signatures, P/Invoke, attributes and resource links
     #[command(hide = true)]
     Dotnet(DotnetArgs),
     /// Identify the producing tools (packer/compiler/protector/installer/linker/runtime) from heuristic signatures
@@ -218,6 +218,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if matches!(
+        &command,
+        Command::Dotnet(args) if args.parent_token.is_some() && args.list != rampage_api::DotNetList::Attributes
+    ) {
+        parser.error(clap::error::ErrorKind::ArgumentConflict, "--parent-token filters --list attributes only").exit();
+    }
     if cli.arch.is_some() && matches!(&command, Command::Analyze(args) if args.all_architectures) {
         parser
             .error(clap::error::ErrorKind::ArgumentConflict, "--all-architectures conflicts with --arch <ARCH>")

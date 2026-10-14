@@ -277,7 +277,7 @@ pub(crate) enum WorkflowCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum ManagedCommand {
-    /// .NET metadata: identity, references, entry point, method/property signatures, P/Invoke and attributes
+    /// .NET metadata: identity, references, entry point, signatures, P/Invoke, attributes and resource links
     Inspect(DotnetArgs),
     /// Disassemble one method's CIL instructions
     Disassemble(DotnetArgs),

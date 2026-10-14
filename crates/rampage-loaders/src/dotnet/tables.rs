@@ -36,6 +36,8 @@ pub(super) const IMPL_MAP: u8 = 0x1C;
 pub(super) const ASSEMBLY: u8 = 0x20;
 pub(super) const ASSEMBLY_REF: u8 = 0x23;
 pub(super) const FILE: u8 = 0x26;
+pub(super) const EXPORTED_TYPE: u8 = 0x27;
+pub(super) const MANIFEST_RESOURCE: u8 = 0x28;
 pub(super) const NESTED_CLASS: u8 = 0x29;
 pub(super) const GENERIC_PARAM: u8 = 0x2A;
 pub(super) const METHOD_SPEC: u8 = 0x2B;
@@ -255,6 +257,28 @@ const WIDE_BLOBS: u8 = 0x04;
 const EXTRA_DATA: u8 = 0x40;
 
 impl<'a> Tables<'a> {
+    pub(super) fn declared_count(stream: &[u8], table: u8) -> Option<u32> {
+        if table >= 64 {
+            return None;
+        }
+        let valid = read_uint(stream, 8, 8, false)?;
+        if valid & (1u64 << table) == 0 {
+            return Some(0);
+        }
+        let mut cursor = 24usize;
+        for id in 0..=table {
+            if valid & (1u64 << id) == 0 {
+                continue;
+            }
+            let rows = read_u32(stream, cursor)?;
+            if id == table {
+                return Some(rows);
+            }
+            cursor = cursor.checked_add(4)?;
+        }
+        None
+    }
+
     /// Parses the table stream header and lays out every standard table. Problems become warnings: a table
     /// that does not fit is truncated to its readable rows and nothing after it is located. `all_wide` makes
     /// every heap, table and coded index 4 bytes, as a `#JTD` stream does for an uncompressed `#-` stream.
@@ -368,5 +392,23 @@ mod tests {
         assert_eq!(Coded::CustomAttributeType.decode(0x0B), Some((MEMBER_REF, 1)));
         assert_eq!(Coded::CustomAttributeType.decode(0x08), None);
         assert_eq!(Coded::TypeDefOrRef.decode(0x03), None);
+    }
+
+    #[test]
+    fn declared_count_recovery_requires_each_preceding_present_count_but_not_later_counts() {
+        let mut stream = vec![0; 24];
+        let valid = (1u64 << ASSEMBLY_REF) | (1 << FILE) | (1 << MANIFEST_RESOURCE) | (1 << GENERIC_PARAM);
+        stream[8..16].copy_from_slice(&valid.to_le_bytes());
+        for count in [2u32, 3, 17] {
+            stream.extend_from_slice(&count.to_le_bytes());
+        }
+        assert_eq!(Tables::declared_count(&stream, MANIFEST_RESOURCE), Some(17));
+        assert!(Tables::parse(&stream, false, &mut Warnings::default()).is_none());
+        stream.truncate(32);
+        assert_eq!(Tables::declared_count(&stream, MANIFEST_RESOURCE), None);
+        stream.truncate(24);
+        assert_eq!(Tables::declared_count(&stream, MANIFEST_RESOURCE), None);
+        assert_eq!(Tables::declared_count(&stream, TYPE_DEF), Some(0));
+        assert_eq!(Tables::declared_count(&stream[..15], MANIFEST_RESOURCE), None);
     }
 }

@@ -67,6 +67,7 @@ const ROUTES: &[Route] = &[
         &[MISSING, "--list", "attributes", "--parent-token", "0x2000001", "--offset", "1", "--limit", "2"],
     ),
     (&["dotnet"], &["managed", "disassemble"], &[MISSING, "--il", "0x0600000d", "--at", "IL_000c", "--limit", "1"]),
+    (&["dotnet"], &["managed", "inspect"], &[MISSING, "--list", "resources", "--contains", "asset", "--limit", "1"]),
     (&["annotations"], &["annotation", "list"], &[MISSING]),
     (&["rename"], &["annotation", "rename"], &[MISSING, "main", "entry_name"]),
     (&["comment"], &["annotation", "comment"], &[MISSING, "main", "entry comment"]),
@@ -720,11 +721,12 @@ fn decompile_keeps_isolated_worker_selection_and_compiler_errors() {
 #[test]
 fn managed_inspection_preserves_metadata_filters_and_paging() {
     let assembly = fixture("Microsoft.Bcl.HashCode.dll");
-    let filters: [&[&str]; 4] = [
+    let filters: [&[&str]; 5] = [
         &["--contains", "hashcode", "--offset", "1", "--limit", "2"],
         &["--list", "attributes", "--contains", "Obsolete", "--limit", "1"],
         &["--list", "pinvokes", "--contains", "hashcode"],
         &["--list", "attributes", "--parent-token", "0x2000001", "--offset", "1", "--limit", "2"],
+        &["--list", "resources", "--contains", "asset", "--offset", "1", "--limit", "2"],
     ];
     for filters in filters {
         let legacy: Vec<_> = ["--json", "dotnet", &assembly].into_iter().chain(filters.iter().copied()).collect();
@@ -736,6 +738,36 @@ fn managed_inspection_preserves_metadata_filters_and_paging() {
     let metadata: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(metadata["types"]["items"].as_array().unwrap().len(), 1);
     assert!(metadata["types"]["items"][0].to_string().to_lowercase().contains("hashcode"));
+}
+
+#[test]
+fn managed_resource_inspection_keeps_text_aliases_help_and_attribute_only_parent_filter_validation() {
+    let assembly = fixture("Microsoft.Bcl.HashCode.dll");
+    assert_same(
+        &["dotnet", &assembly, "--list", "resources", "--limit", "1"],
+        &["managed", "inspect", &assembly, "--list", "resources", "--limit", "1"],
+        true,
+    );
+    for route in [&["dotnet"][..], &["managed", "inspect"][..]] {
+        for list in ["resources", "types", "pinvokes"] {
+            let args: Vec<_> = route
+                .iter()
+                .copied()
+                .chain([MISSING, "--list", list, "--parent-token", "0x28000001", "--pack", MISSING])
+                .collect();
+            let output = run(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            assert!(output.stdout.is_empty());
+            let error = String::from_utf8(output.stderr).unwrap();
+            assert!(error.contains("--parent-token filters --list attributes only"), "{error}");
+            assert!(!error.contains("cannot open") && !error.contains("warning"), "{error}");
+        }
+        let help_args: Vec<_> = route.iter().copied().chain(["--help"]).collect();
+        let help = String::from_utf8(run(&help_args).stdout).unwrap();
+        assert!(help.contains("resources"), "{help}");
+        assert!(help.contains("metadata links only"), "{help}");
+    }
+    assert_eq!(run(&["managed", "disassemble", MISSING, "--list", "resources", "--il", "Main"]).status.code(), Some(2));
 }
 
 #[test]

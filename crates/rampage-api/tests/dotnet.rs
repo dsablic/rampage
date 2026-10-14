@@ -96,6 +96,190 @@ fn event_image() -> EventImage {
     scratch
 }
 
+fn resource_image(declared: u32, cut: usize) -> Vec<u8> {
+    let strings = b"\0Alpha\0Beta\0Part.netmodule\0OtherAssembly\0";
+    let present = [(0x23, 1u32), (0x26, 1), (0x28, declared)];
+    let valid = present.iter().fold(0u64, |mask, &(table, _)| mask | (1 << table));
+    let mut tables = vec![0, 0, 0, 0, 2, 0, 0, 1];
+    tables.extend_from_slice(&valid.to_le_bytes());
+    tables.extend_from_slice(&0u64.to_le_bytes());
+    for &(_, rows) in &present {
+        tables.extend_from_slice(&rows.to_le_bytes());
+    }
+    for value in [1u16, 2, 3, 4, 0, 0, 0, 27, 0, 0] {
+        tables.extend_from_slice(&value.to_le_bytes());
+    }
+    tables.extend_from_slice(&1u32.to_le_bytes());
+    tables.extend_from_slice(&12u16.to_le_bytes());
+    tables.extend_from_slice(&0u16.to_le_bytes());
+    for (offset, flags, name, implementation) in
+        [(0u32, 1u32, 1u16, 0u16), (4, 2, 7, 4), (8, 1, 1, 5), (0, 1, 0xffff, 3)]
+    {
+        tables.extend_from_slice(&offset.to_le_bytes());
+        tables.extend_from_slice(&flags.to_le_bytes());
+        tables.extend_from_slice(&name.to_le_bytes());
+        tables.extend_from_slice(&implementation.to_le_bytes());
+    }
+    tables.truncate(tables.len() - cut);
+    let streams: [(&str, &[u8]); 2] = [("#~", &tables), ("#Strings", strings)];
+    let version = b"v4.0.30319\0\0";
+    let mut root = Vec::new();
+    root.extend_from_slice(&0x424A_5342u32.to_le_bytes());
+    root.extend_from_slice(&[1, 0, 1, 0, 0, 0, 0, 0]);
+    root.extend_from_slice(&(version.len() as u32).to_le_bytes());
+    root.extend_from_slice(version);
+    root.extend_from_slice(&[0, 0, 2, 0]);
+    let mut offset =
+        root.len() + streams.iter().map(|(name, _)| 8 + (name.len() + 1).next_multiple_of(4)).sum::<usize>();
+    for (name, data) in streams {
+        root.extend_from_slice(&(offset as u32).to_le_bytes());
+        root.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        root.extend_from_slice(name.as_bytes());
+        root.push(0);
+        while !root.len().is_multiple_of(4) {
+            root.push(0);
+        }
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in streams {
+        root.extend_from_slice(data);
+        while !root.len().is_multiple_of(4) {
+            root.push(0);
+        }
+    }
+    let mut image = std::fs::read(fixture(ASSEMBLY)).unwrap();
+    let metadata = rampage_loaders::dotnet::parse_image(&image).unwrap().unwrap();
+    let start = image.windows(4).position(|bytes| bytes == b"BSJB").unwrap();
+    assert!(root.len() <= metadata.cli.metadata_size as usize);
+    image[start..start + root.len()].copy_from_slice(&root);
+    image
+}
+
+fn resource_project(declared: u32, cut: usize) -> rampage_api::Project {
+    let image = resource_image(declared, cut);
+    let path =
+        std::env::temp_dir().join(format!("rampage-api-dotnet-resources-{}-{declared}-{cut}.dll", std::process::id()));
+    let scratch = EventImage(path);
+    std::fs::write(&scratch.0, image).unwrap();
+    rampage_api::Project::new(rampage_loaders::Binary::open(&scratch.0).unwrap())
+}
+
+#[test]
+fn dotnet_resources_have_independent_pages_filters_counts_and_json_evidence() {
+    use std::str::FromStr;
+
+    assert_eq!(DotNetList::from_str("resources").unwrap(), DotNetList::Resources);
+    assert_eq!(serde_json::from_str::<DotNetList>("\"resources\"").unwrap(), DotNetList::Resources);
+    let project = resource_project(4, 0);
+    let query = DotNetQuery { list: DotNetList::Resources, offset: Some(1), limit: Some(2), ..Default::default() };
+    let summary = project.dotnet_metadata(&query).unwrap().unwrap();
+    assert_eq!(summary.counts.resources, 4);
+    assert!(summary.resource_counts.declared_known);
+    assert_eq!(
+        (
+            summary.resource_counts.declared,
+            summary.resource_counts.readable,
+            summary.resource_counts.retained,
+            summary.resource_counts.returned,
+            summary.resource_counts.truncated
+        ),
+        (4, 4, 4, 2, false)
+    );
+    assert!(summary.types.is_none() && summary.pinvokes.is_none() && summary.custom_attributes.is_none());
+    let json = serde_json::to_value(&summary).unwrap();
+    assert!(json.get("types").is_none() && json.get("custom_attributes").is_none());
+    assert_eq!(json["list"], "resources");
+    assert_eq!(json["resources"]["total"], 4);
+    assert_eq!(json["resources"]["offset"], 1);
+    assert_eq!(json["resource_counts"]["returned"], 2);
+    let file = &json["resources"]["items"][0];
+    assert_eq!(file["token"], 0x2800_0002u32);
+    assert_eq!(file["offset"], 4);
+    assert_eq!(file["implementation_raw"], 4);
+    assert_eq!(file["implementation"]["kind"], "file");
+    assert_eq!(file["implementation"]["status"], "readable");
+    assert_eq!(file["implementation"]["token"], 0x2600_0001u32);
+    assert_eq!(file["implementation"]["name"], "Part.netmodule");
+    assert_eq!(file["availability"]["kind"], "external");
+    assert_eq!(json["resources"]["items"][1]["implementation"]["kind"], "assembly_ref");
+    for (contains, expected) in [("aLpHa", 2), ("PART.NETMODULE", 1), ("otherassembly", 1), ("absent", 0)] {
+        let query =
+            DotNetQuery { list: DotNetList::Resources, contains: Some(contains.to_owned()), ..Default::default() };
+        let summary = project.dotnet_metadata(&query).unwrap().unwrap();
+        assert_eq!(summary.resources.unwrap().total, expected, "{contains}");
+        assert_eq!(summary.counts.resources, 4, "counts precede filtering");
+    }
+    let query = DotNetQuery { list: DotNetList::Resources, offset: Some(99), limit: Some(1), ..Default::default() };
+    let summary = project.dotnet_metadata(&query).unwrap().unwrap();
+    assert_eq!(summary.resource_counts.returned, 0);
+    let page = summary.resources.unwrap();
+    assert_eq!((page.total, page.offset, page.items.len()), (4, 4, 0));
+    let query = DotNetQuery { list: DotNetList::Resources, parent_token: Some(0x2800_0001), ..Default::default() };
+    assert!(matches!(project.dotnet_metadata(&query), Err(ApiError::Invalid(_))));
+    let types = project.dotnet_metadata(&DotNetQuery::default()).unwrap().unwrap();
+    assert!(types.resources.is_none());
+    assert_eq!((types.counts.resources, types.resource_counts.returned), (4, 0));
+}
+
+#[test]
+fn dotnet_resource_counts_separate_declared_readable_retained_and_returned_rows() {
+    let project = resource_project(4, 1);
+    let query = DotNetQuery { list: DotNetList::Resources, limit: Some(1), ..Default::default() };
+    let summary = project.dotnet_metadata(&query).unwrap().unwrap();
+    let json = serde_json::to_value(&summary).unwrap();
+    assert_eq!(
+        json["resource_counts"],
+        serde_json::json!({
+            "declared": 4, "declared_known": true, "readable": 3, "retained": 3, "returned": 1, "truncated": true,
+        })
+    );
+    let page = summary.resources.unwrap();
+    assert_eq!((page.total, page.items.len()), (3, 1));
+    let embedded = &json["resources"]["items"][0];
+    assert_eq!(embedded["implementation"]["kind"], "embedded");
+    assert_eq!(embedded["availability"]["kind"], "embedded");
+    assert!(embedded["availability"].get("status").is_some());
+    assert!(embedded.get("size").is_none() && embedded.get("payload").is_none());
+    let project = resource_project(u32::MAX, 0);
+    let summary = project.dotnet_metadata(&query).unwrap().unwrap();
+    assert_eq!((summary.resource_counts.declared, summary.resource_counts.readable), (u32::MAX, 4));
+    assert!(summary.resource_counts.truncated);
+}
+
+#[test]
+fn dotnet_resource_json_distinguishes_unknown_and_recovered_partial_header_counts() {
+    for count_available in [false, true] {
+        let mut image = resource_image(4, 0);
+        let root = image.windows(4).position(|bytes| bytes == b"BSJB").unwrap();
+        let table_header = root + 32;
+        let relative = u32::from_le_bytes(image[table_header..table_header + 4].try_into().unwrap()) as usize;
+        let stream = root + relative;
+        let valid = (1u64 << 40) | (1 << 42);
+        image[stream + 8..stream + 16].copy_from_slice(&valid.to_le_bytes());
+        image[stream + 24..stream + 28].copy_from_slice(&17u32.to_le_bytes());
+        let size = if count_available { 28u32 } else { 24 };
+        image[table_header + 4..table_header + 8].copy_from_slice(&size.to_le_bytes());
+        let path = std::env::temp_dir()
+            .join(format!("rampage-api-dotnet-partial-resource-header-{}-{count_available}.dll", std::process::id()));
+        let scratch = EventImage(path);
+        std::fs::write(&scratch.0, image).unwrap();
+        let project = rampage_api::Project::new(rampage_loaders::Binary::open(&scratch.0).unwrap());
+        let query = DotNetQuery { list: DotNetList::Resources, ..Default::default() };
+        let summary = project.dotnet_metadata(&query).unwrap().unwrap();
+        let json = serde_json::to_value(summary).unwrap();
+        assert_eq!(
+            json["resource_counts"],
+            serde_json::json!({
+                "declared": if count_available { 17 } else { 0 },
+                "declared_known": count_available,
+                "readable": 0, "retained": 0, "returned": 0, "truncated": true,
+            })
+        );
+        assert_eq!(json["resources"]["total"], 0);
+        assert_eq!(json["resources"]["items"], serde_json::json!([]));
+    }
+}
+
 #[test]
 fn dotnet_metadata_serializes_events_and_filters_the_current_type_view() {
     let scratch = event_image();
