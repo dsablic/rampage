@@ -13,6 +13,7 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use rampage_api::{FunctionsQuery, ListQuery, Packs, StringsQuery};
 use rampage_arch::Arch;
 
+use crate::args::ArchiveInventoryArgs;
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
@@ -59,6 +60,8 @@ enum PacksCommand {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(skip)]
+    ArchiveInventory(ArchiveInventoryArgs),
     #[command(hide = true)]
     QueryDebugger(QueryDebuggerArgs),
     /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
@@ -218,6 +221,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if matches!(&command, Command::ArchiveInventory(..))
+        && (cli.arch.is_some() || cli.image_offset.is_some() || cli.image_length.is_some())
+    {
+        eprintln!("rampage: binary archive-inventory does not accept --arch, --image-offset or --image-length");
+        return ExitCode::FAILURE;
+    }
     if matches!(
         &command,
         Command::Dotnet(args) if args.parent_token.is_some() && args.list != rampage_api::DotNetList::Attributes
@@ -245,6 +254,14 @@ fn main() -> ExitCode {
     let options = Options { json: cli.json, arch: cli.arch, image, packs: Arc::clone(&packs) };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match command {
+        Command::ArchiveInventory(args) => {
+            let query = rampage_api::ArchiveQuery {
+                offset: Some(args.offset),
+                limit: Some(args.limit as usize),
+                contains: args.contains,
+            };
+            commands::archive_inventory(&mut out, &args.file, &query, &options)
+        }
         Command::QueryDebugger(args) => debugger_query(&mut out, args),
         Command::Analyze(args) => analyze::analyze(&mut out, &args, &options),
         Command::Info(FileArgs { file }) => commands::info(&mut out, &file, &options),
@@ -401,6 +418,7 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
     Some(match command {
         Command::Carve(..) => "carve",
         Command::Inventory(..) => "inventory",
+        Command::ArchiveInventory(..) => "binary archive-inventory",
         Command::Packs { .. } => "packs",
         Command::Mcp(..) => "mcp (pass image_offset to each tool call instead)",
         Command::QueryDebugger(..) => "runtime debugger query (does not open an image)",

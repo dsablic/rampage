@@ -4,6 +4,8 @@ use serde::Serialize;
 
 use crate::{Binary, LoadError};
 
+pub mod archive;
+
 pub fn resolve_executable(path: &Path) -> Result<PathBuf, LoadError> {
     if !path.is_dir() {
         return Ok(path.to_owned());

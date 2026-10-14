@@ -72,6 +72,7 @@ async fn lists_all_tools_with_instructions() {
     let expected = [
         "analysis_diagnostics",
         "annotate_batch",
+        "archive_inventory",
         "binary_info",
         "build_signatures",
         "capa_detect",
@@ -151,7 +152,9 @@ async fn lists_core_tools_and_enable_tools_by_default() {
     for tool in ["triage_report", "decompile", "xrefs", "annotate_batch", "undo", "list_annotations"] {
         assert!(names.iter().any(|name| name == tool), "{tool}");
     }
-    for tool in ["detect_tools", "find_crypto", "set_types", "observe_pointer", "dotnet_metadata", "carve"] {
+    for tool in
+        ["detect_tools", "find_crypto", "set_types", "observe_pointer", "dotnet_metadata", "carve", "archive_inventory"]
+    {
         assert!(!names.iter().any(|name| name == tool), "{tool}");
     }
     let info = client.peer_info().unwrap();

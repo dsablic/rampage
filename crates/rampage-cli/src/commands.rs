@@ -107,6 +107,51 @@ pub fn inventory(out: &mut impl Write, path: &Path, options: &Options) -> Result
     Ok(())
 }
 
+pub fn archive_inventory(
+    out: &mut impl Write,
+    path: &Path,
+    query: &rampage_api::ArchiveQuery,
+    options: &Options,
+) -> Result<()> {
+    let page = rampage_api::archive_inventory(path, query)?;
+    if options.json {
+        serde_json::to_writer(&mut *out, &page)?;
+        return Ok(());
+    }
+    writeln!(out, "ZIP32 central-directory metadata evidence: {}", path.display())?;
+    writeln!(out, "metadata SHA-256: {} (not whole-payload identity)", page.archive_ref.metadata_sha256)?;
+    writeln!(
+        out,
+        "{} declared, {} examined, {} validated directory records; {} matched, {} returned",
+        page.declared, page.examined, page.validated, page.matched, page.returned
+    )?;
+    for member in &page.members {
+        writeln!(
+            out,
+            "#{} name={} raw_hex={}{} method={} flags={:#x} compressed={} uncompressed={} local_offset={:#x}",
+            member.member_ref.ordinal,
+            serde_json::to_string(&member.name_display)?,
+            member.raw_name_hex,
+            if member.name_truncated { " [name truncated]" } else { "" },
+            member.compression_method,
+            member.flags,
+            member.compressed_size,
+            member.uncompressed_size,
+            member.local_header_offset
+        )?;
+    }
+    if let Some(next) = page.next_offset {
+        writeln!(out, "more matching metadata; continue with --offset {next}")?;
+    }
+    for warning in page.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    for limitation in page.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
 pub fn carve(out: &mut impl Write, path: &Path, max_candidates: usize, options: &Options) -> Result<()> {
     let carving = rampage_api::carve(path, Some(max_candidates))?;
     if options.json {

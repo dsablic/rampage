@@ -32,6 +32,45 @@ fn run(args: &[&str]) -> Output {
 const MISSING: &str = "/nonexistent/rampage-hierarchy-input";
 type Route = (&'static [&'static str], &'static [&'static str], &'static [&'static str]);
 
+#[test]
+fn archive_inventory_is_canonical_and_rejects_native_selectors_at_every_command_depth_before_io() {
+    let binary_help = run(&["binary", "--help"]);
+    assert!(binary_help.status.success());
+    assert!(String::from_utf8_lossy(&binary_help.stdout).contains("archive-inventory"));
+    let help = run(&["binary", "archive-inventory", "--help"]);
+    assert!(help.status.success());
+    let help = String::from_utf8_lossy(&help.stdout);
+    for option in ["--offset", "--limit", "--contains"] {
+        assert!(help.contains(option), "{help}");
+    }
+    let root_alias = run(&["archive-inventory", MISSING]);
+    assert!(!root_alias.status.success());
+    assert!(String::from_utf8_lossy(&root_alias.stderr).contains("unrecognized subcommand"));
+    for selectors in
+        [&["--arch", "x86_64"][..], &["--image-offset", "0"][..], &["--image-offset", "0", "--image-length", "22"][..]]
+    {
+        for depth in 0..=2 {
+            let mut arguments = Vec::new();
+            if depth == 0 {
+                arguments.extend_from_slice(selectors);
+            }
+            arguments.push("binary");
+            if depth == 1 {
+                arguments.extend_from_slice(selectors);
+            }
+            arguments.extend_from_slice(&["archive-inventory", MISSING]);
+            if depth == 2 {
+                arguments.extend_from_slice(selectors);
+            }
+            let rejected = run(&arguments);
+            assert!(!rejected.status.success(), "{arguments:?}");
+            let error = String::from_utf8_lossy(&rejected.stderr);
+            assert!(error.contains("does not accept --arch, --image-offset or --image-length"), "{error}");
+            assert!(!error.contains("No such file"), "{error}");
+        }
+    }
+}
+
 const ROUTES: &[Route] = &[
     (&["info"], &["binary", "inspect"], &[MISSING]),
     (&["triage"], &["binary", "triage"], &[MISSING]),

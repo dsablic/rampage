@@ -8,6 +8,20 @@ pub(crate) struct FileArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct ArchiveInventoryArgs {
+    pub(crate) file: PathBuf,
+    /// Matching central-directory records to skip (not a file or image byte offset)
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// Records per page (1..=100), additionally bounded to 60000 JSON bytes
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..=100))]
+    pub(crate) limit: u64,
+    /// Case-sensitive UTF-8 byte substring of the full raw member name, before display truncation
+    #[arg(long)]
+    pub(crate) contains: Option<String>,
+}
+
+#[derive(Args)]
 pub(crate) struct QueryDebuggerArgs {
     /// Explicit absolute path to an operator-started LLDB Unix socket (no attach or discovery)
     #[arg(long)]

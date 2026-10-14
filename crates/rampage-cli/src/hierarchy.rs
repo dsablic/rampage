@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Arg, ArgMatches, Subcommand};
 
+use crate::args::ArchiveInventoryArgs;
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
@@ -78,6 +79,7 @@ impl RootCommand {
             Self::Binary(BinaryCommand::Audit(args)) => Command::Audit(args),
             Self::Binary(BinaryCommand::Carve(args)) => Command::Carve(args),
             Self::Binary(BinaryCommand::Inventory(args)) => Command::Inventory(args),
+            Self::Binary(BinaryCommand::ArchiveInventory(args)) => Command::ArchiveInventory(args),
             Self::Binary(BinaryCommand::ListImports(args)) => Command::Imports(args),
             Self::Binary(BinaryCommand::ListExports(args)) => Command::Exports(args),
             Self::Binary(BinaryCommand::ScanYara(args)) => Command::Yara(args),
@@ -147,6 +149,8 @@ pub(crate) enum BinaryCommand {
     Carve(CarveArgs),
     /// Inventory binaries in a bundle or already-extracted package without executing it
     Inventory(DirectoryArgs),
+    /// Inventory standalone single-disk ZIP32 metadata, without opening, extracting or probing members
+    ArchiveInventory(ArchiveInventoryArgs),
     /// List imported functions with their libraries and import slots
     ListImports(ImportsArgs),
     /// List exported symbols

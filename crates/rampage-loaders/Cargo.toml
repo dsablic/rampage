@@ -10,6 +10,7 @@ serde_json.workspace = true
 plist = "1.8.0"
 rampage-arch.workspace = true
 md-5.workspace = true
+sha2.workspace = true
 memmap2.workspace = true
 object.workspace = true
 serde.workspace = true

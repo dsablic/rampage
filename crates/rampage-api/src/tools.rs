@@ -68,7 +68,9 @@ impl Group {
             }
             Group::Diagnostics => "Decode coverage and unreliable-code evidence, and explicit ARM64 jump-table checks.",
             Group::DotNet => "Managed (.NET) metadata (types, methods, properties, P/Invokes, attributes) and CIL.",
-            Group::Carve => "Scan any file (firmware, installer, archive) for embedded executables and containers.",
+            Group::Carve => {
+                "Scan files for embedded executables/containers and inventory standalone ZIP32 metadata without extraction."
+            }
         }
     }
 }
@@ -208,6 +210,20 @@ struct CarveArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct ArchiveInventoryArgs {
+    /// Explicit standalone single-disk ZIP32 file; never a binary or member path.
+    path: std::path::PathBuf,
+    /// Matching records to skip, not a native-image or byte offset.
+    offset: Option<usize>,
+    /// Records per page, 1..=100, additionally bounded to 60000 JSON bytes.
+    #[schemars(range(min = 1, max = 100))]
+    limit: Option<usize>,
+    /// Case-sensitive UTF-8 byte substring of the full raw name, before display truncation.
+    contains: Option<String>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct QueryDebuggerArgs {
     /// Explicit absolute path of an operator-started LLDB Unix socket in a same-user 0700 directory.
     socket: std::path::PathBuf,
@@ -221,6 +237,52 @@ struct QueryDebuggerArgs {
 /// Every tool that works without a loaded binary.
 pub fn file_tools() -> Vec<FileTool> {
     vec![
+        FileTool {
+            group: Group::Carve,
+            name: "archive_inventory",
+            description: "Inventory central-directory metadata in an explicit standalone single-disk ZIP32 file, \
+                          without opening it as a binary or opening any member. Bounded prefix, tail and directory \
+                          reads only; the tail can overlap member data. No member/local-header seeks, decompression, \
+                          extraction, CRC verification, format probing, nesting or execution. ZIP64, multi-disk, SFX \
+                          and directory gaps are unsupported. Limits: 65557-byte tail, 8 MiB directory, 4096 records, \
+                          1 MiB retained name budget, 1024 bytes per name, 64 warnings, 24 MiB cumulative reads. \
+                          Work is capped at 4096 EOCD candidates and 65536 extra fields; raw-name filtering is linear \
+                          and bounded. \
+                          Budget exhaustion rejects the whole inventory. Names preserve raw hex and ordinal identity, \
+                          not filesystem paths or extraction safety. Metadata digest plus size/directory offsets is \
+                          evidence only, not whole-payload hashing, authentication or an atomic snapshot. Full raw-name \
+                          contains filtering precedes truncation. Exact metadata counts, byte-bounded JSON pages and \
+                          next_offset allow progress even for maximum-size names. No annotations, packs or discovery. \
+                          Native-image arch/image_offset/image_length arguments are rejected.",
+            input_schema: schema::<ArchiveInventoryArgs>(),
+            handler: |_, input| {
+                (|| -> Result<Value, String> {
+                    if input.to_string().len() > 48_000 {
+                        return Err("archive arguments exceed the input byte budget".to_owned());
+                    }
+                    let args: ArchiveInventoryArgs = arguments(input)?;
+                    let query = crate::ArchiveQuery { offset: args.offset, limit: args.limit, contains: args.contains };
+                    let page = crate::archive_inventory(&args.path, &query).map_err(|error| error_chain(&error))?;
+                    let output = serde_json::to_value(page).map_err(|error| error.to_string())?;
+                    if output.to_string().len() > crate::MAX_ARCHIVE_RESULT_BYTES {
+                        return Err("archive result exceeds the JSON byte budget".to_owned());
+                    }
+                    Ok(output)
+                })()
+                .map_err(|mut text| {
+                    const MARKER: &str = "... [archive error truncated]";
+                    if text.len() > 4096 {
+                        let mut end = 4096 - MARKER.len();
+                        while !text.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        text.truncate(end);
+                        text.push_str(MARKER);
+                    }
+                    text
+                })
+            },
+        },
         FileTool {
             group: Group::Runtime,
             name: "query_debugger",
