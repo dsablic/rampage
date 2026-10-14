@@ -281,3 +281,109 @@ fn corrupt_supported_constant_with_missing_name_still_rejects_the_whole_report()
     assert!(matches!(error, rampage_loaders::LoadError::Malformed(_)), "{error}");
     assert!(!error.to_string().contains("unsupported constant numeric prefix"), "{error}");
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod checked {
+    use super::*;
+    use rampage_loaders::pdb::matched_symbols_checked;
+
+    #[test]
+    fn checked_matching_hashes_the_owned_fixture_buffer_and_returns_checked_code_vas() {
+        let binary = Binary::open(fixture("fixture.exe")).unwrap();
+        let (report, provenance) = matched_symbols_checked(&binary, &fixture("fixture.pdb")).unwrap();
+        assert!(report.functions.iter().any(|function| function.address == 0x140001000 && function.name == "pdb_mix"));
+        assert!(
+            report.functions.iter().any(|function| function.address == 0x140001020 && function.name == "pdb_local")
+        );
+        assert_eq!(
+            rampage_arch::hex::bytes(provenance.sha256()),
+            "618b154d83ecd8e0ec08056913371116e193d9d00569be07b6615183c9b3d644"
+        );
+        assert_eq!(provenance.path(), std::path::absolute(fixture("fixture.pdb")).unwrap());
+        provenance.validate_current().unwrap();
+    }
+
+    #[test]
+    fn current_bytes_and_provenance_are_both_required_even_when_pdb_guid_and_age_still_match() {
+        let binary = Binary::open(fixture("fixture.exe")).unwrap();
+        let original = std::fs::read(fixture("fixture.pdb")).unwrap();
+        for replacement in [false, true] {
+            let files = TempFiles::new();
+            let path = files.write("selected.pdb", &original);
+            let (report, provenance) = matched_symbols_checked(&binary, &path).unwrap();
+            if replacement {
+                std::fs::rename(files.write("replacement.pdb", &original), &path).unwrap();
+            } else {
+                let mut changed = original.clone();
+                let start = stream_offset(&original, module_stream(&original), 0);
+                let name = original[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+                changed[start + name..start + name + 10].copy_from_slice(b"new_local\0");
+                std::fs::write(&path, changed).unwrap();
+            }
+            let (current, current_provenance) = matched_symbols_checked(&binary, &path).unwrap();
+            assert_eq!(report.identity, current.identity);
+            if replacement {
+                assert_eq!(provenance.sha256(), current_provenance.sha256());
+            } else {
+                assert!(current.functions.iter().any(|function| function.name == "new_local"));
+                assert_ne!(provenance.sha256(), current_provenance.sha256());
+            }
+            let error = provenance.validate_current().unwrap_err();
+            assert!(error.to_string().contains("bytes or provenance changed"), "{error}");
+            assert!(report.functions.iter().any(|function| function.name == "pdb_local"));
+        }
+    }
+
+    #[test]
+    fn checked_matching_refuses_modified_replaced_and_truncated_original_maps_before_parsing() {
+        let original = std::fs::read(fixture("fixture.exe")).unwrap();
+        for mutation in ["overwrite", "replace", "truncate"] {
+            let files = TempFiles::new();
+            let path = files.write("selected.exe", &original);
+            let binary = Binary::open(&path).unwrap();
+            match mutation {
+                "overwrite" => {
+                    let mut changed = original.clone();
+                    changed[0x400] ^= 1;
+                    std::fs::write(&path, changed).unwrap();
+                }
+                "replace" => std::fs::rename(files.write("replacement.exe", &original), &path).unwrap(),
+                "truncate" => {
+                    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(1).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let error = matched_symbols_checked(&binary, &fixture("fixture.pdb")).unwrap_err();
+            assert!(error.to_string().contains("backing file was modified or replaced"), "{mutation}: {error}");
+        }
+    }
+
+    #[test]
+    fn checked_matching_reuses_numeric_record_and_code_address_guards() {
+        let files = TempFiles::new();
+        let binary = Binary::open(fixture("fixture.exe")).unwrap();
+        let original = std::fs::read(fixture("fixture.pdb")).unwrap();
+        let corrupt = support::corrupt_local_constant_numeric_prefix(&original, 0x1107, 0xffff);
+        let path = files.write("numeric.pdb", &corrupt);
+        let error = matched_symbols_checked(&binary, &path).unwrap_err();
+        assert!(error.to_string().contains("unsupported constant numeric prefix"), "{error}");
+        let corrupt = support::corrupt_local_offset(&original, 3, 0);
+        let path = files.write("data.pdb", &corrupt);
+        let error = matched_symbols_checked(&binary, &path).unwrap_err();
+        assert!(error.to_string().contains("readable, executable"), "{error}");
+    }
+
+    #[test]
+    fn checked_matching_resolves_selected_embedded_pe_rvas_not_outer_file_offsets() {
+        let files = TempFiles::new();
+        let image = std::fs::read(fixture("fixture.exe")).unwrap();
+        let mut outer = vec![b'x'; 1001];
+        outer.extend_from_slice(&image);
+        outer.extend_from_slice(b"not part of the selected image");
+        let path = files.write("embedded.bin", &outer);
+        let binary = Binary::open_at(&path, 1001, Some(image.len() as u64)).unwrap();
+        let (report, provenance) = matched_symbols_checked(&binary, &fixture("fixture.pdb")).unwrap();
+        assert!(report.functions.iter().any(|function| function.address == 0x140001000 && function.name == "pdb_mix"));
+        provenance.validate_current().unwrap();
+    }
+}

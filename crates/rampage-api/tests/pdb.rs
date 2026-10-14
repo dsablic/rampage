@@ -360,3 +360,390 @@ fn shared_pdb_tool_preserves_user_symbol_export_and_entry_names_without_an_undo_
     assert_eq!(project.function_name(0x140001000), "symbol_mix");
     assert!(project.annotation_list().names.is_empty());
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod checked {
+    use super::*;
+    use std::path::Path;
+
+    use rampage_api::{ApiError, PdbPreview};
+
+    const MIX: u64 = 0x140001000;
+    const LOCAL: u64 = 0x140001020;
+    const OTHER: u64 = 0x140005000;
+
+    fn logged(log: &Path) -> Project {
+        Project::with_annotations(
+            Binary::open(fixture("fixture.exe")).unwrap(),
+            Annotations::open(log.to_owned()).unwrap(),
+        )
+    }
+
+    fn seed_history(project: &Project) {
+        project.comment(MIX, Some("keep this undo step")).unwrap();
+        project.comment(LOCAL, Some("keep this redo step")).unwrap();
+        assert_eq!(project.undo().unwrap()[0].address, LOCAL);
+    }
+
+    fn assert_unchanged_rejection<T>(
+        project: &Project,
+        log: &Path,
+        work: impl FnOnce() -> Result<T, ApiError>,
+    ) -> String {
+        let before_log = std::fs::read(log).unwrap();
+        let before_annotations = serde_json::to_value(project.annotation_list()).unwrap();
+        let error = work().err().expect("stale preview must be refused").to_string();
+        assert_eq!(std::fs::read(log).unwrap(), before_log, "{error}");
+        assert_eq!(serde_json::to_value(project.annotation_list()).unwrap(), before_annotations, "{error}");
+        assert_eq!(project.redo().unwrap()[0].address, LOCAL, "stale errors must preserve redo");
+        assert_eq!(project.undo().unwrap()[0].address, LOCAL);
+        assert_eq!(project.undo().unwrap()[0].address, MIX, "stale errors must preserve the previous undo step");
+        assert!(project.undo().unwrap().is_empty());
+        error
+    }
+
+    fn changed_local_name(original: &[u8]) -> Vec<u8> {
+        let mut bytes = original.to_vec();
+        let start = stream_offset(original, module_stream(original), 0);
+        let name = original[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+        bytes[start + name..start + name + 10].copy_from_slice(b"new_local\0");
+        bytes
+    }
+
+    #[test]
+    fn checked_preview_is_read_only_and_apply_and_undo_use_the_approved_batch() {
+        let files = TempFiles::new();
+        let log = files.write("checked.rampage", b"");
+        let project = logged(&log);
+        project.comment(MIX, Some("earlier step")).unwrap();
+        let before = std::fs::read(&log).unwrap();
+        let receipt = project.preview_pdb_names(&fixture("fixture.pdb")).unwrap();
+        assert_eq!(std::fs::read(&log).unwrap(), before);
+        assert!(project.annotation_list().names.is_empty());
+        assert_eq!(project.undo().unwrap()[0].value.as_deref(), Some("earlier step"));
+        assert!(project.undo().unwrap().is_empty(), "preview must not add undo history");
+        assert_eq!(receipt.approved().iter().map(|function| function.address).collect::<Vec<_>>(), [MIX, LOCAL]);
+        assert_eq!(receipt.approved()[0].name, "pdb_mix");
+        assert_eq!(receipt.approved()[1].name, "pdb_local");
+        assert!(receipt.preserved().contains(&0x140001030));
+        assert!(receipt.preserved().contains(&project.binary.entry.unwrap()));
+        // Independently recorded SHA-256 values of the owned LLVM fixtures, not production hash helpers.
+        assert_eq!(
+            rampage_arch::hex::bytes(receipt.image_sha256()),
+            "81f277669933189213eb1b4f04ace20115a8714d4153af053f5d9d75a7889495"
+        );
+        assert_eq!(
+            rampage_arch::hex::bytes(receipt.pdb().sha256()),
+            "618b154d83ecd8e0ec08056913371116e193d9d00569be07b6615183c9b3d644"
+        );
+        let applied = project.apply_pdb_names(&receipt).unwrap();
+        assert_eq!(applied.applied, [MIX, LOCAL]);
+        assert_eq!(applied.preserved, receipt.preserved());
+        assert_eq!(applied.preview.functions, receipt.report().functions);
+        assert_eq!(project.resolve("pdb_mix").unwrap(), MIX);
+        assert_eq!(project.resolve("pdb_local").unwrap(), LOCAL);
+        assert_eq!(project.undo().unwrap().len(), 2);
+        assert!(project.annotation_list().names.is_empty());
+        assert_eq!(project.redo().unwrap().len(), 2);
+        assert!(project.apply_pdb_names(&receipt).unwrap().applied.is_empty());
+        assert_eq!(project.undo().unwrap().len(), 2, "an empty checked apply must not create an undo step");
+    }
+
+    #[test]
+    fn checked_preview_accepts_read_only_inputs_without_writing_or_creating_an_annotation_lock() {
+        let files = TempFiles::new();
+        let log = files.write("read-only.rampage", b"");
+        let pdb = files.write("read-only.pdb", &std::fs::read(fixture("fixture.pdb")).unwrap());
+        let project = logged(&log);
+        for path in [&log, &pdb] {
+            let mut permissions = std::fs::metadata(path).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(path, permissions).unwrap();
+        }
+        let receipt = project.preview_pdb_names(&pdb).unwrap();
+        assert_eq!(receipt.approved().len(), 2);
+        assert!(std::fs::read(&log).unwrap().is_empty());
+        let mut lock = log.as_os_str().to_owned();
+        lock.push(".lock");
+        assert!(!Path::new(&lock).exists());
+        assert!(project.annotation_list().names.is_empty());
+        assert!(project.undo().unwrap().is_empty());
+    }
+
+    #[test]
+    fn another_project_cannot_apply_the_receipt_even_for_the_same_path_and_bytes() {
+        let files = TempFiles::new();
+        let origin = project();
+        let receipt = origin.preview_pdb_names(&fixture("fixture.pdb")).unwrap();
+        let log = files.write("other-project.rampage", b"");
+        let other = logged(&log);
+        seed_history(&other);
+        let error = assert_unchanged_rejection(&other, &log, || other.apply_pdb_names(&receipt));
+        assert!(error.contains("different project"), "{error}");
+        assert!(origin.annotation_list().names.is_empty());
+        assert!(origin.undo().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_session_reload_of_identical_bytes_rejects_the_old_project_receipt_and_keeps_inherited_history() {
+        let files = TempFiles::new();
+        let bytes = std::fs::read(fixture("fixture.exe")).unwrap();
+        let image = files.write("session.exe", &bytes);
+        let log = files.write("session.exe.rampage", b"");
+        let session = rampage_api::Session::default();
+        let origin = session.open(&image, None).unwrap();
+        seed_history(&origin);
+        let receipt = origin.preview_pdb_names(&fixture("fixture.pdb")).unwrap();
+        std::fs::rename(files.write("replacement.exe", &bytes), &image).unwrap();
+        let reloaded = session.open(&image, None).unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&origin, &reloaded));
+        let error = assert_unchanged_rejection(&reloaded, &log, || reloaded.apply_pdb_names(&receipt));
+        assert!(error.contains("different project"), "{error}");
+    }
+
+    #[test]
+    fn changed_pdb_names_with_the_same_guid_age_and_length_require_a_new_preview() {
+        let files = TempFiles::new();
+        let original = std::fs::read(fixture("fixture.pdb")).unwrap();
+        let changed = changed_local_name(&original);
+        let old_report = rampage_loaders::pdb::pdb_symbols_bytes(&original).unwrap();
+        let new_report = rampage_loaders::pdb::pdb_symbols_bytes(&changed).unwrap();
+        assert_eq!(old_report.identity, new_report.identity);
+        assert_eq!(original.len(), changed.len());
+        assert!(new_report.functions.iter().any(|function| function.name == "new_local"));
+        let pdb = files.write("selected.pdb", &original);
+        let log = files.write("changed-pdb.rampage", b"");
+        let project = logged(&log);
+        seed_history(&project);
+        let receipt = project.preview_pdb_names(&pdb).unwrap();
+        std::fs::write(&pdb, &changed).unwrap();
+        let error = assert_unchanged_rejection(&project, &log, || project.apply_pdb_names(&receipt));
+        assert!(error.contains("PDB bytes or provenance changed"), "{error}");
+        assert!(receipt.approved().iter().any(|function| function.name == "pdb_local"));
+        assert!(!receipt.report().functions.iter().any(|function| function.name == "new_local"));
+    }
+
+    #[test]
+    fn checked_preview_rejects_ambiguous_invalid_and_panic_prone_names_without_touching_state_or_history() {
+        let original = std::fs::read(fixture("fixture.pdb")).unwrap();
+        let start = stream_offset(&original, module_stream(&original), 0);
+        let name = original[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+        let mut ambiguous = original.clone();
+        ambiguous[start + name..start + name + 10].copy_from_slice(b"pdb_mix\0\0\0");
+        let mut invalid = original.clone();
+        invalid[start + name..start + name + 10].copy_from_slice(b"bad local\0");
+        let numeric = support::corrupt_local_constant_numeric_prefix(&original, 0x1107, 0xffff);
+        for (bytes, reason) in [
+            (ambiguous, "ambiguous PDB name"),
+            (invalid, "not a valid name"),
+            (numeric, "unsupported constant numeric prefix"),
+        ] {
+            let files = TempFiles::new();
+            let pdb = files.write("invalid.pdb", &bytes);
+            let log = files.write("invalid-preview.rampage", b"");
+            let project = logged(&log);
+            seed_history(&project);
+            let error = assert_unchanged_rejection(&project, &log, || project.preview_pdb_names(&pdb));
+            assert!(error.contains(reason), "{error}");
+        }
+    }
+
+    #[test]
+    fn replaced_identical_missing_truncated_oversized_and_symlink_pdbs_leave_state_and_history_untouched() {
+        let original = std::fs::read(fixture("fixture.pdb")).unwrap();
+        for mutation in ["replace", "missing", "truncate", "oversize", "symlink", "fifo"] {
+            let files = TempFiles::new();
+            let pdb = files.write("selected.pdb", &original);
+            let log = files.write("stale-pdb.rampage", b"");
+            let project = logged(&log);
+            seed_history(&project);
+            let receipt = project.preview_pdb_names(&pdb).unwrap();
+            match mutation {
+                "replace" => std::fs::rename(files.write("replacement.pdb", &original), &pdb).unwrap(),
+                "missing" => std::fs::remove_file(&pdb).unwrap(),
+                "truncate" => {
+                    std::fs::OpenOptions::new().write(true).open(&pdb).unwrap().set_len(31).unwrap();
+                }
+                "oversize" => {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&pdb)
+                        .unwrap()
+                        .set_len(rampage_loaders::pdb::MAX_PDB_BYTES as u64 + 1)
+                        .unwrap();
+                }
+                "symlink" => {
+                    std::fs::remove_file(&pdb).unwrap();
+                    std::os::unix::fs::symlink(fixture("fixture.pdb"), &pdb).unwrap();
+                }
+                "fifo" => {
+                    std::fs::remove_file(&pdb).unwrap();
+                    std::fs::rename(files.fifo("hostile.pdb"), &pdb).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert_unchanged_rejection(&project, &log, || project.apply_pdb_names(&receipt));
+        }
+    }
+
+    fn mutate_image(files: &TempFiles, path: &Path, original: &[u8], mutation: &str) {
+        match mutation {
+            "overwrite" => {
+                let mut changed = original.to_vec();
+                changed[0x400] ^= 1;
+                std::fs::write(path, changed).unwrap();
+            }
+            "replace" => std::fs::rename(files.write("replacement.exe", original), path).unwrap(),
+            "truncate" => {
+                std::fs::OpenOptions::new().write(true).open(path).unwrap().set_len(1).unwrap();
+            }
+            "missing" => std::fs::remove_file(path).unwrap(),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn changed_original_mappings_are_rejected_before_preview_or_apply_can_read_stale_mapped_bytes() {
+        let original = std::fs::read(fixture("fixture.exe")).unwrap();
+        for mutation in ["overwrite", "replace", "truncate", "missing"] {
+            for after_preview in [false, true] {
+                let files = TempFiles::new();
+                let image = files.write("selected.exe", &original);
+                let log = files.write("stale-image.rampage", b"");
+                let project =
+                    Project::with_annotations(Binary::open(&image).unwrap(), Annotations::open(log.clone()).unwrap());
+                seed_history(&project);
+                let receipt = after_preview.then(|| project.preview_pdb_names(&fixture("fixture.pdb")).unwrap());
+                mutate_image(&files, &image, &original, mutation);
+                if let Some(receipt) = receipt {
+                    assert_unchanged_rejection(&project, &log, || project.apply_pdb_names(&receipt));
+                } else {
+                    assert_unchanged_rejection(&project, &log, || project.preview_pdb_names(&fixture("fixture.pdb")));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn new_labels_and_name_conflicts_shrink_checked_application_under_the_shared_log_lock() {
+        for conflict_elsewhere in [false, true] {
+            let files = TempFiles::new();
+            let log = files.write("new-conflict.rampage", b"");
+            let importer = logged(&log);
+            let writer = logged(&log);
+            let receipt = importer.preview_pdb_names(&fixture("fixture.pdb")).unwrap();
+            if conflict_elsewhere {
+                writer.rename(OTHER, Some("pdb_mix")).unwrap();
+            } else {
+                writer.rename(MIX, Some("concurrent_mix")).unwrap();
+            }
+            assert!(importer.name_at(MIX).is_none());
+            let imported = importer.apply_pdb_names(&receipt).unwrap();
+            assert_eq!(imported.applied, [LOCAL]);
+            assert!(imported.preserved.contains(&MIX));
+            assert_eq!(importer.resolve("pdb_local").unwrap(), LOCAL);
+            assert_eq!(importer.undo().unwrap().len(), 1);
+            assert!(importer.resolve("pdb_local").is_err());
+            if conflict_elsewhere {
+                assert_eq!(importer.resolve("pdb_mix").unwrap(), OTHER);
+            } else {
+                assert_eq!(importer.resolve("concurrent_mix").unwrap(), MIX);
+            }
+        }
+    }
+
+    #[test]
+    fn clearing_preview_preserved_labels_or_conflicts_never_enlarges_the_approved_pairs() {
+        for conflict_elsewhere in [false, true] {
+            let files = TempFiles::new();
+            let log = files.write("cleared-conflict.rampage", b"");
+            let importer = logged(&log);
+            let writer = logged(&log);
+            let preserved = if conflict_elsewhere { OTHER } else { MIX };
+            writer.rename(preserved, Some(if conflict_elsewhere { "pdb_mix" } else { "keep_mix" })).unwrap();
+            importer.refresh_annotations().unwrap();
+            let receipt = importer.preview_pdb_names(&fixture("fixture.pdb")).unwrap();
+            assert_eq!(receipt.approved().iter().map(|function| function.address).collect::<Vec<_>>(), [LOCAL]);
+            writer.rename(preserved, None).unwrap();
+            let imported = importer.apply_pdb_names(&receipt).unwrap();
+            assert_eq!(imported.applied, [LOCAL]);
+            assert!(imported.preserved.contains(&MIX));
+            assert!(importer.name_at(MIX).is_none());
+            assert!(importer.resolve("pdb_mix").is_err());
+            assert_eq!(importer.undo().unwrap().len(), 1);
+            assert!(importer.annotation_list().names.is_empty());
+        }
+    }
+
+    #[test]
+    fn clearing_all_preview_preserved_pairs_keeps_an_empty_approval_empty_and_adds_no_undo_step() {
+        let files = TempFiles::new();
+        let log = files.write("empty-approval.rampage", b"");
+        let importer = logged(&log);
+        let writer = logged(&log);
+        writer.rename(MIX, Some("keep_mix")).unwrap();
+        writer.rename(OTHER, Some("pdb_local")).unwrap();
+        importer.refresh_annotations().unwrap();
+        importer.comment(MIX, Some("earlier step")).unwrap();
+        let receipt = importer.preview_pdb_names(&fixture("fixture.pdb")).unwrap();
+        assert!(receipt.approved().is_empty());
+        writer.rename(MIX, None).unwrap();
+        writer.rename(OTHER, None).unwrap();
+        let before = std::fs::read(&log).unwrap();
+        let imported = importer.apply_pdb_names(&receipt).unwrap();
+        assert!(imported.applied.is_empty());
+        assert_eq!(std::fs::read(&log).unwrap(), before);
+        assert!(importer.annotation_list().names.is_empty());
+        assert_eq!(importer.undo().unwrap()[0].value.as_deref(), Some("earlier step"));
+        assert!(importer.undo().unwrap().is_empty());
+    }
+
+    #[test]
+    fn selected_embedded_pe_uses_its_own_digest_and_original_outer_mapping() {
+        let files = TempFiles::new();
+        let image = std::fs::read(fixture("fixture.exe")).unwrap();
+        let mut outer = vec![b'x'; 1001];
+        outer.extend_from_slice(&image);
+        let second_offset = outer.len() as u64;
+        outer.extend_from_slice(&image);
+        outer.extend_from_slice(b"outer trailing bytes");
+        let path = files.write("embedded.bin", &outer);
+        let log = files.write("embedded.rampage", b"");
+        let importer = Project::with_annotations(
+            Binary::open_at(&path, 1001, Some(image.len() as u64)).unwrap(),
+            Annotations::open(log.clone()).unwrap(),
+        );
+        let receipt: PdbPreview<'_> = importer.preview_pdb_names(&fixture("fixture.pdb")).unwrap();
+        assert_eq!(
+            rampage_arch::hex::bytes(receipt.image_sha256()),
+            "81f277669933189213eb1b4f04ace20115a8714d4153af053f5d9d75a7889495"
+        );
+        let other = Project::new(Binary::open_at(&path, second_offset, Some(image.len() as u64)).unwrap());
+        assert!(other.apply_pdb_names(&receipt).is_err());
+        assert_eq!(importer.apply_pdb_names(&receipt).unwrap().applied, [MIX, LOCAL]);
+        assert_eq!(importer.undo().unwrap().len(), 2);
+        seed_history(&importer);
+        std::fs::rename(files.write("same-outer.bin", &outer), &path).unwrap();
+        assert_unchanged_rejection(&importer, &log, || importer.apply_pdb_names(&receipt));
+    }
+}
+
+#[test]
+fn checked_preview_refuses_an_owned_input_without_original_backing_identity() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64.snapshot.json");
+    let project = Project::new(Binary::open(path).unwrap());
+    let error = project.preview_pdb_names(&fixture("fixture.pdb")).unwrap_err();
+    assert!(error.to_string().contains("no mapped-file identity"), "{error}");
+    assert!(project.annotation_list().names.is_empty());
+    assert!(project.undo().unwrap().is_empty());
+}
+
+#[cfg(not(unix))]
+#[test]
+fn checked_preview_refuses_a_mapped_input_when_the_host_cannot_supply_original_backing_identity() {
+    let project = project();
+    let error = project.preview_pdb_names(&fixture("fixture.pdb")).unwrap_err();
+    assert!(error.to_string().contains("identity unavailable"), "{error}");
+    assert!(project.annotation_list().names.is_empty());
+    assert!(project.undo().unwrap().is_empty());
+}

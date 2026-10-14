@@ -132,7 +132,8 @@ pub struct Annotations {
     held: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 struct Log {
     path: PathBuf,
     /// How many bytes of the file have been applied: every complete line before this offset. Other processes'
@@ -358,6 +359,27 @@ impl Annotations {
         let result = work(self);
         self.held = false;
         result
+    }
+
+    /// Checked PDB apply stages refresh, cursor and history under the same log lock, publishing only on success.
+    /// This does not roll back durable writes: work must finish all fallible validation before its final commit.
+    pub(crate) fn locked_staged<T>(
+        &mut self,
+        work: impl FnOnce(&mut Self) -> Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
+        let _lock = self.log_lock().map_err(ApiError::Invalid)?;
+        let mut staged = Self {
+            done: self.done.clone(),
+            undone: self.undone.clone(),
+            log: self.log.clone(),
+            held: true,
+            ..self.snapshot()
+        };
+        staged.refresh().map_err(ApiError::Invalid)?;
+        let result = work(&mut staged)?;
+        staged.held = self.held;
+        *self = staged;
+        Ok(result)
     }
 
     fn log_lock(&self) -> Result<Option<File>, String> {
@@ -775,6 +797,116 @@ mod tests {
         assert_eq!(agent.comment(0x2000), Some("xor loop"));
         ui.refresh().unwrap();
         assert_eq!(ui.name(0x2000), Some("decrypt_config"));
+        cleanup(path);
+    }
+
+    #[test]
+    fn failed_staged_refresh_preserves_private_cache_history_cursor_and_external_log_bytes() {
+        let path = temporary_log("failed-staged-refresh");
+        let mut annotations = Annotations::open_for_image(path.clone(), Some([1; 32])).unwrap();
+        for (field, address, value) in [
+            (Field::Name, 0x10, "original"),
+            (Field::Comment, 0x20, "original comment"),
+            (Field::Signature, 0x30, "int4 original(void);"),
+            (Field::Types, 0x40, "typedef int4 original_type;"),
+            (Field::Global, 0x50, "int4 original_global;"),
+        ] {
+            annotations.set(field, address, Some(value.to_owned())).unwrap();
+        }
+        annotations.set(Field::Comment, 0x60, Some("redo comment".to_owned())).unwrap();
+        annotations.undo().unwrap();
+        annotations.refresh().unwrap();
+        let before_cache = annotations.snapshot();
+        let before_done = annotations.done.clone();
+        let before_undone = annotations.undone.clone();
+        let before_log = annotations.log.clone();
+        let before_warnings = annotations.warnings();
+        assert!(!before_done.is_empty());
+        assert!(!before_undone.is_empty());
+        assert!(!annotations.held);
+
+        let mut writer = Annotations::open_for_image(path.clone(), Some([2; 32])).unwrap();
+        for (field, address, value) in [
+            (Field::Name, 0x10, "external_name"),
+            (Field::Comment, 0x20, "external comment"),
+            (Field::Signature, 0x30, "int4 external_name(void);"),
+            (Field::Types, 0x40, "typedef int4 external_type;"),
+            (Field::Global, 0x50, "int4 external_global;"),
+        ] {
+            writer.set(field, address, Some(value.to_owned())).unwrap();
+        }
+        let external_bytes = std::fs::read(&path).unwrap();
+        let result: Result<(), ApiError> = annotations.locked_staged(|staged| {
+            assert!(staged.held);
+            assert_eq!(staged.name(0x10), Some("external_name"));
+            assert_eq!(staged.address_of("original"), None);
+            assert_eq!(staged.comment(0x20), Some("external comment"));
+            assert_eq!(staged.signatures()[&0x30], "int4 external_name(void);");
+            assert_eq!(staged.types()[&0x40], "typedef int4 external_type;");
+            assert_eq!(staged.globals()[&0x50], "int4 external_global;");
+            assert!(staged.log.as_ref().unwrap().read > before_log.as_ref().unwrap().read);
+            assert_ne!(staged.warnings(), before_warnings);
+            Err(ApiError::Invalid("source changed after staged refresh".to_owned()))
+        });
+        assert!(result.unwrap_err().to_string().contains("source changed"));
+        assert_eq!(annotations.names, before_cache.names);
+        assert_eq!(annotations.addresses, before_cache.addresses);
+        assert_eq!(annotations.comments, before_cache.comments);
+        assert_eq!(annotations.signatures, before_cache.signatures);
+        assert_eq!(annotations.types, before_cache.types);
+        assert_eq!(annotations.globals, before_cache.globals);
+        assert_eq!(annotations.done, before_done);
+        assert_eq!(annotations.undone, before_undone);
+        assert_eq!(annotations.log, before_log);
+        assert_eq!(annotations.warnings(), before_warnings);
+        assert!(!annotations.held);
+        assert_eq!(std::fs::read(&path).unwrap(), external_bytes);
+
+        assert!(annotations.refresh().unwrap());
+        assert_eq!(annotations.name(0x10), Some("external_name"));
+        assert_eq!(annotations.address_of("external_name"), Some(0x10));
+        assert_eq!(annotations.comment(0x20), Some("external comment"));
+        assert_ne!(annotations.warnings(), before_warnings);
+        assert_eq!(annotations.log.as_ref().unwrap().read, external_bytes.len() as u64);
+        assert_eq!(annotations.done, before_done);
+        assert_eq!(annotations.undone, before_undone);
+        assert_eq!(std::fs::read(&path).unwrap(), external_bytes);
+        assert!(!annotations.refresh().unwrap());
+        cleanup(path);
+    }
+
+    #[test]
+    fn staged_batch_success_publishes_history_and_preserves_an_outer_log_lock_on_success_and_failure() {
+        let path = temporary_log("nested-staged-batch");
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        annotations.set(Field::Comment, 0x10, Some("earlier step".to_owned())).unwrap();
+        let changes = [(Field::Name, 0x10, Some("first".to_owned())), (Field::Name, 0x20, Some("second".to_owned()))];
+        annotations
+            .locked(|outer| {
+                assert!(outer.held);
+                let changed = outer.locked_staged(|staged| {
+                    assert!(staged.held);
+                    staged.set_batch_validated(&changes, |_| Ok(())).map_err(ApiError::Invalid)
+                })?;
+                assert_eq!(changed, [true, true]);
+                assert!(outer.held);
+                assert_eq!(outer.name(0x10), Some("first"));
+                assert_eq!(outer.done.len(), 2);
+                let before = std::fs::read(&path).unwrap();
+                let failed: Result<(), ApiError> = outer.locked_staged(|staged| {
+                    assert!(staged.held);
+                    Err(ApiError::Invalid("source changed".to_owned()))
+                });
+                assert!(failed.is_err());
+                assert!(outer.held);
+                assert_eq!(std::fs::read(&path).unwrap(), before);
+                Ok(())
+            })
+            .unwrap();
+        assert!(!annotations.held);
+        assert_eq!(annotations.undo().unwrap().len(), 2);
+        assert!(annotations.names().is_empty());
+        assert_eq!(annotations.undo().unwrap()[0].value.as_deref(), Some("earlier step"));
         cleanup(path);
     }
 

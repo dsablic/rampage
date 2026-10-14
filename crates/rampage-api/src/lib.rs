@@ -65,7 +65,7 @@ pub use offset::{FileOffset, parse_file_offset};
 pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
 pub use pointer_compare::{PointerChange, PointerComparison};
 pub use pointer_observation::{PointerAssessment, PointerObservation};
-pub use project::{PdbImport, Project};
+pub use project::{PdbImport, PdbPreview, Project};
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
 pub use rampage_decompiler::results::RecoveryStatus;

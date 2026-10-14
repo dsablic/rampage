@@ -9,6 +9,7 @@ use ::pdb::{FallibleIterator, PDB, SymbolData};
 use object::Object;
 use object::read::pe::{ImageNtHeaders, PeFile};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::{Binary, LoadError};
 
@@ -25,7 +26,7 @@ const MAX_PAGE_REFERENCES: usize = 262_144;
 const MAX_STRUCTURAL_WORK: usize = 4_000_000;
 const MAX_SECTIONS: usize = 4096;
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct PdbReport {
     pub functions: Vec<PdbFunction>,
     pub warnings: Vec<String>,
@@ -46,6 +47,78 @@ pub struct PdbFunction {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub name: String,
+}
+
+/// Observable provenance of one bounded, owned PDB read. This is not PDB authentication or a filesystem snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdbProvenance {
+    path: PathBuf,
+    stamp: Option<PdbStamp>,
+    sha256: [u8; 32],
+}
+
+impl PdbProvenance {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn sha256(&self) -> &[u8; 32] {
+        &self.sha256
+    }
+
+    /// Rechecks the explicit file's current capped bytes and descriptor provenance, without parsing new names.
+    pub fn validate_current(&self) -> Result<(), LoadError> {
+        self.require_identity()?;
+        let current = read_pdb_input(&self.path, open_pdb_file)?;
+        current.provenance.require_identity()?;
+        if current.provenance != *self {
+            return Err(malformed("PDB bytes or provenance changed since preview"));
+        }
+        Ok(())
+    }
+
+    fn require_identity(&self) -> Result<(), LoadError> {
+        self.stamp.ok_or_else(|| LoadError::Unsupported("PDB file identity unavailable".to_owned())).map(|_| ())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PdbStamp {
+    length: u64,
+    device: u64,
+    inode: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+impl PdbStamp {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Option<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            metadata.is_file().then(|| Self {
+                length: metadata.len(),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                modified_seconds: metadata.mtime(),
+                modified_nanoseconds: metadata.mtime_nsec(),
+                changed_seconds: metadata.ctime(),
+                changed_nanoseconds: metadata.ctime_nsec(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = metadata;
+            None
+        }
+    }
+}
+
+struct PdbInput {
+    bytes: Vec<u8>,
+    provenance: PdbProvenance,
 }
 
 fn serialize_guid<S: serde::Serializer>(guid: &[u8; 16], serializer: S) -> Result<S::Ok, S::Error> {
@@ -69,15 +142,37 @@ pub fn pdb_symbols(path: &Path) -> Result<PdbReport, LoadError> {
 }
 
 fn read_pdb_file(path: &Path, open: impl FnOnce(&Path) -> io::Result<std::fs::File>) -> Result<PdbReport, LoadError> {
+    pdb_symbols_bytes(&read_pdb_input(path, open)?.bytes)
+}
+
+fn read_pdb_input(path: &Path, open: impl FnOnce(&Path) -> io::Result<std::fs::File>) -> Result<PdbInput, LoadError> {
     let io_error = |source| LoadError::Io { path: path.to_path_buf(), source };
-    let file = open(path).map_err(io_error)?;
+    let path = std::path::absolute(path).map_err(io_error)?;
+    let io_error = |source| LoadError::Io { path: path.clone(), source };
+    let mut file = open(&path).map_err(io_error)?;
     let metadata = file.metadata().map_err(io_error)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_PDB_BYTES as u64 {
         return Err(malformed("requires a regular file within the size limit"));
     }
+    let stamp = PdbStamp::from_metadata(&metadata);
     let mut bytes = Vec::new();
-    file.take(MAX_PDB_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(io_error)?;
-    pdb_symbols_bytes(&bytes)
+    (&mut file).take(MAX_PDB_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(io_error)?;
+    if bytes.len() > MAX_PDB_BYTES {
+        return Err(malformed("file exceeds size limit"));
+    }
+    let after = file.metadata().map_err(io_error)?;
+    let pathname = std::fs::symlink_metadata(&path).map_err(io_error)?;
+    if !after.is_file()
+        || !pathname.is_file()
+        || after.len() != bytes.len() as u64
+        || metadata.len() != after.len()
+        || PdbStamp::from_metadata(&after) != stamp
+        || PdbStamp::from_metadata(&pathname) != stamp
+    {
+        return Err(malformed("PDB file changed while reading"));
+    }
+    let sha256 = Sha256::digest(&bytes).into();
+    Ok(PdbInput { bytes, provenance: PdbProvenance { path, stamp, sha256 } })
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -159,6 +254,30 @@ pub fn pdb_symbols_bytes(bytes: &[u8]) -> Result<PdbReport, LoadError> {
 /// Reads explicit PDB names only after matching a unique PE RSDS GUID and age. Returns checked virtual addresses.
 /// Missing identity, ambiguous CodeView records or any invalid code RVA reject the entire report.
 pub fn matched_symbols(binary: &Binary, path: &Path) -> Result<PdbReport, LoadError> {
+    match_report(binary, || pdb_symbols(path))
+}
+
+/// Matches names and hashes the same capped owned PDB buffer. Refuses unavailable source identity.
+pub fn matched_symbols_checked(binary: &Binary, path: &Path) -> Result<(PdbReport, PdbProvenance), LoadError> {
+    binary.validate_backing_source()?;
+    let input = read_pdb_input(path, open_pdb_file)?;
+    input.provenance.require_identity()?;
+    let report = pdb_symbols_bytes(&input.bytes)?;
+    let report = with_backing_source(binary, || match_report(binary, || Ok(report)))?;
+    Ok((report, input.provenance))
+}
+
+fn with_backing_source<T>(binary: &Binary, work: impl FnOnce() -> Result<T, LoadError>) -> Result<T, LoadError> {
+    binary.validate_backing_source()?;
+    let result = work();
+    binary.validate_backing_source()?;
+    result
+}
+
+fn match_report(
+    binary: &Binary,
+    read_report: impl FnOnce() -> Result<PdbReport, LoadError>,
+) -> Result<PdbReport, LoadError> {
     let parsed = object::File::parse(binary.image_bytes())?;
     let identity = match &parsed {
         object::File::Pe32(file) => image_identity(file)?,
@@ -166,7 +285,7 @@ pub fn matched_symbols(binary: &Binary, path: &Path) -> Result<PdbReport, LoadEr
         _ => return Err(LoadError::Unsupported("PDB names require a PE image".to_owned())),
     };
     let image_base = parsed.relative_address_base();
-    let mut report = pdb_symbols(path)?;
+    let mut report = read_report()?;
     if report.identity.as_ref() != Some(&identity) {
         return Err(malformed("GUID/age does not match the PE image"));
     }
@@ -620,6 +739,15 @@ mod tests {
     fn missing_file_reports_io_error() {
         let error = pdb_symbols(Path::new("/nonexistent/does-not-exist.pdb")).unwrap_err();
         assert!(matches!(error, LoadError::Io { .. }));
+    }
+
+    #[test]
+    fn absent_provenance_identity_is_refused_without_substituting_a_new_file_read() {
+        let provenance =
+            PdbProvenance { path: PathBuf::from("/nonexistent/does-not-exist.pdb"), stamp: None, sha256: [0; 32] };
+        let error = provenance.validate_current().unwrap_err();
+        assert!(matches!(error, LoadError::Unsupported(_)), "{error}");
+        assert!(error.to_string().contains("identity unavailable"), "{error}");
     }
 
     #[test]

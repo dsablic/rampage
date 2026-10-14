@@ -8,6 +8,7 @@ use rampage_analysis::strings::{self, FoundString};
 use rampage_analysis::triage::{self, Triage};
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::{Binary, Export, ImageAt, LoadError};
+use sha2::{Digest, Sha256};
 
 use crate::annotations::{Annotations, Edit, Field};
 use crate::rows::{
@@ -28,6 +29,53 @@ pub struct PdbImport {
     /// Addresses left unchanged: already named, not discovered entries, or names used elsewhere.
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
     pub preserved: Vec<u64>,
+}
+
+/// An immutable, process-local checked preview. It borrows its exact project, keeping that project's original
+/// binary and image selection in place. It cannot be deserialized or applied to a reloaded project.
+pub struct PdbPreview<'project> {
+    project: &'project Project,
+    image_sha256: [u8; 32],
+    pdb: rampage_loaders::pdb::PdbProvenance,
+    report: rampage_loaders::pdb::PdbReport,
+    approved: Vec<rampage_loaders::pdb::PdbFunction>,
+    preserved: Vec<u64>,
+}
+
+impl std::fmt::Debug for PdbPreview<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PdbPreview")
+            .field("image_sha256", &self.image_sha256)
+            .field("pdb", &self.pdb)
+            .field("report", &self.report)
+            .field("approved", &self.approved)
+            .field("preserved", &self.preserved)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PdbPreview<'_> {
+    pub fn image_sha256(&self) -> &[u8; 32] {
+        &self.image_sha256
+    }
+
+    pub fn pdb(&self) -> &rampage_loaders::pdb::PdbProvenance {
+        &self.pdb
+    }
+
+    pub fn report(&self) -> &rampage_loaders::pdb::PdbReport {
+        &self.report
+    }
+
+    /// Only these address/name pairs can ever be applied using this preview.
+    pub fn approved(&self) -> &[rampage_loaders::pdb::PdbFunction] {
+        &self.approved
+    }
+
+    pub fn preserved(&self) -> &[u64] {
+        &self.preserved
+    }
 }
 
 pub struct Project {
@@ -240,6 +288,124 @@ impl Project {
             Ok((applied, preserved))
         })?;
         Ok(PdbImport { preview, applied, preserved })
+    }
+
+    /// Checks an explicit matching PDB without editing annotations or undo history. The receipt binds the checked
+    /// report and approved pairs to this project, its selected image digest and the PDB's bytes and provenance.
+    /// Observable source changes are refused; neither source checks nor GUID/age matching authenticate a PDB or
+    /// provide an atomic filesystem snapshot or race-free mapped reads.
+    pub fn preview_pdb_names(&self, path: &Path) -> Result<PdbPreview<'_>, ApiError> {
+        let image_sha256 = self.pdb_image_digest()?;
+        let (report, pdb) = rampage_loaders::pdb::matched_symbols_checked(&self.binary, path)
+            .map_err(|error| ApiError::Invalid(error.to_string()))?;
+        let mut names = std::collections::BTreeSet::new();
+        for function in &report.functions {
+            check_name(&function.name).map_err(ApiError::Invalid)?;
+            if !names.insert(&function.name) {
+                return Err(ApiError::Invalid("ambiguous PDB name at multiple addresses; nothing imported".to_owned()));
+            }
+        }
+        self.check_pdb_backing()?;
+        let analysis = self.analysis();
+        self.check_pdb_backing()?;
+        let entries: std::collections::BTreeSet<_> =
+            analysis?.program.functions.iter().map(|function| function.address).collect();
+        let annotations = self.annotations();
+        let mut approved = Vec::new();
+        let mut preserved = Vec::new();
+        for function in &report.functions {
+            if entries.contains(&function.address) && self.pdb_name_eligible(&annotations, function) {
+                approved.push(function.clone());
+            } else {
+                preserved.push(function.address);
+            }
+        }
+        if self.pdb_image_digest()? != image_sha256 {
+            return Err(ApiError::Invalid("selected image changed during PDB preview".to_owned()));
+        }
+        Ok(PdbPreview { project: self, image_sha256, pdb, report, approved, preserved })
+    }
+
+    /// Applies only the preview's cached approved pairs that remain eligible under the annotation transaction
+    /// lock. Later labels and conflicts can shrink this set; clearing preview-preserved names cannot enlarge it.
+    /// Stale validation publishes no refreshed annotation cache or history. External edits remain for a later refresh.
+    /// The whole batch is one same-process undo step, not durable cross-process undo.
+    pub fn apply_pdb_names(&self, preview: &PdbPreview<'_>) -> Result<PdbImport, ApiError> {
+        if !std::ptr::eq(self, preview.project) {
+            return Err(ApiError::Invalid("PDB preview belongs to a different project; preview again".to_owned()));
+        }
+        let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        self.validate_pdb_preview(preview)?;
+        let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
+        self.commit_pdb_preview(preview, &state, &options)
+    }
+
+    fn commit_pdb_preview(
+        &self,
+        preview: &PdbPreview<'_>,
+        state: &crate::decompile::DecompilerState,
+        options: &rampage_decompiler::DecompilerOptions,
+    ) -> Result<PdbImport, ApiError> {
+        let (applied, preserved) =
+            self.annotations.write().expect("annotations lock").locked_staged(|annotations| {
+                self.validate_pdb_preview(preview)?;
+                let mut preserved = preview.preserved.clone();
+                let mut changes = Vec::new();
+                for function in &preview.approved {
+                    if self.pdb_name_eligible(annotations, function) {
+                        changes.push((Field::Name, function.address, Some(function.name.clone())));
+                    } else {
+                        preserved.push(function.address);
+                    }
+                }
+                preserved.sort_unstable();
+                let changed = annotations
+                    .set_batch_validated(&changes, |candidate| {
+                        self.binary.validate_backing_source().map_err(|error| error.to_string())?;
+                        let result = if candidate.globals().is_empty() {
+                            Ok(())
+                        } else {
+                            self.validate_annotation_snapshot(state, options, candidate)
+                        };
+                        self.binary.validate_backing_source().map_err(|error| error.to_string())?;
+                        result?;
+                        self.validate_pdb_preview(preview).map_err(|error| error.to_string())
+                    })
+                    .map_err(ApiError::Invalid)?;
+                let applied = changes
+                    .into_iter()
+                    .zip(changed)
+                    .filter_map(|((_, address, _), changed)| changed.then_some(address))
+                    .collect();
+                Ok((applied, preserved))
+            })?;
+        Ok(PdbImport { preview: preview.report.clone(), applied, preserved })
+    }
+
+    fn pdb_name_eligible(&self, annotations: &Annotations, function: &rampage_loaders::pdb::PdbFunction) -> bool {
+        annotations.name(function.address).is_none()
+            && self.names.get(function.address).is_none()
+            && !self.address_named(annotations, &function.name).is_some_and(|existing| existing != function.address)
+    }
+
+    fn check_pdb_backing(&self) -> Result<(), ApiError> {
+        self.binary.validate_backing_source().map_err(|error| ApiError::Invalid(error.to_string()))
+    }
+
+    fn pdb_image_digest(&self) -> Result<[u8; 32], ApiError> {
+        self.check_pdb_backing()?;
+        let digest = Sha256::digest(self.binary.image_bytes()).into();
+        self.check_pdb_backing()?;
+        Ok(digest)
+    }
+
+    fn validate_pdb_preview(&self, preview: &PdbPreview<'_>) -> Result<(), ApiError> {
+        self.check_pdb_backing()?;
+        preview.pdb.validate_current().map_err(|error| ApiError::Invalid(error.to_string()))?;
+        if self.pdb_image_digest()? != preview.image_sha256 {
+            return Err(ApiError::Invalid("selected image changed since PDB preview; preview again".to_owned()));
+        }
+        Ok(())
     }
 
     /// Comments the instruction or data at `address` (`None` or blank text removes the comment).
@@ -504,6 +670,79 @@ mod tests {
     use super::*;
     use rampage_analysis::discover::{Block, DiscoveredFunction};
     use rampage_arch::Arch;
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[allow(dead_code)]
+    mod pdb_support {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/pdb/support.rs"));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn checked_pdb_late_source_changes_discard_staged_external_edits_but_normal_refresh_still_sees_them() {
+        use pdb_support::{TempFiles, fixture, module_stream, stream_offset};
+
+        for source in ["pdb", "image"] {
+            let files = TempFiles::new();
+            let image = files.write("selected.exe", &std::fs::read(fixture("fixture.exe")).unwrap());
+            let original_pdb = std::fs::read(fixture("fixture.pdb")).unwrap();
+            let pdb = files.write("selected.pdb", &original_pdb);
+            let log = files.write("late-stale.rampage", b"");
+            let project =
+                Project::with_annotations(Binary::open(&image).unwrap(), Annotations::open(log.clone()).unwrap());
+            let mix = 0x140001000;
+            let local = 0x140001020;
+            project.comment(mix, Some("keep undo")).unwrap();
+            project.comment(local, Some("keep redo")).unwrap();
+            assert_eq!(project.undo().unwrap()[0].address, local);
+            let preview = project.preview_pdb_names(&pdb).unwrap();
+            let before_cache = serde_json::to_value(project.annotation_list()).unwrap();
+
+            let state = project.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+            project.validate_pdb_preview(&preview).unwrap();
+            let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&project.binary));
+            let mut writer = Annotations::open(log.clone()).unwrap();
+            writer.set(Field::Name, mix, Some("external_mix".to_owned())).unwrap();
+            writer.set(Field::Comment, 0x140005000, Some("external comment".to_owned())).unwrap();
+            let external_bytes = std::fs::read(&log).unwrap();
+            match source {
+                "pdb" => {
+                    let mut changed = original_pdb.clone();
+                    let start = stream_offset(&original_pdb, module_stream(&original_pdb), 0);
+                    let name =
+                        original_pdb[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+                    changed[start + name..start + name + 10].copy_from_slice(b"new_local\0");
+                    std::fs::write(&pdb, changed).unwrap();
+                }
+                "image" => {
+                    std::fs::OpenOptions::new().write(true).open(&image).unwrap().set_len(1).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            // Exercise the same locked commit path used after public apply's successful preflight.
+            let error = project.commit_pdb_preview(&preview, &state, &options).unwrap_err();
+            drop(state);
+            let reason = match source {
+                "pdb" => "PDB bytes or provenance changed",
+                "image" => "backing file was modified or replaced",
+                _ => unreachable!(),
+            };
+            assert!(error.to_string().contains(reason), "{error}");
+            assert_eq!(serde_json::to_value(project.annotation_list()).unwrap(), before_cache);
+            assert_eq!(std::fs::read(&log).unwrap(), external_bytes);
+            assert!(project.name_at(mix).is_none());
+
+            assert!(project.refresh_annotations().unwrap());
+            assert_eq!(project.name_at(mix).as_deref(), Some("external_mix"));
+            assert_eq!(project.comment_at(0x140005000).as_deref(), Some("external comment"));
+            assert_eq!(std::fs::read(&log).unwrap(), external_bytes);
+            assert_eq!(project.redo().unwrap()[0].address, local);
+            assert_eq!(project.undo().unwrap()[0].address, local);
+            assert_eq!(project.undo().unwrap()[0].address, mix);
+            assert!(project.undo().unwrap().is_empty());
+            assert_eq!(project.name_at(mix).as_deref(), Some("external_mix"));
+        }
+    }
 
     #[test]
     fn listing_and_graph_reuse_the_analyzed_arm_mode() {
