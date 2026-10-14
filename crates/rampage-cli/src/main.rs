@@ -315,8 +315,17 @@ fn main() -> ExitCode {
         Command::Correlate(CorrelateArgs { file, original, module, at }) => {
             commands::correlate(&mut out, &file, &original, &module, &at, &options)
         }
-        Command::CompareRuntime(CompareRuntimeArgs { file, original, module, range }) => {
-            commands::compare_runtime(&mut out, &file, &original, &module, &range, &options)
+        Command::CompareRuntime(CompareRuntimeArgs {
+            file,
+            original,
+            original_image_offset,
+            original_image_length,
+            module,
+            range,
+        }) => {
+            let original_image =
+                original_image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, original_image_length));
+            commands::compare_runtime(&mut out, &file, &original, original_image, &module, &range, &options)
         }
         Command::ObservePointer(AtArgs { file, at }) => commands::observe_pointer(&mut out, &file, &at, &options),
         Command::ComparePointers(ComparePointersArgs { file, other, at, other_at }) => {

@@ -175,6 +175,12 @@ pub(crate) struct CompareRuntimeArgs {
     pub(crate) file: PathBuf,
     #[arg(long)]
     pub(crate) original: PathBuf,
+    /// Open the original Mach-O embedded at this file offset (hex 0x... or decimal), not the capture
+    #[arg(long, value_parser = rampage_api::parse_file_offset, requires = "original")]
+    pub(crate) original_image_offset: Option<u64>,
+    /// With --original-image-offset, the image's length in bytes; defaults to the extent its headers give
+    #[arg(long, value_parser = rampage_api::parse_file_offset, requires = "original_image_offset")]
+    pub(crate) original_image_length: Option<u64>,
     #[arg(long)]
     pub(crate) module: String,
     #[arg(long, required = true)]

@@ -90,6 +90,23 @@ const ROUTES: &[Route] = &[
         &[MISSING, "--original", MISSING, "--module", "fixture", "--range", "0x1000:4", "--range", "0x2000:4"],
     ),
     (
+        &["compare-runtime"],
+        &["runtime", "bytes", "compare"],
+        &[
+            MISSING,
+            "--original",
+            MISSING,
+            "--original-image-offset",
+            "0x25",
+            "--original-image-length",
+            "256",
+            "--module",
+            "fixture",
+            "--range",
+            "0x1000:4",
+        ],
+    ),
+    (
         &["correlate"],
         &["runtime", "module", "correlate"],
         &[MISSING, "--original", MISSING, "--module", "fixture", "--at", "0x1000"],
@@ -957,6 +974,55 @@ fn runtime_image_restrictions_apply_to_the_normalized_action() {
             .collect();
         let output = assert_same(&legacy, &hierarchy, false);
         assert!(String::from_utf8_lossy(&output.stderr).contains("--image-offset does not apply to compare-pointers"));
+    }
+}
+
+#[test]
+fn runtime_original_image_options_share_parse_validation_before_io() {
+    for route in [&["compare-runtime"][..], &["runtime", "bytes", "compare"][..]] {
+        for options in [
+            &["--original-image-length", "256"][..],
+            &["--original-image-offset", "37", "--original-image-length", "bad"][..],
+            &["--original-image-offset", "0x10000000000000000"][..],
+            &["--original-image-offset", "bad"][..],
+            &["--original-image-offset", "37", "--original-image-offset", "38"][..],
+        ] {
+            let args: Vec<_> = route
+                .iter()
+                .copied()
+                .chain([MISSING, "--original", MISSING, "--module", "fixture", "--range", "0x1000:4"])
+                .chain(options.iter().copied())
+                .chain(["--pack", "/nonexistent/rampage-runtime-pack"])
+                .collect();
+            let output = run(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            assert!(output.stdout.is_empty(), "{args:?}");
+            let error = String::from_utf8(output.stderr).unwrap();
+            assert!(error.contains("--original-image"), "{args:?}: {error}");
+            assert!(!error.contains("cannot read"), "{args:?}: {error}");
+            assert!(!error.contains("warning"), "{args:?}: {error}");
+        }
+    }
+}
+
+#[test]
+fn runtime_original_selection_does_not_enable_ambiguous_global_image_selection() {
+    let options =
+        [MISSING, "--original", MISSING, "--original-image-offset", "37", "--module", "fixture", "--range", "0x1000:4"];
+    let legacy: Vec<_> = ["--image-offset", "16", "compare-runtime"].into_iter().chain(options).collect();
+    let route: Vec<_> = ["runtime", "bytes", "compare"].into_iter().chain(options).collect();
+    for position in (0..=3).chain([route.len()]) {
+        let hierarchy: Vec<_> = route[..position]
+            .iter()
+            .copied()
+            .chain(["--image-offset", "16"])
+            .chain(route[position..].iter().copied())
+            .collect();
+        let output = assert_same(&legacy, &hierarchy, false);
+        let error = String::from_utf8(output.stderr).unwrap();
+        assert!(error.contains("--image-offset does not apply to compare-runtime"), "{error}");
+        assert!(!error.contains("cannot read"), "{error}");
+        assert!(output.stdout.is_empty());
     }
 }
 

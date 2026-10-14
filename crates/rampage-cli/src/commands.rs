@@ -291,12 +291,13 @@ pub fn compare_runtime(
     out: &mut impl Write,
     path: &Path,
     original: &Path,
+    original_image: Option<rampage_loaders::ImageAt>,
     module: &str,
     ranges: &[String],
     options: &Options,
 ) -> Result<()> {
     let project = Project::new(open_binary(path, options)?);
-    let original = rampage_loaders::Binary::open_with(original, Some(project.binary.arch))?;
+    let original = rampage_loaders::Binary::open_image(original, original_image, Some(project.binary.arch))?;
     let ranges = ranges
         .iter()
         .map(|range| {
