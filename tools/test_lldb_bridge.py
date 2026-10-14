@@ -167,9 +167,17 @@ class Module:
     order: int = 0
     width: int = 8
     filespec: FileSpec
+    sections: list[Section]
+    resolutions: list[int]
+    addresses: list[int]
+    on_resolve: Callable[[], None] | None = None
+    on_address: Callable[[], None] | None = None
 
     def __init__(self, name: str = "fixture") -> None:
         self.filespec = FileSpec(name)
+        self.sections = [Section(self, self.image, self.runtime, 0x1000)]
+        self.resolutions = []
+        self.addresses = []
 
     def IsValid(self) -> bool:
         return self.valid
@@ -194,6 +202,165 @@ class Module:
 
     def GetAddressByteSize(self) -> int:
         return self.width
+
+    def GetNumSections(self) -> int:
+        return len(self.sections)
+
+    def GetSectionAtIndex(self, index: int) -> Section:
+        return self.sections[index]
+
+    def ResolveFileAddress(self, file_address: int) -> ResolvedAddress:
+        self.resolutions.append(file_address)
+        selected = self.find_section(self.sections, file_address, 2**32 - 1)
+        offset = file_address - selected.GetFileAddress() if selected is not None else 0
+        result = ResolvedAddress(selected, offset)
+        if self.on_resolve is not None:
+            self.on_resolve()
+        return result
+
+    def find_section(
+        self, sections: list[Section], file_address: int, depth: int
+    ) -> Section | None:
+        for section in sections:
+            base = section.GetFileAddress()
+            if (
+                base != 2**64 - 1
+                and base <= file_address
+                and file_address - base < section.GetByteSize()
+            ):
+                child = (
+                    self.find_section(section.children, file_address, depth - 1)
+                    if depth
+                    else None
+                )
+                return child if child is not None else section
+        return None
+
+
+class GuardedHeaderModule(Module):
+    header_allowed: bool = True
+    header_calls: int = 0
+
+    def GetObjectFileHeaderAddress(self) -> Any:
+        self.header_calls += 1
+        assert self.header_allowed, (
+            "resolution attempted an uncapped object-file header lookup"
+        )
+        return super().GetObjectFileHeaderAddress()
+
+
+class Section:
+    module: Module
+    file: int
+    load: int
+    size: int
+    _children: list[Section]
+    parent: Section | None = None
+    name: str = "__text"
+    valid: bool = True
+
+    def __init__(self, module: Module, file: int, load: int, size: int) -> None:
+        self.module, self.file, self.load, self.size = module, file, load, size
+        self._children = []
+
+    @property
+    def children(self) -> list[Section]:
+        return self._children
+
+    @children.setter
+    def children(self, children: list[Section]) -> None:
+        self._children = children
+        for child in children:
+            child.parent = self
+
+    def IsValid(self) -> bool:
+        return self.valid
+
+    def GetName(self) -> str:
+        return self.name
+
+    def GetNumSubSections(self) -> int:
+        return len(self.children)
+
+    def GetParent(self) -> Any:
+        return (
+            self.parent
+            if self.parent is not None
+            else SimpleNamespace(IsValid=lambda: False)
+        )
+
+    def GetSubSectionAtIndex(self, index: int) -> Section:
+        return self.children[index]
+
+    def GetFileAddress(self) -> int:
+        return self.file
+
+    def GetLoadAddress(self, target: Target) -> int:
+        assert target.IsValid()
+        if self.parent is not None:
+            parent_load = self.parent.GetLoadAddress(target)
+            if parent_load != 2**64 - 1:
+                relative = self.GetFileAddress() - self.parent.GetFileAddress()
+                return (parent_load + relative) % 2**64
+        return self.load
+
+    def GetByteSize(self) -> int:
+        return self.size
+
+
+class InheritedSection(Section):
+    relative_file_offset: int
+
+    def __init__(
+        self,
+        parent: Section,
+        relative_file_offset: int,
+        size: int,
+        direct_load: int = 2**64 - 1,
+    ) -> None:
+        super().__init__(parent.module, 0, direct_load, size)
+        self.parent, self.relative_file_offset = parent, relative_file_offset
+
+    def GetFileAddress(self) -> int:
+        assert self.parent is not None
+        return (self.parent.GetFileAddress() + self.relative_file_offset) % 2**64
+
+
+class ResolvedAddress:
+    section: Section | None
+    offset: int
+    valid: bool = True
+
+    def __init__(self, section: Section | None, offset: int) -> None:
+        self.section, self.offset = section, offset
+
+    def IsValid(self) -> bool:
+        return self.valid and self.section is not None
+
+    def GetModule(self) -> Module | None:
+        return self.section.module if self.section is not None else None
+
+    def GetSection(self) -> Section | None:
+        return self.section
+
+    def GetFileAddress(self) -> int:
+        assert self.section is not None
+        return (self.section.GetFileAddress() + self.offset) % 2**64
+
+    def GetOffset(self) -> int:
+        return self.offset
+
+    def GetLoadAddress(self, target: Target) -> int:
+        assert self.section is not None
+        return (self.section.GetLoadAddress(target) + self.GetOffset()) % 2**64
+
+
+class SdkAddress(ResolvedAddress):
+    def __init__(self, section: Section, offset: int) -> None:
+        super().__init__(section, offset)
+        section.module.addresses.append(self.GetFileAddress())
+        if section.module.on_address is not None:
+            section.module.on_address()
 
 
 class Process:
@@ -331,6 +498,7 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Any:
         SBError=Error,
         SBMemoryRegionInfo=Region,
         SBStream=Stream,
+        SBAddress=SdkAddress,
         eStateStopped=1,
         eByteOrderLittle=0,
         eByteOrderBig=1,
@@ -362,9 +530,14 @@ def send(
     encoded = environment.bridge.query_json(
         environment.debugger, json.dumps(request), environment.api
     )
-    assert len(encoded.encode("ascii")) <= fields.get(
-        "response_budget", environment.bridge.DEFAULT_RESPONSE_BYTES
-    )
+    budget = fields.get("response_budget", environment.bridge.DEFAULT_RESPONSE_BYTES)
+    if type(budget) is not int or not (
+        environment.bridge.MIN_RESPONSE_BYTES
+        <= budget
+        <= environment.bridge.MAX_RESPONSE_BYTES
+    ):
+        budget = environment.bridge.DEFAULT_RESPONSE_BYTES
+    assert len(encoded.encode("ascii")) <= budget
     return json.loads(encoded)
 
 
@@ -382,6 +555,17 @@ def read_memory(
         "read_memory",
         expected_token=expected,
         **({"address": "0x1000", "size": 4, "permissions": "r-x"} | fields),
+    )
+
+
+def resolve_address(
+    environment: Any, expected: dict[str, Any], **fields: Any
+) -> dict[str, Any]:
+    return send(
+        environment,
+        "resolve_module_address",
+        expected_token=expected,
+        **({"module_uuid": Module.uuid, "file_address": "0x100000004"} | fields),
     )
 
 
@@ -532,7 +716,14 @@ def test_request_byte_limit_applies_before_json_parse_or_backend(
 
 
 @pytest.mark.parametrize(
-    "operation", ["list_modules", "list_threads", "read_registers", "read_memory"]
+    "operation",
+    [
+        "list_modules",
+        "list_threads",
+        "read_registers",
+        "read_memory",
+        "resolve_module_address",
+    ],
 )
 def test_data_operations_require_explicit_stop_token(
     environment: Any, operation: str
@@ -1521,6 +1712,7 @@ def test_registration_is_the_only_command_and_queries_never_execute_target_code(
         )
         assert response["ok"], response
     assert read_memory(environment, expected, thread_id=1)["ok"]
+    assert resolve_address(environment, expected)["ok"]
 
 
 def test_queries_do_not_publish_to_disk_or_create_network_endpoints(
@@ -1558,3 +1750,771 @@ def test_queries_do_not_publish_to_disk_or_create_network_endpoints(
         )
         assert response["ok"], response
     assert read_memory(environment, expected)["ok"]
+    assert resolve_address(environment, expected)["ok"]
+
+
+@pytest.mark.parametrize(
+    "uuid_text", [Module.uuid.upper(), Module.uuid.replace("-", "")]
+)
+def test_resolution_selects_only_uuid_among_same_basename_modules(
+    environment: Any, uuid_text: str
+) -> None:
+    first, second = Module("same"), Module("same")
+    second.uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    second.filespec.path = "/other/same"
+    second.sections = [Section(second, 0x100000000, 0x1800, 0x100)]
+    environment.target.modules = [second, first]
+    response = resolve_address(environment, token(environment), module_uuid=uuid_text)
+    assert response["ok"], response
+    data = response["data"]
+    assert data["module_uuid"] == Module.uuid
+    assert data["module"]["index"] == 1 and data["module"]["path"] == "/owned/same"
+    assert data["file_address"] == "0x100000004" and data["load_address"] == "0x1004"
+    assert data["module_context"]["data_byte_order"]["order"] == "unknown"
+    assert data["proven_flow"] is data["proven_layout"] is False
+    assert response["observation"]["atomic_snapshot"] is False
+    assert first.addresses == [0x100000004] * 2 and second.addresses == []
+    assert first.resolutions == second.resolutions == []
+    assert environment.process.mapping_queries == [0x1004] * 2
+    assert environment.process.reads == [] and environment.thread.frames == 0
+
+
+def test_resolution_uses_section_mapping_not_header_slide(environment: Any) -> None:
+    module = environment.target.modules[0]
+    module.sections = [Section(module, module.image + 0x100, 0x1800, 0x80)]
+    response = resolve_address(
+        environment, token(environment), file_address=module.image + 0x104
+    )
+    assert response["ok"], response
+    assert response["data"]["load_address"] == "0x1804"
+    assert response["data"]["section"]["offset"] == "0x4"
+    assert response["data"]["load_address"] != hex(module.runtime + 0x104)
+
+
+def test_resolution_accepts_sdk_build_id_uuid_and_selected_module_context(
+    environment: Any,
+) -> None:
+    module = environment.target.modules[0]
+    module.uuid = "01234567-89AB-CDEF-0123-456789ABCDEF-01234567"
+    module.order = environment.api.eByteOrderBig
+    response = resolve_address(
+        environment,
+        token(environment),
+        module_uuid=module.uuid.replace("-", "").lower(),
+    )
+    assert response["ok"], response
+    assert response["data"]["module_uuid"] == module.uuid.lower()
+    assert response["data"]["module_context"]["object_byte_order"] == "big"
+    assert response["data"]["module_context"]["data_byte_order"]["order"] == "unknown"
+    assert environment.target.order == environment.api.eByteOrderLittle
+
+
+@pytest.mark.parametrize("wrong", ["file", "load", "offset", "invalid"])
+def test_resolution_refuses_inconsistent_resolved_sdk_address(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, wrong: str
+) -> None:
+    module = environment.target.modules[0]
+    expected = token(environment)
+    resolved = ResolvedAddress(module.sections[0], 4)
+    if wrong == "file":
+        monkeypatch.setattr(resolved, "GetFileAddress", lambda: module.image + 5)
+    elif wrong == "load":
+        monkeypatch.setattr(resolved, "GetLoadAddress", lambda target: 0x1005)
+    elif wrong == "offset":
+        monkeypatch.setattr(resolved, "GetOffset", lambda: 5)
+    else:
+        resolved.valid = False
+    monkeypatch.setattr(environment.api, "SBAddress", lambda section, offset: resolved)
+    assert_error(resolve_address(environment, expected), "unavailable")
+    assert environment.process.mapping_queries == []
+
+
+def test_resolution_refuses_file_address_outside_module_width(environment: Any) -> None:
+    module = environment.target.modules[0]
+    module.width = 4
+    assert_error(resolve_address(environment, token(environment)), "invalid_request")
+    assert module.resolutions == []
+
+
+def test_resolution_does_not_coerce_boolean_backend_file_address_at_zero(
+    environment: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = environment.target.modules[0]
+    module.sections = [Section(module, 0, 0x1000, 0x100)]
+    resolved = ResolvedAddress(module.sections[0], 0)
+    monkeypatch.setattr(resolved, "GetFileAddress", lambda: False)
+    monkeypatch.setattr(environment.api, "SBAddress", lambda section, offset: resolved)
+    assert_error(
+        resolve_address(environment, token(environment), file_address=0), "unavailable"
+    )
+    assert environment.process.mapping_queries == []
+
+
+def test_nested_leaf_resolution_keeps_explicit_section_bounds(environment: Any) -> None:
+    module = environment.target.modules[0]
+    parent = module.sections[0]
+    parent.children = [Section(module, parent.file, parent.load, 0x20)]
+    response = resolve_address(environment, token(environment))
+    assert response["ok"], response
+    assert response["data"]["section"]["index_path"] == [0, 0]
+    assert response["data"]["section"]["file_end"] == hex(parent.file + 0x20)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"module_uuid": "same"},
+        {"module_uuid": "0"},
+        {"module_uuid": None},
+        {"module_uuid": []},
+        {"module_uuid": "urn:uuid:" + Module.uuid},
+        {"module_uuid": "{" + Module.uuid + "}"},
+        {"module_uuid": "é" * 32},
+        {"module_uuid": "a" * 129},
+        {"module_uuid": "ab-cd"},
+        {"file_address": True},
+        {"file_address": -1},
+        {"file_address": "100000004"},
+        {"file_address": "0xffffffffffffffff"},
+        {"file_address": None},
+        {"path": "/must/not/open"},
+        {"module_id": 0},
+        {"thread_id": 1},
+        {"response_budget": None},
+    ],
+)
+def test_resolution_invalid_fields_refuse_before_sdk(
+    environment: Any, fields: dict[str, Any]
+) -> None:
+    expected = token(environment)
+    assert_error(resolve_address(environment, expected, **fields), "invalid_request")
+    assert environment.target.modules[0].resolutions == []
+    assert environment.process.mapping_queries == environment.process.reads == []
+
+
+@pytest.mark.parametrize("selection", ["missing", "duplicate", "empty", "opaque"])
+def test_resolution_never_falls_back_from_missing_or_ambiguous_uuid(
+    environment: Any, selection: str
+) -> None:
+    module = environment.target.modules[0]
+    if selection == "duplicate":
+        duplicate = Module("different")
+        duplicate.uuid = module.uuid.upper().replace("-", "")
+        environment.target.modules.append(duplicate)
+    elif selection == "empty":
+        module.uuid = ""
+    elif selection == "opaque":
+        module.uuid = "same"
+    else:
+        module.uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    assert_error(resolve_address(environment, token(environment)), "unavailable")
+    assert module.resolutions == [] and environment.process.mapping_queries == []
+
+
+@pytest.mark.parametrize(
+    "issue",
+    [
+        "gap",
+        "container-gap",
+        "unloaded",
+        "invalid-section",
+        "overflow-file",
+        "overflow-load",
+        "wrong-owner",
+        "foreign-section",
+        "unknown-order",
+        "unknown-width",
+    ],
+)
+def test_resolution_rejects_invalid_section_or_module_evidence(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, issue: str
+) -> None:
+    module = environment.target.modules[0]
+    section = module.sections[0]
+    if issue == "gap":
+        section.size = 2
+    elif issue == "container-gap":
+        section.children = [Section(module, section.file + 0x10, 0x1010, 0x10)]
+    elif issue == "unloaded":
+        section.load = environment.api.LLDB_INVALID_ADDRESS
+    elif issue == "invalid-section":
+        section.valid = False
+    elif issue == "overflow-file":
+        section.size = 2**64 - 1
+    elif issue == "overflow-load":
+        section.load = 2**64 - 8
+    elif issue == "wrong-owner":
+        section.module = Module("other")
+    elif issue == "foreign-section":
+        foreign = Section(module, section.file, section.load, section.size)
+        monkeypatch.setattr(
+            environment.api,
+            "SBAddress",
+            lambda section, offset: ResolvedAddress(foreign, offset),
+        )
+    elif issue == "unknown-order":
+        module.order = 99
+    else:
+        module.width = 0
+    assert_error(resolve_address(environment, token(environment)), "unavailable")
+    assert environment.process.mapping_queries == environment.process.reads == []
+
+
+@pytest.mark.parametrize("permissions", ["---", "-wx", "???", "r??"])
+def test_resolution_requires_known_readable_runtime_mapping(
+    environment: Any, permissions: str
+) -> None:
+    environment.process.mappings = [(0x1000, 0x2000, permissions)]
+    assert_error(resolve_address(environment, token(environment)), "unavailable")
+    assert environment.process.reads == []
+
+
+def test_resolution_rejects_unmapped_address_and_stale_stop(environment: Any) -> None:
+    expected = token(environment)
+    environment.process.mappings = []
+    assert_error(resolve_address(environment, expected), "unavailable")
+    environment.process.mapping_queries.clear()
+    environment.process.stop_id += 1
+    assert_error(resolve_address(environment, expected), "stale_token")
+    assert environment.process.mapping_queries == []
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "stop",
+        "expression-stop",
+        "selected-target",
+        "module-uuid",
+        "module-path",
+        "module-order",
+        "module-width",
+        "mapping-permissions",
+        "mapping-bounds",
+        "section-load",
+        "section-size",
+        "section-replaced",
+        "module-replaced",
+        "same-token-target",
+    ],
+)
+def test_resolution_revalidates_fresh_sdk_objects_after_serialization(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    expected = token(environment)
+    original_encode = environment.bridge.encode_json
+
+    def encode(value: Any) -> str:
+        encoded = original_encode(value)
+        if isinstance(value, dict) and value.get("ok") is True:
+            module = environment.target.modules[0]
+            if change == "section-load":
+                module.sections[0].load += 0x10
+            elif change == "section-size":
+                module.sections[0].size -= 1
+            elif change == "section-replaced":
+                module.sections = [
+                    Section(module, module.image, module.runtime, 0x1000)
+                ]
+            elif change == "module-replaced":
+                environment.target.modules = [Module()]
+            elif change == "same-token-target":
+                environment.debugger.target = Target()
+            else:
+                mutate(environment, change)
+        return encoded
+
+    monkeypatch.setattr(environment.bridge, "encode_json", encode)
+    assert_error(resolve_address(environment, expected), "state_changed")
+    assert environment.process.reads == []
+
+
+def test_resolution_race_during_sdk_resolution_discards_result(
+    environment: Any,
+) -> None:
+    module = environment.target.modules[0]
+    expected = token(environment)
+    module.on_address = lambda: mutate(environment, "stop")
+    assert_error(resolve_address(environment, expected), "state_changed")
+    assert environment.process.mapping_queries == []
+
+
+def test_resolution_detects_same_metadata_module_replaced_after_initial_enumeration(
+    environment: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = token(environment)
+    original = environment.target.GetModuleAtIndex
+    accesses = 0
+
+    def module_at_index(index: int) -> Module:
+        nonlocal accesses
+        accesses += 1
+        if accesses == 2:
+            environment.target.modules = [Module()]
+        return original(index)
+
+    monkeypatch.setattr(environment.target, "GetModuleAtIndex", module_at_index)
+    assert_error(resolve_address(environment, expected), "state_changed")
+    assert environment.target.modules[0].resolutions == []
+
+
+def test_resolution_shared_work_budget_includes_revalidation_and_failed_inspections(
+    environment: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = token(environment)
+    context = environment.bridge.QueryContext(
+        environment.debugger, environment.api, expected, "resolve_module_address"
+    )
+    context.execute(
+        {
+            "operation": "resolve_module_address",
+            "module_uuid": Module.uuid,
+            "file_address": "0x100000004",
+        }
+    )
+    consumed = context.resolution_work
+    monkeypatch.setattr(environment.bridge, "MAX_RESOLUTION_WORK", consumed)
+    with pytest.raises(environment.bridge.QueryError) as raised:
+        context.verify()
+    assert raised.value.code == "state_changed"
+    assert context.resolution_work == consumed
+    assert environment.target.modules[0].addresses == [0x100000004]
+    assert environment.target.modules[0].resolutions == []
+    context = environment.bridge.QueryContext(
+        environment.debugger, environment.api, expected
+    )
+    environment.target.modules[0].valid = False
+    with pytest.raises(environment.bridge.QueryError):
+        context.resolve_module_address(Module.uuid, 0x100000004)
+    assert context.resolution_work == 2
+
+
+@pytest.mark.parametrize(
+    "budget", ["section-count", "section-depth", "mapping", "response"]
+)
+def test_resolution_limits_fail_without_partial_observations(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, budget: str
+) -> None:
+    expected = token(environment)
+    module = environment.target.modules[0]
+    fields = {}
+    if budget == "section-count":
+        monkeypatch.setattr(environment.bridge, "MAX_MODULE_SECTIONS", 1)
+        module.sections.append(Section(module, module.image + 0x2000, 0x4000, 0x10))
+    elif budget == "section-depth":
+        monkeypatch.setattr(environment.bridge, "MAX_SECTION_DEPTH", 1)
+        module.sections[0].children = [Section(module, module.image, 0x1000, 0x10)]
+    elif budget == "mapping":
+        monkeypatch.setattr(environment.bridge, "MAX_MAPPING_QUERIES", 1)
+    else:
+        fields["response_budget"] = 1024
+    assert_error(resolve_address(environment, expected, **fields))
+    assert environment.process.reads == []
+    if budget in {"section-count", "section-depth"}:
+        assert module.resolutions == module.addresses == []
+
+
+@pytest.mark.parametrize("kind", ["roots", "aggregate", "depth", "unresolved-budget"])
+def test_resolution_caps_precede_sdk_address_construction_and_unbounded_native_search(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    module = environment.target.modules[0]
+    expected = token(environment)
+    if kind == "roots":
+        module.sections = [
+            Section(module, module.image, 0x1000, 0x1000)
+            for _ in range(environment.bridge.MAX_MODULE_SECTIONS + 1)
+        ]
+    elif kind == "aggregate":
+        module.sections[0].children = [
+            Section(module, module.image, 0x1000, 0x100)
+            for _ in range(environment.bridge.MAX_MODULE_SECTIONS)
+        ]
+    elif kind == "depth":
+        parent = module.sections[0]
+        for _ in range(environment.bridge.MAX_SECTION_DEPTH):
+            child = InheritedSection(parent, 0, 0x100)
+            parent.children = [child]
+            parent = child
+    else:
+        monkeypatch.setattr(environment.bridge, "MAX_RESOLUTION_WORK", 6)
+    file_address = module.image + (0x1000 if kind == "unresolved-budget" else 4)
+    assert_error(
+        resolve_address(environment, expected, file_address=file_address),
+        "limit_exceeded",
+    )
+    assert module.resolutions == module.addresses == []
+    assert environment.process.mapping_queries == environment.process.reads == []
+
+
+@pytest.mark.parametrize("kind", ["missing", "container-gap"])
+def test_unresolved_file_addresses_still_preflight_structure_without_calling_native_search(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    module = environment.target.modules[0]
+    expected = token(environment)
+    if kind == "container-gap":
+        module.sections[0].children = [InheritedSection(module.sections[0], 0x10, 0x10)]
+    section_queries = []
+    original = module.GetNumSections
+
+    def count() -> int:
+        section_queries.append(True)
+        return original()
+
+    monkeypatch.setattr(module, "GetNumSections", count)
+    file_address = module.image + (0x1000 if kind == "missing" else 4)
+    assert_error(
+        resolve_address(environment, expected, file_address=file_address), "unavailable"
+    )
+    assert section_queries
+    assert module.resolutions == module.addresses == []
+
+
+@pytest.mark.parametrize("failure", ["count", "section"])
+def test_failed_sdk_hierarchy_preflight_consumes_inspection_work_without_resolving(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    module = environment.target.modules[0]
+    context = environment.bridge.QueryContext(
+        environment.debugger, environment.api, token(environment)
+    )
+
+    def broken(*arguments: Any) -> Any:
+        raise RuntimeError("SDK hierarchy unavailable")
+
+    monkeypatch.setattr(
+        module, "GetNumSections" if failure == "count" else "GetSectionAtIndex", broken
+    )
+    with pytest.raises(RuntimeError, match="hierarchy unavailable"):
+        context.read_section_structure(module)
+    assert context.resolution_work == (1 if failure == "count" else 2)
+    assert module.resolutions == module.addresses == []
+
+
+def test_section_metadata_overflow_charges_failed_preflight_before_sdk_address_construction(
+    environment: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = environment.target.modules[0]
+    context = environment.bridge.QueryContext(
+        environment.debugger, environment.api, token(environment)
+    )
+    monkeypatch.setattr(environment.bridge, "MAX_METADATA_BYTES", 1)
+    with pytest.raises(environment.bridge.QueryError) as raised:
+        context.read_section_hierarchy(module, environment.target)
+    assert raised.value.code == "limit_exceeded"
+    assert context.resolution_work == 3
+    assert module.resolutions == module.addresses == []
+
+
+def test_inherited_sdk_load_wrap_is_refused_even_when_wrapped_leaf_is_readable(
+    environment: Any,
+) -> None:
+    module = environment.target.modules[0]
+    parent = Section(module, 0x100000000, 2**64 - 0x1000, 0x4000)
+    leaf = InheritedSection(parent, 0x2000, 0x100)
+    parent.children = [leaf]
+    module.sections = [parent]
+    environment.process.mappings = [(0x1000, 0x2000, "r-x")]
+    observed = ResolvedAddress(leaf, 4)
+    assert observed.GetFileAddress() == 0x100002004
+    assert observed.GetLoadAddress(environment.target) == 0x1004
+    assert_error(
+        resolve_address(environment, token(environment), file_address="0x100002004"),
+        "unavailable",
+    )
+    assert module.resolutions == module.addresses == []
+    assert environment.process.mapping_queries == []
+
+
+def test_inherited_sdk_file_wrap_is_refused_before_address_construction(
+    environment: Any,
+) -> None:
+    module = environment.target.modules[0]
+    parent = Section(module, 2**64 - 0x1000, 0x2000, 0x4000)
+    leaf = InheritedSection(parent, 0x2000, 0x100)
+    parent.children = [leaf]
+    module.sections = [parent]
+    assert ResolvedAddress(leaf, 4).GetFileAddress() == 0x1004
+    assert_error(
+        resolve_address(environment, token(environment), file_address="0x1004"),
+        "unavailable",
+    )
+    assert module.resolutions == module.addresses == []
+
+
+@pytest.mark.parametrize(
+    "kind", ["unloaded-parent", "outside-parent", "wrong-parent", "cycle"]
+)
+def test_resolution_refuses_unsupported_or_inconsistent_ancestor_mapping(
+    environment: Any, kind: str
+) -> None:
+    module = environment.target.modules[0]
+    parent = module.sections[0]
+    leaf = InheritedSection(parent, 0, 0x100, direct_load=0x1000)
+    parent.children = [leaf]
+    if kind == "unloaded-parent":
+        parent.load = environment.api.LLDB_INVALID_ADDRESS
+        assert leaf.GetLoadAddress(environment.target) == 0x1000
+    elif kind == "outside-parent":
+        leaf.size = parent.size + 1
+    elif kind == "wrong-parent":
+        leaf.parent = Section(module, parent.file, parent.load, parent.size)
+    else:
+        parent.children = [parent]
+    assert_error(resolve_address(environment, token(environment)), "unavailable")
+    assert module.resolutions == module.addresses == []
+
+
+def test_resolution_publishes_checked_ancestor_bounds_for_valid_inheritance(
+    environment: Any,
+) -> None:
+    module = environment.target.modules[0]
+    parent = module.sections[0]
+    parent.size = 0x4000
+    leaf = InheritedSection(parent, 0x2000, 0x100)
+    parent.children = [leaf]
+    environment.process.mappings = [(0x3000, 0x4000, "r-x")]
+    response = resolve_address(
+        environment, token(environment), file_address=module.image + 0x2004
+    )
+    assert response["ok"], response
+    assert response["data"]["load_address"] == "0x3004"
+    assert response["data"]["section"]["load_base"] == "0x3000"
+    assert response["data"]["section"]["ancestors"][0]["load_base"] == "0x1000"
+    assert response["data"]["section"]["ancestors"][0]["file_end"] == hex(
+        parent.file + parent.size
+    )
+    assert module.resolutions == []
+
+
+def test_hierarchy_replacement_during_preflight_refuses_before_sdk_address_construction(
+    environment: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = environment.target.modules[0]
+    parent = module.sections[0]
+    parent.children = [InheritedSection(parent, 0, 0x100)]
+    expected = token(environment)
+    original = parent.GetName
+
+    def changed() -> str:
+        parent.children = [InheritedSection(parent, 0, 0x100)]
+        return original()
+
+    monkeypatch.setattr(parent, "GetName", changed)
+    assert_error(resolve_address(environment, expected), "state_changed")
+    assert module.resolutions == module.addresses == []
+
+
+@pytest.mark.parametrize(
+    "change", ["ancestor-size", "ancestor-replaced", "compensated-ancestor-load"]
+)
+def test_resolution_revalidates_full_ancestor_chain_even_when_leaf_address_stays_the_same(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    module = environment.target.modules[0]
+    parent = module.sections[0]
+    parent.size = 0x4000
+    leaf = InheritedSection(parent, 0x2000, 0x100)
+    parent.children = [leaf]
+    environment.process.mappings = [(0x3000, 0x4000, "r-x")]
+    expected = token(environment)
+    original_encode = environment.bridge.encode_json
+
+    def encode(value: Any) -> str:
+        encoded = original_encode(value)
+        if isinstance(value, dict) and value.get("ok") is True:
+            if change == "ancestor-size":
+                parent.size -= 1
+            elif change == "ancestor-replaced":
+                replacement = Section(module, parent.file, parent.load, parent.size)
+                replacement.children = [leaf]
+                module.sections = [replacement]
+            else:
+                parent.file += 0x100
+                parent.load += 0x100
+                leaf.relative_file_offset -= 0x100
+                assert leaf.GetLoadAddress(environment.target) == 0x3000
+                assert leaf.GetFileAddress() == module.image + 0x2000
+        return encoded
+
+    monkeypatch.setattr(environment.bridge, "encode_json", encode)
+    assert_error(
+        resolve_address(environment, expected, file_address=module.image + 0x2004),
+        "state_changed",
+    )
+    assert module.resolutions == []
+
+
+def test_final_mapping_inspection_cannot_publish_a_changed_ancestor_chain(
+    environment: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = environment.target.modules[0]
+    parent = module.sections[0]
+    parent.size = 0x4000
+    parent.children = [InheritedSection(parent, 0x2000, 0x100)]
+    environment.process.mappings = [(0x3000, 0x4000, "r-x")]
+    expected = token(environment)
+    original = environment.process.GetMemoryRegionInfo
+
+    def changed(address: int, region: Region) -> Error:
+        error = original(address, region)
+        if len(environment.process.mapping_queries) == 2:
+            parent.size -= 1
+        return error
+
+    monkeypatch.setattr(environment.process, "GetMemoryRegionInfo", changed)
+    assert_error(
+        resolve_address(environment, expected, file_address=module.image + 0x2004),
+        "state_changed",
+    )
+    assert len(environment.process.mapping_queries) == 2
+    assert module.resolutions == []
+
+
+def guarded_modules_with_unbounded_nonselected_hierarchy(
+    environment: Any,
+) -> tuple[GuardedHeaderModule, GuardedHeaderModule]:
+    selected, other = GuardedHeaderModule("same"), GuardedHeaderModule("same")
+    other.uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    other.filespec.path = "/other/same"
+    parent = other.sections[0]
+    for _ in range(environment.bridge.MAX_SECTION_DEPTH):
+        child = InheritedSection(parent, 0, 0x100)
+        parent.children = [child]
+        parent = child
+    selected.header_allowed = other.header_allowed = False
+    environment.target.modules = [other, selected]
+    return selected, other
+
+
+def test_resolution_init_and_publish_never_resolve_headers_in_any_module(
+    environment: Any,
+) -> None:
+    expected = token(environment)
+    selected, other = guarded_modules_with_unbounded_nonselected_hierarchy(environment)
+    response = resolve_address(environment, expected)
+    assert response["ok"], response
+    assert response["token"] == expected
+    assert response["data"]["module"]["index"] == 1
+    assert response["data"]["module"]["path"] == "/owned/same"
+    assert "runtime_base" not in response["data"]["module"]
+    assert "image_base" not in response["data"]["module"]
+    assert response["data"]["load_address"] == "0x1004"
+    assert selected.addresses == [0x100000004] * 2
+    assert selected.header_calls == other.header_calls == 0
+    assert selected.resolutions == other.resolutions == other.addresses == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "selected-depth",
+        "selected-count",
+        "unresolved",
+        "missing-uuid",
+        "duplicate-uuid",
+        "budget",
+        "sdk-error",
+    ],
+)
+def test_resolution_error_and_unresolved_paths_never_resolve_selected_or_nonselected_headers(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    expected = token(environment)
+    selected, other = guarded_modules_with_unbounded_nonselected_hierarchy(environment)
+    fields = {}
+    code = "unavailable"
+    if failure == "selected-depth":
+        parent = selected.sections[0]
+        for _ in range(environment.bridge.MAX_SECTION_DEPTH):
+            child = InheritedSection(parent, 0, 0x100)
+            parent.children = [child]
+            parent = child
+        code = "limit_exceeded"
+    elif failure == "selected-count":
+        selected.sections = [
+            Section(selected, selected.image, 0x1000, 0x1000)
+            for _ in range(environment.bridge.MAX_MODULE_SECTIONS + 1)
+        ]
+        code = "limit_exceeded"
+    elif failure == "unresolved":
+        fields["file_address"] = selected.image + 0x1000
+    elif failure == "missing-uuid":
+        fields["module_uuid"] = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+    elif failure == "duplicate-uuid":
+        other.uuid = selected.uuid.upper()
+    elif failure == "budget":
+        monkeypatch.setattr(environment.bridge, "MAX_RESOLUTION_WORK", 6)
+        code = "limit_exceeded"
+    else:
+
+        def failed_sections() -> int:
+            raise RuntimeError("selected SDK section enumeration failed")
+
+        monkeypatch.setattr(selected, "GetNumSections", failed_sections)
+        code = "backend_error"
+    assert_error(resolve_address(environment, expected, **fields), code)
+    assert selected.header_calls == other.header_calls == 0
+    assert (
+        selected.addresses
+        == other.addresses
+        == selected.resolutions
+        == other.resolutions
+        == []
+    )
+    assert environment.process.mapping_queries == environment.process.reads == []
+
+
+def test_resolution_stop_identity_and_mapping_do_not_depend_on_uninspected_headers(
+    environment: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = token(environment)
+    selected, other = guarded_modules_with_unbounded_nonselected_hierarchy(environment)
+    original_encode = environment.bridge.encode_json
+
+    def encode(value: Any) -> str:
+        encoded = original_encode(value)
+        if isinstance(value, dict) and value.get("ok") is True:
+            selected.runtime = environment.api.LLDB_INVALID_ADDRESS
+            selected.image = 2**64
+            other.runtime = -1
+            other.image = -1
+        return encoded
+
+    monkeypatch.setattr(environment.bridge, "encode_json", encode)
+    response = resolve_address(environment, expected)
+    assert response["ok"], response
+    assert response["token"] == expected
+    assert response["data"]["file_address"] == "0x100000004"
+    assert response["data"]["load_address"] == "0x1004"
+    assert selected.header_calls == other.header_calls == 0
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "describe_session",
+        "list_modules",
+        "list_threads",
+        "read_registers",
+        "read_memory",
+    ],
+)
+def test_existing_operations_keep_their_original_module_header_observation(
+    environment: Any, operation: str
+) -> None:
+    expected = token(environment)
+    module = GuardedHeaderModule()
+    environment.target.modules = [module]
+    fields = {}
+    if operation == "read_registers":
+        fields = {"thread_id": 1, "registers": ["x0"]}
+    elif operation == "read_memory":
+        fields = {"address": "0x1000", "size": 4, "permissions": "r-x"}
+    response = send(environment, operation, expected_token=expected, **fields)
+    assert response["ok"], response
+    assert module.header_calls == 2
+    if operation == "list_modules":
+        assert response["data"]["items"][0]["runtime_base"] == hex(module.runtime)
+        assert response["data"]["items"][0]["image_base"] == hex(module.image)

@@ -226,7 +226,8 @@ pub fn file_tools() -> Vec<FileTool> {
             name: "query_debugger",
             description: "Read an existing authorized stopped LLDB session through an explicitly supplied local Unix \
                           socket. The operator must start rampage-query-serve first. Only describe_session, \
-                          list_modules, list_threads, read_registers and read_memory are permitted; no attach, launch, \
+                          list_modules, list_threads, read_registers, read_memory and resolve_module_address \
+                          (explicit module UUID plus file address) are permitted; no attach, launch, \
                           resume, expressions, writes or process commands. Requires socket and a version 1 request; \
                           all but initial describe_session require expected_token from a prior response. No binary \
                           path, discovery, environment fallback or sidecar access. Responses preserve stop evidence \

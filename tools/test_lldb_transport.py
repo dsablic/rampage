@@ -203,6 +203,13 @@ def test_serial_queries_share_existing_identity_and_never_touch_target_control(
             ("list_threads", {"limit": 1}),
             ("read_registers", {"thread_id": 1, "registers": ["x0"]}),
             ("read_memory", {"address": "0x1000", "size": 4, "permissions": "r-x"}),
+            (
+                "resolve_module_address",
+                {
+                    "module_uuid": environment.target.modules[0].uuid,
+                    "file_address": "0x100000004",
+                },
+            ),
         ):
             response = exchange(
                 socket_path, request(operation, expected_token=expected, **fields)
@@ -210,10 +217,41 @@ def test_serial_queries_share_existing_identity_and_never_touch_target_control(
             assert response["ok"] and response["token"] == expected, response
             assert response["observation"]["atomic_snapshot"] is False
 
-    assert serve_clients(transport, environment, socket_path, clients, 5) == 5
+    assert serve_clients(transport, environment, socket_path, clients, 6) == 6
     assert stat.S_ISSOCK(socket_path.lstat().st_mode)
     assert environment.process.state == environment.api.eStateStopped
     assert environment.process.reads == [(0x1000, 4)]
+
+
+def test_module_resolution_errors_return_no_partial_data_over_socket(
+    transport: Any, environment: Any, socket_path: Path
+) -> None:
+    expected = token(environment)
+
+    def clients() -> None:
+        fields = {
+            "module_uuid": environment.target.modules[0].uuid,
+            "file_address": "0x100000004",
+        }
+        stale = dict(expected, stop_id=expected["stop_id"] + 1)
+        assert_error(
+            exchange(
+                socket_path,
+                request("resolve_module_address", expected_token=stale, **fields),
+            ),
+            "stale_token",
+        )
+        fields["module_uuid"] = "same"
+        assert_error(
+            exchange(
+                socket_path,
+                request("resolve_module_address", expected_token=expected, **fields),
+            ),
+            "invalid_request",
+        )
+
+    serve_clients(transport, environment, socket_path, clients, 2)
+    assert environment.process.reads == environment.process.mapping_queries == []
 
 
 @pytest.mark.parametrize(

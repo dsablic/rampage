@@ -20,6 +20,9 @@ MAX_PAGE_ITEMS = 128
 MAX_METADATA_BYTES = 1048576
 MAX_MEMORY_BYTES = 65536
 MAX_MAPPING_QUERIES = 1024
+MAX_RESOLUTION_WORK = 16384
+MAX_MODULE_SECTIONS = 4096
+MAX_SECTION_DEPTH = 32
 SESSION_ID = uuid.uuid4().hex
 OPERATIONS = {
     "describe_session": set(),
@@ -27,6 +30,7 @@ OPERATIONS = {
     "list_threads": {"offset", "limit"},
     "read_registers": {"thread_id", "registers"},
     "read_memory": {"address", "size", "permissions", "thread_id"},
+    "resolve_module_address": {"module_uuid", "file_address"},
 }
 REGISTER_NAMES = {
     "aarch64": [f"x{index}" for index in range(31)] + ["sp", "pc", "cpsr"],
@@ -69,6 +73,7 @@ CURRENT_STOP_REASON_NAMES = (
 REGION_DESCRIPTION = re.compile(
     r"\[(0x[0-9a-fA-F]{1,16})-(0x[0-9a-fA-F]{1,16}) ([Rr?-][Ww?-][Xx?-])\]"
 )
+MODULE_UUID = re.compile(r"[0-9a-fA-F-]{2,149}")
 
 
 def load_snapshot_helpers() -> Any:
@@ -119,6 +124,26 @@ def address(value: Any, field: str) -> int:
             )
         value = int(value, 16)
     return integer(value, field, 0, 2**64 - 2)
+
+
+def normalized_module_uuid(value: Any) -> str:
+    if not isinstance(value, str) or MODULE_UUID.fullmatch(value) is None:
+        raise QueryError(
+            "invalid_request", "module_uuid must be a bounded hexadecimal SDK UUID"
+        )
+    digits = value.replace("-", "").lower()
+    if not 2 <= len(digits) <= 128 or len(digits) % 2:
+        raise QueryError(
+            "invalid_request", "module_uuid must contain 1..64 hexadecimal bytes"
+        )
+    parts = [digits[:8], digits[8:12], digits[12:16], digits[16:20]]
+    parts.extend(digits[index : index + 12] for index in range(20, len(digits), 12))
+    canonical = "-".join(part for part in parts if part)
+    if value.lower() not in {digits, canonical}:
+        raise QueryError(
+            "invalid_request", "module_uuid has non-SDK separator placement"
+        )
+    return canonical
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -228,6 +253,9 @@ def parse_request(command: str) -> dict[str, Any]:
             raise QueryError(
                 "invalid_request", "permissions must be exactly r--, rw-, r-x or rwx"
             )
+    if operation == "resolve_module_address":
+        normalized_module_uuid(request.get("module_uuid"))
+        address(request.get("file_address"), "file_address")
     return request
 
 
@@ -319,14 +347,26 @@ class QueryContext:
     token: dict[str, Any]
     target_context: tuple[str, int, int]
     modules: list[dict[str, Any]]
+    module_handles: list[Any]
     threads: list[dict[str, Any]]
     register_contexts: dict[int, dict[str, Any]]
     mapping_context: list[dict[str, Any]] | None
     memory_request: tuple[int, int, str] | None
     mapping_queries: int
+    resolution_work: int
+    resolution_query: bool
+    resolution_request: tuple[str, int] | None
+    resolution_context: dict[str, Any] | None
+    resolution_module: Any
+    resolution_section: Any
+    resolution_hierarchy: list[dict[str, Any]] | None
 
     def __init__(
-        self, debugger: Any, lldb: Any, expected: dict[str, Any] | None
+        self,
+        debugger: Any,
+        lldb: Any,
+        expected: dict[str, Any] | None,
+        operation: str | None = None,
     ) -> None:
         self.debugger, self.lldb = debugger, lldb
         self.target = debugger.GetSelectedTarget()
@@ -346,7 +386,15 @@ class QueryContext:
         self.mapping_context = None
         self.memory_request = None
         self.mapping_queries = 0
-        self.modules = self.read_modules()
+        self.resolution_work = 0
+        self.resolution_query = operation == "resolve_module_address"
+        self.resolution_request = None
+        self.resolution_context = None
+        self.resolution_module = None
+        self.resolution_section = None
+        self.resolution_hierarchy = None
+        self.module_handles = []
+        self.modules = self.read_modules(remember_handles=True)
         self.threads = self.read_threads()
         self.ensure_identity()
 
@@ -444,19 +492,31 @@ class QueryContext:
             )
         return machine
 
-    def read_modules(self) -> list[dict[str, Any]]:
+    def read_modules(self, remember_handles: bool = False) -> list[dict[str, Any]]:
+        """Keep resolution metadata free of SDK header lookups that can search sections without a cap."""
+        if self.resolution_query:
+            self.charge_resolution_work()
         count = backend_integer(
             self.target.GetNumModules(), "module count", 0, MAX_MODULES
         )
         modules: list[dict[str, Any]] = []
         metadata_bytes = 0
         for index in range(count):
+            if self.resolution_query:
+                self.charge_resolution_work()
             self.ensure_identity()
             module = self.target.GetModuleAtIndex(index)
             if not module.IsValid():
                 raise QueryError("unavailable", "invalid module during enumeration")
-            header = module.GetObjectFileHeaderAddress()
-            load, image = header.GetLoadAddress(self.target), header.GetFileAddress()
+            if remember_handles:
+                self.module_handles.append(module)
+            header_addresses = None
+            if not self.resolution_query:
+                header = module.GetObjectFileHeaderAddress()
+                header_addresses = (
+                    header.GetLoadAddress(self.target),
+                    header.GetFileAddress(),
+                )
             byte_order = backend_integer(
                 module.GetByteOrder(), "module byte order", 0, 255
             )
@@ -471,13 +531,21 @@ class QueryContext:
                 "address_byte_size": backend_integer(
                     module.GetAddressByteSize(), "module address size", 0, 8
                 ),
-                "runtime_base": None
-                if load == self.lldb.LLDB_INVALID_ADDRESS
-                else hex(backend_integer(load, "module load address", 0, 2**64 - 2)),
-                "image_base": None
-                if image == self.lldb.LLDB_INVALID_ADDRESS
-                else hex(backend_integer(image, "module image address", 0, 2**64 - 2)),
             }
+            if header_addresses is not None:
+                load, image = header_addresses
+                row["runtime_base"] = (
+                    None
+                    if load == self.lldb.LLDB_INVALID_ADDRESS
+                    else hex(backend_integer(load, "module load address", 0, 2**64 - 2))
+                )
+                row["image_base"] = (
+                    None
+                    if image == self.lldb.LLDB_INVALID_ADDRESS
+                    else hex(
+                        backend_integer(image, "module image address", 0, 2**64 - 2)
+                    )
+                )
             metadata_bytes += len(encode_json(row))
             if metadata_bytes > MAX_METADATA_BYTES:
                 raise QueryError(
@@ -487,12 +555,16 @@ class QueryContext:
         return modules
 
     def read_threads(self) -> list[dict[str, Any]]:
+        if self.resolution_query:
+            self.charge_resolution_work()
         count = backend_integer(
             self.process.GetNumThreads(), "thread count", 0, MAX_THREADS
         )
         threads: list[dict[str, Any]] = []
         seen: set[int] = set()
         for index in range(count):
+            if self.resolution_query:
+                self.charge_resolution_work()
             self.ensure_identity()
             identity, reason, stopped = self.read_thread_context(
                 self.process.GetThreadAtIndex(index)
@@ -726,12 +798,407 @@ class QueryContext:
                 and self.read_mappings(*self.memory_request) != self.mapping_context
             ):
                 raise QueryError("state_changed", "memory mapping provenance changed")
+            if self.resolution_request is not None:
+                data, module, section, hierarchy = self.resolve_module_address(
+                    *self.resolution_request
+                )
+                if (
+                    data != self.resolution_context
+                    or module != self.resolution_module
+                    or section != self.resolution_section
+                    or hierarchy != self.resolution_hierarchy
+                ):
+                    raise QueryError(
+                        "state_changed", "module/section address mapping changed"
+                    )
             self.ensure_identity()
         except (QueryError, ValueError) as error:
             raise QueryError(
                 "state_changed",
                 "query provenance changed or became unavailable during revalidation",
             ) from error
+
+    def charge_resolution_work(self) -> None:
+        self.ensure_identity()
+        if self.resolution_work >= MAX_RESOLUTION_WORK:
+            raise QueryError(
+                "limit_exceeded", "module/section inspection budget exhausted"
+            )
+        self.resolution_work += 1
+
+    def selected_module(
+        self, target: Any, selected_uuid: str
+    ) -> tuple[Any, dict[str, Any]]:
+        self.charge_resolution_work()
+        count = backend_integer(target.GetNumModules(), "module count", 0, MAX_MODULES)
+        matches: list[tuple[Any, dict[str, Any]]] = []
+        for index in range(count):
+            self.charge_resolution_work()
+            module = target.GetModuleAtIndex(index)
+            if not module.IsValid():
+                raise QueryError("unavailable", "invalid module during UUID selection")
+            raw_uuid = bounded_text(module.GetUUIDString(), "module UUID", 256)
+            if raw_uuid is None:
+                continue
+            try:
+                actual_uuid = normalized_module_uuid(raw_uuid)
+            except QueryError:
+                continue
+            if actual_uuid != selected_uuid:
+                continue
+            if (
+                index >= len(self.modules)
+                or self.modules[index]["uuid"] != raw_uuid
+                or module != self.module_handles[index]
+            ):
+                raise QueryError("state_changed", "module UUID provenance changed")
+            matches.append((module, self.modules[index]))
+        if len(matches) != 1:
+            raise QueryError(
+                "unavailable",
+                "module_uuid must identify exactly one selected-target module",
+            )
+        return matches[0]
+
+    def read_section_structure(self, module: Any) -> list[dict[str, Any]]:
+        self.charge_resolution_work()
+        count = backend_integer(module.GetNumSections(), "section count", 0, 2**64 - 1)
+        if count > MAX_MODULE_SECTIONS:
+            raise QueryError(
+                "limit_exceeded", "module section count exceeds inspection budget"
+            )
+        pending = [(module, count, [], None)]
+        structure: list[dict[str, Any]] = []
+        scheduled = count
+        while pending:
+            owner, count, path, parent_index = pending.pop()
+            if len(path) >= MAX_SECTION_DEPTH:
+                raise QueryError(
+                    "limit_exceeded", "module section depth exceeds inspection budget"
+                )
+            for index in range(count):
+                self.charge_resolution_work()
+                section = (
+                    owner.GetSectionAtIndex(index)
+                    if parent_index is None
+                    else owner.GetSubSectionAtIndex(index)
+                )
+                if not section.IsValid():
+                    raise QueryError(
+                        "unavailable", "invalid section during module traversal"
+                    )
+                child_path = path + [index]
+                parent = section.GetParent()
+                if (
+                    parent_index is None
+                    and parent.IsValid()
+                    or parent_index is not None
+                    and (
+                        not parent.IsValid()
+                        or parent != structure[parent_index]["handle"]
+                    )
+                ):
+                    raise QueryError(
+                        "unavailable",
+                        "SDK section parent differs from bounded hierarchy",
+                    )
+                children = backend_integer(
+                    section.GetNumSubSections(),
+                    "subsection count",
+                    0,
+                    2**64 - 1,
+                )
+                scheduled += children
+                if scheduled > MAX_MODULE_SECTIONS:
+                    raise QueryError(
+                        "limit_exceeded",
+                        "module section count exceeds inspection budget",
+                    )
+                section_index = len(structure)
+                structure.append(
+                    {
+                        "handle": section,
+                        "index_path": child_path,
+                        "parent_index": parent_index,
+                        "children": children,
+                    }
+                )
+                if children:
+                    pending.append((section, children, child_path, section_index))
+        self.ensure_identity()
+        return structure
+
+    def read_section_hierarchy(self, module: Any, target: Any) -> list[dict[str, Any]]:
+        structure = self.read_section_structure(module)
+        hierarchy: list[dict[str, Any]] = []
+        metadata_bytes = 0
+        for row in structure:
+            self.charge_resolution_work()
+            section = row["handle"]
+            metadata = {
+                "index_path": row["index_path"],
+                "file_base": backend_integer(
+                    section.GetFileAddress(), "section file address", 0, 2**64 - 1
+                ),
+                "load_base": backend_integer(
+                    section.GetLoadAddress(target),
+                    "section load address",
+                    0,
+                    2**64 - 1,
+                ),
+                "size": backend_integer(
+                    section.GetByteSize(), "section size", 0, 2**64 - 1
+                ),
+                "name": bounded_text(section.GetName(), "section name"),
+            }
+            metadata_bytes += len(encode_json(metadata))
+            if metadata_bytes > MAX_METADATA_BYTES:
+                raise QueryError(
+                    "limit_exceeded", "section metadata exceeds inspection budget"
+                )
+            hierarchy.append({**row, **metadata})
+        if self.read_section_structure(module) != structure:
+            raise QueryError(
+                "state_changed",
+                "SDK section hierarchy changed during bounded inspection",
+            )
+        self.ensure_identity()
+        return hierarchy
+
+    def bound_section_chain(
+        self, hierarchy: list[dict[str, Any]], file_address: int, width: int
+    ) -> list[dict[str, Any]]:
+        matches = []
+        for index, row in enumerate(hierarchy):
+            self.charge_resolution_work()
+            if (
+                row["children"] == 0
+                and row["file_base"] <= file_address < row["file_base"] + row["size"]
+            ):
+                matches.append(index)
+        if len(matches) != 1:
+            raise QueryError(
+                "unavailable",
+                "file address must identify one bounded leaf section, not a gap or container",
+            )
+        chain = []
+        current: int | None = matches[0]
+        while current is not None:
+            self.charge_resolution_work()
+            row = hierarchy[current]
+            chain.append(row)
+            current = row["parent_index"]
+        chain.reverse()
+        parent = None
+        for row in chain:
+            self.charge_resolution_work()
+            file_base, load_base, size = row["file_base"], row["load_base"], row["size"]
+            if load_base == self.lldb.LLDB_INVALID_ADDRESS:
+                raise QueryError(
+                    "unavailable",
+                    "known loaded ancestors are required; independent child loads are unsupported",
+                )
+            if (
+                file_base == self.lldb.LLDB_INVALID_ADDRESS
+                or size == 0
+                or file_base + size > min(2**64 - 1, 2 ** (8 * width))
+                or load_base + size > min(2**64 - 1, 2 ** (8 * self.target_context[2]))
+            ):
+                raise QueryError(
+                    "unavailable",
+                    "invalid, unloaded or overflowing section ancestor range",
+                )
+            if parent is not None:
+                relative = file_base - parent["file_base"]
+                inherited_load = parent["load_base"] + relative
+                if (
+                    relative < 0
+                    or relative + size > parent["size"]
+                    or inherited_load > 2**64 - 2
+                    or load_base != inherited_load
+                    or load_base + size > parent["load_base"] + parent["size"]
+                ):
+                    raise QueryError(
+                        "unavailable",
+                        "inconsistent or overflowing inherited section mapping",
+                    )
+            parent = row
+        return chain
+
+    def resolution_mapping(self, process: Any, load: int) -> dict[str, Any]:
+        self.ensure_identity()
+        if self.mapping_queries >= MAX_MAPPING_QUERIES:
+            raise QueryError(
+                "limit_exceeded", "memory mapping inspection budget exhausted"
+            )
+        self.mapping_queries += 1
+        region = self.lldb.SBMemoryRegionInfo()
+        error = process.GetMemoryRegionInfo(load, region)
+        if not error.Success() or region.IsMapped() is not True:
+            raise QueryError("unavailable", "resolved load address is not mapped")
+        base = backend_integer(region.GetRegionBase(), "mapping base", 0, 2**64 - 1)
+        end = backend_integer(region.GetRegionEnd(), "mapping end", 0, 2**64 - 1)
+        permissions = known_permissions(region, self.lldb)
+        if (
+            not base <= load < end <= min(2**64 - 1, 2 ** (8 * self.target_context[2]))
+            or permissions[0] != "r"
+        ):
+            raise QueryError(
+                "unavailable",
+                "resolved load address is not in a known readable mapping",
+            )
+        return {"base": hex(base), "end": hex(end), "permissions": permissions}
+
+    def resolve_module_address(
+        self, selected_uuid: str, file_address: int
+    ) -> tuple[dict[str, Any], Any, Any, list[dict[str, Any]]]:
+        """Observe SDK section mapping, not a header slide or a static-layout proof.
+
+        SDK source: swiftlang/llvm-project
+        commit 1b669c3f63758879bb0c517a589abdea4c6efbeb.
+        SBAddress(section, offset) avoids the module's unbounded native section search.
+        Section.GetLoadBaseAddress adds inherited offsets without overflow checks.
+        Ancestor ranges and additions are checked before constructing the address.
+        SBSection.GetTargetByteSize is deprecated and returns the constant 1 in this SDK.
+        """
+        self.ensure_identity()
+        target = self.debugger.GetSelectedTarget()
+        if target != self.target:
+            raise QueryError("state_changed", "selected SDK target changed")
+        module, row = self.selected_module(target, selected_uuid)
+        width = backend_integer(
+            module.GetAddressByteSize(), "module address size", 1, 8
+        )
+        triple = bounded_text(module.GetTriple(), "module triple", 256)
+        order = backend_integer(module.GetByteOrder(), "module byte order", 0, 255)
+        if not triple or self.byte_order(order) == "unknown":
+            raise QueryError(
+                "unavailable", "selected module architecture/byte order is unknown"
+            )
+        if file_address >= 2 ** (8 * width):
+            raise QueryError(
+                "invalid_request", "file address exceeds selected module address width"
+            )
+        hierarchy = self.read_section_hierarchy(module, target)
+        chain = self.bound_section_chain(hierarchy, file_address, width)
+        leaf = chain[-1]
+        section, start, load_base, size = (
+            leaf["handle"],
+            leaf["file_base"],
+            leaf["load_base"],
+            leaf["size"],
+        )
+        if self.read_section_hierarchy(module, target) != hierarchy:
+            raise QueryError(
+                "state_changed",
+                "SDK section hierarchy changed before address construction",
+            )
+        current_target = self.debugger.GetSelectedTarget()
+        if (
+            current_target != target
+            or self.selected_module(current_target, selected_uuid)[0] != module
+        ):
+            raise QueryError(
+                "state_changed", "SDK target/module changed before address construction"
+            )
+        self.charge_resolution_work()
+        if (module.GetAddressByteSize(), module.GetTriple(), module.GetByteOrder()) != (
+            width,
+            triple,
+            order,
+        ):
+            raise QueryError(
+                "state_changed",
+                "selected module context changed before address construction",
+            )
+        self.charge_resolution_work()
+        resolved = self.lldb.SBAddress(section, file_address - start)
+        self.charge_resolution_work()
+        if not resolved.IsValid() or resolved.GetModule() != module:
+            raise QueryError(
+                "unavailable", "file address does not resolve in the selected module"
+            )
+        if not resolved.GetSection().IsValid() or resolved.GetSection() != section:
+            raise QueryError("unavailable", "file address has no SDK section evidence")
+        offset = backend_integer(resolved.GetOffset(), "section offset", 0, 2**64 - 2)
+        load = backend_integer(
+            resolved.GetLoadAddress(target), "resolved load address", 0, 2**64 - 2
+        )
+        resolved_file = backend_integer(
+            resolved.GetFileAddress(), "resolved file address", 0, 2**64 - 2
+        )
+        if (
+            start + size > min(2**64 - 1, 2 ** (8 * width))
+            or load_base + size > min(2**64 - 1, 2 ** (8 * self.target_context[2]))
+            or not start <= file_address < start + size
+            or offset != file_address - start
+            or resolved_file != file_address
+            or load != load_base + offset
+        ):
+            raise QueryError(
+                "unavailable",
+                "invalid, overflowing or inconsistent SDK section mapping",
+            )
+        if self.read_section_hierarchy(module, target) != hierarchy:
+            raise QueryError(
+                "state_changed",
+                "SDK section hierarchy changed during address construction",
+            )
+        require_permission_description_support(self.lldb)
+        mapping = self.resolution_mapping(target.GetProcess(), load)
+        if self.read_section_hierarchy(module, target) != hierarchy:
+            raise QueryError(
+                "state_changed",
+                "SDK section hierarchy changed during mapping inspection",
+            )
+        self.ensure_identity()
+        return (
+            {
+                "module_uuid": selected_uuid,
+                "module": row,
+                "module_context": {
+                    "triple": triple,
+                    "object_byte_order": self.byte_order(order),
+                    "address_byte_size": width,
+                    "data_byte_order": {
+                        "order": "unknown",
+                        "source": "no runtime data interpretation",
+                    },
+                },
+                "file_address": hex(file_address),
+                "load_address": hex(load),
+                "section": {
+                    "index_path": leaf["index_path"],
+                    "name": leaf["name"],
+                    "file_base": hex(start),
+                    "file_end": hex(start + size),
+                    "load_base": hex(load_base),
+                    "load_end": hex(load_base + size),
+                    "offset": hex(offset),
+                    "ancestors": [
+                        {
+                            "index_path": row["index_path"],
+                            "name": row["name"],
+                            "file_base": hex(row["file_base"]),
+                            "file_end": hex(row["file_base"] + row["size"]),
+                            "load_base": hex(row["load_base"]),
+                            "load_end": hex(row["load_base"] + row["size"]),
+                        }
+                        for row in chain[:-1]
+                    ],
+                },
+                "mapping": mapping,
+                "interpretation": "raw-addresses-only",
+                "address_semantics": (
+                    "LLDB file virtual address, not a file byte offset"
+                ),
+                "proven_flow": False,
+                "proven_layout": False,
+            },
+            module,
+            section,
+            hierarchy,
+        )
 
     def execute(self, request: dict[str, Any]) -> dict[str, Any]:
         self.architecture()
@@ -755,6 +1222,10 @@ class QueryContext:
                     "page_items": MAX_PAGE_ITEMS,
                     "modules": MAX_MODULES,
                     "threads": MAX_THREADS,
+                    "resolution_work": MAX_RESOLUTION_WORK,
+                    "module_sections": MAX_MODULE_SECTIONS,
+                    "section_depth": MAX_SECTION_DEPTH,
+                    "module_uuid_bytes": 64,
                 },
             }
         if operation in {"list_modules", "list_threads"}:
@@ -769,6 +1240,18 @@ class QueryContext:
                 "total": len(rows),
                 "next_offset": end if end < len(rows) else None,
             }
+        if operation == "resolve_module_address":
+            self.resolution_request = (
+                normalized_module_uuid(request["module_uuid"]),
+                address(request["file_address"], "file_address"),
+            )
+            data, module, section, hierarchy = self.resolve_module_address(
+                *self.resolution_request
+            )
+            self.resolution_context = data
+            self.resolution_module, self.resolution_section = module, section
+            self.resolution_hierarchy = hierarchy
+            return data
         registers = None
         if operation == "read_registers" or "thread_id" in request:
             identity = address(request["thread_id"], "thread_id")
@@ -842,7 +1325,7 @@ def query_json(debugger: Any, command: str, lldb: Any | None = None) -> str:
         budget = request.get("response_budget", DEFAULT_RESPONSE_BYTES)
         operation = request["operation"]
         api = lldb if lldb is not None else importlib.import_module("lldb")
-        context = QueryContext(debugger, api, request.get("expected_token"))
+        context = QueryContext(debugger, api, request.get("expected_token"), operation)
         data = context.execute(request)
         content = encode_json({"operation": operation, "data": data})
         response = {

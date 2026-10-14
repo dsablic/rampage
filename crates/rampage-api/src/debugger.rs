@@ -123,6 +123,17 @@ pub enum DebuggerRequest {
         #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
         thread_id: Option<DebuggerAddress>,
     },
+    ResolveModuleAddress {
+        #[schemars(range(min = 1, max = 1))]
+        version: u8,
+        expected_token: DebuggerToken,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+        #[schemars(range(min = 1024, max = 262144))]
+        response_budget: Option<usize>,
+        #[schemars(length(min = 2, max = 149), regex(pattern = "^[0-9a-fA-F-]+$"))]
+        module_uuid: String,
+        file_address: DebuggerAddress,
+    },
 }
 
 fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -153,6 +164,7 @@ impl DebuggerRequest {
             Self::ListThreads { .. } => "list_threads",
             Self::ReadRegisters { .. } => "read_registers",
             Self::ReadMemory { .. } => "read_memory",
+            Self::ResolveModuleAddress { .. } => "resolve_module_address",
         }
     }
 
@@ -164,6 +176,7 @@ impl DebuggerRequest {
             Self::ListModules { version, expected_token, response_budget, .. }
             | Self::ListThreads { version, expected_token, response_budget, .. }
             | Self::ReadRegisters { version, expected_token, response_budget, .. }
+            | Self::ResolveModuleAddress { version, expected_token, response_budget, .. }
             | Self::ReadMemory { version, expected_token, response_budget, .. } => {
                 (*version, Some(expected_token), *response_budget)
             }
@@ -177,6 +190,7 @@ impl DebuggerRequest {
             | Self::ListModules { response_budget, .. }
             | Self::ListThreads { response_budget, .. }
             | Self::ReadRegisters { response_budget, .. }
+            | Self::ResolveModuleAddress { response_budget, .. }
             | Self::ReadMemory { response_budget, .. } => response_budget,
         };
         *budget = Some(budget.unwrap_or(DEFAULT_RESPONSE_BYTES).min(maximum));
@@ -217,10 +231,35 @@ impl DebuggerRequest {
                     validate_thread(thread)?;
                 }
             }
+            Self::ResolveModuleAddress { module_uuid, file_address, .. } => {
+                validate_module_uuid(module_uuid)?;
+                file_address.value()?;
+            }
             Self::DescribeSession { .. } => {}
         }
         Ok(())
     }
+}
+
+fn validate_module_uuid(value: &str) -> Result<(), ApiError> {
+    if !(2..=149).contains(&value.len()) || !value.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-') {
+        return Err(invalid("module_uuid must be a bounded hexadecimal SDK UUID"));
+    }
+    let digits = value.replace('-', "");
+    if !(2..=128).contains(&digits.len()) || !digits.len().is_multiple_of(2) {
+        return Err(invalid("module_uuid must contain 1..64 hexadecimal bytes"));
+    }
+    let mut canonical = String::new();
+    for (index, byte) in digits.bytes().enumerate() {
+        if matches!(index, 8 | 12 | 16) || index >= 20 && (index - 20) % 12 == 0 {
+            canonical.push('-');
+        }
+        canonical.push(byte as char);
+    }
+    if value != digits && value != canonical {
+        return Err(invalid("module_uuid has non-SDK separator placement"));
+    }
+    Ok(())
 }
 
 fn allowed_register(name: &str) -> bool {

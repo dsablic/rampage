@@ -13,6 +13,84 @@ fn describe() -> DebuggerRequest {
     DebuggerRequest::from_json(r#"{"version":1,"operation":"describe_session"}"#).unwrap()
 }
 
+fn resolve() -> Value {
+    json!({"version":1,"operation":"resolve_module_address","expected_token":token(),
+        "module_uuid":"01234567-89ab-cdef-0123-456789abcdef","file_address":"0x100000004"})
+}
+
+#[test]
+fn module_resolution_requires_bounded_sdk_uuid_address_and_explicit_token() {
+    for uuid in [
+        "01234567-89AB-CDEF-0123-456789ABCDEF",
+        "0123456789abcdef0123456789abcdef",
+        "01234567-89ab-cdef-0123-456789abcdef-01234567",
+        "0123456789abcdef0123456789abcdef01234567",
+    ] {
+        for address in [json!(0), json!(u64::MAX - 1), json!("0x100000004")] {
+            let mut value = resolve();
+            value["module_uuid"] = json!(uuid);
+            value["file_address"] = address;
+            let request = DebuggerRequest::from_json(&value.to_string()).unwrap();
+            assert_eq!(request.operation(), "resolve_module_address");
+            assert_eq!(serde_json::to_value(request).unwrap(), value);
+        }
+    }
+    for (field, value) in [
+        ("module_uuid", json!("fixture")),
+        ("module_uuid", json!("0")),
+        ("module_uuid", json!("ab-cd")),
+        ("module_uuid", json!("a".repeat(129))),
+        ("module_uuid", json!("é".repeat(32))),
+        ("module_uuid", Value::Null),
+        ("file_address", json!(u64::MAX)),
+        ("file_address", json!("0x10000000000000000")),
+        ("file_address", json!(-1)),
+        ("file_address", json!(true)),
+        ("file_address", Value::Null),
+        ("expected_token", Value::Null),
+        ("response_budget", Value::Null),
+        ("response_budget", json!(1023)),
+        ("response_budget", json!(262145)),
+        ("module_id", json!(0)),
+        ("path", json!("/must/not/open")),
+        ("thread_id", json!(1)),
+    ] {
+        let mut invalid = resolve();
+        invalid[field] = value;
+        assert!(DebuggerRequest::from_json(&invalid.to_string()).is_err(), "{invalid}");
+    }
+    for field in ["module_uuid", "file_address", "expected_token"] {
+        let mut invalid = resolve();
+        invalid.as_object_mut().unwrap().remove(field);
+        assert!(DebuggerRequest::from_json(&invalid.to_string()).is_err());
+    }
+    let duplicate = resolve().to_string().replacen("\"file_address\":", "\"file_address\":0,\"file_address\":", 1);
+    assert!(DebuggerRequest::from_json(&duplicate).is_err());
+    let exact = format!("{}{}", resolve(), " ".repeat(MAX_DEBUGGER_REQUEST_BYTES - resolve().to_string().len()));
+    assert!(DebuggerRequest::from_json(&exact).is_ok());
+    assert!(DebuggerRequest::from_json(&format!("{exact}é")).is_err());
+}
+
+#[test]
+fn typed_resolution_schema_requires_uuid_file_address_and_stop_token() {
+    let schema = serde_json::to_value(schemars::schema_for!(DebuggerRequest)).unwrap();
+    let variant = schema["oneOf"]
+        .as_array()
+        .or_else(|| schema["anyOf"].as_array())
+        .unwrap()
+        .iter()
+        .find(|variant| variant["properties"]["operation"].to_string().contains("resolve_module_address"))
+        .unwrap();
+    assert_eq!(variant["additionalProperties"], false);
+    let required = variant["required"].as_array().unwrap();
+    for field in ["version", "operation", "expected_token", "module_uuid", "file_address"] {
+        assert!(required.contains(&json!(field)));
+    }
+    assert_eq!(variant["properties"]["module_uuid"]["maxLength"], 149);
+    assert!(variant["properties"].get("module_id").is_none());
+    assert!(variant["properties"].get("path").is_none());
+}
+
 #[test]
 fn requests_refuse_commands_unknown_duplicate_and_out_of_range_fields() {
     let bad = [
@@ -93,7 +171,9 @@ fn file_tool_schema_requires_explicit_socket_and_read_only_request() {
     assert!(required.contains(&json!("socket")) && required.contains(&json!("request")));
     assert!(tool.input_schema["properties"].get("path").is_none());
     let schema = tool.input_schema.to_string();
-    for operation in ["describe_session", "list_modules", "list_threads", "read_registers", "read_memory"] {
+    for operation in
+        ["describe_session", "list_modules", "list_threads", "read_registers", "read_memory", "resolve_module_address"]
+    {
         assert!(schema.contains(operation));
     }
     assert!(!schema.contains("command") && !schema.contains("expression") && !schema.contains("attach"));
@@ -204,6 +284,36 @@ mod unix {
         server.join().unwrap();
         assert_eq!(serde_json::to_value(result).unwrap(), expected);
         assert_eq!(std::fs::read_dir(&socket.directory).unwrap().count(), 1, "no annotations or images opened");
+    }
+
+    #[test]
+    fn module_resolution_preserves_raw_qualified_results_and_null_operation_errors() {
+        let request_value = resolve();
+        let request = DebuggerRequest::from_json(&request_value.to_string()).unwrap();
+        let mut socket = Socket::new();
+        let mut expected = response("resolve_module_address");
+        expected["data"] = json!({"module_uuid":request_value["module_uuid"],"module":{"index":1,"name":"same"},
+            "file_address":"0x100000004","load_address":"0x1804","interpretation":"raw-addresses-only",
+            "section":{"index_path":[0,0],"file_base":"0x100000000","load_base":"0x1800",
+                "ancestors":[{"index_path":[0],"file_base":"0x100000000","file_end":"0x100004000",
+                    "load_base":"0x1800","load_end":"0x5800"}]},
+            "proven_flow":false,"proven_layout":false});
+        let sent = expected.clone();
+        let server = socket.serve(move |mut stream, received| {
+            assert_eq!(received, request_value);
+            stream.write_all(&line(&sent)).unwrap();
+        });
+        let result = socket.query(&request).unwrap();
+        assert_eq!(serde_json::to_value(result).unwrap(), expected);
+        server.join().unwrap();
+        for operation in [json!("resolve_module_address"), Value::Null] {
+            let mut socket = Socket::new();
+            let failure = json!({"protocol":"rampage-lldb-query-v1","ok":false,"operation":operation,
+                "error":{"code":"unavailable","message":"ambiguous UUID"}});
+            let server = socket.response(line(&failure));
+            assert_eq!(serde_json::to_value(socket.query(&request).unwrap()).unwrap(), failure);
+            server.join().unwrap();
+        }
     }
 
     #[test]

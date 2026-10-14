@@ -139,6 +139,52 @@ mod unix {
     }
 
     #[test]
+    fn module_resolution_sends_explicit_uuid_and_preserves_raw_addresses_without_image_work() {
+        let mut socket = Socket::new();
+        let expected = json!({"version":1,"operation":"resolve_module_address","expected_token":token(),
+            "module_uuid":"01234567-89ab-cdef-0123-456789abcdef","file_address":"0x100000004"});
+        let sent = expected.clone();
+        let server = socket.serve(1, move |received| {
+            assert_eq!(received, sent);
+            let mut response = success("resolve_module_address");
+            response["data"] = json!({"module_uuid":received["module_uuid"],"module":{"index":1,"name":"same"},
+                "file_address":"0x100000004","load_address":"0x1804","proven_flow":false,"proven_layout":false});
+            response
+        });
+        let output = socket.query(&expected);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["data"]["load_address"], "0x1804");
+        assert_eq!(response["data"]["module_uuid"], expected["module_uuid"]);
+        assert_eq!(response["data"]["proven_layout"], false);
+        assert_eq!(response["observation"]["atomic_snapshot"], false);
+        server.join().unwrap();
+        assert_eq!(std::fs::read_dir(&socket.directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn module_resolution_missing_uuid_token_or_invalid_addresses_never_connect() {
+        let socket = Socket::new();
+        let valid = json!({"version":1,"operation":"resolve_module_address","expected_token":token(),
+            "module_uuid":"01234567-89ab-cdef-0123-456789abcdef","file_address":0});
+        for (field, value) in [
+            ("module_uuid", Value::Null),
+            ("module_uuid", json!("same")),
+            ("expected_token", Value::Null),
+            ("file_address", json!(u64::MAX)),
+            ("file_address", json!("expr()")),
+            ("path", json!("/must/not/open")),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            let output = socket.query(&invalid);
+            assert!(!output.status.success());
+        }
+        socket.listener.as_ref().unwrap().set_nonblocking(true).unwrap();
+        assert!(socket.listener.as_ref().unwrap().accept().is_err());
+    }
+
+    #[test]
     fn refuses_process_commands_duplicates_and_image_options_before_connecting() {
         let socket = Socket::new();
         for request in [

@@ -196,3 +196,50 @@ async fn backend_failure_remains_json_and_an_mcp_error() {
     }
     client.cancel().await.unwrap();
 }
+
+#[tokio::test]
+async fn module_resolution_uses_shared_schema_budget_and_raw_qualified_results() {
+    let client = connect(RampageServer::with_groups([Group::Runtime])).await;
+    let tools = client.list_all_tools().await.unwrap();
+    let schema =
+        serde_json::to_value(&tools.iter().find(|tool| tool.name == "query_debugger").unwrap().input_schema).unwrap();
+    assert!(schema.to_string().contains("resolve_module_address"));
+    let base = json!({"version":1,"operation":"resolve_module_address","expected_token":response()["token"],
+        "module_uuid":"01234567-89ab-cdef-0123-456789abcdef","file_address":"0x100000004"});
+    let mut socket = Socket::new();
+    for (field, value) in [
+        ("module_uuid", json!("same")),
+        ("expected_token", Value::Null),
+        ("file_address", json!(u64::MAX)),
+        ("path", json!("/must/not/open")),
+    ] {
+        let mut invalid = base.clone();
+        invalid[field] = value;
+        let result = call(&client, "query_debugger", json!({"socket":socket.path,"request":invalid})).await;
+        assert_eq!(result.is_error, Some(true));
+    }
+    socket.listener.as_ref().unwrap().set_nonblocking(true).unwrap();
+    assert!(socket.listener.as_ref().unwrap().accept().is_err());
+    socket.listener.as_ref().unwrap().set_nonblocking(false).unwrap();
+    let sent = base.clone();
+    let server = socket.serve(move |request| {
+        assert_eq!(request["module_uuid"], sent["module_uuid"]);
+        assert_eq!(request["file_address"], sent["file_address"]);
+        assert_eq!(request["expected_token"], sent["expected_token"]);
+        assert!(request["response_budget"].as_u64().unwrap() <= 60000);
+        let mut result = response();
+        result["operation"] = json!("resolve_module_address");
+        result["data"] = json!({"module_uuid":request["module_uuid"],"load_address":"0x1804",
+            "file_address":"0x100000004","proven_flow":false,"proven_layout":false});
+        result
+    });
+    let result = call(&client, "query_debugger", json!({"socket":socket.path,"request":base})).await;
+    assert_ne!(result.is_error, Some(true), "{}", text(&result));
+    let value: Value = serde_json::from_str(text(&result)).unwrap();
+    assert_eq!(value["data"]["load_address"], "0x1804");
+    assert_eq!(value["data"]["proven_flow"], false);
+    assert_eq!(value["observation"]["atomic_snapshot"], false);
+    server.join().unwrap();
+    assert_eq!(std::fs::read_dir(&socket.directory).unwrap().count(), 1);
+    client.cancel().await.unwrap();
+}

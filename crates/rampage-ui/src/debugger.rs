@@ -10,7 +10,8 @@ use crate::theme;
 use crate::workspace::Job;
 
 const TIMEOUT_MS: u64 = 3000;
-const OPERATIONS: [&str; 5] = ["describe_session", "list_modules", "list_threads", "read_registers", "read_memory"];
+const OPERATIONS: [&str; 6] =
+    ["describe_session", "list_modules", "list_threads", "read_registers", "read_memory", "resolve_module_address"];
 
 pub(crate) struct Debugger {
     pub shown: bool,
@@ -105,6 +106,16 @@ impl Debugger {
             .color(theme::DIM)
             .small(),
         );
+        if self.template == 5 {
+            ui.label(
+                RichText::new(
+                    "Select a unique module UUID from list_modules and supply its LLDB file virtual address, \
+                     not a file offset. Resolution is raw SDK mapping evidence, not proven flow or layout.",
+                )
+                .color(theme::DIM)
+                .small(),
+            );
+        }
         ui.horizontal(|ui| {
             if ui.add_enabled(!self.job.is_running(), egui::Button::new("Query")).clicked() {
                 self.query(ui.ctx());
@@ -287,6 +298,7 @@ fn template(index: usize) -> String {
     let fields = match index {
         1 | 2 => ",\n  \"offset\": 0,\n  \"limit\": 32",
         3 => ",\n  \"thread_id\": \"REPLACE_THREAD_ID\"",
+        5 => ",\n  \"module_uuid\": \"REPLACE_MODULE_UUID\",\n  \"file_address\": \"REPLACE_FILE_ADDRESS\"",
         _ => ",\n  \"address\": \"REPLACE_ADDRESS\",\n  \"size\": 64,\n  \"permissions\": \"r--\"",
     };
     format!(
@@ -476,6 +488,28 @@ mod tests {
     }
 
     #[test]
+    fn resolution_template_requires_manual_uuid_address_and_token_replacement() {
+        let original = template(5);
+        assert!(DebuggerRequest::from_json(&original).is_err());
+        let request = original
+            .replace(
+                "\"REPLACE_WITH_RETURNED_TOKEN_OBJECT\"",
+                concat!(
+                    "{\"backend\":\"lldb-sb\",\"session_id\":\"ui-local-session\",",
+                    "\"process_unique_id\":17,\"stop_id\":4,\"target_index\":0}",
+                ),
+            )
+            .replace("REPLACE_MODULE_UUID", "01234567-89ab-cdef-0123-456789abcdef")
+            .replace("REPLACE_FILE_ADDRESS", "0x100000004");
+        assert_eq!(DebuggerRequest::from_json(&request).unwrap().operation(), "resolve_module_address");
+        let mut debugger = Debugger { template: 5, request, ..Default::default() };
+        debugger.query(&egui::Context::default());
+        assert!(!debugger.job.is_running());
+        assert!(debugger.submitted.is_none());
+        assert!(debugger.error.as_ref().unwrap().contains("explicit absolute"));
+    }
+
+    #[test]
     fn clear_removes_local_inputs_results_and_editor_undo_history() {
         let ctx = egui::Context::default();
         let cursor = egui::text::CCursorRange::default();
@@ -629,6 +663,44 @@ mod tests {
             let request = template(0);
             let error = run_query(mock.path.clone(), request, Instant::now()).unwrap_err();
             assert!(error.contains("deadline"), "{error}");
+            mock.assert_no_connection();
+        }
+
+        #[test]
+        fn module_resolution_is_manual_local_only_and_retains_raw_qualified_result() {
+            let mock = MockSocket::new();
+            let ctx = egui::Context::default();
+            let token = session_response()["token"].clone();
+            let request = serde_json::json!({"version":1,"operation":"resolve_module_address",
+                "expected_token":token,"module_uuid":"01234567-89ab-cdef-0123-456789abcdef",
+                "file_address":"0x100000004"});
+            let mut debugger = Debugger {
+                shown: true,
+                socket: mock.path.to_str().unwrap().to_owned(),
+                template: 5,
+                request: request.to_string(),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| debugger.show(ui.ctx()));
+            output.textures_delta.clear();
+            mock.assert_no_connection();
+            let mut expected = session_response();
+            expected["operation"] = serde_json::json!("resolve_module_address");
+            expected["data"] = serde_json::json!({"module_uuid":request["module_uuid"],
+                "module":{"index":1,"name":"same","path":"/private/runtime/same"},
+                "file_address":"0x100000004","load_address":"0x1804",
+                "section":{"index_path":[0,0],"ancestors":[{"index_path":[0],
+                    "file_base":"0x100000000","file_end":"0x100004000",
+                    "load_base":"0x1800","load_end":"0x5800"}]},
+                "interpretation":"raw-addresses-only","proven_flow":false,"proven_layout":false});
+            debugger.query(&ctx);
+            let sent = mock.respond(expected.clone());
+            assert_eq!(sent["module_uuid"], request["module_uuid"]);
+            assert_eq!(sent["file_address"], request["file_address"]);
+            assert_eq!(sent["expected_token"], token);
+            finish(&mut debugger);
+            assert_eq!(serde_json::from_str::<serde_json::Value>(debugger.job.ready().unwrap()).unwrap(), expected);
+            assert_eq!(debugger.submitted.as_ref().unwrap().1, request.to_string());
             mock.assert_no_connection();
         }
 

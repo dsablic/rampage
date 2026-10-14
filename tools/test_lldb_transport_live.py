@@ -80,8 +80,11 @@ def test_owned_stopped_native_fixture_serves_queries_closes_listener_and_retains
         "    assert before[2] == lldb.eStateStopped\n"
         "    target = debugger.GetSelectedTarget()\n"
         "    process = target.GetProcess()\n"
+        "    value = target.FindFirstGlobalVariable('transport_bytes').GetAddress()\n"
         "    metadata = dict(thread_id=process.GetSelectedThread().GetThreadID(),\n"
-        "                    address=hex(target.FindFirstGlobalVariable('transport_bytes').GetLoadAddress()))\n"
+        "                    address=hex(value.GetLoadAddress(target)),\n"
+        "                    module_uuid=value.GetModule().GetUUIDString(),\n"
+        "                    file_address=hex(value.GetFileAddress()))\n"
         f"    with open({str(metadata_path)!r}, 'w') as destination:\n"
         "        json.dump(metadata, destination)\n"
         "def verify(debugger, command, result, internal):\n"
@@ -135,7 +138,7 @@ def test_owned_stopped_native_fixture_serves_queries_closes_listener_and_retains
             f"command script import {shlex.quote(str(bridge_path))}",
             f"command script import {shlex.quote(str(checks))}",
             "transport-before",
-            f"rampage-query-serve --socket {shlex.quote(str(path))} --max-requests 8 --idle-timeout-ms 5000",
+            f"rampage-query-serve --socket {shlex.quote(str(path))} --max-requests 9 --idle-timeout-ms 5000",
             (
                 f"rampage-query-serve --socket {shlex.quote(str(private / 'idle.sock'))} "
                 "--max-requests 1 --idle-timeout-ms 1"
@@ -182,6 +185,13 @@ def test_owned_stopped_native_fixture_serves_queries_closes_listener_and_retains
                     "read_memory",
                     {"address": metadata["address"], "size": 4, "permissions": "rw-"},
                 ),
+                (
+                    "resolve_module_address",
+                    {
+                        "module_uuid": metadata["module_uuid"],
+                        "file_address": metadata["file_address"],
+                    },
+                ),
             ):
                 response = exchange(
                     path, request(operation, expected_token=expected, **fields)
@@ -190,6 +200,14 @@ def test_owned_stopped_native_fixture_serves_queries_closes_listener_and_retains
                 assert response["observation"]["atomic_snapshot"] is False
                 if operation == "read_memory":
                     assert response["data"]["bytes_hex"] == "12345678"
+                if operation == "resolve_module_address":
+                    assert response["data"]["load_address"] == metadata["address"]
+                    assert response["data"]["file_address"] == metadata["file_address"]
+                    assert (
+                        response["data"]["proven_flow"]
+                        is response["data"]["proven_layout"]
+                        is False
+                    )
             stale = dict(expected, stop_id=expected["stop_id"] + 1)
             failure = exchange(path, request("list_threads", expected_token=stale))
             assert failure["ok"] is False and failure["error"]["code"] == "stale_token"
@@ -202,7 +220,7 @@ def test_owned_stopped_native_fixture_serves_queries_closes_listener_and_retains
                 "owned transport interrupted launch reaped and signal policy restored"
                 in output
             ), output
-            assert "8 accepted connections" in output, output
+            assert "9 accepted connections" in output, output
             assert "0 accepted connections" in output, output
             assert path.exists()
             assert (private / "idle.sock").exists()
