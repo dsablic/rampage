@@ -89,7 +89,7 @@ impl Project {
     }
 }
 
-fn reserved_names(annotations: &crate::annotations::Annotations) -> std::collections::BTreeSet<String> {
+pub(crate) fn reserved_names(annotations: &crate::annotations::Annotations) -> std::collections::BTreeSet<String> {
     annotations
         .types()
         .values()
@@ -103,7 +103,7 @@ fn reserved_names(annotations: &crate::annotations::Annotations) -> std::collect
         .collect()
 }
 
-fn safe_declaration_names(text: &str, reserved: &std::collections::BTreeSet<String>) -> String {
+pub(crate) fn safe_declaration_names(text: &str, reserved: &std::collections::BTreeSet<String>) -> String {
     let text = safe_parameter_names(text, reserved);
     let Some(open) = text.find('(') else { return text };
     let prefix = text[..open].trim_end();

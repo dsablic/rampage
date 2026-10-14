@@ -118,6 +118,7 @@ pub struct Annotations {
     names: BTreeMap<u64, String>,
     /// Each name's address, for resolving names.
     addresses: HashMap<String, u64>,
+    name_owners: BTreeMap<String, std::collections::BTreeSet<u64>>,
     comments: BTreeMap<u64, String>,
     signatures: BTreeMap<u64, String>,
     types: BTreeMap<u64, String>,
@@ -130,6 +131,53 @@ pub struct Annotations {
     log: Option<Log>,
     /// Whether `locked` holds the log's lock, which edits made inside it must not try to take again.
     held: bool,
+    /// Explicit checked ingestion. Legacy `open` does not retroactively provide an allocation-safe boundary.
+    checked_reads: bool,
+    managed_layouts: usize,
+}
+
+const CHECKED_CACHE_BYTES: usize = 8 * 1024 * 1024;
+const CHECKED_VALUE_BYTES: usize = 1024 * 1024;
+const CHECKED_RECORDS: usize = 8192;
+const CHECKED_HISTORY_STEPS: usize = 1024;
+const CHECKED_READ_BYTES: usize = 16 * 1024 * 1024;
+const CHECKED_LINE_BYTES: usize = 2 * 1024 * 1024;
+const CHECKED_ERROR: &str = "checked annotation input is malformed, unstable, or exceeds its bounded ingestion budget";
+
+#[derive(Default)]
+struct CheckedBudget {
+    bytes: usize,
+    records: usize,
+}
+
+impl CheckedBudget {
+    fn text(&mut self, text: &str) -> Result<(), String> {
+        self.bytes = self.bytes.checked_add(text.len()).ok_or(CHECKED_ERROR)?;
+        self.records += 1;
+        if text.len() > CHECKED_VALUE_BYTES || self.bytes > CHECKED_CACHE_BYTES || self.records > CHECKED_RECORDS {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        Ok(())
+    }
+    fn edit(&mut self, edit: &Edit) -> Result<(), String> {
+        self.records += 1;
+        if let Some(value) = &edit.value {
+            if edit.field == Field::Name && value.len() > 128 {
+                return Err(CHECKED_ERROR.to_owned());
+            }
+            self.text(value)?;
+        }
+        if let Some(previous) = &edit.previous {
+            if edit.field == Field::Name && previous.len() > 128 {
+                return Err(CHECKED_ERROR.to_owned());
+            }
+            self.text(previous)?;
+        }
+        if self.records > CHECKED_RECORDS {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Default)]
@@ -191,6 +239,103 @@ impl Annotations {
         Ok(annotations)
     }
 
+    /// Bounded boundary for logs containing checked layout bundles. Limits apply BEFORE reading/serde:
+    /// 16 MiB unread raw bytes, 2 MiB/line, 8192 lines, depth 8 and 65536 structural separators.
+    /// Cache/history limits: 8 MiB cumulative text, 1 MiB/value, 8192 counted entries, 1024 undo/redo steps.
+    /// Ordinary legacy `open` remains compatible and is not claimed allocation-safe for hostile old objects.
+    pub fn open_checked(path: PathBuf) -> Result<Self, String> {
+        Self::open_for_image_checked(path, None)
+    }
+
+    pub fn open_for_image_checked(path: PathBuf, image: Option<[u8; 32]>) -> Result<Self, String> {
+        if path.as_os_str().len() > 4096 {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        let image = image.map(|digest| rampage_arch::hex::bytes(&digest));
+        let mut annotations =
+            Self { log: Some(Log { path, image, ..Log::default() }), checked_reads: true, ..Self::default() };
+        annotations.refresh()?;
+        Ok(annotations)
+    }
+
+    pub(crate) fn preflight_checked(&self) -> Result<(), String> {
+        self.preflight_checked_with_history(self, &[])
+    }
+
+    pub(crate) fn has_checked_layouts(&self) -> bool {
+        self.managed_layouts != 0
+    }
+
+    fn preflight_checked_with_history(&self, history: &Self, extra: &[Edit]) -> Result<(), String> {
+        let mut budget = CheckedBudget::default();
+        let rows = self
+            .names
+            .len()
+            .saturating_add(self.comments.len())
+            .saturating_add(self.signatures.len())
+            .saturating_add(self.types.len())
+            .saturating_add(self.globals.len())
+            .saturating_add(self.addresses.len())
+            .saturating_add(self.name_owners.len());
+        if rows > CHECKED_RECORDS {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        if self.names.values().chain(self.addresses.keys()).chain(self.name_owners.keys()).any(|name| name.len() > 128)
+        {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        for text in self
+            .names
+            .values()
+            .chain(self.comments.values())
+            .chain(self.signatures.values())
+            .chain(self.types.values())
+            .chain(self.globals.values())
+            .chain(self.addresses.keys())
+            .chain(self.name_owners.keys())
+        {
+            budget.text(text)?;
+        }
+        for owners in self.name_owners.values() {
+            budget.records = budget
+                .records
+                .checked_add(owners.len())
+                .filter(|&records| records <= CHECKED_RECORDS)
+                .ok_or(CHECKED_ERROR)?;
+        }
+        if history.done.len() + history.undone.len() + usize::from(!extra.is_empty()) > CHECKED_HISTORY_STEPS {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        for step in history.done.iter().chain(&history.undone) {
+            budget.records += 1;
+            for edit in step {
+                budget.edit(edit)?;
+            }
+        }
+        if !extra.is_empty() {
+            budget.records += 1;
+        }
+        for edit in extra {
+            budget.edit(edit)?;
+        }
+        if let Some(log) = &history.log {
+            if log.path.as_os_str().len() > 4096 {
+                return Err(CHECKED_ERROR.to_owned());
+            }
+            budget.bytes = budget.bytes.checked_add(4096 + 3 * 128).ok_or(CHECKED_ERROR)?;
+            budget.records += 4;
+            for text in [&log.image, &log.logged_image, &log.other_image].into_iter().flatten() {
+                if text.len() > 128 {
+                    return Err(CHECKED_ERROR.to_owned());
+                }
+            }
+        }
+        if budget.records > CHECKED_RECORDS || budget.bytes > CHECKED_CACHE_BYTES {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        Ok(())
+    }
+
     /// Why these annotations may not fit this image: some were made on another image (a different build at the
     /// same path), or the log predates identity lines, so nothing says which image they were made on.
     pub fn warnings(&self) -> Vec<String> {
@@ -231,25 +376,66 @@ impl Annotations {
         Self {
             names: self.names.clone(),
             addresses: self.addresses.clone(),
+            name_owners: self.name_owners.clone(),
             comments: self.comments.clone(),
             signatures: self.signatures.clone(),
             types: self.types.clone(),
             globals: self.globals.clone(),
+            checked_reads: self.checked_reads,
+            managed_layouts: self.managed_layouts,
             ..Self::default()
         }
     }
 
+    /// Reads current shared edits into a detached candidate without publishing cache, cursor or history.
+    pub(crate) fn checked_snapshot(&self) -> Result<Self, ApiError> {
+        self.preflight_checked().map_err(ApiError::Invalid)?;
+        let _lock = self.log_lock_checked().map_err(ApiError::Invalid)?;
+        let mut candidate = Self { log: self.log.clone(), held: true, checked_reads: true, ..self.snapshot() };
+        candidate.refresh().map_err(ApiError::Invalid)?;
+        candidate.log = None;
+        candidate.held = false;
+        Ok(candidate)
+    }
+
     /// Applies edits other processes have appended to the log since it was last read. Returns whether any were.
     pub fn refresh(&mut self) -> Result<bool, String> {
+        if self.checked_reads || self.has_checked_layouts() {
+            self.preflight_checked()?;
+            let mut staged = Self {
+                done: self.done.clone(),
+                undone: self.undone.clone(),
+                log: self.log.clone(),
+                held: self.held,
+                checked_reads: true,
+                ..self.snapshot()
+            };
+            let changed = staged.refresh_inner(true)?;
+            staged.preflight_checked()?;
+            *self = staged;
+            return Ok(changed);
+        }
+        self.refresh_inner(false)
+    }
+
+    fn refresh_inner(&mut self, checked: bool) -> Result<bool, String> {
         let Some(log) = &mut self.log else { return Ok(false) };
-        let (restart, edits) = read_new_edits(log)?;
+        let (restart, edits) = read_new_edits(log, checked)?;
+        if checked {
+            let mut budget = CheckedBudget::default();
+            for edit in &edits {
+                budget.edit(edit)?;
+            }
+        }
         if restart {
             self.names.clear();
             self.addresses.clear();
+            self.name_owners.clear();
             self.comments.clear();
             self.signatures.clear();
             self.types.clear();
             self.globals.clear();
+            self.managed_layouts = 0;
         }
         for edit in &edits {
             self.apply(edit);
@@ -258,20 +444,37 @@ impl Annotations {
     }
 
     fn apply(&mut self, edit: &Edit) {
+        if matches!(edit.field, Field::Types | Field::Signature) {
+            let old = self.field_map(edit.field).get(&edit.address).is_some_and(|text| text.starts_with('!'));
+            let new = edit.value.as_ref().is_some_and(|text| text.starts_with('!'));
+            if old != new {
+                if new {
+                    self.managed_layouts += 1;
+                } else {
+                    self.managed_layouts -= 1;
+                }
+            }
+        }
         match edit.field {
             Field::Name => {
-                if let Some(old) = self.names.remove(&edit.address)
-                    && self.addresses.get(&old) == Some(&edit.address)
-                {
-                    // Edits from several clients can leave a name at two addresses; keep resolving the other.
-                    match self.names.iter().find(|(_, name)| **name == old) {
-                        Some((&other, _)) => self.addresses.insert(old, other),
-                        None => self.addresses.remove(&old),
-                    };
+                if let Some(old) = self.names.remove(&edit.address) {
+                    let owners = self.name_owners.get_mut(&old).expect("indexed name owners");
+                    owners.remove(&edit.address);
+                    let next = owners.first().copied();
+                    if owners.is_empty() {
+                        self.name_owners.remove(&old);
+                    }
+                    if self.addresses.get(&old) == Some(&edit.address) {
+                        match next {
+                            Some(other) => self.addresses.insert(old, other),
+                            None => self.addresses.remove(&old),
+                        };
+                    }
                 }
                 if let Some(value) = &edit.value {
                     self.names.insert(edit.address, value.clone());
                     self.addresses.insert(value.clone(), edit.address);
+                    self.name_owners.entry(value.clone()).or_default().insert(edit.address);
                 }
             }
             Field::Comment => match &edit.value {
@@ -301,6 +504,9 @@ impl Annotations {
     /// the next `refresh`. A file left ending mid-line (by an interrupted write) gets a newline first, so the
     /// fragment becomes a line of its own, which reading skips.
     fn record(&mut self, edits: &[Edit]) -> Result<(), String> {
+        if self.checked_reads {
+            return self.record_checked(edits);
+        }
         let Some(log) = &mut self.log else { return Ok(()) };
         let error = |error: std::io::Error| format!("{}: {error}", log.path.display());
         let mut file = OpenOptions::new().read(true).create(true).append(true).open(&log.path).map_err(error)?;
@@ -331,6 +537,60 @@ impl Annotations {
             }
         }
         file.write_all(lines.as_bytes()).map_err(error)?;
+        if new_image.is_some() {
+            log.logged_image = new_image;
+        }
+        Ok(())
+    }
+
+    fn record_checked(&mut self, edits: &[Edit]) -> Result<(), String> {
+        let Some(log) = &mut self.log else { return Ok(()) };
+        let new_image = log.image.clone().filter(|image| log.logged_image.as_ref() != Some(image));
+        let mut encoded = CheckedLogBuffer::default();
+        if let Some(image) = &new_image {
+            encoded.line(&ImageLine { image })?;
+        }
+        if let [edit] = edits {
+            encoded.line(edit)?;
+        } else {
+            let batch = batch_id();
+            encoded.line(&BatchHeader { batch: batch.clone(), edits: edits.len() })?;
+            for edit in edits {
+                encoded.line(&BatchMember { edit, batch: &batch })?;
+            }
+        }
+        checked_outer_preflight(&encoded.bytes)?;
+        let mut file = checked_log_append(&log.path).map_err(|_| CHECKED_ERROR.to_owned())?;
+        let before = file.metadata().map_err(|_| CHECKED_ERROR.to_owned())?;
+        if !before.is_file() || before.len() < log.read {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        if before.len() != 0 {
+            file.seek(SeekFrom::Start(before.len() - 1)).map_err(|_| CHECKED_ERROR.to_owned())?;
+            let mut last = [0];
+            file.read_exact(&mut last).map_err(|_| CHECKED_ERROR.to_owned())?;
+            if last != *b"\n" {
+                return Err(CHECKED_ERROR.to_owned());
+            }
+        }
+        let unread = usize::try_from(before.len() - log.read).map_err(|_| CHECKED_ERROR.to_owned())?;
+        let combined_len =
+            unread.checked_add(encoded.bytes.len()).filter(|&size| size <= CHECKED_READ_BYTES).ok_or(CHECKED_ERROR)?;
+        let mut combined = Vec::with_capacity(combined_len);
+        combined.resize(unread, 0);
+        file.seek(SeekFrom::Start(log.read)).map_err(|_| CHECKED_ERROR.to_owned())?;
+        file.read_exact(&mut combined).map_err(|_| CHECKED_ERROR.to_owned())?;
+        combined.extend_from_slice(&encoded.bytes);
+        checked_outer_preflight(&combined)?;
+        let after = file.metadata().map_err(|_| CHECKED_ERROR.to_owned())?;
+        let pathname = std::fs::symlink_metadata(&log.path).map_err(|_| CHECKED_ERROR.to_owned())?;
+        if pathname.file_type().is_symlink()
+            || checked_log_stamp(&before) != checked_log_stamp(&after)
+            || checked_log_stamp(&after) != checked_log_stamp(&pathname)
+        {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        file.write_all(&encoded.bytes).map_err(|_| CHECKED_ERROR.to_owned())?;
         if new_image.is_some() {
             log.logged_image = new_image;
         }
@@ -382,7 +642,34 @@ impl Annotations {
         Ok(result)
     }
 
+    /// Checked import/option publication: preflight the already constructed object BEFORE cloning, and
+    /// ingest shared edits with bounded outer JSON before publishing cache, history or cursor.
+    pub(crate) fn locked_staged_checked<T>(
+        &mut self,
+        work: impl FnOnce(&mut Self) -> Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
+        self.preflight_checked().map_err(ApiError::Invalid)?;
+        let _lock = self.log_lock_checked().map_err(ApiError::Invalid)?;
+        let mut staged = Self {
+            done: self.done.clone(),
+            undone: self.undone.clone(),
+            log: self.log.clone(),
+            held: true,
+            checked_reads: true,
+            ..self.snapshot()
+        };
+        staged.refresh().map_err(ApiError::Invalid)?;
+        let result = work(&mut staged)?;
+        staged.checked_reads = self.checked_reads || staged.has_checked_layouts();
+        staged.held = self.held;
+        *self = staged;
+        Ok(result)
+    }
+
     fn log_lock(&self) -> Result<Option<File>, String> {
+        if self.checked_reads {
+            return self.log_lock_checked();
+        }
         let Some(log) = self.log.as_ref().filter(|_| !self.held) else { return Ok(None) };
         let mut path = log.path.as_os_str().to_owned();
         path.push(".lock");
@@ -397,6 +684,27 @@ impl Annotations {
         Ok(Some(file))
     }
 
+    fn log_lock_checked(&self) -> Result<Option<File>, String> {
+        let Some(log) = self.log.as_ref().filter(|_| !self.held) else { return Ok(None) };
+        let mut path = log.path.as_os_str().to_owned();
+        path.push(".lock");
+        #[cfg(unix)]
+        {
+            use rustix::fs::{Mode, OFlags, open};
+            let flags = OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+            let mode = Mode::RUSR | Mode::WUSR;
+            let descriptor = open(std::path::Path::new(&path), flags, mode).map_err(|_| CHECKED_ERROR.to_owned())?;
+            let file = File::from(descriptor);
+            if !file.metadata().map_err(|_| CHECKED_ERROR.to_owned())?.is_file() {
+                return Err(CHECKED_ERROR.to_owned());
+            }
+            file.lock().map_err(|_| CHECKED_ERROR.to_owned())?;
+            Ok(Some(file))
+        }
+        #[cfg(not(unix))]
+        Err(CHECKED_ERROR.to_owned())
+    }
+
     pub(crate) fn set_validated(
         &mut self,
         field: Field,
@@ -406,13 +714,25 @@ impl Annotations {
     ) -> Result<bool, String> {
         let _lock = self.log_lock()?;
         self.refresh()?;
+        let value_limit = if field == Field::Name { 128 } else { CHECKED_VALUE_BYTES };
+        if self.checked_reads && value.as_ref().is_some_and(|value| value.len() > value_limit) {
+            return Err(CHECKED_ERROR.to_owned());
+        }
         let previous = self.field_map(field).get(&address).cloned();
         if previous == value {
             return Ok(false);
         }
+        if field == Field::Types {
+            crate::debug_layout_import::preserve_bundle(previous.as_deref(), value.as_deref())?;
+        }
         let edit = Edit { field, address, value, previous };
         let mut candidate = self.snapshot();
         candidate.apply(&edit);
+        if self.checked_reads {
+            self.preflight_checked_with_history(self, std::slice::from_ref(&edit))?;
+            candidate.preflight_checked_with_history(self, std::slice::from_ref(&edit))?;
+        }
+        crate::debug_layout_import::validate_transition(self, &candidate)?;
         validate(&candidate)?;
         self.commit(std::slice::from_ref(&edit))?;
         self.done.push(vec![edit]);
@@ -429,6 +749,21 @@ impl Annotations {
     ) -> Result<Vec<bool>, String> {
         let _lock = self.log_lock()?;
         self.refresh()?;
+        if self.checked_reads {
+            let mut budget = CheckedBudget::default();
+            for (field, _, value) in changes {
+                budget.records += 1;
+                if let Some(value) = value {
+                    if *field == Field::Name && value.len() > 128 {
+                        return Err(CHECKED_ERROR.to_owned());
+                    }
+                    budget.text(value)?;
+                }
+            }
+            if budget.records > CHECKED_RECORDS {
+                return Err(CHECKED_ERROR.to_owned());
+            }
+        }
         let mut candidate = self.snapshot();
         let mut edits = Vec::new();
         let mut changed = Vec::with_capacity(changes.len());
@@ -436,6 +771,9 @@ impl Annotations {
             let previous = candidate.field_map(*field).get(address).cloned();
             changed.push(previous != *value);
             if previous != *value {
+                if *field == Field::Types {
+                    crate::debug_layout_import::preserve_bundle(previous.as_deref(), value.as_deref())?;
+                }
                 let edit = Edit { field: *field, address: *address, value: value.clone(), previous };
                 candidate.apply(&edit);
                 edits.push(edit);
@@ -444,6 +782,11 @@ impl Annotations {
         if edits.is_empty() {
             return Ok(changed);
         }
+        if self.checked_reads {
+            self.preflight_checked_with_history(self, &edits)?;
+            candidate.preflight_checked_with_history(self, &edits)?;
+        }
+        crate::debug_layout_import::validate_transition(self, &candidate)?;
         validate(&candidate)?;
         self.commit(&edits)?;
         self.done.push(edits);
@@ -558,6 +901,10 @@ impl Annotations {
         if let Some(message) = candidate.blocked(edits) {
             return Err(Refusal::Blocked(message));
         }
+        if self.checked_reads {
+            candidate.preflight_checked_with_history(self, &[]).map_err(Refusal::Failed)?;
+        }
+        crate::debug_layout_import::validate_transition(self, &candidate).map_err(Refusal::Failed)?;
         let checked = edits.iter().any(|edit| {
             matches!(edit.field, Field::Signature | Field::Types | Field::Global)
                 || (edit.field == Field::Name && !candidate.globals().is_empty())
@@ -648,15 +995,19 @@ impl Annotations {
 /// was replaced (it shrank or is another file), in which case they are its whole contents and earlier state must be
 /// dropped. Lines that do not parse, such as a fragment an interrupted write left behind, are skipped, as are the
 /// edits of a batch cut short. A batch still incomplete at the end is left to be read again with what follows.
-fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
+fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), String> {
     let path = log.path.clone();
     let error = |error: std::io::Error| format!("{}: {error}", path.display());
-    let mut file = match File::open(&path) {
+    let opened = if checked { checked_log_file(&path) } else { File::open(&path) };
+    let mut file = match opened {
         Ok(file) => file,
         Err(problem) if problem.kind() == std::io::ErrorKind::NotFound => return Ok((false, Vec::new())),
         Err(problem) => return Err(error(problem)),
     };
     let metadata = file.metadata().map_err(error)?;
+    if checked && (!metadata.is_file() || metadata.len().saturating_sub(log.read) > CHECKED_READ_BYTES as u64) {
+        return Err(CHECKED_ERROR.to_owned());
+    }
     let identity = file_identity(&metadata);
     let restart = metadata.len() < log.read || (log.identity.is_some() && log.identity != identity);
     if restart {
@@ -668,7 +1019,29 @@ fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
     }
     file.seek(SeekFrom::Start(log.read)).map_err(error)?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(error)?;
+    if checked {
+        if metadata.len().saturating_sub(log.read) > CHECKED_READ_BYTES as u64 {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        (&mut file)
+            .take(CHECKED_READ_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| CHECKED_ERROR.to_owned())?;
+        if bytes.len() > CHECKED_READ_BYTES {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        checked_outer_preflight(&bytes)?;
+        let after = file.metadata().map_err(|_| CHECKED_ERROR.to_owned())?;
+        let pathname = std::fs::symlink_metadata(&path).map_err(|_| CHECKED_ERROR.to_owned())?;
+        if pathname.file_type().is_symlink()
+            || checked_log_stamp(&metadata) != checked_log_stamp(&after)
+            || checked_log_stamp(&after) != checked_log_stamp(&pathname)
+        {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+    } else {
+        file.read_to_end(&mut bytes).map_err(error)?;
+    }
     // Only complete lines: the rest may still be being written.
     let complete = bytes.iter().rposition(|&byte| byte == b'\n').map_or(0, |end| end + 1);
     let mut lines = Vec::new();
@@ -684,6 +1057,9 @@ fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
         index += 1;
         match serde_json::from_slice::<LineKind>(line) {
             Ok(LineKind { batch: Some(batch), edits: Some(count), .. }) => {
+                if checked && (batch.len() > 128 || count > CHECKED_RECORDS) {
+                    return Err(CHECKED_ERROR.to_owned());
+                }
                 let members: Vec<Edit> =
                     lines[index..].iter().take(count).map_while(|(_, line)| batch_member(line, &batch)).collect();
                 index += members.len();
@@ -696,17 +1072,153 @@ fn read_new_edits(log: &mut Log) -> Result<(bool, Vec<Edit>), String> {
                 }
             }
             Ok(LineKind { batch: Some(_), edits: None, .. }) => {}
-            Ok(LineKind { batch: None, edits: None, image: Some(image) }) => log.read_image(image),
+            Ok(LineKind { batch: None, edits: None, image: Some(image) }) => {
+                if checked && image.len() > 128 {
+                    return Err(CHECKED_ERROR.to_owned());
+                }
+                log.read_image(image);
+            }
             _ => {
                 if let Ok(edit) = serde_json::from_slice::<Edit>(line) {
                     log.attribute_edits();
                     edits.push(edit);
+                } else if checked {
+                    return Err(CHECKED_ERROR.to_owned());
                 }
             }
         }
     }
     log.read += read as u64;
     Ok((restart, edits))
+}
+
+fn checked_log_file(path: &std::path::Path) -> std::io::Result<File> {
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, OFlags, open};
+        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        let descriptor = open(path, flags, Mode::empty())?;
+        Ok(File::from(descriptor))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err(std::io::Error::other(CHECKED_ERROR))
+    }
+}
+
+fn checked_log_append(path: &std::path::Path) -> std::io::Result<File> {
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, OFlags, open};
+        let flags =
+            OFlags::RDWR | OFlags::APPEND | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+        let descriptor = open(path, flags, Mode::RUSR | Mode::WUSR)?;
+        Ok(File::from(descriptor))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err(std::io::Error::other(CHECKED_ERROR))
+    }
+}
+
+#[derive(Default)]
+struct CheckedLogBuffer {
+    bytes: Vec<u8>,
+    line_bytes: usize,
+}
+
+impl Write for CheckedLogBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let error = || std::io::Error::other(CHECKED_ERROR);
+        let size =
+            self.bytes.len().checked_add(bytes.len()).filter(|&size| size <= CHECKED_READ_BYTES).ok_or_else(error)?;
+        let mut line_bytes = self.line_bytes;
+        for &byte in bytes {
+            line_bytes += 1;
+            if line_bytes > CHECKED_LINE_BYTES {
+                return Err(error());
+            }
+            if byte == b'\n' {
+                line_bytes = 0;
+            }
+        }
+        if size > self.bytes.capacity() {
+            let capacity = size.max(self.bytes.capacity().saturating_mul(2)).min(CHECKED_READ_BYTES);
+            self.bytes.try_reserve_exact(capacity - self.bytes.len()).map_err(|_| error())?;
+        }
+        self.bytes.extend_from_slice(bytes);
+        self.line_bytes = line_bytes;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl CheckedLogBuffer {
+    fn line(&mut self, value: &impl Serialize) -> Result<(), String> {
+        serde_json::to_writer(&mut *self, value).map_err(|_| CHECKED_ERROR.to_owned())?;
+        self.write_all(b"\n").map_err(|_| CHECKED_ERROR.to_owned())
+    }
+}
+
+type CheckedLogStamp = (Option<(u64, u64)>, u64, Option<std::time::SystemTime>, i64, i64);
+
+fn checked_log_stamp(metadata: &std::fs::Metadata) -> CheckedLogStamp {
+    #[cfg(unix)]
+    let changed = {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.ctime(), metadata.ctime_nsec())
+    };
+    #[cfg(not(unix))]
+    let changed = (0, 0);
+    (file_identity(metadata), metadata.len(), metadata.modified().ok(), changed.0, changed.1)
+}
+
+fn checked_outer_preflight(bytes: &[u8]) -> Result<(), String> {
+    let mut records = 0usize;
+    let mut separators = 0usize;
+    for line in bytes.split_inclusive(|&byte| byte == b'\n') {
+        records += 1;
+        if records > CHECKED_RECORDS || line.len() > CHECKED_LINE_BYTES {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        let mut depth = 0usize;
+        let mut string = false;
+        let mut escaped = false;
+        for &byte in line {
+            if string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    string = false;
+                }
+            } else {
+                match byte {
+                    b'"' => string = true,
+                    b'{' | b'[' => {
+                        depth += 1;
+                        separators += 1;
+                    }
+                    b'}' | b']' => depth = depth.checked_sub(1).ok_or(CHECKED_ERROR)?,
+                    b',' | b':' => separators += 1,
+                    _ => {}
+                }
+                if depth > 8 || separators > 65536 {
+                    return Err(CHECKED_ERROR.to_owned());
+                }
+            }
+        }
+        if line.ends_with(b"\n") && (depth != 0 || string) {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+    }
+    Ok(())
 }
 
 /// The edit `line` holds if it belongs to `batch`.
@@ -744,6 +1256,206 @@ fn file_identity(_: &std::fs::Metadata) -> Option<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct CheckedLogFiles(PathBuf);
+
+    impl Drop for CheckedLogFiles {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            cleanup_lock(self.0.clone());
+        }
+    }
+
+    #[test]
+    fn indexed_duplicate_name_owners_keep_last_writer_and_lowest_surviving_address() {
+        let files = CheckedLogFiles(temporary_log("checked-duplicate-name-owners"));
+        let mut first = Annotations::open_checked(files.0.clone()).unwrap();
+        first.set(Field::Name, 20, Some("shared".to_owned())).unwrap();
+        let mut second = Annotations::open_checked(files.0.clone()).unwrap();
+        second.set(Field::Name, 10, Some("shared".to_owned())).unwrap();
+        second.set(Field::Name, 30, Some("shared".to_owned())).unwrap();
+        second.refresh().unwrap();
+        assert_eq!(second.address_of("shared"), Some(30));
+        first.refresh().unwrap();
+        assert_eq!(first.address_of("shared"), Some(30));
+        second.set(Field::Name, 30, None).unwrap();
+        second.refresh().unwrap();
+        assert_eq!(second.address_of("shared"), Some(10));
+        first.refresh().unwrap();
+        assert_eq!(first.address_of("shared"), Some(10));
+        assert!(second.undo().unwrap_err().contains("another address"));
+        assert_eq!(second.address_of("shared"), Some(10));
+        second.set(Field::Name, 30, Some("shared".to_owned())).unwrap();
+        second.refresh().unwrap();
+        assert_eq!(second.address_of("shared"), Some(30));
+    }
+
+    #[test]
+    fn checked_encoded_line_limits_reject_before_append_and_preserve_readable_undo() {
+        let files = CheckedLogFiles(temporary_log("checked-encoded-write"));
+        let mut annotations = Annotations::open_checked(files.0.clone()).unwrap();
+        let before = annotations.log.clone();
+        let oversized = "\0".repeat(384 * 1024);
+        assert_eq!(annotations.set(Field::Comment, 1, Some(oversized)).unwrap_err(), CHECKED_ERROR);
+        assert!(!files.0.exists());
+        assert!(annotations.comments.is_empty() && annotations.done.is_empty() && annotations.undone.is_empty());
+        assert_eq!(annotations.log, before);
+        let accepted = "\0".repeat(32);
+        annotations.set(Field::Comment, 1, Some(accepted.clone())).unwrap();
+        annotations.refresh().unwrap();
+        assert_eq!(annotations.comment(1), Some(accepted.as_str()));
+        assert_eq!(annotations.undo().unwrap().len(), 1);
+        annotations.refresh().unwrap();
+        assert_eq!(annotations.comment(1), None);
+        assert_eq!(Annotations::open_checked(files.0.clone()).unwrap().comment(1), None);
+    }
+
+    #[test]
+    fn checked_writer_refuses_an_unterminated_tail_without_extending_it() {
+        let files = CheckedLogFiles(temporary_log("checked-pending-tail"));
+        let partial = b"{\"field\":\"comment\"";
+        std::fs::write(&files.0, partial).unwrap();
+        let mut annotations = Annotations::open_checked(files.0.clone()).unwrap();
+        assert_eq!(annotations.set(Field::Comment, 1, Some("new".to_owned())).unwrap_err(), CHECKED_ERROR);
+        assert_eq!(std::fs::read(&files.0).unwrap(), partial);
+        assert!(annotations.comments.is_empty() && annotations.done.is_empty());
+        assert_eq!(annotations.log.as_ref().unwrap().read, 0);
+    }
+
+    #[test]
+    fn checked_writer_counts_pending_batch_bytes_before_appending_a_new_record() {
+        let files = CheckedLogFiles(temporary_log("checked-pending-byte-budget"));
+        let mut file = File::create(&files.0).unwrap();
+        serde_json::to_writer(&mut file, &BatchHeader { batch: "pending".to_owned(), edits: 3901 }).unwrap();
+        file.write_all(b"\n").unwrap();
+        for address in 0..3900 {
+            let edit = Edit { field: Field::Comment, address, value: Some("p".repeat(4000)), previous: None };
+            serde_json::to_writer(&mut file, &BatchMember { edit: &edit, batch: "pending" }).unwrap();
+            file.write_all(b"\n").unwrap();
+        }
+        drop(file);
+        let length = std::fs::metadata(&files.0).unwrap().len();
+        assert!(length < CHECKED_READ_BYTES as u64);
+        let mut annotations = Annotations::open_checked(files.0.clone()).unwrap();
+        assert!(annotations.comments.is_empty());
+        assert_eq!(annotations.log.as_ref().unwrap().read, 0);
+        let value = "\0".repeat(300 * 1024);
+        assert_eq!(annotations.set(Field::Comment, 10_000, Some(value)).unwrap_err(), CHECKED_ERROR);
+        assert_eq!(std::fs::metadata(&files.0).unwrap().len(), length);
+        assert!(annotations.comments.is_empty() && annotations.done.is_empty());
+        assert_eq!(annotations.log.as_ref().unwrap().read, 0);
+        Annotations::open_checked(files.0.clone()).unwrap();
+    }
+
+    #[test]
+    fn checked_open_bounds_a_real_large_types_envelope_before_decoding() {
+        let path = temporary_log("checked-large-types-envelope");
+        let mut file = File::create(&path).unwrap();
+        file.write_all(b"{\"field\":\"types\",\"address\":\"0x1\",\"value\":\"").unwrap();
+        let chunk = [b'x'; 65536];
+        for _ in 0..(CHECKED_READ_BYTES / chunk.len() + 1) {
+            file.write_all(&chunk).unwrap();
+        }
+        file.write_all(b"\",\"previous\":null}\n").unwrap();
+        drop(file);
+        let length = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(Annotations::open_checked(path.clone()).err().unwrap(), CHECKED_ERROR);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), length);
+        cleanup(path);
+    }
+
+    #[test]
+    fn checked_staging_rejects_hostile_escapes_without_publishing_cursor_cache_or_history() {
+        let path = temporary_log("checked-hostile-escapes");
+        let mut annotations = Annotations::open_checked(path.clone()).unwrap();
+        annotations.set(Field::Comment, 1, Some("original".to_owned())).unwrap();
+        annotations.refresh().unwrap();
+        let before_log = annotations.log.clone();
+        let before_done = annotations.done.clone();
+        let before_undone = annotations.undone.clone();
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"field\":\"types\",\"address\":\"0x2\",\"value\":\"\\u0021rampage-layout\\n").unwrap();
+        let escaped = b"\\u0078".repeat(4096);
+        for _ in 0..(CHECKED_LINE_BYTES / escaped.len() + 1) {
+            file.write_all(&escaped).unwrap();
+        }
+        file.write_all(b"\",\"previous\":null}\n").unwrap();
+        drop(file);
+        let length = std::fs::metadata(&path).unwrap().len();
+        let result: Result<(), ApiError> = annotations.locked_staged_checked(|_| panic!("must refuse before work"));
+        assert_eq!(result.unwrap_err().to_string(), CHECKED_ERROR);
+        assert_eq!(annotations.log, before_log);
+        assert_eq!(annotations.done, before_done);
+        assert_eq!(annotations.undone, before_undone);
+        assert_eq!(annotations.comment(1), Some("original"));
+        assert!(annotations.types().is_empty());
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), length);
+        cleanup(path);
+    }
+
+    #[test]
+    fn checked_snapshot_preflights_preconstructed_legacy_cache_and_history_without_cloning() {
+        let mut annotations = Annotations::in_memory();
+        annotations.comments.insert(1, "x".repeat(CHECKED_VALUE_BYTES + 1));
+        assert_eq!(annotations.checked_snapshot().err().unwrap().to_string(), CHECKED_ERROR);
+        assert_eq!(annotations.comments[&1].len(), CHECKED_VALUE_BYTES + 1);
+        annotations.comments.clear();
+        annotations.done.resize_with(CHECKED_HISTORY_STEPS + 1, Vec::new);
+        assert_eq!(annotations.checked_snapshot().err().unwrap().to_string(), CHECKED_ERROR);
+        assert_eq!(annotations.done.len(), CHECKED_HISTORY_STEPS + 1);
+    }
+
+    #[test]
+    fn checked_precommit_reserves_the_new_step_and_keeps_its_undo_state_representable() {
+        for edit_count in [1usize, 2] {
+            let largest_base = CHECKED_RECORDS - (5 + 3 * edit_count);
+            for excess in [0, 1] {
+                let original = Annotations {
+                    comments: (0..largest_base + excess).map(|address| (address as u64, "x".to_owned())).collect(),
+                    log: Some(Log { path: PathBuf::from("checked-budget.rampage"), ..Default::default() }),
+                    checked_reads: true,
+                    ..Default::default()
+                };
+                original.preflight_checked().unwrap();
+                let edits: Vec<_> = (0..edit_count)
+                    .map(|index| Edit {
+                        field: Field::Comment,
+                        address: 10_000 + index as u64,
+                        value: Some("x".to_owned()),
+                        previous: None,
+                    })
+                    .collect();
+                let mut candidate = original.snapshot();
+                for edit in &edits {
+                    candidate.apply(edit);
+                }
+                let result = candidate.preflight_checked_with_history(&original, &edits);
+                if excess != 0 {
+                    assert_eq!(result.unwrap_err(), CHECKED_ERROR);
+                    assert!(original.done.is_empty());
+                    continue;
+                }
+                result.unwrap();
+                candidate.log = original.log.clone();
+                candidate.done.push(edits);
+                candidate.preflight_checked().unwrap();
+                original.preflight_checked_with_history(&candidate, &[]).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn checked_reader_rejects_deep_complete_json_but_legacy_reader_keeps_ordinary_compatibility() {
+        let path = temporary_log("checked-deep-json");
+        let nested = format!("{}0{}", "[".repeat(9), "]".repeat(9));
+        let text = format!(
+            "{{\"field\":\"comment\",\"address\":\"0x1\",\"value\":\"kept\",\"previous\":null,\"extra\":{nested}}}\n"
+        );
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(Annotations::open_checked(path.clone()).err().unwrap(), CHECKED_ERROR);
+        assert_eq!(Annotations::open(path.clone()).unwrap().comment(1), Some("kept"));
+        cleanup(path);
+    }
 
     fn temporary_log(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("rampage-{name}-{}.rampage", std::process::id()));

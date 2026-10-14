@@ -9,6 +9,7 @@ mod capabilities;
 mod carve;
 mod correlation;
 mod debug_import;
+mod debug_layout_import;
 mod debugger;
 mod decompile;
 mod detect;
@@ -47,6 +48,9 @@ pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use carve::{CarvingPage, MAX_CARVE_PAGE, carve, carve_page};
 pub use correlation::RuntimeCorrelation;
 pub use debug_import::DebugImport;
+pub use debug_layout_import::{
+    DebugLayoutFunction, DebugLayoutImport, DebugLayoutPreview, DebugLayoutReport, DebugLayoutType,
+};
 pub use debugger::{
     DebuggerAddress, DebuggerBackend, DebuggerError, DebuggerObservation, DebuggerPermissions, DebuggerRequest,
     DebuggerResponse, DebuggerToken, MAX_DEBUGGER_REQUEST_BYTES, MAX_DEBUGGER_RESPONSE_BYTES, query_debugger,

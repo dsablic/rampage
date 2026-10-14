@@ -686,14 +686,14 @@ mod tests {
         layout.validate().unwrap();
         let isolated = escape_ascii_strings(&serde_json::to_vec(&layout).unwrap());
         assert_eq!(PlainStructLayout::from_wire(&isolated).unwrap(), layout);
-        let operation = WorkerOperation::AssertPlainStructLayout { layout: layout.clone() };
+        let operation = WorkerOperation::AssertPlainStructLayout { layout: layout.clone(), expected_context: None };
         let bytes = escape_ascii_strings(&serde_json::to_vec(&operation).unwrap());
         let operation = std::str::from_utf8(&bytes).unwrap();
         let decoded: WorkerRequest = decode_worker(&request(operation), |bytes| {
             serde_json::from_slice(bytes).map_err(|_| "invalid schema".to_owned())
         })
         .unwrap();
-        let WorkerOperation::AssertPlainStructLayout { layout: actual } = &decoded.operations[0] else {
+        let WorkerOperation::AssertPlainStructLayout { layout: actual, .. } = &decoded.operations[0] else {
             panic!("wrong operation")
         };
         assert_eq!(*actual, layout);

@@ -110,7 +110,7 @@ fn subprocess_checks_complete_layouts_before_decompilation_or_validation_success
     request.mappings[0].size = 9;
     request.operations = vec![
         WorkerOperation::ParseTypes { declarations: "struct worker_record { int4 count; uint1 tail; };".to_owned() },
-        WorkerOperation::AssertPlainStructLayout { layout },
+        WorkerOperation::AssertPlainStructLayout { layout, expected_context: None },
         WorkerOperation::Symbol { address: 0x1000, name: "fixture".to_owned() },
         WorkerOperation::Prototype {
             address: 0x1000,
@@ -132,7 +132,7 @@ fn subprocess_checks_complete_layouts_before_decompilation_or_validation_success
         request.validate_only = validate_only;
         run_supervised(&request, &config(), None).unwrap();
         let mut wrong = request.clone();
-        let WorkerOperation::AssertPlainStructLayout { layout } = &mut wrong.operations[1] else { unreachable!() };
+        let WorkerOperation::AssertPlainStructLayout { layout, .. } = &mut wrong.operations[1] else { unreachable!() };
         layout.fields[1].offset = 5;
         layout.validate().unwrap();
         assert!(matches!(

@@ -103,6 +103,10 @@ pub enum WorkerOperation {
     /// Reassert in every worker/session/compiler rebuild; this operation supplies no persistence.
     AssertPlainStructLayout {
         layout: crate::layout::PlainStructLayout,
+        /// Checked import pins the child's exact embedded manifest before native initialization.
+        /// None preserves general/manual/external assertions. Older strict workers refuse this added field.
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "expected_context")]
+        expected_context: Option<String>,
     },
     Global {
         address: u64,
@@ -124,6 +128,43 @@ pub enum WorkerOperation {
         address: u64,
         indirect: bool,
     },
+}
+
+fn expected_context<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    struct ContextVisitor;
+    impl<'de> serde::de::Visitor<'de> for ContextVisitor {
+        type Value = Option<String>;
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("an optional canonical 64-byte SHA-256 context identity")
+        }
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_some<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+            struct DigestVisitor;
+            impl serde::de::Visitor<'_> for DigestVisitor {
+                type Value = String;
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("a canonical 64-byte SHA-256 context identity")
+                }
+                fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<String, E> {
+                    if !context_digest_valid(value) {
+                        return Err(E::custom("invalid checked context identity"));
+                    }
+                    Ok(value.to_owned())
+                }
+            }
+            deserializer.deserialize_str(DigestVisitor).map(Some)
+        }
+    }
+    deserializer.deserialize_option(ContextVisitor)
+}
+
+fn context_digest_valid(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -502,8 +543,11 @@ fn validate_layout_operations(
         if let Some(budget) = budget {
             budget.check()?;
         }
-        if let WorkerOperation::AssertPlainStructLayout { layout } = operation {
+        if let WorkerOperation::AssertPlainStructLayout { layout, expected_context } = operation {
             layout.validate().map_err(|error| WorkerError::Protocol(format!("operation {index}: {error}")))?;
+            if expected_context.as_deref().is_some_and(|text| !context_digest_valid(text)) {
+                return Err(WorkerError::Protocol("invalid checked context identity".to_owned()));
+            }
         }
     }
     Ok(())
@@ -514,6 +558,24 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
         WorkerError::Protocol(message) => message,
         other => other.to_string(),
     })?;
+    let checked_context = request.operations.iter().find_map(|operation| match operation {
+        WorkerOperation::AssertPlainStructLayout { expected_context: Some(expected), .. } => Some(expected.as_str()),
+        _ => None,
+    });
+    if let Some(expected) = checked_context {
+        let actual = rampage_arch::hex::bytes(&crate::context::embedded_manifest_sha256());
+        if expected != actual
+            || request.operations.iter().any(|operation| {
+                matches!(operation,
+            WorkerOperation::AssertPlainStructLayout { expected_context: Some(other), .. } if other != expected)
+            })
+        {
+            return Err(
+                "checked worker embedded specification identity does not match the requested context".to_owned()
+            );
+        }
+        crate::require_verified_bundled_native_context().map_err(|error| error.to_string())?;
+    }
     let arch: Arch = request.arch.parse()?;
     let platform = match request.options.platform.as_str() {
         "default" => Platform::Default,
@@ -558,7 +620,13 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
                 engine.apply_prototype(address, indirect, &declaration)
             }
             WorkerOperation::ParseTypes { declarations } => engine.parse_c(&declarations),
-            WorkerOperation::AssertPlainStructLayout { layout } => engine.assert_plain_struct_layout(&layout),
+            WorkerOperation::AssertPlainStructLayout { layout, expected_context } => {
+                if expected_context.is_some() {
+                    engine.verify_bundled_plain_struct_counterpart(&layout)
+                } else {
+                    engine.assert_plain_struct_layout(&layout)
+                }
+            }
             WorkerOperation::Global { address, declaration } => engine.add_global(address, &declaration),
             WorkerOperation::Mode { modes } => {
                 let modes: Vec<_> = modes.into_iter().map(|mode| (mode.address, mode.thumb)).collect();
@@ -1396,7 +1464,7 @@ mod tests {
             WorkerOperation::ParseTypes {
                 declarations: "struct layout_probe { int4 count; int4 *value; uint1 tail; };".to_owned(),
             },
-            WorkerOperation::AssertPlainStructLayout { layout: layout_probe() },
+            WorkerOperation::AssertPlainStructLayout { layout: layout_probe(), expected_context: None },
             WorkerOperation::Symbol { address: 0x1000, name: "fixture".to_owned() },
             WorkerOperation::Prototype {
                 address: 0x1000,
@@ -1405,6 +1473,37 @@ mod tests {
             },
         ];
         request
+    }
+
+    #[test]
+    fn a_different_embedded_context_is_refused_before_architecture_or_native_initialization() {
+        let mut request = layout_request(true);
+        let mut expected = rampage_arch::hex::bytes(&crate::context::embedded_manifest_sha256());
+        let replacement = if expected.starts_with('0') { "1" } else { "0" };
+        expected.replace_range(..1, replacement);
+        let WorkerOperation::AssertPlainStructLayout { expected_context, .. } = &mut request.operations[1] else {
+            unreachable!()
+        };
+        *expected_context = Some(expected);
+        request.arch = "must-not-reach-architecture-selection".to_owned();
+        let error = execute_request(request).unwrap_err();
+        assert!(error.contains("embedded specification identity does not match"), "{error}");
+    }
+
+    #[test]
+    fn checked_context_wire_bounds_are_applied_before_native_work_and_manual_wire_stays_unchanged() {
+        let manual = layout_request(true);
+        let manual_wire = serde_json::to_vec(&manual).unwrap();
+        assert!(!String::from_utf8(manual_wire.clone()).unwrap().contains("expected_context"));
+        read_request(manual_wire.as_slice()).unwrap();
+        let mut invalid = manual;
+        let WorkerOperation::AssertPlainStructLayout { expected_context, .. } = &mut invalid.operations[1] else {
+            unreachable!()
+        };
+        *expected_context = Some("a".repeat(65));
+        assert!(validate_layout_operations(&invalid, None).is_err());
+        let wire = serde_json::to_vec(&invalid).unwrap();
+        assert!(read_request(wire.as_slice()).is_err());
     }
 
     #[test]
@@ -1434,7 +1533,7 @@ mod tests {
                 assert_eq!(result.text, text);
             }
             let mut request = layout_request(validate_only);
-            if let WorkerOperation::AssertPlainStructLayout { layout } = &mut request.operations[1]
+            if let WorkerOperation::AssertPlainStructLayout { layout, .. } = &mut request.operations[1]
                 && let crate::layout::LayoutType::Scalar { scalar } = &mut layout.fields[0].ty
             {
                 scalar.kind = crate::layout::ScalarKind::UnsignedInteger;
@@ -1453,7 +1552,7 @@ mod tests {
     fn invalid_layout_inputs_are_checked_before_serialization_spawn_or_native_setup() {
         let mut request = layout_request(true);
         request.arch = "not_an_arch".to_owned();
-        if let WorkerOperation::AssertPlainStructLayout { layout } = &mut request.operations[1] {
+        if let WorkerOperation::AssertPlainStructLayout { layout, .. } = &mut request.operations[1] {
             layout.fields[0].offset = u32::MAX;
         }
         let error = execute_request(request.clone()).unwrap_err();

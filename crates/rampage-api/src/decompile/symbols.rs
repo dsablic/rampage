@@ -16,11 +16,13 @@ fn failure(address: u64, operation: &str, error: impl std::fmt::Display) -> ApiE
 }
 
 pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<WorkerOperation>, ApiError> {
+    crate::debug_layout_import::validate_replay_source(project, annotations)?;
+    let analysis = project.analysis()?;
+    crate::debug_layout_import::validate_replay_source(project, annotations)?;
     let mut operations = Vec::new();
     let binary = &project.binary;
     let stubs: BTreeMap<_, _> = stub_names(binary).into_iter().chain(thunk_names(binary)).collect();
-    let mut identities: BTreeMap<_, _> = project
-        .analysis()?
+    let mut identities: BTreeMap<_, _> = analysis
         .program
         .functions
         .iter()
@@ -95,8 +97,16 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::ParseTypes { declarations } => {
                 engine.parse_c(&declarations).map_err(|error| ApiError::Invalid(error.to_string()))?
             }
-            WorkerOperation::AssertPlainStructLayout { layout } => {
-                engine.assert_plain_struct_layout(&layout).map_err(|error| ApiError::Invalid(error.to_string()))?
+            WorkerOperation::AssertPlainStructLayout { layout, expected_context } => {
+                let current = crate::debug_layout_import::current_specification_digest()?;
+                if expected_context.as_deref() != Some(current.as_str()) {
+                    return Err(ApiError::Invalid(
+                        "native assertion context does not match the pinned manifest".to_owned(),
+                    ));
+                }
+                engine
+                    .verify_bundled_plain_struct_counterpart(&layout)
+                    .map_err(|error| ApiError::Invalid(error.to_string()))?
             }
             WorkerOperation::Global { address, declaration } => {
                 engine.add_global(address, &declaration).map_err(|error| failure(address, "apply global", error))?

@@ -18,6 +18,7 @@ pub(super) fn decompile(
     function: Option<(u64, String)>,
     cancellation: &AtomicBool,
 ) -> Result<Decompilation, ApiError> {
+    crate::debug_layout_import::validate_replay_source(project, annotations)?;
     let validate_only = function.is_none();
     let (address, name) = function.unwrap_or_default();
     let started = std::time::Instant::now();
@@ -60,6 +61,7 @@ pub(super) fn decompile(
     };
     let thumb = binary.arch == rampage_arch::Arch::Arm
         && context::mode_at(&binary.target(), &project.analysis()?.program.code_modes, address);
+    crate::debug_layout_import::validate_replay_source(project, annotations)?;
     let mut operations = symbols::plan(project, annotations)?;
     operations.extend(types::plan(project, annotations)?);
     operations.extend(go_abi::plan(project, annotations, options));
@@ -89,6 +91,7 @@ pub(super) fn decompile(
     remaining.timeout = config.timeout.saturating_sub(started.elapsed());
     let output = run_supervised(&request, &remaining, Some(cancellation))
         .map_err(|error| ApiError::Unavailable(error.to_string()))?;
+    crate::debug_layout_import::validate_replay_source(project, annotations)?;
     let tokens = output
         .tokens
         .unwrap_or_default()

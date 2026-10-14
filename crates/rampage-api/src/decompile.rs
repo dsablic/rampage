@@ -114,6 +114,13 @@ fn go_compiler(binary: &rampage_loaders::Binary) -> Option<String> {
     (register_abi && supported && !binary.big_endian).then(|| "golang".to_owned())
 }
 
+fn validate_cached_layout_source(project: &Project, state: &DecompilerState) -> Result<(), ApiError> {
+    if state.types.values().chain(state.signatures.values()).any(|text| text.starts_with('!')) {
+        crate::debug_layout_import::check_backing(project)?;
+    }
+    Ok(())
+}
+
 impl Project {
     pub(crate) fn validate_annotation_snapshot(
         &self,
@@ -121,6 +128,8 @@ impl Project {
         options: &DecompilerOptions,
         candidate: &crate::annotations::Annotations,
     ) -> Result<(), String> {
+        validate_cached_layout_source(self, state).map_err(|error| error.to_string())?;
+        crate::debug_layout_import::validate_replay_source(self, candidate).map_err(|error| error.to_string())?;
         if candidate.types().is_empty() && candidate.signatures().is_empty() && candidate.globals().is_empty() {
             return Ok(());
         }
@@ -146,11 +155,13 @@ impl Project {
     }
     /// Stores one address-bound C signature, including an optional calling convention such as __cdecl.
     pub fn set_signature(&self, address: u64, declaration: Option<&str>) -> Result<crate::EditResult, ApiError> {
+        crate::debug_layout_import::validate_replay_source(self, &self.annotations())?;
         let address = if self.binary.import_slot(address).is_some() {
             address
         } else {
             self.function_containing(address)?.unwrap_or(address)
         };
+        crate::debug_layout_import::validate_replay_source(self, &self.annotations())?;
         self.set_type_annotation(crate::annotations::Field::Signature, address, declaration)
     }
 
@@ -188,6 +199,7 @@ impl Project {
             return Err(ApiError::Invalid("signature address is neither code nor an import slot".to_owned()));
         }
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        crate::debug_layout_import::validate_replay_source(self, &self.annotations())?;
         let options = state.options.clone().unwrap_or_else(|| default_options(&self.binary));
         let mut annotations = self.annotations.write().expect("annotations lock");
         let value = value.map(str::to_owned);
@@ -212,6 +224,40 @@ impl Project {
         state.options = options;
     }
 
+    /// Validates the selected compiler and remaining annotations before publishing new options.
+    /// Unlike `set_decompiler_options`, a rejected selection leaves the current options and cache intact.
+    pub fn try_set_decompiler_options(&self, mut options: Option<DecompilerOptions>) -> Result<(), ApiError> {
+        if default_options(&self.binary).arm_be8
+            && let Some(options) = &mut options
+        {
+            options.arm_be8 = true;
+        }
+        let selected = options.clone().unwrap_or_else(|| default_options(&self.binary));
+        let mut state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        validate_cached_layout_source(self, &state)?;
+        let mut annotations = self.annotations.write().expect("annotations lock");
+        annotations.locked_staged_checked(|candidate| {
+            validate_cached_layout_source(self, &state)?;
+            crate::debug_layout_import::validate_replay_source(self, candidate)?;
+            if let Some(config) = &state.worker {
+                isolated::decompile(
+                    self,
+                    candidate,
+                    &selected,
+                    config,
+                    None,
+                    &std::sync::atomic::AtomicBool::new(false),
+                )?;
+            } else {
+                self.build_decompiler(&selected, candidate)?;
+            }
+            crate::debug_layout_import::validate_replay_source(self, candidate)?;
+            state.engine = None;
+            state.options = options;
+            Ok(())
+        })
+    }
+
     /// Decompiles the function containing `address` to C using bundled processor specifications.
     pub fn decompile(&self, address: u64) -> Result<Decompilation, ApiError> {
         self.decompile_cancellable(address, &std::sync::atomic::AtomicBool::new(false))
@@ -222,12 +268,25 @@ impl Project {
         address: u64,
         cancellation: &std::sync::atomic::AtomicBool,
     ) -> Result<Decompilation, ApiError> {
+        if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(ApiError::Unavailable("decompilation cancelled".to_owned()));
+        }
+        let mut slot = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(ApiError::Unavailable("decompilation cancelled".to_owned()));
+        }
+        validate_cached_layout_source(self, &slot)?;
+        let annotations = {
+            let current = self.annotations();
+            crate::debug_layout_import::validate_replay_source(self, &current)?;
+            current.snapshot()
+        };
+        crate::debug_layout_import::validate_replay_source(self, &annotations)?;
         let start = self.function_containing(address)?.unwrap_or(address);
+        crate::debug_layout_import::validate_replay_source(self, &annotations)?;
         if self.binary.code_from(start).is_none() {
             return Err(ApiError::Invalid("decompilation requires a file-backed code address".to_owned()));
         }
-        let mut slot = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
-        let annotations = self.annotations().snapshot();
         let name = self.function_name_in(&annotations, start);
         if let Some(config) = slot.worker.clone() {
             let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
@@ -260,8 +319,12 @@ impl Project {
         } else {
             false
         };
+        if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(ApiError::Unavailable("decompilation cancelled".to_owned()));
+        }
         let code =
             decompiler.decompile(start, &name, thumb).map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        crate::debug_layout_import::validate_replay_source(self, &annotations)?;
         let tokens = decompiler
             .tokens()
             .into_iter()
@@ -291,8 +354,10 @@ impl Project {
         options: &DecompilerOptions,
         annotations: &crate::annotations::Annotations,
     ) -> Result<Decompiler, ApiError> {
+        crate::debug_layout_import::validate_replay_source(self, annotations)?;
         let binary = &self.binary;
         let regions = image::regions(binary)?;
+        crate::debug_layout_import::validate_replay_source(self, annotations)?;
         // A segment can hold more than code (a Mach-O __TEXT starts with headers), so require an executable
         // segment rather than one that begins at code.
         if !binary.segments.iter().any(|segment| segment.perms.execute && segment.file_size > 0) {
@@ -308,7 +373,9 @@ impl Project {
         let mut operations = symbols::plan(self, annotations)?;
         operations.extend(types::plan(self, annotations)?);
         operations.extend(go_abi::plan(self, annotations, options));
+        crate::debug_layout_import::validate_replay_source(self, annotations)?;
         symbols::apply(operations, &mut decompiler)?;
+        crate::debug_layout_import::validate_replay_source(self, annotations)?;
         Ok(decompiler)
     }
 }

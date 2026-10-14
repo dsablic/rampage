@@ -6,6 +6,7 @@
 //! `GHIDRA_INSTALL_DIR` to override that tree.
 
 mod abi;
+mod context;
 pub mod layout;
 mod layout_wire;
 pub mod results;
@@ -14,6 +15,7 @@ pub mod worker;
 pub use results::{StructuredResult, parse_results};
 
 pub use abi::{DataOrganization, DecompilerOptions, Platform, language_id, language_id_with_options};
+pub use context::{VerifiedBundledContext, require_verified_bundled_native_context, verify_bundled_specifications};
 pub use specs::sleigh_home;
 
 use std::ffi::{CStr, CString, c_char};
@@ -560,8 +562,9 @@ impl Decompiler {
     ) -> Result<Decompiler, Error> {
         validate_regions(arch, regions)?;
         let language_id = language_id_with_options(arch, big_endian, options)?;
-        let home = sleigh_home().ok_or(Error::NoSleighHome)?;
-        let home = CString::new(home.as_os_str().to_string_lossy().as_bytes()).map_err(|_| Error::NoSleighHome)?;
+        let home_path = sleigh_home().ok_or(Error::NoSleighHome)?;
+        let home_path = home_path.canonicalize().unwrap_or(home_path);
+        let home = CString::new(home_path.as_os_str().to_string_lossy().as_bytes()).map_err(|_| Error::NoSleighHome)?;
         let langid = CString::new(language_id.as_str()).map_err(|_| Error::UnsupportedArch(arch))?;
 
         let bases: Vec<u64> = regions.iter().map(|region| region.base).collect();
@@ -573,6 +576,7 @@ impl Decompiler {
         let writable: Vec<u8> = regions.iter().map(|region| u8::from(region.writable)).collect();
 
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        let context_before = context::begin_native_attempt(&home_path);
         // SAFETY: the pointers and lengths describe `segments`, which outlive this call; the shim copies the
         // bytes before returning.
         let handle = unsafe {
@@ -589,7 +593,9 @@ impl Decompiler {
                 writable.as_ptr(),
             )
         };
+        context::finish_native_attempt(context_before);
         if handle.is_null() {
+            context::failed_native_attempt();
             return Err(Error::Ghidra("could not allocate decompiler".to_owned()));
         }
         // SAFETY: handle is non-null; the error string, if any, is owned by the handle and valid until close.
@@ -611,6 +617,7 @@ impl Decompiler {
         let data_organization = match checked {
             Ok(organization) => organization,
             Err(error) => {
+                context::failed_native_attempt();
                 // SAFETY: initialization succeeded, but the selected C data model is incompatible with the target.
                 unsafe {
                     rampage_decomp_close(handle);
