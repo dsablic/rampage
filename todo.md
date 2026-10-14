@@ -580,8 +580,20 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   encoded-log/history and indexed-name replay findings. No authentication or atomic filesystem-snapshot claims.
 - [x] Pre-reconciliation full debug workspace suite and compiled loader/API/worker acceptance; unchanged ordinary
   snapshots and 13-slice gates. The first time-boxed run was incomplete; the cached rerun passed in 158 seconds.
-- [ ] Reconcile Orest's upstream Go ABI/evidence commits, then validate the combined tree and focused release paths.
-- [ ] Final source/history audit, cleanup and publication. Full-workspace release is not a routine increment gate.
+- [x] Reconciled upstream capability evidence, Go compiler selection and caller-derived Go prototypes through
+  `24df5cf`, preserving author history. Independently reviewed generated-type/analyst replay ordering; reproduced
+  and fixed copied Go result declarations/signatures, with earlier-dependency and native/worker regressions.
+- [x] Combined-tree focused loader/architecture/API/CLI/worker tests and all 20 compiled DWARF acceptance tests;
+  post-fix API/ABI/worker regressions, workspace warnings-denied Clippy and formatting. Controlled Python: 678 tests.
+- [ ] One uninterrupted post-reconciliation debug workspace pass: capped after 127 executables / 1,779 passes,
+  during worker API tests. Worker/YARA remainder and workspace doctests passed separately; delay cause unestablished.
+  Final affected suites were rerun after the additional upstream commit and replay fix, not the full workspace.
+- [ ] Current-batch optimized acceptance: the selected API/worker fixture build hit its five-minute cap while linking,
+  before assertions. No optimized-suite success is claimed; release ThinLTO/codegen settings are unchanged.
+- [x] Final independent reconciliation review, 845-file private-key/artifact preflight and protected committed-tree/
+  full-history secret audit. Owned scanner scratch and generated compiler outputs removed before publication.
+  Refreshed architecture/decompiler/API/CLI/worker, manifest, compiled-DWARF, Clippy and format checks passed in
+  258 seconds after the ARM64 Go update. Full-workspace release is not a routine increment gate.
 
 ### Validation and external blockers
 
