@@ -797,6 +797,155 @@ pub fn debug_types(out: &mut impl Write, path: &Path, apply: bool, options: &Opt
     Ok(())
 }
 
+pub fn import_pdb_names(out: &mut impl Write, args: &crate::args::ImportPdbNamesArgs, options: &Options) -> Result<()> {
+    let result = serde_json::to_value(&args.pdb)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "explicit PDB path cannot be represented as UTF-8 in shared JSON: {error}; nothing imported"
+            )
+        })
+        .and_then(|pdb| {
+            let project = open(&args.file, options)?;
+            Ok(rampage_api::tools::call(
+                &rampage_api::tools::tools(),
+                &project,
+                "import_pdb_names",
+                serde_json::json!({
+                    "pdb": pdb,
+                    "apply": args.apply,
+                    "offset": args.offset,
+                    "limit": args.limit,
+                }),
+            ))
+        });
+    let (text, failed) = match result {
+        Ok(result) => result,
+        Err(error) => (rampage_api::tools::pdb_import_error(&format!("{error:#}"), Some(args.apply)), true),
+    };
+    let receipt: serde_json::Value = serde_json::from_str(&text)?;
+    if options.json {
+        out.write_all(text.as_bytes())?;
+    } else {
+        render_pdb_receipt(out, &receipt)?;
+    }
+    if failed {
+        out.flush()?;
+        anyhow::bail!("{}", receipt["error"].as_str().unwrap_or("PDB import rejected; nothing imported"));
+    }
+    Ok(())
+}
+
+fn render_pdb_receipt(out: &mut impl Write, receipt: &serde_json::Value) -> Result<()> {
+    if let Some(guid) = receipt["identity"]["guid"].as_str() {
+        writeln!(out, "PDB identity: GUID {guid}, age {}", receipt["identity"]["age"])?;
+    }
+    match receipt["status"].as_str() {
+        Some("preview") => writeln!(out, "preview only; annotations unchanged (whole apply not requested)")?,
+        Some("applied") => {
+            writeln!(out, "whole apply succeeded; all eligible names applied as one atomic annotation batch")?
+        }
+        _ => writeln!(out, "import rejected; whole apply did not succeed; no names applied")?,
+    }
+    if !receipt["preview_total"].is_null() {
+        writeln!(
+            out,
+            "{} preview functions, {} applied, {} preserved, {} warnings",
+            receipt["preview_total"], receipt["applied_total"], receipt["preserved_total"], receipt["warnings_total"]
+        )?;
+    }
+    if let Some(details) = receipt["details"].as_array() {
+        for detail in details {
+            match detail["kind"].as_str() {
+                Some("function") => {
+                    let address = detail["address"].as_str().unwrap_or("<unreadable address>");
+                    let name = detail["name"].as_str().unwrap_or("<unreadable name>");
+                    let status = detail["status"].as_str().unwrap_or("unreadable status");
+                    writeln!(out, "{address} {name} [{status}]")?;
+                    if detail["name_truncated"] == true {
+                        writeln!(out, "  name truncated ({} bytes in full name)", detail["name_bytes"])?;
+                    }
+                }
+                Some("warning") => {
+                    writeln!(out, "warning: {}", detail["text"].as_str().unwrap_or("<unreadable warning>"))?;
+                    if detail["text_truncated"] == true {
+                        writeln!(out, "  warning truncated ({} bytes in full warning)", detail["text_bytes"])?;
+                    }
+                }
+                _ => writeln!(out, "<unreadable PDB detail>")?,
+            }
+        }
+        if let Some(total) = receipt["details_total"].as_u64() {
+            writeln!(
+                out,
+                "{} of {total} details shown, starting at offset {} (details do not select writes)",
+                details.len(),
+                receipt["offset"]
+            )?;
+        }
+    }
+    if receipt["byte_capped"] == true {
+        writeln!(out, "details byte-capped to keep the receipt bounded")?;
+    }
+    if let Some(next) = receipt["next_offset"].as_u64() {
+        writeln!(out, "more details: --offset {next} --limit {}", receipt["limit"])?;
+    }
+    if let Some(error) = receipt["error"].as_str() {
+        writeln!(out, "error: {error}")?;
+        if receipt["error_truncated"] == true {
+            writeln!(out, "error detail truncated")?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pdb_receipt_tests {
+    use super::render_pdb_receipt;
+
+    #[test]
+    fn human_receipt_keeps_truncation_paging_and_unreadable_details_visible() {
+        let receipt = serde_json::json!({
+            "status": "preview",
+            "identity": { "guid": "1234", "age": 7 },
+            "preview_total": 3,
+            "applied_total": 0,
+            "preserved_total": 1,
+            "warnings_total": 2,
+            "details_total": 5,
+            "offset": 1,
+            "limit": 4,
+            "details": [
+                { "kind": "function", "address": "0x1000", "name": "partial",
+                  "status": "eligible", "name_truncated": true, "name_bytes": 3000 },
+                { "kind": "warning", "text": "unreadable symbol", "text_truncated": true, "text_bytes": 4000 },
+                { "kind": "unrecognized" },
+            ],
+            "byte_capped": true,
+            "next_offset": 4,
+            "error": "partial error",
+            "error_truncated": true,
+        });
+        let mut output = Vec::new();
+        render_pdb_receipt(&mut output, &receipt).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        for phrase in [
+            "preview only",
+            "3 preview functions, 0 applied, 1 preserved, 2 warnings",
+            "partial [eligible]",
+            "name truncated (3000 bytes",
+            "warning: unreadable symbol",
+            "warning truncated (4000 bytes",
+            "<unreadable PDB detail>",
+            "details byte-capped",
+            "--offset 4 --limit 4",
+            "error detail truncated",
+        ] {
+            assert!(text.contains(phrase), "{phrase}: {text}");
+        }
+        assert!(!text.contains("whole apply succeeded"), "{text}");
+    }
+}
+
 pub fn signatures(out: &mut impl Write, path: &Path, output: Option<&Path>, options: &Options) -> Result<()> {
     let database = open(path, options)?.build_signatures();
     let json = database.to_json();

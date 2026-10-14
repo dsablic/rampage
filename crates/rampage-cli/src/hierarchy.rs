@@ -5,9 +5,9 @@ use clap::{Arg, ArgMatches, Subcommand};
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
-    DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportsArgs, JumpTableArgs, McpArgs,
-    ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs, SignaturesArgs, StringsArgs,
-    XrefsArgs, YaraArgs,
+    DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportPdbNamesArgs, ImportsArgs,
+    JumpTableArgs, McpArgs, ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs,
+    SignaturesArgs, StringsArgs, XrefsArgs, YaraArgs,
 };
 use crate::{Command, PacksCommand};
 
@@ -48,7 +48,7 @@ pub(crate) enum RootCommand {
     /// List and edit user annotations
     #[command(subcommand)]
     Annotation(AnnotationCommand),
-    /// Import debug types
+    /// Import debug types and explicit PDB function names
     #[command(subcommand)]
     Type(TypeCommand),
     /// Inspect captured runtime state
@@ -100,6 +100,7 @@ impl RootCommand {
             Self::Annotation(AnnotationCommand::ApplyBatch(args)) => Command::AnnotateBatch(args),
             Self::Annotation(AnnotationCommand::CheckNames(args)) => Command::CheckNames(args),
             Self::Type(TypeCommand::ImportDebug(args)) => Command::DebugTypes(args),
+            Self::Type(TypeCommand::ImportPdbNames(args)) => Command::ImportPdbNames(args),
             Self::Runtime(RuntimeCommand::Pointer(PointerCommand::Observe(args))) => Command::ObservePointer(args),
             Self::Runtime(RuntimeCommand::Pointer(PointerCommand::Compare(args))) => Command::ComparePointers(args),
             Self::Runtime(RuntimeCommand::Branch(BranchCommand::Inspect(args))) => Command::ObserveIndirectBranch(args),
@@ -202,7 +203,8 @@ pub(crate) enum AnnotationCommand {
     Rename(RenameArgs),
     /// Comment an address; saved beside ordinary binaries, or in a capture-identity log for snapshots
     Comment(CommentArgs),
-    /// Apply a JSON array of {at, name?, comment?} as one undo step; nothing is applied if any entry is invalid
+    /// Apply a JSON array of {at, name?, comment?} as one atomic annotation batch; nothing is applied if any entry
+    /// is invalid
     ApplyBatch(AnnotateBatchArgs),
     /// Report whether candidate names are valid identifiers, address-shaped, or already used
     CheckNames(CheckNamesArgs),
@@ -212,6 +214,8 @@ pub(crate) enum AnnotationCommand {
 pub(crate) enum TypeCommand {
     /// Preview embedded DWARF scalar/pointer function signatures, optionally persist them
     ImportDebug(DebugTypesArgs),
+    /// Preview names from an explicit identity-matched PDB, or apply all eligible names as one atomic annotation batch
+    ImportPdbNames(ImportPdbNamesArgs),
 }
 
 #[derive(Subcommand)]

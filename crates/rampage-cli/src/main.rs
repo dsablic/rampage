@@ -16,9 +16,9 @@ use rampage_arch::Arch;
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
-    DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportsArgs, JumpTableArgs, McpArgs,
-    ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs, SignaturesArgs, StringsArgs,
-    XrefsArgs, YaraArgs,
+    DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportPdbNamesArgs, ImportsArgs,
+    JumpTableArgs, McpArgs, ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs,
+    SignaturesArgs, StringsArgs, XrefsArgs, YaraArgs,
 };
 use crate::commands::Options;
 use crate::hierarchy::RootCommand;
@@ -162,7 +162,8 @@ enum Command {
     /// Comment an address; saved beside ordinary binaries, or in a capture-identity log for snapshots
     #[command(hide = true)]
     Comment(CommentArgs),
-    /// Apply a JSON array of {at, name?, comment?} as one undo step; nothing is applied if any entry is invalid
+    /// Apply a JSON array of {at, name?, comment?} as one atomic annotation batch; nothing is applied if any entry
+    /// is invalid
     #[command(hide = true)]
     AnnotateBatch(AnnotateBatchArgs),
     /// Report whether candidate names are valid identifiers, address-shaped, or already used
@@ -174,6 +175,8 @@ enum Command {
     /// Preview embedded DWARF scalar/pointer function signatures, optionally persist them
     #[command(hide = true)]
     DebugTypes(DebugTypesArgs),
+    #[command(skip)]
+    ImportPdbNames(ImportPdbNamesArgs),
     /// Run a guided investigation workflow and print its bounded, evidence-backed report
     #[command(hide = true)]
     Report(ReportArgs),
@@ -352,6 +355,7 @@ fn main() -> ExitCode {
         Command::CheckNames(CheckNamesArgs { file, names }) => commands::check_names(&mut out, &file, &names, &options),
         Command::Annotations(FileArgs { file }) => commands::annotations(&mut out, &file, &options),
         Command::DebugTypes(DebugTypesArgs { file, apply }) => commands::debug_types(&mut out, &file, apply, &options),
+        Command::ImportPdbNames(args) => commands::import_pdb_names(&mut out, &args, &options),
         Command::Report(ReportArgs {
             workflow,
             file,

@@ -227,6 +227,99 @@ fn new_required_and_conflicting_options_keep_clap_validation() {
 }
 
 #[test]
+fn pdb_import_is_canonical_only_and_validates_required_paths_and_page_bounds_before_io() {
+    let route = ["type", "import-pdb-names"];
+    for arguments in [
+        &[MISSING][..],
+        &["--pdb", MISSING][..],
+        &[MISSING, "--pdb"][..],
+        &[MISSING, "--pdb", MISSING, "--limit", "0"][..],
+        &[MISSING, "--pdb", MISSING, "--limit", "1001"][..],
+        &[MISSING, "--pdb", MISSING, "--limit", "18446744073709551616"][..],
+        &[MISSING, "--pdb", MISSING, "--offset", "18446744073709551616"][..],
+        &[MISSING, "--pdb", MISSING, "--offset", "-1"][..],
+        &[MISSING, "--pdb", MISSING, "--arch", "invalid-architecture"][..],
+        &[MISSING, "--pdb", MISSING, "--image-length", "1"][..],
+        &[MISSING, "--pdb", MISSING, "--not-an-option"][..],
+    ] {
+        let args: Vec<_> = route.into_iter().chain(arguments.iter().copied()).collect();
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("cannot open"), "{args:?}");
+    }
+    let help = run(&["type", "import-pdb-names", "--help"]);
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).unwrap();
+    for option in ["--pdb <PDB>", "--apply", "--offset", "--limit", "--arch", "--image-offset"] {
+        assert!(help.contains(option), "{option}: {help}");
+    }
+    assert!(help.contains("one atomic annotation batch"), "{help}");
+    assert!(!help.contains("undoable"), "{help}");
+    assert!(help.contains("does not select which names are applied"), "{help}");
+    let type_help = String::from_utf8(run(&["type", "--help"]).stdout).unwrap();
+    assert!(type_help.contains("import-pdb-names"));
+    assert!(type_help.contains("import-debug"));
+    assert_eq!(run(&["import-pdb-names", "--help"]).status.code(), Some(2));
+}
+
+#[test]
+fn pdb_import_accepts_split_globals_without_applying_image_selection_to_the_pdb() {
+    let first = "/nonexistent/rampage-pdb-first-pack";
+    let second = "/nonexistent/rampage-pdb-second-pack";
+    let expected = run(&[
+        "--json",
+        "--arch",
+        "x86_64",
+        "--image-offset",
+        "0",
+        "--pack",
+        first,
+        "--pack",
+        second,
+        "type",
+        "import-pdb-names",
+        MISSING,
+        "--pdb",
+        MISSING,
+        "--apply",
+        "--offset",
+        "1",
+        "--limit",
+        "1",
+    ]);
+    let actual = run(&[
+        "--pack",
+        first,
+        "type",
+        "--json",
+        "--arch",
+        "amd64",
+        "import-pdb-names",
+        MISSING,
+        "--pdb",
+        MISSING,
+        "--pack",
+        second,
+        "--image-offset",
+        "0",
+        "--apply",
+        "--offset",
+        "1",
+        "--limit",
+        "1",
+    ]);
+    assert_eq!(expected.status.code(), Some(1));
+    assert_eq!(actual.status.code(), expected.status.code());
+    assert_eq!(actual.stdout, expected.stdout);
+    assert_eq!(actual.stderr, expected.stderr);
+    let receipt: Value = serde_json::from_slice(&actual.stdout).unwrap();
+    assert_eq!(receipt["whole_apply_succeeded"], false);
+    assert_eq!(receipt["apply_requested"], true);
+    assert_eq!(receipt["applied_total"], 0);
+}
+
+#[test]
 fn managed_disassembly_requires_il_before_io_and_keeps_legacy_il_filters_and_paging() {
     let output = run(&["managed", "disassemble", MISSING, "--contains", "x"]);
     assert_eq!(output.status.code(), Some(1));

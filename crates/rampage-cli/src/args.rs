@@ -260,6 +260,27 @@ pub(crate) struct DebugTypesArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct ImportPdbNamesArgs {
+    pub(crate) file: PathBuf,
+    /// Explicit PDB file; no recorded path, sidecar discovery, symbol server or download is used
+    #[arg(long, required = true)]
+    pub(crate) pdb: PathBuf,
+    /// Persist all eligible names as one atomic annotation batch; omitted only previews
+    #[arg(long)]
+    pub(crate) apply: bool,
+    /// Details to skip (functions, then warnings); does not select which names are applied
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// Details per page (1 to 1000); the byte budget may shorten the page further
+    #[arg(
+        long,
+        default_value_t = 100,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=1000)
+    )]
+    pub(crate) limit: usize,
+}
+
+#[derive(Args)]
 pub(crate) struct McpArgs {
     /// List every tool group from the start, for clients that do not refresh their tool list
     #[arg(long)]
