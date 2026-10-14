@@ -580,9 +580,14 @@ struct RuntimeRangeArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RuntimeComparisonArgs {
     /// Explicit original Mach-O path; paths recorded in capture metadata are never opened.
     original: std::path::PathBuf,
+    /// Original image's file offset (integer, decimal or hex string); applies only to the explicit original path.
+    original_image_offset: Option<crate::FileOffset>,
+    /// Original image's byte length (integer, decimal or hex string); requires original_image_offset.
+    original_image_length: Option<crate::FileOffset>,
     /// UUID of the recorded module; original UUID, architecture and header base must agree.
     module: String,
     /// 1–256 non-overlapping explicit runtime ranges.
@@ -620,6 +625,13 @@ struct RuntimeComparisonPage {
 }
 
 fn compare_runtime_page(project: &Project, args: RuntimeComparisonArgs) -> Result<RuntimeComparisonPage, ApiError> {
+    let original_image = match (args.original_image_offset, args.original_image_length) {
+        (Some(offset), length) => Some(rampage_loaders::ImageAt::new(offset.0, length.map(|length| length.0))),
+        (None, Some(_)) => {
+            return Err(ApiError::Invalid("original_image_length needs original_image_offset".to_owned()));
+        }
+        (None, None) => None,
+    };
     if args.ranges.is_empty() || args.ranges.len() > 256 {
         return Err(ApiError::Invalid("select 1..256 runtime comparison ranges".to_owned()));
     }
@@ -632,7 +644,7 @@ fn compare_runtime_page(project: &Project, args: RuntimeComparisonArgs) -> Resul
             Ok(crate::RuntimeRange { address, size: range.size })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
-    let original = rampage_loaders::Binary::open_with(&args.original, Some(project.binary.arch))
+    let original = rampage_loaders::Binary::open_image(&args.original, original_image, Some(project.binary.arch))
         .map_err(|source| ApiError::Load { path: args.original, source })?;
     let mut comparison = project.compare_runtime_bytes(&args.module, &original, &ranges)?;
     let spans_total = comparison.spans.len();
@@ -976,8 +988,10 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Runtime,
             "compare_runtime_bytes",
-            "Compare explicit captured ranges with a UUID-matched original Mach-O. Paginated spans, full-range totals; \
-             no annotation transfer or claim of recovered flow. Opens only the explicit original path.",
+            "Compare explicit captured ranges with a UUID-matched original Mach-O. original_image_offset and optional \
+             original_image_length select an image inside the explicit original path, using the capture's \
+             architecture. Paginated spans, full-range totals; no annotation transfer or claim of recovered flow. \
+             Opens no sidecars or recorded module paths.",
             compare_runtime_page,
         )
         .without_annotations(),
