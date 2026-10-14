@@ -122,6 +122,14 @@ reports state limitations and end with concrete next tool calls. These are MCP t
 supported architecture slices into one bounded report, retaining task failures and recovery diagnostics. It
 does not execute suggested next steps or annotation edits. See [CLI batch analysis](cli-analysis.md).
 
+## Archive metadata
+
+Standalone ZIP32 directory inventory is available through API, `binary archive-inventory` and the
+`archive_inventory` file tool. Member references retain directory ordinals, including duplicate names; flags,
+sizes, CRCs and local-header offsets remain unverified payload declarations. Metadata reads are bounded and
+revalidated but not atomic, and tail search may overlap member data. No member offset is followed, and no extraction,
+decompression, automatic member opening or execution occurs. See [archive inventory](archive-inventory.md).
+
 ## Managed assemblies
 
 ECMA-335 metadata includes assembly identity, references, entry point and one paged list:
@@ -129,7 +137,8 @@ ECMA-335 metadata includes assembly identity, references, entry point and one pa
 - `types`: fields, method/property signatures, event types and metadata accessor tokens, plus IL body sizes.
 - `pinvokes`: the DLL export bound by each P/Invoke method.
 - `attributes`: targets and fixed/named primitive, string, type, single-dimensional array and verified
-  local-enum arguments; unsupported values report errors. An attribute target can be filtered by parent token.
+  local-enum arguments, including boxed values and supported vectors inside `object[]`. Unsupported values report
+  errors. An attribute target can be filtered by parent token.
 - `resources`: ManifestResource tokens/names/flags, raw offsets and metadata-only implementation links.
 
 One method's CIL can be disassembled ILDasm-style with tokens resolved to names/signatures, `ldstr` literals,
@@ -141,6 +150,12 @@ reported as managed code, never treated as native instructions. See
 Events retain tokens, names, flags, bounded type rendering and same-owner add/remove/fire/other method bindings.
 EventPtr ordering is preserved; malformed types remain unreadable and invalid ownership is diagnosed. Accessor
 bindings are metadata, not proof of accessor behavior. Events do not imply resource or general attribute decoding.
+
+Boxed custom-attribute values retain serialized types in their existing rendered strings, such as `box(int32, 42)`
+and `box(int32[], null)`; named arguments keep their declared `object`/`object[]` type. Boxed strings, types and
+verified local enums share the existing depth/node/text/image-work budgets, including failed type/name lookups.
+Direct jagged constructor types, unknown/external or qualified/escaped enum resolution, bare `0xFF` object tags
+and repeated object tags are unsupported. A failure in named arguments retains only fully charged valid fixed values.
 
 Resource inventory distinguishes embedded-directory locations, external File/AssemblyRef links, unsupported
 ExportedType links and malformed/dangling references. An embedded `readable_location` reports only a checked,

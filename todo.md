@@ -252,6 +252,10 @@ in UX/workflow ideas, not the multi-engine dispatch:
   and optional lengths, including files that do not open as a whole image. Sessions reload changed binaries;
   diff-builds supports `--other-image-offset`.
 - [ ] APK (JADX) and Electron unpacking are lower-priority follow-ons; carving is not archive extraction.
+- [x] Bounded standalone ZIP32 central-directory metadata inventory through API, canonical CLI and MCP, with
+  archive/member references, ordinals for duplicate names, explicit name/count/work limits and byte-bounded pages.
+  Tail search may overlap member data; no local/member offset is followed, payload validated, decompressed,
+  extracted or automatically opened. ZIP64, multi-disk, SFX inference and directory gaps remain unsupported.
 - [x] .NET: ECMA-335 blob signatures (method/field/MemberRef, TypeSpec, GenericParam names) rendered ILAsm-style
   with depth/node/text caps and an `<unreadable>` fallback; ImplMap P/Invoke (DLL + import per method);
   CustomAttribute rows with type, target and primitive/string/Type fixed arguments; nested types as `Outer/Inner`.
@@ -270,7 +274,10 @@ in UX/workflow ideas, not the multi-engine dispatch:
   File/AssemblyRef and invalid/unsupported link evidence. Directory bounds/backing are numeric checks, not payload
   validation. Row/name budgets, UTF-8 truncation and declared/readable/retained/returned counts are explicit;
   `declared_known` preserves unknown versus observed zero and recovered partial-header counts.
-- [ ] .NET boxed/jagged values, external or assembly-qualified/escaped enums, enum constant names, resource payloads,
+- [x] Bounded fixed/named boxed custom-attribute values and `object[]` elements, including supported boxed vectors,
+  with explicit serialized-type rendering and failed-work budget regressions. Direct jagged constructor/attribute
+  types remain rejected; ordinary signature rendering and boxed vectors are distinct serialization cases.
+- [ ] .NET external or assembly-qualified/escaped enums, enum constant names, resource payloads,
   and comparison of `dotnet_il` with ildasm/ILSpy once available. Metadata bindings do not establish accessor behavior.
 - [x] Agent batch annotation: `annotate_batch` (all-or-nothing, at most 1000 entries, one undo step, per-entry
   outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits. Name
@@ -471,7 +478,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Hosted CI at `3e82a71`: macOS workspace/UI/accuracy and selected opt-ins, Linux core, formatting and
   committed-tree/full-history secrets. This covers the published wave, not the next uncommitted surface additions.
 
-### Current comparison/import/resource surface wave
+### Published comparison/import/resource surface wave (`dbe5e4f`)
 
 - [x] Fresh reviews and retained regressions for original-selector validation/fixture layout, CLI native-path
   serialization, process-local undo semantics, resource backing spans and partial-header/count provenance.
@@ -482,6 +489,18 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Full ordinary release workspace suite, warnings-denied Clippy and Rust formatting. Ignored scale/performance
   gates and Linux-only native non-UTF-8 PE filesystem acceptance remain outside the local macOS test results.
 - [x] Protected committed-tree/full-history secret audit before publication; no commercial inputs or private keys.
+- [x] Hosted CI at `dbe5e4f`: macOS workspace/UI/accuracy and selected opt-ins, Linux core, formatting and
+  committed-tree/full-history secrets. This does not establish acceptance of later boxed-value/archive additions.
+
+### Current boxed-attribute and ZIP-metadata wave
+
+- [x] Fresh source reviews of boxed grammar/budgets, ZIP parser/resource/descriptor boundaries and API/CLI/MCP glue.
+  Adversarial argument-error expansion is capped before publication; successful pages preserve whole records/counts.
+- [x] Full ordinary debug workspace suite on final source, including boxed and archive regressions, unchanged UI
+  snapshots and the unchanged 13-slice evaluation gate. Warnings-denied Clippy and protected working-tree preflight.
+- [x] Full ordinary release suite, final formatting/Clippy, and complete controlled Python suite: 677 tests and
+  108 subtests. Ignored scale/performance and broader archive/platform acceptance remain separate gates.
+- [x] Protected committed-tree/full-history secret audit before publication; owned audit scratch removed afterward.
 
 ### Validation and external blockers
 

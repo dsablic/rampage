@@ -68,9 +68,10 @@ impl Group {
             }
             Group::Diagnostics => "Decode coverage and unreliable-code evidence, and explicit ARM64 jump-table checks.",
             Group::DotNet => "Managed (.NET) metadata (types, methods, properties, P/Invokes, attributes) and CIL.",
-            Group::Carve => {
-                "Scan files for embedded executables/containers and inventory standalone ZIP32 metadata without extraction."
-            }
+            Group::Carve => concat!(
+                "Scan files for embedded executables/containers and inventory ",
+                "standalone ZIP32 metadata without extraction."
+            ),
         }
     }
 }
@@ -250,10 +251,11 @@ pub fn file_tools() -> Vec<FileTool> {
                           and bounded. \
                           Budget exhaustion rejects the whole inventory. Names preserve raw hex and ordinal identity, \
                           not filesystem paths or extraction safety. Metadata digest plus size/directory offsets is \
-                          evidence only, not whole-payload hashing, authentication or an atomic snapshot. Full raw-name \
-                          contains filtering precedes truncation. Exact metadata counts, byte-bounded JSON pages and \
-                          next_offset allow progress even for maximum-size names. No annotations, packs or discovery. \
-                          Native-image arch/image_offset/image_length arguments are rejected.",
+                          evidence only, not whole-payload hashing, authentication or an atomic snapshot. \
+                          Full raw-name contains filtering precedes truncation. Exact metadata counts, \
+                          byte-bounded JSON pages and next_offset allow progress even for maximum-size names. \
+                          No annotations, packs or discovery. Native-image arch/image_offset/image_length arguments \
+                          are rejected.",
             input_schema: schema::<ArchiveInventoryArgs>(),
             handler: |_, input| {
                 (|| -> Result<Value, String> {

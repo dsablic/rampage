@@ -19,6 +19,7 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | `binary audit FILE [--include-discovery]` | `audit` | Bounded decode coverage and unreliable-code evidence |
 | `binary carve FILE [--max-candidates N]` | `carve` | Validated embedded headers; no extraction/decompression |
 | `binary inventory DIR` | `inventory` | Binaries in bundles/extracted packages; no execution |
+| `binary archive-inventory ARCHIVE` | — | Standalone ZIP32 directory metadata; no member opening or extraction |
 | `binary list-imports FILE [--contains TEXT]` | `imports` | Imports, libraries and import slots |
 | `binary list-exports FILE [--contains TEXT]` | `exports` | Exported symbols |
 | `binary scan-yara FILE [--rules FILE_OR_DIR]` | `yara` | Embedded yara-x rule scan |
@@ -28,6 +29,8 @@ Compatibility entries showing only a command name take the same operands and fla
 `--rules` is optional when a [data pack](data-packs.md) supplies that kind of rule. YARA `include` statements
 are refused in every rule set, including user files, packs and agent-supplied rules; each file must stand alone.
 `carve` accepts 1–4096 candidates. Header-estimated extents do not establish that a whole container is valid.
+`archive-inventory` has independent row/byte budgets and metadata/member references, not native-image offsets.
+See [ZIP32 inventory](archive-inventory.md) for format, path, paging and output limits.
 
 See [CLI batch analysis](cli-analysis.md) for `analyze` task selection, limits, worker requirements and exit
 behavior. Its flat examples remain compatible:

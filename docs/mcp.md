@@ -30,7 +30,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
-- `carve`: `carve`.
+- `carve`: `carve`, `archive_inventory`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
@@ -40,7 +40,7 @@ nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a
 
 Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
 without group gating, plus the interactive `show_address`; it does not offer file tools
-`carve`/`list_packs`/`query_debugger`.
+`carve`/`archive_inventory`/`list_packs`/`query_debugger`.
 `show_address` is not an MCP tool because the server has no interactive listing to navigate.
 
 ## Inputs, paging and decompiler tokens
@@ -72,6 +72,9 @@ Embedded mapping evidence does not validate payload extents; external targets an
 
 `carve` accepts any file path rather than requiring a loadable binary. Pages use `offset`/`limit` and `more`,
 not a total; scanning stops at the candidate after the page. It extracts/decompresses nothing.
+`archive_inventory` similarly needs no image or sidecar, but inventories bounded standalone ZIP32 central-directory
+metadata. Its member ordinals and metadata hashes are not payload validation or extraction-safe paths; whole-record
+JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive inventory](archive-inventory.md).
 `observe_pointer` exposes a captured slot without modifying discovery or asserting a call edge. See
 [runtime snapshots](runtime-snapshots.md) for runtime evidence limits and [data packs](data-packs.md) for pack warnings.
 
