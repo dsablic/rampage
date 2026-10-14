@@ -61,6 +61,128 @@ fn worker_applies_ordered_symbols_types_and_address_bound_prototypes() {
 }
 
 #[test]
+fn subprocess_checks_complete_layouts_before_decompilation_or_validation_success() {
+    use rampage_decompiler::layout::{
+        LayoutField, LayoutOrganization, LayoutScalar, LayoutType, PlainStructLayout, ScalarKind,
+    };
+
+    let layout = PlainStructLayout {
+        name: "worker_record".to_owned(),
+        size: 8,
+        alignment: 4,
+        organization: LayoutOrganization {
+            pointer_size: 8,
+            int_size: 4,
+            long_size: 8,
+            scalar_alignments: [1, 2, 4, 8],
+        },
+        fields: vec![
+            LayoutField {
+                name: "count".to_owned(),
+                offset: 0,
+                size: 4,
+                ty: LayoutType::Scalar {
+                    scalar: LayoutScalar {
+                        name: "int4".to_owned(),
+                        kind: ScalarKind::SignedInteger,
+                        size: 4,
+                        alignment: 4,
+                    },
+                },
+            },
+            LayoutField {
+                name: "tail".to_owned(),
+                offset: 4,
+                size: 1,
+                ty: LayoutType::Scalar {
+                    scalar: LayoutScalar {
+                        name: "uint1".to_owned(),
+                        kind: ScalarKind::UnsignedInteger,
+                        size: 1,
+                        alignment: 1,
+                    },
+                },
+            },
+        ],
+    };
+    let mut request = request();
+    request.mappings[0].hex_bytes = "8b070fb6570401d0c3".to_owned();
+    request.mappings[0].size = 9;
+    request.operations = vec![
+        WorkerOperation::ParseTypes { declarations: "struct worker_record { int4 count; uint1 tail; };".to_owned() },
+        WorkerOperation::AssertPlainStructLayout { layout },
+        WorkerOperation::Symbol { address: 0x1000, name: "fixture".to_owned() },
+        WorkerOperation::Prototype {
+            address: 0x1000,
+            indirect: false,
+            declaration: "int4 fixture(worker_record *item);".to_owned(),
+        },
+    ];
+    let checked = run_supervised(&request, &config(), None).unwrap();
+    assert!(checked.text.contains("->count"), "{}", checked.text);
+    assert!(checked.text.contains("->tail"), "{}", checked.text);
+    let mut control = request.clone();
+    control.operations.remove(1);
+    let unchecked = run_supervised(&control, &config(), None).unwrap();
+    assert_eq!(checked.text, unchecked.text);
+    assert_eq!(checked.structure, unchecked.structure);
+    assert_eq!(serde_json::to_value(checked.tokens).unwrap(), serde_json::to_value(unchecked.tokens).unwrap());
+
+    for validate_only in [false, true] {
+        request.validate_only = validate_only;
+        run_supervised(&request, &config(), None).unwrap();
+        let mut wrong = request.clone();
+        let WorkerOperation::AssertPlainStructLayout { layout } = &mut wrong.operations[1] else { unreachable!() };
+        layout.fields[1].offset = 5;
+        layout.validate().unwrap();
+        assert!(matches!(
+            run_supervised(&wrong, &config(), None),
+            Err(WorkerError::Decompile(message)) if message.contains("operation 1") && message.contains("layout")
+        ));
+    }
+    let mut reversed = request;
+    reversed.operations.swap(0, 1);
+    assert!(matches!(
+        run_supervised(&reversed, &config(), None),
+        Err(WorkerError::Decompile(message)) if message.contains("operation 0")
+    ));
+}
+
+#[test]
+fn malformed_layout_wire_errors_do_not_echo_oversized_values_or_keys() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let oversized = "private_input_marker_".repeat(2048);
+    let payloads = [
+        format!(r#"{{"fields":[{{"ty":{{"kind":"{oversized}"}}}}]}}"#),
+        format!(r#"{{"{oversized}":[]}}"#),
+        format!(r#"{{"name":"{}"}}"#, r"\u0078".repeat(4096)),
+    ];
+    for payload in payloads {
+        let input = format!(r#"{{"version":{PROTOCOL_VERSION},"arch":"x86_64","mappings":[],"operations":["#)
+            + &format!(r#"{{"layout":{payload},"op":"assert_plain_struct_layout"}}"#)
+            + r#"],"decompile":{"address":4096}}"#;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_rampage-worker"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let written = child.stdin.take().unwrap().write_all(input.as_bytes());
+        let output = child.wait_with_output().unwrap();
+        written.unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(output.stdout.len() <= 2048, "malformed layout error expanded to {} bytes", output.stdout.len());
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["version"], PROTOCOL_VERSION);
+        assert_eq!(response["status"], "error");
+        assert!(response["message"].as_str().unwrap().len() <= 1024);
+        assert!(!response["message"].as_str().unwrap().contains("private_input_marker"));
+    }
+}
+
+#[test]
 fn worker_resolves_import_runtime_prototypes_in_selected_target_abi() {
     let mut request = request();
     request.mappings[0].hex_bytes = "bf00200000ff15f51f000031c0c3".to_owned();
@@ -125,11 +247,13 @@ fn arm_thumb_mode_operations_are_replayed_before_decompilation() {
 fn unsupported_request_version_and_bad_memory_bytes_fail_as_structured_errors() {
     let mut wrong_version = request();
     wrong_version.version += 1;
+    assert!(matches!(
+        run_supervised(&wrong_version, &config(), None),
+        Err(WorkerError::Protocol(message)) if message.contains("unsupported worker protocol version")
+    ));
     let mut bad_hex = request();
     bad_hex.mappings[0].hex_bytes = "invalid".to_owned();
-    for request in [wrong_version, bad_hex] {
-        assert!(matches!(run_supervised(&request, &config(), None), Err(WorkerError::Decompile(_))));
-    }
+    assert!(matches!(run_supervised(&bad_hex, &config(), None), Err(WorkerError::Decompile(_))));
 }
 
 #[test]

@@ -135,11 +135,13 @@ jobs:
           cc --version
           clang --version
           clang++ --version
+          objcopy --version
       - name: Warnings-denied core Clippy and tests
         timeout-minutes: 20
         run: bash tools/ci/linux-core.sh
 
 # Step/job timeouts bound CI execution, not individual analysis time or memory.
 # macOS runs the ordinary non-ignored debug workspace suite once, plus the two selected opt-in tests above.
+# Linux additionally compiles x86-64 ELF layout constants/field-use oracles and runs the selected ignored layout gates.
 # Ignored million-point context and Chrome performance tests are not CI coverage; Linux checks only the named core.
 # Metal-backed UI snapshots must pass on macOS; no snapshot updates, skips, or headless Linux UI claims.

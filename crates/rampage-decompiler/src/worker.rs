@@ -20,7 +20,7 @@ use crate::{Decompiler, DecompilerOptions, MemoryRegion, Platform};
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,6 +98,11 @@ pub enum WorkerOperation {
     },
     ParseTypes {
         declarations: String,
+    },
+    /// Read-only, ephemeral check of an already parsed flat struct, before dependent prototypes.
+    /// Reassert in every worker/session/compiler rebuild; this operation supplies no persistence.
+    AssertPlainStructLayout {
+        layout: crate::layout::PlainStructLayout,
     },
     Global {
         address: u64,
@@ -273,6 +278,8 @@ pub fn run_supervised(
 ) -> Result<WorkerOutput, WorkerError> {
     let started = std::time::Instant::now();
     let budget = SupervisorBudget { started, timeout: config.timeout, cancellation };
+    budget.check()?;
+    validate_layout_operations(request, Some(budget))?;
     let bytes = serialize_supervised(request, config.max_request_bytes.min(MAX_REQUEST_BYTES), budget)?;
     let executable = match &config.executable {
         Some(path) => path.clone(),
@@ -456,7 +463,9 @@ fn read_request(input: impl Read) -> Result<WorkerRequest, String> {
     if bytes.len() > MAX_REQUEST_BYTES {
         return Err("worker request exceeds protocol limit".to_owned());
     }
-    serde_json::from_slice(&bytes).map_err(|error| format!("decode request: {error}"))
+    crate::layout_wire::decode_worker(&bytes, |bytes| {
+        serde_json::from_slice(bytes).map_err(|_| "decode request: invalid worker schema".to_owned())
+    })
 }
 
 fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
@@ -482,10 +491,29 @@ fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
+fn validate_layout_operations(
+    request: &WorkerRequest,
+    budget: Option<SupervisorBudget<'_>>,
+) -> Result<(), WorkerError> {
     if request.version != PROTOCOL_VERSION {
-        return Err(format!("unsupported worker protocol version {}", request.version));
+        return Err(WorkerError::Protocol(format!("unsupported worker protocol version {}", request.version)));
     }
+    for (index, operation) in request.operations.iter().enumerate() {
+        if let Some(budget) = budget {
+            budget.check()?;
+        }
+        if let WorkerOperation::AssertPlainStructLayout { layout } = operation {
+            layout.validate().map_err(|error| WorkerError::Protocol(format!("operation {index}: {error}")))?;
+        }
+    }
+    Ok(())
+}
+
+fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
+    validate_layout_operations(&request, None).map_err(|error| match error {
+        WorkerError::Protocol(message) => message,
+        other => other.to_string(),
+    })?;
     let arch: Arch = request.arch.parse()?;
     let platform = match request.options.platform.as_str() {
         "default" => Platform::Default,
@@ -530,6 +558,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
                 engine.apply_prototype(address, indirect, &declaration)
             }
             WorkerOperation::ParseTypes { declarations } => engine.parse_c(&declarations),
+            WorkerOperation::AssertPlainStructLayout { layout } => engine.assert_plain_struct_layout(&layout),
             WorkerOperation::Global { address, declaration } => engine.add_global(address, &declaration),
             WorkerOperation::Mode { modes } => {
                 let modes: Vec<_> = modes.into_iter().map(|mode| (mode.address, mode.thumb)).collect();
@@ -1313,5 +1342,172 @@ mod tests {
             assert!(decode_hex(text).is_err(), "accepted {text:?}");
         }
         assert_eq!(decode_hex("00aAff").unwrap(), [0, 0xaa, 0xff]);
+    }
+
+    fn layout_probe() -> crate::layout::PlainStructLayout {
+        use crate::layout::{LayoutField, LayoutOrganization, LayoutScalar, LayoutType, ScalarKind};
+
+        let int = LayoutScalar { name: "int4".to_owned(), kind: ScalarKind::SignedInteger, size: 4, alignment: 4 };
+        crate::layout::PlainStructLayout {
+            name: "layout_probe".to_owned(),
+            size: 24,
+            alignment: 8,
+            organization: LayoutOrganization {
+                pointer_size: 8,
+                int_size: 4,
+                long_size: 8,
+                scalar_alignments: [1, 2, 4, 8],
+            },
+            fields: vec![
+                LayoutField {
+                    name: "count".to_owned(),
+                    offset: 0,
+                    size: 4,
+                    ty: LayoutType::Scalar { scalar: int.clone() },
+                },
+                LayoutField {
+                    name: "value".to_owned(),
+                    offset: 8,
+                    size: 8,
+                    ty: LayoutType::Pointer { name: String::new(), size: 8, alignment: 8, pointee: int },
+                },
+                LayoutField {
+                    name: "tail".to_owned(),
+                    offset: 16,
+                    size: 1,
+                    ty: LayoutType::Scalar {
+                        scalar: LayoutScalar {
+                            name: "uint1".to_owned(),
+                            kind: ScalarKind::UnsignedInteger,
+                            size: 1,
+                            alignment: 1,
+                        },
+                    },
+                },
+            ],
+        }
+    }
+
+    fn layout_request(validate_only: bool) -> WorkerRequest {
+        let mut request = request();
+        request.validate_only = validate_only;
+        request.mappings[0].hex_bytes = "8b07c3".to_owned();
+        request.operations = vec![
+            WorkerOperation::ParseTypes {
+                declarations: "struct layout_probe { int4 count; int4 *value; uint1 tail; };".to_owned(),
+            },
+            WorkerOperation::AssertPlainStructLayout { layout: layout_probe() },
+            WorkerOperation::Symbol { address: 0x1000, name: "fixture".to_owned() },
+            WorkerOperation::Prototype {
+                address: 0x1000,
+                indirect: false,
+                declaration: "int4 fixture(layout_probe *item);".to_owned(),
+            },
+        ];
+        request
+    }
+
+    #[test]
+    fn ordered_worker_layout_assertion_matches_native_including_validation_only() {
+        let bytes = [0x8b, 0x07, 0xc3];
+        let mut native = Decompiler::open_regions(
+            Arch::X86_64,
+            false,
+            &[MemoryRegion { base: 0x1000, bytes: &bytes, size: 3, readable: true, writable: false, executable: true }],
+        )
+        .unwrap();
+        native.parse_c("struct layout_probe { int4 count; int4 *value; uint1 tail; };").unwrap();
+        native.assert_plain_struct_layout(&layout_probe()).unwrap();
+        native.set_symbol(0x1000, "fixture").unwrap();
+        native.apply_prototype(0x1000, false, "int4 fixture(layout_probe *item);").unwrap();
+        let text = native.decompile(0x1000, "fixture", false).unwrap();
+        assert!(text.contains("->count"), "{text}");
+        for validate_only in [false, true] {
+            let request = layout_request(validate_only);
+            let encoded = serialize_bounded(&request, MAX_REQUEST_BYTES).unwrap();
+            let decoded = read_request(encoded.as_slice()).unwrap();
+            let result = execute_request(decoded).unwrap();
+            if validate_only {
+                assert!(result.text.is_empty());
+                assert!(result.structure.is_none());
+            } else {
+                assert_eq!(result.text, text);
+            }
+            let mut request = layout_request(validate_only);
+            if let WorkerOperation::AssertPlainStructLayout { layout } = &mut request.operations[1]
+                && let crate::layout::LayoutType::Scalar { scalar } = &mut layout.fields[0].ty
+            {
+                scalar.kind = crate::layout::ScalarKind::UnsignedInteger;
+            }
+            let error = execute_request(request).unwrap_err();
+            assert!(error.starts_with("operation 1:"), "{error}");
+            assert!(error.contains("does not match"), "{error}");
+            let mut request = layout_request(validate_only);
+            request.operations.swap(0, 1);
+            let error = execute_request(request).unwrap_err();
+            assert!(error.starts_with("operation 0:"), "{error}");
+        }
+    }
+
+    #[test]
+    fn invalid_layout_inputs_are_checked_before_serialization_spawn_or_native_setup() {
+        let mut request = layout_request(true);
+        request.arch = "not_an_arch".to_owned();
+        if let WorkerOperation::AssertPlainStructLayout { layout } = &mut request.operations[1] {
+            layout.fields[0].offset = u32::MAX;
+        }
+        let error = execute_request(request.clone()).unwrap_err();
+        assert!(error.starts_with("operation 1:"), "{error}");
+        let fixture = Fixture::new("exit 0");
+        let config = WorkerConfig { max_request_bytes: 1, ..fixture.config() };
+        let result = run_supervised(&request, &config, None);
+        assert!(matches!(result, Err(WorkerError::Protocol(message)) if message.starts_with("operation 1:")));
+        assert!(!fixture.pid.exists());
+        for version in [0, 3, PROTOCOL_VERSION + 1] {
+            let mut request = layout_request(true);
+            request.version = version;
+            let error = execute_request(request).unwrap_err();
+            assert!(error.contains("unsupported worker protocol version"), "{error}");
+        }
+    }
+
+    #[test]
+    fn raw_stdio_reader_preflights_hostile_assertions_before_serde_materialization() {
+        let zeros = format!("[{}0]", "0,".repeat(1_000_000));
+        let escaped = "\\u0061".repeat(200_000);
+        let giant = "hostile_marker".repeat(100_000);
+        for operation in [
+            format!(r#"{{"op":"assert_plain_struct_layout","layout":{{"fields":{zeros}}}}}"#),
+            format!(r#"{{"layout":{{"f\u0069elds":{zeros}}},"op":"assert_plain_struct_layout"}}"#),
+            format!(r#"{{"layout":{{"name":"{escaped}"}},"op":"assert_plain_struct_layout"}}"#),
+            format!(r#"{{"layout":{{}},"{giant}":null,"op":"assert_plain_struct_layout"}}"#),
+        ] {
+            let wire = format!(
+                r#"{{"version":{PROTOCOL_VERSION},"arch":"x86_64","mappings":[],"decompile":{{"address":4096}},
+                "operations":[{operation}]}}"#
+            );
+            let error = read_request(wire.as_bytes()).unwrap_err();
+            assert!(error.starts_with("operation 0:"), "{error}");
+            assert!(error.len() <= 160);
+            assert!(!error.contains("hostile_marker"));
+        }
+    }
+
+    #[test]
+    fn malformed_schema_diagnostics_do_not_format_serde_offending_values() {
+        for operation in [
+            r#"{"op":"unexpected_variant"}"#,
+            r#"{"op":"symbol","address":"unexpected_type","name":"fixture"}"#,
+            r#"{"op":"symbol","address":4096,"name":"fixture","unexpected_property":1}"#,
+        ] {
+            let wire = format!(
+                r#"{{"version":{PROTOCOL_VERSION},"arch":"x86_64","mappings":[],"decompile":{{"address":4096}},
+                "operations":[{operation}]}}"#
+            );
+            assert_eq!(read_request(wire.as_bytes()).unwrap_err(), "decode request: invalid worker schema");
+        }
+        let wire = serde_json::to_string(&layout_request(true)).unwrap();
+        let wire = wire.replacen("\"kind\":\"scalar\"", "\"kind\":\"unexpected_kind\"", 1);
+        assert_eq!(read_request(wire.as_bytes()).unwrap_err(), "decode request: invalid worker schema");
     }
 }

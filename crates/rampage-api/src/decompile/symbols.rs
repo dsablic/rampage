@@ -95,6 +95,9 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::ParseTypes { declarations } => {
                 engine.parse_c(&declarations).map_err(|error| ApiError::Invalid(error.to_string()))?
             }
+            WorkerOperation::AssertPlainStructLayout { layout } => {
+                engine.assert_plain_struct_layout(&layout).map_err(|error| ApiError::Invalid(error.to_string()))?
+            }
             WorkerOperation::Global { address, declaration } => {
                 engine.add_global(address, &declaration).map_err(|error| failure(address, "apply global", error))?
             }

@@ -199,6 +199,180 @@ struct Handle {
     bool unsafeCleanup = false;
 };
 
+// Fixed flat records shared with layout.rs, not a serialization of Ghidra's type graph.
+constexpr size_t layoutMaxFields = 128;
+constexpr size_t layoutMaxName = 128;
+constexpr size_t layoutMaxText = 32768;
+constexpr uint32_t layoutMaxSize = 1048576;
+
+struct LayoutScalar {
+    uint8_t name[layoutMaxName + 1];
+    uint32_t kind;
+    uint32_t size;
+    uint32_t alignment;
+};
+
+struct LayoutField {
+    uint8_t name[layoutMaxName + 1];
+    uint8_t typeName[layoutMaxName + 1];
+    uint32_t offset;
+    uint32_t size;
+    uint32_t alignment;
+    uint32_t pointer;
+    LayoutScalar scalar;
+};
+
+struct PlainLayout {
+    uint8_t name[layoutMaxName + 1];
+    uint32_t size;
+    uint32_t alignment;
+    uint32_t pointerSize;
+    uint32_t intSize;
+    uint32_t longSize;
+    uint32_t scalarAlignments[4];
+    uint32_t count;
+    LayoutField fields[layoutMaxFields];
+};
+
+bool layoutIdentifier(const char *name, size_t length, bool empty = false) {
+    if (length == 0) return empty;
+    if (length > layoutMaxName) return false;
+    auto letter = [](unsigned char ch) { return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_'; };
+    if (!letter(name[0])) return false;
+    for (size_t i = 1; i < length; ++i) {
+        unsigned char ch = name[i];
+        if (!letter(ch) && !(ch >= '0' && ch <= '9')) return false;
+    }
+    return true;
+}
+
+void layoutName(uint8_t *output, const string &name, size_t &budget, bool empty = false) {
+    if (!layoutIdentifier(name.data(), name.size(), empty))
+        throw LowlevelError("Plain-struct layout has an invalid or over-budget name");
+    if (name.size() > layoutMaxText - budget)
+        throw LowlevelError("Plain-struct layout cumulative name/type byte limit exceeded");
+    budget += name.size();
+    memcpy(output, name.data(), name.size());
+    output[name.size()] = 0;
+}
+
+bool layoutAlignment(int4 alignment) {
+    return alignment > 0 && alignment <= 8 && (alignment & (alignment - 1)) == 0;
+}
+
+void inspectLayoutScalar(Datatype *type, LayoutScalar &output, size_t &budget, bool allowVoid) {
+    if (type == nullptr || type->isIncomplete() || type->hasBitfields() || type->hasWarning()
+        || type->isEnumType() || type->hasStripped() || type->numDepend() != 0)
+        throw LowlevelError("Plain-struct layout requires complete plain scalar leaves");
+    int4 size = type->getSize();
+    int4 alignment = type->getAlignment();
+    if (!layoutAlignment(alignment) || size < 0)
+        throw LowlevelError("Plain-struct layout has invalid scalar size/alignment");
+    switch (type->getMetatype()) {
+    case TYPE_VOID:
+        if (!allowVoid || size != 0 || alignment != 1)
+            throw LowlevelError("Plain-struct layout does not permit a void field");
+        output.kind = 0;
+        break;
+    case TYPE_INT:
+    case TYPE_UINT:
+        if (size != 1 && size != 2 && size != 4 && size != 8)
+            throw LowlevelError("Plain-struct layout has an unsupported integer width");
+        if (type->isASCII()) {
+            if (size != 1) throw LowlevelError("Plain-struct layout has an unsupported character width");
+            output.kind = type->getMetatype() == TYPE_INT ? 3 : 4;
+        } else {
+            if (type->isCharPrint()) throw LowlevelError("Plain-struct layout does not support wide/opaque characters");
+            output.kind = type->getMetatype() == TYPE_INT ? 1 : 2;
+        }
+        break;
+    case TYPE_FLOAT:
+        if (size != 4 && size != 8) throw LowlevelError("Plain-struct layout has an unsupported float width");
+        output.kind = 5;
+        break;
+    case TYPE_BOOL:
+        if (size != 1) throw LowlevelError("Plain-struct layout has an unsupported boolean width");
+        output.kind = 6;
+        break;
+    default:
+        throw LowlevelError("Plain-struct layout does not support aggregate/array/code/pointer/unknown leaves");
+    }
+    if (size != 0 && (alignment > size || type->getAlignSize() != size))
+        throw LowlevelError("Plain-struct layout has an unsupported padded scalar");
+    layoutName(output.name, type->getName(), budget);
+    output.size = size;
+    output.alignment = alignment;
+}
+
+PlainLayout inspectPlainLayout(MemArchitecture *arch, const string &name) {
+    TypeFactory *types = arch->types;
+    AddrSpace *space = arch->getDefaultDataSpace();
+    if (space->isBigEndian() || space->getWordSize() != 1 || space->getAddrSize() != 8
+        || types->getSizeOfPointer() != 8 || types->getSizeOfInt() != 4
+        || types->getSizeOfLong() != 8 || types->getSizeOfChar() != 1)
+        throw LowlevelError("Plain-struct layout requires x86-64 little-endian LP64 byte-addressed organization");
+    Datatype *type = types->findByName(name);
+    if (type == nullptr || type->getMetatype() != TYPE_STRUCT || type->isIncomplete()
+        || type->hasWarning() || type->hasBitfields() || type->getSize() <= 0
+        || type->getSize() > layoutMaxSize || !layoutAlignment(type->getAlignment())
+        || type->getAlignSize() != type->getSize())
+        throw LowlevelError("Plain-struct layout requires a complete bounded struct without bitfields");
+    TypeStruct *structure = static_cast<TypeStruct *>(type);
+    size_t count = size_t(structure->endField() - structure->beginField());
+    if (count == 0 || count > layoutMaxFields || structure->numBitFields() != 0)
+        throw LowlevelError("Plain-struct layout field count/bitfield limit exceeded");
+    PlainLayout result = {};
+    size_t budget = 0;
+    layoutName(result.name, type->getName(), budget);
+    result.size = type->getSize();
+    result.alignment = type->getAlignment();
+    result.pointerSize = types->getSizeOfPointer();
+    result.intSize = types->getSizeOfInt();
+    result.longSize = types->getSizeOfLong();
+    for (size_t i = 0; i < 4; ++i) {
+        int4 alignment = types->getAlignment(uint4(1) << i);
+        if (!layoutAlignment(alignment)) throw LowlevelError("Plain-struct layout has unsupported native alignments");
+        result.scalarAlignments[i] = alignment;
+    }
+    uint32_t previousEnd = 0;
+    for (auto field = structure->beginField(); field != structure->endField(); ++field) {
+        LayoutField &output = result.fields[result.count];
+        Datatype *leaf = field->type;
+        if (leaf == nullptr || leaf->isIncomplete() || leaf->hasBitfields() || leaf->hasWarning()
+            || leaf->getSize() <= 0 || leaf->getSize() > layoutMaxSize
+            || !layoutAlignment(leaf->getAlignment()) || field->offset < 0)
+            throw LowlevelError("Plain-struct layout has an invalid field type/offset/size");
+        output.offset = field->offset;
+        output.size = leaf->getSize();
+        output.alignment = leaf->getAlignment();
+        if (output.offset < previousEnd || output.offset > result.size
+            || output.size > result.size - output.offset || output.offset % output.alignment != 0
+            || output.alignment > result.alignment)
+            throw LowlevelError("Plain-struct layout field overlaps or exceeds its struct/alignment");
+        previousEnd = output.offset + output.size;
+        layoutName(output.name, field->name, budget);
+        for (uint32_t i = 0; i < result.count; ++i) {
+            if (strcmp(reinterpret_cast<const char *>(output.name),
+                       reinterpret_cast<const char *>(result.fields[i].name)) == 0)
+                throw LowlevelError("Plain-struct layout has duplicate field names");
+        }
+        if (leaf->getMetatype() == TYPE_PTR) {
+            TypePointer *pointer = static_cast<TypePointer *>(leaf);
+            if (pointer->getWordSize() != 1 || pointer->getSpace() != nullptr || leaf->isPointerRel()
+                || leaf->isPointerToArray() || leaf->hasStripped() || output.size != result.pointerSize
+                || leaf->getAlignSize() != leaf->getSize())
+                throw LowlevelError("Plain-struct layout requires a native-width ordinary pointer");
+            output.pointer = 1;
+            layoutName(output.typeName, leaf->getName(), budget, true);
+            inspectLayoutScalar(pointer->getPtrTo(), output.scalar, budget, true);
+        } else {
+            inspectLayoutScalar(leaf, output.scalar, budget, false);
+        }
+        ++result.count;
+    }
+    return result;
+}
+
 const char *handleError(const Handle *handle) noexcept {
     if (handle->fallbackError) return "Native decompiler failed; handle is unavailable";
     return handle->error.empty() ? nullptr : handle->error.c_str();
@@ -512,6 +686,28 @@ const char *rampage_decomp_parse_c(void *h, const char *text) noexcept {
         nativeMutation = true;
         parse_C(handle->arch, in);
     });
+}
+
+// Read-only: do not route assertion failures through the mutation/poisoning path. Publish no partial layout.
+const char *rampage_decomp_inspect_layout(void *h, const char *name, size_t nameLength, PlainLayout *output) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    if (handle == nullptr || handle->arch == nullptr || handle->poisoned) return "Decompiler handle is unavailable";
+    if (output == nullptr || name == nullptr || !layoutIdentifier(name, nameLength))
+        return "Invalid plain-struct layout input";
+    try {
+        PlainLayout result = inspectPlainLayout(handle->arch, string(name, nameLength));
+        *output = result;
+        handle->error.clear();
+        handle->fallbackError = false;
+        return nullptr;
+    } catch (const LowlevelError &error) {
+        if (error.explain.size() > 512 || std::any_of(error.explain.begin(), error.explain.end(),
+            [](unsigned char ch) { return ch == 0 || ch > 127; }))
+            return setError(handle, "Plain-struct layout inspection failed with an invalid native error");
+        return setError(handle, error.explain.c_str());
+    } catch (...) {
+        return setError(handle, "Plain-struct layout inspection failed");
+    }
 }
 
 const char *rampage_decomp_error(void *h) noexcept {

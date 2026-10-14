@@ -6,6 +6,8 @@
 //! `GHIDRA_INSTALL_DIR` to override that tree.
 
 mod abi;
+pub mod layout;
+mod layout_wire;
 pub mod results;
 mod specs;
 pub mod worker;
