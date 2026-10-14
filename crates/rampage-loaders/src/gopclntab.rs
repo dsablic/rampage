@@ -37,6 +37,8 @@ pub struct GoReport {
     pub warnings: Vec<String>,
     /// The table's header version, once its magic is recognized.
     pub version: Option<GoTableVersion>,
+    /// The table's virtual address, which `moduledata` points at; set by the loader.
+    pub table_address: Option<u64>,
 }
 
 /// A pclntab header version. Each names the first Go release using that layout; a layout spans every release
@@ -69,7 +71,93 @@ pub struct GoFunction {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub name: String,
+    /// The `_func` facts behind a register-ABI prototype; read only from go1.18+ tables.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame: Option<GoFrame>,
 }
+
+/// What a go1.18+ `_func` records about a function's arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct GoFrame {
+    /// `_func.args`: bytes of inputs then results in Go's stack-frame layout, rounded up to the pointer size.
+    pub args: u32,
+    /// Written in assembly, so it uses the stack-based ABI0 rather than the register ABI.
+    pub assembly: bool,
+    /// The `FUNCDATA_ArgInfo` traceback layout of the inputs, as an offset from `moduledata.gofunc`.
+    pub arg_info: Option<u32>,
+}
+
+/// A function's argument area and inputs, from its `_func` and decoded ArgInfo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoArguments {
+    /// [`GoFrame::args`]: inputs then results, rounded up to the pointer size.
+    pub args: u32,
+    /// Each top-level input (the receiver first) as its scalar components, in order.
+    pub inputs: Vec<Vec<GoSlot>>,
+}
+
+/// One scalar component of an input: its offset in the argument area and its size in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GoSlot {
+    pub offset: u8,
+    pub size: u8,
+}
+
+/// `abi.TraceArgsMaxLen`, `abi.TraceArgsMaxDepth` and the ArgInfo operators above `abi.TraceArgsSpecial`.
+pub const ARG_INFO_MAX_LEN: usize = (5 * 3 + 2) * 10 + 1;
+const ARG_INFO_MAX_DEPTH: usize = 5;
+const ARG_INFO_END_SEQ: u8 = 0xff;
+const ARG_INFO_START_AGG: u8 = 0xfe;
+const ARG_INFO_END_AGG: u8 = 0xfd;
+const ARG_INFO_SPECIAL: u8 = 0xf0;
+
+/// Decodes an ArgInfo traceback layout into top-level inputs. `None` when it is malformed, or when it is
+/// truncated (`...` past the traceback limit, or an offset too large to encode), since the inputs are then
+/// incomplete.
+pub fn decode_arg_info(bytes: &[u8]) -> Option<Vec<Vec<GoSlot>>> {
+    let mut inputs = Vec::new();
+    let mut current = Vec::new();
+    let mut depth = 0usize;
+    let mut end = 0usize;
+    let mut at = 0;
+    loop {
+        let &op = bytes.get(at)?;
+        at += 1;
+        match op {
+            ARG_INFO_END_SEQ if depth == 0 => return Some(inputs),
+            ARG_INFO_START_AGG if depth < ARG_INFO_MAX_DEPTH => depth += 1,
+            ARG_INFO_END_AGG if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    inputs.push(std::mem::take(&mut current));
+                }
+            }
+            offset if offset < ARG_INFO_SPECIAL => {
+                let &size = bytes.get(at)?;
+                at += 1;
+                if !matches!(size, 1 | 2 | 4 | 8) || usize::from(offset) < end {
+                    return None;
+                }
+                end = usize::from(offset) + usize::from(size);
+                let slot = GoSlot { offset, size };
+                if depth == 0 {
+                    inputs.push(vec![slot]);
+                } else {
+                    current.push(slot);
+                }
+            }
+            _ => return None,
+        }
+        if at > ARG_INFO_MAX_LEN {
+            return None;
+        }
+    }
+}
+
+/// `abi.FUNCDATA_ArgInfo`, `abi.FuncFlagAsm` and `abi.ArgsSizeUnknown`.
+const FUNCDATA_ARG_INFO: u64 = 5;
+const FUNC_FLAG_ASM: u8 = 1 << 2;
+const ARGS_SIZE_UNKNOWN: u32 = 0x8000_0000;
 
 impl GoReport {
     pub(crate) fn warn(&mut self, warning: String) {
@@ -91,6 +179,9 @@ struct Layout {
     functab_base: usize,
     /// Absolute offset the `_func` structs are measured from (the blob start for go1.2, else the functab).
     funcdata_base: usize,
+    /// Bytes of a go1.18+ `_func` before its pcdata and funcdata offsets (go1.20 added `startLine`); `None`
+    /// for older tables, whose frames this reader does not decode.
+    func_size: Option<usize>,
 }
 
 /// Parses a Go pclntab blob and returns the `(address, name)` pairs it describes. `pointer_size` is the
@@ -159,10 +250,10 @@ const MAX_SCAN_CANDIDATES: usize = 64;
 /// Scans a read-only data blob for an embedded pclntab, for images whose table is in an unnamed or renamed
 /// section. Each pointer-aligned position whose bytes form a `pcHeader` prefix (a known magic, the two zero
 /// pad bytes, a plausible `minLC`, and a `ptrSize` matching the image) is parsed; the first candidate that
-/// yields at least [`MIN_SCANNED_FUNCTIONS`] functions with no warnings is returned. The number of positions
+/// yields at least [`MIN_SCANNED_FUNCTIONS`] functions with no warnings is returned, with its offset. The number of positions
 /// fully parsed is capped, so a blob full of magic-shaped noise cannot make this run away. The caller still
 /// confirms the recovered addresses are code before trusting the result.
-pub fn scan_blob(blob: &[u8], text_base: u64, pointer_size: u8, big_endian: bool) -> Option<GoReport> {
+pub fn scan_blob(blob: &[u8], text_base: u64, pointer_size: u8, big_endian: bool) -> Option<(usize, GoReport)> {
     let stride = usize::from(pointer_size);
     let mut candidates = 0;
     let mut offset = 0usize;
@@ -170,7 +261,7 @@ pub fn scan_blob(blob: &[u8], text_base: u64, pointer_size: u8, big_endian: bool
         if header_shaped(&blob[offset..], pointer_size, big_endian) {
             let report = parse(&blob[offset..], text_base, pointer_size, big_endian);
             if report.warnings.is_empty() && report.functions.len() >= MIN_SCANNED_FUNCTIONS {
-                return Some(report);
+                return Some((offset, report));
             }
             candidates += 1;
             if candidates >= MAX_SCAN_CANDIDATES {
@@ -240,9 +331,30 @@ fn collect(blob: &[u8], text_base: u64, big_endian: bool, layout: &Layout, nfunc
             continue;
         };
         if !name.is_empty() {
-            report.functions.push(GoFunction { address, name });
+            let base = name_field - layout.first_field;
+            let frame = layout.func_size.and_then(|size| read_frame(blob, base, size, big_endian));
+            report.functions.push(GoFunction { address, name, frame });
         }
     }
+}
+
+/// Reads a go1.18+ `_func` at `base`: `args` at offset 8, `npcdata` at 28, and `flag` and `nfuncdata` in the
+/// struct's last bytes, then the ArgInfo entry of the funcdata offsets that follow the pcdata offsets.
+fn read_frame(blob: &[u8], base: usize, size: usize, big_endian: bool) -> Option<GoFrame> {
+    let field = |offset: u64, width: usize| {
+        read_uint(blob, base.checked_add(usize::try_from(offset).ok()?)?, width, big_endian)
+    };
+    let args = u32::try_from(field(8, 4)?).ok().filter(|&args| args != ARGS_SIZE_UNKNOWN)?;
+    let npcdata = field(28, 4)?;
+    let flag = field(size as u64 - 3, 1)? as u8;
+    let nfuncdata = field(size as u64 - 1, 1)?;
+    let arg_info = if FUNCDATA_ARG_INFO < nfuncdata {
+        let offset = npcdata.checked_add(FUNCDATA_ARG_INFO)?.checked_mul(4)?.checked_add(size as u64)?;
+        field(offset, 4).map(|offset| offset as u32).filter(|&offset| offset != u32::MAX)
+    } else {
+        None
+    };
+    Some(GoFrame { args, assembly: flag & FUNC_FLAG_ASM != 0, arg_info })
 }
 
 /// Resolves the table offsets for a known magic. The field positions follow Go's `runtime.pcHeader`.
@@ -258,6 +370,7 @@ fn resolve_layout(blob: &[u8], magic: u32, ptr: usize, big_endian: bool) -> Opti
             funcname_base: 0,
             functab_base: 8 + ptr,
             funcdata_base: 0,
+            func_size: None,
         }),
         // go1.16: pointer-wide functab fields holding absolute PCs; funcname at field 2, functab at field 6.
         MAGIC_GO116 => {
@@ -270,6 +383,7 @@ fn resolve_layout(blob: &[u8], magic: u32, ptr: usize, big_endian: bool) -> Opti
                 funcname_base,
                 functab_base,
                 funcdata_base: functab_base,
+                func_size: None,
             })
         }
         // go1.18 and go1.20+: 32-bit functab fields holding text-relative PCs; the field after the count is a
@@ -284,6 +398,7 @@ fn resolve_layout(blob: &[u8], magic: u32, ptr: usize, big_endian: bool) -> Opti
                 funcname_base,
                 functab_base,
                 funcdata_base: functab_base,
+                func_size: Some(if magic == MAGIC_GO120 { 44 } else { 40 }),
             })
         }
         _ => None,
@@ -390,7 +505,7 @@ mod tests {
         let mut blob = vec![0xAAu8; 32];
         blob.extend_from_slice(&table);
         blob.extend_from_slice(&[0x55u8; 40]);
-        let report = scan_blob(&blob, 0x401000, 8, false).expect("scan finds the table");
+        let (_, report) = scan_blob(&blob, 0x401000, 8, false).expect("scan finds the table");
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         assert_eq!(report.functions.len(), 20);
         assert_eq!(report.functions[0].name, "pkg.fn0");
@@ -422,13 +537,32 @@ mod tests {
         let blob = synthetic_go120();
         let report = parse(&blob, 0x401000, 8, false);
         assert!(report.warnings.is_empty(), "unexpected warnings: {:?}", report.warnings);
-        assert_eq!(
-            report.functions,
-            vec![
-                GoFunction { address: 0x401010, name: "main.main".to_owned() },
-                GoFunction { address: 0x401040, name: "main.greet".to_owned() },
-            ]
-        );
+        let named: Vec<(u64, &str)> =
+            report.functions.iter().map(|function| (function.address, function.name.as_str())).collect();
+        assert_eq!(named, [(0x401010, "main.main"), (0x401040, "main.greet")]);
+    }
+
+    fn slot(offset: u8, size: u8) -> GoSlot {
+        GoSlot { offset, size }
+    }
+
+    #[test]
+    fn arg_info_groups_aggregates_into_one_input() {
+        // func(s string, b bool): {ptr, len}, then a byte.
+        let bytes = [ARG_INFO_START_AGG, 0, 8, 8, 8, ARG_INFO_END_AGG, 16, 1, ARG_INFO_END_SEQ];
+        assert_eq!(decode_arg_info(&bytes), Some(vec![vec![slot(0, 8), slot(8, 8)], vec![slot(16, 1)]]));
+        assert_eq!(decode_arg_info(&[ARG_INFO_END_SEQ]), Some(Vec::new()));
+    }
+
+    #[test]
+    fn truncated_or_malformed_arg_info_is_rejected() {
+        let dotdotdot = 0xfc;
+        assert_eq!(decode_arg_info(&[0, 8, dotdotdot, ARG_INFO_END_SEQ]), None, "past the traceback limit");
+        assert_eq!(decode_arg_info(&[0, 8]), None, "no end marker");
+        assert_eq!(decode_arg_info(&[0, 3, ARG_INFO_END_SEQ]), None, "not a scalar size");
+        assert_eq!(decode_arg_info(&[8, 8, 0, 8, ARG_INFO_END_SEQ]), None, "offsets go backwards");
+        assert_eq!(decode_arg_info(&[ARG_INFO_START_AGG, 0, 8, ARG_INFO_END_SEQ]), None, "unclosed aggregate");
+        assert_eq!(decode_arg_info(&[ARG_INFO_END_AGG, ARG_INFO_END_SEQ]), None, "unopened aggregate");
     }
 
     #[test]

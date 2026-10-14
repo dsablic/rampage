@@ -7,7 +7,7 @@ use rampage_decompiler::worker::{
     run_supervised,
 };
 
-use super::{Decompilation, DecompiledToken, context, image, symbols, types};
+use super::{Decompilation, DecompiledToken, context, go_abi, image, symbols, types};
 use crate::{ApiError, Project, annotations::Annotations};
 
 pub(super) fn decompile(
@@ -62,6 +62,7 @@ pub(super) fn decompile(
         && context::mode_at(&binary.target(), &project.analysis()?.program.code_modes, address);
     let mut operations = symbols::plan(project, annotations)?;
     operations.extend(types::plan(project, annotations)?);
+    operations.extend(go_abi::plan(project, annotations, options));
     let request = WorkerRequest {
         version: PROTOCOL_VERSION,
         arch: binary.arch.to_string(),

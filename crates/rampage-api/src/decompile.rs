@@ -2,6 +2,7 @@
 //! is built once per project over its executable segments and reused for every function.
 
 mod context;
+mod go_abi;
 mod image;
 mod isolated;
 mod symbols;
@@ -11,6 +12,8 @@ use rampage_decompiler::{Decompiler, DecompilerOptions, Platform};
 use serde::Serialize;
 
 use crate::{ApiError, Project};
+
+pub(crate) use go_abi::GoPrototypes;
 
 #[derive(Debug, Serialize)]
 pub struct Decompilation {
@@ -304,6 +307,7 @@ impl Project {
 
         let mut operations = symbols::plan(self, annotations)?;
         operations.extend(types::plan(self, annotations)?);
+        operations.extend(go_abi::plan(self, annotations, options));
         symbols::apply(operations, &mut decompiler)?;
         Ok(decompiler)
     }

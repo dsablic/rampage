@@ -6,6 +6,7 @@ mod flow;
 pub mod hex;
 pub mod ir;
 mod mrs;
+pub mod registers;
 mod track;
 mod x86;
 

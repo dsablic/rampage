@@ -91,6 +91,8 @@ pub struct Project {
     pub(crate) decompiler: std::sync::Mutex<crate::decompile::DecompilerState>,
     /// Data packs layered over the bundled heuristic databases.
     packs: RwLock<Arc<Packs>>,
+    /// Go register-ABI prototypes, derived once on first decompilation.
+    pub(crate) go_prototypes: OnceLock<crate::decompile::GoPrototypes>,
 }
 
 pub(crate) struct Analysis {
@@ -147,6 +149,7 @@ impl Project {
             strings: OnceLock::new(),
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
             packs: RwLock::default(),
+            go_prototypes: OnceLock::new(),
         }
     }
 

@@ -110,3 +110,30 @@ fn ambiguous_go_tables_keep_the_platform_default_and_overrides_win() {
     project.set_decompiler_options(Some(DecompilerOptions { compiler: Some("gcc".to_owned()), ..Default::default() }));
     assert!(project.decompile(main).unwrap().language_id.ends_with(":gcc"));
 }
+
+#[test]
+fn go_results_inferred_from_callers_flow_into_the_next_call() {
+    let project = Project::new(fixture("hello-go-x64.elf"));
+    let at = |name: &str| project.resolve(name).unwrap();
+    // fmt.Println(shout(greet(who))): each string result reaches the next call as its two words.
+    let main = project.decompile(at("main.main")).unwrap().code;
+    assert!(main.contains("= main.greet(xVar1,xVar2);"), "{main}");
+    assert!(main.contains("= main.shout(gVar3.r0,gVar3.r1);"), "{main}");
+    assert!(main.contains("runtime.convTstring(gVar3.r0,gVar3.r1);"), "{main}");
+    // greet returns the string fmt.Sprintf builds.
+    let greet = project.decompile(at("main.greet")).unwrap().code;
+    assert!(greet.contains("go_results_2 main.greet(xunknown8 param_1,xunknown8 param_2)"), "{greet}");
+    assert!(greet.contains("= fmt.Sprintf(") && greet.contains("return gVar1;"), "{greet}");
+}
+
+#[test]
+fn user_signatures_and_c_conventions_replace_derived_go_prototypes() {
+    let project = Project::new(fixture("hello-go-x64.elf"));
+    let greet = project.resolve("main.greet").unwrap();
+    project.set_signature(greet, Some("int8 greet(int8 who);")).unwrap();
+    assert!(project.decompile(greet).unwrap().code.contains("int8 main.greet(int8 who)"));
+
+    let project = Project::new(fixture("hello-go-x64.elf"));
+    project.set_decompiler_options(Some(DecompilerOptions { compiler: Some("gcc".to_owned()), ..Default::default() }));
+    assert!(!project.decompile(greet).unwrap().code.contains("go_results"));
+}

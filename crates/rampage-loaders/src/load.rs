@@ -126,6 +126,9 @@ pub struct Binary {
     /// The version of the Go pclntab that named functions, set by [`Binary::recover_go_symbols`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub go_table: Option<crate::gopclntab::GoTableVersion>,
+    /// Register-ABI Go functions' argument layouts by entry address, set by [`Binary::recover_go_symbols`].
+    #[serde(skip)]
+    pub go_arguments: std::collections::BTreeMap<u64, crate::gopclntab::GoArguments>,
     #[serde(skip)]
     image: Range<usize>,
 }
@@ -270,6 +273,7 @@ impl Binary {
             snapshot_target: None,
             embedded: None,
             go_table: None,
+            go_arguments: std::collections::BTreeMap::new(),
         })
     }
 
@@ -607,6 +611,7 @@ impl Binary {
             snapshot_target: None,
             embedded: None,
             go_table: None,
+            go_arguments: std::collections::BTreeMap::new(),
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
@@ -793,6 +798,7 @@ impl Binary {
             return report;
         }
         self.go_table = report.version;
+        self.go_arguments = self.read_go_arguments(&report);
         let mut taken: std::collections::HashSet<u64> = self.symbols.iter().map(|symbol| symbol.address).collect();
         for function in &report.functions {
             if !taken.insert(function.address) {
@@ -825,7 +831,9 @@ impl Binary {
             report.warn("gopclntab found but no text section to anchor addresses".to_owned());
             return report;
         };
-        crate::gopclntab::parse(bytes, text.address, self.arch.pointer_size(), self.big_endian)
+        let mut report = crate::gopclntab::parse(bytes, text.address, self.arch.pointer_size(), self.big_endian);
+        report.table_address = Some(section.address);
+        report
     }
 
     /// Fallback for a stripped or packed image whose pclntab keeps no recognizable section name: scans the
@@ -840,15 +848,88 @@ impl Binary {
                 continue;
             }
             let Some(bytes) = self.read(section.address, section.size) else { continue };
-            let Some(report) = crate::gopclntab::scan_blob(bytes, text_base, pointer_size, self.big_endian) else {
+            let Some((offset, mut report)) =
+                crate::gopclntab::scan_blob(bytes, text_base, pointer_size, self.big_endian)
+            else {
                 continue;
             };
+            report.table_address = section.address.checked_add(offset as u64);
             let sample: Vec<u64> = report.functions.iter().take(32).map(|function| function.address).collect();
             if !sample.is_empty() && sample.iter().all(|&address| self.is_code(address)) {
                 return report;
             }
         }
         crate::gopclntab::GoReport::default()
+    }
+
+    /// Decodes the argument layout of each register-ABI function in `report`. Assembly functions use ABI0,
+    /// and a function with arguments but no ArgInfo has no recoverable inputs; both are left out.
+    fn read_go_arguments(
+        &self,
+        report: &crate::gopclntab::GoReport,
+    ) -> std::collections::BTreeMap<u64, crate::gopclntab::GoArguments> {
+        let framed: Vec<_> = report
+            .functions
+            .iter()
+            .filter_map(|function| Some((function.address, function.frame?)))
+            .filter(|(_, frame)| !frame.assembly)
+            .collect();
+        let gofunc = self.find_gofunc(report, &framed);
+        framed
+            .into_iter()
+            .filter_map(|(address, frame)| {
+                let inputs = match frame.arg_info {
+                    Some(offset) => self.arg_info(gofunc?, offset)?,
+                    None if frame.args == 0 => Vec::new(),
+                    None => return None,
+                };
+                Some((address, crate::gopclntab::GoArguments { args: frame.args, inputs }))
+            })
+            .collect()
+    }
+
+    fn arg_info(&self, gofunc: u64, offset: u32) -> Option<Vec<Vec<crate::gopclntab::GoSlot>>> {
+        let bytes = self.read_to_segment_end(gofunc.checked_add(u64::from(offset))?)?;
+        crate::gopclntab::decode_arg_info(&bytes[..bytes.len().min(crate::gopclntab::ARG_INFO_MAX_LEN)])
+    }
+
+    /// `moduledata.gofunc`, the base of ArgInfo offsets. `moduledata` begins with a pointer to the pclntab and
+    /// holds `minpc` 20 words in; `gofunc` follows a run of fields that differs between Go releases, so each
+    /// plausible position is tried and the one under which sampled ArgInfo all decode is taken.
+    fn find_gofunc(
+        &self,
+        report: &crate::gopclntab::GoReport,
+        framed: &[(u64, crate::gopclntab::GoFrame)],
+    ) -> Option<u64> {
+        const MINPC: usize = 20;
+        const GOFUNC_CANDIDATES: std::ops::RangeInclusive<usize> = 36..=48;
+        let table = report.table_address?;
+        let minpc = report.functions.iter().map(|function| function.address).min()?;
+        let sample: Vec<u32> = framed.iter().filter_map(|(_, frame)| frame.arg_info).take(64).collect();
+        if sample.is_empty() {
+            return None;
+        }
+        let pointer = usize::from(self.arch.pointer_size());
+        for section in &self.sections {
+            if !matches!(section.kind, SectionKind::Data | SectionKind::ReadOnlyData) {
+                continue;
+            }
+            let Some(bytes) = self.read(section.address, section.size) else { continue };
+            let word =
+                |at: usize, index: usize| read_uint(bytes, at.checked_add(index * pointer)?, pointer, self.big_endian);
+            for at in (0..bytes.len()).step_by(pointer) {
+                if word(at, 0) != Some(table) || word(at, MINPC) != Some(minpc) {
+                    continue;
+                }
+                let found = GOFUNC_CANDIDATES.filter_map(|index| word(at, index)).find(|&candidate| {
+                    candidate != 0 && sample.iter().all(|&offset| self.arg_info(candidate, offset).is_some())
+                });
+                if found.is_some() {
+                    return found;
+                }
+            }
+        }
+        None
     }
 }
 
