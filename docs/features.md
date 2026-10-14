@@ -34,8 +34,9 @@ and exports, then import stubs and thunks (`puts`, or `puts@plt` on ELF). A bare
 import slots such as GOT entries, Mach-O symbol pointers and the PE import address table are `__imp_<name>`.
 Disassembly comments branches and data references with the name or string they target. Stripped Go function
 names are recovered from the embedded pclntab, including binaries built with `-ldflags "-s -w"`. Decompiling
-x86-64 Go (go1.18+) uses Go's register ABI with per-function argument and result prototypes derived from that
-table and from how callers use results; see the [decompiler reference](../crates/rampage-decompiler/README.md).
+x86-64 and ARM64 Go (go1.18+) uses Go's register ABI with per-function argument and result prototypes derived
+from that table and from how callers use results; see the
+[decompiler reference](../crates/rampage-decompiler/README.md).
 
 On AArch64, ADRP+ADD and ADRP+LDR pairs provide data references. Known ADR/ADRP/ADD/MOV/LDR values can resolve
 BR/BLR targets through readable, non-writable pointers. This does not resolve authenticated pointers or prove

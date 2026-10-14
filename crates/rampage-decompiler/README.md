@@ -51,13 +51,12 @@ The project layer selects Windows specifications for PE, Apple specifications fo
 macOS specifications for big-endian PowerPC Mach-O, and existing defaults otherwise. A little-endian x86-64 or
 ARM64 image whose Go pclntab is go1.18 or later selects `golang`, Go's register ABI; a go1.16 table (go1.16 or
 go1.17) and older Go keep the platform default, since go1.16 and earlier pass arguments on the stack.
-On x86-64, Go functions also get derived prototypes, so values pass between calls: inputs come from each
-function's ArgInfo traceback layout, and result counts from the result registers callers read after a call
-(including registers passed straight to another call or returned again). A result no caller reads is not
+Go functions on both architectures also get derived prototypes, so values pass between calls: inputs come
+from each function's ArgInfo traceback layout, and result counts from the result registers callers read after a
+call (including registers passed straight to another call or returned again). A result no caller reads is not
 found. Functions that take or return floats, or whose inputs do not fit in registers, keep inferred prototypes;
 user signatures replace derived ones. Every derived value is an 8-byte or smaller `xunknown` word, and a
-multi-word result is a `go_results_N` struct with fields `r0` to `rN-1`. ARM64 Go binaries select `golang`
-without derived prototypes.
+multi-word result is a `go_results_N` struct with fields `r0` to `rN-1`.
 `DecompilerOptions` exposes platform/compiler overrides; `Project::set_decompiler_options(None)` restores
 format-based selection. The CLI accepts `rampage function decompile IMAGE --at FUNCTION --compiler windows`
 (or another advertised compiler ID). Unknown IDs are errors, not silent fallback to the first compiler in a
@@ -65,6 +64,7 @@ language definition. Results report the exact selected `language_id`.
 
 Bundled C data organizations explicitly use ILP32 for MIPS32 and PowerPC32 (including Darwin) and LP64 for
 SPARC64 and Darwin PowerPC64; these six compiler specifications carry local corrections marked in their XML.
+The ARM64 Go specification also carries one: its prototypes pop no stack on return, as `bl` pushes nothing.
 Selected C specifications with incompatible pointer/`int`/`long` widths are rejected, including external installs
 that still contain the original missing/incorrect widths.
 

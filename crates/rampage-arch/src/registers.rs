@@ -2,8 +2,9 @@
 
 use iced_x86::{Decoder, DecoderOptions, InstructionInfoFactory, Mnemonic, OpAccess, OpKind, Register};
 
-/// Registers as bits: x86-64 general-purpose registers by hardware number (RAX 0, RCX 1, RDX 2, RBX 3, ... R15
-/// 15), then XMM0 to XMM15 as bits 16 to 31.
+/// Registers as bits. x86-64: general-purpose registers by hardware number (RAX 0, RCX 1, RDX 2, RBX 3, ... R15
+/// 15), then XMM0 to XMM15 as bits 16 to 31. AArch64: X0 to X30 as bits 0 to 30, SP as bit 31, and V0 to V31
+/// (with their B, H, S, D, Q and Z views) as bits 32 to 63; the zero register has no bit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RegisterAccess {
     /// Registers whose incoming values the instruction uses.
@@ -12,6 +13,16 @@ pub struct RegisterAccess {
     /// or 16 bits of a general-purpose register merges with the rest, but compilers avoid reading the merged
     /// whole (a partial-register stall), so code that writes `r9b` and tests `r9b` never uses the old R9.
     pub writes: u64,
+}
+
+/// The [`RegisterAccess`] bit of AArch64 general-purpose register X`number` (31 is SP).
+pub const fn x(number: u32) -> u64 {
+    1 << number
+}
+
+/// The [`RegisterAccess`] bit of AArch64 vector register V`number`.
+pub const fn v(number: u32) -> u64 {
+    1 << (32 + number)
 }
 
 /// The [`RegisterAccess`] bit of XMM register `number`.
@@ -166,6 +177,127 @@ fn zeroing_idiom(instruction: &iced_x86::Instruction) -> bool {
     zeroing && registers && count >= 2 && instruction.op_register(sources[0]) == instruction.op_register(sources[1])
 }
 
+/// The register access of an AArch64 instruction word, or `None` when it is unallocated.
+///
+/// Arm's specification names register operands by role: `d` is written; `n`, `m`, `a` and `v` are read; `dn`
+/// is both; `t` is written by loads (and swaps, system register reads) and read by everything else; `s` is
+/// read, except that a compare-and-swap also writes it and an exclusive store writes its status there. Register
+/// 31 is SP where the placeholder allows it (`<Xn|SP>`) and the zero register otherwise. Pre- and post-indexed
+/// addressing also writes the base, `bl` and `blr` write X30, and a few instructions merge into their
+/// destination (`movk`, bitfield inserts, vector accumulates) and so read it too.
+pub fn a64_access(word: u32) -> Option<RegisterAccess> {
+    let decoded = crate::a64::decode_word(word)?;
+    let encoding = decoded.encoding;
+    let mnemonic = encoding.name.split('_').next().unwrap_or_default().to_ascii_uppercase();
+    let operands = encoding.syntax.operands;
+    let selector = |name| operands.iter().any(|operand| operand.name == name);
+    let general = selector("<R>");
+    let vector = selector("<V>");
+    let transfers_in = mnemonic.starts_with("LD")
+        || mnemonic.starts_with("SWP")
+        || matches!(mnemonic.as_str(), "MRS" | "MRRS" | "SYSL");
+    let exclusive_store = ["STXR", "STLXR", "STXP", "STLXP"].iter().any(|store| mnemonic.starts_with(store));
+    let compare_and_swap = mnemonic.starts_with("CAS");
+    let merges = MERGING.iter().any(|prefix| mnemonic.starts_with(prefix));
+    let writeback = ["immpost", "immpre", "pair_post", "pair_pre", "Spost", "Spre", "asisdlsep", "64W_ldst_pac"]
+        .iter()
+        .any(|class| encoding.name.contains(class));
+
+    let mut access = RegisterAccess::default();
+    for operand in operands {
+        let Some(register) = register_operand(operand.name, general, vector) else { continue };
+        let fields = operand.fields.iter().map(|&index| encoding.fields[usize::from(index)].name);
+        let offset = match register.index {
+            // `<Xt2>` names its own Rt2 field; `<Vt2>` is the register after Rt in a list.
+            Some(index) if !fields.clone().any(|field| field.ends_with(index)) => {
+                u64::from(index.as_bytes()[0].saturating_sub(b'1'))
+            }
+            _ => register.offset,
+        };
+        let number = (encoding.operand_bits(word, operand).0 + offset) % 32;
+        let bit = match (register.vector, number == 31) {
+            (true, _) => v(number as u32),
+            (false, true) if register.stack => x(31),
+            (false, true) => continue,
+            (false, false) => x(number as u32),
+        };
+        let (read, written) = match register.role {
+            "d" => (merges, true),
+            "dn" => (true, true),
+            "t" => (!transfers_in, transfers_in),
+            "s" if compare_and_swap => (true, true),
+            "s" if exclusive_store => (false, true),
+            _ => (true, false),
+        };
+        if read {
+            access.reads |= bit;
+        }
+        if written {
+            access.writes |= bit;
+        }
+        if writeback && register.role == "n" {
+            access.writes |= bit;
+        }
+    }
+    if matches!(mnemonic.as_str(), "BL" | "BLR" | "BLRAA" | "BLRAAZ" | "BLRAB" | "BLRABZ") {
+        access.writes |= x(30);
+    }
+    // A merge that also reads its destination does not end it.
+    access.writes &= !(access.reads & access.writes & if merges { !0 } else { 0 });
+    Some(access)
+}
+
+/// Instructions that write only part of their destination, or accumulate into it.
+const MERGING: &[&str] = &[
+    "MOVK", "BFM", "INS", "BIT", "BIF", "BSL", "TBX", "FMLA", "FMLS", "FMLAL", "FMLSL", "FCMLA", "MLA", "MLS", "SDOT",
+    "UDOT", "USDOT", "SUDOT", "BFDOT", "BFMLAL", "SMLAL", "UMLAL", "SMLSL", "UMLSL", "SQDMLAL", "SQDMLSL", "SQRDMLAH",
+    "SQRDMLSH", "SABA", "UABA", "SADALP", "UADALP", "SSRA", "USRA", "SRSRA", "URSRA", "SLI", "SRI",
+];
+
+/// A register placeholder: whether it is a vector register, its role letters, and how it numbers from its field.
+struct RegisterOperand<'a> {
+    vector: bool,
+    role: &'a str,
+    /// Register 31 is SP rather than the zero register.
+    stack: bool,
+    /// Added to the field: `<X(t+1)>` and `<Vn+2>` name registers after the one encoded.
+    offset: u64,
+    /// The digit of `<Vt2>` or `<Xt2>`, which is an offset unless the placeholder has a field of its own.
+    index: Option<&'a str>,
+}
+
+/// Parses `<Xn|SP>`, `<Wt>`, `<Dd>`, `<Vt3>`, `<X(s+1)>`, or a bare `<n>` after a `<R>` or `<V>` width selector.
+fn register_operand(name: &str, general: bool, vector: bool) -> Option<RegisterOperand<'_>> {
+    let name = name.strip_prefix('<')?.strip_suffix('>')?;
+    let (name, stack) = match name.split_once('|') {
+        Some((name, "SP" | "WSP")) => (name, true),
+        Some(_) => return None,
+        None => (name, false),
+    };
+    let (is_vector, rest) = match name.as_bytes().first()? {
+        b'X' | b'W' => (false, &name[1..]),
+        b'V' | b'B' | b'H' | b'S' | b'D' | b'Q' | b'Z' => (true, &name[1..]),
+        b'a'..=b'z' if general || vector => (vector && !general, name),
+        _ => return None,
+    };
+    let rest = rest.trim_start_matches('(').trim_end_matches(')');
+    let (role, offset) = match rest.split_once('+') {
+        Some((role, offset)) => (role, offset.parse().ok()?),
+        None => (rest, 0),
+    };
+    let (role, index) = match role.find(|character: char| character.is_ascii_digit()) {
+        Some(at) => (&role[..at], Some(&role[at..])),
+        None => (role, None),
+    };
+    matches!(role, "d" | "dn" | "n" | "m" | "a" | "t" | "s" | "v").then_some(RegisterOperand {
+        vector: is_vector,
+        role,
+        stack,
+        offset,
+        index,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +329,52 @@ mod tests {
         assert_eq!(access(&[0x66, 0x0f, 0xef, 0xc0]), RegisterAccess { reads: 0, writes: xmm(0) }, "pxor xmm0, xmm0");
         assert_eq!(access(&[0x48, 0x31, 0xd8]).reads, RAX | RBX, "xor rax, rbx");
         assert_eq!(access(&[0x4d, 0x19, 0xd2]), RegisterAccess { reads: 0, writes: gpr(10) }, "sbb r10, r10");
+    }
+
+    fn a64(word: u32) -> RegisterAccess {
+        a64_access(word).expect("allocated")
+    }
+
+    #[test]
+    fn a64_roles_follow_the_specification_placeholders() {
+        assert_eq!(a64(0x8b020020), RegisterAccess { reads: x(1) | x(2), writes: x(0) }, "add x0, x1, x2");
+        assert_eq!(a64(0xf9400020), RegisterAccess { reads: x(1), writes: x(0) }, "ldr x0, [x1]");
+        assert_eq!(a64(0xf9000020), RegisterAccess { reads: x(0) | x(1), writes: 0 }, "str x0, [x1]");
+        assert_eq!(a64(0xd65f03c0), RegisterAccess { reads: x(30), writes: 0 }, "ret");
+        assert_eq!(a64(0xaa0103e0), RegisterAccess { reads: x(1), writes: x(0) }, "mov x0, x1 (orr from xzr)");
+        assert_eq!(a64(0x2a0103e0).writes, x(0), "mov w0, w1 ends x0");
+        assert_eq!(a64(0x94000000).writes, x(30), "bl");
+    }
+
+    #[test]
+    fn a64_stack_pointer_and_zero_register_are_told_apart() {
+        // stp x29, x30, [sp, #-16]!: reads both and the base, and writes the base back.
+        assert_eq!(a64(0xa9bf7bfd), RegisterAccess { reads: x(29) | x(30) | x(31), writes: x(31) });
+        // cmp x0, #1 is subs xzr, x0, #1: nothing written.
+        assert_eq!(a64(0xf100041f), RegisterAccess { reads: x(0), writes: 0 });
+        // ldr xzr, [x0], a Go nil check, reads only the pointer.
+        assert_eq!(a64(0xf940001f), RegisterAccess { reads: x(0), writes: 0 });
+    }
+
+    #[test]
+    fn a64_pairs_lists_and_merges() {
+        assert_eq!(a64(0xa9400820), RegisterAccess { reads: x(1), writes: x(0) | x(2) }, "ldp x0, x2, [x1]");
+        // ld1 {v0.16b, v1.16b}, [x0]
+        assert_eq!(a64(0x4c40a000), RegisterAccess { reads: x(0), writes: v(0) | v(1) });
+        assert_eq!(a64(0xf2a00020), RegisterAccess { reads: x(0), writes: 0 }, "movk x0, #1, lsl #16");
+        assert_eq!(a64(0xfd400400), RegisterAccess { reads: x(0), writes: v(0) }, "ldr d0, [x0, #8]");
+        assert_eq!(a64(0x1e602820), RegisterAccess { reads: v(0) | v(1), writes: v(0) }, "fadd d0, d1, d0");
+    }
+
+    #[test]
+    fn a64_access_never_panics() {
+        let mut word = 0x1234_5678u32;
+        for _ in 0..2_000_000 {
+            word ^= word << 13;
+            word ^= word >> 17;
+            word ^= word << 5;
+            let _ = a64_access(word);
+        }
     }
 
     #[test]

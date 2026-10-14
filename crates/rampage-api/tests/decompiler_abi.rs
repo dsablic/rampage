@@ -113,17 +113,28 @@ fn ambiguous_go_tables_keep_the_platform_default_and_overrides_win() {
 
 #[test]
 fn go_results_inferred_from_callers_flow_into_the_next_call() {
-    let project = Project::new(fixture("hello-go-x64.elf"));
-    let at = |name: &str| project.resolve(name).unwrap();
-    // fmt.Println(shout(greet(who))): each string result reaches the next call as its two words.
-    let main = project.decompile(at("main.main")).unwrap().code;
-    assert!(main.contains("= main.greet(xVar1,xVar2);"), "{main}");
-    assert!(main.contains("= main.shout(gVar3.r0,gVar3.r1);"), "{main}");
-    assert!(main.contains("runtime.convTstring(gVar3.r0,gVar3.r1);"), "{main}");
-    // greet returns the string fmt.Sprintf builds.
-    let greet = project.decompile(at("main.greet")).unwrap().code;
-    assert!(greet.contains("go_results_2 main.greet(xunknown8 param_1,xunknown8 param_2)"), "{greet}");
-    assert!(greet.contains("= fmt.Sprintf(") && greet.contains("return gVar1;"), "{greet}");
+    for name in ["hello-go-x64.elf", "hello-go-arm64.elf"] {
+        let project = Project::new(fixture(name));
+        let at = |function: &str| project.resolve(function).unwrap();
+        // fmt.Println(shout(greet(who))): each string result reaches the next call as its two words.
+        let main = project.decompile(at("main.main")).unwrap().code;
+        assert!(main.contains("= main.greet(xVar1,xVar2);"), "{name}: {main}");
+        assert!(main.contains("= main.shout(gVar3.r0,gVar3.r1);"), "{name}: {main}");
+        assert!(main.contains("runtime.convTstring(gVar3.r0,gVar3.r1);"), "{name}: {main}");
+        // greet returns the string fmt.Sprintf builds.
+        let greet = project.decompile(at("main.greet")).unwrap().code;
+        assert!(greet.contains("go_results_2 main.greet(xunknown8 param_1,xunknown8 param_2)"), "{name}: {greet}");
+        assert!(greet.contains("= fmt.Sprintf(") && greet.contains("return gVar1;"), "{name}: {greet}");
+    }
+}
+
+#[test]
+fn arm64_go_calls_leave_the_stack_pointer_trackable() {
+    // The Go ARM64 specification once popped 8 bytes per call, as x86 does, and lost the stack pointer.
+    let project = Project::new(fixture("hello-go-arm64.elf"));
+    let main = project.decompile(project.resolve("main.main").unwrap()).unwrap().code;
+    assert!(!main.contains("BADSPACEBASE") && !main.contains("register0x"), "{main}");
+    assert!(main.contains("while (&stack0x00000000 <="), "{main}");
 }
 
 #[test]

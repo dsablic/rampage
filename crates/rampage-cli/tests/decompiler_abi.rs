@@ -48,16 +48,18 @@ fn pe_images_select_windows_without_an_override() {
 
 #[test]
 fn isolated_go_decompilation_carries_derived_results() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-go-x64.elf");
-    let output = Command::cargo_bin("rampage")
-        .unwrap()
-        .args(["function", "decompile", "--at", "main.main", "--isolated"])
-        .arg(path)
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let code = String::from_utf8(output).unwrap();
-    assert!(code.contains("= main.shout(gVar3.r0,gVar3.r1);"), "{code}");
+    for name in ["hello-go-x64.elf", "hello-go-arm64.elf"] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name);
+        let output = Command::cargo_bin("rampage")
+            .unwrap()
+            .args(["function", "decompile", "--at", "main.main", "--isolated"])
+            .arg(path)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let code = String::from_utf8(output).unwrap();
+        assert!(code.contains("= main.shout(gVar3.r0,gVar3.r1);"), "{name}: {code}");
+    }
 }

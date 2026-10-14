@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <compiler_spec>
+  <!-- Modified for rampage: AArch64 calls leave SP unchanged (bl links in x30), so every prototype has extrapop
+       and stackshift 0 rather than the x86 value 8 that made the decompiler lose the stack pointer. -->
 	<data_organization>
 		<absolute_max_alignment value="0" />
 		<machine_alignment value="2" />
@@ -34,7 +36,7 @@
   <funcptr align="4"/>     <!-- Function pointers are word aligned and leastsig bit may encode otherstuff -->
   
     <default_proto>
-		<prototype name="abi-internal" extrapop="8" stackshift="8">
+		<prototype name="abi-internal" extrapop="0" stackshift="0">
 			<input>
 				<pentry minsize="4" maxsize="8" metatype="float">
 					<register name="q0"/>
@@ -199,7 +201,7 @@
 		</prototype>
 	</default_proto>
 	
-	<prototype name="abi0" extrapop="8" stackshift="8">
+	<prototype name="abi0" extrapop="0" stackshift="0">
 		<input>
 			<pentry minsize="1" maxsize="500" align="8">
 				<addr offset="8" space="stack"/>
@@ -234,7 +236,7 @@
 		</unaffected>
 	</prototype>
 	
-	<prototype name="gcwrite_batch" extrapop="8" stackshift="8">
+	<prototype name="gcwrite_batch" extrapop="0" stackshift="0">
 		<input>
 			<pentry minsize="1" maxsize="8">
 				<register name="x25"/>
@@ -270,7 +272,7 @@
 		</unaffected>
 	</prototype>
 
-	<prototype name="gcwrite_buffered" extrapop="8" stackshift="8">
+	<prototype name="gcwrite_buffered" extrapop="0" stackshift="0">
 		<input>
 			<pentry minsize="1" maxsize="8">
 				<register name="x3"/>
@@ -306,7 +308,7 @@
 	</prototype>
 	
 	
-	<prototype name="duffzero" extrapop="8" stackshift="8">
+	<prototype name="duffzero" extrapop="0" stackshift="0">
 		<input>
 			<pentry minsize="1" maxsize="8">
 				<register name="x20"/>
@@ -330,7 +332,7 @@
 	</prototype>
 		
 		
-	<prototype name="duffcopy" extrapop="8" stackshift="8">
+	<prototype name="duffcopy" extrapop="0" stackshift="0">
 		<input>
 			<pentry minsize="1" maxsize="8">
 				<register name="x21"/>
