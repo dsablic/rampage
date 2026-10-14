@@ -5,6 +5,7 @@
 //! neither call ordering nor argument/data-flow relationships. No binary is executed by this detector.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 use serde::Serialize;
 
@@ -25,13 +26,14 @@ pub struct Capability {
     pub name: Cow<'static, str>,
     pub category: Cow<'static, str>,
     /// Evidence as `kind:value`: legacy rules emit canonical matched terms; corroborated rules emit original inputs.
+    /// A name term matched only by a linked-in function symbol, not an import, reports kind `symbol`.
     pub evidence: Vec<String>,
 }
 
 /// How a rule term is matched against a candidate name.
 #[derive(Clone, Copy)]
 enum Match {
-    /// An import whose [`names::import_stem`] matches this lowercase pattern under [`names::stem_matches`]: exact
+    /// An import or function symbol whose [`names::import_stem`] matches this lowercase pattern under [`names::stem_matches`]: exact
     /// or with one trailing `A`/`W` charset suffix, or by prefix for a `*`-terminated pattern.
     Import(&'static str),
     /// A string contains this substring (case-sensitive, so `AES` does not match `aes` in a path).
@@ -50,8 +52,9 @@ enum RegistryHive {
 
 /// Detection inputs with the per-call normalizations computed once.
 struct Inputs<'a> {
-    imports: &'a [String],
-    /// [`names::import_stem`] of each import.
+    /// Each import, then each function symbol not also imported, with its evidence kind.
+    names: Vec<(&'static str, &'a str)>,
+    /// [`names::import_stem`] of each name.
     stems: Vec<String>,
     strings: &'a [String],
     /// ASCII-lowercased copy of each string.
@@ -59,10 +62,18 @@ struct Inputs<'a> {
 }
 
 impl<'a> Inputs<'a> {
-    fn new(imports: &'a [String], strings: &'a [String]) -> Self {
+    fn new(imports: &'a [String], symbols: &'a [String], strings: &'a [String]) -> Self {
+        let imported: HashSet<&str> = imports.iter().map(String::as_str).collect();
+        let names: Vec<(&'static str, &'a str)> = imports
+            .iter()
+            .map(|name| ("import", name.as_str()))
+            .chain(
+                symbols.iter().filter(|name| !imported.contains(name.as_str())).map(|name| ("symbol", name.as_str())),
+            )
+            .collect();
         Inputs {
-            imports,
-            stems: imports.iter().map(|name| names::import_stem(name)).collect(),
+            stems: names.iter().map(|(_, name)| names::import_stem(name)).collect(),
+            names,
             strings,
             lowered: strings.iter().map(|value| value.to_ascii_lowercase()).collect(),
         }
@@ -91,32 +102,32 @@ impl Match {
         }
     }
 
-    /// The evidence kind this term reports and its canonical (rule-table) spelling.
-    fn canonical(self) -> (&'static str, &'static str) {
+    /// This term's canonical (rule-table) spelling.
+    fn canonical(self) -> &'static str {
         match self {
-            Self::Import(needle) => ("import", needle),
-            Self::String(needle) | Self::StringAsciiInsensitive(needle) | Self::RegistryPath { path: needle, .. } => {
-                ("string", needle)
-            }
+            Self::Import(needle)
+            | Self::String(needle)
+            | Self::StringAsciiInsensitive(needle)
+            | Self::RegistryPath { path: needle, .. } => needle,
         }
     }
 
-    /// The original inputs this term matches, in input order.
-    fn hits<'a>(self, inputs: &Inputs<'a>) -> Vec<&'a str> {
+    /// The original inputs this term matches with their evidence kinds, in input order (imports first).
+    fn hits<'a>(self, inputs: &Inputs<'a>) -> Vec<(&'static str, &'a str)> {
         match self {
             Self::Import(pattern) => inputs
-                .imports
+                .names
                 .iter()
                 .zip(&inputs.stems)
                 .filter(|(_, stem)| names::stem_matches(pattern, stem))
-                .map(|(original, _)| original.as_str())
+                .map(|(&found, _)| found)
                 .collect(),
             _ => inputs
                 .strings
                 .iter()
                 .zip(&inputs.lowered)
                 .filter(|(value, lowered)| self.matches_string(value, lowered))
-                .map(|(value, _)| value.as_str())
+                .map(|(value, _)| ("string", value.as_str()))
                 .collect(),
         }
     }
@@ -323,14 +334,20 @@ const RULES: &[Rule] = &[
 /// Detects capabilities from import names and strings. Imports should be the names the binary imports (and its
 /// import-slot names); strings should be the readable strings found in the image.
 pub fn detect(imports: &[String], strings: &[String]) -> Vec<Capability> {
-    let inputs = Inputs::new(imports, strings);
+    detect_with_symbols(imports, &[], strings)
+}
+
+/// [`detect`], also matching name terms against function symbols, which name statically linked code. A term
+/// matched by an import reports `import` evidence; one matched only by a symbol reports `symbol` evidence.
+pub fn detect_with_symbols(imports: &[String], symbols: &[String], strings: &[String]) -> Vec<Capability> {
+    let inputs = Inputs::new(imports, symbols, strings);
     let mut found = Vec::new();
     for rule in RULES {
         let mut evidence = Vec::new();
         for term in rule.terms {
-            if !term.hits(&inputs).is_empty() {
-                let (kind, needle) = term.canonical();
-                evidence.push(format!("{kind}:{needle}"));
+            // Imports precede symbols in the inputs, so the first hit's kind prefers `import`.
+            if let Some(&(kind, _)) = term.hits(&inputs).first() {
+                evidence.push(format!("{kind}:{}", term.canonical()));
             }
         }
         if evidence.len() >= rule.threshold {
@@ -347,8 +364,7 @@ pub fn detect(imports: &[String], strings: &[String]) -> Vec<Capability> {
         let matched = rule.groups.iter().all(|group| {
             let mut matched_group = false;
             for term in *group {
-                let (kind, _) = term.canonical();
-                for value in term.hits(&inputs) {
+                for (kind, value) in term.hits(&inputs) {
                     matched_group = true;
                     add_evidence(&mut evidence, kind, value);
                 }
@@ -380,6 +396,32 @@ mod tests {
         let caps = detect(&strings(&["connect", "malloc"]), &[]);
         let network = caps.iter().find(|cap| cap.id == "network-socket").expect("networking");
         assert_eq!(network.evidence, vec!["import:connect"]);
+    }
+
+    #[test]
+    fn a_term_matched_only_by_a_symbol_reports_symbol_evidence() {
+        let caps = detect_with_symbols(&[], &strings(&["puts", "main"]), &[]);
+        let console = caps.iter().find(|cap| cap.id == "console-output").expect("console output");
+        assert_eq!(console.evidence, vec!["symbol:puts"]);
+    }
+
+    #[test]
+    fn an_imported_name_reports_import_evidence_even_with_a_symbol() {
+        let caps = detect_with_symbols(&strings(&["connect"]), &strings(&["connect", "send"]), &[]);
+        let network = caps.iter().find(|cap| cap.id == "network-socket").expect("networking");
+        assert_eq!(network.evidence, vec!["import:connect", "symbol:send"]);
+    }
+
+    #[test]
+    fn corroborated_evidence_labels_each_input_by_origin() {
+        let imports = strings(&["OpenProcessToken"]);
+        let symbols = strings(&["OpenProcessToken", "LookupPrivilegeValueW", "AdjustTokenPrivileges"]);
+        let caps = detect_with_symbols(&imports, &symbols, &[]);
+        let token = caps.iter().find(|cap| cap.id == "token-privilege").expect("token privilege");
+        assert_eq!(
+            token.evidence,
+            vec!["import:OpenProcessToken", "symbol:LookupPrivilegeValueW", "symbol:AdjustTokenPrivileges"]
+        );
     }
 
     #[test]

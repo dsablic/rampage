@@ -14,7 +14,9 @@ Import matching normalizes thunk prefixes, leading underscores, `@` decorations 
 terms accept one trailing A/W suffix; explicitly named variants remain distinct. Normalization affects matching,
 not corroborated evidence: `__imp__CreateFileW@28` remains `import:__imp__CreateFileW@28` in a corroborated hit,
 while a legacy filesystem hit reports `import:createfile`. Legacy thresholds count distinct matched rule terms,
-not duplicate inputs. String matching is rule-specific: literal case-sensitive substrings, ASCII-insensitive
+not duplicate inputs. Name terms also match function symbols, which name statically linked code; a term or input
+matched only by a symbol reports `symbol:` evidence instead of `import:` (`symbol:puts` in a static musl binary).
+String matching is rule-specific: literal case-sensitive substrings, ASCII-insensitive
 substrings or bounded registry paths. None of these rules establishes an API's argument values or data flow.
 
 | Rule ID | Required groups |

@@ -99,7 +99,7 @@ fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
     }
     for section in &report.sections {
         let shown = if section.truncated {
-            format!(" ({} of {})", section.findings.len(), section.total)
+            format!(" (showing {} of {} findings)", section.findings.len(), section.total)
         } else if section.excerpt.is_some() && section.total == 0 {
             String::new()
         } else {

@@ -8,29 +8,36 @@ impl Project {
     /// Likely behaviors of the binary, inferred from the names it imports and the strings it contains. This is
     /// triage evidence, not proof that the behavior executes.
     pub fn capabilities(&self) -> Vec<Capability> {
-        let (imports, strings) = self.capability_inputs();
-        rampage_capabilities::detect(&imports, &strings)
+        let (imports, symbols, strings) = self.capability_sources();
+        rampage_capabilities::detect_with_symbols(&imports, &symbols, &strings)
     }
 
     /// The imports and strings fed to capability detection. Imports and import slots name dynamically linked
     /// behavior; function symbols cover statically linked code (a static binary has `connect` as a symbol, not
     /// an import). The string scan is the cached default-length one, not a fresh rescan.
     pub(crate) fn capability_inputs(&self) -> (Vec<String>, Vec<String>) {
+        let (mut imports, symbols, strings) = self.capability_sources();
+        imports.extend(symbols);
+        (imports, strings)
+    }
+
+    /// The imports (with import slots), function symbols and strings behind [`Self::capability_inputs`], kept
+    /// apart so evidence can say whether a name was imported or linked in.
+    fn capability_sources(&self) -> (Vec<String>, Vec<String>, Vec<String>) {
         let binary = &self.binary;
         let imports: Vec<String> = binary
             .imports
             .iter()
             .map(|import| import.name.clone())
             .chain(binary.import_slots.iter().map(|slot| slot.name.clone()))
-            .chain(
-                binary
-                    .symbols
-                    .iter()
-                    .filter(|symbol| symbol.kind == rampage_loaders::SymbolKind::Function)
-                    .map(|symbol| symbol.name.clone()),
-            )
+            .collect();
+        let symbols: Vec<String> = binary
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.kind == rampage_loaders::SymbolKind::Function)
+            .map(|symbol| symbol.name.clone())
             .collect();
         let strings: Vec<String> = self.scanned_strings().iter().map(|string| string.text.clone()).collect();
-        (imports, strings)
+        (imports, symbols, strings)
     }
 }
