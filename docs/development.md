@@ -27,6 +27,23 @@ If debugging Rust code requires symbols, temporarily override `CARGO_PROFILE_DEV
 the debugging session and clean obsolete artifacts when no build is running. Merely stripping final executables
 does not remove intermediate objects and incremental caches.
 
+## Scope release validation
+
+For routine increments, use the full debug workspace suite and focused release checks for affected paths. Release
+uses ThinLTO and one codegen unit: changing the embedded native engine can trigger optimized linking for many
+separate integration-test executables. A full workspace release rebuild is an explicit broad acceptance run,
+not a prerequisite for every edit. Give release checks an explicit elapsed-time budget; report interrupted or
+unrun broad gates as incomplete rather than inferring success from a focused pass. Keep optimization settings
+unchanged unless a profile change is deliberately requested.
+
+For example, focused ABI/layout release checks can select existing integration targets without rebuilding unrelated
+UI and CLI test executables:
+
+```sh
+cargo test --locked --release --workspace --test darwin_narrow --test layout --test api --test smoke
+cargo test --locked --release -p rampage-decompiler --lib
+```
+
 ## Inspect and clean build output
 
 ```sh

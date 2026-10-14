@@ -7,10 +7,10 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
-## Protocol version 3
+## Protocol version 4
 
-Protocol 3 adds explicit `no_return` setup operations. Structured result schemas came with protocol 2;
-incompatible request/response versions are rejected rather than silently mixed.
+Protocol 4 adds ordered flat-struct layout assertions. It retains explicit `no_return` setup and structured results;
+incompatible request/response versions are rejected rather than silently mixed. Install callers and workers together.
 
 Requests own all data. Addresses and mapping sizes are JSON integers; `hex_bytes` contains consecutive hexadecimal
 pairs with no prefix. Mapping permissions and zero-fill size are preserved. `options.platform` is `default`,
@@ -18,7 +18,7 @@ pairs with no prefix. Mapping permissions and zero-fill size are preserved. `opt
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "arch": "x86_64",
   "big_endian": false,
   "options": { "platform": "default", "compiler": null },
@@ -44,6 +44,7 @@ The worker installs initial `code_modes`, then replays `operations` in their sup
 | `symbol` | `address`, `name` |
 | `import` | `slot`, optional `target`, `name` |
 | `parse_types` | `declarations` |
+| `assert_plain_struct_layout` | `layout`: complete bounded `PlainStructLayout` descriptor |
 | `prototype` | `address`, `indirect`, `declaration` |
 | `runtime_prototype` | `address`, `indirect`, canonical runtime `name`, optional `optional` boolean |
 | `mode` | `modes`: objects with `address` and `thumb` |
@@ -54,8 +55,8 @@ failed setup operation is a structured error identifying the operation index. `o
 runtime identities while preserving other setup errors. Unknown fields and versions are
 rejected.
 
-Responses are `{ "version": 3, "status": "ok", "output": ... }` or
-`{ "version": 3, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
+Responses are `{ "version": 4, "status": "ok", "output": ... }` or
+`{ "version": 4, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
 `data_organization` (`pointer`, `int`, `long` byte widths), and optional semantic `tokens` with `text`, `kind`, and
 optional numeric `address`.
 The CLI uses `rampage function decompile ... --isolated`; flat `decompile` remains accepted. Batch
@@ -63,6 +64,24 @@ The CLI uses `rampage function decompile ... --isolated`; flat `decompile` remai
 
 `validate_only: true` checks mappings, modes and ordered setup operations without requiring any function to
 decompile. It returns empty text; typed annotation transactions use this to validate entryless images.
+
+`assert_plain_struct_layout` checks an already parsed complete flat struct against independent layout facts before
+dependent prototypes are installed. It is supported only for `x86:LE:64:default:gcc`; it measures the selected native
+organization rather than host layout. Struct size/alignment, ordered fields, offsets, sizes and semantic leaf types
+must all agree. Limits are 128 fields, 128 bytes per name, 32 KiB cumulative text, one MiB size and alignment at most
+eight bytes. Nested aggregates, unions, arrays, retained bitfields, enums, callbacks and pointer chains are refused.
+Assertions are read-only and ephemeral, including in validation-only requests: they do not import debug layouts or
+persist proof across a new engine/compiler selection. Ordinary mismatches preserve prior native types/results;
+inspection exceptions are contained. Failure while storing an error diagnostic poisons the handle and clears results.
+
+Raw requests are preflighted before Serde buffers internally tagged operations. A complete layout-assertion operation
+is limited to 384 KiB encoded data, 64 KiB decoded text, 2,048 nodes and depth 12, regardless of member order or escaped
+keys. Layout strings/keys are at most 128 decoded bytes, tags 32 bytes, arrays 128 entries and objects 32 keys.
+Operations and layout records require object representation, and enum tags require strings; positional Serde
+representations and enum-object tags are refused.
+General requests retain the 128 MiB byte cap and also cap depth at 32, total nodes at 1,048,576 and nodes per operation
+at 65,536. Ordinary strings are at most 4 KiB; legacy mapping hex and declaration fields retain the request-byte
+budget. Malformed schema diagnostics are constant-size rather than echoes of offending strings.
 
 ## Resource boundary
 

@@ -17,6 +17,7 @@ context variables; `funcdata.hh` synchronizes display names and `funcdata.cc` re
 `grammar.cc` and `type.cc` bound array layouts;
 `prettyprint.hh` and `printlanguage.hh` allow an address-aware token emitter. Default loader hooks preserve
 upstream behavior; `modelrules.hh` and `modelrules.cc` add optional aligned stack-slot assignment for Darwin.
+`fspec.hh`, `fspec.cc` and `marshal.cc` add an opt-in bounded integer input-extension window.
 Other vendored sources are unchanged.
 
 Ghidra is Copyright the National Security Agency, licensed under the Apache License 2.0; `vendor/ghidra/LICENSE`
@@ -70,7 +71,10 @@ The legacy free `c_prototype` helper remains LP64-only and is not used by the pr
 
 These defaults do not establish full ABI parity. Darwin ARM64 selects `apple`, with byte-packed fixed stack
 arguments, consecutive integer register allocation, reserved x18 preservation and explicit unnamed-argument
-eight-byte stack slots. General variadic call recovery and exact narrow caller-extension modeling remain open.
+eight-byte stack slots. Bundled Apple rules extend signed/unsigned fixed register inputs smaller than 32 bits
+according to their declared integer type only through bit 31; upper register bits remain unknown. External
+specifications must supply the corresponding `extension_size` rule. This does not infer missing source types,
+change return rules or establish general variadic-call recovery. Other models retain their existing extension rules.
 Compiler overrides such as Go or Swift disable automatic C runtime declarations rather than assigning C
 signatures to functions using another calling convention.
 ARM BE8 selects mixed-endian SLEIGH using loader instruction/data order; compiler-only overrides preserve it.
@@ -108,6 +112,32 @@ and external debug files are explicitly skipped with diagnostics. `class_evidenc
 vtable/RTTI candidates and validated code slots without inferring object layouts or applying class types.
 Automatic C++ class-layout recovery is not provided.
 
+### Plain-struct layout verification
+
+`Decompiler::inspect_plain_struct(name)` reads a previously parsed, complete flat struct from the selected native
+type factory. `assert_plain_struct_layout(expected)` compares its complete layout with an independently supplied
+`layout::PlainStructLayout`: struct name/size/alignment, compiler organization, ordered field names/offsets/sizes,
+and semantic scalar or scalar-pointer leaf descriptors. Matching display names alone is insufficient.
+
+The bridge accepts only `x86:LE:64:default:gcc`, with measured LP64 widths and primitive alignments, including when
+specifications come from an external installation. Limits are 128 fields, 128 bytes per name, 32 KiB cumulative
+name/type text, one MiB aggregate size and alignment at most eight bytes. Incomplete types, unions, nested or
+recursive aggregates, arrays, bitfields, enums, callbacks, pointer chains and unsupported leaves are refused.
+Ordinary mismatches do not modify registered types or prior decompilation results. Inspection exceptions are
+contained; failure while storing an error diagnostic poisons the handle and clears results. No padding is
+synthesized. Refusal applies to retained native type facts, not syntax already normalized by the C parser.
+
+Inspection measures Ghidra's parsed layout, not a producer's debug layout. Assertions are read-only and ephemeral:
+callers must repeat them for every engine/session/compiler-specification rebuild, before dependent prototypes.
+This supplies no persistent assertions, debug provenance, DWARF/PDB layout import or general aggregate ABI recovery.
+The ordered worker `assert_plain_struct_layout` operation performs the same check, including validation-only requests.
+`PlainStructLayout::from_wire(bytes)` preflights raw JSON before Serde can buffer tagged values. A layout/assertion
+is limited to 384 KiB encoded data, 64 KiB decoded text including keys/tags, 2,048 nodes and depth 12. Wire strings
+and keys are at most 128 decoded bytes, tags 32 bytes, arrays 128 entries and objects 32 keys. These are wire caps
+in addition to the semantic limits above. Arbitrary third-party Serde deserializers do not supply this allocation
+boundary; use `from_wire` for isolated untrusted JSON.
+Layout records require object representation and enum tags require strings; positional Serde alternatives are refused.
+
 ## Structured output and limits
 
 Results include semantic tokens and an engine-derived `structure`: typed signature/parameter storage, local
@@ -134,8 +164,9 @@ Text output is bounded to four MiB and tokens to 262,144; the engine also retain
 Sessions select a sibling worker automatically when installed beside the application; `tools/install.sh`
 installs the worker and CLI together, optionally with the UI. Direct `Project` construction remains explicitly
 opt-in; `Session::open` also selects a sibling worker when present.
-Worker protocol version 3 carries ordered symbol/type/prototype/global/mode and `no_return` operations;
-mismatched request or response versions are rejected. Install the CLI and worker together rather than mixing builds.
+Worker protocol version 4 carries ordered symbol/type/prototype/global/mode, `no_return` and layout-assertion
+operations; mismatched request or response versions are rejected. Install the CLI and worker together rather than
+mixing builds.
 The protocol bounds input/output, drains pipes concurrently, cancels/times out and reaps failed children without
 native fallback. Hard wire limits are 128 MiB requests, 16 MiB stdout and 64 KiB stderr. Defaults are 30 seconds
 and one GiB memory. Linux uses hard AS/DATA limits; macOS samples RSS and can overshoot between samples.

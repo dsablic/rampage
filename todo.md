@@ -382,7 +382,10 @@ guarantee identical output: memory mappings, ABI, mode context, symbols/types an
    - [x] Darwin ARM64 fixed stack packing and explicit variadic slot allocator/compiler model.
    - [x] OS/library-specific typedefs: off_t/time_t/mode_t/pid_t prototypes sized by width placeholders, with the
      POSIX I/O and time functions that use them (documented 32-bit Linux off_t and 32-bit Darwin time_t edges).
-   - [ ] Remaining ABI-specific work: general Darwin ARM64 variadic call recovery and narrow caller extension.
+    - [x] Declared Darwin ARM64 narrow integer input extension to 32 bits, preserving unknown upper bits and
+      existing return rules. Owned compiled/recompiled C covers 58 comparisons; input-window controls include
+      cloned models, packing, promotions and conservative malformed-spec refusals.
+    - [ ] Remaining ABI-specific work: general Darwin ARM64 variadic call recovery and broader ABI/call correctness.
 4. [x] Symbol/type synchronization: address-bound prototypes, independent import slots, metadata identity
    separate from display spelling, reported failures, cached engine refresh on name/type edits and undo/redo.
 5. [x] Portable specification packaging and supervised resource/cancellation integration,
@@ -399,7 +402,9 @@ guarantee identical output: memory mappings, ABI, mode context, symbols/types an
    - [x] Validated persistent signatures and type declarations, API/MCP tools and shared-log dependency checks.
    - [x] Validated persistent typed globals with complete mapped-data storage and dependency checks.
    - [x] Bounded embedded-DWARF scalar/pointer signature preview/import with non-overwriting application.
-   - [x] Bounded named Itanium vtable/RTTI/code-slot class evidence; no asserted object layouts.
+    - [x] Bounded named Itanium vtable/RTTI/code-slot class evidence; no asserted object layouts.
+    - [x] Bounded read-only verification of parsed flat-struct layouts and ordered worker assertions for x86-64 GCC;
+      independent compiled size/alignment/offset and field-use gates. Assertions are ephemeral, not debug imports.
    - [ ] Exact aggregate/debug-layout import, external PDB/dSYM support and automatic class-layout recovery.
 7. [x] Address-linked structured results and clickable pseudocode, including engine-derived flow evidence.
    - [x] Semantic address-linked tokens and background UI pseudocode/navigation panel.
@@ -537,7 +542,37 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   are unchanged.
 - [x] Full frozen-source release workspace suite, preserving ordinary UI snapshots and the 13-slice gate.
 - [x] Protected committed-tree/full-history audit before publication; owned audit scratch removed afterward.
-- [ ] After this wave: assess decompiler ABI, stack/alias and aggregate-layout gaps before selecting implementations.
+- [x] Assessed decompiler ABI, stack/alias and aggregate-layout gaps. Native SSA stack facts do not feed primary
+  Ghidra C; model selection/allocation tests are not recovered-call correctness, and parsed C is not layout proof.
+
+### Darwin narrow inputs and aggregate-verification bridge
+
+- [x] Independently reproduced wrong Darwin signed fixed-input C using compiler assembly and recompiled output:
+  byte `-1 + 7` produced 262 instead of 6; signed-to-unsigned conversion failed while unsigned controls passed.
+- [x] Corrected the proven narrow-input extension errors. Caller guarantees stop at 32 bits; general variadic recovery
+  and return rules remain separate.
+- [x] Bounded inspection/assertion of already parsed flat plain-struct layouts, with exact leaf descriptors,
+  offsets, sizes and alignment, plus ordered worker validation. No DWARF import or persisted assertions yet.
+- [x] Independent reviews resolved extension-window, invalid-spec, Serde buffering and alternate-representation
+  findings. Raw JSON is bounded before materialization; malformed schema diagnostics do not echo input strings.
+- [x] Owned compiler arithmetic/layout/field-use gates and full debug workspace suite, including complete API/worker
+  token parity, ordinary UI snapshots and unchanged 13-slice evaluation gates. Warnings-denied Clippy and formatting.
+- [x] Controlled Python suite: 677 tests / 108 subtests; no new target-control or external-host acceptance claims.
+- [x] Focused optimized ABI/layout/API/worker regressions, decompiler unit tests and both compiled layout gates.
+  The final compiler-family refusal test registers a valid type before checking the specific unsupported-model error.
+- [ ] Full-workspace release gate: interrupted during compilation after an excessive optimized test-link rebuild;
+  this is neither a suite pass nor an assertion failure. Focused release validation above passed with unchanged
+  profiles.
+- [x] Protected committed-tree/history audit; owned audit/compiler scratch removed before publication.
+
+### Next verified-DWARF layout batch
+
+- [ ] Bounded embedded-DWARF extraction of complete flat-struct pointer dependencies and producer layout facts,
+  initially x86-64 little-endian ELF. Missing alignment/layout proof remains preview-only or rejected.
+- [ ] Persistent layout assertions replayed before dependent prototypes on every engine rebuild; Project-bound,
+  non-widening checked consent and atomic non-overwriting type/signature batches with one same-process undo step.
+- [ ] Owned compiled fixtures with independent layout/field-use oracles, refusal cases, reopen/undo and worker parity.
+  No general by-value ABI, recursive aggregates, union/bitfield/inheritance or inferred class-layout acceptance.
 
 ### Validation and external blockers
 

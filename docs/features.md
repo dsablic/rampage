@@ -56,6 +56,8 @@ target-sized runtime prototypes, ARM/Thumb context, BE8 and a Darwin ARM64 compi
 address-linked semantic tokens, signatures, storage mappings, CFG edges and recovered calls/jump tables.
 Processor specifications are embedded: relocated executables need no external Ghidra installation.
 `GHIDRA_INSTALL_DIR` overrides the embedded specifications; otherwise they use a writable HOME cache.
+Bundled Darwin ARM64 rules model declared narrow integer register inputs with signed/unsigned extension to 32 bits,
+without assuming values for the upper 32 bits. General variadic-call recovery remains separate.
 
 Sessions select a supervised sibling `rampage-worker` when installed. `--isolated` explicitly requires worker
 execution; batch decompilations and workflow previews also require supervision.
@@ -71,6 +73,10 @@ and dependency-checked undo/redo. Embedded DWARF scalar/pointer signatures can b
 without replacing analyst signatures. Named Itanium and MSVC vtables provide bounded class evidence, including
 the C++ class name, not inferred object layouts. For stripped binaries, Itanium and MSVC RTTI scanning recovers
 class names and base-class edges. See [debug signature import](debug-signatures.md).
+The decompiler library can inspect/assert complete flat-struct layouts for x86-64 GCC before using dependent
+prototypes. This read-only bridge compares native field offsets, sizes, alignment and leaf types against independent
+facts; it does not import debug layouts or persist assertions across engine rebuilds. Nested aggregates and inferred
+class layouts remain unsupported by this bridge.
 An explicit [PDB name import API](pdb-symbols.md) matches PE/PDB GUID and age, then previews or applies names to
 already-discovered unnamed entries without replacing existing labels. PDB types/layouts and undiscovered starts
 are not imported; no PDB sidecar is opened automatically.
