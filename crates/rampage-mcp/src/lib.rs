@@ -66,7 +66,10 @@ Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), id
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
 yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are \
 loaded with their licence and provenance. Types: set_signature, set_types and set_global persist C declarations; \
-language_metadata exposes demangled names and bounded metadata. Diagnostics: analysis_diagnostics reports decode \
+language_metadata exposes demangled names and bounded metadata. import_pdb_names requires an explicit pdb path \
+matching the PE image's RSDS GUID/age; preview is the default, apply=true imports names only as one undo batch. \
+Its detail pages never restrict the whole import; whole_apply_succeeded and exact totals survive byte caps. \
+Diagnostics: analysis_diagnostics reports decode \
 confidence limits. Runtime: compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal runtime \
 ranges, returning paginated byte evidence without sidecars or annotation transfer; verify identities when combining \
 pages. observe_indirect_branch takes explicit hexadecimal start/at addresses for a bounded ARM64 branch window; slot \
@@ -304,11 +307,16 @@ impl RampageServer {
         let arch = arguments.remove("arch");
         let image_offset = arguments.remove("image_offset");
         let image_length = arguments.remove("image_length");
-        let outcome = (|| -> Result<String, String> {
+        let apply_requested = arguments.get("apply").map_or(Some(false), Value::as_bool);
+        let outcome = (|| -> Result<(String, bool), String> {
             let tool =
                 self.tools.iter().find(|tool| tool.name == name).ok_or_else(|| format!("unknown tool {name}"))?;
             let path = path.as_ref().and_then(Value::as_str).ok_or("`path` is required")?;
-            let arch = arch.as_ref().and_then(Value::as_str).map(str::parse::<Arch>).transpose()?;
+            let arch = match arch.as_ref() {
+                None | Some(Value::Null) => None,
+                Some(Value::String(arch)) => Some(arch.parse::<Arch>()?),
+                Some(_) => return Err("`arch` must be an architecture string or null".to_owned()),
+            };
             let offset = image_offset.as_ref().map(|value| file_offset("image_offset", value)).transpose()?.flatten();
             let length = image_length.as_ref().map(|value| file_offset("image_length", value)).transpose()?.flatten();
             let image = match (offset, length) {
@@ -328,13 +336,14 @@ impl RampageServer {
                 project.set_packs(self.packs());
                 Arc::new(project)
             };
-            match tools::call(&self.tools, &project, name, Value::Object(arguments)) {
-                (output, false) => Ok(output),
-                (error, true) => Err(error),
-            }
+            Ok(tools::call(&self.tools, &project, name, Value::Object(arguments)))
         })();
         match outcome {
-            Ok(output) => CallToolResult::success(vec![ContentBlock::text(output)]),
+            Ok((output, false)) => CallToolResult::success(vec![ContentBlock::text(output)]),
+            Ok((message, true)) => CallToolResult::error(vec![ContentBlock::text(message)]),
+            Err(message) if name == "import_pdb_names" => {
+                CallToolResult::error(vec![ContentBlock::text(tools::pdb_import_error(&message, apply_requested))])
+            }
             Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
         }
     }
@@ -408,6 +417,12 @@ impl ServerHandler for RampageServer {
             return Ok(result.into());
         }
         if let Some(reason) = self.disabled_reason(&name) {
+            let reason = if name == "import_pdb_names" {
+                let apply_requested = arguments.get("apply").map_or(Some(false), Value::as_bool);
+                tools::pdb_import_error(&reason, apply_requested)
+            } else {
+                reason
+            };
             return Ok(CallToolResult::error(vec![ContentBlock::text(reason)]).into());
         }
         let server = self.clone();

@@ -9,9 +9,11 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 /// Results longer than this are cut, so that one large answer cannot crowd out the conversation. Workflow reports
-/// shrink themselves below it instead, so they stay valid JSON and keep their limitations.
+/// and PDB import receipts fit themselves below it instead, preserving valid JSON and whole-operation status.
 const MAX_RESULT_CHARS: usize = 60_000;
 const DEFAULT_PAGE: usize = 100;
+const MAX_PDB_DETAIL_BYTES: usize = 4096;
+const MAX_PDB_ERROR_BYTES: usize = 1024;
 
 type Handler = Box<dyn Fn(&Project, Value) -> Result<Value, String> + Send + Sync>;
 
@@ -58,7 +60,7 @@ impl Group {
             }
             Group::Types => {
                 "C signatures, type declarations and globals, embedded DWARF signature import, demangled names and \
-                 Itanium vtable/RTTI evidence."
+                 Itanium vtable/RTTI evidence, and explicit identity-matched PDB function-name import."
             }
             Group::Runtime => {
                 "Memory snapshot evidence: captured pointer slots, pointer comparisons across captures, runtime \
@@ -305,6 +307,157 @@ pub struct At {
 struct DebugImportArgs {
     #[serde(default)]
     apply: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PdbImportArgs {
+    /// Explicit PDB file path. No automatic sidecar, recorded path, symbol server or download is used.
+    pdb: std::path::PathBuf,
+    /// Persist eligible names as one undoable batch; omitted or false only previews.
+    #[serde(default)]
+    apply: bool,
+    /// Details to skip: function rows first, then warnings. Does not select which names are applied.
+    offset: Option<usize>,
+    /// Details per page (default 100, 1..=1000); the byte budget can shorten the page further.
+    #[schemars(range(min = 1, max = 1000))]
+    limit: Option<usize>,
+}
+
+fn pdb_receipt(apply_requested: Option<bool>) -> Value {
+    serde_json::json!({
+        "ok": false,
+        "status": "rejected",
+        "apply_requested": apply_requested,
+        "whole_apply_succeeded": false,
+        "identity": null,
+        "preview_total": null,
+        "applied_total": 0,
+        "preserved_total": null,
+        "warnings_total": null,
+        "details_total": null,
+        "offset": 0,
+        "limit": 0,
+        "details": [],
+        "more": false,
+        "next_offset": null,
+        "byte_capped": false,
+        "error": null,
+        "error_truncated": false,
+    })
+}
+
+fn pdb_detail_capacity() -> Result<usize, ApiError> {
+    // Reserve the largest receipt, including an escaped error, before any annotation action.
+    let mut envelope = pdb_receipt(Some(false));
+    envelope["identity"] = serde_json::json!({ "guid": "f".repeat(32), "age": u32::MAX });
+    for field in [
+        "preview_total",
+        "applied_total",
+        "preserved_total",
+        "warnings_total",
+        "details_total",
+        "offset",
+        "limit",
+        "next_offset",
+    ] {
+        envelope[field] = serde_json::json!(usize::MAX);
+    }
+    envelope["error"] = Value::String("\0".repeat(MAX_PDB_ERROR_BYTES));
+    MAX_RESULT_CHARS
+        .checked_sub(envelope.to_string().len())
+        .filter(|capacity| *capacity >= 6 * MAX_PDB_DETAIL_BYTES + 512)
+        .ok_or_else(|| ApiError::Invalid("PDB receipt cannot fit the tool output budget; nothing imported".to_owned()))
+}
+
+fn pdb_bounded_text(text: &str, budget: usize) -> &str {
+    let mut end = text.len().min(budget);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// A bounded JSON failure receipt, also used for MCP failures before the shared PDB tool can run.
+pub fn pdb_import_error(message: &str, apply_requested: Option<bool>) -> String {
+    let mut receipt = pdb_receipt(apply_requested);
+    let bounded = pdb_bounded_text(message, MAX_PDB_ERROR_BYTES);
+    receipt["error"] = Value::String(bounded.to_owned());
+    receipt["error_truncated"] = Value::Bool(bounded.len() != message.len());
+    receipt.to_string()
+}
+
+fn import_pdb_page(project: &Project, args: PdbImportArgs) -> Result<Value, ApiError> {
+    let limit = args.limit.unwrap_or(DEFAULT_PAGE);
+    if !(1..=1000).contains(&limit) {
+        return Err(ApiError::Invalid("limit must be in 1..=1000; nothing imported".to_owned()));
+    }
+    let capacity = pdb_detail_capacity()?;
+    let imported = project.import_pdb_names(&args.pdb, args.apply)?;
+    Ok(pdb_import_page(imported, args.apply, args.offset.unwrap_or(0), limit, capacity))
+}
+
+fn pdb_import_page(imported: crate::PdbImport, apply: bool, offset: usize, limit: usize, capacity: usize) -> Value {
+    let mut receipt = pdb_receipt(Some(apply));
+    receipt["ok"] = Value::Bool(true);
+    receipt["status"] = Value::String(if apply { "applied" } else { "preview" }.to_owned());
+    receipt["whole_apply_succeeded"] = Value::Bool(apply);
+    receipt["identity"] = imported.preview.identity.as_ref().map_or(
+        Value::Null,
+        |identity| serde_json::json!({ "guid": rampage_arch::hex::bytes(&identity.guid), "age": identity.age }),
+    );
+    let preview_total = imported.preview.functions.len();
+    let warnings_total = imported.preview.warnings.len();
+    let details_total = preview_total + warnings_total;
+    let offset = offset.min(details_total);
+    receipt["preview_total"] = serde_json::json!(preview_total);
+    receipt["applied_total"] = serde_json::json!(imported.applied.len());
+    receipt["preserved_total"] = serde_json::json!(imported.preserved.len());
+    receipt["warnings_total"] = serde_json::json!(warnings_total);
+    receipt["details_total"] = serde_json::json!(details_total);
+    receipt["offset"] = serde_json::json!(offset);
+    receipt["limit"] = serde_json::json!(limit);
+    let applied: std::collections::BTreeSet<_> = imported.applied.into_iter().collect();
+    let preserved: std::collections::BTreeSet<_> = imported.preserved.into_iter().collect();
+    let mut details = Vec::new();
+    let mut bytes = 0;
+    for index in offset..details_total.min(offset.saturating_add(limit)) {
+        let detail = if let Some(function) = imported.preview.functions.get(index) {
+            let status = if applied.contains(&function.address) {
+                "applied"
+            } else if preserved.contains(&function.address) {
+                "preserved"
+            } else {
+                "eligible"
+            };
+            let name = pdb_bounded_text(&function.name, MAX_PDB_DETAIL_BYTES);
+            serde_json::json!({
+                "kind": "function", "address": format!("{:#x}", function.address), "name": name,
+                "name_bytes": function.name.len(), "name_truncated": name.len() != function.name.len(),
+                "status": status,
+            })
+        } else {
+            let warning = &imported.preview.warnings[index - preview_total];
+            let text = pdb_bounded_text(warning, MAX_PDB_DETAIL_BYTES);
+            serde_json::json!({
+                "kind": "warning", "text": text, "text_bytes": warning.len(),
+                "text_truncated": text.len() != warning.len(),
+            })
+        };
+        let size = detail.to_string().len() + usize::from(!details.is_empty());
+        if size > capacity - bytes {
+            receipt["byte_capped"] = Value::Bool(true);
+            break;
+        }
+        bytes += size;
+        details.push(detail);
+    }
+    let next = offset + details.len();
+    let more = next < details_total;
+    receipt["details"] = Value::Array(details);
+    receipt["more"] = Value::Bool(more);
+    receipt["next_offset"] = if more { serde_json::json!(next) } else { Value::Null };
+    receipt
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -620,6 +773,19 @@ pub fn tools() -> Vec<Tool> {
             "import_debug_signatures",
             "Preview bounded embedded-DWARF signatures; apply=true persists them without replacing user signatures.",
             |project, arguments: DebugImportArgs| project.import_debug_signatures(arguments.apply),
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "import_pdb_names",
+            "Preview function names from an explicit `pdb` path matching this PE image's RSDS GUID and age. \
+             Only apply=true persists names, atomically as one undo batch, for preexisting unnamed function entries; \
+             user, symbol, export, entry and concurrent labels are preserved. No types, layouts, signatures, new \
+             functions, automatic paths, symbol servers or downloads. `offset`/`limit` page details only: every apply \
+             acts on the WHOLE import, not the page. Bounded JSON always retains identity, full preview/applied/\
+             preserved totals and whole_apply_succeeded; more/next_offset continue byte-capped details. To inspect \
+             later pages without another apply, omit apply or use false; eligibility reflects current annotations.",
+            import_pdb_page,
         )
         .annotates(),
         tool(
@@ -1056,6 +1222,10 @@ pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (Str
     let Some(tool) = tools.iter().find(|tool| tool.name == name) else {
         return (format!("unknown tool {name}"), true);
     };
+    let apply_requested = input
+        .get("apply")
+        .and_then(Value::as_bool)
+        .or_else(|| (input.is_object() && input.get("apply").is_none()).then_some(false));
     match (tool.handler)(project, input) {
         Ok(value) => {
             let mut text = value.to_string();
@@ -1066,6 +1236,7 @@ pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (Str
             }
             (text, false)
         }
+        Err(error) if name == "import_pdb_names" => (pdb_import_error(&error, apply_requested), true),
         Err(error) => (error, true),
     }
 }
@@ -1111,5 +1282,130 @@ mod tests {
         let (text, failed) = call(&tools, &project, "binary_info", serde_json::json!(42));
         assert!(failed);
         assert!(text.starts_with("invalid arguments:"));
+    }
+
+    #[test]
+    fn pdb_pages_keep_whole_import_receipts_and_exact_totals_under_the_byte_cap() {
+        use rampage_loaders::pdb::{PdbFunction, PdbIdentity, PdbReport};
+
+        let imported = || crate::PdbImport {
+            preview: PdbReport {
+                identity: Some(PdbIdentity { guid: [0xab; 16], age: 42 }),
+                functions: (0..5000)
+                    .map(|index| PdbFunction {
+                        address: 0x140001000 + index * 16,
+                        name: format!("symbol_{index}_{}", "x".repeat(700)),
+                    })
+                    .collect(),
+                warnings: vec!["\u{03bb}\n".repeat(10_000)],
+            },
+            applied: (3..5000).map(|index| 0x140001000 + index * 16).collect(),
+            preserved: (0..3).map(|index| 0x140001000 + index * 16).collect(),
+        };
+        assert!(serde_json::to_string(&imported()).unwrap().len() > MAX_RESULT_CHARS);
+        let capacity = pdb_detail_capacity().unwrap();
+        let first = pdb_import_page(imported(), true, 0, 1000, capacity);
+        let text = first.to_string();
+        assert!(text.len() <= MAX_RESULT_CHARS, "{}", text.len());
+        let first: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(first["whole_apply_succeeded"], true);
+        assert_eq!(first["status"], "applied");
+        assert_eq!(first["preview_total"], 5000);
+        assert_eq!(first["applied_total"], 4997);
+        assert_eq!(first["preserved_total"], 3);
+        assert_eq!(first["warnings_total"], 1);
+        assert_eq!(first["details_total"], 5001);
+        assert_eq!(first["byte_capped"], true);
+        assert_eq!(first["more"], true);
+        assert_eq!(first["details"][0]["status"], "preserved");
+        assert_eq!(first["details"][3]["status"], "applied");
+        let next = first["next_offset"].as_u64().unwrap() as usize;
+        assert!(next > 0 && next < 1000);
+        assert_eq!(next, first["details"].as_array().unwrap().len());
+        let second = pdb_import_page(imported(), true, next, 1000, capacity);
+        assert!(second.to_string().len() <= MAX_RESULT_CHARS);
+        assert_eq!(second["identity"], first["identity"]);
+        assert_eq!(second["applied_total"], first["applied_total"]);
+        assert_eq!(second["details"][0]["address"], format!("{:#x}", 0x140001000u64 + next as u64 * 16));
+
+        let last = pdb_import_page(imported(), true, 5000, 1000, capacity);
+        let last: Value = serde_json::from_str(&last.to_string()).unwrap();
+        assert!(last.to_string().len() <= MAX_RESULT_CHARS);
+        assert_eq!(last["whole_apply_succeeded"], true);
+        assert_eq!(last["applied_total"], 4997);
+        assert_eq!(last["more"], false);
+        assert_eq!(last["next_offset"], Value::Null);
+        assert_eq!(last["details"][0]["kind"], "warning");
+        assert_eq!(last["details"][0]["text_truncated"], true);
+        assert_eq!(last["details"][0]["text_bytes"], 30_000);
+
+        let mut preview = imported();
+        preview.applied.clear();
+        let preview = pdb_import_page(preview, false, usize::MAX, 1, capacity);
+        assert_eq!(preview["status"], "preview");
+        assert_eq!(preview["whole_apply_succeeded"], false);
+        assert_eq!(preview["preview_total"], 5000);
+        assert_eq!(preview["applied_total"], 0);
+        assert_eq!(preview["offset"], 5001);
+        assert_eq!(preview["details"], serde_json::json!([]));
+        assert_eq!(preview["more"], false);
+    }
+
+    #[test]
+    fn pdb_error_receipts_bound_escaped_unicode_without_losing_failure_status() {
+        let message = "\0\n\u{03bb}".repeat(30_000);
+        let text = pdb_import_error(&message, Some(true));
+        assert!(text.len() <= MAX_RESULT_CHARS);
+        let receipt: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(receipt["ok"], false);
+        assert_eq!(receipt["apply_requested"], true);
+        assert_eq!(receipt["whole_apply_succeeded"], false);
+        assert_eq!(receipt["applied_total"], 0);
+        assert_eq!(receipt["error_truncated"], true);
+        assert!(message.starts_with(receipt["error"].as_str().unwrap()));
+    }
+
+    #[test]
+    fn pdb_byte_capped_pages_always_advance_even_for_maximally_escaped_detail_text() {
+        use rampage_loaders::pdb::{PdbFunction, PdbIdentity, PdbReport};
+
+        let imported = || crate::PdbImport {
+            preview: PdbReport {
+                identity: Some(PdbIdentity { guid: [0xff; 16], age: u32::MAX }),
+                functions: (0..3)
+                    .map(|index| PdbFunction { address: u64::MAX - index, name: "\0".repeat(MAX_PDB_DETAIL_BYTES) })
+                    .collect(),
+                warnings: vec!["\0".repeat(MAX_PDB_DETAIL_BYTES * 2)],
+            },
+            applied: vec![u64::MAX],
+            preserved: vec![u64::MAX - 1, u64::MAX - 2],
+        };
+        let capacity = pdb_detail_capacity().unwrap();
+        let mut offset = 0;
+        let mut pages = 0;
+        loop {
+            let page = pdb_import_page(imported(), true, offset, 1000, capacity);
+            let text = page.to_string();
+            assert!(text.len() <= MAX_RESULT_CHARS, "{}", text.len());
+            let page: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(page["whole_apply_succeeded"], true);
+            assert_eq!(page["applied_total"], 1);
+            assert_eq!(page["preserved_total"], 2);
+            let count = page["details"].as_array().unwrap().len();
+            assert!(count > 0);
+            pages += 1;
+            assert!(pages <= 4);
+            if page["more"] == false {
+                assert_eq!(offset + count, 4);
+                assert_eq!(page["next_offset"], Value::Null);
+                assert_eq!(page["details"].as_array().unwrap().last().unwrap()["text_truncated"], true);
+                break;
+            }
+            assert_eq!(page["byte_capped"], true);
+            let next = page["next_offset"].as_u64().unwrap() as usize;
+            assert_eq!(next, offset + count);
+            offset = next;
+        }
+        assert!(pages > 1);
     }
 }

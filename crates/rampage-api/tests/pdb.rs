@@ -187,3 +187,176 @@ fn corrupt_constant_numeric_prefix_cannot_panic_or_partially_apply_function_name
     assert_eq!(names.len(), 1);
     assert_eq!(names[0].text, "preserved_user_local");
 }
+
+fn shared_import(project: &Project, input: serde_json::Value) -> (serde_json::Value, bool) {
+    let (text, failed) = rampage_api::tools::call(&rampage_api::tools::tools(), project, "import_pdb_names", input);
+    assert!(text.len() <= 60_000, "{}", text.len());
+    (serde_json::from_str(&text).unwrap(), failed)
+}
+
+#[test]
+fn shared_pdb_tool_defaults_to_preview_and_applies_the_whole_import_not_the_page() {
+    use rampage_api::tools::{Effect, Group};
+    use serde_json::json;
+
+    let files = TempFiles::new();
+    let log = files.write("shared-names.rampage", b"");
+    let project = Project::with_annotations(
+        Binary::open(fixture("fixture.exe")).unwrap(),
+        Annotations::open(log.clone()).unwrap(),
+    );
+    let tools = rampage_api::tools::tools();
+    let tool = tools.iter().find(|tool| tool.name == "import_pdb_names").unwrap();
+    assert_eq!(tool.group, Group::Types);
+    assert_eq!(tool.effect, Effect::Annotations);
+    assert!(tool.reads_annotations);
+    let before = std::fs::read(&log).unwrap();
+    let (preview, failed) = shared_import(&project, json!({ "pdb": fixture("fixture.pdb"), "limit": 1 }));
+    assert!(!failed, "{preview}");
+    assert_eq!(preview["status"], "preview");
+    assert_eq!(preview["apply_requested"], false);
+    assert_eq!(preview["whole_apply_succeeded"], false);
+    assert_eq!(preview["applied_total"], 0);
+    assert!(preview["identity"]["guid"].is_string());
+    assert!(preview["identity"]["age"].as_u64().unwrap() > 0);
+    assert_eq!(preview["details"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["more"], true);
+    assert_eq!(preview["next_offset"], 1);
+    assert_eq!(std::fs::read(&log).unwrap(), before);
+    assert!(project.annotation_list().names.is_empty());
+    assert!(project.resolve("pdb_mix").is_err());
+
+    let (applied, failed) = shared_import(
+        &project,
+        json!({ "pdb": fixture("fixture.pdb"), "apply": true, "offset": usize::MAX, "limit": 1 }),
+    );
+    assert!(!failed, "{applied}");
+    assert_eq!(applied["identity"], preview["identity"]);
+    assert_eq!(applied["preview_total"], preview["preview_total"]);
+    assert_eq!(applied["whole_apply_succeeded"], true);
+    assert_eq!(applied["status"], "applied");
+    assert_eq!(applied["applied_total"], 2);
+    assert_eq!(applied["details"], json!([]));
+    assert_eq!(applied["more"], false);
+    assert_ne!(std::fs::read(&log).unwrap(), before);
+    assert_eq!(project.resolve("pdb_mix").unwrap(), 0x140001000);
+    assert_eq!(project.resolve("pdb_local").unwrap(), 0x140001020);
+    let reopened =
+        Project::with_annotations(Binary::open(fixture("fixture.exe")).unwrap(), Annotations::open(log).unwrap());
+    assert_eq!(reopened.resolve("pdb_mix").unwrap(), 0x140001000);
+    assert_eq!(reopened.resolve("pdb_local").unwrap(), 0x140001020);
+    let (undo, failed) = rampage_api::tools::call(&tools, &project, "undo", json!({}));
+    assert!(!failed, "{undo}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&undo).unwrap().as_array().unwrap().len(), 2);
+    assert!(project.annotation_list().names.is_empty());
+    assert!(project.resolve("pdb_mix").is_err());
+}
+
+#[test]
+fn shared_pdb_tool_rejects_identity_malformed_and_invalid_arguments_without_edits() {
+    use serde_json::json;
+
+    let files = TempFiles::new();
+    let mut image = std::fs::read(fixture("fixture.exe")).unwrap();
+    let guid = rsds_offset(&image) + 4;
+    image[guid] ^= 1;
+    let mismatch = Project::new(Binary::open(files.write("shared-mismatch.exe", &image)).unwrap());
+    let (receipt, failed) = shared_import(&mismatch, json!({ "pdb": fixture("fixture.pdb"), "apply": true }));
+    assert!(failed);
+    assert_eq!(receipt["whole_apply_succeeded"], false);
+    assert_eq!(receipt["applied_total"], 0);
+    assert!(receipt["error"].as_str().unwrap().contains("GUID/age"), "{receipt}");
+    assert!(mismatch.annotation_list().names.is_empty());
+
+    let project = project();
+    project.rename(0x140001020, Some("keep_user_local")).unwrap();
+    let bytes = std::fs::read(fixture("fixture.pdb")).unwrap();
+    let malformed = files.write("shared-truncated.pdb", &bytes[..bytes.len() - 1]);
+    for input in [
+        json!({ "pdb": malformed, "apply": true }),
+        json!({ "apply": true }),
+        json!({ "pdb": fixture("fixture.pdb"), "apply": true, "limit": 0 }),
+        json!({ "pdb": fixture("fixture.pdb"), "apply": true, "limit": 1001 }),
+        json!({ "pdb": fixture("fixture.pdb"), "apply": "true" }),
+        json!({ "pdb": fixture("fixture.pdb"), "apply": true, "auto_sidecar": true }),
+    ] {
+        let (receipt, failed) = shared_import(&project, input);
+        assert!(failed, "{receipt}");
+        assert_eq!(receipt["ok"], false);
+        assert_eq!(receipt["status"], "rejected");
+        assert_eq!(receipt["whole_apply_succeeded"], false);
+        assert_eq!(receipt["applied_total"], 0);
+        assert!(receipt["error"].is_string());
+        assert!(project.resolve("pdb_mix").is_err());
+        assert_eq!(project.annotation_list().names.len(), 1);
+        assert_eq!(project.resolve("keep_user_local").unwrap(), 0x140001020);
+    }
+    assert_eq!(project.undo().unwrap().len(), 1);
+    assert!(project.annotation_list().names.is_empty());
+}
+
+#[test]
+fn shared_pdb_tool_preserves_another_clients_label_and_reports_full_counts() {
+    use serde_json::json;
+
+    let files = TempFiles::new();
+    let log = files.write("shared-concurrent.rampage", b"");
+    let importer = Project::with_annotations(
+        Binary::open(fixture("fixture.exe")).unwrap(),
+        Annotations::open(log.clone()).unwrap(),
+    );
+    let writer =
+        Project::with_annotations(Binary::open(fixture("fixture.exe")).unwrap(), Annotations::open(log).unwrap());
+    let (preview, failed) = shared_import(&importer, json!({ "pdb": fixture("fixture.pdb") }));
+    assert!(!failed, "{preview}");
+    writer.rename(0x140001000, Some("concurrent_mix")).unwrap();
+    assert!(importer.name_at(0x140001000).is_none());
+    let (receipt, failed) =
+        shared_import(&importer, json!({ "pdb": fixture("fixture.pdb"), "apply": true, "offset": 1, "limit": 1 }));
+    assert!(!failed, "{receipt}");
+    assert_eq!(receipt["whole_apply_succeeded"], true);
+    assert_eq!(receipt["preview_total"], preview["preview_total"]);
+    assert_eq!(receipt["applied_total"], 1);
+    assert_eq!(receipt["preserved_total"].as_u64().unwrap(), preview["preserved_total"].as_u64().unwrap() + 1);
+    assert_eq!(importer.function_name(0x140001000), "concurrent_mix");
+    assert_eq!(importer.resolve("pdb_local").unwrap(), 0x140001020);
+    assert_eq!(importer.undo().unwrap().len(), 1);
+    assert_eq!(importer.function_name(0x140001000), "concurrent_mix");
+    assert!(importer.resolve("pdb_local").is_err());
+}
+
+#[test]
+fn shared_pdb_tool_preserves_user_symbol_export_and_entry_names_without_an_undo_step() {
+    use serde_json::json;
+
+    let mut binary = Binary::open(fixture("fixture.exe")).unwrap();
+    binary.symbols.push(Symbol {
+        address: 0x140001000,
+        name: "symbol_mix".to_owned(),
+        size: 0,
+        kind: SymbolKind::Function,
+    });
+    let project = Project::new(binary);
+    project.rename(0x140001020, Some("user_local")).unwrap();
+    let (receipt, failed) = shared_import(&project, json!({ "pdb": fixture("fixture.pdb"), "apply": true }));
+    assert!(!failed, "{receipt}");
+    assert_eq!(receipt["whole_apply_succeeded"], true);
+    assert_eq!(receipt["applied_total"], 0);
+    assert_eq!(receipt["preserved_total"], receipt["preview_total"]);
+    assert!(
+        receipt["details"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|detail| { detail["kind"] != "function" || detail["status"] == "preserved" })
+    );
+    assert_eq!(project.function_name(0x140001000), "symbol_mix");
+    assert_eq!(project.function_name(0x140001020), "user_local");
+    assert_eq!(project.function_name(0x140001030), "pdb_export");
+    assert_eq!(project.function_name(project.binary.entry.unwrap()), "entry");
+    let undo = project.undo().unwrap();
+    assert_eq!(undo.len(), 1);
+    assert_eq!(undo[0].value.as_deref(), Some("user_local"));
+    assert_eq!(project.function_name(0x140001000), "symbol_mix");
+    assert!(project.annotation_list().names.is_empty());
+}
