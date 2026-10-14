@@ -80,6 +80,10 @@ The decompiler library can inspect/assert complete flat-struct layouts for x86-6
 prototypes. This read-only bridge compares native field offsets, sizes, alignment and leaf types against independent
 facts; it does not import debug layouts or persist assertions across engine rebuilds. Nested aggregates and inferred
 class layouts remain unsupported by this bridge.
+The separate [checked DWARF layout API](debug-layout-import.md) can persist verified flat-struct pointer declarations
+and dependent signatures as one non-overwriting batch, replaying assertions on reopen in native and worker engines.
+Its initial scope is small x86-64 ELF C metadata with explicit struct alignment and verified bundled specifications;
+it does not widen the existing scalar-only CLI/MCP importer or infer stripped-binary class layouts.
 An explicit [PDB name import API](pdb-symbols.md) matches PE/PDB GUID and age, then previews or applies names to
 already-discovered unnamed entries without replacing existing labels. PDB types/layouts and undiscovered starts
 are not imported; no PDB sidecar is opened automatically.

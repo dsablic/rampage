@@ -44,7 +44,7 @@ The worker installs initial `code_modes`, then replays `operations` in their sup
 | `symbol` | `address`, `name` |
 | `import` | `slot`, optional `target`, `name` |
 | `parse_types` | `declarations` |
-| `assert_plain_struct_layout` | `layout`: complete bounded `PlainStructLayout` descriptor |
+| `assert_plain_struct_layout` | `layout`: complete bounded descriptor; optional `expected_context` manifest SHA-256 |
 | `prototype` | `address`, `indirect`, `declaration` |
 | `runtime_prototype` | `address`, `indirect`, canonical runtime `name`, optional `optional` boolean |
 | `mode` | `modes`: objects with `address` and `thumb` |
@@ -73,6 +73,11 @@ eight bytes. Nested aggregates, unions, arrays, retained bitfields, enums, callb
 Assertions are read-only and ephemeral, including in validation-only requests: they do not import debug layouts or
 persist proof across a new engine/compiler selection. Ordinary mismatches preserve prior native types/results;
 inspection exceptions are contained. Failure while storing an error diagnostic poisons the handle and clears results.
+
+Checked project replay supplies `expected_context`: a canonical embedded-manifest SHA-256. The worker compares its
+own bundle and actual native context before initialization. `None` is omitted on the wire for ordinary manual or
+external-spec assertions. Older strict protocol-4 workers reject checked requests with this additional field;
+install callers and workers together. A digest does not authenticate an arbitrary replacement executable.
 
 Raw requests are preflighted before Serde buffers internally tagged operations. A complete layout-assertion operation
 is limited to 384 KiB encoded data, 64 KiB decoded text, 2,048 nodes and depth 12, regardless of member order or escaped

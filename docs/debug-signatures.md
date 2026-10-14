@@ -25,3 +25,6 @@ equivalence or complete source recovery.
 The `import_debug_signatures` API/MCP tool uses the same preview/apply behavior. A configured worker performs
 native signature validation out of process.
 The legacy `debug-types` CLI spelling remains accepted.
+
+[Checked flat-struct pointer import](debug-layout-import.md) is a separate library API with frozen consent,
+persistent layout assertions and whole-batch type/signature application. It does not widen this legacy importer.

@@ -147,6 +147,12 @@ in addition to the semantic limits above. Arbitrary third-party Serde deserializ
 boundary; use `from_wire` for isolated untrusted JSON.
 Layout records require object representation and enum tags require strings; positional Serde alternatives are refused.
 
+The project layer's separate [checked DWARF layout import](../../docs/debug-layout-import.md) persists bounded
+assertion-backed declarations and prototypes. Unlike ordinary manual inspection, this path requires the exact
+embedded specification manifest and a compatible process-cached context. `verify_bundled_specifications` and
+`require_verified_bundled_native_context` expose the respective fresh-worker and native-context checks;
+`verify_bundled_plain_struct_counterpart` measures native facts without filling unknown producer evidence.
+
 ## Structured output and limits
 
 Results include semantic tokens and an engine-derived `structure`: typed signature/parameter storage, local

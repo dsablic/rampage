@@ -85,6 +85,9 @@ jobs:
           clang --version
           clang++ --version
           xcrun --sdk macosx --show-sdk-path
+      - name: Require LLVM fixture tools
+        timeout-minutes: 3
+        run: rustup component add llvm-tools-preview
       - name: Warnings-denied workspace Clippy
         timeout-minutes: 30
         run: time cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -107,6 +110,17 @@ jobs:
       - name: Workspace tests including offscreen UI snapshots
         timeout-minutes: 20
         run: time cargo test --locked --workspace --exclude rampage-eval
+      - name: Owned DWARF layout import and worker acceptance
+        timeout-minutes: 5
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          DEBUG_LAYOUT_CPP: "1"
+        run: |
+          export RUST_SYSROOT="$(rustc --print sysroot)"
+          export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
+          bash tools/ci/debug-layout-oracle.sh --check \
+            cargo test --locked -p rampage-loaders -p rampage-api -p rampage-worker \
+            --test debug_layouts --test debug_layout_import --test debug_layout_acceptance -- --include-ignored
       - name: Opt-in native compiled fixture and isolated CLI acceptance
         timeout-minutes: 5
         run: |
@@ -141,7 +155,7 @@ jobs:
         run: bash tools/ci/linux-core.sh
 
 # Step/job timeouts bound CI execution, not individual analysis time or memory.
-# macOS runs the ordinary non-ignored debug workspace suite once, plus the two selected opt-in tests above.
+# macOS runs the ordinary debug workspace suite once, plus the selected compiled-fixture and isolated gates above.
 # Linux additionally compiles x86-64 ELF layout constants/field-use oracles and runs the selected ignored layout gates.
 # Ignored million-point context and Chrome performance tests are not CI coverage; Linux checks only the named core.
 # Metal-backed UI snapshots must pass on macOS; no snapshot updates, skips, or headless Linux UI claims.

@@ -405,6 +405,8 @@ guarantee identical output: memory mappings, ABI, mode context, symbols/types an
     - [x] Bounded named Itanium vtable/RTTI/code-slot class evidence; no asserted object layouts.
     - [x] Bounded read-only verification of parsed flat-struct layouts and ordered worker assertions for x86-64 GCC;
       independent compiled size/alignment/offset and field-use gates. Assertions are ephemeral, not debug imports.
+    - [x] Separate checked embedded-DWARF flat-struct pointer import: explicit producer struct alignment, bounded
+      C metadata, identity-qualified types, persistent assertions, frozen consent and one atomic dependency batch.
    - [ ] Exact aggregate/debug-layout import, external PDB/dSYM support and automatic class-layout recovery.
 7. [x] Address-linked structured results and clickable pseudocode, including engine-derived flow evidence.
    - [x] Semantic address-linked tokens and background UI pseudocode/navigation panel.
@@ -565,14 +567,21 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   profiles.
 - [x] Protected committed-tree/history audit; owned audit/compiler scratch removed before publication.
 
-### Next verified-DWARF layout batch
+### Verified-DWARF layout batch — initial bounded scope
 
-- [ ] Bounded embedded-DWARF extraction of complete flat-struct pointer dependencies and producer layout facts,
-  initially x86-64 little-endian ELF. Missing alignment/layout proof remains preview-only or rejected.
-- [ ] Persistent layout assertions replayed before dependent prototypes on every engine rebuild; Project-bound,
+- [x] Bounded embedded-DWARF extraction of complete flat-struct pointer dependencies and producer layout facts,
+  initially x86-64 little-endian ELF C. Missing struct alignment remains preview-only; unknown member/leaf facts
+  remain unknown and need a separately measured native counterpart. `.debug_info` is at most 128 KiB.
+- [x] Persistent layout assertions replayed before dependent prototypes on every engine rebuild; Project-bound,
   non-widening checked consent and atomic non-overwriting type/signature batches with one same-process undo step.
-- [ ] Owned compiled fixtures with independent layout/field-use oracles, refusal cases, reopen/undo and worker parity.
+- [x] Owned compiled fixtures with independent layout/field-use oracles, refusal cases, reopen/undo and worker parity.
   No general by-value ABI, recursive aggregates, union/bitfield/inheritance or inferred class-layout acceptance.
+- [x] Fresh reviews closed pre-read/base/address uniqueness, contextual-cache, compiler-context, ingestion/copy,
+  encoded-log/history and indexed-name replay findings. No authentication or atomic filesystem-snapshot claims.
+- [x] Pre-reconciliation full debug workspace suite and compiled loader/API/worker acceptance; unchanged ordinary
+  snapshots and 13-slice gates. The first time-boxed run was incomplete; the cached rerun passed in 158 seconds.
+- [ ] Reconcile Orest's upstream Go ABI/evidence commits, then validate the combined tree and focused release paths.
+- [ ] Final source/history audit, cleanup and publication. Full-workspace release is not a routine increment gate.
 
 ### Validation and external blockers
 
