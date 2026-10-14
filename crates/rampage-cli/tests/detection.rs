@@ -112,6 +112,106 @@ fn capa_and_capabilities_render_alike() {
 
 const ASSEMBLY: &str = "Microsoft.Bcl.HashCode.dll";
 
+fn boxed_attribute_image() -> Vec<u8> {
+    let mut strings = vec![0];
+    let mut name = |text: &str| {
+        let index = strings.len() as u16;
+        strings.extend_from_slice(text.as_bytes());
+        strings.push(0);
+        index
+    };
+    let attribute = name("BoxedAttribute");
+    let namespace = name("Demo");
+    let ctor = name(".ctor");
+    let mut value = vec![1, 0, 0x08, 42, 0, 0, 0, 2, 0, 0, 0, 0x0E, 2, b'4', b'2'];
+    value.extend([0x1D, 0x08, 2, 0, 0, 0]);
+    value.extend((-2i32).to_le_bytes());
+    value.extend(7i32.to_le_bytes());
+    value.extend([2, 0, 0x54, 0x51, 5]);
+    value.extend(b"Value");
+    value.extend([0x50, 11]);
+    value.extend(b"Demo.Target");
+    value.extend([0x53, 0x1D, 0x51, 5]);
+    value.extend(b"Items");
+    value.extend([2, 0, 0, 0, 0x0E, 0xFF, 0x02, 1]);
+    let mut blobs = vec![0, 6, 0x20, 2, 0x01, 0x1C, 0x1D, 0x1C];
+    assert!(value.len() < 0x80);
+    blobs.push(value.len() as u8);
+    blobs.extend(value);
+    let valid = (1u64 << 1) | (1 << 10) | (1 << 12);
+    let mut tables = vec![0, 0, 0, 0, 2, 0, 0, 1];
+    tables.extend(valid.to_le_bytes());
+    tables.extend(0u64.to_le_bytes());
+    for _ in 0..3 {
+        tables.extend(1u32.to_le_bytes());
+    }
+    for column in [0, attribute, namespace, 9, ctor, 1, 34, 11, 8] {
+        tables.extend(column.to_le_bytes());
+    }
+    let streams: [(&str, &[u8]); 3] = [("#~", &tables), ("#Strings", &strings), ("#Blob", &blobs)];
+    let version = b"v4.0.30319\0\0";
+    let mut root = b"BSJB\x01\0\x01\0\0\0\0\0".to_vec();
+    root.extend((version.len() as u32).to_le_bytes());
+    root.extend(version);
+    root.extend([0, 0, 3, 0]);
+    let mut offset =
+        root.len() + streams.iter().map(|(name, _)| 8 + (name.len() + 1).next_multiple_of(4)).sum::<usize>();
+    for (name, data) in streams {
+        root.extend((offset as u32).to_le_bytes());
+        root.extend((data.len() as u32).to_le_bytes());
+        root.extend(name.as_bytes());
+        root.push(0);
+        root.resize(root.len().next_multiple_of(4), 0);
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in streams {
+        root.extend(data);
+        root.resize(root.len().next_multiple_of(4), 0);
+    }
+    let mut image = std::fs::read(fixture(ASSEMBLY)).unwrap();
+    let metadata = rampage_loaders::dotnet::parse_image(&image).unwrap().unwrap();
+    let start = image.windows(4).position(|bytes| bytes == b"BSJB").unwrap();
+    assert!(root.len() <= metadata.cli.metadata_size as usize);
+    image[start..start + root.len()].copy_from_slice(&root);
+    image
+}
+
+#[test]
+fn dotnet_renders_typed_boxed_fixed_and_named_values_in_text_and_json() {
+    let scratch = Scratch::new("dotnet-boxed");
+    let path = scratch.0.join("boxed.dll");
+    std::fs::write(&path, boxed_attribute_image()).unwrap();
+    Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["dotnet", "--list", "attributes"])
+        .arg(&path)
+        .assert()
+        .success()
+        .stdout(contains("[Demo.BoxedAttribute(box(int32, 42), [box(string, \"42\"), box(int32[], [-2, 7])])]"))
+        .stdout(contains("property object \"Value\" = box(System.Type, typeof(Demo.Target))"))
+        .stdout(contains("field object[] \"Items\" = [box(string, null), box(bool, true)]"))
+        .stdout(contains("unreadable arguments:").not());
+    let output = Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["--json", "dotnet", "--list", "attributes"])
+        .arg(&path)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["custom_attributes"]["total"], 1);
+    let attribute = &json["custom_attributes"]["items"][0];
+    assert_eq!(
+        attribute["arguments"],
+        serde_json::json!(["box(int32, 42)", "[box(string, \"42\"), box(int32[], [-2, 7])]"])
+    );
+    assert_eq!(attribute["named_arguments"][0]["argument_type"], "object");
+    assert_eq!(attribute["named_arguments"][0]["value"], "box(System.Type, typeof(Demo.Target))");
+    assert_eq!(attribute["named_arguments"][1]["value"], "[box(string, null), box(bool, true)]");
+}
+
 #[test]
 fn dotnet_pages_types_and_shows_the_module_and_entry_point() {
     rampage(&["dotnet", "--limit", "2"], ASSEMBLY)

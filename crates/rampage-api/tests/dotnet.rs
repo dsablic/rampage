@@ -164,6 +164,100 @@ fn resource_project(declared: u32, cut: usize) -> rampage_api::Project {
     rampage_api::Project::new(rampage_loaders::Binary::open(&scratch.0).unwrap())
 }
 
+fn boxed_attribute_image() -> Vec<u8> {
+    let mut strings = vec![0];
+    let mut name = |text: &str| {
+        let index = strings.len() as u16;
+        strings.extend_from_slice(text.as_bytes());
+        strings.push(0);
+        index
+    };
+    let attribute = name("BoxedAttribute");
+    let namespace = name("Demo");
+    let ctor = name(".ctor");
+    let mut value = vec![1, 0, 0x08, 42, 0, 0, 0, 2, 0, 0, 0, 0x0E, 2, b'4', b'2'];
+    value.extend([0x1D, 0x08, 2, 0, 0, 0]);
+    value.extend((-2i32).to_le_bytes());
+    value.extend(7i32.to_le_bytes());
+    value.extend([2, 0, 0x54, 0x51, 5]);
+    value.extend(b"Value");
+    value.extend([0x50, 11]);
+    value.extend(b"Demo.Target");
+    value.extend([0x53, 0x1D, 0x51, 5]);
+    value.extend(b"Items");
+    value.extend([2, 0, 0, 0, 0x0E, 0xFF, 0x02, 1]);
+    let mut blobs = vec![0, 6, 0x20, 2, 0x01, 0x1C, 0x1D, 0x1C];
+    assert!(value.len() < 0x80);
+    blobs.push(value.len() as u8);
+    blobs.extend(value);
+    let valid = (1u64 << 1) | (1 << 10) | (1 << 12);
+    let mut tables = vec![0, 0, 0, 0, 2, 0, 0, 1];
+    tables.extend(valid.to_le_bytes());
+    tables.extend(0u64.to_le_bytes());
+    for _ in 0..3 {
+        tables.extend(1u32.to_le_bytes());
+    }
+    for column in [0, attribute, namespace, 9, ctor, 1, 34, 11, 8] {
+        tables.extend(column.to_le_bytes());
+    }
+    let streams: [(&str, &[u8]); 3] = [("#~", &tables), ("#Strings", &strings), ("#Blob", &blobs)];
+    let version = b"v4.0.30319\0\0";
+    let mut root = b"BSJB\x01\0\x01\0\0\0\0\0".to_vec();
+    root.extend((version.len() as u32).to_le_bytes());
+    root.extend(version);
+    root.extend([0, 0, 3, 0]);
+    let mut offset =
+        root.len() + streams.iter().map(|(name, _)| 8 + (name.len() + 1).next_multiple_of(4)).sum::<usize>();
+    for (name, data) in streams {
+        root.extend((offset as u32).to_le_bytes());
+        root.extend((data.len() as u32).to_le_bytes());
+        root.extend(name.as_bytes());
+        root.push(0);
+        root.resize(root.len().next_multiple_of(4), 0);
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in streams {
+        root.extend(data);
+        root.resize(root.len().next_multiple_of(4), 0);
+    }
+    let mut image = std::fs::read(fixture(ASSEMBLY)).unwrap();
+    let metadata = rampage_loaders::dotnet::parse_image(&image).unwrap().unwrap();
+    let start = image.windows(4).position(|bytes| bytes == b"BSJB").unwrap();
+    assert!(root.len() <= metadata.cli.metadata_size as usize);
+    image[start..start + root.len()].copy_from_slice(&root);
+    image
+}
+
+#[test]
+fn dotnet_attribute_json_preserves_boxed_types_without_changing_value_or_named_argument_schema() {
+    let scratch = EventImage(std::env::temp_dir().join(format!("rampage-api-dotnet-boxed-{}.dll", std::process::id())));
+    std::fs::write(&scratch.0, boxed_attribute_image()).unwrap();
+    let project = rampage_api::Project::new(rampage_loaders::Binary::open(&scratch.0).unwrap());
+    let query = DotNetQuery { list: DotNetList::Attributes, ..Default::default() };
+    let summary = project.dotnet_metadata(&query).unwrap().unwrap();
+    let json = serde_json::to_value(&summary).unwrap();
+    assert_eq!(json["custom_attributes"]["total"], 1);
+    let attribute = &json["custom_attributes"]["items"][0];
+    assert_eq!(attribute["attribute_type"], "Demo.BoxedAttribute");
+    assert_eq!(
+        attribute["arguments"],
+        serde_json::json!(["box(int32, 42)", "[box(string, \"42\"), box(int32[], [-2, 7])]"])
+    );
+    assert_eq!(
+        attribute["named_arguments"],
+        serde_json::json!([
+            {"kind": "property", "name": "Value", "argument_type": "object",
+             "value": "box(System.Type, typeof(Demo.Target))"},
+            {"kind": "field", "name": "Items", "argument_type": "object[]",
+             "value": "[box(string, null), box(bool, true)]"},
+        ])
+    );
+    assert!(attribute.get("arguments_error").is_none_or(serde_json::Value::is_null));
+    assert!(json.get("types").is_none() && json.get("resources").is_none());
+    let query = DotNetQuery { contains: Some("boxedattribute".to_owned()), ..query };
+    assert_eq!(project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes.unwrap().total, 1);
+}
+
 #[test]
 fn dotnet_resources_have_independent_pages_filters_counts_and_json_evidence() {
     use std::str::FromStr;

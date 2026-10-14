@@ -879,7 +879,8 @@ pub fn tools() -> Vec<Tool> {
              and event types, pinvokes with DLL/exports, attributes with fixed/named values, or resources with \
              metadata-only offset/reference evidence. Resource locations are not validated payload extents; no \
              payload or external resource is read. Supported attribute values include primitives, \
-             strings, types, single-dimensional arrays and verified local enums; unsupported values report errors. \
+             strings, types, single-dimensional arrays, verified local enums and boxed values/vectors in object[]; \
+             unsupported values report errors. \
              Property/event accessor tokens are metadata bindings, not inferred behavior. Filter with contains; \
              offset/limit page the list and parent_token selects an attribute target. Bodies are CIL, listed by \
              dotnet_il, not native code for decompile/disassemble. Returns null for a native image.",

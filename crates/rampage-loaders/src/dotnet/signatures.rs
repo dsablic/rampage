@@ -72,8 +72,10 @@ fn generic_name(params: &[(u32, String)], number: u32, prefix: &str) -> String {
 /// What a custom attribute value can hold for a parameter of this type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Kind {
-    /// A bare ELEMENT_TYPE (primitive, string, object, ...).
+    /// A bare ELEMENT_TYPE (primitive, string, ...).
     Element(u8),
+    /// An object value carries its serialized type before its payload.
+    Object,
     /// `System.Type`, stored in an attribute value as the type's name.
     SystemType,
     Enum(u8, u32),
@@ -443,7 +445,8 @@ impl<'r> Reader<'r> {
             _ => None,
         };
         if let Some(name) = primitive {
-            return self.charge(name.to_owned(), Kind::Element(element));
+            let kind = if element == 0x1C { Kind::Object } else { Kind::Element(element) };
+            return self.charge(name.to_owned(), kind);
         }
         let text = match element {
             0x0F => format!("{}*", self.ty_at(cursor, depth + 1, TypeContext::PointerTarget)?.text),
@@ -593,6 +596,15 @@ impl Reader<'_> {
         self.attribute_node(depth)?;
         let text = match &ty.kind {
             Kind::Element(element) => primitive_argument(cursor, *element)?,
+            Kind::Object => {
+                let boxed = self.serialized_type(cursor, depth + 1)?;
+                // A tagged object supplies one actual type, not another untyped object (CLR DecodeArgument).
+                if boxed.kind == Kind::Object {
+                    return None;
+                }
+                let value = self.argument(cursor, &boxed, depth + 1)?;
+                format!("box({}, {value})", boxed.text)
+            }
             Kind::SystemType => ser_string(cursor)?
                 .map_or_else(|| "null".to_owned(), |name| format!("typeof({}){}", name.text, name.cut())),
             Kind::Enum(table, row) => {
@@ -606,7 +618,7 @@ impl Reader<'_> {
             Kind::Array(inner) => {
                 let supported = match inner.kind {
                     Kind::Element(element) => matches!(element, 0x02..=0x0E),
-                    Kind::SystemType | Kind::NamedEnum(_) => true,
+                    Kind::Object | Kind::SystemType | Kind::NamedEnum(_) => true,
                     Kind::Enum(table, row) => {
                         let known = self.resolve.enum_underlying(table, row).is_some();
                         if !known {
@@ -670,14 +682,18 @@ impl Reader<'_> {
         }
         if element == 0x55 {
             let name = exact_ser_string(cursor)?;
-            let Some(underlying) = self.resolve.named_enum_underlying(&name) else {
+            let ty = self.charge(name, Kind::Other)?;
+            let Some(underlying) = self.resolve.named_enum_underlying(&ty.text) else {
                 self.attribute_error = Some(UNKNOWN_ENUM);
                 return None;
             };
-            return self.charge(name, Kind::NamedEnum(underlying));
+            return Some(Ty { kind: Kind::NamedEnum(underlying), ..ty });
         }
         if element == 0x50 {
             return self.charge("System.Type".to_owned(), Kind::SystemType);
+        }
+        if element == 0x51 {
+            return self.charge("object".to_owned(), Kind::Object);
         }
         if !matches!(element, 0x02..=0x0E) {
             return None;
@@ -947,7 +963,208 @@ mod tests {
         assert_eq!(attribute_arguments(&params[1..2], &[1, 0, 1, 2]), None, "truncated int32");
         assert_eq!(attribute_arguments(&params[..1], &[1, 0, 9, b'a']), None, "string past the blob");
         assert_eq!(attribute_arguments(&[ty(Kind::Other)], &[1, 0, 0, 0, 0, 0]), None, "enum or array");
-        assert_eq!(attribute_arguments(&[ty(Kind::Element(0x1C))], &[1, 0, 0x08, 1, 0, 0, 0]), None, "boxed");
+        assert_eq!(
+            attribute_arguments(&[ty(Kind::Object)], &[1, 0, 0x08, 1, 0, 0, 0, 0, 0]),
+            Some(vec!["box(int32, 1)".to_owned()])
+        );
+    }
+
+    #[test]
+    fn boxed_attribute_values_keep_actual_types_and_clr_null_encodings() {
+        let fake = Fake(Vec::new());
+        let budget = Cell::new(TOTAL_BUDGET);
+        let params = Reader::new(&fake, Generics::default(), &budget).method(&[0x20, 1, 0x01, 0x1C]).unwrap().params;
+        assert_eq!(params[0].kind, Kind::Object);
+        for (tag, payload, expected) in [
+            (0x02, vec![1], "box(bool, true)"),
+            (0x03, vec![b'x', 0], "box(char, 'x')"),
+            (0x04, vec![0xFE], "box(int8, -2)"),
+            (0x05, vec![0xFE], "box(uint8, 254)"),
+            (0x06, (-2i16).to_le_bytes().to_vec(), "box(int16, -2)"),
+            (0x07, u16::MAX.to_le_bytes().to_vec(), "box(uint16, 65535)"),
+            (0x08, (-2i32).to_le_bytes().to_vec(), "box(int32, -2)"),
+            (0x09, u32::MAX.to_le_bytes().to_vec(), "box(uint32, 4294967295)"),
+            (0x0A, (-2i64).to_le_bytes().to_vec(), "box(int64, -2)"),
+            (0x0B, u64::MAX.to_le_bytes().to_vec(), "box(uint64, 18446744073709551615)"),
+            (0x0C, 1.5f32.to_le_bytes().to_vec(), "box(float32, 1.5)"),
+            (0x0D, 2.5f64.to_le_bytes().to_vec(), "box(float64, 2.5)"),
+            (0x0E, vec![1, b'2'], "box(string, \"2\")"),
+            (0x0E, vec![0xFF], "box(string, null)"),
+            (0x50, vec![1, b'T'], "box(System.Type, typeof(T))"),
+            (0x50, vec![0xFF], "box(System.Type, null)"),
+            (0x1D, vec![0x08, 0xFF, 0xFF, 0xFF, 0xFF], "box(int32[], null)"),
+            (0x1D, vec![0x08, 0, 0, 0, 0], "box(int32[], [])"),
+            (0x1D, vec![0x50, 1, 0, 0, 0, 1, b'T'], "box(System.Type[], [typeof(T)])"),
+        ] {
+            let mut value = vec![1, 0, tag];
+            value.extend(payload);
+            value.extend([0, 0]);
+            let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+            assert_eq!(decoded.arguments, Some(vec![expected.to_owned()]), "{value:02x?}");
+            assert!(decoded.error.is_none());
+        }
+    }
+
+    #[test]
+    fn boxed_tags_reject_sentinels_untyped_objects_and_direct_jagged_vectors() {
+        let fake = Fake(Vec::new());
+        let params = [Ty { text: "object".to_owned(), kind: Kind::Object, shape: TypeShape::Other }];
+        for payload in [
+            vec![0xFF],
+            vec![0x00],
+            vec![0x01],
+            vec![0x1C],
+            vec![0x41],
+            vec![0x53],
+            vec![0x54],
+            vec![0x51, 0x08, 42, 0, 0, 0],
+            vec![0x1D, 0x1D, 0x08, 0xFF, 0xFF, 0xFF, 0xFF],
+            vec![0x1D, 0x08, 0xFE, 0xFF, 0xFF, 0xFF],
+            vec![0x1D, 0x08, 0xFF, 0xFF, 0xFF, 0x7F],
+        ] {
+            let mut value = vec![1, 0];
+            value.extend(payload);
+            value.extend([0, 0]);
+            let budget = Cell::new(TOTAL_BUDGET);
+            let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+            assert!(decoded.arguments.is_none() && decoded.named_arguments.is_none(), "{value:02x?}");
+            assert!(decoded.error.is_some());
+            assert!(budget.get() < TOTAL_BUDGET, "failed boxes still consume work");
+        }
+    }
+
+    #[test]
+    fn boxed_vectors_and_named_objects_require_complete_payloads() {
+        let fake = Fake(Vec::new());
+        let params = [Ty { text: "object".to_owned(), kind: Kind::Object, shape: TypeShape::Other }];
+        let mut value = vec![1, 0, 0x1D, 0x51, 2, 0, 0, 0, 0x08, 42, 0, 0, 0, 0x1D, 0x0E, 2, 0, 0, 0];
+        value.extend([1, b'x', 0xFF]);
+        let fixed_end = value.len();
+        value.extend([1, 0, 0x54, 0x51, 1, b'P', 0x50, 1, b'T']);
+        let expected = vec!["box(object[], [box(int32, 42), box(string[], [\"x\", null])])".to_owned()];
+        for end in 0..value.len() {
+            let budget = Cell::new(TOTAL_BUDGET);
+            let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value[..end]);
+            assert_eq!(decoded.arguments, (end >= fixed_end).then(|| expected.clone()), "truncation at {end}");
+            assert!(decoded.named_arguments.is_none() && decoded.error.is_some(), "truncation at {end}");
+        }
+        let budget = Cell::new(TOTAL_BUDGET);
+        let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+        assert_eq!(decoded.arguments, Some(expected.clone()));
+        let named = decoded.named_arguments.unwrap();
+        assert_eq!(named[0].argument_type, "object");
+        assert_eq!(named[0].value, "box(System.Type, typeof(T))");
+        assert!(decoded.error.is_none());
+        value.push(0);
+        let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+        assert_eq!(decoded.arguments, Some(expected));
+        assert!(decoded.named_arguments.is_none() && decoded.error.is_some(), "trailing bytes are not ignored");
+    }
+
+    #[test]
+    fn boxed_rendering_and_failed_tags_charge_exact_shared_work_without_recovery() {
+        let fake = Fake(Vec::new());
+        let params = [Ty { text: "object".to_owned(), kind: Kind::Object, shape: TypeShape::Other }];
+        let value = [1, 0, 0x08, 42, 0, 0, 0, 0, 0];
+        let text_cost = "int32".len() + "42".len() + "box(int32, 42)".len();
+        let fixed_cost = text_cost + value.len() - 2;
+        for (available, fixed, named) in
+            [(fixed_cost - 1, false, false), (fixed_cost, true, false), (fixed_cost + 2, true, true)]
+        {
+            let budget = Cell::new(available);
+            let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+            assert_eq!(decoded.arguments.is_some(), fixed, "budget {available}");
+            assert_eq!(decoded.named_arguments.is_some(), named, "budget {available}");
+            assert_eq!(budget.get(), 0);
+            assert!(
+                Reader::new(&fake, Generics::default(), &budget)
+                    .attribute_arguments(&params, &value)
+                    .arguments
+                    .is_none()
+            );
+        }
+        for (payload, cost) in [(vec![0x51, 0x08], 3 + "object".len()), (vec![0xFF], 3)] {
+            let mut value = vec![1, 0];
+            value.extend(payload);
+            let budget = Cell::new(TOTAL_BUDGET);
+            let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+            assert!(decoded.arguments.is_none());
+            assert_eq!(TOTAL_BUDGET - budget.get(), cost, "failed tags charge exactly the bytes read and text");
+            let budget = Cell::new(cost - 1);
+            assert!(
+                Reader::new(&fake, Generics::default(), &budget)
+                    .attribute_arguments(&params, &value)
+                    .arguments
+                    .is_none()
+            );
+            assert_eq!(budget.get(), 0);
+        }
+    }
+
+    #[test]
+    fn boxed_vector_recursion_and_fanout_share_attribute_caps() {
+        let fake = Fake(Vec::new());
+        let params = [Ty { text: "object".to_owned(), kind: Kind::Object, shape: TypeShape::Other }];
+        let nested = |levels: usize| {
+            let mut value = vec![1, 0];
+            value.extend([0x1D, 0x51, 1, 0, 0, 0].repeat(levels));
+            value.extend([0x08, 1, 0, 0, 0, 0, 0]);
+            value
+        };
+        for (levels, readable) in [(2, true), (MAX_DEPTH as usize + 1, false)] {
+            let budget = Cell::new(TOTAL_BUDGET);
+            let decoded =
+                Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &nested(levels));
+            assert_eq!(decoded.error.is_none(), readable);
+            assert!(budget.get() > 0, "depth caps do not exhaust the image budget");
+        }
+        let budget = Cell::new(TOTAL_BUDGET);
+        let mut many = vec![1, 0, 0x1D, 0x51];
+        many.extend(MAX_NODES.to_le_bytes());
+        many.extend([0x08, 0, 0, 0, 0].repeat(MAX_NODES as usize));
+        many.extend([0, 0]);
+        assert!(
+            Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &many).arguments.is_none()
+        );
+
+        let mut long = vec![1, 0, 0x1D, 0x51, 3, 0, 0, 0];
+        for _ in 0..3 {
+            long.extend([0x0E, 0x84, 0]);
+            long.extend([b'x'; 1024]);
+        }
+        long.extend([0, 0]);
+        assert!(
+            Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &long).arguments.is_none()
+        );
+        let recursive = Fake(vec![vec![0x12, SPEC1]]);
+        assert!(Reader::new(&recursive, Generics::default(), &budget).method(&[0x20, 1, 1, 0x12, SPEC1]).is_none());
+    }
+
+    #[test]
+    fn failed_boxed_enum_lookups_charge_type_names_and_keep_only_fully_charged_fixed_values() {
+        let fake = Fake(Vec::new());
+        let params = [Ty { text: "int32".to_owned(), kind: Kind::Element(0x08), shape: TypeShape::Other }];
+        let name = "Unknown.Enum";
+        let mut value = vec![1, 0, 42, 0, 0, 0, 1, 0, 0x54, 0x51, 1, b'P', 0x1D, 0x55, name.len() as u8];
+        value.extend(name.as_bytes());
+        let consumed = value.len();
+        value.extend([0xFF; 4]);
+        let rendered = "42".len() + "object".len() + "P".len() + name.len();
+        let cost = consumed + rendered;
+        let budget = Cell::new(TOTAL_BUDGET);
+        let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+        assert_eq!(decoded.arguments, Some(vec!["42".to_owned()]));
+        assert!(decoded.named_arguments.is_none());
+        assert_eq!(decoded.error, Some(UNKNOWN_ENUM));
+        assert_eq!(TOTAL_BUDGET - budget.get(), cost, "unknown enum names are charged before lookup fails");
+        for available in [cost - 1, cost] {
+            let budget = Cell::new(available);
+            let decoded = Reader::new(&fake, Generics::default(), &budget).attribute_arguments(&params, &value);
+            assert_eq!(decoded.arguments, Some(vec!["42".to_owned()]));
+            assert!(decoded.named_arguments.is_none());
+            assert_eq!(budget.get(), 0);
+            assert!(Reader::new(&fake, Generics::default(), &budget).method(&[0, 0, 1]).is_none());
+        }
     }
 
     #[test]

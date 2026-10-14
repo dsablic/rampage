@@ -1640,6 +1640,147 @@ fn ser_text(text: &str) -> Vec<u8> {
 }
 
 #[test]
+fn custom_attributes_decode_typed_boxes_and_mixed_object_vectors_with_verified_local_enums() {
+    for (underlying, bytes, number) in [
+        (0x04, vec![0xFE], "-2"),
+        (0x05, vec![0xFE], "254"),
+        (0x06, (-1234i16).to_le_bytes().to_vec(), "-1234"),
+        (0x07, 60_000u16.to_le_bytes().to_vec(), "60000"),
+        (0x08, (-123_456i32).to_le_bytes().to_vec(), "-123456"),
+        (0x09, 4_000_000_000u32.to_le_bytes().to_vec(), "4000000000"),
+        (0x0A, (-8_000_000_000i64).to_le_bytes().to_vec(), "-8000000000"),
+        (0x0B, 18_000_000_000u64.to_le_bytes().to_vec(), "18000000000"),
+    ] {
+        let name = "Demo.Program+Inner";
+        let mut enum_type = vec![0x55];
+        enum_type.extend(ser_text(name));
+        let mut enum_box = enum_type.clone();
+        enum_box.extend(&bytes);
+        let mut enum_vector = vec![0x1D];
+        enum_vector.extend(&enum_type);
+        enum_vector.extend(1u32.to_le_bytes());
+        enum_vector.extend(&bytes);
+
+        let mut value = vec![1, 0];
+        value.extend(&enum_box);
+        value.extend(9u32.to_le_bytes());
+        value.extend([0x08, 42, 0, 0, 0, 0x0E]);
+        value.extend(ser_text("42"));
+        value.push(0x50);
+        value.extend(ser_text("Demo.Program"));
+        value.extend(&enum_box);
+        value.extend([0x1D, 0x08, 2, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0]);
+        value.extend(&enum_vector);
+        value.extend([0x0E, 0xFF, 0x50, 0xFF, 0x1D, 0x08, 0xFF, 0xFF, 0xFF, 0xFF]);
+        let fixed_end = value.len();
+        value.extend([3, 0, 0x53, 0x51]);
+        value.extend(ser_text("Empty"));
+        value.extend([0x0E, 0xFF, 0x54, 0x51]);
+        value.extend(ser_text("Choices"));
+        value.extend(&enum_vector);
+        value.extend([0x54, 0x1D, 0x51]);
+        value.extend(ser_text("Mixed"));
+        value.extend([2, 0, 0, 0, 0x05, 0xFE, 0x1D, 0x02, 2, 0, 0, 0, 1, 0]);
+        let spec = Spec {
+            enum_underlying: Some(underlying),
+            ctor_signature: Some(vec![0x20, 2, 0x01, 0x1C, 0x1D, 0x1C]),
+            attribute_value: Some(value.clone()),
+            ..Spec::default()
+        };
+        let metadata = parse(&spec).unwrap().unwrap();
+        assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments_error, None, "underlying {underlying:#x}");
+        let boxed_enum = format!("box({name}, {name}({number}))");
+        let boxed_vector = format!("box({name}[], [{name}({number})])");
+        assert_eq!(
+            attribute.arguments.as_ref().unwrap(),
+            &[
+                boxed_enum.clone(),
+                format!(
+                    "[box(int32, 42), box(string, \"42\"), box(System.Type, typeof(Demo.Program)), \
+                     {boxed_enum}, box(int32[], [1, 2]), {boxed_vector}, \
+                     box(string, null), box(System.Type, null), box(int32[], null)]"
+                ),
+            ]
+        );
+        let named = attribute.named_arguments.as_ref().unwrap();
+        assert_eq!(named[0].kind, dotnet::NamedArgumentKind::Field);
+        assert_eq!(named[0].argument_type, "object");
+        assert_eq!(named[0].value, "box(string, null)");
+        assert_eq!(named[1].kind, dotnet::NamedArgumentKind::Property);
+        assert_eq!(named[1].argument_type, "object");
+        assert_eq!(named[1].value, boxed_vector);
+        assert_eq!(named[2].argument_type, "object[]");
+        assert_eq!(named[2].value, "[box(uint8, 254), box(bool[], [true, false])]");
+        let json = serde_json::to_value(attribute).unwrap();
+        assert_eq!(json["named_arguments"][1]["argument_type"], "object");
+        assert!(json["arguments"][0].is_string() && json["named_arguments"][1]["value"].is_string());
+        if underlying == 0x06 {
+            for end in 0..value.len() {
+                let truncated =
+                    parse(&Spec { attribute_value: Some(value[..end].to_vec()), ..spec.clone() }).unwrap().unwrap();
+                let row = &truncated.custom_attributes[0];
+                assert_eq!(row.arguments.is_some(), end >= fixed_end, "truncation at {end}");
+                assert!(row.named_arguments.is_none() && row.arguments_error.is_some(), "truncation at {end}");
+            }
+            value.push(0);
+            let trailing = parse(&Spec { attribute_value: Some(value), ..spec }).unwrap().unwrap();
+            let row = &trailing.custom_attributes[0];
+            assert_eq!(row.arguments, attribute.arguments);
+            assert!(row.named_arguments.is_none() && row.arguments_error.is_some());
+        }
+    }
+}
+
+#[test]
+fn boxed_enums_never_infer_unknown_qualified_escaped_or_ambiguous_widths_even_for_empty_vectors() {
+    let base = Spec { enum_underlying: Some(0x06), ..Spec::default() };
+    for (spec, name) in [
+        (base.clone(), "External.Mode"),
+        (base.clone(), "External.Mode, OtherAssembly"),
+        (base.clone(), "Demo.Program+Inner, Demo"),
+        (base.clone(), "Demo.Program+Inn\\er"),
+        (Spec { duplicate_enum_name: true, ..base.clone() }, "Demo.Program+Inner"),
+        (Spec { enum_field_flags: Some(0x0616), ..base.clone() }, "Demo.Program+Inner"),
+        (Spec { enum_underlying: Some(0x02), ..base.clone() }, "Demo.Program+Inner"),
+        (Spec { inner_name: Some("Mode*".to_owned()), ..base.clone() }, "Demo.Program+Mode*"),
+    ] {
+        for count in [None, Some(-1i32), Some(0)] {
+            let mut boxed = Vec::new();
+            if count.is_some() {
+                boxed.push(0x1D);
+            }
+            boxed.push(0x55);
+            boxed.extend(ser_text(name));
+            boxed.extend(count.map_or_else(|| vec![42, 0], |count| count.to_le_bytes().to_vec()));
+            for named in [false, true] {
+                let mut value = vec![1, 0];
+                if named {
+                    value.extend([1, 0, 0x54, 0x51]);
+                    value.extend(ser_text("Choice"));
+                }
+                value.extend(&boxed);
+                if !named {
+                    value.extend([0, 0]);
+                }
+                let metadata = parse(&Spec {
+                    ctor_signature: Some(if named { vec![0x20, 0, 0x01] } else { vec![0x20, 1, 0x01, 0x1C] }),
+                    attribute_value: Some(value),
+                    ..spec.clone()
+                })
+                .unwrap()
+                .unwrap();
+                let attribute = &metadata.custom_attributes[0];
+                assert_eq!(attribute.arguments, named.then(Vec::new), "{name}, count {count:?}");
+                assert!(attribute.named_arguments.is_none());
+                assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+            }
+        }
+    }
+}
+
+#[test]
 fn custom_attributes_decode_named_primitives_types_and_arrays() {
     let mut value = vec![1, 0];
     value.extend(2i32.to_le_bytes());

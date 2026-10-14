@@ -417,6 +417,108 @@ async fn dotnet_il_lists_a_method_by_name() {
     client.cancel().await.unwrap();
 }
 
+fn boxed_attribute_image() -> Vec<u8> {
+    let mut strings = vec![0];
+    let mut name = |text: &str| {
+        let index = strings.len() as u16;
+        strings.extend_from_slice(text.as_bytes());
+        strings.push(0);
+        index
+    };
+    let attribute = name("BoxedAttribute");
+    let namespace = name("Demo");
+    let ctor = name(".ctor");
+    let mut value = vec![1, 0, 0x08, 42, 0, 0, 0, 2, 0, 0, 0, 0x0E, 2, b'4', b'2'];
+    value.extend([0x1D, 0x08, 2, 0, 0, 0]);
+    value.extend((-2i32).to_le_bytes());
+    value.extend(7i32.to_le_bytes());
+    value.extend([2, 0, 0x54, 0x51, 5]);
+    value.extend(b"Value");
+    value.extend([0x50, 11]);
+    value.extend(b"Demo.Target");
+    value.extend([0x53, 0x1D, 0x51, 5]);
+    value.extend(b"Items");
+    value.extend([2, 0, 0, 0, 0x0E, 0xFF, 0x02, 1]);
+    let mut blobs = vec![0, 6, 0x20, 2, 0x01, 0x1C, 0x1D, 0x1C];
+    assert!(value.len() < 0x80);
+    blobs.push(value.len() as u8);
+    blobs.extend(value);
+    let valid = (1u64 << 1) | (1 << 10) | (1 << 12);
+    let mut tables = vec![0, 0, 0, 0, 2, 0, 0, 1];
+    tables.extend(valid.to_le_bytes());
+    tables.extend(0u64.to_le_bytes());
+    for _ in 0..3 {
+        tables.extend(1u32.to_le_bytes());
+    }
+    for column in [0, attribute, namespace, 9, ctor, 1, 34, 11, 8] {
+        tables.extend(column.to_le_bytes());
+    }
+    let streams: [(&str, &[u8]); 3] = [("#~", &tables), ("#Strings", &strings), ("#Blob", &blobs)];
+    let version = b"v4.0.30319\0\0";
+    let mut root = b"BSJB\x01\0\x01\0\0\0\0\0".to_vec();
+    root.extend((version.len() as u32).to_le_bytes());
+    root.extend(version);
+    root.extend([0, 0, 3, 0]);
+    let mut offset =
+        root.len() + streams.iter().map(|(name, _)| 8 + (name.len() + 1).next_multiple_of(4)).sum::<usize>();
+    for (name, data) in streams {
+        root.extend((offset as u32).to_le_bytes());
+        root.extend((data.len() as u32).to_le_bytes());
+        root.extend(name.as_bytes());
+        root.push(0);
+        root.resize(root.len().next_multiple_of(4), 0);
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in streams {
+        root.extend(data);
+        root.resize(root.len().next_multiple_of(4), 0);
+    }
+    let mut image = std::fs::read(fixture("Microsoft.Bcl.HashCode.dll")).unwrap();
+    let metadata = rampage_loaders::dotnet::parse_image(&image).unwrap().unwrap();
+    let start = image.windows(4).position(|bytes| bytes == b"BSJB").unwrap();
+    assert!(root.len() <= metadata.cli.metadata_size as usize);
+    image[start..start + root.len()].copy_from_slice(&root);
+    image
+}
+
+#[tokio::test]
+async fn dotnet_metadata_transports_typed_boxed_values_through_the_existing_schema() {
+    struct BoxedImage(PathBuf);
+    impl Drop for BoxedImage {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let scratch = BoxedImage(std::env::temp_dir().join(format!("rampage-mcp-dotnet-boxed-{}.dll", std::process::id())));
+    std::fs::write(&scratch.0, boxed_attribute_image()).unwrap();
+    let client = connect().await;
+    let tools = client.list_all_tools().await.unwrap();
+    let metadata = tools.iter().find(|tool| tool.name == "dotnet_metadata").unwrap();
+    assert!(metadata.input_schema["properties"].get("boxed").is_none());
+    let result = call(
+        &client,
+        "dotnet_metadata",
+        json!({"path": scratch.0.to_str().unwrap(), "list": "attributes", "limit": 1}),
+    )
+    .await;
+    let json = json_of(&result);
+    assert_eq!(json["custom_attributes"]["total"], 1);
+    let attribute = &json["custom_attributes"]["items"][0];
+    assert_eq!(attribute["attribute_type"], "Demo.BoxedAttribute");
+    assert_eq!(attribute["arguments"], json!(["box(int32, 42)", "[box(string, \"42\"), box(int32[], [-2, 7])]"]));
+    assert_eq!(
+        attribute["named_arguments"],
+        json!([
+            {"kind": "property", "name": "Value", "argument_type": "object",
+             "value": "box(System.Type, typeof(Demo.Target))"},
+            {"kind": "field", "name": "Items", "argument_type": "object[]",
+             "value": "[box(string, null), box(bool, true)]"},
+        ])
+    );
+    assert!(attribute.get("arguments_error").is_none_or(Value::is_null));
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn dotnet_resources_select_the_independent_metadata_page_and_counts() {
     let client = connect().await;
