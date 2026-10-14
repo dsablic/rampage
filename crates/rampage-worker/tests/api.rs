@@ -2,6 +2,33 @@ use rampage_api::{DecompilerWorkerConfig, Project};
 use rampage_loaders::Binary;
 
 #[test]
+fn generated_go_result_dependencies_replay_before_analyst_signatures_in_both_engines() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-go-x64.elf");
+    for (types, result) in
+        [(None, "go_results_2"), (Some("typedef struct{xunknown8 r0; xunknown8 r1;}go_results_2;"), "go_results_2")]
+    {
+        let project = Project::new(Binary::open(&path).unwrap());
+        let greet = project.resolve("main.greet").unwrap();
+        project.set_decompiler_worker(Some(DecompilerWorkerConfig {
+            executable: Some(env!("CARGO_BIN_EXE_rampage-worker").into()),
+            ..Default::default()
+        }));
+        project.set_types(1, Some("struct result_box { go_results_2 result; };")).unwrap();
+        if let Some(types) = types {
+            project.set_types(greet, Some(types)).unwrap();
+        }
+        let signature = format!("{result} greet(xunknown8 who, xunknown8 size);");
+        project.set_signature(greet, Some(&signature)).unwrap();
+        let isolated = project.decompile(greet).unwrap();
+        assert!(isolated.code.contains(&format!("{result} main.greet")), "{}", isolated.code);
+        project.set_decompiler_worker(None);
+        let native = project.decompile(greet).unwrap();
+        assert_eq!(isolated.code, native.code);
+        assert_eq!(isolated.structure, native.structure);
+    }
+}
+
+#[test]
 fn api_supervised_path_matches_native_imports_tokens_and_typed_annotations() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64-dyn.elf");
     let project = Project::new(Binary::open(path).unwrap());

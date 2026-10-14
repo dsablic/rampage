@@ -4,6 +4,7 @@ use rampage_decompiler::worker::WorkerOperation;
 pub(super) fn plan(
     project: &crate::Project,
     annotations: &crate::annotations::Annotations,
+    generated_types: &[String],
 ) -> Result<Vec<WorkerOperation>, ApiError> {
     use crate::debug_layout_import::{self, LayoutBundle};
     debug_layout_import::validate_replay_source(project, annotations)?;
@@ -15,7 +16,10 @@ pub(super) fn plan(
     };
     let specifications =
         if layouts.is_empty() { None } else { Some(debug_layout_import::current_specification_digest()?) };
-    let mut operations = Vec::new();
+    let mut operations: Vec<_> = generated_types
+        .iter()
+        .map(|declaration| WorkerOperation::ParseTypes { declarations: declaration.clone() })
+        .collect();
     let mut assertions = Vec::new();
     let mut name_work = 0usize;
     for text in annotations.types().values() {
@@ -47,6 +51,10 @@ pub(super) fn plan(
             }
         }
         for declaration in declarations(text)? {
+            if generated_types.iter().any(|generated| declaration_tokens(declaration).eq(declaration_tokens(generated)))
+            {
+                continue;
+            }
             if declaration
                 .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
                 .any(|word| word == "extern")
@@ -82,6 +90,22 @@ pub(super) fn plan(
         }
     }
     Ok(operations)
+}
+
+fn declaration_tokens(mut text: &str) -> impl Iterator<Item = &str> {
+    std::iter::from_fn(move || {
+        text = text.trim_start();
+        let first = text.chars().next()?;
+        let identifier = |character: char| character.is_alphanumeric() || character == '_';
+        let length = if identifier(first) {
+            text.find(|character: char| !identifier(character)).unwrap_or(text.len())
+        } else {
+            first.len_utf8()
+        };
+        let (token, remaining) = text.split_at(length);
+        text = remaining;
+        Some(token)
+    })
 }
 
 fn reject_late_type_definitions(
@@ -192,7 +216,7 @@ mod tests {
         annotations.set(Field::Types, address, Some(text)).unwrap();
         annotations.set(Field::Signature, address, Some(signature)).unwrap();
         for _ in 0..2 {
-            let operations = plan(&project, &annotations).unwrap();
+            let operations = plan(&project, &annotations, &[]).unwrap();
             let types = operations.iter().position(|op| matches!(op, WorkerOperation::ParseTypes { .. })).unwrap();
             let assertion =
                 operations.iter().position(|op| matches!(op, WorkerOperation::AssertPlainStructLayout { .. })).unwrap();
@@ -202,6 +226,6 @@ mod tests {
         annotations
             .set(Field::Global, 0, Some("struct ordered_record { uint8 changed; } variable;".to_owned()))
             .unwrap();
-        assert!(plan(&project, &annotations).is_err());
+        assert!(plan(&project, &annotations, &[]).is_err());
     }
 }

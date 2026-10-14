@@ -148,3 +148,23 @@ fn user_signatures_and_c_conventions_replace_derived_go_prototypes() {
     project.set_decompiler_options(Some(DecompilerOptions { compiler: Some("gcc".to_owned()), ..Default::default() }));
     assert!(!project.decompile(greet).unwrap().code.contains("go_results"));
 }
+
+#[test]
+fn analyst_signatures_can_reuse_generated_go_result_types() {
+    let project = Project::new(fixture("hello-go-x64.elf"));
+    let greet = project.resolve("main.greet").unwrap();
+    project.set_signature(greet, Some("go_results_2 greet(xunknown8 who, xunknown8 size);")).unwrap();
+    assert!(project.decompile(greet).unwrap().code.contains("go_results_2 main.greet"));
+}
+
+#[test]
+fn analyst_types_can_supply_generated_go_result_declarations() {
+    let project = Project::new(fixture("hello-go-x64.elf"));
+    let greet = project.resolve("main.greet").unwrap();
+    project.set_types(1, Some("struct result_box { go_results_2 result; };")).unwrap();
+    project.set_types(greet, Some("typedef struct{xunknown8 r0;\nxunknown8 r1;}go_results_2;")).unwrap();
+    project.set_signature(greet, Some("go_results_2 greet(xunknown8 who, xunknown8 size);")).unwrap();
+    assert!(project.decompile(greet).unwrap().code.contains("go_results_2 main.greet"));
+    project.set_types(greet, None).unwrap();
+    assert!(project.decompile(greet).unwrap().code.contains("go_results_2 main.greet"));
+}

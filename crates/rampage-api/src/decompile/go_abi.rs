@@ -118,25 +118,26 @@ impl Project {
     }
 }
 
-/// The operations declaring derived prototypes, when the decompiler uses Go's register ABI. Addresses that
-/// carry a user signature keep it.
+#[derive(Default)]
+pub(super) struct GoPlan {
+    pub(super) types: Vec<String>,
+    pub(super) prototypes: Vec<WorkerOperation>,
+}
+
+/// Generated types precede analyst dependencies; inferred prototypes follow analyst annotations.
 pub(super) fn plan(
     project: &Project,
     annotations: &crate::annotations::Annotations,
     options: &DecompilerOptions,
-) -> Vec<WorkerOperation> {
+) -> GoPlan {
     if options.compiler.as_deref() != Some("golang") {
-        return Vec::new();
+        return GoPlan::default();
     }
     let prototypes = project.go_prototypes();
     if prototypes.declarations.is_empty() {
-        return Vec::new();
+        return GoPlan::default();
     }
-    let mut operations: Vec<WorkerOperation> = prototypes
-        .types
-        .iter()
-        .map(|declaration| WorkerOperation::ParseTypes { declarations: declaration.clone() })
-        .collect();
+    let mut operations = Vec::new();
     for (&address, declaration) in &prototypes.declarations {
         if annotations.signatures().contains_key(&address) {
             continue;
@@ -144,7 +145,7 @@ pub(super) fn plan(
         operations.push(WorkerOperation::Symbol { address, name: project.function_name_in(annotations, address) });
         operations.push(WorkerOperation::Prototype { address, indirect: false, declaration: declaration.clone() });
     }
-    operations
+    GoPlan { types: prototypes.types.clone(), prototypes: operations }
 }
 
 fn derive(project: &Project) -> Option<GoPrototypes> {

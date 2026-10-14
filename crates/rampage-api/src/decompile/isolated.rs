@@ -63,8 +63,9 @@ pub(super) fn decompile(
         && context::mode_at(&binary.target(), &project.analysis()?.program.code_modes, address);
     crate::debug_layout_import::validate_replay_source(project, annotations)?;
     let mut operations = symbols::plan(project, annotations)?;
-    operations.extend(types::plan(project, annotations)?);
-    operations.extend(go_abi::plan(project, annotations, options));
+    let go = go_abi::plan(project, annotations, options);
+    operations.extend(types::plan(project, annotations, &go.types)?);
+    operations.extend(go.prototypes);
     let request = WorkerRequest {
         version: PROTOCOL_VERSION,
         arch: binary.arch.to_string(),

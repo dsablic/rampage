@@ -371,8 +371,9 @@ impl Project {
         }
 
         let mut operations = symbols::plan(self, annotations)?;
-        operations.extend(types::plan(self, annotations)?);
-        operations.extend(go_abi::plan(self, annotations, options));
+        let go = go_abi::plan(self, annotations, options);
+        operations.extend(types::plan(self, annotations, &go.types)?);
+        operations.extend(go.prototypes);
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         symbols::apply(operations, &mut decompiler)?;
         crate::debug_layout_import::validate_replay_source(self, annotations)?;

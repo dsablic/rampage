@@ -57,6 +57,9 @@ call (including registers passed straight to another call or returned again). A 
 found. Functions that take or return floats, or whose inputs do not fit in registers, keep inferred prototypes;
 user signatures replace derived ones. Every derived value is an 8-byte or smaller `xunknown` word, and a
 multi-word result is a `go_results_N` struct with fields `r0` to `rN-1`.
+Generated result declarations precede analyst types and signatures. A token-equivalent analyst copy is installed
+once, including when an earlier analyst declaration depends on it. Arbitrary redefinitions and aliases of these
+generated anonymous result types are not supported by this replay guarantee.
 `DecompilerOptions` exposes platform/compiler overrides; `Project::set_decompiler_options(None)` restores
 format-based selection. The CLI accepts `rampage function decompile IMAGE --at FUNCTION --compiler windows`
 (or another advertised compiler ID). Unknown IDs are errors, not silent fallback to the first compiler in a
