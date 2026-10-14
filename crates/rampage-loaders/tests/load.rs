@@ -9,6 +9,119 @@ fn fixture(name: &str) -> PathBuf {
 
 const GREETING: &[u8] = b"rampage fixture greeting";
 
+#[cfg(unix)]
+mod backing_source {
+    use super::*;
+    use std::fs::{File, FileTimes};
+    use std::io::{Seek, SeekFrom, Write};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    struct SourceFixture {
+        directory: PathBuf,
+        path: PathBuf,
+        replacement: PathBuf,
+    }
+
+    impl SourceFixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let directory = std::env::temp_dir().join(format!(
+                "rampage-backing-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            std::fs::create_dir(&directory).unwrap();
+            let path = directory.join("image.macho");
+            let replacement = directory.join("replacement.macho");
+            std::fs::write(&path, thin_image()).unwrap();
+            Self { directory, path, replacement }
+        }
+    }
+
+    impl Drop for SourceFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(&self.replacement);
+            let _ = std::fs::remove_dir(&self.directory);
+        }
+    }
+
+    fn thin_image() -> Vec<u8> {
+        let mut bytes = vec![0; 0x1000];
+        for (offset, value) in [
+            (0, 0xfeed_facfu32),
+            (4, 0x0100_000c),
+            (12, 2),
+            (16, 2),
+            (20, 96),
+            (32, 0x19),
+            (36, 72),
+            (88, 7),
+            (92, 5),
+            (104, 0x1b),
+            (108, 24),
+        ] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for (offset, value) in [(56, 0x1_0000_0000u64), (64, 0x1000), (80, 0x1000)] {
+            bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes[40..46].copy_from_slice(b"__TEXT");
+        bytes[112..128].fill(0x11);
+        bytes
+    }
+
+    #[test]
+    fn an_unchanged_original_mapping_has_a_valid_backing_identity() {
+        let fixture = SourceFixture::new();
+        let binary = Binary::open(&fixture.path).unwrap();
+        assert!(binary.validate_backing_source().is_ok());
+        assert_eq!(binary.read(0x1_0000_0000, 4).unwrap(), &0xfeed_facfu32.to_le_bytes());
+    }
+
+    #[test]
+    fn in_place_uuid_overwrite_is_detected_without_reading_the_old_mapping() {
+        let fixture = SourceFixture::new();
+        let binary = Binary::open(&fixture.path).unwrap();
+        let mut file = File::options().write(true).open(&fixture.path).unwrap();
+        let modified = file.metadata().unwrap().modified().unwrap();
+        file.seek(SeekFrom::Start(112)).unwrap();
+        file.write_all(&[0x22; 16]).unwrap();
+        file.set_times(FileTimes::new().set_modified(modified + Duration::from_secs(1))).unwrap();
+        assert!(binary.validate_backing_source().is_err());
+        assert!(binary.validate_backing_source().is_err());
+    }
+
+    #[test]
+    fn pathname_replacement_never_adopts_a_new_file_stamp_for_an_old_mapping() {
+        let fixture = SourceFixture::new();
+        let binary = Binary::open(&fixture.path).unwrap();
+        std::fs::write(&fixture.replacement, thin_image()).unwrap();
+        std::fs::rename(&fixture.replacement, &fixture.path).unwrap();
+        assert!(binary.validate_backing_source().is_err());
+        let replacement = Binary::open(&fixture.path).unwrap();
+        assert!(replacement.validate_backing_source().is_ok());
+        assert!(binary.validate_backing_source().is_err());
+    }
+
+    #[test]
+    fn truncation_is_detected_using_metadata_without_dereferencing_the_old_mapping() {
+        let fixture = SourceFixture::new();
+        let binary = Binary::open(&fixture.path).unwrap();
+        File::options().write(true).open(&fixture.path).unwrap().set_len(0).unwrap();
+        assert!(binary.validate_backing_source().is_err());
+    }
+
+    #[test]
+    fn owned_snapshot_bytes_cannot_claim_a_mapped_backing_identity() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/runtime-arm64.snapshot.json");
+        let binary = Binary::open(path).unwrap();
+        assert_eq!(binary.format, Format::Snapshot);
+        assert!(binary.validate_backing_source().is_err());
+    }
+}
+
 fn check_x64_fixture(name: &str, format: Format, add_symbol: &str) {
     let binary = Binary::open(fixture(name)).unwrap();
     assert_eq!(binary.format, format);

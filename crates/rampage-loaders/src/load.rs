@@ -129,8 +129,74 @@ pub struct Binary {
 
 #[derive(Debug)]
 enum Bytes {
-    Mapped(Mmap),
+    Mapped(MappedSource),
     Owned(Vec<u8>),
+}
+
+#[derive(Debug)]
+struct MappedSource {
+    map: Mmap,
+    file: File,
+    path: PathBuf,
+    stamp: Option<BackingStamp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BackingStamp {
+    length: u64,
+    device: u64,
+    inode: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+impl BackingStamp {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Option<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            metadata.is_file().then(|| Self {
+                length: metadata.len(),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                modified_seconds: metadata.mtime(),
+                modified_nanoseconds: metadata.mtime_nsec(),
+                changed_seconds: metadata.ctime(),
+                changed_nanoseconds: metadata.ctime_nsec(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = metadata;
+            None
+        }
+    }
+}
+
+impl Deref for MappedSource {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.map
+    }
+}
+
+impl MappedSource {
+    fn validate(&self) -> Result<(), LoadError> {
+        let stamp =
+            self.stamp.ok_or_else(|| LoadError::Unsupported("original mapped-file identity unavailable".into()))?;
+        let io_error = |source| LoadError::Io { path: self.path.clone(), source };
+        let descriptor = self.file.metadata().map_err(io_error)?;
+        let pathname = std::fs::metadata(&self.path).map_err(io_error)?;
+        if BackingStamp::from_metadata(&descriptor) != Some(stamp)
+            || BackingStamp::from_metadata(&pathname) != Some(stamp)
+        {
+            return Err(LoadError::Malformed("backing file was modified or replaced since mapping".into()));
+        }
+        Ok(())
+    }
 }
 
 impl Deref for Bytes {
@@ -145,6 +211,15 @@ impl Deref for Bytes {
 }
 
 impl Binary {
+    /// Detects observable changes to the original mapped file without reading mapped bytes. This metadata check
+    /// does not make subsequent reads atomic with external writes or truncation. Owned inputs have no such proof.
+    pub fn validate_backing_source(&self) -> Result<(), LoadError> {
+        match &self.data {
+            Bytes::Mapped(source) => source.validate(),
+            Bytes::Owned(_) => Err(LoadError::Unsupported("owned input has no mapped-file identity".into())),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_snapshot(
         arch: Arch,
@@ -345,7 +420,12 @@ impl Binary {
 
     /// Loads the ELF, PE or Mach-O image at `image` within `data`; `slices` lists a universal binary's
     /// architectures.
-    fn load(data: Mmap, image: Range<usize>, slices: Vec<Arch>, wanted: Option<Arch>) -> Result<Self, LoadError> {
+    fn load(
+        data: MappedSource,
+        image: Range<usize>,
+        slices: Vec<Arch>,
+        wanted: Option<Arch>,
+    ) -> Result<Self, LoadError> {
         let image_bytes = &data[image.clone()];
         let parsed = object::File::parse(image_bytes)?;
 
@@ -767,14 +847,18 @@ impl Binary {
 }
 
 /// Maps the file at `path`, or the executable inside the bundle directory it names.
-fn map_executable(path: &Path) -> Result<Mmap, LoadError> {
+fn map_executable(path: &Path) -> Result<MappedSource, LoadError> {
     let resolved = crate::container::resolve_executable(path)?;
     let path = resolved.as_path();
     let io_error = |source| LoadError::Io { path: path.to_owned(), source };
     let file = File::open(path).map_err(io_error)?;
+    let stamp = file.metadata().ok().and_then(|metadata| BackingStamp::from_metadata(&metadata));
     // SAFETY: the mapping is read-only; a concurrent external truncation of the input is out of scope,
     // the same assumption every mmap-based binary tool makes.
-    unsafe { Mmap::map(&file) }.map_err(io_error)
+    let map = unsafe { Mmap::map(&file) }.map_err(io_error)?;
+    let after = file.metadata().ok().and_then(|metadata| BackingStamp::from_metadata(&metadata));
+    let stamp = stamp.filter(|stamp| Some(*stamp) == after);
+    Ok(MappedSource { map, file, path: std::path::absolute(path).unwrap_or_else(|_| path.to_owned()), stamp })
 }
 
 /// Whether a section name is the Go pclntab under any of its spellings. Go's linker names a PIE's relro copy
