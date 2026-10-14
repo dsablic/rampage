@@ -14,12 +14,34 @@ annotations are refreshed under the shared log lock before application.
 Eligibility requires an already-discovered function entry and an unused name valid for the annotation identifier
 contract. Ambiguous or invalid names reject the import rather than being sanitized into different names. Names
 at undiscovered entries or already-named addresses are preserved; metadata does not invent discovery evidence.
-The preview can include names not eligible for application. CLI/MCP/UI import exposure remains separate.
+The preview can include names not eligible for application. CLI and dedicated UI import actions remain separate.
 
 The standalone reader reports relative virtual addresses. Image-matched results and the project preview report
 checked `ImageBase + RVA` virtual addresses, each in readable, executable, file-backed code.
 Section-offset arithmetic is checked before RVA conversion. Matching GUID/age is linkage evidence,
 not authentication of the PDB or proof that a name describes the code correctly.
+
+## Shared tool and MCP
+
+`import_pdb_names` belongs to the `types` group. It requires the loaded PE's `path` and an explicit `pdb` path;
+`arch` and embedded-image selectors use the normal binary-tool wrapper. Preview is the default. Only
+`"apply": true` requests the whole atomic rename batch.
+
+```json
+{"path":"fixture.exe","pdb":"fixture.pdb","apply":false,"offset":0,"limit":100}
+```
+
+`offset` and `limit` page details only; they never select which names apply. The receipt retains identity,
+`preview_total`, `applied_total`, `preserved_total`, `warnings_total`, `details_total` and
+`whole_apply_succeeded`, even when the page is shortened or empty. `more` / `next_offset` continue details;
+`byte_capped` identifies a page shortened to the output budget. Names and warnings can carry explicit text
+truncation fields without losing whole-operation counts or status. Results remain valid JSON within 60,000 bytes.
+
+Rejections retain a bounded JSON receipt with `ok: false`, failure status and `whole_apply_succeeded: false`.
+Invalid arguments reject the import without edits. Non-string architecture selectors are rejected before
+project loading; ordinary tool-argument validation can occur after the project is opened.
+Malformed/identity-mismatched PDBs leave annotations unchanged. Undo reverts an applied import as one batch.
+Paging a subsequent call recomputes eligibility; it is not a frozen receipt from the previous call.
 
 ## Limits and errors
 

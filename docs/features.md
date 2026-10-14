@@ -126,7 +126,7 @@ does not execute suggested next steps or annotation edits. See [CLI batch analys
 
 ECMA-335 metadata includes assembly identity, references, entry point and one paged list:
 
-- `types`: fields, method/property signatures, metadata accessor tokens and IL body sizes.
+- `types`: fields, method/property signatures, event types and metadata accessor tokens, plus IL body sizes.
 - `pinvokes`: the DLL export bound by each P/Invoke method.
 - `attributes`: targets and fixed/named primitive, string, type, single-dimensional array and verified
   local-enum arguments; unsupported values report errors. An attribute target can be filtered by parent token.
@@ -136,6 +136,10 @@ branch/switch labels, locals and exception clauses. Paging counts instructions; 
 instruction containing that offset. Metadata and body decoding are bounded against hostile inputs. CIL is
 reported as managed code, never treated as native instructions. See
 [managed CLI commands](cli-reference.md#managed-code) or MCP tools `dotnet_metadata` and `dotnet_il`.
+
+Events retain tokens, names, flags, bounded type rendering and same-owner add/remove/fire/other method bindings.
+EventPtr ordering is preserved; malformed types remain unreadable and invalid ownership is diagnosed. Accessor
+bindings are metadata, not proof of accessor behavior. Events do not imply resource or general attribute decoding.
 
 ## Measurements and development
 

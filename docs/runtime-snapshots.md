@@ -199,6 +199,13 @@ It does not apply symbol/type annotations. Differences can be relocations, runti
 breakpoint normalization; neither differences nor equality prove transformed-code recovery or ABI correctness.
 The `compare_runtime_bytes` API uses the same rules.
 
+The CLI can select an original Mach-O embedded in a wrapper with `--original-image-offset OFFSET` and optional
+`--original-image-length LENGTH`. These apply only to `--original`, using the capture's architecture; length
+requires an offset. Correlation addresses remain image virtual addresses, not wrapper file offsets. Identity and
+hashes describe the selected original image. The global single-image `--image-offset` remains rejected here.
+This does not add embedded snapshot-JSON or pointer-peer image selection. Shared-tool/MCP original offsets are a
+separate surface; the fields below still select a whole original file.
+
 Agents and MCP can call `compare_runtime_bytes` with an explicit `original` path, `module` UUID and
 `ranges: [{"address": "0x1010", "size": 256}]`. Addresses must be hexadecimal, not annotation aliases.
 Span pagination uses `offset` and `limit` (default 100, capped at 200); `spans_total` describes the complete

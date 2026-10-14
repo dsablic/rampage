@@ -18,7 +18,7 @@ debugger context, not capture content or process authenticity.
 
 ## Explicit local transport
 
-The operator can serve the same five read-only operations over a local Unix-domain socket from the stopped
+The operator can serve the enumerated read-only operations over a local Unix-domain socket from the stopped
 LLDB command thread. Serving is explicit: clients do not start LLDB, discover endpoints or control execution.
 The endpoint must be an absolute path in a preexisting same-user private directory (mode `0700`), without
 symlinked components. Existing endpoints are refused, not replaced; the new socket uses mode `0600`.
@@ -74,6 +74,7 @@ sensitive: use an authorized local client and do not share responses externally 
 | `list_threads` | `expected_token`, optional `offset`, `limit` |
 | `read_registers` | `expected_token`, `thread_id`, optional `registers` |
 | `read_memory` | `expected_token`, `address`, `size`, exact `permissions`, optional `thread_id` |
+| `resolve_module_address` | `expected_token`, explicit `module_uuid`, `file_address` |
 
 All operations accept `response_budget`. Addresses and thread IDs accept integers or hexadecimal strings.
 The protocol is `rampage-lldb-query-v1`; successful responses include `ok`, operation, token, data and an
@@ -98,3 +99,23 @@ Metadata paths are reported, not opened automatically. Captured bytes and regist
 keep query results local unless sharing them is authorized. The operation/data content hash covers the returned
 query envelope, not memory bytes alone; identical bytes with different metadata can have different hashes. It is
 separate from the debugger stop token and from persisted snapshot capture identity.
+
+## Module-qualified address observations
+
+`resolve_module_address` selects exactly one normalized SDK UUID/build ID, never a basename or recorded path.
+`file_address` is the module's image virtual address, not a file offset. Compact hexadecimal IDs and the SDK's
+hyphen-separated spelling are accepted case-insensitively, bounded to 1–64 bytes; opaque identifiers are refused.
+
+The result retains raw image/load addresses, module context, leaf-section and ancestor evidence, known-readable
+mapping coverage, and the current session/stop token. Traversal is bounded before SDK address construction, and
+file/load ranges and inherited arithmetic are checked and revalidated before publication. Gaps, unloaded mappings,
+ambiguous identities, overflow, changed provenance and stale stops fail without partial data. Independently loaded
+children beneath unloaded ancestors are explicitly unsupported.
+
+The resolver caps cumulative inspection work at 16,384 units, sections at 4,096 per traversal, depth at 32, and
+mapping queries at 1,024. These are traversal budgets, not SDK-call latency limits. The deprecated SDK target-byte
+size getter is not evidence that arbitrary target address units are supported. SDK section inspection may lazily
+load symbol metadata. No project image or path reported by the target is opened by this operation.
+
+These are non-atomic qualified observations, not proven cross-module flow or object layout. The local UI template
+requires explicit UUID, address and token replacement and does not navigate the static project's cursor.

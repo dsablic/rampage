@@ -75,7 +75,7 @@ stdout; identification defaults to the bundled starter database. See
 
 Metadata pages default to `types`. `--contains TEXT` filters names/targets; `--parent-token TOKEN` filters
 attribute targets with `--list attributes`. `--offset N` skips list entries and `--limit N` selects the page
-size (default 100). Types include fields, method/property signatures, accessor tokens and IL body sizes;
+size (default 100). Types include fields, method/property signatures, event types, accessor tokens and IL body sizes;
 P/Invokes include DLL/export bindings. Supported attribute values and bounded decoding limits are described in
 [managed assemblies](features.md#managed-assemblies). Accessor tokens are metadata bindings, not inferred behavior.
 
@@ -145,6 +145,10 @@ observations do not change discovery or prove a call edge; comparison does not i
 ordering or slot correspondence. Branch inspection links a captured ARM64 branch to a slot load in a bounded
 window. Byte/module correlation uses an explicit UUID-matched original Mach-O, without annotation transfer.
 See [runtime snapshots](runtime-snapshots.md) and the separate [read-only LLDB query bridge](lldb-query.md).
+
+`runtime bytes compare` accepts `--original-image-offset OFFSET` and optional `--original-image-length LENGTH`
+to select only the original's embedded executable view. Length requires offset; the capture stays a whole snapshot.
+Global `--image-offset` and pointer-comparison peer-image options are not substitutes for these flags.
 
 ## Workflows, packs and serving
 

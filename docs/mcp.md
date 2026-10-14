@@ -24,7 +24,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
-- `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `class_evidence`,
+- `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_pdb_names`, `class_evidence`,
   `language_metadata`.
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
   `query_debugger`.
@@ -84,6 +84,8 @@ Analysis runs once per binary when first needed and is cached for the session. A
 [persistent logs](cli-reference.md#persistence-and-shared-edits) used by CLI and UI; the UI reflects incoming edits.
 `annotate_batch` validates all entries before applying one undo step; `check_names` pre-flights candidate names.
 Types/signatures/globals also persist, with dependency checks rather than inferred class layouts.
+The explicit [PDB name-import tool](pdb-symbols.md#shared-tool-and-mcp) previews by default and applies eligible
+names as one undoable batch only with `apply: true`. Detail pagination does not restrict the batch's writes.
 
 `undo`/`redo` revert/reapply one session step, including a whole batch. When another client's edit blocks undo,
 `discard_undo` drops the blocked step from session history, leaving its edits in effect and the log unchanged,

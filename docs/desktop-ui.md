@@ -47,7 +47,8 @@ without reverting its edits. It does not force an undo through the conflict. Dat
 The brand's context menu or Ctrl/Cmd+D opens **Read-only debugger**, even without a loaded binary. Opening the
 window does not connect. Enter an explicit local Unix socket and request, then select **Query**. The LLDB operator
 must start the stopped-session endpoint separately; the window cannot attach, launch, resume, evaluate expressions
-or write target memory. The five read-only request templates correspond to the [LLDB protocol](lldb-query.md).
+or write target memory. Read-only request templates correspond to the [LLDB protocol](lldb-query.md), including
+explicit module-UUID/image-address resolution. Qualified runtime observations do not imply static-project navigation.
 
 Session tokens are copied into follow-up requests explicitly; stale tokens are not refreshed or retried.
 Responses and backend errors remain local to this window, separate from the loaded project's addresses and
