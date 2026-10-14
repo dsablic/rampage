@@ -151,6 +151,17 @@ Events retain tokens, names, flags, bounded type rendering and same-owner add/re
 EventPtr ordering is preserved; malformed types remain unreadable and invalid ownership is diagnosed. Accessor
 bindings are metadata, not proof of accessor behavior. Events do not imply resource or general attribute decoding.
 
+Verified local enum literals can carry optional `enum_constant` field metadata with an underlying integral type
+and exact decimal `value` string, including 64-bit extrema. Different named fields may retain equal values as
+aliases; duplicate Constant rows for one field invalidate that field's evidence. This requires a verified local
+enum owner, matching value-type field signature, appropriate literal flags, and exact Constant type/width/padding.
+It works without custom attributes and does not replace numeric attribute values with symbolic names or synthesize
+`Flags` combinations.
+
+Enum constants have separate bounds of 100,000 Constant rows, 100,000 owner/field work rows, 10,000 retained
+constants and 4 MiB of work/text, with bounded diagnostics. Incomplete or over-limit Constant tables yield no
+constant evidence because an unread suffix could contain duplicate parents. External assemblies are not loaded.
+
 Boxed custom-attribute values retain serialized types in their existing rendered strings, such as `box(int32, 42)`
 and `box(int32[], null)`; named arguments keep their declared `object`/`object[]` type. Boxed strings, types and
 verified local enums share the existing depth/node/text/image-work budgets, including failed type/name lookups.

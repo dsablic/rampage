@@ -82,6 +82,8 @@ attribute targets with `--list attributes`. `--offset N` skips list entries and 
 size (default 100). Types include fields, method/property signatures, event types, accessor tokens and IL body sizes;
 P/Invokes include DLL/export bindings. Supported attribute values and bounded decoding limits are described in
 [managed assemblies](features.md#managed-assemblies). Accessor tokens are metadata bindings, not inferred behavior.
+Verified local enum constants appear as metadata rows with field tokens, underlying integral types and exact numeric
+values. Aliases are retained; numeric custom-attribute rendering is not replaced by symbolic names.
 
 Resource output retains raw flags/offsets and reference/mapping status, not extracted payloads or validated payload
 lengths. Declared/readable/retained/returned counts and truncation notes remain visible. `--parent-token` selects

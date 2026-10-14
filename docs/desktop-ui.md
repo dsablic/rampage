@@ -48,20 +48,37 @@ The brand's context menu or Ctrl/Cmd+D opens **Read-only debugger**, even withou
 window does not connect. Enter an explicit local Unix socket and request, then select **Query**. The LLDB operator
 must start the stopped-session endpoint separately; the window cannot attach, launch, resume, evaluate expressions
 or write target memory. Read-only request templates correspond to the [LLDB protocol](lldb-query.md), including
-explicit module-UUID/image-address resolution. Qualified runtime observations do not imply static-project navigation.
+explicit module-UUID/image-address resolution. Qualified runtime observations never navigate automatically.
 
 Session tokens are copied into follow-up requests explicitly; stale tokens are not refreshed or retried.
 Responses and backend errors remain local to this window, separate from the loaded project's addresses and
-annotations. They are not applied to navigation or sent to the assistant/provider. **Clear local data** clears
+annotations. They are not sent to the assistant/provider. **Clear local data** clears
 inputs, results and editor undo state. Memory observations are non-atomic, and a client timeout does not prove an
 LLDB SDK operation stopped.
+
+A successful `resolve_module_address` submitted with a workspace open can offer **Go to matching static image
+address**. Only an explicit click uses the returned file virtual address, never its load address or an inferred
+slide. It navigates the already-open matching Mach-O through ordinary local history without another socket request.
+It opens no module path reported by the debugger and transfers no observation into annotations or assistant state.
+
+Actionable results require typed, internally consistent SDK section/mapping evidence and matching request/token,
+16-byte UUID, supported architecture/variant, address width and byte order. Static destination bytes must be readable
+and file-backed. Missing evidence, owned snapshots, unsupported source identity or mismatches leave results raw-only.
+Input edits, rejected input, template replacement, clear, new queries and workspace replacement invalidate the action,
+including late completions. A matching UUID alone does not establish equal bytes, a current stop, flow or layout.
+
+Original mapping-descriptor identity and precise metadata are checked against the descriptor and source pathname;
+debugger painting does not read mapped headers/bytes, and clicks revalidate before navigation. This detects
+observable source changes, not atomicity between validation and subsequent reads, and does not retrofit other
+existing workspace readers.
 
 ## Assistant and data disclosure
 
 The Assistant tab talks to Claude about the open project. It reads functions, graphs, strings and references
 through rampage tools, can save names/comments and typed annotations, and can point the listing at what it
 discusses. It offers binary tools from every group, plus interactive `show_address`, but not `carve`,
-`list_packs` or `query_debugger`. See the [MCP tool groups](mcp.md#tool-groups) for the shared tool names.
+`archive_inventory`, `list_packs` or `query_debugger`. See the [MCP tool groups](mcp.md#tool-groups)
+for shared tool names.
 
 Set `ANTHROPIC_API_KEY` through your environment to use the assistant; `RAMPAGE_MODEL` optionally selects the
 model. Keep API credentials out of command-line examples, source control and shared logs. Enter submits a

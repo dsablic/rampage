@@ -118,4 +118,6 @@ size getter is not evidence that arbitrary target address units are supported. S
 load symbol metadata. No project image or path reported by the target is opened by this operation.
 
 These are non-atomic qualified observations, not proven cross-module flow or object layout. The local UI template
-requires explicit UUID, address and token replacement and does not navigate the static project's cursor.
+requires explicit UUID, address and token replacement and never navigates automatically. A separate explicit
+[matching-static-image action](desktop-ui.md#local-debugger-observations) validates local context before navigation;
+it does not strengthen the protocol's identity, atomicity or flow guarantees.

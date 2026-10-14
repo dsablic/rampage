@@ -277,7 +277,11 @@ in UX/workflow ideas, not the multi-engine dispatch:
 - [x] Bounded fixed/named boxed custom-attribute values and `object[]` elements, including supported boxed vectors,
   with explicit serialized-type rendering and failed-work budget regressions. Direct jagged constructor/attribute
   types remain rejected; ordinary signature rendering and boxed vectors are distinct serialization cases.
-- [ ] .NET external or assembly-qualified/escaped enums, enum constant names, resource payloads,
+- [x] Verified local enum field constants through existing API/CLI/MCP type metadata: exact integral-type/value
+  strings across all eight widths, aliases retained, strict VALUETYPE/owner/flags/type/padding/blob checks.
+  Works without custom attributes. Duplicate parents invalidate field evidence; incomplete/over-limit Constant
+  tables yield none. Numeric/boxed attribute rendering is unchanged; no symbolic substitution or flags synthesis.
+- [ ] .NET external or assembly-qualified/escaped enums, symbolic enum-attribute names, resource payloads,
   and comparison of `dotnet_il` with ildasm/ILSpy once available. Metadata bindings do not establish accessor behavior.
 - [x] Agent batch annotation: `annotate_batch` (all-or-nothing, at most 1000 entries, one undo step, per-entry
   outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits. Name
@@ -492,7 +496,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Hosted CI at `dbe5e4f`: macOS workspace/UI/accuracy and selected opt-ins, Linux core, formatting and
   committed-tree/full-history secrets. This does not establish acceptance of later boxed-value/archive additions.
 
-### Current boxed-attribute and ZIP-metadata wave
+### Published boxed-attribute and ZIP-metadata wave (`ae4daba`)
 
 - [x] Fresh source reviews of boxed grammar/budgets, ZIP parser/resource/descriptor boundaries and API/CLI/MCP glue.
   Adversarial argument-error expansion is capped before publication; successful pages preserve whole records/counts.
@@ -501,6 +505,20 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Full ordinary release suite, final formatting/Clippy, and complete controlled Python suite: 677 tests and
   108 subtests. Ignored scale/performance and broader archive/platform acceptance remain separate gates.
 - [x] Protected committed-tree/full-history secret audit before publication; owned audit scratch removed afterward.
+- [x] Hosted CI at `ae4daba`: macOS workspace/UI/accuracy and selected opt-ins, Linux core, formatting and
+  committed-tree/full-history secrets. Later navigation/enum-constant work has separate acceptance gates.
+
+### Current static-navigation and enum-constant wave
+
+- [x] Fresh reviews of mapped-source identity/ownership, typed navigation evidence and invalidation, runtime
+  address-width bounds, and local enum Constant ownership/grammar/budgets. Review fixes retain targeted regressions.
+- [x] Full ordinary debug workspace suite on final source: backing-source detection, 38 UI unit tests, debugger
+  integration, populated enum API/CLI/MCP output, unchanged UI snapshots and the unchanged 13-slice evaluation gate.
+- [x] Warnings-denied Clippy, scoped formatting/whitespace checks and protected working-tree secret preflight.
+- [x] Complete controlled Python regression rerun: 677 tests and 108 subtests.
+- [x] Protected committed-tree/full-history secret audit before publication.
+- [ ] Final release workspace validation; still compiling when this wave was published. Debug validation passed;
+  release success is not implied by publication or hosted debug CI.
 
 ### Validation and external blockers
 
@@ -761,7 +779,11 @@ arbitrary debugger control and multi-module runtime resolution must not be infer
       for operator cleanup; no automatic attach/resume/expression/target-write controls.
      - [x] Stop-pinned UUID-qualified image/load address observations via bounded section/ancestor evidence,
        surfaced in typed queries and a manual local UI template. No basename/slide fallback or automatic navigation.
-     - [ ] Static-project module-qualified navigation and broader SDK/platform acceptance.
+     - [x] Explicit local navigation to an already-open matching static Mach-O's file address, with typed
+       request/result/workspace bindings, UUID/variant/width/endian/backing/permission gates and input invalidation.
+       Original mapping-descriptor identity guards observable source changes; debugger painting avoids mapped reads.
+       This is neither atomic source reading nor equal-byte/current-stop/flow/layout proof.
+     - [ ] Broader static-format navigation and SDK/platform acceptance.
      Query observations remain non-atomic and external-plugin runtime acceptance remains blocked on an authorized host.
 
 Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,
