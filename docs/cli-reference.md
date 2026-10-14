@@ -70,14 +70,19 @@ stdout; identification defaults to the bundled starter database. See
 
 | Primary route | Compatibility spelling |
 | --- | --- |
-| `managed inspect FILE [--list types\|pinvokes\|attributes]` | `dotnet FILE` with metadata options |
+| `managed inspect FILE [--list LIST]` | `dotnet FILE` with metadata options |
 | `managed disassemble FILE --il METHOD` | `dotnet FILE --il METHOD` |
 
-Metadata pages default to `types`. `--contains TEXT` filters names/targets; `--parent-token TOKEN` filters
+`LIST` is `types`, `pinvokes`, `attributes` or `resources`. Metadata pages default to `types`.
+`--contains TEXT` filters names/targets; `--parent-token TOKEN` filters
 attribute targets with `--list attributes`. `--offset N` skips list entries and `--limit N` selects the page
 size (default 100). Types include fields, method/property signatures, event types, accessor tokens and IL body sizes;
 P/Invokes include DLL/export bindings. Supported attribute values and bounded decoding limits are described in
 [managed assemblies](features.md#managed-assemblies). Accessor tokens are metadata bindings, not inferred behavior.
+
+Resource output retains raw flags/offsets and reference/mapping status, not extracted payloads or validated payload
+lengths. Declared/readable/retained/returned counts and truncation notes remain visible. `--parent-token` selects
+attribute targets; it is not a resource-owner filter.
 
 `METHOD` accepts a MethodDef token such as `0x0600000d` or `Namespace.Type::Name`; ambiguous overloaded names
 report their tokens/signatures. IL output resolves tokens, strings, branches/switches, locals and exception
@@ -98,12 +103,20 @@ which also conflicts with `--contains`/`--parent-token`. IL `--at` requires `--i
 | `annotation apply-batch FILE entries.json` | `annotate-batch` |
 | `annotation check-names FILE NAME...` | `check-names` |
 | `type import-debug FILE [--apply]` | `debug-types` |
+| `type import-pdb-names FILE --pdb PDB [--apply]` | — |
 
 Rename/comment take positional operands, not `--at`. `--clear` replaces the new name/text operand and cannot
 be combined with it. A batch is a JSON array of `{at, name?, comment?}` entries, at most 1000, applied all or
 nothing as one undo step. `check-names` checks identifier validity, address-shaped names and existing use.
 Debug import previews bounded embedded DWARF scalar/pointer signatures unless `--apply` is explicit; it does
 not replace analyst signatures. See [debug signature import](debug-signatures.md).
+
+PDB name import requires the explicit `--pdb` file and previews by default. `--apply` requests all eligible names
+as one atomic annotation batch, not just the displayed page. Undo history is process-local and is not recovered
+after the CLI exits. `--offset` (default 0) and `--limit` (default 100, range 1–1000)
+select details only; byte caps can shorten them further. JSON output retains whole-operation identity, totals and
+success status. Rejections return a failing exit status and, with `--json`, a bounded JSON receipt. Global image
+selectors apply to `FILE`, not the PDB. See [PDB name import](pdb-symbols.md#cli).
 
 ### Persistence and shared edits
 

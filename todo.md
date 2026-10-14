@@ -33,10 +33,13 @@
 
 - [x] Explicit PDB name preview/apply API with matching PE/PDB GUID and age, checked RVA/VA arithmetic and
   readable executable backing. Names only discovered unnamed entries, preserving labels in one undoable batch;
-  real owned LLVM/LLD PE/PDB fixture. OMAP, types/layouts and CLI/dedicated UI import actions remain separate.
+  real owned LLVM/LLD PE/PDB fixture. OMAP, types/layouts and a dedicated UI import action remain separate.
 - [x] Types-group `import_pdb_names` shared tool/MCP: explicit path, preview default and whole-batch apply,
   undoable with preserved labels. Byte-capped JSON pages retain identity, totals and success status independently
   of detail selection. Malformed architecture selectors refuse before project loading or edits.
+- [x] Canonical CLI `type import-pdb-names`: explicit PDB path, preview default, bounded receipts and whole-batch
+  atomic apply. Existing annotation values persist; undo history is process-local and is not recovered after CLI
+  exit. Non-UTF-8 PDB arguments reject before loading; native non-UTF-8 PE fixture coverage is Linux-only.
 - [x] Bundled starter signature databases: `rampage identify` applies a bundled musl libc database for the
   binary's architecture (x86-64, aarch64) out of the box; a user `--db` overlays on top, `--no-bundled` opts out.
   Generated reproducibly by `tools/gen-signatures.sh` (pinned zig). Follow-ups: more libs (libstdc++/libc++),
@@ -237,7 +240,7 @@ in UX/workflow ideas, not the multi-engine dispatch:
   never seeded as native code. API `dotnet_metadata` (paged, filterable), `rampage dotnet`, MCP tool, and
   `triage_report` routes managed assemblies to it. Validated on Microsoft.Bcl.HashCode 1.1.1 (MIT, committed with
   its licence). Signatures/generics, primitive attributes, P/Invoke and IL/exception decoding were added below;
-  remaining metadata includes resources and richer attribute arguments.
+  remaining metadata includes resource payload interpretation and richer attribute arguments.
 - [x] Embedded-binary carving (`rampage carve`, MCP `carve`, `rampage_api::carve`): bounded scan for ELF, PE,
   Mach-O (thin and universal) and zip/gzip/xz/zstd/LZMA/squashfs/cpio/uImage/Android boot, with validated header
   facts, header-derived extents, validated or magic-only confidence and a 4096-candidate cap.
@@ -263,7 +266,11 @@ in UX/workflow ideas, not the multi-engine dispatch:
 - [x] .NET events: tokens/names/flags, bounded type rendering and same-owner add/remove/fire/other bindings through
   API/CLI/MCP metadata, with EventPtr order and event-name filtering. Invalid/duplicate map owners cannot steal
   later valid targets. Strict alias/function-pointer grammar and shared-budget regressions retain unreadable evidence.
-- [ ] .NET boxed/jagged values, external or assembly-qualified/escaped enums, enum constant names, resources,
+- [x] Bounded ManifestResource inventory and independent API/CLI/MCP resource pages, preserving raw offsets/flags,
+  File/AssemblyRef and invalid/unsupported link evidence. Directory bounds/backing are numeric checks, not payload
+  validation. Row/name budgets, UTF-8 truncation and declared/readable/retained/returned counts are explicit;
+  `declared_known` preserves unknown versus observed zero and recovered partial-header counts.
+- [ ] .NET boxed/jagged values, external or assembly-qualified/escaped enums, enum constant names, resource payloads,
   and comparison of `dotnet_il` with ildasm/ILSpy once available. Metadata bindings do not establish accessor behavior.
 - [x] Agent batch annotation: `annotate_batch` (all-or-nothing, at most 1000 entries, one undo step, per-entry
   outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits. Name
@@ -275,7 +282,10 @@ in UX/workflow ideas, not the multi-engine dispatch:
 - [x] CLI `compare-runtime` / `runtime bytes compare` original-image offset and optional length, preserving
   architecture selection, selected-image hash/UUID/address domains and annotation-free loading. Independent
   identity/hash goldens plus malformed universal/truncation/overflow/mismatch controls pass.
-- [ ] Shared-tool/MCP original-image selection and per-path pointer-comparison offsets. Nontrivial image selection
+- [x] Shared-tool/MCP original-image offset/length selection for runtime-byte comparisons, using the capture's
+  architecture and fresh annotation-free inputs. Strict top-level arguments reject misspelled selectors; integer,
+  decimal/hex and null forms, identity goldens, malformed headers and changed capture architectures are tested.
+- [ ] Per-path pointer-comparison offsets. Nontrivial image selection
   does not load embedded snapshot JSON; pointer-peer flags alone would not establish usable support.
 - [x] MCP tool groups: every registry tool has a group; `rampage mcp` lists core + `enable_tools` (lists groups,
   enables them, sends tools/list_changed); `--all-tools` / `RAMPAGE_MCP_TOOLS` for clients without list_changed;
@@ -448,7 +458,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Selected opt-ins: native compiled ARM64 fixture and isolated CLI/worker acceptance passed on the final source.
 - [x] Hosted CI at `d18b95f`: macOS workspace/UI/accuracy, Linux core subset and formatting/HEAD/history secrets.
 
-### Current metadata and qualified-resolution wave
+### Published metadata and qualified-resolution wave (`3e82a71`)
 
 - [x] Fresh-context review fixes retained for event grammar/ownership, malformed MCP architecture selectors,
   independent original-image test oracles and bounded SDK section/ancestor resolution.
@@ -458,6 +468,20 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Actual Rust CLI-to-stopped owned LLDB interoperability, including UUID-qualified address resolution and
   stale-token errors; target identity unchanged. SDK/native results cover this controlled Apple LLDB fixture only.
 - [x] Protected source/fixture preflight plus committed-tree/full-history secret audit before publication.
+- [x] Hosted CI at `3e82a71`: macOS workspace/UI/accuracy and selected opt-ins, Linux core, formatting and
+  committed-tree/full-history secrets. This covers the published wave, not the next uncommitted surface additions.
+
+### Current comparison/import/resource surface wave
+
+- [x] Fresh reviews and retained regressions for original-selector validation/fixture layout, CLI native-path
+  serialization, process-local undo semantics, resource backing spans and partial-header/count provenance.
+- [x] Full ordinary debug workspace suite, including actual MCP comparison/resource calls, CLI imports, unchanged
+  UI snapshots and the unchanged 13-slice evaluation gate. The MCP resource test covers empty-inventory wiring;
+  populated resource evidence is exercised by synthetic loader/API and renderer tests, not payload interpretation.
+- [x] Complete controlled Python suite: 677 tests and 108 subtests; working-tree secret preflight.
+- [x] Full ordinary release workspace suite, warnings-denied Clippy and Rust formatting. Ignored scale/performance
+  gates and Linux-only native non-UTF-8 PE filesystem acceptance remain outside the local macOS test results.
+- [x] Protected committed-tree/full-history secret audit before publication; no commercial inputs or private keys.
 
 ### Validation and external blockers
 

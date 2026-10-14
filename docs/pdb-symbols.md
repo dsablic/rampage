@@ -14,7 +14,7 @@ annotations are refreshed under the shared log lock before application.
 Eligibility requires an already-discovered function entry and an unused name valid for the annotation identifier
 contract. Ambiguous or invalid names reject the import rather than being sanitized into different names. Names
 at undiscovered entries or already-named addresses are preserved; metadata does not invent discovery evidence.
-The preview can include names not eligible for application. CLI and dedicated UI import actions remain separate.
+The preview can include names not eligible for application. A dedicated UI import action remains separate.
 
 The standalone reader reports relative virtual addresses. Image-matched results and the project preview report
 checked `ImageBase + RVA` virtual addresses, each in readable, executable, file-backed code.
@@ -42,6 +42,27 @@ Invalid arguments reject the import without edits. Non-string architecture selec
 project loading; ordinary tool-argument validation can occur after the project is opened.
 Malformed/identity-mismatched PDBs leave annotations unchanged. Undo reverts an applied import as one batch.
 Paging a subsequent call recomputes eligibility; it is not a frozen receipt from the previous call.
+
+## CLI
+
+```sh
+rampage type import-pdb-names fixture.exe --pdb fixture.pdb
+rampage --json type import-pdb-names fixture.exe --pdb fixture.pdb --apply --limit 1
+```
+
+Preview is the default; `--apply` requests the same atomic whole-batch transaction as the API/MCP tool. Required PDB and
+page arguments are validated before input loading. `--offset` and `--limit` select receipt details, never applied
+names. Human output includes counts, identity, whole-apply status and explicit paging/truncation notes. JSON output
+uses the same bounded receipt as the shared tool, including on load/import rejection, followed by a failing exit
+status. Parser errors retain ordinary CLI argument-error behavior.
+The shared JSON request requires a UTF-8 PDB path; an unrepresentable native path is rejected before project loading
+with the same bounded failure receipt. This does not restrict the native PE operand's path encoding.
+
+Global architecture and embedded-image selectors apply only to the PE operand. Existing annotation logs are
+opened normally; this is distinct from automatic PDB discovery, which remains disabled. Names persist in the
+annotation log, but undo history is process-local: another API/MCP/UI instance cannot undo the exited CLI's import.
+The CLI has no separate undo verb. Imports made through a persistent API/MCP project have one undo step in that
+project's process; reopening the same annotation log restores values, not prior undo history.
 
 ## Limits and errors
 

@@ -130,6 +130,7 @@ ECMA-335 metadata includes assembly identity, references, entry point and one pa
 - `pinvokes`: the DLL export bound by each P/Invoke method.
 - `attributes`: targets and fixed/named primitive, string, type, single-dimensional array and verified
   local-enum arguments; unsupported values report errors. An attribute target can be filtered by parent token.
+- `resources`: ManifestResource tokens/names/flags, raw offsets and metadata-only implementation links.
 
 One method's CIL can be disassembled ILDasm-style with tokens resolved to names/signatures, `ldstr` literals,
 branch/switch labels, locals and exception clauses. Paging counts instructions; an IL label selects the
@@ -140,6 +141,18 @@ reported as managed code, never treated as native instructions. See
 Events retain tokens, names, flags, bounded type rendering and same-owner add/remove/fire/other method bindings.
 EventPtr ordering is preserved; malformed types remain unreadable and invalid ownership is diagnosed. Accessor
 bindings are metadata, not proof of accessor behavior. Events do not imply resource or general attribute decoding.
+
+Resource inventory distinguishes embedded-directory locations, external File/AssemblyRef links, unsupported
+ExportedType links and malformed/dangling references. An embedded `readable_location` reports only a checked,
+mapped location within a directory that fits one backed section span, not a validated length prefix or payload extent.
+No payload, external resource, assembly or named file is opened or interpreted.
+
+Resource inventory attempts at most 100,000 rows with a separate 4 MiB name-work budget; failed lookups and repeated
+linked names consume that budget. Names have a 1,024-byte cap, UTF-8-safe truncation markers and explicit flags.
+`resource_counts` separates declared/readable/retained/returned rows and reports inventory/name truncation independently
+of filtering and pagination. `declared_known` distinguishes an observed zero from an unread declaration count;
+`declared: 0` is only a placeholder when that flag is false. A recovered declaration can survive a later header
+failure, but such a header still yields no decoded rows. `contains` matches resource or linked File/AssemblyRef names.
 
 ## Measurements and development
 

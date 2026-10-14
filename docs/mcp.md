@@ -62,15 +62,22 @@ not automatically program virtual addresses. C production and `no_reported_issue
 recovery. See the [decompiler reference](../crates/rampage-decompiler/README.md) for token/output bounds,
 diagnostics and worker requirements; `function_summary` remains a structural alternative, not decompiled C.
 
-`dotnet_metadata` selects `types`, `pinvokes` or `attributes`, filtering with `contains`/`parent_token` and
+`dotnet_metadata` selects `types`, `pinvokes`, `attributes` or `resources`, filtering with `contains`/`parent_token` and
 paging entries. `dotnet_il` selects a method token or qualified name and pages instructions with `offset`/`limit`,
 or starts at an IL label with `at`. Property signatures/accessor tokens and supported attribute values are
 metadata evidence. CIL is never treated as native code; see [managed assemblies](features.md#managed-assemblies).
+Resources preserve raw metadata and offset/reference availability, with independent inventory counts and truncation.
+Embedded mapping evidence does not validate payload extents; external targets and resource payloads are not read.
+`parent_token` is an attribute-target filter, not a resource-owner selector.
 
 `carve` accepts any file path rather than requiring a loadable binary. Pages use `offset`/`limit` and `more`,
 not a total; scanning stops at the candidate after the page. It extracts/decompresses nothing.
 `observe_pointer` exposes a captured slot without modifying discovery or asserting a call edge. See
 [runtime snapshots](runtime-snapshots.md) for runtime evidence limits and [data packs](data-packs.md) for pack warnings.
+
+`compare_runtime_bytes` accepts `original_image_offset` and optional dependent `original_image_length` for its
+explicit original path. Integer/decimal/hex forms and null-as-absent follow ordinary image-selector parsing. They
+do not select the primary snapshot, infer pointer correspondence or enable embedded snapshot-JSON loading.
 
 `query_debugger` accepts an explicit local Unix socket and typed read-only request without opening a binary or
 annotation sidecar. An LLDB operator must start the stopped-session endpoint; this tool cannot attach, resume,

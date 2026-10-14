@@ -203,8 +203,7 @@ The CLI can select an original Mach-O embedded in a wrapper with `--original-ima
 `--original-image-length LENGTH`. These apply only to `--original`, using the capture's architecture; length
 requires an offset. Correlation addresses remain image virtual addresses, not wrapper file offsets. Identity and
 hashes describe the selected original image. The global single-image `--image-offset` remains rejected here.
-This does not add embedded snapshot-JSON or pointer-peer image selection. Shared-tool/MCP original offsets are a
-separate surface; the fields below still select a whole original file.
+This does not add embedded snapshot-JSON or pointer-peer image selection.
 
 Agents and MCP can call `compare_runtime_bytes` with an explicit `original` path, `module` UUID and
 `ranges: [{"address": "0x1010", "size": 256}]`. Addresses must be hexadecimal, not annotation aliases.
@@ -212,6 +211,13 @@ Span pagination uses `offset` and `limit` (default 100, capped at 200); `spans_t
 span list, while totals and hashes always cover every requested range. Each page recomputes the comparison;
 check capture/original identities before combining pages. MCP loads fresh explicit inputs without sidecars
 for this tool, rather than reusing an annotation-bearing session. No whole-program discovery is performed.
+
+`original_image_offset` and optional `original_image_length` select an embedded original for the shared tool/MCP.
+They accept nonnegative JSON integers, decimal strings or hexadecimal strings; `null` means absent. A non-null
+length requires a non-null offset, checked before opening the original. These fields never select the primary
+capture. Offset zero without a length retains ordinary whole-file loading; selected universal originals use the
+capture's architecture, with the same UUID/hash and virtual-address rules as the CLI.
+Comparison arguments reject unknown fields; misspelled image selectors cannot silently drop an intended bound.
 
 ## Observe a captured pointer slot
 
