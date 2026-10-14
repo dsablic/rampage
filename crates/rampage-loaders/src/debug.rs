@@ -8,6 +8,13 @@ use serde::Serialize;
 use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 
+mod layouts;
+pub use layouts::{
+    DebugLayoutField, DebugLayoutLeaf, DebugLayoutParameter, DebugLayoutReport, DebugLayoutScalar,
+    DebugLayoutScalarKind, DebugLayoutSignature, DebugLayoutSource, DebugLayoutTypeId, DebugLayoutValue,
+    DebugStructLayout, layout_signatures,
+};
+
 const MAX_DEBUG_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UNITS: usize = 256;
 const MAX_DIES: usize = 1_000_000;
@@ -428,6 +435,15 @@ fn bounded_name<'a>(
     unit: &Unit<DebugReader<'a>>,
     value: AttributeValue<DebugReader<'a>>,
 ) -> gimli::Result<DebugReader<'a>> {
+    bounded_name_limit(dwarf, unit, value, MAX_NAME_BYTES)
+}
+
+fn bounded_name_limit<'a>(
+    dwarf: &Dwarf<DebugReader<'a>>,
+    unit: &Unit<DebugReader<'a>>,
+    value: AttributeValue<DebugReader<'a>>,
+    limit: usize,
+) -> gimli::Result<DebugReader<'a>> {
     let (mut reader, offset) = match value {
         AttributeValue::String(reader) => return dwarf.attr_string(unit, AttributeValue::String(reader)),
         AttributeValue::DebugStrRef(offset) => (*dwarf.debug_str.reader(), offset.0),
@@ -436,16 +452,30 @@ fn bounded_name<'a>(
         _ => return Err(gimli::Error::ExpectedStringAttributeValue),
     };
     reader.skip(offset)?;
-    reader.truncate(reader.len().min(MAX_NAME_BYTES + 1))?;
+    reader.truncate(reader.len().min(limit + 1))?;
     let string = reader.read_null_terminated_slice()?;
     dwarf.attr_string(unit, AttributeValue::String(string))
 }
 
 fn validate_abbreviations(dwarf: &Dwarf<DebugReader<'_>>, offset: gimli::DebugAbbrevOffset) -> gimli::Result<()> {
+    validate_abbreviations_work(dwarf, offset, &mut 0, usize::MAX, false)
+}
+
+fn validate_abbreviations_work(
+    dwarf: &Dwarf<DebugReader<'_>>,
+    offset: gimli::DebugAbbrevOffset,
+    work: &mut usize,
+    limit: usize,
+    reject_indirect: bool,
+) -> gimli::Result<()> {
     let mut reader = *dwarf.debug_abbrev.reader();
     reader.skip(offset.0)?;
     let mut count = 0;
     while !reader.is_empty() && reader.read_uleb128()? != 0 {
+        *work += 1;
+        if *work > limit {
+            return Err(gimli::Error::TooManyIterations);
+        }
         count += 1;
         if count > MAX_ABBREVIATIONS {
             return Err(gimli::Error::TooManyIterations);
@@ -460,7 +490,14 @@ fn validate_abbreviations(dwarf: &Dwarf<DebugReader<'_>>, offset: gimli::DebugAb
                 break;
             }
             attributes += 1;
+            *work += 1;
+            if *work > limit {
+                return Err(gimli::Error::TooManyIterations);
+            }
             if attributes > MAX_ATTRIBUTES {
+                return Err(gimli::Error::TooManyIterations);
+            }
+            if reject_indirect && form == u64::from(gimli::DW_FORM_indirect.0) {
                 return Err(gimli::Error::TooManyIterations);
             }
             if form == u64::from(gimli::DW_FORM_implicit_const.0) {
