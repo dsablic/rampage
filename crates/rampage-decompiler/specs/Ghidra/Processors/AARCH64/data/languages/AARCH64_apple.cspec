@@ -102,28 +102,28 @@
         <pentry minsize="1" maxsize="16" storage="float">
           <register name="q7"/>
         </pentry>
-        <pentry minsize="1" maxsize="8" extension="zero">
+        <pentry minsize="1" maxsize="8" extension="inttype" extension_size="4">
           <register name="x0"/>
         </pentry>
-        <pentry minsize="1" maxsize="8" extension="zero">
+        <pentry minsize="1" maxsize="8" extension="inttype" extension_size="4">
           <register name="x1"/>
         </pentry>
-        <pentry minsize="1" maxsize="8" extension="zero">
+        <pentry minsize="1" maxsize="8" extension="inttype" extension_size="4">
           <register name="x2"/>
         </pentry>
-        <pentry minsize="1" maxsize="8" extension="zero">
+        <pentry minsize="1" maxsize="8" extension="inttype" extension_size="4">
           <register name="x3"/>
         </pentry>
-        <pentry minsize="1" maxsize="8" extension="zero">
+        <pentry minsize="1" maxsize="8" extension="inttype" extension_size="4">
           <register name="x4"/>
         </pentry>
-        <pentry minsize="1" maxsize="8" extension="zero">
+        <pentry minsize="1" maxsize="8" extension="inttype" extension_size="4">
           <register name="x5"/>
         </pentry>
-        <pentry minsize="1" maxsize="8" extension="zero">
+        <pentry minsize="1" maxsize="8" extension="inttype" extension_size="4">
           <register name="x6"/>
         </pentry>
-        <pentry minsize="1" maxsize="8" extension="zero">
+        <pentry minsize="1" maxsize="8" extension="inttype" extension_size="4">
           <register name="x7"/>
         </pentry>
         <pentry minsize="1" maxsize="1048576" align="1">

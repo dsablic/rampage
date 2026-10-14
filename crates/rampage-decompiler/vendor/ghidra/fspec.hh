@@ -30,6 +30,7 @@ class JoinRecord;
 extern AttributeId ATTRIB_CUSTOM;	///< Marshaling attribute "custom"
 extern AttributeId ATTRIB_DOTDOTDOT;	///< Marshaling attribute "dotdotdot"
 extern AttributeId ATTRIB_EXTENSION;	///< Marshaling attribute "extension"
+extern AttributeId ATTRIB_EXTENSION_SIZE;	///< Marshaling attribute "extension_size" (guaranteed extension bytes)
 extern AttributeId ATTRIB_HASTHIS;	///< Marshaling attribute "hasthis"
 extern AttributeId ATTRIB_INLINE;	///< Marshaling attribute "inline"
 extern AttributeId ATTRIB_KILLEDBYCALL;	///< Marshaling attribute "killedbycall"
@@ -112,6 +113,7 @@ private:
   int4 size;			///< Size of the range in bytes
   int4 minsize;			///< Minimum bytes allowed for the logical value
   int4 alignment;		///< How much alignment (0 means only 1 logical value is allowed)
+  int4 extensionSize;		///< Integer extension window in bytes (0 means the full container)
   int4 numslots;		///< (Maximum) number of slots that can store separate parameters
   JoinRecord *joinrec;		///< Non-null if this is logical variable from joined pieces
   static const ParamEntry *findEntryByStorage(const list<ParamEntry> &entryList,const VarnodeData &vn);
@@ -122,13 +124,14 @@ private:
   /// \brief Is the logical value left-justified within its container
   bool isLeftJustified(void) const { return (((flags&force_left_justify)!=0)||(!spaceid->isBigEndian())); }
 public:
-  ParamEntry(int4 grp) { groupSet.push_back(grp); }	///< Constructor for use with decode
+  ParamEntry(int4 grp) : extensionSize(0) { groupSet.push_back(grp); }	///< Constructor for use with decode
   int4 getGroup(void) const { return groupSet[0]; }	///< Get the group id \b this belongs to
   const vector<int4> &getAllGroups(void) const { return groupSet; }	///< Get all group numbers \b this overlaps
   bool groupOverlap(const ParamEntry &op2) const;	///< Check if \b this and op2 occupy any of the same groups
   int4 getSize(void) const { return size; }		///< Get the size of the memory range in bytes.
   int4 getMinSize(void) const { return minsize; }	///< Get the minimum size of a logical value contained in \b this
   int4 getAlign(void) const { return alignment; }	///< Get the alignment of \b this entry
+  bool isExtensionBounded(void) const { return extensionSize != 0; }	///< Is the integer input extension bounded
   JoinRecord *getJoinRecord(void) const { return joinrec; }	///< Get record describing joined pieces (or null if only 1 piece)
   type_class getType(void) const { return type; }	///< Get the data-type class associated with \b this
   bool isExclusion(void) const { return (alignment==0); }	///< Return \b true if this holds a single parameter exclusively

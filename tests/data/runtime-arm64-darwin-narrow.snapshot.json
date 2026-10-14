@@ -1,0 +1,16 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "aarch64",
+  "target": {"platform": "darwin"},
+  "provenance": "Owned narrow_callee.c instructions; darwin_narrow.rs independently checks Apple clang assembly",
+  "regions": [
+    {
+      "name": "text",
+      "address": "0x1000",
+      "permissions": "r-x",
+      "bytes": "001c0011c0035fd6001c0011c0035fd6001c0011c0035fd6001c0011c0035fd6e003002ac0035fd6e003002ac0035fd6"
+    }
+  ],
+  "seeds": ["0x1000", "0x1008", "0x1010", "0x1018", "0x1020", "0x1028"],
+  "entry": "0x1000"
+}

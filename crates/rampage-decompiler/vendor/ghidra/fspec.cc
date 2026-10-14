@@ -21,6 +21,7 @@ namespace ghidra {
 AttributeId ATTRIB_CUSTOM = AttributeId("custom",114);
 AttributeId ATTRIB_DOTDOTDOT = AttributeId("dotdotdot",115);
 AttributeId ATTRIB_EXTENSION = AttributeId("extension",116);
+AttributeId ATTRIB_EXTENSION_SIZE = AttributeId("extension_size",159);
 AttributeId ATTRIB_HASTHIS = AttributeId("hasthis",117);
 AttributeId ATTRIB_INLINE = AttributeId("inline",118);
 AttributeId ATTRIB_KILLEDBYCALL = AttributeId("killedbycall",119);
@@ -359,6 +360,8 @@ bool ParamEntry::contains(const ParamEntry &op2) const
 ///
 ///  (A CPUI_FLOAT2FLOAT=float extension is handled by heritage and JoinRecord)
 /// If returning an extension operator, pass back the container being extended.
+/// A bounded input entry passes back only its least-significant extension_size bytes.
+/// Bytes outside that window have no assumed value.
 /// \param addr is the starting address of the logical value
 /// \param sz is the size of the logical value in bytes
 /// \param res will hold the passed back containing range
@@ -367,6 +370,14 @@ OpCode ParamEntry::assumedExtension(const Address &addr,int4 sz,VarnodeData &res
 
 {
   if ((flags & (smallsize_zext|smallsize_sext|smallsize_inttype))==0) return CPUI_COPY;
+  if (extensionSize != 0) {
+    if (sz <= 0 || sz >= extensionSize || addr.getSpace() != spaceid) return CPUI_COPY;
+    uintb highest = spaceid->getHighest();
+    if (addressbase > highest || (uintb)(size-1) > highest-addressbase) return CPUI_COPY;
+    if (addr.getOffset() < addressbase) return CPUI_COPY;
+    uintb relative = addr.getOffset()-addressbase;
+    if (relative >= (uintb)size || (uintb)sz > (uintb)size-relative) return CPUI_COPY;
+  }
   if (alignment != 0) {
     if (sz >= alignment)
       return CPUI_COPY;
@@ -385,6 +396,16 @@ OpCode ParamEntry::assumedExtension(const Address &addr,int4 sz,VarnodeData &res
     int4 alignAdjust = (addr.getOffset() - addressbase) % alignment;
     res.offset = addr.getOffset() - alignAdjust;
     res.size = alignment;
+  }
+  if (extensionSize != 0) {
+    uintb relative = res.offset-addressbase;
+    if (relative >= (uintb)size || (uintb)res.size > (uintb)size-relative) return CPUI_COPY;
+    if (!isLeftJustified())
+      res.offset += res.size-extensionSize;
+    res.size = extensionSize;
+    if (addr.getOffset() < res.offset) return CPUI_COPY;
+    relative = addr.getOffset()-res.offset;
+    if (relative >= (uintb)res.size || (uintb)sz > (uintb)res.size-relative) return CPUI_COPY;
   }
   if ((flags & smallsize_zext)!=0)
     return CPUI_INT_ZEXT;
@@ -505,6 +526,7 @@ void ParamEntry::decode(Decoder &decoder,bool normalstack,bool grouped,list<Para
   type = TYPECLASS_GENERAL;
   size = minsize = -1;		// Must be filled in
   alignment = 0;		// default
+  extensionSize = 0;		// default: extend to the full container
   numslots = 1;
 
   uint4 elemId = decoder.openElement(ELEM_PENTRY);
@@ -522,6 +544,16 @@ void ParamEntry::decode(Decoder &decoder,bool normalstack,bool grouped,list<Para
     }
     else if (attribId == ATTRIB_MAXSIZE) {
       size = decoder.readSignedInteger();
+    }
+    else if (attribId == ATTRIB_EXTENSION_SIZE) {
+      if (extensionSize != 0)
+	throw LowlevelError("Duplicate extension_size attribute");
+      istringstream value(decoder.readString());
+      intb width = 0;
+      value >> width;
+      if (value.fail() || !value.eof() || width <= 0 || width > 0x7fffffff)
+	throw LowlevelError("Bad extension_size attribute");
+      extensionSize = (int4)width;
     }
     else if (attribId == ATTRIB_STORAGE || attribId == ATTRIB_METATYPE)
       type = string2typeclass(decoder.readString());
@@ -550,7 +582,20 @@ void ParamEntry::decode(Decoder &decoder,bool normalstack,bool grouped,list<Para
   addr = Address::decode(decoder);
   decoder.closeElement(elemId);
   spaceid = addr.getSpace();
+  if (extensionSize != 0 && spaceid == (AddrSpace *)0)
+    throw LowlevelError("extension_size requires a parameter address space");
   addressbase = addr.getOffset();
+  if (extensionSize != 0) {
+    int4 containerSize = alignment == 0 ? size : alignment;
+    if (size <= 0 || minsize <= 0 || minsize > size || alignment < 0 || alignment > size ||
+	extensionSize > size || extensionSize > containerSize || (alignment != 0 && size % alignment != 0) ||
+	(flags & (smallsize_zext|smallsize_sext|smallsize_inttype)) == 0 ||
+	(flags & smallsize_floatext) != 0 || spaceid->getType() == IPTR_JOIN ||
+	addressbase > spaceid->getHighest() || (uintb)(size-1) > spaceid->getHighest()-addressbase)
+      throw LowlevelError("extension_size requires an integer extension within its parameter container");
+    if (spaceid->isReverseJustified())
+      throw LowlevelError("extension_size does not support reverse-justified parameter spaces");
+  }
   if (alignment != 0) {
 //    if ((addressbase % alignment) != 0)
 //      throw LowlevelError("Stack <pentry> address must match alignment");
@@ -1496,6 +1541,12 @@ void ParamListStandard::decode(Decoder &decoder,vector<EffectRecord> &effectlist
     }
     else {
       throw LowlevelError("<pentry> and <group> elements must come before any <modelrule>");
+    }
+  }
+  if (elemId != ELEM_INPUT) {
+    for(list<ParamEntry>::const_iterator iter=entry.begin();iter!=entry.end();++iter) {
+      if ((*iter).isExtensionBounded())
+	throw LowlevelError("extension_size is only supported for input parameters");
     }
   }
   decoder.closeElement(elemId);

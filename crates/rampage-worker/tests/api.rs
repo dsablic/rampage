@@ -55,6 +55,45 @@ fn isolated_decompilation_preserves_declared_capture_platform() {
 }
 
 #[test]
+fn darwin_narrow_prototypes_and_arithmetic_match_native_and_supervised_engines() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/data/runtime-arm64-darwin-narrow.snapshot.json");
+    let project = Project::new(Binary::open(path).unwrap());
+    let cases = [
+        (0x1000, "int4 narrow_signed_char(int1 value);", 1),
+        (0x1008, "int4 narrow_signed_short(int2 value);", 2),
+        (0x1010, "uint4 narrow_unsigned_char(uint1 value);", 1),
+        (0x1018, "uint4 narrow_unsigned_short(uint2 value);", 2),
+        (0x1020, "uint8 narrow_signed_char_u32(int1 value);", 1),
+        (0x1028, "uint8 narrow_signed_short_u32(int2 value);", 2),
+    ];
+    for (address, declaration, width) in cases {
+        project.set_decompiler_worker(None);
+        project.set_signature(address, Some(declaration)).unwrap();
+        let native = project.decompile(address).unwrap();
+        assert!(native.language_id.ends_with(":apple"));
+        let parameters = &native.structure.signature.parameters;
+        assert_eq!(parameters.len(), 1, "{}", native.code);
+        assert_eq!(parameters[0].name, "value");
+        assert_eq!(parameters[0].data_type.size, width);
+        if declaration.contains("(int1") || declaration.contains("(int2") {
+            assert!(!native.code.contains("(uint1)value"), "{}", native.code);
+            assert!(!native.code.contains("(uint2)value"), "{}", native.code);
+        }
+        project.set_decompiler_worker(Some(DecompilerWorkerConfig {
+            executable: Some(env!("CARGO_BIN_EXE_rampage-worker").into()),
+            ..Default::default()
+        }));
+        let isolated = project.decompile(address).unwrap();
+        assert_eq!(isolated.code, native.code);
+        assert_eq!(isolated.language_id, native.language_id);
+        assert_eq!(isolated.structure, native.structure);
+        assert_eq!(isolated.recovery_status, native.recovery_status);
+        assert_eq!(serde_json::to_value(isolated.tokens).unwrap(), serde_json::to_value(native.tokens).unwrap());
+    }
+}
+
+#[test]
 fn annotation_validation_does_not_require_an_entry_and_recovery_does_not_require_a_worker() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
     let mut binary = Binary::open(path).unwrap();
