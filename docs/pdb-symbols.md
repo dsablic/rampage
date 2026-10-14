@@ -21,6 +21,28 @@ checked `ImageBase + RVA` virtual addresses, each in readable, executable, file-
 Section-offset arithmetic is checked before RVA conversion. Matching GUID/age is linkage evidence,
 not authentication of the PDB or proof that a name describes the code correctly.
 
+### Checked preview and consent
+
+`Project::preview_pdb_names(path)` returns an opaque, immutable `PdbPreview<'_>` borrowing that exact project.
+`Project::apply_pdb_names(&preview)` applies only cached, originally approved pairs that remain eligible.
+The receipt cannot outlive its project or be deserialized into a different project. Read-only getters expose
+`report`, `approved`, `preserved`, `image_sha256` and `pdb` provenance for inspection.
+
+One capped owned input supplies both PDB parsing and SHA-256. Checked application revalidates the explicit PDB's
+provenance/bytes and the original mapped image's backing identity and selected-image digest; it never adopts newly
+parsed names as consent. Different/reloaded projects and observable source or PDB changes reject before import.
+Concurrent labels and conflicts can shrink the approved set; clearing an originally preserved label/conflict cannot
+enlarge it. Successful changes retain the existing atomic batch and same-process undo behavior.
+
+Checked apply stages refreshed annotation state under the shared log lock. Validation failure leaves its cached
+annotations, read cursor and undo/redo state unchanged while preserving external edits already committed to disk;
+ordinary refresh can still observe those edits later. This is not rollback of durable or partially appended writes.
+
+This separate checked API is the consent foundation for a future UI; existing path-based API/CLI/MCP imports retain
+their fresh-preview/recomputed-eligibility contract. Checked operation requires available original backing identity,
+currently supported on macOS/Linux. Hashes and metadata checks do not authenticate a PDB, create an atomic filesystem
+snapshot, eliminate races after validation, or make all existing mmap readers safe against concurrent truncation.
+
 ## Shared tool and MCP
 
 `import_pdb_names` belongs to the `types` group. It requires the loaded PE's `path` and an explicit `pdb` path;

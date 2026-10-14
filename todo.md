@@ -40,6 +40,10 @@
 - [x] Canonical CLI `type import-pdb-names`: explicit PDB path, preview default, bounded receipts and whole-batch
   atomic apply. Existing annotation values persist; undo history is process-local and is not recovered after CLI
   exit. Non-UTF-8 PDB arguments reject before loading; native non-UTF-8 PE fixture coverage is Linux-only.
+- [x] Checked PDB consent core: opaque immutable Project-bound preview, selected-image and same-buffer PDB digests,
+  current provenance validation, and application restricted to originally approved pairs still eligible under lock.
+  Late stale errors discard staged annotation cache/history/cursor changes, preserving external disk edits.
+  This does not expose a UI action or strengthen legacy path-based CLI/MCP import into frozen consent.
 - [x] Bundled starter signature databases: `rampage identify` applies a bundled musl libc database for the
   binary's architecture (x86-64, aarch64) out of the box; a user `--db` overlays on top, `--no-bundled` opts out.
   Generated reproducibly by `tools/gen-signatures.sh` (pinned zig). Follow-ups: more libs (libstdc++/libc++),
@@ -281,7 +285,10 @@ in UX/workflow ideas, not the multi-engine dispatch:
   strings across all eight widths, aliases retained, strict VALUETYPE/owner/flags/type/padding/blob checks.
   Works without custom attributes. Duplicate parents invalidate field evidence; incomplete/over-limit Constant
   tables yield none. Numeric/boxed attribute rendering is unchanged; no symbolic substitution or flags synthesis.
-- [ ] .NET external or assembly-qualified/escaped enums, symbolic enum-attribute names, resource payloads,
+- [x] Exact canonical escaped local enum identities, with structural nesting distinct from literal reserved
+  characters, complete unique local identity evidence and verified widths. Initial nesting reads reserve shared
+  work before inspection and cap readable rows at 100,000. Partial/invalid indexes cannot prove uniqueness.
+- [ ] .NET external or assembly-qualified enums, symbolic enum-attribute names, resource payloads,
   and comparison of `dotnet_il` with ildasm/ILSpy once available. Metadata bindings do not establish accessor behavior.
 - [x] Agent batch annotation: `annotate_batch` (all-or-nothing, at most 1000 entries, one undo step, per-entry
   outcomes) and the read-only `check_names` pre-flight, over MCP and CLI. Undo/redo return the step's edits. Name
@@ -508,7 +515,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Hosted CI at `ae4daba`: macOS workspace/UI/accuracy and selected opt-ins, Linux core, formatting and
   committed-tree/full-history secrets. Later navigation/enum-constant work has separate acceptance gates.
 
-### Current static-navigation and enum-constant wave
+### Published static-navigation and enum-constant wave (`c097515`)
 
 - [x] Fresh reviews of mapped-source identity/ownership, typed navigation evidence and invalidation, runtime
   address-width bounds, and local enum Constant ownership/grammar/budgets. Review fixes retain targeted regressions.
@@ -517,8 +524,20 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Warnings-denied Clippy, scoped formatting/whitespace checks and protected working-tree secret preflight.
 - [x] Complete controlled Python regression rerun: 677 tests and 108 subtests.
 - [x] Protected committed-tree/full-history secret audit before publication.
-- [ ] Final release workspace validation; still compiling when this wave was published. Debug validation passed;
-  release success is not implied by publication or hosted debug CI.
+- [x] Later frozen-source release workspace validation includes this foundation plus the checked-PDB/escaped-enum
+  additions below. This is not a claim of an exact `c097515` release rerun. The original run was interrupted during
+  compilation before the harness to avoid mixing source waves; that interruption was not an assertion failure.
+
+### Current checked-PDB and escaped-enum wave
+
+- [x] Independent reviews of same-buffer PDB provenance, Project-bound consent/intersection, staged annotation
+  refresh, canonical escaped identities, initial nesting work budgets and API/CLI/MCP surface regressions.
+- [x] Full ordinary debug workspace suite, warnings-denied Clippy, Rust formatting and protected working-tree
+  secret preflight. Controlled Python suite: 677 tests / 108 subtests. Ordinary UI snapshots and the 13-slice gate
+  are unchanged.
+- [x] Full frozen-source release workspace suite, preserving ordinary UI snapshots and the 13-slice gate.
+- [x] Protected committed-tree/full-history audit before publication; owned audit scratch removed afterward.
+- [ ] After this wave: assess decompiler ABI, stack/alias and aggregate-layout gaps before selecting implementations.
 
 ### Validation and external blockers
 

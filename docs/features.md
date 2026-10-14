@@ -165,8 +165,21 @@ constant evidence because an unread suffix could contain duplicate parents. Exte
 Boxed custom-attribute values retain serialized types in their existing rendered strings, such as `box(int32, 42)`
 and `box(int32[], null)`; named arguments keep their declared `object`/`object[]` type. Boxed strings, types and
 verified local enums share the existing depth/node/text/image-work budgets, including failed type/name lookups.
-Direct jagged constructor types, unknown/external or qualified/escaped enum resolution, bare `0xFF` object tags
+Direct jagged constructor types, unknown/external or assembly-qualified enum resolution, bare `0xFF` object tags
 and repeated object tags are unsupported. A failure in named arguments retains only fully charged valid fixed values.
+
+Serialized local enum names use exact canonical reflection spelling: literal `+`, comma, backslash, brackets,
+`*` and `&` are escaped with backslashes, while structural nesting uses an unescaped `+`. For example,
+`Demo.Mo\+de` names a literal `Mo+de`, not a nested type. Dots, slashes, whitespace, case and Unicode are preserved;
+there is no case folding, Unicode normalization, alternate spelling or general type-expression parser.
+
+Only unique local definitions with verified integral widths resolve. Assembly-qualified names remain unsupported,
+even when the assembly name appears to match the local image. Invalid/conflicting nesting, cycles, unreadable names
+or incomplete identity evidence disable the whole serialized-name index rather than proving partial uniqueness.
+Direct numeric enum decoding and constant evidence remain independent when their own evidence and budgets suffice.
+Initial nesting scans cap readable rows at 100,000 and reserve eight shared-work units per attempt before reads or
+insertion; escape expansion and failed name lookup also consume the existing decoding budgets. Within-limit ordinary
+ILAsm nested-type display is unchanged.
 
 Resource inventory distinguishes embedded-directory locations, external File/AssemblyRef links, unsupported
 ExportedType links and malformed/dangling references. An embedded `readable_location` reports only a checked,
