@@ -11,6 +11,7 @@ fn debugger_window_opens_without_a_binary_and_waits_for_an_explicit_query() {
     harness.run();
     harness.get_by_label("Read-only debugger");
     harness.get_by_label("No query has been sent.");
+    assert!(harness.query_by_label("Go to matching static image address").is_none());
     assert!(harness.state_mut().workspace_mut().is_none());
     harness.get_by_label("Query").click();
     harness.run();
@@ -32,6 +33,7 @@ fn resolution_template_does_not_open_a_project_or_issue_an_automatic_query() {
     harness.get_by_label("Insert template").click();
     harness.run();
     harness.get_by_label("No query has been sent.");
+    assert!(harness.query_by_label("Go to matching static image address").is_none());
     harness.get_by_label(
         "Select a unique module UUID from list_modules and supply its LLDB file virtual address, \
          not a file offset. Resolution is raw SDK mapping evidence, not proven flow or layout.",

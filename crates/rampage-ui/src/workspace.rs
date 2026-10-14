@@ -140,6 +140,7 @@ pub struct Xrefs {
 }
 
 pub struct Workspace {
+    pub(crate) instance: Arc<()>,
     pub path: PathBuf,
     /// The embedded image opened, when not the whole file.
     pub image: Option<ImageAt>,
@@ -213,6 +214,7 @@ impl Workspace {
         let highest = project.binary.segments.iter().map(|segment| segment.address + segment.size).max().unwrap_or(0);
         let address_width = (64 - highest.leading_zeros() as usize).div_ceil(4).max(4);
         let mut workspace = Self {
+            instance: Arc::new(()),
             path,
             image,
             project,

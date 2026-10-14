@@ -88,6 +88,7 @@ impl App {
         }
         match Workspace::open(&self.session, path, arch, image, ctx, self.blocking) {
             Ok(workspace) => {
+                self.debugger.invalidate_navigation();
                 self.workspace = Some(workspace);
                 self.error = None;
             }
@@ -168,7 +169,7 @@ impl App {
             about::show(&ui.ctx().clone(), &mut self.about, &self.session.packs());
         }
         self.carve_window(&ui.ctx().clone());
-        self.debugger.show(ui.ctx());
+        self.debugger.show(ui.ctx(), self.workspace.as_mut());
         let Some(workspace) = &mut self.workspace else {
             egui::CentralPanel::default().show(ui, |ui| self.empty(ui));
             self.shortcuts(ui.ctx());
