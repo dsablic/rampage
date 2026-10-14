@@ -12,10 +12,11 @@
 //! warnings and partial results. Only an image that claims to be managed but whose CLI header or metadata root
 //! cannot be read is an error.
 //!
-//! Method, field, property and member-reference signatures are rendered as ILAsm-style text. Properties include
-//! bounded MethodSemantics bindings; P/Invoke imports come from ImplMap. Custom attributes decode fixed and named
-//! primitive/string/type arguments, single-dimensional arrays and enums verified in this image. External enum
-//! underlying types remain unknown. Boxed attribute arguments and resources are not decoded.
+//! Method, field, property and member-reference signatures and event types are rendered as ILAsm-style text.
+//! Properties and events include bounded MethodSemantics bindings; P/Invoke imports come from ImplMap.
+//! Custom attributes decode fixed and named primitive/string/type arguments, single-dimensional arrays and enums
+//! verified in this image. External enum underlying types remain unknown. Boxed attribute arguments and resources
+//! are not decoded.
 //!
 //! [`method_il`] disassembles one method's CIL on request, with its locals and exception clauses; that is a
 //! listing for a reader, never a source of native analysis.
@@ -50,7 +51,7 @@ const MAX_VERSION_BYTES: usize = 256;
 const METADATA_SIGNATURE: u32 = 0x424A_5342;
 /// Enclosing types prefixed to a nested type's name; deeper (or cyclic) nesting is cut off.
 const MAX_NESTING: u32 = 16;
-const MAX_PROPERTY_ACCESSORS: usize = 64;
+const MAX_MEMBER_ACCESSORS: usize = 64;
 const BUDGET_EXHAUSTED: &str = "signature text budget exhausted; remaining signatures not rendered";
 
 /// CLI header flags (II.25.3.3.1).
@@ -173,6 +174,27 @@ pub struct TypeDef {
     pub fields: Vec<FieldDef>,
     pub methods: Vec<MethodDef>,
     pub properties: Vec<PropertyDef>,
+    pub events: Vec<EventDef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EventDef {
+    pub token: u32,
+    pub name: String,
+    /// EventAttributes (II.23.1.4), retained even when the type is unreadable.
+    pub flags: u16,
+    /// The EventType TypeDefOrRef, including a bounded TypeSpec in the owning type's generic context.
+    pub event_type: String,
+    /// Up to 64 distinct add/remove/fire/other bindings to methods declared by the same type.
+    /// These report MethodSemantics rows, not inferred behavior or validated method signatures.
+    pub accessors: Vec<EventAccessor>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct EventAccessor {
+    /// MethodSemanticsAttributes: 8 add, 16 remove, 32 fire or 4 other (II.23.1.12).
+    pub semantics: u16,
+    pub method_token: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -862,6 +884,18 @@ impl Decoder<'_, '_> {
     /// row's is raised to it and a target row already handed out is skipped, so each target row lands in at
     /// most one list: out-of-order or duplicated lists in a hostile file cannot multiply the output.
     fn member_lists(&mut self, owner: u8, column: usize, target: u8, ptr: u8) -> Vec<Vec<u32>> {
+        self.member_lists_eligible(owner, column, target, ptr, None)
+    }
+
+    /// Ineligible owners still delimit list ranges, but cannot reserve target rows.
+    fn member_lists_eligible(
+        &mut self,
+        owner: u8,
+        column: usize,
+        target: u8,
+        ptr: u8,
+        eligible: Option<&[bool]>,
+    ) -> Vec<Vec<u32>> {
         let ptr_rows = self.tables.rows(ptr);
         let target_rows = self.tables.rows(target);
         let count = if ptr_rows > 0 { ptr_rows } else { target_rows };
@@ -884,6 +918,9 @@ impl Decoder<'_, '_> {
         let mut assigned = vec![false; target_rows as usize + 1];
         (0..starts.len())
             .map(|index| {
+                if eligible.is_some_and(|rows| !rows.get(index).copied().unwrap_or(false)) {
+                    return Vec::new();
+                }
                 let end = starts.get(index + 1).copied().unwrap_or(limit);
                 (starts[index]..end)
                     .filter_map(|index| if ptr_rows > 0 { self.tables.cell(ptr, index, 0) } else { Some(index) })
@@ -900,9 +937,9 @@ impl Decoder<'_, '_> {
         let field_lists = self.member_lists(table, 4, tables::FIELD, tables::FIELD_PTR);
         let method_lists = self.member_lists(table, 5, tables::METHOD_DEF, tables::METHOD_PTR);
         self.index_enums(&field_lists);
-        let (member_types, property_lists) = self.property_and_event_types();
+        let (member_types, property_lists, event_lists) = self.property_and_event_types();
         self.member_types = member_types;
-        let mut accessors = self.property_accessors(&method_lists);
+        let mut accessors = self.member_accessors(&method_lists);
         let param_lists = self.member_lists(tables::METHOD_DEF, 5, tables::PARAM, tables::PARAM_PTR);
         for (params, method) in param_lists.iter().zip(1..) {
             self.param_methods.extend(params.iter().map(|&param| (param, method)));
@@ -911,8 +948,9 @@ impl Decoder<'_, '_> {
             .into_iter()
             .zip(method_lists)
             .zip(property_lists)
+            .zip(event_lists)
             .zip(1..)
-            .map(|(((fields, methods), properties), row)| {
+            .map(|((((fields, methods), properties), events), row)| {
                 let fields = fields.into_iter().map(|field| self.field(field, row)).collect();
                 let methods = methods
                     .into_iter()
@@ -927,8 +965,26 @@ impl Decoder<'_, '_> {
                             flags: self.tables.cell(tables::PROPERTY, property, 0).unwrap_or(0) as u16,
                             signature: self.signature(tables::PROPERTY, property, &name, Some(row)),
                             name,
-                            accessors: accessors.remove(&property).unwrap_or_default(),
+                            accessors: accessors.remove(&(tables::PROPERTY, property)).unwrap_or_default(),
                         }
+                    })
+                    .collect();
+                let events = events
+                    .into_iter()
+                    .map(|event| EventDef {
+                        token: token(tables::EVENT, event),
+                        name: self.string(tables::EVENT, event, 1),
+                        flags: self.tables.cell(tables::EVENT, event, 0).unwrap_or(0) as u16,
+                        event_type: self.event_type(event, row),
+                        accessors: accessors
+                            .remove(&(tables::EVENT, event))
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|binding| EventAccessor {
+                                semantics: binding.semantics,
+                                method_token: binding.method_token,
+                            })
+                            .collect(),
                     })
                     .collect();
                 TypeDef {
@@ -941,6 +997,7 @@ impl Decoder<'_, '_> {
                     fields,
                     methods,
                     properties,
+                    events,
                 }
             })
             .collect()
@@ -1038,7 +1095,7 @@ impl Decoder<'_, '_> {
         (name.len() <= signatures::MAX_TEXT).then_some(name)
     }
 
-    fn property_accessors(&mut self, method_lists: &[Vec<u32>]) -> HashMap<u32, Vec<PropertyAccessor>> {
+    fn member_accessors(&mut self, method_lists: &[Vec<u32>]) -> HashMap<(u8, u32), Vec<PropertyAccessor>> {
         let table = tables::METHOD_SEMANTICS;
         if self.tables.rows(table) == 0 {
             return HashMap::new();
@@ -1047,28 +1104,33 @@ impl Decoder<'_, '_> {
         for (methods, owner) in method_lists.iter().zip(1..) {
             method_types.extend(methods.iter().map(|&method| (method, owner)));
         }
-        let mut accessors: HashMap<u32, Vec<PropertyAccessor>> = HashMap::new();
+        let mut accessors: HashMap<(u8, u32), Vec<PropertyAccessor>> = HashMap::new();
         let mut capped = std::collections::HashSet::new();
         for row in 1..=self.tables.rows(table) {
             let association = self.tables.cell(table, row, 2).and_then(|value| C::HasSemantics.decode(value));
-            let Some((tables::PROPERTY, property)) = association else { continue };
+            let Some((target, member)) = association else { continue };
             let method = self.tables.cell(table, row, 1).unwrap_or(0);
             let semantics = self.tables.cell(table, row, 0).unwrap_or(0) as u16;
-            let owner = self.member_types.get(&(tables::PROPERTY, property));
-            if owner.is_none() || owner != method_types.get(&method) || !matches!(semantics, 1 | 2 | 4) {
-                self.warnings.push(format!("MethodSemantics row {row}: invalid property method binding"));
+            let owner = self.member_types.get(&(target, member));
+            let (kind, valid) = match target {
+                tables::PROPERTY => ("property", matches!(semantics, 1 | 2 | 4)),
+                tables::EVENT => ("event", matches!(semantics, 4 | 8 | 16 | 32)),
+                _ => continue,
+            };
+            if owner.is_none() || owner != method_types.get(&method) || !valid {
+                self.warnings.push(format!("MethodSemantics row {row}: invalid {kind} method binding"));
                 continue;
             }
-            let bindings = accessors.entry(property).or_default();
+            let bindings = accessors.entry((target, member)).or_default();
             let binding = PropertyAccessor { semantics, method_token: token(tables::METHOD_DEF, method) };
             if bindings.contains(&binding) {
                 continue;
             }
-            if bindings.len() < MAX_PROPERTY_ACCESSORS {
+            if bindings.len() < MAX_MEMBER_ACCESSORS {
                 bindings.push(binding);
-            } else if capped.insert(property) {
-                self.warnings
-                    .push(format!("Property row {property}: accessor bindings capped at {MAX_PROPERTY_ACCESSORS}"));
+            } else if capped.insert((target, member)) {
+                let table = tables::TABLE_NAMES[usize::from(target)];
+                self.warnings.push(format!("{table} row {member}: accessor bindings capped at {MAX_MEMBER_ACCESSORS}"));
             }
         }
         accessors
@@ -1127,6 +1189,19 @@ impl Decoder<'_, '_> {
         if let Some(text) = self.render_signature(table, row, name, owner) {
             return text;
         }
+        self.unreadable_signature(table, row, "signature blob")
+    }
+
+    fn event_type(&mut self, row: u32, owner: u32) -> String {
+        let value = self.tables.cell(tables::EVENT, row, 2).unwrap_or(0);
+        let generics = Generics { type_params: self.generics(tables::TYPE_DEF, owner), method_params: &[] };
+        if let Some(ty) = Reader::new(self, generics, &self.budget).event_type(value) {
+            return ty.text;
+        }
+        self.unreadable_signature(tables::EVENT, row, "type reference")
+    }
+
+    fn unreadable_signature(&mut self, table: u8, row: u32, what: &str) -> String {
         // A spent budget fails every later signature too: one warning says so instead of one per row.
         if self.budget.get() == 0 {
             if !std::mem::replace(&mut self.budget_reported, true) {
@@ -1134,7 +1209,7 @@ impl Decoder<'_, '_> {
             }
         } else {
             let table = tables::TABLE_NAMES[usize::from(table)];
-            self.warnings.push(format!("{table} row {row}: signature blob is malformed or exceeds the rendering caps"));
+            self.warnings.push(format!("{table} row {row}: {what} is malformed or exceeds the rendering caps"));
         }
         UNREADABLE.to_owned()
     }
@@ -1226,27 +1301,48 @@ impl Decoder<'_, '_> {
         attributes
     }
 
-    /// Property/Event ownership and each type's Property rows in map/pointer-list order.
-    fn property_and_event_types(&mut self) -> (MemberTypes, Vec<Vec<u32>>) {
+    /// Property/Event ownership and each type's member rows in map/pointer-list order.
+    fn property_and_event_types(&mut self) -> (MemberTypes, Vec<Vec<u32>>, Vec<Vec<u32>>) {
         let mut types = HashMap::new();
         let mut properties = vec![Vec::new(); self.tables.rows(tables::TYPE_DEF) as usize];
+        let mut events = vec![Vec::new(); properties.len()];
+        let mut event_owners = std::collections::HashSet::new();
         let maps = [
             (tables::PROPERTY_MAP, tables::PROPERTY, tables::PROPERTY_PTR),
             (tables::EVENT_MAP, tables::EVENT, tables::EVENT_PTR),
         ];
         for (map, target, ptr) in maps {
-            for (members, row) in self.member_lists(map, 1, target, ptr).into_iter().zip(1..) {
+            let eligible = (target == tables::EVENT).then(|| {
+                (1..=self.tables.rows(map))
+                    .map(|row| {
+                        let parent = self.tables.cell(map, row, 0).unwrap_or(0);
+                        if parent == 0 || parent > self.tables.rows(tables::TYPE_DEF) {
+                            self.warnings.push(format!("EventMap row {row}: invalid owning TypeDef {parent}"));
+                            return false;
+                        }
+                        if event_owners.insert(parent) {
+                            return true;
+                        }
+                        self.warnings.push(format!(
+                            "EventMap row {row}: duplicate owning TypeDef {parent}; later map rows ignored"
+                        ));
+                        false
+                    })
+                    .collect::<Vec<_>>()
+            });
+            for (members, row) in
+                self.member_lists_eligible(map, 1, target, ptr, eligible.as_deref()).into_iter().zip(1..)
+            {
                 if let Some(parent) = self.tables.cell(map, row, 0) {
-                    if target == tables::PROPERTY
-                        && let Some(list) = parent.checked_sub(1).and_then(|row| properties.get_mut(row as usize))
-                    {
+                    let lists = if target == tables::PROPERTY { &mut properties } else { &mut events };
+                    if let Some(list) = parent.checked_sub(1).and_then(|row| lists.get_mut(row as usize)) {
                         list.extend(&members);
                     }
                     types.extend(members.into_iter().map(|member| ((target, member), parent)));
                 }
             }
         }
-        (types, properties)
+        (types, properties, events)
     }
 
     /// What a custom attribute is applied to: a member as `Type::member`, a parameter as `Type::Method/param`,
@@ -1440,6 +1536,47 @@ mod tests {
         assert!(decoder.serialized_type_def_name(1, 0).is_none(), "cycles never resolve an enum name");
         assert_eq!(decoder.budget.get(), 0, "failed nested name lookups still cost work");
         assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
+        assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
+        assert_eq!(warnings.0, [BUDGET_EXHAUSTED]);
+    }
+
+    #[test]
+    fn failed_event_type_lookups_spend_the_shared_signature_budget() {
+        let mut stream = table_stream(&[(tables::TYPE_DEF, 1), (tables::EVENT, 3), (tables::TYPE_SPEC, 1)]);
+        for (value, width) in [(0u32, 4), (1, 2), (0, 2), (0, 2), (1, 2), (1, 2)] {
+            stream.extend_from_slice(&value.to_le_bytes()[..width]);
+        }
+        for value in [3u32, 6, 4] {
+            for column in [0, 1, value] {
+                stream.extend_from_slice(&(column as u16).to_le_bytes());
+            }
+        }
+        stream.extend_from_slice(&1u16.to_le_bytes());
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: b"\0M\0", blobs: &[0, 1, 0x99], ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        decoder.budget.set(3);
+        assert_eq!(decoder.event_type(1, 1), UNREADABLE);
+        assert_eq!(decoder.budget.get(), 2, "a reserved coded tag still costs lookup work");
+        assert_eq!(decoder.event_type(2, 1), UNREADABLE);
+        assert_eq!(decoder.budget.get(), 0, "a failed TypeSpec costs its lookup and bytes read");
+        assert_eq!(decoder.event_type(3, 1), UNREADABLE);
+        assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
+        assert_eq!(warnings.0.iter().filter(|warning| warning.as_str() == BUDGET_EXHAUSTED).count(), 1);
+    }
+
+    #[test]
+    fn event_text_and_other_signatures_share_the_image_budget() {
+        let (stream, blobs) = method_tables(&[&[0x00, 0, 0x01]]);
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: b"\0M\0", blobs: &blobs, ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        decoder.budget.set(3);
+        let ty = Reader::new(&decoder, Generics::default(), &decoder.budget).event_type(4).unwrap();
+        assert_eq!(ty.text, "M");
+        assert_eq!(decoder.budget.get(), 1, "lookup work and rendered event text both count");
         assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
         assert_eq!(warnings.0, [BUDGET_EXHAUSTED]);
     }

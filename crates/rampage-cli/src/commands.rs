@@ -896,12 +896,13 @@ pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuer
     let counts = &summary.counts;
     writeln!(
         out,
-        "{} types, {} methods ({} IL, {} native), {} properties, {} P/Invoke imports, {} attributes",
+        "{} types, {} methods ({} IL, {} native), {} properties, {} events, {} P/Invoke imports, {} attributes",
         counts.types,
         counts.methods,
         counts.il_methods,
         counts.native_methods,
         counts.properties,
+        counts.events,
         counts.pinvokes,
         counts.custom_attributes
     )?;
@@ -1009,6 +1010,20 @@ fn dotnet_types(out: &mut impl Write, types: &rampage_api::Page<rampage_loaders:
             };
             writeln!(out, "  property {signature} (token {:#010x})", property.token)?;
             for accessor in &property.accessors {
+                writeln!(
+                    out,
+                    "    metadata accessor {:#010x}, semantics {:#x}",
+                    accessor.method_token, accessor.semantics
+                )?;
+            }
+        }
+        for event in &ty.events {
+            writeln!(
+                out,
+                "  event {} {} (token {:#010x}, flags {:#x})",
+                event.event_type, event.name, event.token, event.flags
+            )?;
+            for accessor in &event.accessors {
                 writeln!(
                     out,
                     "    metadata accessor {:#010x}, semantics {:#x}",
@@ -1193,7 +1208,38 @@ fn render_pack(out: &mut impl Write, pack: &PackInfo) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use rampage_loaders::dotnet::{BodyKind, MethodDef, UNREADABLE};
+    use rampage_loaders::dotnet::{BodyKind, EventAccessor, EventDef, MethodDef, TypeDef, UNREADABLE};
+
+    #[test]
+    fn event_text_preserves_names_and_metadata_bindings_when_types_are_unreadable() {
+        let types = rampage_api::Page {
+            total: 1,
+            offset: 0,
+            items: vec![TypeDef {
+                token: 0x0200_0001,
+                namespace: "Fixture".to_owned(),
+                name: "Owner".to_owned(),
+                flags: 0,
+                extends: None,
+                enclosing: None,
+                fields: Vec::new(),
+                methods: Vec::new(),
+                properties: Vec::new(),
+                events: vec![EventDef {
+                    token: 0x1400_0001,
+                    name: "Changed".to_owned(),
+                    flags: 0x200,
+                    event_type: UNREADABLE.to_owned(),
+                    accessors: vec![EventAccessor { semantics: 8, method_token: 0x0600_0001 }],
+                }],
+            }],
+        };
+        let mut out = Vec::new();
+        super::dotnet_types(&mut out, &types).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("event <unreadable> Changed (token 0x14000001, flags 0x200)"), "{text}");
+        assert!(text.contains("metadata accessor 0x06000001, semantics 0x8"), "{text}");
+    }
 
     #[test]
     fn an_unreadable_method_signature_keeps_the_method_name() {

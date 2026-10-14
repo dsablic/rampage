@@ -119,7 +119,9 @@ fn dotnet_pages_types_and_shows_the_module_and_entry_point() {
         .stdout(contains("assembly   Microsoft.Bcl.HashCode 1.0.0.0"))
         .stdout(contains("module     Microsoft.Bcl.HashCode.dll (mvid "))
         .stdout(contains("entry      none"))
-        .stdout(contains("11 types, 48 methods (48 IL, 0 native), 4 properties, 0 P/Invoke imports, 76 attributes"))
+        .stdout(contains(
+            "11 types, 48 methods (48 IL, 0 native), 4 properties, 0 events, 0 P/Invoke imports, 76 attributes",
+        ))
         .stdout(contains("... 9 more types (page with --list types --offset 2, or filter with --contains)"))
         .stdout(contains("attribute  ").not());
     rampage(&["dotnet", "--limit", "0"], ASSEMBLY).failure().stderr(contains("--limit"));

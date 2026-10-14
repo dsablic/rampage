@@ -86,6 +86,13 @@ pub(super) enum Kind {
 pub(super) struct Ty {
     pub(super) text: String,
     pub(super) kind: Kind,
+    shape: TypeShape,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeShape {
+    Named,
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,6 +272,22 @@ impl<'r> Reader<'r> {
         self.read(blob, |reader, cursor| reader.ty(cursor, 0))
     }
 
+    /// EventType is a table coded index, not a blob; failed lookups still spend shared work.
+    pub(super) fn event_type(&mut self, value: u32) -> Option<Ty> {
+        self.spend(1)?;
+        let previous = std::mem::replace(&mut self.strict_types, true);
+        self.nodes += 1;
+        let ty = (|| {
+            if self.nodes > MAX_NODES || self.budget.get() == 0 {
+                return None;
+            }
+            let ty = self.type_def_or_ref_value(value, 0)?;
+            self.charge_type(ty)
+        })();
+        self.strict_types = previous;
+        ty
+    }
+
     /// The local variable types of a LocalVarSig (II.23.2.6). Each local is capped as one signature would be.
     pub(super) fn locals(&mut self, blob: &[u8]) -> Option<Vec<Ty>> {
         self.read(blob, |reader, cursor| {
@@ -326,18 +349,30 @@ impl<'r> Reader<'r> {
         if convention > 5 {
             return None;
         }
+        if self.strict_types
+            && (first & 0x80 != 0
+                || first & SIGNATURE_EXPLICIT_THIS != 0 && first & SIGNATURE_HAS_THIS == 0
+                || first & SIGNATURE_GENERIC != 0 && !matches!(convention, 0 | 5))
+        {
+            return None;
+        }
         let generic_count = if first & SIGNATURE_GENERIC != 0 { cursor.compressed()? } else { 0 };
-        if generic_count > MAX_ARITY {
+        if generic_count > MAX_ARITY || self.strict_types && first & SIGNATURE_GENERIC != 0 && generic_count == 0 {
             return None;
         }
         let count = cursor.compressed()?;
         let ret = self.ty_at(cursor, depth + 1, TypeContext::Return)?;
         let mut params = Vec::new();
+        let mut sentinel = false;
         // Every parameter consumes at least one byte, so a huge declared count fails at the blob's end.
         for _ in 0..count {
             if cursor.peek() == Some(ELEMENT_SENTINEL) {
-                cursor.byte();
-                params.push(Ty { text: "...".to_owned(), kind: Kind::Other });
+                cursor.byte()?;
+                if self.strict_types && (convention != 5 || sentinel) {
+                    return None;
+                }
+                sentinel = true;
+                params.push(Ty { text: "...".to_owned(), kind: Kind::Other, shape: TypeShape::Other });
             }
             params.push(self.ty_at(cursor, depth + 1, TypeContext::Parameter)?);
         }
@@ -353,9 +388,13 @@ impl<'r> Reader<'r> {
 
     /// Charges rendered text against this signature's cap and the image-wide budget.
     fn charge(&mut self, text: String, kind: Kind) -> Option<Ty> {
-        self.text = self.text.saturating_add(text.len());
-        self.spend(text.len())?;
-        (self.text <= MAX_TEXT).then_some(Ty { text, kind })
+        self.charge_type(Ty { text, kind, shape: TypeShape::Other })
+    }
+
+    fn charge_type(&mut self, ty: Ty) -> Option<Ty> {
+        self.text = self.text.saturating_add(ty.text.len());
+        self.spend(ty.text.len())?;
+        (self.text <= MAX_TEXT).then_some(ty)
     }
 
     /// One Type (II.23.2.12), including the BYREF, TYPEDBYREF, VOID and custom-modifier prefixes that RetType,
@@ -411,8 +450,8 @@ impl<'r> Reader<'r> {
             0x10 => format!("{}&", self.ty(cursor, depth + 1)?.text),
             0x11 | 0x12 => {
                 let token_at = cursor.at;
-                let name = self.type_def_or_ref(cursor, depth)?;
-                let kind = if element == 0x12 && name == "System.Type" {
+                let mut ty = self.type_def_or_ref(cursor, depth)?;
+                ty.kind = if element == 0x12 && ty.text == "System.Type" {
                     Kind::SystemType
                 } else if element == 0x11 {
                     let mut token = Cursor::new(&cursor.bytes[token_at..cursor.at]);
@@ -421,7 +460,7 @@ impl<'r> Reader<'r> {
                 } else {
                     Kind::Other
                 };
-                return self.charge(name, kind);
+                return self.charge_type(ty);
             }
             0x13 => generic_name(self.generics.type_params, cursor.compressed()?, "!"),
             0x1E => generic_name(self.generics.method_params, cursor.compressed()?, "!!"),
@@ -449,7 +488,10 @@ impl<'r> Reader<'r> {
                 if !matches!(cursor.byte()?, 0x11 | 0x12) {
                     return None;
                 }
-                let name = self.type_def_or_ref(cursor, depth)?;
+                let definition = self.type_def_or_ref(cursor, depth)?;
+                if self.strict_types && definition.shape != TypeShape::Named {
+                    return None;
+                }
                 let count = cursor.compressed()?;
                 if count == 0 || count > MAX_ARITY {
                     return None;
@@ -458,7 +500,7 @@ impl<'r> Reader<'r> {
                 for _ in 0..count {
                     arguments.push(self.ty(cursor, depth + 1)?.text);
                 }
-                format!("{}<{}>", without_arity(&name), arguments.join(", "))
+                format!("{}<{}>", without_arity(&definition.text), arguments.join(", "))
             }
             0x1B => {
                 let method = self.method_at(cursor, depth + 1)?;
@@ -472,7 +514,7 @@ impl<'r> Reader<'r> {
                 let modifier = self.type_def_or_ref(cursor, depth)?;
                 let inner = self.ty_at(cursor, depth + 1, context)?;
                 let keyword = if element == 0x1F { "modreq" } else { "modopt" };
-                return self.charge(format!("{} {keyword}({modifier})", inner.text), inner.kind);
+                return self.charge(format!("{} {keyword}({})", inner.text, modifier.text), inner.kind);
             }
             0x45 => format!("{} pinned", self.ty(cursor, depth + 1)?.text),
             _ => return None,
@@ -481,8 +523,12 @@ impl<'r> Reader<'r> {
     }
 
     /// A TypeDefOrRefOrSpecEncoded token (II.23.2.8), resolved to a name or a rendered TypeSpec.
-    fn type_def_or_ref(&mut self, cursor: &mut Cursor, depth: u32) -> Option<String> {
-        let (table, row) = Coded::TypeDefOrRef.decode(cursor.compressed()?)?;
+    fn type_def_or_ref(&mut self, cursor: &mut Cursor, depth: u32) -> Option<Ty> {
+        self.type_def_or_ref_value(cursor.compressed()?, depth)
+    }
+
+    fn type_def_or_ref_value(&mut self, value: u32, depth: u32) -> Option<Ty> {
+        let (table, row) = Coded::TypeDefOrRef.decode(value)?;
         if table == tables::TYPE_SPEC {
             let blob = self.resolve.type_spec(row)?;
             let ty = self.read(blob, |reader, cursor| {
@@ -492,9 +538,9 @@ impl<'r> Reader<'r> {
                 }
                 Some(ty)
             })?;
-            return Some(ty.text);
+            return Some(ty);
         }
-        self.resolve.type_name(table, row)
+        self.resolve.type_name(table, row).map(|text| Ty { text, kind: Kind::Other, shape: TypeShape::Named })
     }
 }
 
@@ -874,7 +920,7 @@ mod tests {
 
     #[test]
     fn decodes_fixed_attribute_arguments() {
-        let ty = |kind| Ty { text: String::new(), kind };
+        let ty = |kind| Ty { text: String::new(), kind, shape: TypeShape::Other };
         let params = [
             ty(Kind::Element(0x0E)),
             ty(Kind::Element(0x08)),
@@ -954,7 +1000,7 @@ mod tests {
         assert!(decoded.arguments.is_none(), "individually bounded strings must also obey the total text cap");
         assert!(budget.get() > 0, "per-attribute caps do not spend the entire image budget");
 
-        let params = [Ty { text: "string".to_owned(), kind: Kind::Element(ELEMENT_STRING) }];
+        let params = [Ty { text: "string".to_owned(), kind: Kind::Element(ELEMENT_STRING), shape: TypeShape::Other }];
         let mut long = vec![1, 0, 0xA7, 0x10]; // 10,000 UTF-8 bytes, kept text fits the per-string cap.
         long.extend([b'x'; 10_000]);
         long.extend([0, 0]);
@@ -967,7 +1013,7 @@ mod tests {
     #[test]
     fn named_argument_budget_failures_preserve_fully_charged_fixed_arguments() {
         let fake = Fake(Vec::new());
-        let params = [Ty { text: "int32".to_owned(), kind: Kind::Element(0x08) }];
+        let params = [Ty { text: "int32".to_owned(), kind: Kind::Element(0x08), shape: TypeShape::Other }];
         let value = [1, 0, 42, 0, 0, 0, 1, 0, 0x54, 0x08, 1, b'X', 0, 0, 0, 0];
         for (available, fixed_available, named_available) in
             [(7, false, false), (8, true, false), (14, true, false), (20, true, false), (25, true, true)]
@@ -1059,6 +1105,55 @@ mod tests {
                 Reader::new(&invalid, Generics::default(), &budget).method(&[0x00, 0, 0x12, SPEC1]).is_some(),
                 "complete TypeSpec consumption is scoped to strict property decoding"
             );
+        }
+    }
+
+    #[test]
+    fn event_generic_definition_failures_charge_alias_rendering_and_restore_legacy_parsing() {
+        let fake = Fake(vec![vec![0x15, 0x12, (2 << 2) | 2, 1, 0x08], vec![0x1D, 0x08]]);
+        let cost = 1 + 3 + 2 + "int32".len() + "int32[]".len();
+        let budget = Cell::new(TOTAL_BUDGET);
+        let mut reader = Reader::new(&fake, Generics::default(), &budget);
+        assert!(reader.event_type(u32::from(SPEC1)).is_none());
+        assert_eq!(TOTAL_BUDGET - budget.get(), cost, "failed definitions charge both nested bytes and text");
+        assert!(
+            reader.method(&[0, 0, 0x15, 0x12, (2 << 2) | 2, 1, 0x08]).is_some(),
+            "legacy method decoding is unchanged"
+        );
+
+        let property = [0x28, 0, 0x12, SPEC1];
+        let budget = Cell::new(TOTAL_BUDGET);
+        assert!(Reader::new(&fake, Generics::default(), &budget).property(&property).is_none());
+        assert_eq!(TOTAL_BUDGET - budget.get(), cost - 1 + property.len());
+        for available in [cost - 1, cost] {
+            let budget = Cell::new(available);
+            assert!(Reader::new(&fake, Generics::default(), &budget).event_type(u32::from(SPEC1)).is_none());
+            assert_eq!(budget.get(), 0);
+            assert!(Reader::new(&fake, Generics::default(), &budget).method(&[0, 0, 0x01]).is_none());
+        }
+    }
+
+    #[test]
+    fn event_function_pointer_failures_charge_consumed_headers_and_sentinels() {
+        for (blob, cost) in [
+            (vec![0x1B, 0x00, 1, 0x01, 0x41, 0x08], 1 + 5 + "void".len()),
+            (vec![0x1B, 0x80, 0, 0x01], 3),
+            (vec![0x1B, 0x40, 0, 0x01], 3),
+            (vec![0x1B, 0x05, 2, 0x01, 0x41, 0x08, 0x41, 0x0E], 1 + 7 + "void".len() + "int32".len()),
+            (vec![0x1B, 0x11, 1, 0, 0x01], 3),
+            (vec![0x1B, 0x10, 0, 0, 0x01], 4),
+        ] {
+            let fake = Fake(vec![blob.clone()]);
+            let budget = Cell::new(TOTAL_BUDGET);
+            let mut reader = Reader::new(&fake, Generics::default(), &budget);
+            assert!(reader.event_type(u32::from(SPEC1)).is_none(), "{blob:02x?}");
+            assert_eq!(TOTAL_BUDGET - budget.get(), cost, "{blob:02x?}: consumed work is fully charged");
+            assert!(reader.method(&blob[1..]).is_some(), "strict grammar is scoped to the event/property context");
+
+            let budget = Cell::new(cost - 1);
+            assert!(Reader::new(&fake, Generics::default(), &budget).event_type(u32::from(SPEC1)).is_none());
+            assert_eq!(budget.get(), 0);
+            assert!(Reader::new(&fake, Generics::default(), &budget).method(&[0, 0, 0x01]).is_none());
         }
     }
 

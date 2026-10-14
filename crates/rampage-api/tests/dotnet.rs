@@ -8,6 +8,128 @@ fn fixture(name: &str) -> PathBuf {
 
 const ASSEMBLY: &str = "Microsoft.Bcl.HashCode.dll";
 
+struct EventImage(PathBuf);
+
+impl Drop for EventImage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn event_image() -> EventImage {
+    let mut strings = vec![0];
+    let mut name = |text: &str| {
+        let index = strings.len() as u16;
+        strings.extend_from_slice(text.as_bytes());
+        strings.push(0);
+        index
+    };
+    let namespace = name("Demo");
+    let owner = name("Publisher");
+    let idle = name("Idle");
+    let handler = name("Handler");
+    let bind = name("Bind");
+    let unbind = name("Unbind");
+    let changed = name("Changed");
+    let broken = name("Broken");
+
+    let present = [(0x01, 1u32), (0x02, 2), (0x06, 2), (0x12, 1), (0x14, 2), (0x18, 2)];
+    let valid = present.iter().fold(0u64, |mask, &(table, _)| mask | (1 << table));
+    let mut tables = vec![0, 0, 0, 0, 2, 0, 0, 1];
+    tables.extend_from_slice(&valid.to_le_bytes());
+    tables.extend_from_slice(&0u64.to_le_bytes());
+    for &(_, rows) in &present {
+        tables.extend_from_slice(&rows.to_le_bytes());
+    }
+    let mut narrow = |columns: &[u16]| {
+        for value in columns {
+            tables.extend_from_slice(&value.to_le_bytes());
+        }
+    };
+    narrow(&[0, handler, namespace]);
+    // Narrow columns split the TypeDef flags and MethodDef RVA into their two 16-bit halves.
+    narrow(&[1, 0, owner, namespace, 0, 1, 1]);
+    narrow(&[1, 0, idle, namespace, 0, 1, 3]);
+    narrow(&[0, 0, 0, 0x16, bind, 1, 1]);
+    narrow(&[0, 0, 0, 0x16, unbind, 1, 1]);
+    narrow(&[1, 1]);
+    narrow(&[0x0200, changed, 5]);
+    narrow(&[0x0400, broken, 3]);
+    narrow(&[8, 1, 2]);
+    narrow(&[16, 2, 2]);
+
+    let blobs = [0, 3, 0, 0, 1];
+    let streams: [(&str, &[u8]); 3] = [("#~", &tables), ("#Strings", &strings), ("#Blob", &blobs)];
+    let version = b"v4.0.30319\0\0";
+    let mut root = Vec::new();
+    root.extend_from_slice(&0x424A_5342u32.to_le_bytes());
+    root.extend_from_slice(&[1, 0, 1, 0, 0, 0, 0, 0]);
+    root.extend_from_slice(&(version.len() as u32).to_le_bytes());
+    root.extend_from_slice(version);
+    root.extend_from_slice(&[0, 0, 3, 0]);
+    let mut offset =
+        root.len() + streams.iter().map(|(name, _)| 8 + (name.len() + 1).next_multiple_of(4)).sum::<usize>();
+    for (name, data) in streams {
+        root.extend_from_slice(&(offset as u32).to_le_bytes());
+        root.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        root.extend_from_slice(name.as_bytes());
+        root.push(0);
+        while !root.len().is_multiple_of(4) {
+            root.push(0);
+        }
+        offset += data.len().next_multiple_of(4);
+    }
+    for (_, data) in streams {
+        root.extend_from_slice(data);
+        while !root.len().is_multiple_of(4) {
+            root.push(0);
+        }
+    }
+    let mut image = std::fs::read(fixture(ASSEMBLY)).unwrap();
+    let metadata = rampage_loaders::dotnet::parse_image(&image).unwrap().unwrap();
+    let start = image.windows(4).position(|bytes| bytes == b"BSJB").unwrap();
+    assert!(root.len() <= metadata.cli.metadata_size as usize);
+    image[start..start + root.len()].copy_from_slice(&root);
+    let path = std::env::temp_dir().join(format!("rampage-api-dotnet-events-{}.dll", std::process::id()));
+    let scratch = EventImage(path);
+    std::fs::write(&scratch.0, image).unwrap();
+    scratch
+}
+
+#[test]
+fn dotnet_metadata_serializes_events_and_filters_the_current_type_view() {
+    let scratch = event_image();
+    let project = rampage_api::Project::new(rampage_loaders::Binary::open(&scratch.0).unwrap());
+    let query = DotNetQuery { contains: Some("cHaNgEd".to_owned()), ..Default::default() };
+    let summary = project.dotnet_metadata(&query).unwrap().unwrap();
+    assert_eq!((summary.counts.types, summary.counts.events, summary.counts.properties), (2, 2, 0));
+    let json = serde_json::to_value(&summary).unwrap();
+    assert_eq!(json["counts"]["events"], 2);
+    assert_eq!(json["types"]["total"], 1);
+    let ty = &json["types"]["items"][0];
+    assert_eq!(ty["name"], "Publisher");
+    assert_eq!(ty["events"][0]["token"], 0x1400_0001u32);
+    assert_eq!(ty["events"][0]["name"], "Changed");
+    assert_eq!(ty["events"][0]["flags"], 0x0200);
+    assert_eq!(ty["events"][0]["event_type"], "Demo.Handler");
+    assert_eq!(ty["events"][0]["accessors"][0]["semantics"], 8);
+    assert_eq!(ty["events"][0]["accessors"][1]["method_token"], 0x0600_0002u32);
+    assert_eq!(ty["events"][1]["event_type"], "<unreadable>");
+    assert!(summary.warnings.iter().any(|warning| warning.contains("Event row 2: type reference")));
+    assert!(summary.pinvokes.is_none() && summary.custom_attributes.is_none());
+
+    let query =
+        DotNetQuery { contains: Some("BROKEN".to_owned()), offset: Some(1), limit: Some(1), ..Default::default() };
+    let page = project.dotnet_metadata(&query).unwrap().unwrap().types.unwrap();
+    assert_eq!((page.offset, page.total, page.items.len()), (1, 1, 0));
+    let query = DotNetQuery { contains: Some("Handler".to_owned()), ..Default::default() };
+    assert_eq!(
+        project.dotnet_metadata(&query).unwrap().unwrap().types.unwrap().total,
+        0,
+        "filter matches event names, not types"
+    );
+}
+
 #[test]
 fn dotnet_metadata_reports_identity_and_filters_types() {
     let project = Session::default().open(&fixture(ASSEMBLY), None).unwrap();

@@ -50,6 +50,14 @@ struct Spec {
     property_flags: u16,
     property_maps: Vec<(u32, u32)>,
     property_ptrs: Vec<u32>,
+    event_types: Vec<u32>,
+    event_flags: u16,
+    event_maps: Vec<(u32, u32)>,
+    event_ptrs: Vec<u32>,
+    /// Truncates the table stream inside Event, cutting this many bytes from the event rows' end.
+    event_table_cut: Option<usize>,
+    type_specs: Vec<Vec<u8>>,
+    type_generics: Vec<String>,
     /// MethodSemantics rows: flags, method row, HasSemantics coded association.
     semantics: Vec<(u16, u32, u32)>,
     extra_methods: u32,
@@ -142,6 +150,7 @@ fn build(spec: &Spec) -> Vec<u8> {
     // Compute's locals (int32, T) and the instantiation Compute<int32>.
     let locals_signature = blobs.blob(spec.compute_locals.as_deref().unwrap_or(&[0x07, 2, 0x08, 0x1E, 0]));
     let instantiation = blobs.blob(&[0x0A, 1, 0x08]);
+    let type_specs: Vec<_> = spec.type_specs.iter().map(|signature| blobs.blob(signature)).collect();
     let guids: Vec<u8> = (1..=16).collect();
     let mut user_strings = vec![0u8, 11];
     for unit in "hello".encode_utf16() {
@@ -244,8 +253,18 @@ fn build(spec: &Spec) -> Vec<u8> {
     tables.put(locals_signature, b);
     // EventMap and PropertyMap give Program (TypeDef 2) the event Changed (of type Object) and the property Count.
     let (changed, count) = (strings.string("Changed"), strings.string("Count"));
-    tables.put(2, i).put(1, i);
-    tables.put(0, 2).put(changed, s).put((1 << 2) | 1, tdor);
+    let event_maps = if spec.event_maps.is_empty() { vec![(2, 1)] } else { spec.event_maps.clone() };
+    let event_types = if spec.event_types.is_empty() { vec![(1 << 2) | 1] } else { spec.event_types.clone() };
+    for &(owner, start) in &event_maps {
+        tables.put(owner, i).put(start, i);
+    }
+    for &event in &spec.event_ptrs {
+        tables.put(event, i);
+    }
+    for &event_type in &event_types {
+        tables.put(u32::from(spec.event_flags), 2).put(changed, s).put(event_type, tdor);
+    }
+    let event_end = tables.bytes.len();
     let property_maps = if spec.property_maps.is_empty() { vec![(2, 1)] } else { spec.property_maps.clone() };
     for &(owner, start) in &property_maps {
         tables.put(owner, i).put(start, i);
@@ -262,6 +281,9 @@ fn build(spec: &Spec) -> Vec<u8> {
     // ModuleRef, and ImplMap binding Run (MemberForwarded tag 1 = MethodDef) to native.dll!RunNative.
     let (native_dll, run_native) = (strings.string("native.dll"), strings.string("RunNative"));
     tables.put(native_dll, s);
+    for &signature in &type_specs {
+        tables.put(signature, b);
+    }
     tables.put(0x0100, 2).put((4 << 1) | 1, i).put(run_native, s).put(1, i);
     // Assembly
     let demo_assembly = strings.string("Demo");
@@ -277,6 +299,10 @@ fn build(spec: &Spec) -> Vec<u8> {
     // GenericParam: Compute's T (TypeOrMethodDef tag 1 = MethodDef 2).
     let t = strings.string("T");
     tables.put(0, 2).put(0, 2).put((2 << 1) | 1, i).put(t, s);
+    for (number, name) in spec.type_generics.iter().enumerate() {
+        let name = strings.string(name);
+        tables.put(number as u32, 2).put(0, 2).put(2 << 1, i).put(name, s);
+    }
     // MethodSpec: Compute (MethodDefOrRef tag 0 = MethodDef 2) instantiated with int32.
     tables.put(2 << 1, i).put(instantiation, b);
 
@@ -290,18 +316,20 @@ fn build(spec: &Spec) -> Vec<u8> {
         (0x0A, 1),
         (0x0C, attribute_parents.len() as u32),
         (0x11, 1),
-        (0x12, 1),
-        (0x14, 1),
+        (0x12, event_maps.len() as u32),
+        (0x13, spec.event_ptrs.len() as u32),
+        (0x14, event_types.len() as u32),
         (0x15, property_maps.len() as u32),
         (0x16, spec.property_ptrs.len() as u32),
         (0x17, property_signatures.len() as u32),
         (0x18, spec.semantics.len() as u32),
         (0x1A, 1),
+        (0x1B, type_specs.len() as u32),
         (0x1C, 1),
         (0x20, 1),
         (0x23, 1),
         (0x29, 1 + u32::from(spec.duplicate_enum_name)),
-        (0x2A, 1),
+        (0x2A, 1 + spec.type_generics.len() as u32),
         (0x2B, 1),
     ];
     let present: Vec<_> = present.into_iter().filter(|&(_, rows)| rows != 0).collect();
@@ -313,8 +341,12 @@ fn build(spec: &Spec) -> Vec<u8> {
     for &(_, rows) in &present {
         table_stream.extend_from_slice(&rows.to_le_bytes());
     }
-    table_stream.extend_from_slice(&tables.bytes);
-    pad4(&mut table_stream);
+    if let Some(cut) = spec.event_table_cut {
+        table_stream.extend_from_slice(&tables.bytes[..event_end - cut]);
+    } else {
+        table_stream.extend_from_slice(&tables.bytes);
+        pad4(&mut table_stream);
+    }
     pad4(&mut strings.bytes);
     pad4(&mut blobs.bytes);
     pad4(&mut user_strings);
@@ -583,6 +615,418 @@ fn attribute_targets_and_nested_types_name_their_owners() {
     let metadata = parse(&cyclic).unwrap().unwrap();
     let inner = metadata.types.iter().find(|ty| ty.name == "Inner").unwrap();
     assert_eq!(inner.extends.as_deref().unwrap().matches("System.Pad").count(), 17);
+}
+
+#[test]
+fn events_report_types_flags_and_explicit_same_owner_semantics() {
+    let spec = Spec {
+        event_types: vec![5, 12],
+        event_flags: 0x0600,
+        semantics: vec![(8, 1, 2), (16, 2, 2), (32, 3, 2), (4, 4, 2), (8, 1, 2), (8, 2, 4), (2, 1, 3)],
+        attribute_parents: vec![(1 << 5) | 10, (2 << 5) | 10],
+        ..Spec::default()
+    };
+    let metadata = parse(&spec).unwrap().unwrap();
+    assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+    let events = &program(&metadata).events;
+    assert_eq!(events.len(), 2);
+    assert_eq!((events[0].token, events[0].name.as_str(), events[0].flags), (0x1400_0001, "Changed", 0x0600));
+    assert_eq!(events[0].event_type, "System.Object");
+    assert_eq!(events[1].event_type, "Demo.Program/Inner");
+    let bindings: Vec<_> =
+        events[0].accessors.iter().map(|binding| (binding.semantics, binding.method_token)).collect();
+    assert_eq!(bindings, [(8, 0x0600_0001), (16, 0x0600_0002), (32, 0x0600_0003), (4, 0x0600_0004)]);
+    assert_eq!(events[1].accessors[0].method_token, 0x0600_0002);
+    assert_eq!(program(&metadata).properties[0].accessors[0].semantics, 2);
+    assert!(
+        metadata.custom_attributes.iter().all(|attribute| attribute.parent.as_deref() == Some("Demo.Program::Changed"))
+    );
+    let json = serde_json::to_value(&events[0]).unwrap();
+    assert_eq!(json["event_type"], "System.Object");
+    assert_eq!(json["accessors"][2]["semantics"], 32);
+    assert_eq!(parse(&Spec { jtd: true, ..spec }).unwrap().unwrap().types, metadata.types);
+}
+
+#[test]
+fn events_reject_invalid_semantics_and_cross_owner_methods_without_inference() {
+    let metadata = parse(&Spec {
+        method_lists: Some([1, 1, 4]),
+        semantics: vec![
+            (8, 1, 2),
+            (16, 4, 2),
+            (32, 0, 2),
+            (4, 99, 2),
+            (8, 1, 0),
+            (8, 1, 198),
+            (0, 2, 2),
+            (1, 2, 2),
+            (2, 2, 2),
+            (24, 2, 2),
+            (64, 2, 2),
+            (0xFFFF, 2, 2),
+        ],
+        ..Spec::default()
+    })
+    .unwrap()
+    .unwrap();
+    let event = &program(&metadata).events[0];
+    assert_eq!(event.accessors.len(), 1);
+    assert_eq!((event.accessors[0].semantics, event.accessors[0].method_token), (8, 0x0600_0001));
+    assert_eq!(metadata.warnings.iter().filter(|warning| warning.contains("invalid event method binding")).count(), 11);
+    let normal = parse(&Spec::default()).unwrap().unwrap();
+    assert!(program(&normal).events[0].accessors.is_empty(), "methods alone do not imply event behavior");
+}
+
+#[test]
+fn malformed_event_owners_do_not_emit_events_or_bind_methods() {
+    for owner in [0, 4, 0xFFFF] {
+        let metadata = parse(&Spec {
+            event_maps: vec![(owner, 1)],
+            semantics: vec![(8, 1, 2)],
+            attribute_parents: vec![(1 << 5) | 10],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        assert!(metadata.types.iter().all(|ty| ty.events.is_empty()), "owner {owner}");
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("invalid owning TypeDef")));
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("invalid event method binding")));
+        assert_eq!(metadata.custom_attributes[0].parent.as_deref(), Some("Event Changed"));
+    }
+    let metadata =
+        parse(&Spec { event_maps: vec![(3, 1)], semantics: vec![(8, 1, 2)], ..Spec::default() }).unwrap().unwrap();
+    assert!(program(&metadata).events.is_empty());
+    assert!(metadata.types[2].events[0].accessors.is_empty());
+}
+
+#[test]
+fn event_pointer_lists_preserve_order_and_unique_ownership() {
+    for jtd in [false, true] {
+        let spec = Spec {
+            jtd,
+            event_types: vec![5, 12],
+            event_ptrs: vec![2, 1, 2, 0, 99],
+            semantics: vec![(8, 1, 2), (16, 2, 4)],
+            ..Spec::default()
+        };
+        let metadata = parse(&spec).unwrap().unwrap();
+        assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+        let events = &program(&metadata).events;
+        let rows: Vec<_> = events.iter().map(|event| (event.token, event.event_type.as_str())).collect();
+        assert_eq!(rows, [(0x1400_0002, "Demo.Program/Inner"), (0x1400_0001, "System.Object")]);
+        assert_eq!(events[0].accessors[0].method_token, 0x0600_0002);
+        assert_eq!(events[1].accessors[0].method_token, 0x0600_0001);
+
+        let split = parse(&Spec { event_ptrs: vec![2, 2, 1], event_maps: vec![(2, 1), (3, 3)], ..spec.clone() })
+            .unwrap()
+            .unwrap();
+        assert_eq!(program(&split).events[0].token, 0x1400_0002);
+        assert_eq!(split.types[2].events[0].token, 0x1400_0001);
+        assert!(split.types[2].events[0].accessors.is_empty(), "pointer remapping must also enforce method ownership");
+        assert_eq!(split.types.iter().map(|ty| ty.events.len()).sum::<usize>(), 2);
+
+        for maps in [vec![(2, 3), (3, 1)], vec![(2, 1), (2, 1)]] {
+            let malformed = parse(&Spec { event_maps: maps, ..spec.clone() }).unwrap().unwrap();
+            let tokens: Vec<_> = malformed.types.iter().flat_map(|ty| &ty.events).map(|event| event.token).collect();
+            assert!(tokens.len() <= 2);
+            assert_eq!(tokens.iter().collect::<std::collections::HashSet<_>>().len(), tokens.len());
+        }
+    }
+}
+
+#[test]
+fn duplicate_event_map_owners_keep_only_the_first_map_and_diagnose_later_bindings() {
+    for jtd in [false, true] {
+        let metadata = parse(&Spec {
+            jtd,
+            event_types: vec![5, 12],
+            event_maps: vec![(2, 1), (2, 2)],
+            semantics: vec![(8, 1, 2), (16, 2, 4)],
+            attribute_parents: vec![(1 << 5) | 10, (2 << 5) | 10],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        let events = &program(&metadata).events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].token, 0x1400_0001);
+        assert_eq!(events[0].accessors.len(), 1);
+        assert_eq!(events[0].accessors[0].semantics, 8);
+        assert_eq!(metadata.types.iter().map(|ty| ty.events.len()).sum::<usize>(), 1);
+        assert_eq!(
+            metadata.warnings,
+            [
+                "EventMap row 2: duplicate owning TypeDef 2; later map rows ignored",
+                "MethodSemantics row 2: invalid event method binding",
+            ]
+        );
+        assert_eq!(metadata.custom_attributes[0].parent.as_deref(), Some("Demo.Program::Changed"));
+        assert_eq!(metadata.custom_attributes[1].parent.as_deref(), Some("Event Changed"));
+    }
+}
+
+#[test]
+fn ignored_duplicate_event_maps_do_not_claim_later_valid_pointer_targets() {
+    for jtd in [false, true] {
+        let metadata = parse(&Spec {
+            jtd,
+            event_types: vec![5, 12],
+            event_ptrs: vec![1, 2, 2],
+            event_maps: vec![(2, 1), (2, 2), (3, 3)],
+            method_lists: Some([1, 1, 2]),
+            semantics: vec![(8, 1, 2), (8, 2, 4)],
+            attribute_parents: vec![(1 << 5) | 10, (2 << 5) | 10],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        let publisher = program(&metadata);
+        let inner = &metadata.types[2];
+        assert_eq!(publisher.events.len(), 1, "ignored maps still delimit the first owner's range");
+        assert_eq!(publisher.events[0].token, 0x1400_0001);
+        assert_eq!(publisher.events[0].accessors[0].method_token, 0x0600_0001);
+        assert_eq!(inner.events.len(), 1, "an ignored duplicate must not reserve EventPtr's target");
+        assert_eq!(inner.events[0].token, 0x1400_0002);
+        assert_eq!(inner.events[0].accessors.len(), 1);
+        assert_eq!(
+            (inner.events[0].accessors[0].semantics, inner.events[0].accessors[0].method_token),
+            (8, 0x0600_0002)
+        );
+        assert!(inner.methods.iter().any(|method| method.token == inner.events[0].accessors[0].method_token));
+        let tokens: Vec<_> = metadata.types.iter().flat_map(|ty| &ty.events).map(|event| event.token).collect();
+        assert_eq!(tokens, [0x1400_0001, 0x1400_0002]);
+        assert_eq!(metadata.warnings, ["EventMap row 2: duplicate owning TypeDef 2; later map rows ignored"]);
+        assert_eq!(metadata.custom_attributes[0].parent.as_deref(), Some("Demo.Program::Changed"));
+        assert_eq!(metadata.custom_attributes[1].parent.as_deref(), Some("Demo.Program/Inner::Changed"));
+    }
+}
+
+#[test]
+fn invalid_event_map_parents_do_not_claim_later_valid_pointer_targets() {
+    for jtd in [false, true] {
+        for parent in [0, 4, 0xFFFF] {
+            let metadata = parse(&Spec {
+                jtd,
+                event_types: vec![5],
+                event_ptrs: vec![1, 1],
+                event_maps: vec![(parent, 1), (2, 2)],
+                semantics: vec![(8, 1, 2)],
+                attribute_parents: vec![(1 << 5) | 10],
+                ..Spec::default()
+            })
+            .unwrap()
+            .unwrap();
+            let publisher = program(&metadata);
+            assert_eq!(publisher.events.len(), 1, "invalid parent {parent} must not reserve the pointer target");
+            let event = &publisher.events[0];
+            assert_eq!(event.token, 0x1400_0001);
+            assert_eq!(event.accessors.len(), 1);
+            assert_eq!((event.accessors[0].semantics, event.accessors[0].method_token), (8, 0x0600_0001));
+            assert!(publisher.methods.iter().any(|method| method.token == event.accessors[0].method_token));
+            assert_eq!(metadata.types.iter().map(|ty| ty.events.len()).sum::<usize>(), 1);
+            assert_eq!(metadata.warnings, [format!("EventMap row 1: invalid owning TypeDef {parent}")]);
+            assert_eq!(metadata.custom_attributes[0].parent.as_deref(), Some("Demo.Program::Changed"));
+        }
+    }
+}
+
+#[test]
+fn event_accessor_fanout_is_capped_after_deduplication() {
+    let mut semantics = vec![(8, 1, 2); 100];
+    semantics.extend((1..=74).map(|method| (4, method, 2)));
+    semantics.extend([(4, 2, 2); 100]);
+    let metadata = parse(&Spec { extra_methods: 70, semantics, ..Spec::default() }).unwrap().unwrap();
+    let bindings = &program(&metadata).events[0].accessors;
+    assert_eq!(bindings.len(), 64);
+    assert_eq!(bindings[0].semantics, 8);
+    assert_eq!(bindings[1].method_token, 0x0600_0001, "distinct semantics on one method remain distinct bindings");
+    assert_eq!(bindings.last().unwrap().method_token, 0x0600_003F);
+    assert_eq!(metadata.warnings, ["Event row 1: accessor bindings capped at 64"]);
+}
+
+#[test]
+fn event_types_render_specs_in_the_owner_generic_context() {
+    let metadata = parse(&Spec {
+        event_types: vec![5, 8, 6, 10],
+        object_name: Some("Handler`1".to_owned()),
+        type_specs: vec![vec![0x15, 0x12, 5, 1, 0x13, 0], vec![0x12, 6]],
+        type_generics: vec!["TEvent".to_owned()],
+        ..Spec::default()
+    })
+    .unwrap()
+    .unwrap();
+    assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+    let types: Vec<_> = program(&metadata).events.iter().map(|event| event.event_type.as_str()).collect();
+    assert_eq!(types, ["System.Handler`1", "Demo.Program", "System.Handler<TEvent>", "System.Handler<TEvent>"]);
+    let nested = parse(&Spec { extra_type_refs: 1, pad_scope: Some(7), event_types: vec![9], ..Spec::default() })
+        .unwrap()
+        .unwrap();
+    assert_eq!(program(&nested).events[0].event_type, "System.Object/System.Pad");
+}
+
+#[test]
+fn generic_event_definitions_preserve_named_aliases_but_reject_constructed_aliases() {
+    let definition = vec![0x15, 0x12, 10, 1, 0x08];
+    for alias in [
+        vec![0x1D, 0x08],
+        vec![0x14, 0x08, 1, 0, 0],
+        vec![0x0F, 0x08],
+        vec![0x1B, 0x00, 0, 0x01],
+        vec![0x13, 0],
+        vec![0x08],
+        vec![0x15, 0x12, 5, 1, 0x08],
+    ] {
+        let metadata = parse(&Spec {
+            event_types: vec![6],
+            type_specs: vec![definition.clone(), alias.clone()],
+            semantics: vec![(8, 1, 2)],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        let event = &program(&metadata).events[0];
+        assert_eq!(event.event_type, "<unreadable>", "{alias:02x?}");
+        assert_eq!(event.accessors.len(), 1, "type errors do not invalidate a metadata binding");
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("Event row 1: type reference")));
+    }
+    for jtd in [false, true] {
+        let metadata = parse(&Spec {
+            jtd,
+            object_name: Some("Handler`1".to_owned()),
+            event_types: vec![6, 18, 22],
+            type_specs: vec![definition.clone(), vec![0x12, 14], vec![0x12, 5], vec![0x1D, 0x08], vec![0x12, 18]],
+            property_signatures: vec![vec![0x28, 0, 0x12, 6]],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        assert!(metadata.warnings.is_empty(), "{:?}", metadata.warnings);
+        let events = &program(&metadata).events;
+        assert_eq!(events[0].event_type, "System.Handler<int32>");
+        assert_eq!(events[1].event_type, "int32[]", "array aliases still render as types");
+        assert_eq!(events[2].event_type, "int32[]", "alias chains preserve the underlying type's shape");
+        assert_eq!(program(&metadata).properties[0].signature, "instance System.Handler<int32> Count()");
+    }
+}
+
+#[test]
+fn event_and_property_function_pointers_validate_headers_and_sentinels() {
+    for signature in [
+        vec![0x1B, 0x00, 1, 0x01, 0x41, 0x08],
+        vec![0x1B, 0x80, 0, 0x01],
+        vec![0x1B, 0x40, 0, 0x01],
+        vec![0x1B, 0x05, 2, 0x01, 0x41, 0x08, 0x41, 0x0E],
+        vec![0x1B, 0x11, 1, 0, 0x01],
+        vec![0x1B, 0x10, 0, 0, 0x01],
+    ] {
+        let mut property = vec![0x28, 0];
+        property.extend(&signature);
+        let metadata = parse(&Spec {
+            event_types: vec![6],
+            type_specs: vec![signature.clone()],
+            property_signatures: vec![property],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(program(&metadata).events[0].event_type, "<unreadable>", "{signature:02x?}");
+        assert_eq!(program(&metadata).properties[0].signature, "<unreadable>", "{signature:02x?}");
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("Event row 1: type reference")));
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("Property row 1: signature")));
+    }
+    for (signature, text) in [
+        (vec![0x1B, 0x00, 0x80, 1, 0x01, 0x08], "method void *(int32)"),
+        (vec![0x1B, 0x01, 0, 0x01], "method unmanaged cdecl void *()"),
+        (vec![0x1B, 0x02, 0, 0x01], "method unmanaged stdcall void *()"),
+        (vec![0x1B, 0x03, 0, 0x01], "method unmanaged thiscall void *()"),
+        (vec![0x1B, 0x04, 0, 0x01], "method unmanaged fastcall void *()"),
+        (vec![0x1B, 0x05, 2, 0x01, 0x08, 0x41, 0x0E], "method vararg void *(int32, ..., string)"),
+        (vec![0x1B, 0x60, 0, 0x01], "method instance explicit void *()"),
+        (vec![0x1B, 0x10, 1, 1, 0x1E, 0, 0x1E, 0], "method !!0 *<!!0>(!!0)"),
+    ] {
+        for jtd in [false, true] {
+            let mut property = vec![0x28, 0];
+            property.extend(&signature);
+            let metadata = parse(&Spec {
+                jtd,
+                event_types: vec![6],
+                type_specs: vec![signature.clone()],
+                property_signatures: vec![property],
+                ..Spec::default()
+            })
+            .unwrap()
+            .unwrap();
+            assert!(metadata.warnings.is_empty(), "{signature:02x?}: {:?}", metadata.warnings);
+            assert_eq!(program(&metadata).events[0].event_type, text);
+            assert_eq!(program(&metadata).properties[0].signature, format!("instance {text} Count()"));
+        }
+    }
+}
+
+#[test]
+fn malformed_event_types_keep_identity_flags_and_valid_bindings() {
+    for value in [0, 1, 2, 3, 7, 0x7C, 0x7D, 0x7E] {
+        let metadata = parse(&Spec {
+            event_types: vec![value],
+            event_flags: 0x0200,
+            semantics: vec![(8, 1, 2)],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        let event = &program(&metadata).events[0];
+        assert_eq!((event.token, event.name.as_str(), event.flags), (0x1400_0001, "Changed", 0x0200));
+        assert_eq!(event.event_type, "<unreadable>", "coded reference {value}");
+        assert_eq!(event.accessors.len(), 1);
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("Event row 1: type reference")));
+    }
+    for blob in [vec![], vec![0x12], vec![0x08, 0x08], vec![0x12, 6], vec![0x01], vec![0x10, 0x08]] {
+        let metadata =
+            parse(&Spec { event_types: vec![6], type_specs: vec![blob.clone()], ..Spec::default() }).unwrap().unwrap();
+        assert_eq!(program(&metadata).events[0].event_type, "<unreadable>", "{blob:02x?}");
+    }
+}
+
+#[test]
+fn event_type_expansion_is_bounded_by_depth_nodes_and_text() {
+    let mut deep = vec![0x1D; 40];
+    deep.push(0x08);
+    let mut fanout: Vec<_> = (1..=10)
+        .map(|row| {
+            let next = ((row + 1) << 2) | 2;
+            vec![0x15, 0x12, 5, 2, 0x12, next, 0x12, next]
+        })
+        .collect();
+    fanout.push(vec![0x0E]);
+    let mut long = vec![0x15, 0x12, 5, 64];
+    long.extend([0x12, 5].repeat(64));
+    for (type_specs, object_name) in [(vec![deep], None), (fanout, None), (vec![long], Some("H".repeat(1024)))] {
+        let metadata =
+            parse(&Spec { event_types: vec![6], type_specs, object_name, ..Spec::default() }).unwrap().unwrap();
+        assert_eq!(program(&metadata).events[0].event_type, "<unreadable>");
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("Event row 1: type reference")));
+    }
+}
+
+#[test]
+fn truncated_event_rows_are_not_read_as_later_tables() {
+    for jtd in [false, true] {
+        let metadata = parse(&Spec {
+            jtd,
+            event_types: vec![5, 12],
+            event_table_cut: Some(1),
+            semantics: vec![(8, 1, 2)],
+            ..Spec::default()
+        })
+        .unwrap()
+        .unwrap();
+        let events = &program(&metadata).events;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "System.Object");
+        assert!(events[0].accessors.is_empty(), "MethodSemantics after the truncated table is unlocatable");
+        assert!(metadata.assembly.is_none());
+        assert!(metadata.warnings.iter().any(|warning| warning.contains("Event table declares 2 rows but only 1")));
+    }
 }
 
 #[test]
