@@ -662,8 +662,7 @@ impl Reader<'_> {
                 _ => return None,
             };
             let ty = self.serialized_type(cursor, 0)?;
-            let name = exact_ser_string(cursor)?;
-            self.charge(name.clone(), Kind::Other)?;
+            let name = self.attribute_identifier(cursor)?;
             let value = self.argument(cursor, &ty, 0)?;
             arguments.push(NamedArgument { kind, name, argument_type: ty.text, value });
         }
@@ -681,8 +680,8 @@ impl Reader<'_> {
             return self.charge(format!("{}[]", inner.text), Kind::Array(Box::new(inner)));
         }
         if element == 0x55 {
-            let name = exact_ser_string(cursor)?;
-            let ty = self.charge(name, Kind::Other)?;
+            let name = self.attribute_identifier(cursor)?;
+            let ty = Ty { text: name, kind: Kind::Other, shape: TypeShape::Other };
             let Some(underlying) = self.resolve.named_enum_underlying(&ty.text) else {
                 self.attribute_error = Some(UNKNOWN_ENUM);
                 return None;
@@ -699,6 +698,21 @@ impl Reader<'_> {
             return None;
         }
         self.ty(&mut Cursor::new(&[element]), depth)
+    }
+
+    /// Charge exact identifier bytes before UTF-8 validation or allocation, including failed enum lookups.
+    fn attribute_identifier(&mut self, cursor: &mut Cursor) -> Option<String> {
+        let length = usize::try_from(cursor.compressed()?).ok()?;
+        if length > MAX_ARGUMENT_BYTES {
+            return None;
+        }
+        let bytes = cursor.take(length)?;
+        self.text = self.text.saturating_add(length);
+        self.spend(length)?;
+        if self.text > MAX_TEXT {
+            return None;
+        }
+        std::str::from_utf8(bytes).ok().map(str::to_owned)
     }
 }
 
@@ -724,15 +738,6 @@ fn primitive_argument(cursor: &mut Cursor, element: u8) -> Option<String> {
         }
         _ => return None,
     })
-}
-
-/// Identifiers must be complete and valid UTF-8; truncated or lossy text must not resolve a different enum.
-fn exact_ser_string(cursor: &mut Cursor) -> Option<String> {
-    let length = usize::try_from(cursor.compressed()?).ok()?;
-    if length > MAX_ARGUMENT_BYTES {
-        return None;
-    }
-    std::str::from_utf8(cursor.take(length)?).ok().map(str::to_owned)
 }
 
 /// The kept text of a SerString, and its full length in bytes when the text was cut.
@@ -1144,7 +1149,7 @@ mod tests {
     fn failed_boxed_enum_lookups_charge_type_names_and_keep_only_fully_charged_fixed_values() {
         let fake = Fake(Vec::new());
         let params = [Ty { text: "int32".to_owned(), kind: Kind::Element(0x08), shape: TypeShape::Other }];
-        let name = "Unknown.Enum";
+        let name = r"Unknown.Enum\+Literal\,\[\]\\\*\&";
         let mut value = vec![1, 0, 42, 0, 0, 0, 1, 0, 0x54, 0x51, 1, b'P', 0x1D, 0x55, name.len() as u8];
         value.extend(name.as_bytes());
         let consumed = value.len();

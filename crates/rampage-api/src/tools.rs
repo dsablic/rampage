@@ -947,6 +947,8 @@ pub fn tools() -> Vec<Tool> {
              unsupported values report errors. \
              Type fields can retain verified local enum constants as exact numeric strings; attribute numeric \
              values are not replaced by symbolic names. \
+             Serialized local enum identities accept canonical reflection escapes, not assembly qualification \
+             or external enum loading. \
              Property/event accessor tokens are metadata bindings, not inferred behavior. Filter with contains; \
              offset/limit page the list and parent_token selects an attribute target. Bodies are CIL, listed by \
              dotnet_il, not native code for decompile/disassemble. Returns null for a native image.",

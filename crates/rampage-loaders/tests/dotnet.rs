@@ -68,6 +68,19 @@ struct Spec {
     field_lists: Option<[u32; 3]>,
     duplicate_enum_name: bool,
     inner_name: Option<String>,
+    inner_namespace: Option<String>,
+    inner_flags: Option<u32>,
+    program_name: Option<String>,
+    program_namespace: Option<String>,
+    program_flags: Option<u32>,
+    module_type_name: Option<String>,
+    module_namespace: Option<String>,
+    module_flags: Option<u32>,
+    module_is_enum: bool,
+    nested_classes: Option<Vec<(u32, u32)>>,
+    declared_nested_classes: Option<u32>,
+    nested_table_cut: Option<usize>,
+    bad_type_name: Option<u32>,
     enum_literals: Vec<(String, u16, Vec<u8>)>,
     constants: Vec<(u16, u32, Vec<u8>)>,
     field_ptrs: Vec<u32>,
@@ -199,18 +212,31 @@ fn build(spec: &Spec) -> Vec<u8> {
         tables.put((1 << 2) | 2, scope).put(enum_name, s).put(system, s);
     }
     // TypeDef: <Module>, Demo.Program extends TypeRef 1 (TypeDefOrRef tag 1), and Inner nested in Program.
-    let module_type = strings.string(if spec.duplicate_enum_name { "Inner" } else { "<Module>" });
+    let module_type = strings.string(spec.module_type_name.as_deref().unwrap_or(if spec.duplicate_enum_name {
+        spec.inner_name.as_deref().unwrap_or("Inner")
+    } else {
+        "<Module>"
+    }));
     let (program, demo, inner) = (
-        strings.string("Program"),
-        strings.string("Demo"),
+        strings.string(spec.program_name.as_deref().unwrap_or("Program")),
+        strings.string(spec.program_namespace.as_deref().unwrap_or("Demo")),
         strings.string(spec.inner_name.as_deref().unwrap_or("Inner")),
     );
+    let module_namespace = strings.string(spec.module_namespace.as_deref().unwrap_or(""));
+    let inner_namespace = strings.string(spec.inner_namespace.as_deref().unwrap_or(""));
+    let name_index = |row, offset| if spec.bad_type_name == Some(row) { u32::MAX } else { offset };
     let method_lists = spec.method_lists.unwrap_or([1, 1, 5 + spec.extra_methods]);
     let field_lists = spec.field_lists.unwrap_or([1, 1, 2]);
-    tables.put(0, 4).put(module_type, s).put(0, s).put(0, tdor).put(field_lists[0], i).put(method_lists[0], i);
     tables
-        .put(0x0010_0001, 4)
-        .put(program, s)
+        .put(spec.module_flags.unwrap_or(if spec.duplicate_enum_name { 2 } else { 0 }), 4)
+        .put(name_index(1, module_type), s)
+        .put(module_namespace, s)
+        .put(if spec.module_is_enum { (type_refs << 2) | 1 } else { 0 }, tdor)
+        .put(field_lists[0], i)
+        .put(method_lists[0], i);
+    tables
+        .put(spec.program_flags.unwrap_or(0x0010_0001), 4)
+        .put(name_index(2, program), s)
         .put(demo, s)
         .put((1 << 2) | 1, tdor)
         .put(field_lists[1], i)
@@ -218,9 +244,9 @@ fn build(spec: &Spec) -> Vec<u8> {
     let inner_extends =
         spec.inner_extends.unwrap_or(if spec.enum_underlying.is_some() { (type_refs << 2) | 1 } else { (1 << 2) | 1 });
     tables
-        .put(0x0010_0002, 4)
-        .put(inner, s)
-        .put(0, s)
+        .put(spec.inner_flags.unwrap_or(0x0010_0002), 4)
+        .put(name_index(3, inner), s)
+        .put(inner_namespace, s)
         .put(inner_extends, tdor)
         .put(field_lists[2], i)
         .put(method_lists[2], i);
@@ -228,8 +254,11 @@ fn build(spec: &Spec) -> Vec<u8> {
         tables.put(field, i);
     }
     // Field
-    let counter = strings.string("counter");
-    tables.put(0x0001, 2).put(counter, s).put(field_signature, b);
+    let counter = strings.string(if spec.module_is_enum { "value__" } else { "counter" });
+    tables
+        .put(if spec.module_is_enum { 0x0606 } else { 0x0001 }, 2)
+        .put(counter, s)
+        .put(if spec.module_is_enum { enum_signature } else { field_signature }, b);
     if spec.enum_underlying.is_some() {
         let value = strings.string(spec.enum_field_name.as_deref().unwrap_or("value__"));
         tables.put(u32::from(spec.enum_field_flags.unwrap_or(0x0606)), 2).put(value, s).put(enum_signature, b);
@@ -319,10 +348,14 @@ fn build(spec: &Spec) -> Vec<u8> {
     let mscorlib = strings.string("mscorlib");
     tables.put(4, 2).put(0, 2).put(0, 2).put(0, 2).put(0, 4).put(token_blob, b).put(mscorlib, s).put(0, s).put(0, b);
     // NestedClass: Inner (TypeDef 3) inside Program (TypeDef 2).
-    tables.put(3, i).put(2, i);
-    if spec.duplicate_enum_name {
-        tables.put(1, i).put(2, i);
+    let nested_classes = spec
+        .nested_classes
+        .clone()
+        .unwrap_or_else(|| if spec.duplicate_enum_name { vec![(3, 2), (1, 2)] } else { vec![(3, 2)] });
+    for &(nested, outer) in &nested_classes {
+        tables.put(nested, i).put(outer, i);
     }
+    let nested_end = tables.bytes.len();
     // GenericParam: Compute's T (TypeOrMethodDef tag 1 = MethodDef 2).
     let t = strings.string("T");
     tables.put(0, 2).put(0, 2).put((2 << 1) | 1, i).put(t, s);
@@ -357,7 +390,7 @@ fn build(spec: &Spec) -> Vec<u8> {
         (0x1C, 1),
         (0x20, 1),
         (0x23, 1),
-        (0x29, 1 + u32::from(spec.duplicate_enum_name)),
+        (0x29, spec.declared_nested_classes.unwrap_or(nested_classes.len() as u32)),
         (0x2A, 1 + spec.type_generics.len() as u32),
         (0x2B, 1),
     ];
@@ -374,6 +407,8 @@ fn build(spec: &Spec) -> Vec<u8> {
         table_stream.extend_from_slice(&tables.bytes[..constant_end - cut]);
     } else if let Some(cut) = spec.event_table_cut {
         table_stream.extend_from_slice(&tables.bytes[..event_end - cut]);
+    } else if let Some(cut) = spec.nested_table_cut {
+        table_stream.extend_from_slice(&tables.bytes[..nested_end - cut]);
     } else {
         table_stream.extend_from_slice(&tables.bytes);
         pad4(&mut table_stream);
@@ -1765,12 +1800,16 @@ fn custom_attributes_decode_typed_boxes_and_mixed_object_vectors_with_verified_l
 }
 
 #[test]
-fn boxed_enums_never_infer_unknown_qualified_escaped_or_ambiguous_widths_even_for_empty_vectors() {
+fn boxed_enums_never_infer_unknown_qualified_malformed_or_ambiguous_widths_even_for_empty_vectors() {
     let base = Spec { enum_underlying: Some(0x06), ..Spec::default() };
     for (spec, name) in [
         (base.clone(), "External.Mode"),
+        (base.clone(), r"External.Mode\+Literal"),
         (base.clone(), "External.Mode, OtherAssembly"),
         (base.clone(), "Demo.Program+Inner, Demo"),
+        (base.clone(), "Demo.Program+Inner,Demo"),
+        (base.clone(), "Demo.Program+Inner, Demo, Version=1.2.3.4, PublicKeyToken=null"),
+        (Spec { inner_name: Some("Mode, Demo".to_owned()), ..base.clone() }, r"Demo.Program+Mode\, Demo, Demo"),
         (base.clone(), "Demo.Program+Inn\\er"),
         (Spec { duplicate_enum_name: true, ..base.clone() }, "Demo.Program+Inner"),
         (Spec { enum_field_flags: Some(0x0616), ..base.clone() }, "Demo.Program+Inner"),
@@ -2071,20 +2110,22 @@ fn truncated_constant_tables_never_prove_a_unique_parent_or_panic() {
 
 #[test]
 fn enum_constant_metadata_never_substitutes_names_into_numeric_boxed_attributes() {
-    let mut spec = enum_constant_spec(0x08, 3i32.to_le_bytes().to_vec());
-    spec.no_attributes = false;
-    spec.ctor_signature = Some(vec![0x20, 1, 0x01, 0x1C]);
-    let mut value = vec![1, 0, 0x55];
-    value.extend(ser_text("Demo.Program+Inner"));
-    value.extend(3i32.to_le_bytes());
-    value.extend([0, 0]);
-    spec.attribute_value = Some(value);
-    let metadata = parse(&spec).unwrap().unwrap();
-    assert_eq!(enum_evidence(&metadata).len(), 1);
-    assert_eq!(
-        metadata.custom_attributes[0].arguments,
-        Some(vec!["box(Demo.Program+Inner, Demo.Program+Inner(3))".to_owned()])
-    );
+    for (raw, name) in [("Inner", "Demo.Program+Inner"), (r"Mode+,[\]*&", r"Demo.Program+Mode\+\,\[\\\]\*\&")] {
+        let mut spec = enum_constant_spec(0x08, 3i32.to_le_bytes().to_vec());
+        spec.no_attributes = false;
+        spec.inner_name = Some(raw.to_owned());
+        spec.ctor_signature = Some(vec![0x20, 1, 0x01, 0x1C]);
+        let mut value = vec![1, 0, 0x55];
+        value.extend(ser_text(name));
+        value.extend(3i32.to_le_bytes());
+        value.extend([0, 0]);
+        spec.attribute_value = Some(value);
+        let metadata = parse(&spec).unwrap().unwrap();
+        let evidence = enum_evidence(&metadata);
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].enum_constant.as_ref().unwrap().value, "3");
+        assert_eq!(metadata.custom_attributes[0].arguments, Some(vec![format!("box({name}, {name}(3))")]));
+    }
 }
 
 #[test]
@@ -2240,6 +2281,337 @@ fn a_named_enum_with_duplicate_local_type_names_is_unknown() {
     assert_eq!(attribute.arguments, Some(vec!["Demo.Program/Inner(42)".to_owned()]));
     assert_eq!(attribute.named_arguments, None, "a verified enum and non-enum namesake must remain ambiguous");
     assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+}
+
+#[test]
+fn canonical_escaped_enum_names_decode_scalars_boxes_and_null_empty_or_populated_boxed_vectors() {
+    for (raw, escaped) in [
+        ("Mode+", r"Mode\+"),
+        ("Mode, Demo", r"Mode\, Demo"),
+        (r"Mode\", r"Mode\\"),
+        ("Mode[]", r"Mode\[\]"),
+        ("Mode*", r"Mode\*"),
+        ("Mode&", r"Mode\&"),
+        (r"Mode\+,[*]&", r"Mode\\\+\,\[\*\]\&"),
+        ("Mode/Part.Name`1", "Mode/Part.Name`1"),
+    ] {
+        for nested in [false, true] {
+            for (underlying, bytes, number) in [(0x04, vec![0xFE], "-2"), (0x0B, vec![0xFF; 8], "18446744073709551615")]
+            {
+                let name = if nested { format!("Demo.Program+{escaped}") } else { format!("Demo.{escaped}") };
+                let mut tag = vec![0x55];
+                tag.extend(ser_text(&name));
+                let mut value = vec![1, 0];
+                value.extend(&bytes);
+                value.extend([5, 0, 0x54]);
+                value.extend(&tag);
+                value.extend(ser_text("Scalar"));
+                value.extend(&bytes);
+                value.extend([0x53, 0x51]);
+                value.extend(ser_text("Box"));
+                value.extend(&tag);
+                value.extend(&bytes);
+                for (label, count) in [("Null", -1i32), ("Empty", 0), ("Vector", 2)] {
+                    value.extend([0x54, 0x51]);
+                    value.extend(ser_text(label));
+                    value.push(0x1D);
+                    value.extend(&tag);
+                    value.extend(count.to_le_bytes());
+                    if count == 2 {
+                        value.extend(&bytes);
+                        value.extend(&bytes);
+                    }
+                }
+                let metadata = parse(&Spec {
+                    enum_underlying: Some(underlying),
+                    inner_name: Some(raw.to_owned()),
+                    inner_namespace: (!nested).then(|| "Demo".to_owned()),
+                    inner_flags: (!nested).then_some(1),
+                    nested_classes: (!nested).then(Vec::new),
+                    ctor_signature: Some(vec![0x20, 1, 0x01, 0x11, 12]),
+                    attribute_value: Some(value),
+                    ..Spec::default()
+                })
+                .unwrap()
+                .unwrap();
+                let attribute = &metadata.custom_attributes[0];
+                assert_eq!(attribute.arguments_error, None, "{name}, {underlying:#x}");
+                let il_name = if nested { format!("Demo.Program/{raw}") } else { format!("Demo.{raw}") };
+                assert_eq!(attribute.arguments, Some(vec![format!("{il_name}({number})")]));
+                let named = attribute.named_arguments.as_ref().unwrap();
+                assert_eq!(named[0].argument_type, name);
+                assert_eq!(named[0].value, format!("{name}({number})"));
+                assert_eq!(named[1].value, format!("box({name}, {name}({number}))"));
+                assert_eq!(named[2].value, format!("box({name}[], null)"));
+                assert_eq!(named[3].value, format!("box({name}[], [])"));
+                assert_eq!(named[4].value, format!("box({name}[], [{name}({number}), {name}({number})])"));
+            }
+        }
+    }
+}
+
+fn named_enum_spec(mut spec: Spec, name: &str) -> Spec {
+    let mut value = vec![1, 0, 42, 0, 0, 0, 1, 0, 0x54, 0x55];
+    value.extend(ser_text(name));
+    value.extend(ser_text("Choice"));
+    value.extend(99i16.to_le_bytes());
+    spec.enum_underlying = Some(0x06);
+    spec.ctor_signature = Some(vec![0x20, 1, 0x01, 0x08]);
+    spec.attribute_value = Some(value);
+    spec
+}
+
+#[test]
+fn escaped_enum_keys_include_exact_namespace_and_enclosing_components_at_multiple_nesting_levels() {
+    let name = r"Ns\+\,\[\]\\\*\&.Root\++Branch\,+Leaf\[\]";
+    let metadata = parse(&named_enum_spec(
+        Spec {
+            module_type_name: Some("Root+".to_owned()),
+            module_namespace: Some(r"Ns+,[]\*&".to_owned()),
+            program_name: Some("Branch,".to_owned()),
+            program_namespace: Some(String::new()),
+            program_flags: Some(2),
+            inner_name: Some("Leaf[]".to_owned()),
+            nested_classes: Some(vec![(2, 1), (3, 2)]),
+            ..Spec::default()
+        },
+        name,
+    ))
+    .unwrap()
+    .unwrap();
+    let attribute = &metadata.custom_attributes[0];
+    assert_eq!(attribute.arguments_error, None);
+    assert_eq!(attribute.named_arguments.as_ref().unwrap()[0].value, format!("{name}(99)"));
+}
+
+#[test]
+fn literal_plus_and_structural_nesting_are_distinct_even_with_a_non_enum_namesake() {
+    for literal_enum in [false, true] {
+        let spec = if literal_enum {
+            Spec {
+                inner_name: Some("Program+Inner".to_owned()),
+                inner_namespace: Some("Demo".to_owned()),
+                inner_flags: Some(1),
+                module_type_name: Some("Inner".to_owned()),
+                module_flags: Some(2),
+                nested_classes: Some(vec![(1, 2)]),
+                ..Spec::default()
+            }
+        } else {
+            Spec {
+                module_type_name: Some("Program+Inner".to_owned()),
+                module_namespace: Some("Demo".to_owned()),
+                ..Spec::default()
+            }
+        };
+        for (name, literal_name) in [(r"Demo.Program\+Inner", true), ("Demo.Program+Inner", false)] {
+            let metadata = parse(&named_enum_spec(spec.clone(), name)).unwrap().unwrap();
+            let attribute = &metadata.custom_attributes[0];
+            assert_eq!(attribute.arguments, Some(vec!["42".to_owned()]));
+            assert_eq!(attribute.named_arguments.is_some(), literal_name == literal_enum, "{name}");
+            assert_eq!(attribute.arguments_error.is_none(), literal_name == literal_enum);
+        }
+    }
+}
+
+#[test]
+fn duplicate_escaped_enum_and_non_enum_identities_remain_ambiguous() {
+    for second_enum in [false, true] {
+        let metadata = parse(&named_enum_spec(
+            Spec {
+                inner_name: Some(r"Mode+,[\]*&".to_owned()),
+                duplicate_enum_name: true,
+                module_is_enum: second_enum,
+                field_lists: second_enum.then_some([1, 2, 2]),
+                ..Spec::default()
+            },
+            r"Demo.Program+Mode\+\,\[\\\]\*\&",
+        ))
+        .unwrap()
+        .unwrap();
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments, Some(vec!["42".to_owned()]));
+        assert!(attribute.named_arguments.is_none(), "second enum: {second_enum}");
+        assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+    }
+}
+
+#[test]
+fn escaped_enum_identifiers_are_not_case_folded_unicode_normalized_or_arbitrarily_unescaped() {
+    for other in ["Cafe\u{301}+Mode", "CAFÉ+Mode"] {
+        let spec = Spec {
+            inner_name: Some("Café+Mode".to_owned()),
+            module_type_name: Some(other.to_owned()),
+            duplicate_enum_name: true,
+            ..Spec::default()
+        };
+        for (name, accepted) in [
+            (r"Demo.Program+Café\+Mode".to_owned(), true),
+            (format!("Demo.Program+{}", other.replace('+', r"\+")), false),
+            (r"Demo.Program+Ca\fé\+Mode".to_owned(), false),
+            (r"Demo.Program+Café+Mode".to_owned(), false),
+        ] {
+            let metadata = parse(&named_enum_spec(spec.clone(), &name)).unwrap().unwrap();
+            let attribute = &metadata.custom_attributes[0];
+            assert_eq!(attribute.named_arguments.is_some(), accepted, "{name}");
+        }
+    }
+}
+
+#[test]
+fn malformed_or_incomplete_nesting_never_establishes_a_unique_serialized_enum_identity() {
+    let invalid = [
+        Spec { nested_classes: Some(vec![(3, 2), (3, 2)]), ..Spec::default() },
+        Spec { nested_classes: Some(vec![(3, 1), (3, 2)]), ..Spec::default() },
+        Spec { nested_classes: Some(vec![(3, 2), (3, 1)]), ..Spec::default() },
+        Spec { nested_classes: Some(vec![(3, 0), (3, 2)]), ..Spec::default() },
+        Spec { nested_classes: Some(vec![(3, 4), (3, 2)]), ..Spec::default() },
+        Spec { nested_classes: Some(vec![(0, 2), (3, 2)]), ..Spec::default() },
+        Spec { nested_classes: Some(vec![(4, 2), (3, 2)]), ..Spec::default() },
+        Spec { nested_classes: Some(vec![(3, 3)]), ..Spec::default() },
+        Spec { nested_classes: Some(vec![(3, 2), (2, 3)]), program_flags: Some(2), ..Spec::default() },
+        Spec { nested_classes: Some(Vec::new()), ..Spec::default() },
+        Spec { inner_flags: Some(1), ..Spec::default() },
+        Spec { nested_table_cut: Some(1), ..Spec::default() },
+        Spec { nested_table_cut: Some(4), ..Spec::default() },
+        Spec { nested_classes: Some(vec![(3, 2)]), declared_nested_classes: Some(10), ..Spec::default() },
+        Spec { bad_type_name: Some(1), ..Spec::default() },
+        Spec { module_type_name: Some("x".repeat(1025)), ..Spec::default() },
+    ];
+    for spec in invalid {
+        let metadata = parse(&named_enum_spec(spec.clone(), "Demo.Program+Inner")).unwrap().unwrap();
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments, Some(vec!["42".to_owned()]), "{spec:?}");
+        assert!(attribute.named_arguments.is_none(), "{spec:?}");
+        assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+    }
+}
+
+#[test]
+fn bounded_initial_nesting_scan_keeps_independent_numeric_enums_constants_and_named_failures_honest() {
+    for rows in [100_000, 100_001, 1_000_000] {
+        let mut spec = enum_constant_spec(0x08, 3i32.to_le_bytes().to_vec());
+        spec.no_attributes = false;
+        spec.inner_name = Some("Mode+".to_owned());
+        spec.nested_classes = Some(vec![(3, 2); rows]);
+        spec.ctor_signature = Some(vec![0x20, 1, 0x01, 0x11, 12]);
+        let mut value = vec![1, 0];
+        value.extend(42i32.to_le_bytes());
+        value.extend([1, 0, 0x54, 0x55]);
+        value.extend(ser_text(r"Demo.Program+Mode\+"));
+        value.extend(ser_text("Choice"));
+        value.extend(99i32.to_le_bytes());
+        spec.attribute_value = Some(value);
+        let metadata = parse(&spec).unwrap().unwrap();
+        let capped = rows > 100_000;
+        assert_eq!(metadata.types[2].enclosing, (!capped).then_some(0x0200_0002));
+        let attribute = &metadata.custom_attributes[0];
+        let fixed = if capped { "Mode+(42)" } else { "Demo.Program/Mode+(42)" };
+        assert_eq!(attribute.arguments, Some(vec![fixed.to_owned()]), "rows {rows}");
+        assert!(attribute.named_arguments.is_none(), "duplicate or incomplete nesting is never unique");
+        assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+        let evidence = enum_evidence(&metadata);
+        assert_eq!(evidence.len(), 1, "independent Constant evidence survives structural limits");
+        assert_eq!(evidence[0].enum_constant.as_ref().unwrap().value, "3");
+        let limits: Vec<_> =
+            metadata.warnings.iter().filter(|warning| warning.contains("NestedClass row limit")).collect();
+        assert_eq!(limits.len(), usize::from(capped));
+        if capped {
+            assert!(limits[0].contains("nesting not rendered and serialized enum names unavailable"));
+        }
+        assert!(!metadata.warnings.iter().any(|warning| warning.contains("signature text budget exhausted")));
+    }
+}
+
+#[test]
+fn escaped_enum_names_still_refuse_all_assembly_qualifications_and_type_expressions() {
+    let spec = Spec { inner_name: Some("Mode,+[]\\*&".to_owned()), ..Spec::default() };
+    let canonical = r"Demo.Program+Mode\,\+\[\]\\\*\&";
+    for suffix in [
+        ",Demo",
+        ", Demo",
+        ", demo",
+        ", Demo, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null",
+        ", OtherAssembly",
+        ",",
+        ", ",
+        "[]",
+        "[*]",
+        "[,]",
+        "*",
+        "&",
+        "[System.Int32]",
+        "[[System.Int32, Demo]]",
+        "\\",
+        r"\q",
+        r"\.",
+    ] {
+        let name = format!("{canonical}{suffix}");
+        let metadata = parse(&named_enum_spec(spec.clone(), &name)).unwrap().unwrap();
+        let attribute = &metadata.custom_attributes[0];
+        assert_eq!(attribute.arguments, Some(vec!["42".to_owned()]));
+        assert!(attribute.named_arguments.is_none(), "{name}");
+        assert!(attribute.arguments_error.as_deref().unwrap().contains("enum underlying type is unknown"));
+    }
+    for name in ["External.Mode", r"External.Mode\+Literal", "Demo.Program+Mode,+[]\\*&"] {
+        let metadata = parse(&named_enum_spec(spec.clone(), name)).unwrap().unwrap();
+        assert!(metadata.custom_attributes[0].named_arguments.is_none(), "{name}");
+    }
+    let metadata = parse(&named_enum_spec(spec, canonical)).unwrap().unwrap();
+    assert!(metadata.custom_attributes[0].arguments_error.is_none());
+}
+
+#[test]
+fn verified_escaped_enums_do_not_make_direct_jagged_constructor_vectors_valid() {
+    for inner in [vec![0x11, 12], vec![0x1C]] {
+        for count in [-1i32, 0] {
+            let mut ctor = vec![0x20, 1, 0x01, 0x1D, 0x1D];
+            ctor.extend(&inner);
+            let mut value = vec![1, 0];
+            value.extend(count.to_le_bytes());
+            value.extend([0, 0]);
+            let metadata = parse(&Spec {
+                enum_underlying: Some(0x06),
+                inner_name: Some("Mode+".to_owned()),
+                ctor_signature: Some(ctor),
+                attribute_value: Some(value),
+                ..Spec::default()
+            })
+            .unwrap()
+            .unwrap();
+            let attribute = &metadata.custom_attributes[0];
+            assert!(attribute.arguments.is_none(), "inner {inner:02x?}, count {count}");
+            assert!(attribute.named_arguments.is_none() && attribute.arguments_error.is_some());
+        }
+    }
+}
+
+#[test]
+fn escaped_enum_text_expansion_shares_attribute_caps_and_preserves_fully_charged_fixed_arguments() {
+    let raw = "+".repeat(480);
+    let name = format!("Demo.Program+{}", r"\+".repeat(480));
+    let mut value = vec![1, 0, 42, 0, 0, 0, 10, 0];
+    for _ in 0..10 {
+        value.extend([0x54, 0x55]);
+        value.extend(ser_text(&name));
+        value.extend(ser_text("P"));
+        value.extend(99i16.to_le_bytes());
+    }
+    let metadata = parse(&Spec {
+        enum_underlying: Some(0x06),
+        inner_name: Some(raw),
+        ctor_signature: Some(vec![0x20, 1, 0x01, 0x08]),
+        attribute_value: Some(value),
+        ..Spec::default()
+    })
+    .unwrap()
+    .unwrap();
+    let attribute = &metadata.custom_attributes[0];
+    assert_eq!(attribute.arguments, Some(vec!["42".to_owned()]));
+    assert!(attribute.named_arguments.is_none());
+    let error = attribute.arguments_error.as_deref().unwrap();
+    assert!(error.contains("exceeds rendering caps"), "{error}");
+    assert!(!metadata.warnings.iter().any(|warning| warning.contains("signature text budget exhausted")));
 }
 
 #[test]

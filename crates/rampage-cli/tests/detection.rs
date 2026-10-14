@@ -113,6 +113,10 @@ fn capa_and_capabilities_render_alike() {
 const ASSEMBLY: &str = "Microsoft.Bcl.HashCode.dll";
 
 fn boxed_attribute_image() -> Vec<u8> {
+    boxed_attribute_image_for_enum("Mode", None)
+}
+
+fn boxed_attribute_image_for_enum(mode_name: &str, enum_wire_name: Option<&str>) -> Vec<u8> {
     let mut strings = vec![0];
     let mut name = |text: &str| {
         let index = strings.len() as u16;
@@ -125,7 +129,7 @@ fn boxed_attribute_image() -> Vec<u8> {
     let ctor = name(".ctor");
     let enum_name = name("Enum");
     let system = name("System");
-    let mode = name("Mode");
+    let mode = name(mode_name);
     let value_field = name("value__");
     let all = name("All");
     let alias = name("Alias");
@@ -134,13 +138,21 @@ fn boxed_attribute_image() -> Vec<u8> {
     value.extend([0x1D, 0x08, 2, 0, 0, 0]);
     value.extend((-2i32).to_le_bytes());
     value.extend(7i32.to_le_bytes());
-    value.extend([2, 0, 0x54, 0x51, 5]);
+    value.extend([if enum_wire_name.is_some() { 3 } else { 2 }, 0, 0x54, 0x51, 5]);
     value.extend(b"Value");
     value.extend([0x50, 11]);
     value.extend(b"Demo.Target");
     value.extend([0x53, 0x1D, 0x51, 5]);
     value.extend(b"Items");
     value.extend([2, 0, 0, 0, 0x0E, 0xFF, 0x02, 1]);
+    if let Some(enum_wire_name) = enum_wire_name {
+        assert!(enum_wire_name.len() < 0x80);
+        value.extend([0x53, 0x55, enum_wire_name.len() as u8]);
+        value.extend(enum_wire_name.as_bytes());
+        value.push(4);
+        value.extend(b"Mode");
+        value.extend(u64::MAX.to_le_bytes());
+    }
     let mut blobs = vec![0, 6, 0x20, 2, 0x01, 0x1C, 0x1D, 0x1C];
     assert!(value.len() < 0x80);
     blobs.push(value.len() as u8);
@@ -239,6 +251,34 @@ fn dotnet_renders_typed_boxed_fixed_and_named_values_in_text_and_json() {
     assert_eq!(attribute["named_arguments"][0]["argument_type"], "object");
     assert_eq!(attribute["named_arguments"][0]["value"], "box(System.Type, typeof(Demo.Target))");
     assert_eq!(attribute["named_arguments"][1]["value"], "[box(string, null), box(bool, true)]");
+}
+
+#[test]
+fn dotnet_escaped_local_enum_names_keep_literal_identity_and_exact_values() {
+    let scratch = Scratch::new("dotnet-escaped-enum");
+    let path = scratch.0.join("escaped.dll");
+    for (wire_name, accepted) in [(r"Demo.Mo\+de", true), ("Demo.Mo+de", false), (r"Demo.Mo\+de, Demo", false)] {
+        std::fs::write(&path, boxed_attribute_image_for_enum("Mo+de", Some(wire_name))).unwrap();
+        let output = Command::cargo_bin("rampage")
+            .unwrap()
+            .args(["--json", "managed", "inspect"])
+            .arg(&path)
+            .args(["--list", "attributes"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let attribute = &summary["custom_attributes"]["items"][0];
+        assert_eq!(attribute["arguments"][0], "box(int32, 42)");
+        if accepted {
+            assert!(attribute["arguments_error"].is_null(), "{summary}");
+            assert_eq!(attribute["named_arguments"][2]["argument_type"], r"Demo.Mo\+de");
+            assert_eq!(attribute["named_arguments"][2]["value"], r"Demo.Mo\+de(18446744073709551615)");
+        } else {
+            assert!(attribute["arguments_error"].is_string(), "{summary}");
+        }
+    }
 }
 
 #[test]

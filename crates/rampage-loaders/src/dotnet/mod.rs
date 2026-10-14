@@ -51,6 +51,13 @@ const MAX_VERSION_BYTES: usize = 256;
 const METADATA_SIGNATURE: u32 = 0x424A_5342;
 /// Enclosing types prefixed to a nested type's name; deeper (or cyclic) nesting is cut off.
 const MAX_NESTING: u32 = 16;
+const MAX_NESTED_CLASS_ROWS: u32 = 100_000;
+/// Reserve both decoded row indexes before reading a NestedClass row or updating its enclosing map.
+const NESTED_CLASS_ROW_WORK: usize = 8;
+const NESTING_ROW_LIMIT: &str =
+    "NestedClass row limit exceeded; nesting not rendered and serialized enum names unavailable";
+const NESTING_ROW_UNREADABLE: &str =
+    "NestedClass row unreadable; nesting not rendered and serialized enum names unavailable";
 const MAX_MEMBER_ACCESSORS: usize = 64;
 const BUDGET_EXHAUSTED: &str = "signature text budget exhausted; remaining signatures not rendered";
 pub const MAX_RESOURCE_ROWS: u32 = 100_000;
@@ -832,6 +839,8 @@ struct Decoder<'t, 'a> {
     budget_reported: bool,
     /// The enclosing TypeDef row of each nested TypeDef row, from NestedClass.
     enclosing: HashMap<u32, u32>,
+    /// A bounded initial scan must finish before any later index can claim unique serialized names.
+    enclosing_complete: bool,
     /// The owning MethodDef row of each Param row, filled in as the methods are decoded.
     param_methods: HashMap<u32, u32>,
     member_types: MemberTypes,
@@ -854,6 +863,23 @@ fn charge_enum_work(budget: &Cell<usize>, bytes: usize) -> Option<()> {
     let left = budget.get().checked_sub(bytes);
     budget.set(left.unwrap_or(0));
     left.map(|_| ())
+}
+
+fn read_enclosing_types(
+    rows: u32,
+    budget: &Cell<usize>,
+    mut read: impl FnMut(u32) -> Option<(u32, u32)>,
+) -> Result<HashMap<u32, u32>, &'static str> {
+    if rows > MAX_NESTED_CLASS_ROWS {
+        return Err(NESTING_ROW_LIMIT);
+    }
+    let mut enclosing = HashMap::new();
+    for row in 1..=rows {
+        charge_enum_work(budget, NESTED_CLASS_ROW_WORK).ok_or(BUDGET_EXHAUSTED)?;
+        let (nested, outer) = read(row).ok_or(NESTING_ROW_UNREADABLE)?;
+        enclosing.insert(nested, outer);
+    }
+    Ok(enclosing)
 }
 
 impl ResourceBudget {
@@ -892,6 +918,16 @@ impl signatures::Resolve for Decoder<'_, '_> {
 
 impl<'t, 'a> Decoder<'t, 'a> {
     fn new(tables: &'t Tables<'a>, heaps: Heaps<'a>, warnings: &'t mut Warnings) -> Self {
+        Self::with_budget(tables, heaps, warnings, signatures::TOTAL_BUDGET)
+    }
+
+    fn with_budget(
+        tables: &'t Tables<'a>,
+        heaps: Heaps<'a>,
+        warnings: &'t mut Warnings,
+        initial_budget: usize,
+    ) -> Self {
+        let budget = Cell::new(initial_budget);
         let mut generic_params: HashMap<_, Vec<_>> = HashMap::new();
         let table = tables::GENERIC_PARAM;
         for row in 1..=tables.rows(table) {
@@ -907,21 +943,29 @@ impl<'t, 'a> Decoder<'t, 'a> {
         for params in generic_params.values_mut() {
             params.sort_unstable_by_key(|&(number, _)| number);
         }
-        let mut enclosing = HashMap::new();
-        for row in 1..=tables.rows(tables::NESTED_CLASS) {
-            let cell = |column| tables.cell(tables::NESTED_CLASS, row, column);
-            if let (Some(nested), Some(outer)) = (cell(0), cell(1)) {
-                enclosing.insert(nested, outer);
-            }
-        }
+        let mut budget_reported = false;
+        let (enclosing, enclosing_complete) =
+            match read_enclosing_types(tables.rows(tables::NESTED_CLASS), &budget, |row| {
+                Some((tables.cell(tables::NESTED_CLASS, row, 0)?, tables.cell(tables::NESTED_CLASS, row, 1)?))
+            }) {
+                Ok(enclosing) => {
+                    (enclosing, tables.rows(tables::NESTED_CLASS) == tables.declared[usize::from(tables::NESTED_CLASS)])
+                }
+                Err(warning) => {
+                    warnings.push(warning.to_owned());
+                    budget_reported = warning == BUDGET_EXHAUSTED;
+                    (HashMap::new(), false)
+                }
+            };
         Self {
             tables,
             heaps,
             warnings,
             generic_params,
-            budget: Cell::new(signatures::TOTAL_BUDGET),
-            budget_reported: false,
+            budget,
+            budget_reported,
             enclosing,
+            enclosing_complete,
             param_methods: HashMap::new(),
             member_types: HashMap::new(),
             enum_underlying: HashMap::new(),
@@ -1388,18 +1432,45 @@ impl Decoder<'_, '_> {
         if self.enum_underlying.is_empty() {
             return;
         }
+        self.index_named_enums();
+    }
+
+    fn index_named_enums(&mut self) {
+        self.named_enums.clear();
+        let Some(enclosing) = self.enum_enclosing_types() else { return };
         // Include non-enum types when detecting duplicate names; a valid enum beside an invalid namesake is
-        // ambiguous too. Failed lookups and name rendering share the image-wide signature work budget.
+        // ambiguous too. A partial index cannot rule out an unreadable namesake.
         for row in 1..=self.tables.rows(tables::TYPE_DEF) {
-            if self.budget.get() == 0 {
+            let Some(name) = self.serialized_type_def_name(row, 0, &enclosing) else {
                 self.named_enums.clear();
-                break;
-            }
-            if let Some(name) = self.serialized_type_def_name(row, 0) {
-                let underlying = self.enum_underlying.get(&row).copied();
-                self.named_enums.entry(name).and_modify(|kind| *kind = None).or_insert(underlying);
-            }
+                return;
+            };
+            let underlying = self.enum_underlying.get(&row).copied();
+            self.named_enums.entry(name).and_modify(|kind| *kind = None).or_insert(underlying);
         }
+    }
+
+    fn enum_enclosing_types(&self) -> Option<HashMap<u32, u32>> {
+        charge_enum_work(&self.budget, 1)?;
+        if !self.enclosing_complete
+            || [tables::TYPE_DEF, tables::NESTED_CLASS]
+                .iter()
+                .any(|&table| self.tables.rows(table) != self.tables.declared[usize::from(table)])
+        {
+            return None;
+        }
+        let mut enclosing = HashMap::new();
+        let types = self.tables.rows(tables::TYPE_DEF);
+        for row in 1..=self.tables.rows(tables::NESTED_CLASS) {
+            charge_enum_work(&self.budget, 1)?;
+            let nested = self.tables.cell(tables::NESTED_CLASS, row, 0)?;
+            let outer = self.tables.cell(tables::NESTED_CLASS, row, 1)?;
+            if nested == 0 || nested > types || outer == 0 || outer > types || enclosing.contains_key(&nested) {
+                return None;
+            }
+            enclosing.insert(nested, outer);
+        }
+        Some(enclosing)
     }
 
     fn verified_enum_base<'s>(
@@ -1597,40 +1668,57 @@ impl Decoder<'_, '_> {
     }
 
     fn enum_identifier(&self, table: u8, row: u32, column: usize) -> Option<&str> {
-        if self.budget.get() == 0 {
-            return None;
-        }
-        let text = self.heaps.exact_string(self.tables.cell(table, row, column)?);
-        let cost = text.map_or(heaps::MAX_NAME_BYTES + 1, |text| text.len() + 1);
-        let left = self.budget.get().checked_sub(cost);
-        self.budget.set(left.unwrap_or(0));
-        left?;
-        text
+        self.constant_identifier(table, row, column, &self.budget)
     }
 
-    /// The unescaped subset of reflection names that can safely resolve named enum types in this image.
-    fn serialized_type_def_name(&self, row: u32, depth: u32) -> Option<String> {
-        if depth > MAX_NESTING || self.budget.get() == 0 {
+    /// Canonical reflection spelling, as in CLR TypeNameBuilder::EscapeName, not an ILAsm label.
+    fn serialized_type_def_name(&self, row: u32, depth: u32, enclosing: &HashMap<u32, u32>) -> Option<String> {
+        charge_enum_work(&self.budget, 1)?;
+        if depth > MAX_NESTING {
+            return None;
+        }
+        let flags = self.tables.cell(tables::TYPE_DEF, row, 0)?;
+        if (flags & 7 >= 2) != enclosing.contains_key(&row) {
             return None;
         }
         let identifier = |column| self.enum_identifier(tables::TYPE_DEF, row, column);
         let (namespace, name) = (identifier(2)?, identifier(1)?);
-        if namespace
-            .chars()
-            .chain(name.chars())
-            .any(|character| matches!(character, '+' | '/' | ',' | '\\' | '[' | ']' | '*' | '&'))
-        {
+        if name.is_empty() {
             return None;
         }
-        let name = qualified_name(namespace, name);
-        let name = match self.enclosing.get(&row) {
-            Some(&outer) => format!("{}+{name}", self.serialized_type_def_name(outer, depth + 1)?),
-            None => name,
+        let outer = match enclosing.get(&row) {
+            Some(&outer) => Some(self.serialized_type_def_name(outer, depth + 1, enclosing)?),
+            None => None,
         };
-        let left = self.budget.get().checked_sub(name.len());
-        self.budget.set(left.unwrap_or(0));
-        left?;
-        (name.len() <= signatures::MAX_TEXT).then_some(name)
+        // These seven ASCII characters, and only these, are reserved in CLR identifier components.
+        let reserved = |byte| matches!(byte, b'+' | b',' | b'\\' | b'[' | b']' | b'*' | b'&');
+        let escapes = namespace.bytes().chain(name.bytes()).filter(|&byte| reserved(byte)).count();
+        let length = namespace.len()
+            + name.len()
+            + escapes
+            + usize::from(!namespace.is_empty())
+            + outer.as_ref().map_or(0, |outer| outer.len() + 1);
+        charge_enum_work(&self.budget, length)?;
+        if length > signatures::MAX_TEXT {
+            return None;
+        }
+        let mut key = String::with_capacity(length);
+        if let Some(outer) = outer {
+            key.push_str(&outer);
+            key.push('+');
+        }
+        for (index, component) in [namespace, name].into_iter().enumerate() {
+            if index == 1 && !namespace.is_empty() {
+                key.push('.');
+            }
+            for character in component.chars() {
+                if character.is_ascii() && reserved(character as u8) {
+                    key.push('\\');
+                }
+                key.push(character);
+            }
+        }
+        Some(key)
     }
 
     fn member_accessors(&mut self, method_lists: &[Vec<u32>]) -> HashMap<(u8, u32), Vec<PropertyAccessor>> {
@@ -2070,13 +2158,205 @@ mod tests {
         let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
         let heaps = Heaps { strings: b"\0M\0", blobs: &blobs, ..Heaps::default() };
         let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
-        decoder.enclosing.insert(1, 1);
         decoder.budget.set(40);
-        assert!(decoder.serialized_type_def_name(1, 0).is_none(), "cycles never resolve an enum name");
-        assert_eq!(decoder.budget.get(), 0, "failed nested name lookups still cost work");
+        assert!(decoder.serialized_type_def_name(1, 0, &HashMap::new()).is_none());
+        assert_eq!(decoder.budget.get(), 0, "failed raw identifier lookups still cost work");
         assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
         assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
         assert_eq!(warnings.0, [BUDGET_EXHAUSTED]);
+    }
+
+    fn enum_identity_tables(definitions: &[(u32, &str, &str)], nested: &[(u32, u32)]) -> (Vec<u8>, Vec<u8>) {
+        let mut stream =
+            table_stream(&[(tables::TYPE_DEF, definitions.len() as u32), (tables::NESTED_CLASS, nested.len() as u32)]);
+        let mut strings = vec![0];
+        for &(flags, namespace, name) in definitions {
+            let namespace_offset = strings.len() as u32;
+            strings.extend(namespace.as_bytes());
+            strings.push(0);
+            let name_offset = strings.len() as u32;
+            strings.extend(name.as_bytes());
+            strings.push(0);
+            for (value, width) in [(flags, 4), (name_offset, 2), (namespace_offset, 2), (0, 2), (1, 2), (1, 2)] {
+                stream.extend_from_slice(&value.to_le_bytes()[..width]);
+            }
+        }
+        for &(nested, outer) in nested {
+            stream.extend_from_slice(&(nested as u16).to_le_bytes());
+            stream.extend_from_slice(&(outer as u16).to_le_bytes());
+        }
+        (stream, strings)
+    }
+
+    #[test]
+    fn initial_nested_class_scan_reserves_each_row_before_any_access_and_discards_failed_scans() {
+        for (available, expected_reads, complete) in
+            [(0, 0, false), (7, 0, false), (8, 1, false), (15, 1, false), (16, 2, true)]
+        {
+            let budget = Cell::new(available);
+            let mut reads = 0;
+            let result = read_enclosing_types(2, &budget, |row| {
+                reads += 1;
+                assert_eq!(budget.get(), available - reads * NESTED_CLASS_ROW_WORK, "reserve before row {row}");
+                Some((3, row))
+            });
+            assert_eq!(reads, expected_reads, "available {available}");
+            assert_eq!(budget.get(), 0);
+            if complete {
+                assert_eq!(result.unwrap().get(&3), Some(&2), "within-limit last-wins display behavior is unchanged");
+            } else {
+                assert_eq!(result, Err(BUDGET_EXHAUSTED), "no partial map escapes a failed scan");
+            }
+        }
+        let budget = Cell::new(NESTED_CLASS_ROW_WORK);
+        let result = read_enclosing_types(1, &budget, |_| {
+            assert_eq!(budget.get(), 0, "failed reads also reserve their work first");
+            None
+        });
+        assert_eq!(result, Err(NESTING_ROW_UNREADABLE));
+        assert_eq!(budget.get(), 0);
+    }
+
+    #[test]
+    fn initial_nested_class_scan_caps_huge_duplicate_tables_before_unbounded_accesses() {
+        for rows in [MAX_NESTED_CLASS_ROWS, MAX_NESTED_CLASS_ROWS + 1, 1_000_000] {
+            let budget = Cell::new(signatures::TOTAL_BUDGET);
+            let mut reads = 0;
+            let result = read_enclosing_types(rows, &budget, |row| {
+                assert!(row <= MAX_NESTED_CLASS_ROWS, "the cap is checked before touching a row");
+                reads += 1;
+                assert_eq!(
+                    budget.get(),
+                    signatures::TOTAL_BUDGET - reads * NESTED_CLASS_ROW_WORK,
+                    "every duplicate row is charged before access"
+                );
+                Some((3, 2))
+            });
+            if rows == MAX_NESTED_CLASS_ROWS {
+                assert_eq!(reads, MAX_NESTED_CLASS_ROWS as usize);
+                assert_eq!(result.unwrap(), HashMap::from([(3, 2)]));
+            } else {
+                assert_eq!(reads, 0, "a known oversized table is refused before its first row access");
+                assert_eq!(budget.get(), signatures::TOTAL_BUDGET);
+                assert_eq!(result, Err(NESTING_ROW_LIMIT));
+            }
+            assert!(budget.get() > 0, "structural row limits do not spend the whole signature budget");
+        }
+    }
+
+    #[test]
+    fn decoder_initial_nested_scan_shares_its_budget_and_preserves_within_limit_ilasm_names() {
+        let (stream, strings) =
+            enum_identity_tables(&[(0, "", "<Module>"), (1, "Demo", "Program"), (2, "", "Inner")], &[(3, 1), (3, 2)]);
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: &strings, ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        assert_eq!(decoder.budget.get(), signatures::TOTAL_BUDGET - 2 * NESTED_CLASS_ROW_WORK);
+        assert!(decoder.enclosing_complete);
+        assert_eq!(decoder.type_label(tables::TYPE_DEF, 3, 0).as_deref(), Some("Demo.Program/Inner"));
+        decoder.enum_underlying.insert(3, 0x06);
+        decoder.index_named_enums();
+        assert!(decoder.named_enums.is_empty(), "duplicate parents still cannot prove enum identity");
+        assert_eq!(signatures::Resolve::enum_underlying(&decoder, tables::TYPE_DEF, 3), Some(0x06));
+        assert!(warnings.0.is_empty());
+    }
+
+    #[test]
+    fn failed_initial_nested_budget_cannot_be_reinterpreted_as_complete_enum_name_evidence() {
+        let (stream, strings) =
+            enum_identity_tables(&[(0, "", "<Module>"), (1, "Demo", "Program"), (2, "", "Inner")], &[(3, 2)]);
+        for available in [0, NESTED_CLASS_ROW_WORK - 1] {
+            let mut warnings = Warnings::default();
+            let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+            let heaps = Heaps { strings: &strings, ..Heaps::default() };
+            let mut decoder = Decoder::with_budget(&tables, heaps, &mut warnings, available);
+            assert_eq!(decoder.budget.get(), 0);
+            assert!(decoder.enclosing.is_empty());
+            assert!(!decoder.enclosing_complete);
+            assert!(decoder.budget_reported);
+            assert_eq!(decoder.signature(tables::METHOD_DEF, 1, "M", None), UNREADABLE);
+            // Even independently funded later name work must not treat an abandoned initial scan as complete.
+            decoder.budget.set(signatures::TOTAL_BUDGET);
+            decoder.enum_underlying.insert(3, 0x06);
+            decoder.index_named_enums();
+            assert!(decoder.named_enums.is_empty());
+            assert_eq!(signatures::Resolve::enum_underlying(&decoder, tables::TYPE_DEF, 3), Some(0x06));
+            assert_eq!(warnings.0, [BUDGET_EXHAUSTED], "initial budget failure is diagnosed once");
+        }
+    }
+
+    #[test]
+    fn enum_identity_escape_expansion_is_charged_before_retaining_a_key() {
+        let name = "\\".repeat(heaps::MAX_NAME_BYTES);
+        let (stream, strings) = enum_identity_tables(&[(1, "", &name)], &[]);
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: &strings, ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        decoder.enum_underlying.insert(1, 0x06);
+        // Index validation + one node + two NUL-terminated identifiers + doubled escape output.
+        let cost = 2 + 1 + name.len() + 1 + name.len() * 2;
+        for (available, retained) in [(cost - 1, false), (cost, true)] {
+            decoder.budget.set(available);
+            decoder.index_named_enums();
+            assert_eq!(decoder.named_enums.contains_key(&"\\".repeat(name.len() * 2)), retained);
+            assert_eq!(decoder.budget.get(), 0);
+        }
+    }
+
+    #[test]
+    fn incomplete_typedef_tables_or_unreadable_names_cannot_prove_enum_name_uniqueness() {
+        let (stream, strings) = enum_identity_tables(&[(1, "", "Mode"), (1, "", "Mode")], &[]);
+        let mut warnings = Warnings::default();
+        let truncated = &stream[..stream.len() - 14];
+        let tables = Tables::parse(truncated, false, &mut warnings).unwrap();
+        assert_eq!(tables.rows(tables::TYPE_DEF), 1);
+        let heaps = Heaps { strings: &strings, ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        decoder.enum_underlying.insert(1, 0x06);
+        decoder.named_enums.insert("stale".to_owned(), Some(0x06));
+        decoder.index_named_enums();
+        assert!(decoder.named_enums.is_empty());
+
+        let (stream, _) = enum_identity_tables(&[(1, "", "Mode"), (1, "", "Mode")], &[]);
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: b"\0\0Mode\0\0\xff\0", ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        decoder.enum_underlying.insert(1, 0x06);
+        decoder.index_named_enums();
+        assert!(decoder.named_enums.is_empty(), "a valid key seen before invalid UTF-8 is not trustworthy");
+        assert!(decoder.budget.get() < signatures::TOTAL_BUDGET - heaps::MAX_NAME_BYTES);
+    }
+
+    #[test]
+    fn partial_budget_depth_or_text_limited_enum_indexes_never_retain_earlier_keys() {
+        let (stream, strings) = enum_identity_tables(&[(1, "", "Mode"), (1, "", "Other")], &[]);
+        let mut warnings = Warnings::default();
+        let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+        let heaps = Heaps { strings: &strings, ..Heaps::default() };
+        let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+        decoder.enum_underlying.insert(1, 0x06);
+        decoder.budget.set(1030);
+        decoder.index_named_enums();
+        assert!(decoder.named_enums.is_empty());
+        assert_eq!(decoder.budget.get(), 0, "a later failed reservation invalidates earlier names");
+
+        for (levels, raw) in [(MAX_NESTING + 3, "N".to_owned()), (MAX_NESTING, "\\".repeat(512))] {
+            let mut definitions = vec![(2, "", raw.as_str()); levels as usize];
+            definitions[0].0 = 1;
+            let nested: Vec<_> = (2..=levels).map(|row| (row, row - 1)).collect();
+            let (stream, strings) = enum_identity_tables(&definitions, &nested);
+            let mut warnings = Warnings::default();
+            let tables = Tables::parse(&stream, false, &mut warnings).unwrap();
+            let heaps = Heaps { strings: &strings, ..Heaps::default() };
+            let mut decoder = Decoder::new(&tables, heaps, &mut warnings);
+            decoder.enum_underlying.insert(1, 0x06);
+            decoder.index_named_enums();
+            assert!(decoder.named_enums.is_empty(), "levels {levels}, raw length {}", raw.len());
+            assert!(decoder.budget.get() > 0, "depth and text caps bound walks without spending the image budget");
+        }
     }
 
     #[test]

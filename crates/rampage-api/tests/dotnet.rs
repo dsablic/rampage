@@ -165,6 +165,10 @@ fn resource_project(declared: u32, cut: usize) -> rampage_api::Project {
 }
 
 fn boxed_attribute_image() -> Vec<u8> {
+    boxed_attribute_image_for_enum("Mode", None)
+}
+
+fn boxed_attribute_image_for_enum(mode_name: &str, enum_wire_name: Option<&str>) -> Vec<u8> {
     let mut strings = vec![0];
     let mut name = |text: &str| {
         let index = strings.len() as u16;
@@ -177,7 +181,7 @@ fn boxed_attribute_image() -> Vec<u8> {
     let ctor = name(".ctor");
     let enum_name = name("Enum");
     let system = name("System");
-    let mode = name("Mode");
+    let mode = name(mode_name);
     let value_field = name("value__");
     let all = name("All");
     let alias = name("Alias");
@@ -186,13 +190,21 @@ fn boxed_attribute_image() -> Vec<u8> {
     value.extend([0x1D, 0x08, 2, 0, 0, 0]);
     value.extend((-2i32).to_le_bytes());
     value.extend(7i32.to_le_bytes());
-    value.extend([2, 0, 0x54, 0x51, 5]);
+    value.extend([if enum_wire_name.is_some() { 3 } else { 2 }, 0, 0x54, 0x51, 5]);
     value.extend(b"Value");
     value.extend([0x50, 11]);
     value.extend(b"Demo.Target");
     value.extend([0x53, 0x1D, 0x51, 5]);
     value.extend(b"Items");
     value.extend([2, 0, 0, 0, 0x0E, 0xFF, 0x02, 1]);
+    if let Some(enum_wire_name) = enum_wire_name {
+        assert!(enum_wire_name.len() < 0x80);
+        value.extend([0x53, 0x55, enum_wire_name.len() as u8]);
+        value.extend(enum_wire_name.as_bytes());
+        value.push(4);
+        value.extend(b"Mode");
+        value.extend(u64::MAX.to_le_bytes());
+    }
     let mut blobs = vec![0, 6, 0x20, 2, 0x01, 0x1C, 0x1D, 0x1C];
     assert!(value.len() < 0x80);
     blobs.push(value.len() as u8);
@@ -285,6 +297,35 @@ fn dotnet_attribute_json_preserves_boxed_types_without_changing_value_or_named_a
     assert!(json.get("types").is_none() && json.get("resources").is_none());
     let query = DotNetQuery { contains: Some("boxedattribute".to_owned()), ..query };
     assert_eq!(project.dotnet_metadata(&query).unwrap().unwrap().custom_attributes.unwrap().total, 1);
+}
+
+#[test]
+fn escaped_local_enum_identity_survives_api_json_without_changing_numeric_values() {
+    let scratch =
+        EventImage(std::env::temp_dir().join(format!("rampage-api-dotnet-escaped-{}.dll", std::process::id())));
+    for (wire_name, accepted) in [(r"Demo.Mo\+de", true), ("Demo.Mo+de", false), (r"Demo.Mo\+de, Demo", false)] {
+        std::fs::write(&scratch.0, boxed_attribute_image_for_enum("Mo+de", Some(wire_name))).unwrap();
+        let project = rampage_api::Project::new(rampage_loaders::Binary::open(&scratch.0).unwrap());
+        let query = DotNetQuery { list: DotNetList::Attributes, ..Default::default() };
+        let summary = serde_json::to_value(project.dotnet_metadata(&query).unwrap().unwrap()).unwrap();
+        let attribute = &summary["custom_attributes"]["items"][0];
+        assert_eq!(
+            attribute["arguments"],
+            serde_json::json!(["box(int32, 42)", "[box(string, \"42\"), box(int32[], [-2, 7])]"])
+        );
+        if accepted {
+            assert!(attribute["arguments_error"].is_null(), "{summary}");
+            assert_eq!(
+                attribute["named_arguments"][2],
+                serde_json::json!({
+                    "kind": "field", "name": "Mode", "argument_type": r"Demo.Mo\+de",
+                    "value": r"Demo.Mo\+de(18446744073709551615)"
+                })
+            );
+        } else {
+            assert!(attribute["arguments_error"].is_string(), "{summary}");
+        }
+    }
 }
 
 #[test]
