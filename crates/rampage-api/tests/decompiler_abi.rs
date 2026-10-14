@@ -81,3 +81,32 @@ fn snapshot_compiler_context_overrides_platform_selection_without_silent_fallbac
         Some(SnapshotTarget { platform: SnapshotPlatform::Windows, compiler: Some("unknown_compiler".to_owned()) });
     assert!(Project::new(binary).decompile(0x1000).is_err());
 }
+
+fn fixture(name: &str) -> Binary {
+    Binary::open(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)).unwrap()
+}
+
+#[test]
+fn go_register_abi_binaries_select_the_golang_spec() {
+    for name in ["hello-go-x64.elf", "hello-go-arm64.elf"] {
+        let project = Project::new(fixture(name));
+        let main = project.decompile(project.resolve("main.main").unwrap()).unwrap();
+        assert!(main.language_id.ends_with(":golang"), "{name}: {}", main.language_id);
+        // Under the C convention `who` looks unused, so its `os.Args` branch vanished and greet took nothing.
+        assert!(main.code.contains("if ("), "{name}: {}", main.code);
+        assert!(!main.code.contains("main.greet();"), "{name}: {}", main.code);
+    }
+}
+
+#[test]
+fn ambiguous_go_tables_keep_the_platform_default_and_overrides_win() {
+    let mut binary = fixture("hello-go-x64.elf");
+    binary.go_table = Some(rampage_loaders::gopclntab::GoTableVersion::Go116);
+    let project = Project::new(binary);
+    let main = project.resolve("main.main").unwrap();
+    assert!(project.decompile(main).unwrap().language_id.ends_with(":gcc"));
+
+    let project = Project::new(fixture("hello-go-x64.elf"));
+    project.set_decompiler_options(Some(DecompilerOptions { compiler: Some("gcc".to_owned()), ..Default::default() }));
+    assert!(project.decompile(main).unwrap().language_id.ends_with(":gcc"));
+}

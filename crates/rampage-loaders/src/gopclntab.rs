@@ -35,6 +35,31 @@ const MAGIC_GO120: u32 = 0xFFFF_FFF1;
 pub struct GoReport {
     pub functions: Vec<GoFunction>,
     pub warnings: Vec<String>,
+    /// The table's header version, once its magic is recognized.
+    pub version: Option<GoTableVersion>,
+}
+
+/// A pclntab header version. Each names the first Go release using that layout; a layout spans every release
+/// until the next one, so `Go116` covers go1.16 and go1.17.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoTableVersion {
+    Go12,
+    Go116,
+    Go118,
+    Go120,
+}
+
+impl GoTableVersion {
+    fn from_magic(magic: u32) -> Option<Self> {
+        match magic {
+            MAGIC_GO12 => Some(Self::Go12),
+            MAGIC_GO116 => Some(Self::Go116),
+            MAGIC_GO118 => Some(Self::Go118),
+            MAGIC_GO120 => Some(Self::Go120),
+            _ => None,
+        }
+    }
 }
 
 /// A function recovered from the pclntab. Being a `GoFunction` rather than a loader `Symbol` is the source
@@ -79,10 +104,11 @@ pub fn parse(pclntab: &[u8], text_base: u64, pointer_size: u8, big_endian: bool)
         report.warn("gopclntab too small for a header".to_owned());
         return report;
     };
-    if !matches!(magic, MAGIC_GO12 | MAGIC_GO116 | MAGIC_GO118 | MAGIC_GO120) {
+    let Some(version) = GoTableVersion::from_magic(magic) else {
         report.warn(format!("not a gopclntab: unknown magic {magic:#010x}"));
         return report;
-    }
+    };
+    report.version = Some(version);
     if pclntab.get(4) != Some(&0) || pclntab.get(5) != Some(&0) {
         report.warn("gopclntab header padding is not zero".to_owned());
         return report;

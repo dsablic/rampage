@@ -123,6 +123,9 @@ pub struct Binary {
     /// Set when the image was opened at an offset inside a larger file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedded: Option<Embedded>,
+    /// The version of the Go pclntab that named functions, set by [`Binary::recover_go_symbols`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub go_table: Option<crate::gopclntab::GoTableVersion>,
     #[serde(skip)]
     image: Range<usize>,
 }
@@ -266,6 +269,7 @@ impl Binary {
             snapshot_registers: Vec::new(),
             snapshot_target: None,
             embedded: None,
+            go_table: None,
         })
     }
 
@@ -602,6 +606,7 @@ impl Binary {
             snapshot_registers: Vec::new(),
             snapshot_target: None,
             embedded: None,
+            go_table: None,
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
@@ -787,6 +792,7 @@ impl Binary {
         if report.functions.is_empty() {
             return report;
         }
+        self.go_table = report.version;
         let mut taken: std::collections::HashSet<u64> = self.symbols.iter().map(|symbol| symbol.address).collect();
         for function in &report.functions {
             if !taken.insert(function.address) {

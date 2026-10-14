@@ -48,11 +48,13 @@ whole-program point-count cutoff. The million-point scale gate runs with
 ## Compiler specifications and prototypes
 
 The project layer selects Windows specifications for PE, Apple specifications for little-endian ARM64 Mach-O,
-macOS specifications for big-endian PowerPC Mach-O, and existing defaults otherwise. `DecompilerOptions` exposes
-platform/compiler overrides; `Project::set_decompiler_options(None)` restores format-based selection. The CLI accepts
-`rampage function decompile IMAGE --at FUNCTION --compiler windows` (or another advertised compiler ID).
-Unknown IDs are errors, not silent fallback to the first compiler in a language definition. Results report the
-exact selected `language_id`.
+macOS specifications for big-endian PowerPC Mach-O, and existing defaults otherwise. A little-endian x86-64 or
+ARM64 image whose Go pclntab is go1.18 or later selects `golang`, Go's register ABI; a go1.16 table (go1.16 or
+go1.17) and older Go keep the platform default, since go1.16 and earlier pass arguments on the stack.
+`DecompilerOptions` exposes platform/compiler overrides; `Project::set_decompiler_options(None)` restores
+format-based selection. The CLI accepts `rampage function decompile IMAGE --at FUNCTION --compiler windows`
+(or another advertised compiler ID). Unknown IDs are errors, not silent fallback to the first compiler in a
+language definition. Results report the exact selected `language_id`.
 
 Bundled C data organizations explicitly use ILP32 for MIPS32 and PowerPC32 (including Darwin) and LP64 for
 SPARC64 and Darwin PowerPC64; these six compiler specifications carry local corrections marked in their XML.

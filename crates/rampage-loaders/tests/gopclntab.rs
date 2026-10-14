@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use rampage_loaders::gopclntab::GoTableVersion;
 use rampage_loaders::{Binary, SymbolKind};
 
 fn fixture(name: &str) -> PathBuf {
@@ -23,6 +24,15 @@ fn recovers_function_names_from_a_stripped_go_binary() {
     // Recovery pulls in the wider Go runtime too, not just package main.
     assert!(binary.symbols.len() > 100, "expected many recovered functions, got {}", binary.symbols.len());
     assert!(binary.symbols.iter().any(|symbol| symbol.name.starts_with("runtime.")));
+}
+
+#[test]
+fn records_the_pclntab_version_only_for_go_binaries() {
+    for name in ["hello-go-x64.elf", "hello-go-arm64.elf"] {
+        let binary = Binary::open(fixture(name)).unwrap();
+        assert_eq!(binary.go_table, Some(GoTableVersion::Go120), "{name}");
+    }
+    assert_eq!(Binary::open(fixture("hello-x64.elf")).unwrap().go_table, None);
 }
 
 #[test]

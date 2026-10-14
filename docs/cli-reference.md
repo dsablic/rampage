@@ -61,7 +61,7 @@ Noun labels do not narrow the queries: disassembly is not function-bounded, and 
 instruction. `compare` compares function starts, not decompiled semantics. The hidden `export-cfg FILE`
 benchmark action remains accepted; see [benchmarks](benchmarks.md) rather than treating it as an interactive query.
 
-`decompile --compiler ID` overrides the format-selected Ghidra compiler ID. Sessions select a sibling worker
+`decompile --compiler ID` overrides the format-selected Ghidra compiler ID (`golang` for go1.18+ binaries). Sessions select a sibling worker
 when present; `--isolated` requires supervision explicitly. See the
 [decompiler reference](../crates/rampage-decompiler/README.md) for engine limits and recovery status.
 `identify --no-bundled` requires a user database or a matching pack database. `build-signatures` defaults to

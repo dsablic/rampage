@@ -95,9 +95,20 @@ pub(crate) fn default_options(binary: &rampage_loaders::Binary) -> DecompilerOpt
     });
     DecompilerOptions {
         platform,
-        compiler,
+        compiler: compiler.or_else(|| go_compiler(binary)),
         arm_be8: binary.arch == rampage_arch::Arch::Arm && target.data_big_endian && !target.big_endian,
     }
+}
+
+/// Go's register ABI for a binary whose pclntab proves it. Go passes arguments in registers from go1.17 on
+/// x86-64 and go1.18 on AArch64; read as C, those calls lose their arguments and the code computing them. A
+/// go1.18+ table proves the register ABI on both. A go1.16 table also covers go1.17, and older Go passed
+/// arguments on the stack, so those keep the platform default rather than guess.
+fn go_compiler(binary: &rampage_loaders::Binary) -> Option<String> {
+    use rampage_loaders::gopclntab::GoTableVersion;
+    let register_abi = matches!(binary.go_table, Some(GoTableVersion::Go118 | GoTableVersion::Go120));
+    let supported = matches!(binary.arch, rampage_arch::Arch::X86_64 | rampage_arch::Arch::Aarch64);
+    (register_abi && supported && !binary.big_endian).then(|| "golang".to_owned())
 }
 
 impl Project {
