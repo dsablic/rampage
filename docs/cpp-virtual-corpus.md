@@ -96,8 +96,9 @@ adapter additionally bounds each inner decompile to 1–30 seconds. `--output` c
 to overwrite one; without it, the runner prints JSON to stdout. Wrapper provenance also uses stdout, so an explicit
 report file keeps the JSON separate. Exit status is zero only when the report's whole-lane success gate passes.
 
-No GitHub Actions dispatch is part of this lane. Workflows remain manual-only; any later dispatch requires explicit
-user approval after all work is complete.
+No GitHub Actions dispatch is part of this lane. Automatic CI builds are limited to pushes of version tags such as
+`v1.2.3` or `v1.2.3-rc.1`; manual dispatch remains available. Ordinary branch pushes and pull requests do not build.
+This local lane creates no release tag and dispatches no workflow.
 
 ## Controlled backend protocol
 

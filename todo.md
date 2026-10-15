@@ -671,9 +671,10 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   audits passed. The checksum-verified scanner and owned audit scratch were removed; raw reports are not committed.
 - [ ] Broad C++ differential/corpus/performance acceptance, typed virtual dispatch, inheritance and adjusting thunks.
   The owned source/compiler oracles and exact slot correlations do not earn these broader capabilities.
-- [x] GitHub Actions remains manual-only. No run is dispatched during this push; dispatch still requires explicit
-  user approval after all work is complete. The virtual acceptance wrapper is wired into the manual workflow but
-  has not run there. Release optimization settings and the two-job shared target are unchanged.
+- [x] CI automatically builds only numeric version-tag pushes (`vMAJOR.MINOR.PATCH`, including prerelease suffixes)
+  or explicit manual dispatches, never ordinary branch pushes or pull requests. No release tag was created and no
+  workflow was dispatched during this work. The virtual acceptance wrapper is wired but has not run in Actions.
+  Release optimization settings and the two-job shared target are unchanged.
 
 ### Validation and external blockers
 
