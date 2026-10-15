@@ -1,0 +1,220 @@
+{
+  "license": "Apache-2.0",
+  "scope": "Clang producer; x86_64 little-endian ELF; GCC-compatible Itanium ABI consumer evidence",
+  "compiler_dump_contract": [
+    "Clang AST vptr offset; opaque-pointer IRgen storage",
+    "Width from IRgen ptr plus source sizeof(void *), never artificial-member offsetof"
+  ],
+  "source_assumptions": [
+    "Out-of-line key virtual methods emit strong vtable symbols without constructing objects",
+    "Positive PeerRecord repeats all method names; exact ELF symbols and record DIE identity remain distinct",
+    "Inheritance control has a second vptr at8 and a -8 this-adjusting thunk; not a supported record",
+    "Destructor control defines class-owned no-op delete to avoid runtime linkage, never invoked",
+    "Destructor D1/D2 symbol aliases are intentional negative ABI evidence; positive methods forbid aliases",
+    "Compiler dump formatting requires opaque-pointer Clang IRgen; parent must run and inspect actual DWARF"
+  ],
+  "target": {
+    "triple": "x86_64-linux-gnu",
+    "format": "ELF64",
+    "byte_order": "little",
+    "address_size": 8,
+    "elf_type": 2,
+    "elf_machine": 62,
+    "max_binary_bytes": 1048576,
+    "max_debug_info_bytes": 131072,
+    "max_layout_dump_bytes": 131072,
+    "max_function_bytes": 128,
+    "max_sections": 128,
+    "max_symbols": 256
+  },
+  "constant_encoding": {
+    "description": "13 little-endian u64 words; only source-visible data members, no synthetic vptr offsetof",
+    "magic": "0x52414d5056495231",
+    "version": 1,
+    "byte_order_tag": 1,
+    "byte_size": 104
+  },
+  "positive_vptr": {
+    "records": ["checked", "peer"],
+    "offset": 0,
+    "width": 8,
+    "evidence": "AST compiler vtable-pointer entry plus IRgen ptr storage and independently measured pointer width",
+    "source_member_offsetof": false,
+    "address_point_offset": 16,
+    "prefix_status": "UnverifiedPrefix"
+  },
+  "layouts": {
+    "flat": {
+      "size": 16,
+      "alignment": 8,
+      "fields": [
+        {"name": "count", "offset": 8, "size": 4, "alignment": 4},
+        {"name": "tail", "offset": 12, "size": 1, "alignment": 1}
+      ]
+    },
+    "inherited": {
+      "size": 24,
+      "alignment": 8,
+      "fields": [
+        {"name": "count", "offset": 16, "size": 4, "alignment": 4},
+        {"name": "tail", "offset": 20, "size": 1, "alignment": 1}
+      ]
+    }
+  },
+  "records": {
+    "checked": {"tag": "VirtualRecord", "layout": "flat"},
+    "peer": {"tag": "PeerRecord", "layout": "flat"},
+    "noalign": {"tag": "NoAlignRecord", "layout": "flat"},
+    "callback": {"tag": "CallbackRecord", "layout": "flat"},
+    "chain": {"tag": "ChainRecord", "layout": "flat"},
+    "inherited": {"tag": "InheritedRecord", "layout": "inherited"},
+    "constant": {"tag": "ConstRecord", "layout": "flat"},
+    "reference": {"tag": "ReferenceRecord", "layout": "flat"},
+    "value": {"tag": "ValueRecord", "layout": "flat"},
+    "destructor": {"tag": "DestructorRecord", "layout": "flat"}
+  },
+  "groups": {
+    "records": {
+      "source": "records.cpp",
+      "records": ["checked", "peer"],
+      "vptr_dump_records": ["checked", "peer"],
+      "expectation": "Admit only after exact method DIE, specification, artificial this/vptr and slot evidence",
+      "functions": [
+        "_ZN13VirtualRecord9readCountEv", "_ZN13VirtualRecord10writeCountEi", "_ZN13VirtualRecord8readTailEv",
+        "_ZN10PeerRecord9readCountEv", "_ZN10PeerRecord10writeCountEi", "_ZN10PeerRecord8readTailEv",
+        "debug_virtual_read", "debug_virtual_write", "debug_virtual_tail",
+        "debug_peer_read", "debug_peer_write", "debug_peer_tail"
+      ],
+      "nonalias_methods": [
+        "_ZN13VirtualRecord9readCountEv", "_ZN13VirtualRecord10writeCountEi", "_ZN13VirtualRecord8readTailEv",
+        "_ZN10PeerRecord9readCountEv", "_ZN10PeerRecord10writeCountEi", "_ZN10PeerRecord8readTailEv"
+      ],
+      "methods": [
+        {
+          "symbol": "_ZN13VirtualRecord9readCountEv", "record": "checked", "object": "VirtualRecord *",
+          "field": "count", "access": "read-signed", "virtual_slot": 0,
+          "expression": {"source": "field", "name": "count", "add": 0}, "return_size": 4
+        },
+        {
+          "symbol": "_ZN13VirtualRecord10writeCountEi", "record": "checked", "object": "VirtualRecord *",
+          "field": "count", "access": "write", "virtual_slot": 1,
+          "expression": {"source": "parameter", "name": "replacement", "add": 0}, "return_size": 0
+        },
+        {
+          "symbol": "_ZN13VirtualRecord8readTailEv", "record": "checked", "object": "VirtualRecord *",
+          "field": "tail", "access": "read-unsigned", "virtual_slot": null,
+          "expression": {"source": "field", "name": "tail", "add": 0}, "return_size": 4
+        },
+        {
+          "symbol": "_ZN10PeerRecord9readCountEv", "record": "peer", "object": "PeerRecord *",
+          "field": "count", "access": "read-signed", "virtual_slot": 0,
+          "expression": {"source": "field", "name": "count", "add": 17}, "return_size": 4
+        },
+        {
+          "symbol": "_ZN10PeerRecord10writeCountEi", "record": "peer", "object": "PeerRecord *",
+          "field": "count", "access": "write", "virtual_slot": 1,
+          "expression": {"source": "parameter", "name": "replacement", "add": -3}, "return_size": 0
+        },
+        {
+          "symbol": "_ZN10PeerRecord8readTailEv", "record": "peer", "object": "PeerRecord *",
+          "field": "tail", "access": "read-unsigned", "virtual_slot": null,
+          "expression": {"source": "field", "name": "tail", "add": 1}, "return_size": 4
+        }
+      ],
+      "tables": [
+        {
+          "symbol": "_ZTV13VirtualRecord",
+          "words": [0, 0, "_ZN13VirtualRecord9readCountEv", "_ZN13VirtualRecord10writeCountEi"],
+          "address_point_offset": 16,
+          "prefix_status": "UnverifiedPrefix"
+        },
+        {
+          "symbol": "_ZTV10PeerRecord",
+          "words": [0, 0, "_ZN10PeerRecord9readCountEv", "_ZN10PeerRecord10writeCountEi"],
+          "address_point_offset": 16,
+          "prefix_status": "UnverifiedPrefix"
+        }
+      ]
+    },
+    "missing-alignment": {
+      "source": "missing_alignment.cpp",
+      "records": ["noalign"],
+      "vptr_dump_records": [],
+      "expectation": "Refuse absent explicit alignment DWARF evidence, not invalid natural layout",
+      "functions": ["_ZN13NoAlignRecord9readCountEv", "debug_noalign_read"],
+      "tables": [
+        {"symbol": "_ZTV13NoAlignRecord", "words": [0, 0, "_ZN13NoAlignRecord9readCountEv"]}
+      ]
+    },
+    "lookalikes": {
+      "source": "lookalikes.cpp",
+      "records": ["callback", "chain"],
+      "vptr_dump_records": [],
+      "expectation": "Ordinary callback/pointer-chain fields at zero are not artificial vptr storage",
+      "functions": [
+        "_ZN14CallbackRecord9readCountEv", "_ZN11ChainRecord9readCountEv",
+        "debug_callback_read", "debug_chain_read"
+      ],
+      "tables": []
+    },
+    "inherited": {
+      "source": "inherited.cpp",
+      "records": ["inherited"],
+      "vptr_dump_records": [],
+      "expectation": "Refuse inheritance, secondary tables and this-adjusting thunks",
+      "functions": [
+        "_ZN10LeftRecord8readLeftEv", "_ZN11RightRecord9readRightEv",
+        "_ZN15InheritedRecord8readLeftEv", "_ZN15InheritedRecord9readRightEv",
+        "_ZThn8_N15InheritedRecord9readRightEv", "debug_inherited_left", "debug_inherited_right"
+      ],
+      "tables": [
+        {"symbol": "_ZTV10LeftRecord", "words": [0, 0, "_ZN10LeftRecord8readLeftEv"]},
+        {"symbol": "_ZTV11RightRecord", "words": [0, 0, "_ZN11RightRecord9readRightEv"]},
+        {
+          "symbol": "_ZTV15InheritedRecord",
+          "words": [
+            0, 0, "_ZN15InheritedRecord8readLeftEv", "_ZN15InheritedRecord9readRightEv",
+            -8, 0, "_ZThn8_N15InheritedRecord9readRightEv"
+          ]
+        }
+      ]
+    },
+    "signatures": {
+      "source": "signatures.cpp",
+      "records": ["constant", "reference", "value", "destructor"],
+      "vptr_dump_records": [],
+      "expectation": "Refuse const this, reference/by-value signatures and virtual destructors",
+      "functions": [
+        "_ZNK11ConstRecord9readCountEv", "_ZN15ReferenceRecord10writeCountERi",
+        "_ZN11ValueRecord9readOtherE12ValuePayload", "_ZN11ValueRecord4copyEv",
+        "_ZN16DestructorRecordD0Ev", "_ZN16DestructorRecordD1Ev", "_ZN16DestructorRecordD2Ev",
+        "_ZN16DestructorRecord9readCountEv", "_ZN16DestructorRecorddlEPv",
+        "debug_const_read", "debug_reference_write", "debug_value_argument", "debug_value_return",
+        "debug_destructor_read"
+      ],
+      "tables": [
+        {"symbol": "_ZTV11ConstRecord", "words": [0, 0, "_ZNK11ConstRecord9readCountEv"]},
+        {"symbol": "_ZTV15ReferenceRecord", "words": [0, 0, "_ZN15ReferenceRecord10writeCountERi"]},
+        {
+          "symbol": "_ZTV11ValueRecord",
+          "words": [0, 0, "_ZN11ValueRecord9readOtherE12ValuePayload", "_ZN11ValueRecord4copyEv"]
+        },
+        {
+          "symbol": "_ZTV16DestructorRecord",
+          "words": [0, 0, "_ZN16DestructorRecordD1Ev", "_ZN16DestructorRecordD0Ev", "_ZN16DestructorRecord9readCountEv"]
+        }
+      ]
+    }
+  },
+  "parent_dwarf_contract": [
+    "Class DIE: complete size16, explicit alignment8, base-free; ordinary count8/tail12 data members",
+    "Artificial compiler vptr: offset0, pointer width8, independently matched to mandatory AST/IR dump",
+    "Exact method definition/specification/declaration and object_pointer artificial this resolve to the same record",
+    "Two records reuse method names: do not join by source class/method names or wrapper first arguments",
+    "readCount/writeCount are mutable virtual slots0/1; readTail is nonvirtual and proves the last data field",
+    "Raw table first two zero words remain UnverifiedPrefix, never KnownRtti or verified offset-to-top",
+    "No RTTI recovery, constructors, global objects, standard headers, runtime libraries or target execution",
+    "Missing alignment and ordinary pointer controls need actual DWARF inspection before evidence claims",
+    "Malformed forms, forged artificial flags and wrong this/spec references require later synthetic production tests"
+  ]
+}

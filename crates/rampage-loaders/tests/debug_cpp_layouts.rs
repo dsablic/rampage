@@ -108,6 +108,9 @@ fn leaf_alignment(leaf: &debug::DebugLayoutLeaf, nodes: &BTreeMap<u64, Evidence>
                 alignment(scalar.producer_alignment, scalar.byte_size);
             }
         }
+        debug::DebugLayoutLeaf::OpaqueVptr { .. } => {
+            panic!("non-polymorphic fixtures must retain exact leaf categories")
+        }
     }
 }
 
@@ -301,9 +304,7 @@ fn compiled_methods_preserve_exact_record_declaration_and_actual_object_paramete
 fn compiled_unsupported_method_shapes_never_gain_this_projection_or_orphan_layouts() {
     let (root, oracle) = fixture_inputs();
     for variant in ["dwarf4-o1", "dwarf5-o2"] {
-        for group in
-            ["unaligned", "const-method", "reference-argument", "byvalue", "virtual", "inherited", "static-method"]
-        {
+        for group in ["unaligned", "const-method", "reference-argument", "byvalue", "inherited", "static-method"] {
             let binary = Binary::open(root.join(variant).join(format!("{group}.debug.elf"))).unwrap();
             if group == "unaligned" {
                 let nodes = evidence(&binary);
@@ -362,5 +363,24 @@ fn compiled_unsupported_method_shapes_never_gain_this_projection_or_orphan_layou
                     .any(|symbol| symbol.as_str() == Some(method.linkage_name.as_str()))
             );
         }
+    }
+}
+
+#[test]
+#[ignore = "requires centrally compiled C++ controls through debug-cpp-layouts/build.sh --check"]
+fn former_virtual_refusal_now_exposes_only_explicit_vptr_storage_and_the_declared_slot() {
+    let (root, _) = fixture_inputs();
+    for variant in ["dwarf4-o1", "dwarf5-o2"] {
+        let binary = Binary::open(root.join(variant).join("virtual.debug.elf")).unwrap();
+        let entry = binary.symbol_by_name("_ZN13VirtualRecord9readCountEv").unwrap().address;
+        let report = debug::layout_signatures(&binary).unwrap();
+        assert_eq!(report.signatures.len(), 1, "{variant}: {report:?}");
+        let signature = &report.signatures[0];
+        assert_eq!(signature.address, entry);
+        assert_eq!(signature.method.as_ref().unwrap().virtual_slot, Some(0));
+        let record = report.layouts.iter().find(|record| signature.dependencies.contains(&record.id)).unwrap();
+        assert_eq!(record.fields[0].emitted_name, "rampage_vptr");
+        assert!(matches!(record.fields[0].leaf, debug::DebugLayoutLeaf::OpaqueVptr { byte_size: 8, .. }));
+        assert!(!record.strictly_applicable, "opaque storage is not exact producer-pointee equivalence");
     }
 }

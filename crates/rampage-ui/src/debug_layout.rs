@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use egui::{Key, Modifiers, RichText, Ui};
-use rampage_api::{DebugLayoutReview, DebugLayoutType, Project};
+use rampage_api::{DebugLayoutProjection, DebugLayoutReview, DebugLayoutType, Project};
 use rampage_arch::Arch;
 use rampage_loaders::{Format, debug};
 
@@ -16,7 +16,7 @@ const STALE: &str = "Review is no longer current. Preview again and review the c
 const PENDING: &str = "A previous preview is still running. Wait for it to finish, then preview again.";
 const SCOPE: &str = concat!(
     "Scope: embedded x86_64 little-endian ELF DWARF, default gcc; C flat structs and producer-described ",
-    "base-free, non-polymorphic C++ records with explicit mutable this methods."
+    "base-free C++ records with explicit mutable this methods, including checked opaque vptr storage projections."
 );
 
 #[derive(Clone, Default)]
@@ -219,6 +219,32 @@ impl DebugLayouts {
         }
     }
 
+    fn can_navigate(&self, workspace: &Workspace) -> bool {
+        self.shown
+            && !self.job.is_running()
+            && !self.gate.is_running()
+            && self.error.is_none()
+            && self.reply.as_ref().is_some_and(|reply| reply.binding.matches(workspace, &self.revision))
+    }
+
+    fn goto_exact_method_entry(&self, workspace: &mut Workspace, address: u64) -> bool {
+        if !self.can_navigate(workspace)
+            || !self.reply.as_ref().is_some_and(|reply| {
+                reply
+                    .review
+                    .virtual_evidence
+                    .tables
+                    .iter()
+                    .flat_map(|table| &table.methods)
+                    .any(|method| method.method_address == address)
+            })
+        {
+            return false;
+        }
+        workspace.goto(address);
+        true
+    }
+
     fn contents(&mut self, ui: &mut Ui, workspace: &mut Workspace) {
         ui.label(SCOPE);
         ui.label(
@@ -244,6 +270,7 @@ impl DebugLayouts {
         if let Some(error) = &self.error {
             ui.label(RichText::new(error).color(theme::WARNING));
         }
+        let navigation_enabled = self.can_navigate(workspace);
         let Some(reply) = &self.reply else { return };
         let review = &reply.review;
         if let Some(imported) = &review.imported {
@@ -267,6 +294,7 @@ impl DebugLayouts {
                 review.preserved.len(),
             ));
         }
+        let mut goto_method = None;
         egui::ScrollArea::vertical().id_salt("checked-layout-review").max_height(470.0).show(ui, |ui| {
             identities(ui, review);
             if let Some(imported) = &review.imported {
@@ -283,9 +311,14 @@ impl DebugLayouts {
                 });
             }
             proposals(ui, review);
+            opaque_projections(ui, review);
+            goto_method = virtual_evidence(ui, review, navigation_enabled);
             producer_facts(ui, review);
             warnings(ui, "Checked preview warnings", &review.report.warnings);
         });
+        if let Some(address) = goto_method {
+            self.goto_exact_method_entry(workspace, address);
+        }
     }
 }
 
@@ -353,7 +386,7 @@ fn proposals(ui: &mut Ui, review: &DebugLayoutReview) {
     }
     let needed = proposed_types(review);
     for ty in review.report.types.iter().filter(|ty| needed.contains(ty.layout.name.as_str())) {
-        checked_type(ui, ty);
+        checked_type(ui, ty, true);
     }
     ui.collapsing("Preserved addresses / preview-only final declarations (not proposed additions)", |ui| {
         ui.label("No per-address refusal reason is supplied by the checked API; see its warnings and producer facts.");
@@ -364,19 +397,29 @@ fn proposals(ui: &mut Ui, review: &DebugLayoutReview) {
             ui.label(RichText::new(format!("{:#x}: {}", function.address, function.declaration)).monospace());
         }
         for ty in review.report.types.iter().filter(|ty| !needed.contains(ty.layout.name.as_str())) {
-            checked_type(ui, ty);
+            checked_type(ui, ty, false);
         }
     });
 }
 
-fn checked_type(ui: &mut Ui, ty: &DebugLayoutType) {
+fn checked_type(ui: &mut Ui, ty: &DebugLayoutType, verified: bool) {
     ui.push_id((&ty.layout.name, ty.unit_offset, ty.die_offset), |ui| {
         ui.collapsing(format!("Checked consumer layout: {}", ty.layout.name), |ui| {
+            ui.label(if verified {
+                "Verified within an approved source closure; see the actual applied batch for import status."
+            } else {
+                "Unverified consumer layout/fields: not needed by any approved source closure."
+            });
             ui.label(format!(
                 "Original: {}; unit {:#x}, DIE {:#x}; size {}, consumer alignment {} bytes",
                 ty.original_name, ty.unit_offset, ty.die_offset, ty.layout.size, ty.layout.alignment,
             ));
-            for field in &ty.layout.fields {
+            for (index, field) in ty.layout.fields.iter().enumerate() {
+                if ty.projections.iter().any(|projection| match projection {
+                    DebugLayoutProjection::OpaqueVptr { field_index, .. } => *field_index == index,
+                }) {
+                    ui.label("Projected opaque consumer storage below; not an exact producer void pointer type.");
+                }
                 ui.label(
                     RichText::new(format!(
                         "{}: offset {}, size {}; consumer type/alignment: {:?}",
@@ -391,6 +434,162 @@ fn checked_type(ui: &mut Ui, ty: &DebugLayoutType) {
 
 fn alignment(value: Option<u64>) -> String {
     value.map_or_else(|| "unknown (not inferred)".to_owned(), |value| format!("{value} bytes (explicit)"))
+}
+
+fn producer_id(id: &debug::DebugLayoutTypeId) -> String {
+    format!("unit {:#x}, DIE {:#x}", id.unit_offset, id.die_offset)
+}
+
+fn opaque_projections(ui: &mut Ui, review: &DebugLayoutReview) {
+    if review.report.types.iter().all(|ty| ty.projections.is_empty()) {
+        return;
+    }
+    ui.collapsing("Opaque consumer storage projections (read-only)", |ui| {
+        ui.label(
+            "The consumer void pointer is storage only, not an exact producer void pointer or function pointer. \
+             Producer roles establish pointer -> pointer -> subroutine, not an exact callback ABI. \
+             Unknown widths and alignments remain unknown. No object-to-named-table proof is implied.",
+        );
+        for ty in &review.report.types {
+            for projection in &ty.projections {
+                let DebugLayoutProjection::OpaqueVptr {
+                    field_index,
+                    record_id,
+                    member_id,
+                    source,
+                    record_byte_size,
+                    record_alignment,
+                    member_offset,
+                    member_byte_size,
+                    member_alignment,
+                    pointer_id,
+                    pointer_byte_size,
+                    pointer_alignment,
+                    pointee_pointer_id,
+                    pointee_pointer_byte_size,
+                    pointee_pointer_alignment,
+                    subroutine_id,
+                } = projection;
+                ui.label(RichText::new(format!("{}: opaque_vptr, field {field_index}", ty.layout.name)).strong());
+                ui.label(format!(
+                    "Source CU {:#x}, DWARF language code {:#x}, DWARF {}, address size {}",
+                    source.unit_offset, source.language, source.dwarf_version, source.address_size,
+                ));
+                ui.label(format!(
+                    "Record {}: size {record_byte_size}, alignment {record_alignment}",
+                    producer_id(record_id),
+                ));
+                ui.label(format!(
+                    "Member {}: offset {member_offset}, declared size {}, alignment {}",
+                    producer_id(member_id),
+                    alignment(*member_byte_size),
+                    alignment(*member_alignment),
+                ));
+                for (role, id, size, align) in [
+                    ("Pointer", pointer_id, pointer_byte_size, pointer_alignment),
+                    ("Pointee pointer", pointee_pointer_id, pointee_pointer_byte_size, pointee_pointer_alignment),
+                ] {
+                    ui.label(format!(
+                        "{role} {}: declared size {}, alignment {}",
+                        producer_id(id),
+                        alignment(*size),
+                        alignment(*align),
+                    ));
+                }
+                ui.label(format!("Subroutine role: {} (not an exact callback type)", producer_id(subroutine_id)));
+            }
+        }
+    });
+}
+
+fn virtual_evidence(ui: &mut Ui, review: &DebugLayoutReview, navigation_enabled: bool) -> Option<u64> {
+    let evidence = &review.virtual_evidence;
+    if evidence.tables.is_empty() && evidence.warnings.is_empty() && evidence.limitations.is_empty() {
+        return None;
+    }
+    let mut goto_method = None;
+    ui.heading("Read-only virtual evidence (not virtual-call targets)");
+    ui.label(
+        "Native-checked source associations are not applied/current analyst types or authorization. \
+         They prove neither named-table ownership nor that an arbitrary object's vptr uses the table. \
+         Navigation uses only the retained exact method entry; no names, thunks or containing-function fallback.",
+    );
+    ui.collapsing("Raw named tables / header confidence", |ui| {
+        for table in &evidence.tables {
+            let raw = &table.raw;
+            ui.label(RichText::new(format!("Raw named table {:#x}: {}", raw.address, raw.vtable_symbol)).strong());
+            ui.label(format!("Display name: {}; source {}; confidence {}", raw.name, raw.source, raw.confidence));
+            ui.label(format!(
+                "Header: {:?}; pointer size {}; raw offset word {:#x}; offset-to-top {}",
+                raw.header,
+                raw.pointer_size,
+                raw.raw_offset_word,
+                raw.offset_to_top.map_or_else(|| "unknown (not inferred)".to_owned(), |value| value.to_string()),
+            ));
+            ui.label(format!(
+                "RTTI candidate {:#x}: {:?}; symbol {}",
+                raw.rtti_candidate.address,
+                raw.rtti_candidate.classification,
+                raw.rtti_candidate.symbol.as_deref().unwrap_or("unknown"),
+            ));
+            ui.label(format!(
+                "Bound {}; scan limit {:#x}; scan end {:#x}; stop {:?}",
+                raw.bound, raw.scan_limit, raw.scan_end, raw.stop,
+            ));
+        }
+        ui.label("UnverifiedPrefix retains candidate positions only, not a proven address point or offset-to-top.");
+    });
+    ui.collapsing("Raw table slots (candidate positions)", |ui| {
+        for table in &evidence.tables {
+            for slot in &table.raw.slots {
+                ui.label(format!(
+                    "Table {:#x}, candidate slot {} at {:#x}: raw {:#x}, {:?}, target {}",
+                    table.raw.address,
+                    slot.index,
+                    slot.address,
+                    slot.raw_value,
+                    slot.classification,
+                    slot.target.map_or_else(|| "unknown".to_owned(), |address| format!("{address:#x}")),
+                ));
+            }
+        }
+    });
+    ui.collapsing("Exact method entry associations (source evidence only)", |ui| {
+        for table in &evidence.tables {
+            for method in &table.methods {
+                ui.push_id((table.raw.address, method.slot_index, method.method_address), |ui| {
+                    ui.label(format!(
+                        "Table {:#x}, candidate slot {}, declared virtual slot {}; exact method entry {:#x}",
+                        table.raw.address, method.slot_index, method.declared_virtual_slot_index, method.method_address,
+                    ));
+                    ui.label(format!(
+                        "{}; layout {}; {}",
+                        method.linkage_name, method.layout_name, method.verification,
+                    ));
+                    for (role, id) in [
+                        ("Definition", &method.definition_id),
+                        ("Record", &method.record_id),
+                        ("Declaration", &method.declaration_id),
+                        ("Object pointer", &method.object_pointer_id),
+                    ] {
+                        ui.label(format!("{role}: {}", producer_id(id)));
+                    }
+                    if ui
+                        .add_enabled(
+                            navigation_enabled,
+                            egui::Button::new(format!("Go to exact method entry {:#x}", method.method_address)),
+                        )
+                        .clicked()
+                    {
+                        goto_method = Some(method.method_address);
+                    }
+                });
+            }
+        }
+    });
+    warnings(ui, "Virtual evidence warnings", &evidence.warnings);
+    warnings(ui, "Virtual evidence limitations", &evidence.limitations);
+    goto_method
 }
 
 fn producer_facts(ui: &mut Ui, review: &DebugLayoutReview) {
@@ -414,7 +613,7 @@ fn producer_facts(ui: &mut Ui, review: &DebugLayoutReview) {
                     alignment(layout.producer_alignment),
                 ));
                 ui.label(format!(
-                    "C language code {:#x}, DWARF {}, address size {}; strict producer applicability: {}; \
+                    "DWARF language code {:#x}, DWARF {}, address size {}; strict producer applicability: {}; \
                      eligible for native verification: {}",
                     layout.source.language,
                     layout.source.dwarf_version,
@@ -423,6 +622,9 @@ fn producer_facts(ui: &mut Ui, review: &DebugLayoutReview) {
                     layout.eligible_for_native_verification,
                 ));
                 for field in &layout.fields {
+                    if matches!(&field.leaf, debug::DebugLayoutLeaf::OpaqueVptr { .. }) {
+                        ui.label(format!("Opaque producer member role: {}", producer_id(&field.id)));
+                    }
                     ui.label(format!(
                         "{}: offset {}, size {}; producer field alignment: {}",
                         field.emitted_name,
@@ -491,6 +693,36 @@ fn producer_leaf(ui: &mut Ui, leaf: &debug::DebugLayoutLeaf) {
                 ));
             }
         }
+        debug::DebugLayoutLeaf::OpaqueVptr {
+            pointer_id,
+            pointer_byte_size,
+            producer_alignment,
+            pointee_pointer_id,
+            pointee_pointer_byte_size,
+            pointee_pointer_alignment,
+            subroutine_id,
+            member_byte_size,
+            byte_size,
+        } => {
+            ui.label(format!(
+                "Producer opaque_vptr: projected storage size {byte_size}; declared member size {}",
+                alignment(*member_byte_size),
+            ));
+            ui.label(format!(
+                "Pointer {}: declared size {}, alignment {}",
+                producer_id(pointer_id),
+                alignment(*pointer_byte_size),
+                alignment(*producer_alignment),
+            ));
+            ui.label(format!(
+                "Pointee pointer {}: declared size {}, alignment {}",
+                producer_id(pointee_pointer_id),
+                alignment(*pointee_pointer_byte_size),
+                alignment(*pointee_pointer_alignment),
+            ));
+            ui.label(format!("Subroutine role: {} (not an exact callback type)", producer_id(subroutine_id)));
+            ui.label("Consumer void pointer is opaque storage only, not the exact producer field type.");
+        }
     }
 }
 
@@ -524,9 +756,188 @@ mod tests {
             compiler_spec_sha256: "2".repeat(64),
             report: DebugLayoutReport::default(),
             producer_report: None,
+            virtual_evidence: Default::default(),
             approved: vec![0x400000],
             preserved: Vec::new(),
             imported: None,
+        }
+    }
+
+    fn review_with_method(address: u64) -> DebugLayoutReview {
+        use rampage_analysis::classes::{
+            ClassEvidence, HeaderClassification, RttiClassification, RttiEvidence, ScanStop, SlotClassification,
+            VtableSlot,
+        };
+        let id = |die_offset| debug::DebugLayoutTypeId { unit_offset: 0, die_offset };
+        DebugLayoutReview {
+            virtual_evidence: rampage_api::DebugLayoutVirtualEvidence {
+                tables: vec![rampage_api::DebugLayoutVtableEvidence {
+                    raw: ClassEvidence {
+                        name: "misleading display name".to_owned(),
+                        vtable_symbol: "not a resolvable symbol".to_owned(),
+                        address: 0x800000,
+                        source: "named_itanium_vtable_symbol",
+                        confidence: "raw_named_vtable_evidence",
+                        pointer_size: 8,
+                        header: HeaderClassification::UnverifiedPrefix,
+                        raw_offset_word: u64::MAX,
+                        offset_to_top: None,
+                        rtti_candidate: RttiEvidence {
+                            address: 0,
+                            classification: RttiClassification::Null,
+                            symbol: None,
+                        },
+                        bound: "symbol_size",
+                        scan_limit: 0x800020,
+                        scan_end: 0x800020,
+                        slots: vec![
+                            VtableSlot {
+                                index: 0,
+                                address: 0x800010,
+                                raw_value: address,
+                                classification: SlotClassification::Function,
+                                target: Some(address),
+                            },
+                            VtableSlot {
+                                index: 1,
+                                address: 0x800018,
+                                raw_value: address + 1,
+                                classification: SlotClassification::Function,
+                                target: Some(address + 1),
+                            },
+                        ],
+                        stop: ScanStop::Bound,
+                    },
+                    methods: vec![rampage_api::DebugLayoutVirtualMethodEvidence {
+                        slot_index: 0,
+                        declared_virtual_slot_index: 0,
+                        method_address: address,
+                        definition_id: id(1),
+                        record_id: id(2),
+                        declaration_id: id(3),
+                        object_pointer_id: id(4),
+                        linkage_name: "also not a resolvable symbol".to_owned(),
+                        layout_name: "not an analyst type".to_owned(),
+                        verification: "native_checked_source_evidence",
+                    }],
+                }],
+                ..Default::default()
+            },
+            ..review()
+        }
+    }
+
+    fn other_entry(workspace: &Workspace) -> u64 {
+        workspace
+            .functions
+            .ready()
+            .unwrap()
+            .iter()
+            .find(|function| function.address != workspace.cursor)
+            .unwrap()
+            .address
+    }
+
+    #[test]
+    fn producer_vptr_render_keeps_role_ids_and_unknown_widths_without_claiming_an_exact_callback_type() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let id = |die_offset| debug::DebugLayoutTypeId { unit_offset: 16, die_offset };
+        let leaf = debug::DebugLayoutLeaf::OpaqueVptr {
+            pointer_id: id(32),
+            pointer_byte_size: None,
+            producer_alignment: None,
+            pointee_pointer_id: id(40),
+            pointee_pointer_byte_size: Some(8),
+            pointee_pointer_alignment: None,
+            subroutine_id: id(48),
+            member_byte_size: None,
+            byte_size: 8,
+        };
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1400.0, 800.0))
+            .build_ui_state(|ui, leaf: &mut debug::DebugLayoutLeaf| producer_leaf(ui, leaf), leaf);
+        harness.run();
+        for label in [
+            "Producer opaque_vptr: projected storage size 8; declared member size unknown (not inferred)",
+            "Pointer unit 0x10, DIE 0x20: declared size unknown (not inferred), alignment unknown (not inferred)",
+            "Pointee pointer unit 0x10, DIE 0x28: declared size 8 bytes (explicit), alignment unknown (not inferred)",
+            "Subroutine role: unit 0x10, DIE 0x30 (not an exact callback type)",
+            "Consumer void pointer is opaque storage only, not the exact producer field type.",
+        ] {
+            harness.get_by_label(label);
+        }
+    }
+
+    #[test]
+    fn exact_navigation_requires_a_retained_association_and_keeps_review_requests_annotations_and_editor_unchanged() {
+        let mut workspace = workspace(&Session::default());
+        let target = other_entry(&workspace);
+        let mut state = DebugLayouts { shown: true, ..DebugLayouts::default() };
+        state.reply =
+            Some(Reply { binding: Binding::capture(&workspace, &state.revision), review: review_with_method(target) });
+        let original_cursor = workspace.cursor;
+        assert!(!state.goto_exact_method_entry(&mut workspace, target + 1), "raw slots are not associations");
+        assert_eq!(workspace.cursor, original_cursor);
+        let revision = Arc::clone(&state.revision);
+        let epoch = Arc::clone(&workspace.annotations_epoch);
+        let before = serde_json::to_value(workspace.project.annotation_list()).unwrap();
+        workspace.begin_comment();
+        workspace.editing.as_mut().unwrap().text = "unsaved analyst explanation".to_owned();
+        assert!(state.goto_exact_method_entry(&mut workspace, target));
+        assert_eq!(workspace.cursor, target);
+        assert!(workspace.can_go_back());
+        assert!(state.shown());
+        assert!(state.can_apply(&workspace));
+        assert!(Arc::ptr_eq(&revision, &state.revision));
+        assert!(Arc::ptr_eq(&epoch, &workspace.annotations_epoch));
+        assert!(matches!(state.job, Job::Idle));
+        assert!(matches!(workspace.pseudocode, Job::Idle));
+        assert_eq!(workspace.editing.as_ref().unwrap().text, "unsaved analyst explanation");
+        assert_eq!(serde_json::to_value(workspace.project.annotation_list()).unwrap(), before);
+        assert!(workspace.project.undo().unwrap().is_empty());
+        let retained = &state.reply.as_ref().unwrap().review;
+        assert!(retained.imported.is_none());
+        assert_eq!(retained.virtual_evidence.tables[0].raw.offset_to_top, None);
+        assert_eq!(retained.review_sha256, "0".repeat(64));
+    }
+
+    #[test]
+    fn exact_navigation_refuses_stale_bindings_hidden_pending_gated_and_failed_reviews_without_side_effects() {
+        for refusal in 0..9 {
+            let session = Session::default();
+            let mut workspace = workspace(&session);
+            let target = other_entry(&workspace);
+            let mut state = DebugLayouts { shown: true, ..DebugLayouts::default() };
+            state.reply = Some(Reply {
+                binding: Binding::capture(&workspace, &state.revision),
+                review: review_with_method(target),
+            });
+            let mut permit = None;
+            match refusal {
+                0 => workspace.instance = Arc::new(()),
+                1 => workspace.project = Arc::new(Project::new(rampage_loaders::Binary::open(path()).unwrap())),
+                2 => workspace.annotations_changed(None),
+                3 => state.invalidate(),
+                4 => state.shown = false,
+                5 => permit = state.gate.try_acquire(),
+                6 => state.job = Job::Running(std::sync::mpsc::channel().1),
+                7 => state.error = Some("preview refused".to_owned()),
+                _ => state.reply = None,
+            }
+            let cursor = workspace.cursor;
+            let revision = Arc::clone(&state.revision);
+            let epoch = Arc::clone(&workspace.annotations_epoch);
+            let before = serde_json::to_value(workspace.project.annotation_list()).unwrap();
+            assert!(!state.goto_exact_method_entry(&mut workspace, target), "refusal {refusal}");
+            assert_eq!(workspace.cursor, cursor);
+            assert!(Arc::ptr_eq(&revision, &state.revision));
+            assert!(Arc::ptr_eq(&epoch, &workspace.annotations_epoch));
+            assert_eq!(serde_json::to_value(workspace.project.annotation_list()).unwrap(), before);
+            assert!(workspace.project.undo().unwrap().is_empty());
+            assert!(matches!(workspace.pseudocode, Job::Idle));
+            drop(permit);
         }
     }
 

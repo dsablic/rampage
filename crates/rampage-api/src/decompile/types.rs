@@ -34,7 +34,7 @@ pub(super) fn plan(
             }
             for stored in bundle.layouts {
                 operations.push(WorkerOperation::ParseTypes {
-                    declarations: debug_layout_import::declaration(&stored.layout),
+                    declarations: debug_layout_import::stored_declaration(&stored)?,
                 });
                 assertions.push(WorkerOperation::AssertPlainStructLayout {
                     layout: stored.layout,

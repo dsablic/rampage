@@ -98,6 +98,13 @@ fn named_headers_preserve_signed_offsets_endianness_and_sources() {
         assert_eq!(class.slots[1].index, 1);
         assert_eq!(class.source, "named_itanium_vtable_symbol");
         assert_eq!(class.confidence, "raw_named_vtable_evidence");
+        let bounded = classes::recover_named_bounded(&binary, 1, 1);
+        assert_eq!(bounded.classes[0].header, class.header);
+        assert_eq!(bounded.classes[0].offset_to_top, class.offset_to_top);
+        assert_eq!(bounded.classes[0].slots.len(), 1);
+        assert_eq!(bounded.classes[0].slots[0].target, class.slots[0].target);
+        assert_eq!(bounded.classes[0].stop, ScanStop::SlotLimit);
+        assert!(bounded.rtti_classes.is_empty());
     }
 }
 

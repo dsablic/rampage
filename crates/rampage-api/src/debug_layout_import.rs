@@ -5,9 +5,20 @@ use rampage_decompiler::layout::{
 };
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+mod projected_bundle_tests;
+mod projections;
 mod review;
+mod source_evidence;
+#[cfg(test)]
+mod virtual_acceptance_tests;
+mod virtuals;
 
+pub use projections::DebugLayoutProjection;
 pub use review::DebugLayoutReview;
+pub use virtuals::{DebugLayoutVirtualEvidence, DebugLayoutVirtualMethodEvidence, DebugLayoutVtableEvidence};
+
+use projections::{TYPE_MAGIC_V2, decode_projection_line, encode_projection_line, validate_projections};
 
 use crate::{
     ApiError, Project,
@@ -74,9 +85,20 @@ pub(crate) fn validate_replay_source(project: &Project, annotations: &Annotation
     if annotations.has_checked_layouts() {
         check_backing(project)?;
         annotations.preflight_checked().map_err(ApiError::Invalid)?;
-        specification_identity()?;
+        let layouts = stored_layouts(annotations)?;
         validate_replay_budget(annotations)?;
         validate_native_work(project)?;
+        let image = rampage_arch::hex::bytes(&image_digest(project)?);
+        let specifications = current_specification_digest()?;
+        for text in annotations.types().values().filter(|text| text.starts_with('!')) {
+            let bundle = LayoutBundle::decode(text)?.ok_or_else(|| invalid("invalid stored type bundle"))?;
+            if bundle.image != image || bundle.specifications != specifications {
+                return Err(invalid("stored layout bundle does not match the current image/specification context"));
+            }
+        }
+        for text in annotations.signatures().values().filter(|text| text.starts_with('!')) {
+            signature(text, &layouts)?;
+        }
     }
     Ok(())
 }
@@ -148,6 +170,7 @@ pub(crate) fn validate_replay_budget(annotations: &Annotations) -> Result<(), Ap
 
 pub(crate) struct StoredLayout {
     pub(crate) layout: PlainStructLayout,
+    pub(crate) projections: Vec<DebugLayoutProjection>,
     pub(crate) digest: String,
 }
 
@@ -159,16 +182,23 @@ pub(crate) struct LayoutBundle {
 
 impl LayoutBundle {
     pub(crate) fn decode(text: &str) -> Result<Option<Self>, ApiError> {
-        if !text.starts_with(TYPE_MAGIC) {
+        let (magic, projected) = if text.starts_with(TYPE_MAGIC) {
+            (TYPE_MAGIC, false)
+        } else if text.starts_with(TYPE_MAGIC_V2) {
+            (TYPE_MAGIC_V2, true)
+        } else {
             if text.starts_with('!') {
                 return Err(invalid("unknown type bundle version"));
             }
             return Ok(None);
-        }
+        };
         if text.len() > MAX_BUNDLE_BYTES {
             return Err(invalid("type bundle byte limit exceeded"));
         }
-        let mut lines = text[TYPE_MAGIC.len()..].lines();
+        if projected && text.contains('\r') {
+            return Err(invalid("projected type bundles require canonical newline framing"));
+        }
+        let mut lines = text[magic.len()..].lines();
         let image = lines.next().filter(|text| hex_digest(text)).ok_or_else(|| invalid("invalid bundle image"))?;
         if lines.next() != Some(LANGUAGE) {
             return Err(invalid("unsupported bundle compiler identity"));
@@ -177,22 +207,39 @@ impl LayoutBundle {
             .next()
             .filter(|text| hex_digest(text))
             .ok_or_else(|| invalid("invalid bundle specification identity"))?;
+        let mut pairs = Vec::new();
+        while let Some(line) = lines.next() {
+            if pairs.len() == MAX_LAYOUTS {
+                return Err(invalid("type bundle layout limit exceeded"));
+            }
+            let metadata = if projected {
+                if !line.starts_with('{') {
+                    return Err(invalid("projected type bundle requires a layout/metadata pair"));
+                }
+                decode_projection_line(lines.next().ok_or_else(|| invalid("missing projection metadata line"))?)?
+            } else {
+                Vec::new()
+            };
+            pairs.push((line, metadata));
+        }
+        if projected && pairs.iter().all(|(_, metadata)| metadata.is_empty()) {
+            return Err(invalid("projected type bundle has no opaque projection"));
+        }
         let mut layouts = Vec::new();
         let mut names = BTreeSet::new();
         let mut fields = 0usize;
-        for line in lines {
-            if layouts.len() == MAX_LAYOUTS {
-                return Err(invalid("type bundle layout limit exceeded"));
-            }
+        for (line, projections) in pairs {
             let layout = PlainStructLayout::from_wire(line.as_bytes()).map_err(|error| invalid(&error.to_string()))?;
+            validate_projections(&layout, &projections)?;
             fields += layout.fields.len();
             if fields > MAX_FIELDS || !names.insert(layout.name.clone()) {
                 return Err(invalid("duplicate layout or cumulative field limit exceeded"));
             }
             let canonical = serde_json::to_string(&layout).map_err(|error| invalid(&error.to_string()))?;
-            let digest =
-                digest_text(format!("{TYPE_MAGIC}{image}\n{LANGUAGE}\n{specifications}\n{canonical}").as_bytes());
-            layouts.push(StoredLayout { layout, digest });
+            let canonical =
+                if projected { format!("{canonical}\n{}", encode_projection_line(&projections)?) } else { canonical };
+            let digest = digest_text(format!("{magic}{image}\n{LANGUAGE}\n{specifications}\n{canonical}").as_bytes());
+            layouts.push(StoredLayout { layout, projections, digest });
         }
         if layouts.is_empty() {
             return Err(invalid("empty type bundle"));
@@ -200,21 +247,47 @@ impl LayoutBundle {
         Ok(Some(Self { image: image.to_owned(), specifications: specifications.to_owned(), layouts }))
     }
 
+    #[cfg(test)]
     pub(crate) fn encode(image: &[u8; 32], layouts: &[PlainStructLayout]) -> Result<String, ApiError> {
         if layouts.is_empty() || layouts.len() > MAX_LAYOUTS {
             return Err(invalid("invalid layout count"));
         }
+        let entries: Vec<_> = layouts.iter().map(|layout| (layout, &[][..])).collect();
+        Self::encode_entries(image, &entries)
+    }
+
+    fn encode_types(image: &[u8; 32], types: &[&DebugLayoutType]) -> Result<String, ApiError> {
+        if types.is_empty() || types.len() > MAX_LAYOUTS {
+            return Err(invalid("invalid layout count"));
+        }
+        let entries: Vec<_> = types.iter().map(|ty| (&ty.layout, ty.projections.as_slice())).collect();
+        Self::encode_entries(image, &entries)
+    }
+
+    fn encode_entries(
+        image: &[u8; 32],
+        entries: &[(&PlainStructLayout, &[DebugLayoutProjection])],
+    ) -> Result<String, ApiError> {
+        if entries.is_empty() || entries.len() > MAX_LAYOUTS {
+            return Err(invalid("invalid layout count"));
+        }
+        let projected = entries.iter().any(|(_, metadata)| !metadata.is_empty());
+        let magic = if projected { TYPE_MAGIC_V2 } else { TYPE_MAGIC };
         let specifications = current_specification_digest()?;
-        let mut text = format!("{TYPE_MAGIC}{}\n{LANGUAGE}\n{specifications}\n", rampage_arch::hex::bytes(image));
+        let mut text = format!("{magic}{}\n{LANGUAGE}\n{specifications}\n", rampage_arch::hex::bytes(image));
         let mut fields = 0usize;
-        for layout in layouts {
-            layout.validate().map_err(|error| invalid(&error.to_string()))?;
+        for (layout, metadata) in entries {
+            validate_projections(layout, metadata)?;
             fields += layout.fields.len();
             if fields > MAX_FIELDS {
                 return Err(invalid("cumulative field limit exceeded"));
             }
             text.push_str(&serde_json::to_string(layout).map_err(|error| invalid(&error.to_string()))?);
             text.push('\n');
+            if projected {
+                text.push_str(&encode_projection_line(metadata)?);
+                text.push('\n');
+            }
             if text.len() > MAX_BUNDLE_BYTES {
                 return Err(invalid("type bundle byte limit exceeded"));
             }
@@ -241,6 +314,11 @@ pub(crate) fn declaration(layout: &PlainStructLayout) -> String {
     }
     text.push_str("};");
     text
+}
+
+pub(crate) fn stored_declaration(stored: &StoredLayout) -> Result<String, ApiError> {
+    validate_projections(&stored.layout, &stored.projections)?;
+    Ok(declaration(&stored.layout))
 }
 
 pub(crate) fn seal_signature(declaration: &str, dependencies: &[&StoredLayout]) -> Result<String, ApiError> {
@@ -346,7 +424,10 @@ pub(crate) fn validate_transition(previous: &Annotations, candidate: &Annotation
 }
 
 pub(crate) fn preserve_bundle(previous: Option<&str>, value: Option<&str>) -> Result<(), String> {
-    if previous.is_some_and(|text| text.starts_with(TYPE_MAGIC)) && value.is_some() && previous != value {
+    if previous.is_some_and(|text| text.starts_with(TYPE_MAGIC) || text.starts_with(TYPE_MAGIC_V2))
+        && value.is_some()
+        && previous != value
+    {
         return Err(
             "assertion-backed types cannot be overwritten; remove their dependent declarations first".to_owned()
         );
@@ -360,6 +441,8 @@ pub struct DebugLayoutType {
     pub unit_offset: u64,
     pub die_offset: u64,
     pub layout: PlainStructLayout,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub projections: Vec<DebugLayoutProjection>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -392,6 +475,7 @@ pub struct DebugLayoutPreview<'project> {
     report: DebugLayoutReport,
     approved: Vec<DebugLayoutFunction>,
     preserved: Vec<u64>,
+    virtual_evidence: DebugLayoutVirtualEvidence,
 }
 
 impl std::fmt::Debug for DebugLayoutPreview<'_> {
@@ -425,6 +509,9 @@ impl DebugLayoutPreview<'_> {
     /// Exact bounded loader facts, including unknown producer alignments and preview-only candidates.
     pub fn producer_report(&self) -> Option<&rampage_loaders::debug::DebugLayoutReport> {
         self.producer.as_ref()
+    }
+    pub fn virtual_evidence(&self) -> &DebugLayoutVirtualEvidence {
+        &self.virtual_evidence
     }
 }
 
@@ -474,7 +561,13 @@ fn validate_report(report: &DebugLayoutReport) -> Result<(), ApiError> {
     let mut addresses = BTreeSet::new();
     let mut functions = BTreeSet::new();
     for ty in &report.types {
-        ty.layout.validate().map_err(|error| invalid(&error.to_string()))?;
+        validate_projections(&ty.layout, &ty.projections)?;
+        for projection in &ty.projections {
+            let DebugLayoutProjection::OpaqueVptr { record_id, .. } = projection;
+            if record_id.unit_offset != ty.unit_offset || record_id.die_offset != ty.die_offset {
+                return Err(invalid("projection identity disagrees with its producer record"));
+            }
+        }
         bytes += ty.original_name.len();
         fields += ty.layout.fields.len();
         if ty.original_name.len() > 128 || !names.insert(ty.layout.name.as_str()) || fields > MAX_FIELDS {
@@ -486,6 +579,7 @@ fn validate_report(report: &DebugLayoutReport) -> Result<(), ApiError> {
             }
         }
         bytes += serde_json::to_string(&ty.layout).map_err(|error| invalid(&error.to_string()))?.len();
+        bytes += encode_projection_line(&ty.projections)?.len();
     }
     for function in &report.functions {
         if function.original_name.len() > 128
@@ -547,6 +641,7 @@ impl Project {
         );
         preview.preserved.sort_unstable();
         preview.preserved.dedup();
+        preview.virtual_evidence = source_evidence::checked_virtual_source_evidence(self, &producer, &preview)?;
         preview.producer = Some(producer);
         Ok(preview)
     }
@@ -620,6 +715,7 @@ impl Project {
             report,
             approved,
             preserved,
+            virtual_evidence: DebugLayoutVirtualEvidence::default(),
         })
     }
 
@@ -719,9 +815,8 @@ fn layout_changes(
 ) -> Result<(LayoutChanges, Vec<String>), ApiError> {
     let Some(owner) = functions.first() else { return Ok((Vec::new(), Vec::new())) };
     let dependencies: BTreeSet<_> = functions.iter().flat_map(|function| function.dependencies.iter()).collect();
-    let layouts: Vec<_> =
-        report.types.iter().filter(|ty| dependencies.contains(&ty.layout.name)).map(|ty| ty.layout.clone()).collect();
-    let text = LayoutBundle::encode(image, &layouts)?;
+    let types: Vec<_> = report.types.iter().filter(|ty| dependencies.contains(&ty.layout.name)).collect();
+    let text = LayoutBundle::encode_types(image, &types)?;
     let bundle = LayoutBundle::decode(&text)?.ok_or_else(|| invalid("invalid generated bundle"))?;
     let mut changes = vec![(Field::Types, owner.address, Some(text))];
     for function in functions {
@@ -793,6 +888,9 @@ fn leaf_descriptor(leaf: &rampage_loaders::debug::DebugLayoutLeaf) -> Result<Lay
             };
             Ok(LayoutType::Pointer { name: String::new(), size: 8, alignment: 8, pointee })
         }
+        DebugLayoutLeaf::OpaqueVptr { .. } => {
+            Err(invalid("opaque vptr storage is admitted only as an explicitly projected record member"))
+        }
     }
 }
 
@@ -856,8 +954,50 @@ fn adapt_producer(producer: &rampage_loaders::debug::DebugLayoutReport) -> Resul
             continue;
         };
         let mut converted = Vec::new();
-        for field in &layout.fields {
-            let ty = leaf_descriptor(&field.leaf)?;
+        let mut projections = Vec::new();
+        for (field_index, field) in layout.fields.iter().enumerate() {
+            let ty = if let rampage_loaders::debug::DebugLayoutLeaf::OpaqueVptr {
+                pointer_id,
+                pointer_byte_size,
+                producer_alignment,
+                pointee_pointer_id,
+                pointee_pointer_byte_size,
+                pointee_pointer_alignment,
+                subroutine_id,
+                member_byte_size,
+                byte_size,
+            } = &field.leaf
+            {
+                if *byte_size != 8 || field.byte_size != 8 {
+                    return Err(invalid("opaque vptr effective storage width must be eight bytes"));
+                }
+                projections.push(DebugLayoutProjection::OpaqueVptr {
+                    field_index,
+                    record_id: layout.id,
+                    member_id: field.id,
+                    source: layout.source.clone(),
+                    record_byte_size: layout.byte_size,
+                    record_alignment: alignment,
+                    member_offset: field.offset,
+                    member_byte_size: *member_byte_size,
+                    member_alignment: field.producer_alignment,
+                    pointer_id: *pointer_id,
+                    pointer_byte_size: *pointer_byte_size,
+                    pointer_alignment: *producer_alignment,
+                    pointee_pointer_id: *pointee_pointer_id,
+                    pointee_pointer_byte_size: *pointee_pointer_byte_size,
+                    pointee_pointer_alignment: *pointee_pointer_alignment,
+                    subroutine_id: *subroutine_id,
+                });
+                LayoutType::Pointer {
+                    name: String::new(),
+                    size: 8,
+                    alignment: 8,
+                    pointee: LayoutScalar { name: "void".to_owned(), kind: ScalarKind::Void, size: 0, alignment: 1 },
+                }
+            } else {
+                leaf_descriptor(&field.leaf)?
+            };
             let consumer_alignment = match &ty {
                 LayoutType::Scalar { scalar } => scalar.alignment,
                 LayoutType::Pointer { alignment, .. } => *alignment,
@@ -884,13 +1024,14 @@ fn adapt_producer(producer: &rampage_loaders::debug::DebugLayoutReport) -> Resul
             },
             fields: converted,
         };
-        native.validate().map_err(|error| invalid(&error.to_string()))?;
+        validate_projections(&native, &projections)?;
         types.insert(layout.id, native.name.clone());
         report.types.push(DebugLayoutType {
             original_name: layout.original_name.clone().unwrap_or_default(),
             unit_offset: layout.id.unit_offset,
             die_offset: layout.id.die_offset,
             layout: native,
+            projections,
         });
     }
     let mut seen = BTreeSet::new();
@@ -949,6 +1090,7 @@ fn method_identity_name(function: &rampage_loaders::debug::DebugLayoutSignature)
     let unit = function.id.unit_offset;
     if method.linkage_name.is_empty()
         || method.linkage_name.len() > 128
+        || method.virtual_slot.is_some_and(|index| index >= 64)
         || method.record_id.unit_offset != unit
         || method.declaration_id.unit_offset != unit
         || method.object_pointer_id.unit_offset != unit
@@ -1044,6 +1186,7 @@ mod tests {
                 unit_offset: 0,
                 die_offset: 1,
                 layout: layout(),
+                projections: Vec::new(),
             }],
             functions: vec![DebugLayoutFunction {
                 address,

@@ -122,7 +122,7 @@
     "virtual": {
       "source": "virtual_record.cpp",
       "extra_constants": [],
-      "expectation": "Refuse polymorphic record; no vptr projection, vtable inference, or RTTI recovery",
+      "expectation": "Explicit producer-backed opaque vptr storage only; writable table cannot supply slot evidence",
       "functions": ["_ZN13VirtualRecord9readCountEv", "debug_cpp_virtual_read"]
     },
     "inherited": {

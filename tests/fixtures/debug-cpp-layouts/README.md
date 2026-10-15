@@ -6,10 +6,13 @@ fields and mutable explicit-this methods only**. The projected interface is an
 ordinary record pointer plus explicit scalar arguments, not a recovered C++ ABI.
 No generated binary is committed. ELF files are analysis inputs, never run.
 
-There is no RTTI recovery, vptr projection, inheritance import, aggregate-by-value
-import, or class-layout inference. A vtable never proves an admitted layout.
-The polymorphic and inherited inputs are refusal controls, not a broader feature
-promise. All C++ inputs disable RTTI and exceptions and require no target headers,
+This recipe's independent layout oracle covers the non-polymorphic records, not
+RTTI, inheritance, aggregate-by-value ABI or inferred class layouts. The former
+`virtual` refusal now checks explicit producer-backed opaque storage projection;
+its writable table still cannot supply raw read-only slot evidence. The separate
+[virtual fixture recipe](../debug-cpp-virtuals/) independently measures artificial
+vptr storage and read-only table words independently. A vtable alone never proves
+an admitted layout. All C++ inputs disable RTTI and exceptions and require no target headers,
 runtime, constructors, destructors, templates, or system libraries.
 
 ## Positive records and methods
@@ -111,7 +114,7 @@ All groups are mandatory; there is no optional C++ opt-out.
 | `const-method` | Const-qualified object method is outside the mutable-this slice |
 | `reference-argument` | `int &` is not an ordinary scalar-pointer argument |
 | `byvalue` | Independently refuse by-value aggregate argument and aggregate return |
-| `virtual` | Polymorphic record: never project a vptr or infer layout from a vtable |
+| `virtual` | Explicit opaque vptr storage only; its writable table remains refused as raw slot evidence |
 | `inherited` | Nonvirtual inheritance is still outside the base-free slice |
 | `static-method` | No implicit object pointer: never invent `this` for a static member |
 | `overloads` | Admit separately or refuse, at the parent's choice; never join by `readCount` alone |

@@ -42,6 +42,12 @@ pub struct DebugLayoutSource {
     pub address_size: u8,
 }
 
+impl DebugLayoutSource {
+    pub fn is_cpp(&self) -> bool {
+        cpp_language(self.language)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DebugLayoutScalarKind {
@@ -74,6 +80,18 @@ pub enum DebugLayoutLeaf {
         producer_alignment: Option<u64>,
         pointee: Option<DebugLayoutScalar>,
     },
+    /// Object storage only; the producer function-pointee ABI is not recovered.
+    OpaqueVptr {
+        pointer_id: DebugLayoutTypeId,
+        pointer_byte_size: Option<u64>,
+        producer_alignment: Option<u64>,
+        pointee_pointer_id: DebugLayoutTypeId,
+        pointee_pointer_byte_size: Option<u64>,
+        pointee_pointer_alignment: Option<u64>,
+        subroutine_id: DebugLayoutTypeId,
+        member_byte_size: Option<u64>,
+        byte_size: u64,
+    },
 }
 
 impl DebugLayoutLeaf {
@@ -84,18 +102,21 @@ impl DebugLayoutLeaf {
                 producer_alignment.is_some()
                     && pointee.as_ref().is_none_or(|scalar| scalar.producer_alignment.is_some())
             }
+            Self::OpaqueVptr { .. } => false,
         }
     }
     fn alignment(&self) -> Option<u64> {
         match self {
             Self::Scalar { scalar } => scalar.producer_alignment,
-            Self::Pointer { producer_alignment, .. } => *producer_alignment,
+            Self::Pointer { producer_alignment, .. } | Self::OpaqueVptr { producer_alignment, .. } => {
+                *producer_alignment
+            }
         }
     }
     fn size(&self) -> u64 {
         match self {
             Self::Scalar { scalar } => scalar.byte_size,
-            Self::Pointer { byte_size, .. } => *byte_size,
+            Self::Pointer { byte_size, .. } | Self::OpaqueVptr { byte_size, .. } => *byte_size,
         }
     }
 
@@ -105,6 +126,7 @@ impl DebugLayoutLeaf {
             Self::Pointer { pointee, .. } => {
                 format!("{} *", pointee.as_ref().map_or("void", |scalar| scalar.declaration.as_str()))
             }
+            Self::OpaqueVptr { .. } => "void *".to_owned(),
         }
     }
 }
@@ -175,6 +197,8 @@ pub struct DebugLayoutMethod {
     /// The definition's actual first formal, explicitly referenced by `DW_AT_object_pointer`.
     pub object_pointer_id: DebugLayoutTypeId,
     pub linkage_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub virtual_slot: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -328,7 +352,12 @@ struct LayoutNode {
     linkage_name: Option<String>,
     specification: TypeRef,
     object_pointer: TypeRef,
+    containing_type: TypeRef,
+    virtuality: Option<gimli::DwVirtuality>,
+    virtual_slot: Option<u64>,
+    calling_convention: Option<gimli::DwCc>,
     artificial: bool,
+    external: bool,
     target: TypeRef,
     size: Option<u64>,
     alignment: Option<u64>,
@@ -418,6 +447,21 @@ fn constant(value: AttributeValue<DebugReader<'_>>) -> Option<u64> {
     }
 }
 
+fn virtual_slot(value: AttributeValue<DebugReader<'_>>, form: gimli::DwForm) -> Option<u64> {
+    if form != gimli::DW_FORM_exprloc {
+        return None;
+    }
+    let AttributeValue::Exprloc(expression) = value else {
+        return None;
+    };
+    let mut bytes = expression.0;
+    if bytes.len() > 11 || bytes.read_u8().ok()? != gimli::DW_OP_constu.0 {
+        return None;
+    }
+    let slot = bytes.read_uleb128().ok()?;
+    (bytes.is_empty() && slot < 64).then_some(slot)
+}
+
 fn supported_language(language: gimli::DwLang) -> bool {
     matches!(
         language,
@@ -436,7 +480,7 @@ fn cpp_language(language: u16) -> bool {
 }
 
 fn cpp_node(node: &LayoutNode) -> bool {
-    node.source.as_ref().is_some_and(|source| cpp_language(source.language))
+    node.source.as_ref().is_some_and(DebugLayoutSource::is_cpp)
 }
 
 fn record_tag(tag: gimli::DwTag) -> bool {
@@ -465,6 +509,35 @@ impl ReadBudget {
             }
         }
     }
+}
+
+fn read_layout_name<'a>(
+    dwarf: &Dwarf<DebugReader<'a>>,
+    unit: &Unit<DebugReader<'a>>,
+    value: AttributeValue<DebugReader<'a>>,
+    strings_base: bool,
+    budget: &mut ReadBudget,
+    work: &mut usize,
+    names: &mut usize,
+) -> Result<String, String> {
+    *work += MAX_NAME + 1;
+    if *work > MAX_WORK {
+        return Err("DWARF cumulative name lookup work limit exceeded".to_owned());
+    }
+    if matches!(value, AttributeValue::DebugStrOffsetsIndex(_)) && !strings_base {
+        return Err("indexed DWARF name has no verified string-offset base".to_owned());
+    }
+    budget.reserve(NAME_READ_RESERVATION)?;
+    let reader = bounded_name_limit(dwarf, unit, value, MAX_NAME).map_err(|error| error.to_string())?;
+    if reader.len() > MAX_NAME {
+        return Err("DWARF layout name exceeds 128 ASCII bytes".to_owned());
+    }
+    let bytes = reader.to_slice().map_err(|error| error.to_string())?;
+    if !bytes.is_ascii() || *names + bytes.len() > MAX_NAMES {
+        return Err("DWARF layout names exceed ASCII/32 KiB retained-text limit".to_owned());
+    }
+    *names += bytes.len();
+    Ok(std::str::from_utf8(&bytes).unwrap().to_owned())
 }
 
 struct UnitProof<'a> {
@@ -701,7 +774,12 @@ fn read_layout_nodes_budget(
                 linkage_name: None,
                 specification: TypeRef::Absent,
                 object_pointer: TypeRef::Absent,
+                containing_type: TypeRef::Absent,
+                virtuality: None,
+                virtual_slot: None,
+                calling_convention: None,
                 artificial: false,
+                external: false,
                 target: TypeRef::Absent,
                 size: None,
                 alignment: None,
@@ -716,8 +794,17 @@ fn read_layout_nodes_budget(
                 prototyped: false,
                 invalid: false,
             };
+            let record_variable = tag == gimli::DW_TAG_variable
+                && cpp_node(&node)
+                && node.parent.and_then(|parent| nodes.get(&parent)).is_some_and(|parent| {
+                    record_tag(parent.tag)
+                        && cpp_node(parent)
+                        && parent.id.unit_offset == node.id.unit_offset
+                        && parent.source == node.source
+                });
             let mut attribute_names = BTreeSet::new();
             let mut high_pc = None;
+            let mut variable_name = None;
             for spec in abbreviation.attributes() {
                 work += 1;
                 if work > MAX_WORK || attribute_names.len() >= MAX_ATTRIBUTES {
@@ -734,6 +821,7 @@ fn read_layout_nodes_budget(
                 );
                 node.address_index_incomplete |= matches!(attr.name(), gimli::DW_AT_ranges | gimli::DW_AT_entry_pc);
                 let relevant = is_type(tag)
+                    || record_variable
                     || matches!(
                         tag,
                         gimli::DW_TAG_member
@@ -742,40 +830,38 @@ fn read_layout_nodes_budget(
                             | gimli::DW_TAG_unspecified_parameters
                     );
                 let cpp = cpp_node(&node);
-                if relevant && !allowed_attribute(tag, attr.name()) && !(cpp && allowed_cpp_attribute(tag, attr.name()))
+                let member_artifact_external = cpp
+                    && unit.header.version() == 4
+                    && tag == gimli::DW_TAG_member
+                    && attr.name() == gimli::DW_AT_external;
+                if relevant
+                    && !allowed_attribute(tag, attr.name())
+                    && !(cpp && allowed_cpp_attribute(tag, attr.name()))
+                    && !member_artifact_external
                 {
                     node.invalid = true;
                 }
                 match attr.name() {
                     gimli::DW_AT_name | gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name if relevant => {
-                        work += MAX_NAME + 1;
-                        if work > MAX_WORK {
-                            return Err("DWARF cumulative name lookup work limit exceeded".to_owned());
-                        }
-                        if matches!(value, AttributeValue::DebugStrOffsetsIndex(_)) && !proof.strings_base {
-                            return Err("indexed DWARF name has no verified string-offset base".to_owned());
-                        }
-                        budget.reserve(NAME_READ_RESERVATION)?;
-                        let reader =
-                            bounded_name_limit(dwarf, &unit, value, MAX_NAME).map_err(|error| error.to_string())?;
-                        if reader.len() > MAX_NAME {
-                            return Err("DWARF layout name exceeds 128 ASCII bytes".to_owned());
-                        } else {
-                            let bytes = reader.to_slice().map_err(|error| error.to_string())?;
-                            if !bytes.is_ascii() || names + bytes.len() > MAX_NAMES {
-                                return Err("DWARF layout names exceed ASCII/32 KiB retained-text limit".to_owned());
-                            }
-                            names += bytes.len();
-                            let name = std::str::from_utf8(&bytes).unwrap().to_owned();
+                        if record_variable {
                             if attr.name() == gimli::DW_AT_name {
-                                node.name = Some(name);
-                            } else {
-                                node.invalid |= node.linkage_name.is_some();
-                                node.linkage_name = Some(name);
+                                variable_name = Some(value);
                             }
+                            continue;
+                        }
+                        let name =
+                            read_layout_name(dwarf, &unit, value, proof.strings_base, budget, &mut work, &mut names)?;
+                        if attr.name() == gimli::DW_AT_name {
+                            node.name = Some(name);
+                        } else {
+                            node.invalid |= node.linkage_name.is_some();
+                            node.linkage_name = Some(name);
                         }
                     }
-                    gimli::DW_AT_type | gimli::DW_AT_specification | gimli::DW_AT_object_pointer => {
+                    gimli::DW_AT_type
+                    | gimli::DW_AT_specification
+                    | gimli::DW_AT_object_pointer
+                    | gimli::DW_AT_containing_type => {
                         edges += 1;
                         if edges > MAX_EDGES {
                             return Err("DWARF cumulative type-edge limit exceeded".to_owned());
@@ -790,8 +876,22 @@ fn read_layout_nodes_budget(
                         match attr.name() {
                             gimli::DW_AT_type => node.target = reference,
                             gimli::DW_AT_specification => node.specification = reference,
-                            _ => node.object_pointer = reference,
+                            gimli::DW_AT_object_pointer => node.object_pointer = reference,
+                            _ => {
+                                node.invalid |= cpp && matches!(reference, TypeRef::Unsupported);
+                                node.containing_type = reference;
+                            }
                         }
+                    }
+                    gimli::DW_AT_virtuality if cpp => match value {
+                        AttributeValue::Virtuality(gimli::DW_VIRTUALITY_virtual) => {
+                            node.virtuality = Some(gimli::DW_VIRTUALITY_virtual);
+                        }
+                        _ => node.invalid = true,
+                    },
+                    gimli::DW_AT_vtable_elem_location if cpp => {
+                        node.virtual_slot = virtual_slot(value, attr.form());
+                        node.invalid |= node.virtual_slot.is_none();
                     }
                     gimli::DW_AT_byte_size => {
                         node.size = constant(value);
@@ -845,6 +945,16 @@ fn read_layout_nodes_budget(
                         AttributeValue::Flag(flag) => node.artificial = flag,
                         _ => node.invalid = true,
                     },
+                    gimli::DW_AT_external
+                        if cpp
+                            && (tag == gimli::DW_TAG_variable
+                                || (tag == gimli::DW_TAG_member && unit.header.version() == 4)) =>
+                    {
+                        match value {
+                            AttributeValue::Flag(flag) => node.external = flag,
+                            _ => node.invalid = true,
+                        }
+                    }
                     gimli::DW_AT_accessibility if cpp => {
                         node.invalid |= !matches!(
                             value,
@@ -871,11 +981,16 @@ fn read_layout_nodes_budget(
                         _ => node.invalid = true,
                     },
                     gimli::DW_AT_calling_convention => {
-                        node.invalid |= if cpp && record_tag(tag) {
-                            !matches!(value, AttributeValue::CallingConvention(gimli::DW_CC_pass_by_value))
+                        if let AttributeValue::CallingConvention(convention) = value {
+                            node.calling_convention = Some(convention);
+                            node.invalid |= if cpp && record_tag(tag) {
+                                !matches!(convention, gimli::DW_CC_pass_by_value | gimli::DW_CC_pass_by_reference)
+                            } else {
+                                convention != gimli::DW_CC_normal
+                            };
                         } else {
-                            !matches!(value, AttributeValue::CallingConvention(gimli::DW_CC_normal))
-                        };
+                            node.invalid = true;
+                        }
                     }
                     gimli::DW_AT_address_class => {
                         node.invalid |= !matches!(value, AttributeValue::AddressClass(gimli::DW_ADDR_none));
@@ -898,6 +1013,27 @@ fn read_layout_nodes_budget(
                     }
                     _ => {}
                 }
+            }
+            if record_variable
+                && vtable_declaration_tag(&node)
+                && !node.invalid
+                && node.declaration
+                && node.artificial
+                && node.external
+                && let Some(value) = variable_name
+            {
+                node.name =
+                    Some(read_layout_name(dwarf, &unit, value, proof.strings_base, budget, &mut work, &mut names)?);
+            }
+            if cpp_node(&node) && tag == gimli::DW_TAG_subprogram {
+                node.invalid |= declared_virtual_slot(&node).is_err();
+            }
+            if tag == gimli::DW_TAG_member && attribute_names.contains(&gimli::DW_AT_external) {
+                node.invalid |= !vtable_declaration_tag(&node)
+                    || node.name.as_deref() != Some("_vtable$")
+                    || !node.declaration
+                    || !node.artificial
+                    || !node.external;
             }
             if let Some(high_pc) = high_pc {
                 node.address_end = node.address.and_then(|start| {
@@ -1118,6 +1254,148 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    fn opaque_vptr(&mut self, record: usize, member: usize) -> Result<DebugLayoutLeaf, String> {
+        let nodes = self.nodes;
+        let owner = &nodes[&record];
+        let field = &nodes[&member];
+        let expected_name = format!("_vptr${}", owner.name.as_deref().unwrap_or_default());
+        if !cpp_node(owner)
+            || field.parent != Some(record)
+            || field.id.unit_offset != owner.id.unit_offset
+            || field.source != owner.source
+            || !field.artificial
+            || field.name.as_deref() != Some(expected_name.as_str())
+            || field.member_offset != Some(0)
+            || owner.source.as_ref().is_none_or(|source| source.address_size != 8)
+        {
+            return Err(
+                "artificial vptr requires exact record ownership, compiler name, and constant offset zero".to_owned()
+            );
+        }
+        let mut graph = Vec::with_capacity(3);
+        let mut reference = field.target;
+        let mut seen = BTreeSet::from([record, member]);
+        let tags = [gimli::DW_TAG_pointer_type, gimli::DW_TAG_pointer_type, gimli::DW_TAG_subroutine_type];
+        for (index, tag) in tags.into_iter().enumerate() {
+            self.charge_work()?;
+            let TypeRef::Offset(offset) = reference else {
+                return Err("vptr graph requires direct pointer-to-pointer-to-subroutine references".to_owned());
+            };
+            if !seen.insert(offset) {
+                return Err("recursive or aliased vptr storage graph".to_owned());
+            }
+            let node = nodes.get(&offset).ok_or_else(|| "unresolved vptr graph reference".to_owned())?;
+            clean(node)?;
+            if node.tag != tag
+                || node.id.unit_offset != owner.id.unit_offset
+                || node.source != owner.source
+                || !node.children.is_empty()
+                || node.name.as_deref() != if index == 1 { Some("__vtbl_ptr_type") } else { None }
+                || node.artificial
+            {
+                return Err(
+                    "vptr graph requires clean same-CU pointer/pointer/subroutine DIEs without children".to_owned()
+                );
+            }
+            graph.push(node);
+            reference = node.target;
+        }
+        let [pointer, pointee, subroutine] = graph.as_slice() else { unreachable!() };
+        self.validate_vptr_terminal(subroutine, owner)?;
+        for node in [field, *pointer, *pointee] {
+            if node.size.is_some_and(|size| size != 8) || node.alignment.is_some_and(|alignment| alignment != 8) {
+                return Err("vptr storage width or alignment conflicts with the verified address size".to_owned());
+            }
+        }
+        Ok(DebugLayoutLeaf::OpaqueVptr {
+            pointer_id: pointer.id,
+            pointer_byte_size: pointer.size,
+            producer_alignment: pointer.alignment,
+            pointee_pointer_id: pointee.id,
+            pointee_pointer_byte_size: pointee.size,
+            pointee_pointer_alignment: pointee.alignment,
+            subroutine_id: subroutine.id,
+            member_byte_size: field.size,
+            byte_size: 8,
+        })
+    }
+
+    fn validate_vptr_terminal(&mut self, terminal: &LayoutNode, owner: &LayoutNode) -> Result<(), String> {
+        self.charge_work()?;
+        if terminal.prototyped
+            || terminal.calling_convention.is_some()
+            || terminal.size.is_some()
+            || terminal.alignment.is_some()
+        {
+            return Err("vptr terminal has unobserved prototype or calling-convention evidence".to_owned());
+        }
+        let TypeRef::Offset(target) = terminal.target else {
+            return Err("vptr terminal requires its direct producer return DIE".to_owned());
+        };
+        let node = self.nodes.get(&target).ok_or_else(|| "unresolved vptr terminal return DIE".to_owned())?;
+        clean(node)?;
+        if node.tag != gimli::DW_TAG_base_type
+            || node.name.as_deref() != Some("int")
+            || node.size != Some(4)
+            || node.encoding != Some(gimli::DW_ATE_signed)
+            || !node.children.is_empty()
+            || !matches!(node.target, TypeRef::Absent)
+            || node.id.unit_offset != owner.id.unit_offset
+            || node.source != owner.source
+            || node.alignment.is_some_and(|alignment| alignment != 4)
+        {
+            return Err("vptr terminal does not match the observed child-free signed-int32 producer shape".to_owned());
+        }
+        Ok(())
+    }
+
+    fn validate_vtable_declaration(&mut self, offset: usize, record: usize) -> Result<(), String> {
+        self.charge_work()?;
+        let nodes = self.nodes;
+        let node = &nodes[&offset];
+        let owner = &nodes[&record];
+        if node.invalid
+            || !vtable_declaration_tag(node)
+            || node.name.as_deref() != Some("_vtable$")
+            || !node.declaration
+            || !node.artificial
+            || !node.external
+            || node.parent != Some(record)
+            || node.id.unit_offset != owner.id.unit_offset
+            || node.source != owner.source
+            || !node.children.is_empty()
+            || node.address_evidence
+            || node.address.is_some()
+            || node.address_index_incomplete
+            || node.size.is_some()
+            || node.alignment.is_some()
+            || node.member_offset.is_some()
+            || !matches!(node.specification, TypeRef::Absent)
+            || !matches!(node.containing_type, TypeRef::Absent)
+            || !matches!(node.object_pointer, TypeRef::Absent)
+        {
+            return Err("record static child is not the observed address-free artificial vtable declaration".to_owned());
+        }
+        self.charge_work()?;
+        let TypeRef::Offset(target) = node.target else {
+            return Err("artificial vtable declaration requires its direct void-pointer DIE".to_owned());
+        };
+        let pointer = nodes.get(&target).ok_or_else(|| "unresolved artificial vtable declaration type".to_owned())?;
+        clean(pointer)?;
+        if pointer.tag != gimli::DW_TAG_pointer_type
+            || !matches!(pointer.target, TypeRef::Absent)
+            || pointer.id.unit_offset != owner.id.unit_offset
+            || pointer.source != owner.source
+            || !pointer.children.is_empty()
+            || pointer.name.is_some()
+            || pointer.size.is_some_and(|size| size != 8)
+            || pointer.alignment.is_some_and(|alignment| alignment != 8)
+        {
+            return Err("artificial vtable declaration requires a clean same-CU void-pointer DIE".to_owned());
+        }
+        Ok(())
+    }
+
     fn layout(&mut self, offset: usize) -> Result<(), String> {
         self.charge_work()?;
         if let Some(result) = self.layouts.get(&offset) {
@@ -1178,30 +1456,73 @@ impl<'a> Resolver<'a> {
         let mut intervals = Vec::new();
         let mut leaf_alignment = 1;
         let mut alignment_proof = node.alignment.is_some();
+        let mut projected = false;
+        if cpp_node(node) {
+            for &child in &node.children {
+                self.charge_work()?;
+                projected |=
+                    nodes[&child].tag == gimli::DW_TAG_member && nodes[&child].artificial && !nodes[&child].declaration;
+            }
+        }
+        let mut vptrs = 0;
+        let mut vtable_declarations = 0;
+        let mut virtual_methods = 0;
+        let mut virtual_slots = BTreeSet::new();
         for (index, &child) in node.children.iter().enumerate() {
             self.charge_work()?;
             let field = &nodes[&child];
+            if projected
+                && (field.tag == gimli::DW_TAG_variable
+                    || (field.tag == gimli::DW_TAG_member && field.name.as_deref() == Some("_vtable$")))
+            {
+                // This compiler-owned static declaration supplies no object-storage or table-ownership evidence.
+                vtable_declarations += 1;
+                if vtable_declarations != 1 {
+                    return Err("record has multiple artificial static vtable declarations".to_owned());
+                }
+                self.validate_vtable_declaration(child, offset)?;
+                continue;
+            }
             if cpp_node(node) && field.tag == gimli::DW_TAG_subprogram {
                 clean_declaration(field)?;
                 if field.id.unit_offset != node.id.unit_offset || field.parent != Some(offset) {
                     return Err("method declaration is not owned by the exact record DIE".to_owned());
                 }
+                let slot = declared_virtual_slot(field)?;
+                validate_containing_type(field, offset)?;
+                if projected || slot.is_some() {
+                    self.validate_method_declaration(child, offset)?;
+                }
+                if let Some(slot) = slot {
+                    virtual_methods += 1;
+                    if !virtual_slots.insert(slot) {
+                        return Err("record has duplicate virtual slot declarations".to_owned());
+                    }
+                }
                 continue;
             }
             clean(field)?;
-            if field.tag != gimli::DW_TAG_member || !field.children.is_empty() || field.artificial {
+            if field.tag != gimli::DW_TAG_member || !field.children.is_empty() {
                 return Err("struct has inheritance, nested types, or non-member children".to_owned());
             }
-            let emitted = emitted_name_for(field.name.as_deref(), &format!("field_{}", index + 1))?;
+            let (emitted, leaf) = if field.artificial {
+                vptrs += 1;
+                if vptrs != 1 {
+                    return Err("projected record requires exactly one artificial vptr member".to_owned());
+                }
+                ("rampage_vptr".to_owned(), self.opaque_vptr(offset, child)?)
+            } else {
+                let emitted = emitted_name_for(field.name.as_deref(), &format!("field_{}", index + 1))?;
+                let resolved = self.resolve(field.target, 0)?;
+                if cpp_node(node) && matches!(resolved, Resolved::Pointer { target: Pointee::Void, .. }) {
+                    return Err("C++ record pointer fields require an exact scalar pointee".to_owned());
+                }
+                (emitted, self.leaf(resolved)?)
+            };
             if !names.insert(emitted.clone()) {
                 return Err("duplicate or sanitized-colliding field names".to_owned());
             }
             self.retain_text(field.name.as_ref().map_or(0, String::len) + emitted.len())?;
-            let resolved = self.resolve(field.target, 0)?;
-            if cpp_node(node) && matches!(resolved, Resolved::Pointer { target: Pointee::Void, .. }) {
-                return Err("C++ record pointer fields require an exact scalar pointee".to_owned());
-            }
-            let leaf = self.leaf(resolved)?;
             alignment_proof &= field.alignment.is_some() && leaf.alignment_proven();
             let field_size = leaf.size();
             leaf_alignment = leaf_alignment.max(field_size);
@@ -1242,6 +1563,19 @@ impl<'a> Resolver<'a> {
         }
         if fields.is_empty() {
             return Err("record has no supported data members".to_owned());
+        }
+        if (projected && (vptrs != 1 || virtual_methods == 0)) || (!projected && virtual_methods != 0) {
+            return Err(
+                "polymorphic record requires one artificial vptr and its own validated virtual methods".to_owned()
+            );
+        }
+        if node.calling_convention == Some(gimli::DW_CC_pass_by_reference) && !projected {
+            return Err("pass-by-reference record convention requires supported opaque vptr projection".to_owned());
+        }
+        if projected {
+            validate_containing_type(node, offset)?;
+        } else if !matches!(node.containing_type, TypeRef::Absent) {
+            return Err("containing-type record metadata requires supported opaque vptr projection".to_owned());
         }
         intervals.sort_unstable();
         if intervals.windows(2).any(|pair| pair[0].1 > pair[1].0) {
@@ -1338,6 +1672,8 @@ impl<'a> Resolver<'a> {
         self.charge_work()?;
         let pointer = nodes.get(&pointer).ok_or_else(|| "unresolved object-pointer type".to_owned())?;
         if pointer.tag != gimli::DW_TAG_pointer_type
+            || pointer.id.unit_offset != node.id.unit_offset
+            || pointer.source != node.source
             || !matches!(pointer.target, TypeRef::Offset(target) if target == record)
         {
             return Err("object pointer must target the exact unqualified owning record DIE".to_owned());
@@ -1353,6 +1689,30 @@ impl<'a> Resolver<'a> {
         Ok(parameters)
     }
 
+    fn validate_method_declaration(&mut self, offset: usize, record: usize) -> Result<(), String> {
+        self.charge_work()?;
+        let nodes = self.nodes;
+        let node = &nodes[&offset];
+        clean_declaration(node)?;
+        validate_containing_type(node, record)?;
+        let name = node.name.as_deref().unwrap_or_default();
+        if node.parent != Some(record)
+            || node.id.unit_offset != nodes[&record].id.unit_offset
+            || !ordinary_identifier(name)
+            || nodes[&record].name.as_deref() == Some(name)
+            || node.artificial
+            || node.inline.is_some()
+            || node.linkage_name.as_deref().is_none_or(|linkage| !linkage.starts_with("_ZN"))
+        {
+            return Err("virtual record methods require ordinary mutable own method declarations".to_owned());
+        }
+        self.method_parameters(offset, record)?;
+        if !matches!(node.target, TypeRef::Absent) && !matches!(self.resolve(node.target, 0)?, Resolved::Scalar(_)) {
+            return Err("method return must be void or an ordinary scalar".to_owned());
+        }
+        Ok(())
+    }
+
     fn method_proof(&mut self, offset: usize) -> Result<MethodProof, String> {
         self.charge_work()?;
         let nodes = self.nodes;
@@ -1360,6 +1720,7 @@ impl<'a> Resolver<'a> {
         let declaration_offset = method_declaration(offset, nodes)?;
         let declaration = &nodes[&declaration_offset];
         let record = declaration.parent.unwrap();
+        let virtual_slot = declared_virtual_slot(declaration)?;
         let mut declarations = 0;
         for &child in &nodes[&record].children {
             self.charge_work()?;
@@ -1409,6 +1770,7 @@ impl<'a> Resolver<'a> {
                 declaration_id: declaration.id,
                 object_pointer_id: nodes[&parameters[0]].id,
                 linkage_name: linkage.clone(),
+                virtual_slot,
             },
             original_name: original.to_owned(),
             return_type: declaration.target,
@@ -1556,6 +1918,53 @@ fn clean_declaration(node: &LayoutNode) -> Result<(), String> {
     Ok(())
 }
 
+fn vtable_declaration_tag(node: &LayoutNode) -> bool {
+    node.source.as_ref().is_some_and(|source| {
+        source.is_cpp()
+            && matches!((source.dwarf_version, node.tag), (4, gimli::DW_TAG_member) | (5, gimli::DW_TAG_variable))
+    })
+}
+
+fn declared_virtual_slot(node: &LayoutNode) -> Result<Option<u64>, String> {
+    match (node.virtuality, node.virtual_slot) {
+        (None, None) => Ok(None),
+        (Some(gimli::DW_VIRTUALITY_virtual), Some(slot)) if slot < 64 => Ok(Some(slot)),
+        _ => Err("virtual method requires explicit ordinary virtuality and one constant slot in 0..63".to_owned()),
+    }
+}
+
+fn validate_containing_type(node: &LayoutNode, record: usize) -> Result<(), String> {
+    match node.containing_type {
+        TypeRef::Absent => Ok(()),
+        TypeRef::Offset(target) if target == record => Ok(()),
+        _ => Err("containing-type evidence must reference the exact owning record DIE".to_owned()),
+    }
+}
+
+fn declaration_index_owner_valid(node: &LayoutNode, nodes: &BTreeMap<usize, LayoutNode>) -> bool {
+    if !cpp_node(node)
+        || (node.virtuality.is_none() && node.virtual_slot.is_none() && matches!(node.containing_type, TypeRef::Absent))
+    {
+        return true;
+    }
+    let Some(record_offset) = node.parent else {
+        return false;
+    };
+    let Some(record) = nodes.get(&record_offset) else {
+        return false;
+    };
+    record_tag(record.tag)
+        && cpp_node(record)
+        && record.id.unit_offset == node.id.unit_offset
+        && record.source == node.source
+        && record.parent.and_then(|parent| nodes.get(&parent)).is_some_and(|parent| {
+            parent.tag == gimli::DW_TAG_compile_unit && parent.id.unit_offset == node.id.unit_offset
+        })
+        && declared_virtual_slot(node).is_ok()
+        && validate_containing_type(node, record_offset).is_ok()
+        && validate_containing_type(record, record_offset).is_ok()
+}
+
 fn same_reference(left: TypeRef, right: TypeRef) -> bool {
     match (left, right) {
         (TypeRef::Absent, TypeRef::Absent) => true,
@@ -1594,10 +2003,20 @@ fn method_declaration(offset: usize, nodes: &BTreeMap<usize, LayoutNode>) -> Res
         .and_then(|parent| nodes.get(&parent))
         .filter(|record| record_tag(record.tag) && cpp_node(record))
         .ok_or_else(|| "method declaration is not owned by a C++ record".to_owned())?;
+    let record_offset = declaration.parent.unwrap();
     if record.id.unit_offset != node.id.unit_offset
+        || record.source != node.source
+        || declaration.source != node.source
         || record.parent.is_none_or(|parent| nodes[&parent].tag != gimli::DW_TAG_compile_unit)
     {
         return Err("method declaration must belong to the exact same-CU, CU-scoped record".to_owned());
+    }
+    validate_containing_type(declaration, record_offset)?;
+    validate_containing_type(node, record_offset)?;
+    let declared_slot = declared_virtual_slot(declaration)?;
+    let actual_slot = declared_virtual_slot(node)?;
+    if actual_slot.is_some() && actual_slot != declared_slot {
+        return Err("method definition and declaration have conflicting virtual evidence".to_owned());
     }
     if declaration.name.as_deref().is_none_or(str::is_empty)
         || (node.name.is_some() && node.name != declaration.name)
@@ -1702,7 +2121,8 @@ fn build_report(
                     && (node.address_evidence
                         || node.address.is_some()
                         || node.invalid
-                        || !matches!(node.specification, TypeRef::Absent)))
+                        || !matches!(node.specification, TypeRef::Absent)
+                        || !declaration_index_owner_valid(node, nodes)))
                 || (!node.declaration && node.address.is_none() && !abstract_inline_metadata(node, nodes))
             {
                 report.warn("incomplete concrete DWARF function-address index cannot establish uniqueness".to_owned());
@@ -1843,7 +2263,13 @@ fn allowed_attribute(tag: gimli::DwTag, name: gimli::DwAt) -> bool {
 fn allowed_cpp_attribute(tag: gimli::DwTag, name: gimli::DwAt) -> bool {
     match tag {
         gimli::DW_TAG_class_type | gimli::DW_TAG_structure_type => {
-            matches!(name, gimli::DW_AT_byte_size | gimli::DW_AT_alignment | gimli::DW_AT_calling_convention)
+            matches!(
+                name,
+                gimli::DW_AT_byte_size
+                    | gimli::DW_AT_alignment
+                    | gimli::DW_AT_calling_convention
+                    | gimli::DW_AT_containing_type
+            )
         }
         gimli::DW_TAG_member => matches!(name, gimli::DW_AT_accessibility | gimli::DW_AT_artificial),
         gimli::DW_TAG_subprogram => matches!(
@@ -1854,8 +2280,15 @@ fn allowed_cpp_attribute(tag: gimli::DwTag, name: gimli::DwAt) -> bool {
                 | gimli::DW_AT_object_pointer
                 | gimli::DW_AT_accessibility
                 | gimli::DW_AT_artificial
+                | gimli::DW_AT_virtuality
+                | gimli::DW_AT_vtable_elem_location
+                | gimli::DW_AT_containing_type
         ),
         gimli::DW_TAG_formal_parameter => name == gimli::DW_AT_artificial,
+        gimli::DW_TAG_subroutine_type => name == gimli::DW_AT_type,
+        gimli::DW_TAG_variable => {
+            matches!(name, gimli::DW_AT_type | gimli::DW_AT_artificial | gimli::DW_AT_external)
+        }
         _ => false,
     }
 }
@@ -1872,6 +2305,7 @@ mod tests {
         entries: Vec<u8>,
         abbreviations: Vec<u8>,
         codes: BTreeMap<AbbreviationKey, usize>,
+        dwarf_version: u16,
     }
 
     fn uleb(mut value: u64) -> Vec<u8> {
@@ -1923,7 +2357,7 @@ mod tests {
                 self.abbreviations.extend_from_slice(&[0, 0]);
                 next
             });
-            let offset = self.entries.len() + 11;
+            let offset = self.entries.len() + if self.dwarf_version == 5 { 12 } else { 11 };
             self.entries.extend(uleb(code as u64));
             for (_, _, bytes) in attributes {
                 self.entries.extend(bytes);
@@ -1936,6 +2370,9 @@ mod tests {
         }
 
         fn unit(&self) -> Vec<u8> {
+            if self.dwarf_version == 5 {
+                return self.unit5();
+            }
             let mut bytes = ((self.entries.len() + 7) as u32).to_le_bytes().to_vec();
             bytes.extend_from_slice(&[4, 0, 0, 0, 0, 0, 8]);
             bytes.extend_from_slice(&self.entries);
@@ -2136,6 +2573,770 @@ mod tests {
         raw.close();
         raw.close();
         Cpp { raw, record, declaration, declared_object, definition, object, pointer, declared_pointer, integer, field }
+    }
+
+    fn slot(index: u64) -> RawAttribute {
+        let mut bytes = vec![gimli::DW_OP_constu.0];
+        bytes.extend(uleb(index));
+        let mut expression = uleb(bytes.len() as u64);
+        expression.extend(bytes);
+        (gimli::DW_AT_vtable_elem_location, gimli::DW_FORM_exprloc, expression)
+    }
+
+    struct Virtual {
+        raw: Raw,
+        record: usize,
+        vptr: usize,
+        count: usize,
+        tail: usize,
+        pointer: usize,
+        pointee_pointer: usize,
+        subroutine: usize,
+        integer: usize,
+        object_pointer: usize,
+        vtable_declaration: usize,
+        vtable_pointer: usize,
+        declarations: Vec<usize>,
+        definitions: Vec<usize>,
+        objects: Vec<usize>,
+    }
+
+    fn virtual_cpp(virtual_extra: Vec<RawAttribute>, terminal_extra: Vec<RawAttribute>) -> Virtual {
+        virtual_cpp_artifact(4, gimli::DW_TAG_member, Vec::new(), virtual_extra, terminal_extra)
+    }
+
+    fn virtual_cpp_artifact(
+        version: u16,
+        artifact_tag: gimli::DwTag,
+        artifact_extra: Vec<RawAttribute>,
+        virtual_extra: Vec<RawAttribute>,
+        terminal_extra: Vec<RawAttribute>,
+    ) -> Virtual {
+        let mut raw = Raw { dwarf_version: version, ..Default::default() };
+        raw.root(gimli::DW_LANG_C_plus_plus_14);
+        let integer = raw.scalar("int", Some(4), gimli::DW_ATE_signed);
+        let character = raw.scalar("unsigned char", Some(1), gimli::DW_ATE_unsigned_char);
+        let terminal_attributes = if terminal_extra.is_empty() { vec![target(integer)] } else { terminal_extra };
+        let subroutine = raw.die(gimli::DW_TAG_subroutine_type, false, terminal_attributes);
+        let pointee_pointer =
+            raw.die(gimli::DW_TAG_pointer_type, false, vec![text("__vtbl_ptr_type"), target(subroutine)]);
+        let pointer = raw.die(gimli::DW_TAG_pointer_type, false, vec![target(pointee_pointer)]);
+        let vtable_pointer = raw.die(gimli::DW_TAG_pointer_type, false, Vec::new());
+        let object_pointer = raw.die(gimli::DW_TAG_pointer_type, false, vec![target(0)]);
+        let pointer_patch = raw.entries.len() - 4;
+        let record = raw.die(
+            gimli::DW_TAG_class_type,
+            true,
+            vec![
+                text("VirtualRecord"),
+                number(gimli::DW_AT_byte_size, 16),
+                number(gimli::DW_AT_alignment, 8),
+                number(gimli::DW_AT_calling_convention, u64::from(gimli::DW_CC_pass_by_reference.0)),
+            ],
+        );
+        raw.entries[pointer_patch..pointer_patch + 4].copy_from_slice(&(record as u32).to_le_bytes());
+        let vptr = raw.die(
+            gimli::DW_TAG_member,
+            false,
+            vec![
+                text("_vptr$VirtualRecord"),
+                target(pointer),
+                flag(gimli::DW_AT_artificial, true),
+                number(gimli::DW_AT_data_member_location, 0),
+            ],
+        );
+        let count = raw.die(
+            gimli::DW_TAG_member,
+            false,
+            vec![text("count"), target(integer), number(gimli::DW_AT_data_member_location, 8)],
+        );
+        let tail = raw.die(
+            gimli::DW_TAG_member,
+            false,
+            vec![text("tail"), target(character), number(gimli::DW_AT_data_member_location, 12)],
+        );
+        let methods = [
+            ("readCount", "_ZN13VirtualRecord9readCountEv", Some(integer), false, Some(0)),
+            ("writeCount", "_ZN13VirtualRecord10writeCountEi", None, true, Some(1)),
+            ("readTail", "_ZN13VirtualRecord8readTailEv", Some(integer), false, None),
+        ];
+        let mut declarations = Vec::new();
+        for (name, symbol, result, setter, virtual_slot) in methods {
+            let mut attributes = vec![text(name), linkage(symbol), flag(gimli::DW_AT_declaration, true)];
+            attributes.extend(result.map(target));
+            if let Some(index) = virtual_slot {
+                if virtual_extra.is_empty() {
+                    attributes.push(number(gimli::DW_AT_virtuality, u64::from(gimli::DW_VIRTUALITY_virtual.0)));
+                    attributes.push(slot(index));
+                } else {
+                    attributes.extend(virtual_extra.clone());
+                }
+            }
+            declarations.push(raw.die(gimli::DW_TAG_subprogram, true, attributes));
+            raw.die(
+                gimli::DW_TAG_formal_parameter,
+                false,
+                vec![target(object_pointer), flag(gimli::DW_AT_artificial, true)],
+            );
+            if setter {
+                raw.die(gimli::DW_TAG_formal_parameter, false, vec![target(integer)]);
+            }
+            raw.close();
+        }
+        let mut artifact_attributes = vec![
+            text("_vtable$"),
+            target(vtable_pointer),
+            flag(gimli::DW_AT_declaration, true),
+            flag(gimli::DW_AT_artificial, true),
+            flag(gimli::DW_AT_external, true),
+        ];
+        for attribute in artifact_extra {
+            artifact_attributes.retain(|(name, _, _)| *name != attribute.0);
+            artifact_attributes.push(attribute);
+        }
+        let vtable_declaration = raw.die(artifact_tag, false, artifact_attributes);
+        raw.close();
+        let mut definitions = Vec::new();
+        let mut objects = Vec::new();
+        for (index, &declaration) in declarations.iter().enumerate() {
+            definitions.push(raw.die(
+                gimli::DW_TAG_subprogram,
+                true,
+                vec![
+                    reference(gimli::DW_AT_specification, declaration),
+                    (gimli::DW_AT_low_pc, gimli::DW_FORM_addr, (0x4000u64 + index as u64 * 32).to_le_bytes().to_vec()),
+                    reference(gimli::DW_AT_object_pointer, 0),
+                ],
+            ));
+            let object_patch = raw.entries.len() - 4;
+            let object = raw.die(
+                gimli::DW_TAG_formal_parameter,
+                false,
+                vec![text("this"), target(object_pointer), flag(gimli::DW_AT_artificial, true)],
+            );
+            raw.entries[object_patch..object_patch + 4].copy_from_slice(&(object as u32).to_le_bytes());
+            objects.push(object);
+            if index == 1 {
+                raw.die(gimli::DW_TAG_formal_parameter, false, vec![text("replacement"), target(integer)]);
+            }
+            raw.close();
+        }
+        raw.close();
+        Virtual {
+            raw,
+            record,
+            vptr,
+            count,
+            tail,
+            pointer,
+            pointee_pointer,
+            subroutine,
+            integer,
+            object_pointer,
+            vtable_declaration,
+            vtable_pointer,
+            declarations,
+            definitions,
+            objects,
+        }
+    }
+
+    #[test]
+    fn virtual_storage_projection_preserves_graph_identity_unknowns_and_ordinary_method_roles() {
+        let fixture = virtual_cpp(Vec::new(), Vec::new());
+        let nodes = read(&fixture.raw).unwrap();
+        let output = report(&nodes);
+        assert_eq!(output.layouts.len(), 1, "{output:?}");
+        assert_eq!(output.signatures.len(), 3, "{output:?}");
+        let layout = &output.layouts[0];
+        assert_eq!(layout.id, nodes[&fixture.record].id);
+        assert_eq!((layout.byte_size, layout.producer_alignment), (16, Some(8)));
+        assert!(layout.eligible_for_native_verification);
+        assert!(!layout.strictly_applicable);
+        let fields: Vec<_> = layout.fields.iter().map(|field| (field.emitted_name.as_str(), field.offset)).collect();
+        assert_eq!(fields, [("rampage_vptr", 0), ("count", 8), ("tail", 12)]);
+        let field = &layout.fields[0];
+        assert_eq!(field.id, nodes[&fixture.vptr].id);
+        assert_eq!(field.original_name.as_deref(), Some("_vptr$VirtualRecord"));
+        assert_eq!(field.producer_alignment, None);
+        assert_eq!(field.byte_size, 8);
+        assert_eq!(
+            field.leaf,
+            DebugLayoutLeaf::OpaqueVptr {
+                pointer_id: nodes[&fixture.pointer].id,
+                pointer_byte_size: None,
+                producer_alignment: None,
+                pointee_pointer_id: nodes[&fixture.pointee_pointer].id,
+                pointee_pointer_byte_size: None,
+                pointee_pointer_alignment: None,
+                subroutine_id: nodes[&fixture.subroutine].id,
+                member_byte_size: None,
+                byte_size: 8,
+            },
+        );
+        assert!(!field.leaf.alignment_proven());
+        for (index, signature) in output.signatures.iter().enumerate() {
+            let method = signature.method.as_ref().unwrap();
+            assert_eq!(method.virtual_slot, [Some(0), Some(1), None][index]);
+            assert_eq!(method.declaration_id, nodes[&fixture.declarations[index]].id);
+            assert_eq!(method.object_pointer_id, nodes[&fixture.objects[index]].id);
+            assert_eq!(signature.id, nodes[&fixture.definitions[index]].id);
+            assert_eq!(signature.dependencies, [layout.id]);
+            assert!(signature.eligible_for_native_verification);
+            assert!(!signature.strictly_applicable);
+        }
+        let json = serde_json::to_value(&output).unwrap();
+        let leaf = &json["layouts"][0]["fields"][0]["leaf"];
+        assert_eq!(leaf["kind"], "opaque_vptr");
+        assert!(leaf["pointer_byte_size"].is_null());
+        assert!(leaf["pointee_pointer_alignment"].is_null());
+        assert!(leaf.get("pointee").is_none());
+        assert!(json["signatures"][2]["method"].get("virtual_slot").is_none());
+    }
+
+    #[test]
+    fn virtual_storage_is_member_only_and_never_proves_pointee_alignment() {
+        let fixture = virtual_cpp(Vec::new(), Vec::new());
+        let mut nodes = read(&fixture.raw).unwrap();
+        for offset in [fixture.vptr, fixture.pointer, fixture.pointee_pointer] {
+            let node = nodes.get_mut(&offset).unwrap();
+            node.size = Some(8);
+            node.alignment = Some(8);
+        }
+        for node in nodes.values_mut() {
+            if node.tag == gimli::DW_TAG_base_type {
+                node.alignment = node.size;
+            }
+        }
+        nodes.get_mut(&fixture.count).unwrap().alignment = Some(4);
+        nodes.get_mut(&fixture.tail).unwrap().alignment = Some(1);
+        nodes.get_mut(&fixture.object_pointer).unwrap().alignment = Some(8);
+        let output = report(&nodes);
+        assert_eq!(output.signatures.len(), 3, "{output:?}");
+        assert!(!output.layouts[0].strictly_applicable);
+        assert!(output.signatures.iter().all(|signature| !signature.strictly_applicable));
+        assert!(matches!(
+            output.layouts[0].fields[0].leaf,
+            DebugLayoutLeaf::OpaqueVptr {
+                pointer_byte_size: Some(8),
+                producer_alignment: Some(8),
+                pointee_pointer_byte_size: Some(8),
+                pointee_pointer_alignment: Some(8),
+                member_byte_size: Some(8),
+                ..
+            }
+        ));
+        let mut resolver = Resolver::new(&nodes);
+        assert!(resolver.value(TypeRef::Offset(fixture.pointer), true).is_err());
+        assert!(resolver.value(TypeRef::Offset(fixture.pointer), false).is_err());
+        assert!(resolver.resolve(TypeRef::Offset(fixture.pointee_pointer), 0).is_err());
+        assert!(resolver.resolve(TypeRef::Offset(fixture.subroutine), 0).is_err());
+    }
+
+    #[test]
+    fn virtual_storage_refuses_forged_members_graphs_missing_evidence_and_non_natural_extents() {
+        let fixture = virtual_cpp(Vec::new(), Vec::new());
+        let original = read(&fixture.raw).unwrap();
+        for case in 0..53 {
+            let mut nodes = original.clone();
+            match case {
+                0 => nodes.get_mut(&fixture.vptr).unwrap().artificial = false,
+                1 => nodes.get_mut(&fixture.vptr).unwrap().name = Some("_vptr$OtherRecord".to_owned()),
+                2 => nodes.get_mut(&fixture.vptr).unwrap().name = None,
+                3 => nodes.get_mut(&fixture.vptr).unwrap().member_offset = None,
+                4 => nodes.get_mut(&fixture.vptr).unwrap().member_offset = Some(8),
+                5 => nodes.get_mut(&fixture.vptr).unwrap().target = TypeRef::Absent,
+                6 => nodes.get_mut(&fixture.vptr).unwrap().target = TypeRef::Unsupported,
+                7 => nodes.get_mut(&fixture.vptr).unwrap().target = TypeRef::Offset(9999),
+                8 => nodes.get_mut(&fixture.vptr).unwrap().target = TypeRef::Offset(fixture.pointee_pointer),
+                9 => nodes.get_mut(&fixture.pointer).unwrap().target = TypeRef::Offset(fixture.pointer),
+                10 => nodes.get_mut(&fixture.pointee_pointer).unwrap().target = TypeRef::Offset(fixture.pointer),
+                11 => nodes.get_mut(&fixture.pointee_pointer).unwrap().target = TypeRef::Absent,
+                12 => nodes.get_mut(&fixture.pointee_pointer).unwrap().target = TypeRef::Offset(9999),
+                13 => nodes.get_mut(&fixture.pointer).unwrap().tag = gimli::DW_TAG_typedef,
+                14 => nodes.get_mut(&fixture.subroutine).unwrap().invalid = true,
+                15 => nodes.get_mut(&fixture.subroutine).unwrap().children.push(fixture.count),
+                16 => nodes.get_mut(&fixture.subroutine).unwrap().tag = gimli::DW_TAG_base_type,
+                17 => nodes.get_mut(&fixture.subroutine).unwrap().target = TypeRef::Offset(fixture.record),
+                18 => nodes.get_mut(&fixture.pointer).unwrap().id.unit_offset = 1000,
+                19 => nodes.get_mut(&fixture.pointee_pointer).unwrap().id.unit_offset = 1000,
+                20 => nodes.get_mut(&fixture.subroutine).unwrap().id.unit_offset = 1000,
+                21 => nodes.get_mut(&fixture.vptr).unwrap().id.unit_offset = 1000,
+                22 => nodes.get_mut(&fixture.vptr).unwrap().parent = None,
+                23 => nodes.get_mut(&fixture.pointer).unwrap().source = None,
+                24 => nodes.get_mut(&fixture.vptr).unwrap().size = Some(4),
+                25 => nodes.get_mut(&fixture.pointer).unwrap().size = Some(4),
+                26 => nodes.get_mut(&fixture.pointee_pointer).unwrap().size = Some(4),
+                27 => nodes.get_mut(&fixture.vptr).unwrap().alignment = Some(4),
+                28 => nodes.get_mut(&fixture.pointer).unwrap().alignment = Some(4),
+                29 => nodes.get_mut(&fixture.pointee_pointer).unwrap().alignment = Some(4),
+                30 => nodes.get_mut(&fixture.record).unwrap().alignment = None,
+                31 => nodes.get_mut(&fixture.record).unwrap().alignment = Some(4),
+                32 => nodes.get_mut(&fixture.record).unwrap().size = Some(8),
+                33 => nodes.get_mut(&fixture.count).unwrap().member_offset = Some(4),
+                34 => nodes.get_mut(&fixture.count).unwrap().target = TypeRef::Offset(fixture.pointer),
+                35 => nodes.get_mut(&fixture.tail).unwrap().name = Some("rampage_vptr".to_owned()),
+                36 => {
+                    let mut extra = nodes[&fixture.vptr].clone();
+                    extra.id.die_offset = 9999;
+                    nodes.insert(9999, extra);
+                    nodes.get_mut(&fixture.record).unwrap().children.push(9999);
+                }
+                37 => nodes.get_mut(&fixture.record).unwrap().children.retain(|&child| child != fixture.vptr),
+                38 => {
+                    for &offset in &fixture.declarations {
+                        let declaration = nodes.get_mut(&offset).unwrap();
+                        declaration.virtuality = None;
+                        declaration.virtual_slot = None;
+                    }
+                }
+                39 => nodes.get_mut(&fixture.declarations[0]).unwrap().virtual_slot = None,
+                40 => nodes.get_mut(&fixture.declarations[0]).unwrap().virtuality = None,
+                41 => nodes.get_mut(&fixture.declarations[1]).unwrap().virtual_slot = Some(0),
+                42 => nodes.get_mut(&fixture.declarations[0]).unwrap().virtual_slot = Some(64),
+                43 => nodes.get_mut(&fixture.declarations[0]).unwrap().containing_type = TypeRef::Offset(9999),
+                44 => nodes.get_mut(&fixture.record).unwrap().containing_type = TypeRef::Offset(fixture.pointer),
+                45 => nodes.get_mut(&fixture.pointee_pointer).unwrap().name = Some("__other_ptr_type".to_owned()),
+                46 => nodes.get_mut(&fixture.pointer).unwrap().name = Some("__vtbl_ptr_type".to_owned()),
+                47 => nodes.get_mut(&fixture.integer).unwrap().encoding = Some(gimli::DW_ATE_unsigned),
+                48 => nodes.get_mut(&fixture.integer).unwrap().size = Some(8),
+                49 => nodes.get_mut(&fixture.integer).unwrap().id.unit_offset = 1000,
+                50 => nodes.get_mut(&fixture.subroutine).unwrap().target = TypeRef::Absent,
+                51 => nodes.get_mut(&fixture.subroutine).unwrap().target = TypeRef::Offset(9999),
+                52 => nodes.get_mut(&fixture.subroutine).unwrap().prototyped = true,
+                _ => unreachable!(),
+            }
+            let output = report(&nodes);
+            assert!(output.layouts.is_empty() && output.signatures.is_empty(), "case {case}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn virtual_slot_requires_one_constu_expression_and_explicit_non_pure_virtuality() {
+        let virtuality = number(gimli::DW_AT_virtuality, u64::from(gimli::DW_VIRTUALITY_virtual.0));
+        let location = gimli::DW_AT_vtable_elem_location;
+        for attributes in [
+            vec![virtuality.clone()],
+            vec![slot(0)],
+            vec![number(gimli::DW_AT_virtuality, u64::from(gimli::DW_VIRTUALITY_pure_virtual.0)), slot(0)],
+            vec![number(gimli::DW_AT_virtuality, 99), slot(0)],
+            vec![virtuality.clone(), number(location, 0)],
+            vec![virtuality.clone(), expression(location)],
+            vec![virtuality.clone(), (location, gimli::DW_FORM_exprloc, vec![3, gimli::DW_OP_constu.0, 0, 0x96])],
+            vec![virtuality.clone(), (location, gimli::DW_FORM_exprloc, vec![1, gimli::DW_OP_constu.0])],
+            vec![virtuality.clone(), (location, gimli::DW_FORM_block, vec![2, gimli::DW_OP_constu.0, 0])],
+            vec![virtuality.clone(), slot(64)],
+            vec![virtuality, slot(u64::MAX)],
+        ] {
+            let fixture = virtual_cpp(attributes, Vec::new());
+            let nodes = read(&fixture.raw).unwrap();
+            assert!(nodes[&fixture.declarations[0]].invalid);
+            let output = report(&nodes);
+            assert!(output.layouts.is_empty() && output.signatures.is_empty(), "{output:?}");
+        }
+        for attribute in [gimli::DW_AT_virtuality, gimli::DW_AT_vtable_elem_location, gimli::DW_AT_containing_type] {
+            let mut raw = Raw::default();
+            raw.root(gimli::DW_LANG_C_plus_plus_14);
+            raw.die(gimli::DW_TAG_subprogram, false, vec![number(attribute, 1), number(attribute, 1)]);
+            raw.close();
+            assert!(read(&raw).unwrap_err().contains("duplicate"));
+        }
+        for index in [0, 1, 63] {
+            let mut raw = Raw::default();
+            raw.root(gimli::DW_LANG_C_plus_plus_14);
+            let method = raw.die(
+                gimli::DW_TAG_subprogram,
+                false,
+                vec![number(gimli::DW_AT_virtuality, u64::from(gimli::DW_VIRTUALITY_virtual.0)), slot(index)],
+            );
+            raw.close();
+            let nodes = read(&raw).unwrap();
+            assert!(!nodes[&method].invalid);
+            assert_eq!(declared_virtual_slot(&nodes[&method]).unwrap(), Some(index));
+        }
+    }
+
+    #[test]
+    fn virtual_definition_facts_cannot_override_the_declaration_or_actual_object_pointer() {
+        let fixture = virtual_cpp(Vec::new(), Vec::new());
+        let original = read(&fixture.raw).unwrap();
+        for case in 0..8 {
+            let mut nodes = original.clone();
+            let definition = fixture.definitions[0];
+            match case {
+                0 => {
+                    let node = nodes.get_mut(&definition).unwrap();
+                    node.virtuality = Some(gimli::DW_VIRTUALITY_virtual);
+                    node.virtual_slot = Some(1);
+                }
+                1 => nodes.get_mut(&definition).unwrap().virtuality = Some(gimli::DW_VIRTUALITY_virtual),
+                2 => nodes.get_mut(&definition).unwrap().virtual_slot = Some(0),
+                3 => nodes.get_mut(&definition).unwrap().containing_type = TypeRef::Offset(fixture.pointer),
+                4 => nodes.get_mut(&definition).unwrap().specification = TypeRef::Offset(fixture.definitions[1]),
+                5 => nodes.get_mut(&definition).unwrap().object_pointer = TypeRef::Offset(fixture.objects[1]),
+                6 => nodes.get_mut(&fixture.objects[0]).unwrap().artificial = false,
+                7 => nodes.get_mut(&fixture.objects[0]).unwrap().target = TypeRef::Offset(fixture.pointer),
+                _ => unreachable!(),
+            }
+            let output = report(&nodes);
+            assert!(!output.signatures.iter().any(|signature| signature.id == nodes[&definition].id), "{case}");
+        }
+        let mut nodes = original;
+        for &declaration in &fixture.declarations {
+            nodes.get_mut(&declaration).unwrap().containing_type = TypeRef::Offset(fixture.record);
+        }
+        nodes.get_mut(&fixture.record).unwrap().containing_type = TypeRef::Offset(fixture.record);
+        let definition = nodes.get_mut(&fixture.definitions[0]).unwrap();
+        definition.virtuality = Some(gimli::DW_VIRTUALITY_virtual);
+        definition.virtual_slot = Some(0);
+        definition.containing_type = TypeRef::Offset(fixture.record);
+        assert_eq!(report(&nodes).signatures.len(), 3);
+    }
+
+    #[test]
+    fn unsupported_vptr_terminals_and_ordinary_callback_or_chain_fields_remain_refused() {
+        for attributes in [
+            vec![flag(gimli::DW_AT_prototyped, true)],
+            vec![flag(gimli::DW_AT_artificial, true)],
+            vec![target(9999)],
+            vec![number(gimli::DW_AT_byte_size, 8)],
+            vec![number(gimli::DW_AT_alignment, 8)],
+            vec![reference(gimli::DW_AT_abstract_origin, 0)],
+        ] {
+            let fixture = virtual_cpp(Vec::new(), attributes);
+            let output = report(&read(&fixture.raw).unwrap());
+            assert!(output.layouts.is_empty() && output.signatures.is_empty(), "{output:?}");
+        }
+        let fixture = virtual_cpp(Vec::new(), Vec::new());
+        let original = read(&fixture.raw).unwrap();
+        for callback in [true, false] {
+            let mut nodes = original.clone();
+            nodes.get_mut(&fixture.vptr).unwrap().artificial = false;
+            nodes.get_mut(&fixture.vptr).unwrap().name = Some("callback".to_owned());
+            if callback {
+                nodes.get_mut(&fixture.vptr).unwrap().target = TypeRef::Offset(fixture.pointee_pointer);
+            }
+            let output = report(&nodes);
+            assert!(output.layouts.is_empty() && output.signatures.is_empty(), "callback {callback}: {output:?}");
+        }
+        let nonpoly = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+        let mut nodes = read(&nonpoly.raw).unwrap();
+        nodes.get_mut(&nonpoly.record).unwrap().calling_convention = Some(gimli::DW_CC_pass_by_reference);
+        assert!(report(&nodes).signatures.is_empty());
+    }
+
+    #[test]
+    fn virtual_graph_resolution_and_containing_type_edges_obey_existing_work_budgets() {
+        let fixture = virtual_cpp(Vec::new(), Vec::new());
+        let nodes = read(&fixture.raw).unwrap();
+        let mut resolver = Resolver::new(&nodes);
+        resolver.work = MAX_WORK;
+        assert!(resolver.opaque_vptr(fixture.record, fixture.vptr).unwrap_err().contains("work limit"));
+        let mut resolver = Resolver::new(&nodes);
+        resolver.work = MAX_WORK - 1;
+        assert!(resolver.layout(fixture.record).unwrap_err().contains("work limit"));
+        let mut resolver = Resolver::new(&nodes);
+        resolver.text = MAX_NAMES;
+        assert!(resolver.signature(fixture.definitions[0], MAX_DECLARATION).unwrap_err().contains("text"));
+        let ordinary = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+        let output = report(&read(&ordinary.raw).unwrap());
+        let json = serde_json::to_value(&output).unwrap();
+        assert!(json["signatures"][0]["method"].get("virtual_slot").is_none());
+        assert!(!json.to_string().contains("opaque_vptr"));
+    }
+
+    #[test]
+    fn artificial_static_vtable_declarations_are_address_free_non_storage_and_narrowly_recognized() {
+        for (version, tag) in [(4, gimli::DW_TAG_member), (5, gimli::DW_TAG_variable)] {
+            let fixture = virtual_cpp_artifact(version, tag, Vec::new(), Vec::new(), Vec::new());
+            let original = read(&fixture.raw).unwrap();
+            for case in 0..19 {
+                let mut nodes = original.clone();
+                let offset = fixture.vtable_declaration;
+                match case {
+                    0 => nodes.get_mut(&offset).unwrap().name = Some("other_static".to_owned()),
+                    1 => nodes.get_mut(&offset).unwrap().declaration = false,
+                    2 => nodes.get_mut(&offset).unwrap().artificial = false,
+                    3 => nodes.get_mut(&offset).unwrap().external = false,
+                    4 => nodes.get_mut(&offset).unwrap().invalid = true,
+                    5 => nodes.get_mut(&offset).unwrap().parent = None,
+                    6 => nodes.get_mut(&offset).unwrap().id.unit_offset = 1000,
+                    7 => nodes.get_mut(&offset).unwrap().children.push(fixture.count),
+                    8 => nodes.get_mut(&offset).unwrap().address_evidence = true,
+                    9 => nodes.get_mut(&offset).unwrap().address = Some(0x5000),
+                    10 => nodes.get_mut(&offset).unwrap().address_index_incomplete = true,
+                    11 => nodes.get_mut(&offset).unwrap().specification = TypeRef::Offset(fixture.declarations[0]),
+                    12 => nodes.get_mut(&offset).unwrap().target = TypeRef::Offset(fixture.pointer),
+                    13 => nodes.get_mut(&offset).unwrap().target = TypeRef::Absent,
+                    14 => nodes.get_mut(&fixture.vtable_pointer).unwrap().id.unit_offset = 1000,
+                    15 => nodes.get_mut(&fixture.vtable_pointer).unwrap().size = Some(4),
+                    16 => nodes.get_mut(&fixture.vtable_pointer).unwrap().alignment = Some(4),
+                    17 => nodes.get_mut(&offset).unwrap().alignment = Some(8),
+                    18 => {
+                        let mut duplicate = nodes[&offset].clone();
+                        duplicate.id.die_offset = 9999;
+                        nodes.insert(9999, duplicate);
+                        nodes.get_mut(&fixture.record).unwrap().children.push(9999);
+                    }
+                    _ => unreachable!(),
+                }
+                let output = report(&nodes);
+                assert!(
+                    output.layouts.is_empty() && output.signatures.is_empty(),
+                    "DWARF {version} case {case}: {output:?}",
+                );
+            }
+            for attribute in [
+                expression(gimli::DW_AT_location),
+                reference(gimli::DW_AT_specification, fixture.vtable_declaration),
+                reference(gimli::DW_AT_abstract_origin, fixture.vtable_declaration),
+            ] {
+                let mut raw = Raw { dwarf_version: version, ..Default::default() };
+                raw.root(gimli::DW_LANG_C_plus_plus_14);
+                raw.die(gimli::DW_TAG_class_type, true, vec![text("Owner")]);
+                let node = raw.die(tag, false, vec![text("_vtable$"), attribute]);
+                raw.close();
+                raw.close();
+                assert!(read(&raw).unwrap()[&node].invalid);
+            }
+            let mut nodes = original;
+            nodes.get_mut(&fixture.record).unwrap().children.retain(|&child| child != fixture.vtable_declaration);
+            let output = report(&nodes);
+            assert_eq!(output.layouts.len(), 1, "static metadata is not object-storage evidence: {output:?}");
+            assert_eq!(output.layouts[0].fields.len(), 3);
+        }
+    }
+
+    #[test]
+    fn dwarf4_member_and_dwarf5_variable_artifacts_are_version_specific_non_storage_declarations() {
+        for (version, tag) in [(4, gimli::DW_TAG_member), (5, gimli::DW_TAG_variable)] {
+            let fixture = virtual_cpp_artifact(version, tag, Vec::new(), Vec::new(), Vec::new());
+            let nodes = read(&fixture.raw).unwrap();
+            let artifact = &nodes[&fixture.vtable_declaration];
+            assert_eq!(artifact.tag, tag);
+            assert_eq!(artifact.source.as_ref().unwrap().dwarf_version, version);
+            assert!(!artifact.invalid);
+            assert!(artifact.declaration && artifact.artificial && artifact.external);
+            assert_eq!(artifact.member_offset, None);
+            let output = report(&nodes);
+            assert_eq!(output.layouts.len(), 1, "DWARF {version}: {output:?}");
+            assert_eq!(output.signatures.len(), 3, "DWARF {version}: {output:?}");
+            let layout = &output.layouts[0];
+            assert_eq!(layout.fields.len(), 3);
+            assert!(layout.fields.iter().all(|field| field.id != artifact.id));
+            assert_eq!(layout.fields[0].id, nodes[&fixture.vptr].id);
+            assert!(matches!(&layout.fields[0].leaf, DebugLayoutLeaf::OpaqueVptr { .. }));
+            assert!(layout.eligible_for_native_verification);
+            assert!(!layout.strictly_applicable);
+        }
+        for (version, tag) in [(4, gimli::DW_TAG_variable), (5, gimli::DW_TAG_member)] {
+            let fixture = virtual_cpp_artifact(version, tag, Vec::new(), Vec::new(), Vec::new());
+            let output = report(&read(&fixture.raw).unwrap());
+            assert!(output.layouts.is_empty() && output.signatures.is_empty(), "DWARF {version} {tag}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn artifact_declarations_cannot_hide_object_offsets_locations_or_forged_evidence_in_either_version() {
+        for attribute in [
+            number(gimli::DW_AT_data_member_location, 0),
+            number(gimli::DW_AT_data_member_location, 8),
+            expression(gimli::DW_AT_data_member_location),
+            expression(gimli::DW_AT_location),
+            number(gimli::DW_AT_byte_size, 8),
+            number(gimli::DW_AT_alignment, 8),
+            flag(gimli::DW_AT_declaration, false),
+            flag(gimli::DW_AT_artificial, false),
+            flag(gimli::DW_AT_external, false),
+            expression(gimli::DW_AT_external),
+            reference(gimli::DW_AT_specification, 0),
+            reference(gimli::DW_AT_abstract_origin, 0),
+            reference(gimli::DW_AT_containing_type, 0),
+            reference(gimli::DW_AT_object_pointer, 0),
+            target(9999),
+            text("ordinary_static"),
+            (gimli::DW_AT_low_pc, gimli::DW_FORM_addr, 0x5000u64.to_le_bytes().to_vec()),
+            (gimli::DW_AT_ranges, gimli::DW_FORM_sec_offset, 0u32.to_le_bytes().to_vec()),
+            number(gimli::DwAt(0x3fff), 0),
+        ] {
+            let attribute_name = attribute.0;
+            for (version, tag) in [(4, gimli::DW_TAG_member), (5, gimli::DW_TAG_variable)] {
+                let fixture = virtual_cpp_artifact(version, tag, vec![attribute.clone()], Vec::new(), Vec::new());
+                let nodes = read(&fixture.raw).unwrap();
+                let output = report(&nodes);
+                assert!(
+                    output.layouts.is_empty() && output.signatures.is_empty(),
+                    "DWARF {version} forged artifact {attribute_name}: {output:?}",
+                );
+            }
+        }
+        for language in [gimli::DW_LANG_C11, gimli::DW_LANG_C_plus_plus_14] {
+            for declared in [false, true] {
+                let mut raw = Raw::default();
+                raw.root(language);
+                let ordinary = raw.die(
+                    gimli::DW_TAG_member,
+                    false,
+                    vec![
+                        text("count"),
+                        flag(gimli::DW_AT_external, true),
+                        flag(gimli::DW_AT_declaration, declared),
+                        flag(gimli::DW_AT_artificial, true),
+                    ],
+                );
+                raw.close();
+                assert!(read(&raw).unwrap()[&ordinary].invalid, "{language} declared {declared}");
+            }
+        }
+    }
+
+    #[test]
+    fn unrelated_cpp_variable_names_do_not_consume_name_lookup_or_retained_text_budgets() {
+        let read_cost = |raw: &Raw| {
+            let info = raw.unit();
+            let abbrev = raw.abbrev();
+            let mut budget = ReadBudget::default();
+            let nodes = read_layout_nodes_budget(&dwarf(&info, &abbrev), &mut budget).unwrap();
+            (nodes, budget.reserved - 2 * info.len() - 2 * abbrev.len())
+        };
+        let baseline = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+        let (original, original_cost) = read_cost(&baseline.raw);
+        let original_text = Resolver::new(&original).text;
+        for local in [false, true] {
+            for artifact_flags in [false, true] {
+                let mut fixture = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+                fixture.raw.entries.truncate(fixture.raw.entries.len() - if local { 2 } else { 1 });
+                let variable = fixture.raw.die(
+                    gimli::DW_TAG_variable,
+                    false,
+                    vec![
+                        text(&"x".repeat(MAX_NAME + 1)),
+                        target(fixture.integer),
+                        flag(gimli::DW_AT_declaration, artifact_flags),
+                        flag(gimli::DW_AT_artificial, artifact_flags),
+                        flag(gimli::DW_AT_external, artifact_flags),
+                    ],
+                );
+                if local {
+                    fixture.raw.close();
+                }
+                fixture.raw.close();
+                let (nodes, cost) = read_cost(&fixture.raw);
+                assert_eq!(cost, original_cost, "local {local}, artifact flags {artifact_flags}");
+                assert_eq!(Resolver::new(&nodes).text, original_text);
+                assert!(nodes[&variable].name.is_none());
+                let output = report(&nodes);
+                assert_eq!(output.signatures.len(), 1, "{output:?}");
+                assert_eq!(output.signatures[0].id, nodes[&fixture.definition].id);
+                assert_eq!(output.layouts.len(), 1);
+            }
+        }
+        let fixture = virtual_cpp_artifact(
+            5,
+            gimli::DW_TAG_variable,
+            vec![text(&"x".repeat(MAX_NAME + 1)), flag(gimli::DW_AT_external, false)],
+            Vec::new(),
+            Vec::new(),
+        );
+        let (nodes, _) = read_cost(&fixture.raw);
+        assert!(nodes[&fixture.vtable_declaration].name.is_none());
+        let output = report(&nodes);
+        assert!(output.layouts.is_empty() && output.signatures.is_empty(), "record variables must not be skipped");
+    }
+
+    #[test]
+    fn distinct_records_may_share_the_same_producer_vptr_graph_without_merging_method_ownership() {
+        let fixture = virtual_cpp(Vec::new(), Vec::new());
+        let original = read(&fixture.raw).unwrap();
+        let mut stack = vec![fixture.record, fixture.object_pointer];
+        stack.extend(&fixture.definitions);
+        let mut copies = BTreeMap::new();
+        while let Some(offset) = stack.pop() {
+            if !copies.contains_key(&offset) {
+                copies.insert(offset, 10_000 + copies.len());
+                stack.extend(&original[&offset].children);
+            }
+        }
+        let remap = |reference| match reference {
+            TypeRef::Offset(offset) => TypeRef::Offset(copies.get(&offset).copied().unwrap_or(offset)),
+            other => other,
+        };
+        let mut nodes = original.clone();
+        for (&offset, &new_offset) in &copies {
+            let mut node = original[&offset].clone();
+            node.id.die_offset = new_offset as u64;
+            node.parent = node.parent.map(|parent| copies.get(&parent).copied().unwrap_or(parent));
+            node.children = node.children.iter().map(|child| copies[child]).collect();
+            node.target = remap(node.target);
+            node.specification = remap(node.specification);
+            node.object_pointer = remap(node.object_pointer);
+            node.containing_type = remap(node.containing_type);
+            if node.tag == gimli::DW_TAG_class_type {
+                node.name = Some("PeerRecord".to_owned());
+            }
+            if offset == fixture.vptr {
+                node.name = Some("_vptr$PeerRecord".to_owned());
+            }
+            if let Some(linkage) = &mut node.linkage_name {
+                *linkage = linkage.replace("13VirtualRecord", "10PeerRecord");
+            }
+            node.address = node.address.map(|address| address + 0x1000);
+            nodes.insert(new_offset, node);
+        }
+        let output = report(&nodes);
+        assert_eq!(output.layouts.len(), 2, "{output:?}");
+        assert_eq!(output.signatures.len(), 6, "{output:?}");
+        assert_ne!(output.layouts[0].id, output.layouts[1].id);
+        assert_eq!(output.layouts[0].fields[0].leaf, output.layouts[1].fields[0].leaf);
+        let declarations: BTreeSet<_> =
+            output.signatures.iter().map(|signature| signature.method.as_ref().unwrap().declaration_id).collect();
+        assert_eq!(declarations.len(), 6);
+    }
+
+    #[test]
+    fn projected_records_refuse_unsupported_sibling_method_declarations_as_a_whole() {
+        let fixture = virtual_cpp(Vec::new(), Vec::new());
+        let original = read(&fixture.raw).unwrap();
+        for case in 0..10 {
+            let mut nodes = original.clone();
+            let declaration = fixture.declarations[2];
+            match case {
+                0 => nodes.get_mut(&declaration).unwrap().name = Some("VirtualRecord".to_owned()),
+                1 => nodes.get_mut(&declaration).unwrap().name = Some("~VirtualRecord".to_owned()),
+                2 => nodes.get_mut(&declaration).unwrap().name = Some("operator+".to_owned()),
+                3 => nodes.get_mut(&declaration).unwrap().name = Some("readTail<int>".to_owned()),
+                4 => nodes.get_mut(&declaration).unwrap().inline = Some(gimli::DW_INL_not_inlined),
+                5 => nodes.get_mut(&declaration).unwrap().artificial = true,
+                6 => nodes.get_mut(&declaration).unwrap().children.clear(),
+                7 => nodes.get_mut(&declaration).unwrap().target = TypeRef::Offset(fixture.record),
+                8 => nodes.get_mut(&declaration).unwrap().linkage_name = Some("_ZThn8_readTail".to_owned()),
+                9 => {
+                    let object = nodes[&declaration].children[0];
+                    nodes.get_mut(&object).unwrap().artificial = false;
+                }
+                _ => unreachable!(),
+            }
+            let output = report(&nodes);
+            assert!(output.layouts.is_empty() && output.signatures.is_empty(), "case {case}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_c_void_pointers_keep_their_legacy_leaf_and_serialization() {
+        let fixture = flat(Some(number(gimli::DW_AT_alignment, 8)));
+        let mut nodes = read(&fixture.raw).unwrap();
+        let TypeRef::Offset(pointer) = nodes[&fixture.fields[2]].target else { unreachable!() };
+        nodes.get_mut(&pointer).unwrap().target = TypeRef::Absent;
+        let output = report(&nodes);
+        assert_eq!(output.signatures.len(), 1, "{output:?}");
+        assert!(matches!(output.layouts[0].fields[2].leaf, DebugLayoutLeaf::Pointer { pointee: None, .. }));
+        let json = serde_json::to_value(&output).unwrap();
+        let leaf = &json["layouts"][0]["fields"][2]["leaf"];
+        assert_eq!(leaf["kind"], "pointer");
+        assert_eq!(leaf["byte_size"], 8);
+        assert!(leaf["pointee"].is_null());
+        assert!(leaf.get("pointer_id").is_none());
+        assert!(json["signatures"][0].get("method").is_none());
     }
 
     #[test]
@@ -3283,7 +4484,7 @@ mod tests {
 
     #[test]
     fn cpp_sibling_declarations_require_direct_valid_address_free_evidence_for_index_exemption() {
-        for case in 0..6 {
+        for case in 0..13 {
             let mut cpp = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
             cpp.raw.entries.pop();
             let mut attributes = vec![text("unrelated_declaration"), flag(gimli::DW_AT_declaration, true)];
@@ -3294,16 +4495,44 @@ mod tests {
                 3 => attributes.push(number(gimli::DW_AT_virtuality, 1)),
                 4 => attributes.push(expression(gimli::DW_AT_specification)),
                 5 => attributes.push(reference(gimli::DW_AT_specification, cpp.declaration)),
+                6 => {
+                    attributes.push(number(gimli::DW_AT_virtuality, 1));
+                    attributes.push(slot(0));
+                }
+                7 => attributes.push(expression(gimli::DW_AT_containing_type)),
+                8 => attributes.push(reference(gimli::DW_AT_containing_type, cpp.record)),
+                9 => {
+                    attributes.push(number(gimli::DW_AT_virtuality, 1));
+                    attributes.push(slot(0));
+                    attributes.push(reference(gimli::DW_AT_containing_type, cpp.pointer));
+                }
+                10 => {
+                    attributes.push(number(gimli::DW_AT_virtuality, 1));
+                    attributes.push(slot(0));
+                    attributes.push((gimli::DW_AT_low_pc, gimli::DW_FORM_addr, 0x5000u64.to_le_bytes().to_vec()));
+                }
+                11 => {
+                    attributes.push(number(gimli::DW_AT_virtuality, 1));
+                    attributes.push(slot(0));
+                    attributes.push(expression(gimli::DW_AT_containing_type));
+                }
+                12 => {
+                    attributes.push(reference(gimli::DW_AT_containing_type, cpp.pointer));
+                    attributes.push((gimli::DW_AT_low_pc, gimli::DW_FORM_addr, 0x5000u64.to_le_bytes().to_vec()));
+                }
                 _ => unreachable!(),
             }
             let sibling = cpp.raw.die(gimli::DW_TAG_subprogram, false, attributes);
             cpp.raw.close();
             let nodes = read(&cpp.raw).unwrap();
             assert!(nodes[&sibling].declaration);
-            assert!(nodes[&sibling].address.is_none());
-            assert!(!nodes[&sibling].address_evidence);
-            if case == 1 {
-                assert!(!nodes[&sibling].invalid, "specification must be checked independently of invalid bits");
+            assert_eq!(nodes[&sibling].address.is_some(), matches!(case, 10 | 12));
+            assert_eq!(nodes[&sibling].address_evidence, matches!(case, 10 | 12));
+            if matches!(case, 1 | 6 | 8 | 9) {
+                assert!(!nodes[&sibling].invalid, "ownership/specification require checks beyond invalid bits");
+            }
+            if matches!(case, 7 | 11) {
+                assert!(nodes[&sibling].invalid, "unsupported containing-type forms must invalidate the DIE");
             }
             let output = report(&nodes);
             if case == 0 {
@@ -3314,6 +4543,33 @@ mod tests {
                 assert!(output.warnings.iter().any(|warning| warning.contains("function-address index")));
             }
         }
+    }
+
+    #[test]
+    fn virtual_declaration_address_exemptions_require_the_exact_same_cu_record_owner() {
+        let fixture = virtual_cpp(Vec::new(), Vec::new());
+        let original = read(&fixture.raw).unwrap();
+        for case in 0..5 {
+            let mut nodes = original.clone();
+            let declaration = fixture.declarations[0];
+            match case {
+                0 => nodes.get_mut(&declaration).unwrap().containing_type = TypeRef::Offset(fixture.pointer),
+                1 => nodes.get_mut(&declaration).unwrap().containing_type = TypeRef::Unsupported,
+                2 => nodes.get_mut(&fixture.record).unwrap().id.unit_offset = 1000,
+                3 => nodes.get_mut(&declaration).unwrap().parent = nodes[&fixture.record].parent,
+                4 => nodes.get_mut(&fixture.record).unwrap().parent = Some(fixture.definitions[0]),
+                _ => unreachable!(),
+            }
+            let output = report(&nodes);
+            assert!(output.layouts.is_empty() && output.signatures.is_empty(), "case {case}: {output:?}");
+            assert!(output.warnings.iter().any(|warning| warning.contains("function-address index")));
+        }
+        let mut nodes = original;
+        for &declaration in &fixture.declarations {
+            nodes.get_mut(&declaration).unwrap().containing_type = TypeRef::Offset(fixture.record);
+        }
+        let output = report(&nodes);
+        assert_eq!(output.signatures.len(), 3, "valid virtual and nonvirtual sibling declarations: {output:?}");
     }
 
     #[test]

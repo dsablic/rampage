@@ -14,6 +14,7 @@ const MAX_SYMBOLS: usize = 1_000_000;
 const MAX_NAME_BYTES: usize = 4096;
 const MAX_METADATA_ITEMS: usize = 16_384;
 const MAX_LOOKUP_WORK: usize = 8_000_000;
+const MAX_NAMED_TEXT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Serialize)]
 pub struct ClassRecovery {
@@ -174,6 +175,8 @@ fn evidence(
     target: &Target,
     symbol: &Symbol,
     rtti_symbols: &BTreeMap<u64, &Symbol>,
+    max_slots: u64,
+    text_budget: Option<usize>,
 ) -> Result<ClassEvidence, &'static str> {
     if symbol.name.len() > MAX_NAME_BYTES {
         return Err("vtable symbol name exceeds the 4096-byte limit");
@@ -198,18 +201,21 @@ fn evidence(
     }
     let offset = binary.read_pointer(symbol.address, size).ok_or("unreadable vtable offset-to-top")?;
     let rtti_address = binary.read_pointer(symbol.address + width, size).ok_or("unreadable vtable RTTI pointer")?;
-    let name = crate::language::demangle(&symbol.name)
-        .and_then(|name| {
-            name.strip_prefix("vtable for ")
-                .or_else(|| name.strip_prefix("{vtable(").and_then(|name| name.strip_suffix(")}")))
-                .map(str::to_owned)
-        })
+    let demangled = crate::language::demangle(&symbol.name).ok_or("invalid Itanium vtable name")?;
+    let name = demangled
+        .strip_prefix("vtable for ")
+        .or_else(|| demangled.strip_prefix("{vtable(").and_then(|name| name.strip_suffix(")}")))
         .filter(|name| !name.is_empty())
         .ok_or("invalid Itanium vtable name")?;
+    let text_bytes =
+        name.len() + symbol.name.len() + rtti_symbols.get(&rtti_address).map_or(0, |symbol| symbol.name.len());
+    if text_budget.is_some_and(|budget| text_bytes > budget) {
+        return Err("named-vtable text budget exhausted");
+    }
     let available = (end - start) / width;
-    let count = available.min(MAX_SLOTS);
+    let count = available.min(max_slots);
     let mut slots = Vec::new();
-    let mut stop = if available > MAX_SLOTS { ScanStop::SlotLimit } else { ScanStop::Bound };
+    let mut stop = if available > max_slots { ScanStop::SlotLimit } else { ScanStop::Bound };
     for index in 0..count {
         let address = start + index * width;
         let Some(raw_value) = binary.read_pointer(address, size) else {
@@ -237,7 +243,7 @@ fn evidence(
             .as_deref()
             .is_some_and(|rtti| normalized(rtti).strip_prefix("_ZTI") == normalized(&symbol.name).strip_prefix("_ZTV"));
     Ok(ClassEvidence {
-        name,
+        name: name.to_owned(),
         vtable_symbol: symbol.name.clone(),
         address: symbol.address,
         source: "named_itanium_vtable_symbol",
@@ -261,6 +267,31 @@ pub(crate) fn is_mips64_n32(binary: &Binary) -> bool {
     binary.format == Format::Elf
         && binary.arch == Arch::Mips64
         && binary.image_bytes().get(..5) == Some(b"\x7fELF\x01".as_slice())
+}
+
+/// Bounded named-symbol evidence only; never invokes symbol-independent RTTI recovery.
+/// Limits are clamped to the full recovery caps, with an additional 64 KiB raw-name budget.
+pub fn recover_named_bounded(binary: &Binary, max_tables: usize, max_slots: u64) -> ClassRecovery {
+    let max_tables = max_tables.min(MAX_CLASSES);
+    let max_slots = max_slots.min(MAX_SLOTS);
+    let mut result = ClassRecovery {
+        classes: Vec::new(),
+        rtti_classes: Vec::new(),
+        warnings: Vec::new(),
+        limitations: vec![
+            format!(
+                "Named-only recovery examines at most {max_tables} vtable candidates and {max_slots} slots per \
+                 table, with 64 KiB of raw names; symbol-independent RTTI recovery is not run."
+            ),
+            "Named recovery retains the one-million-symbol, 32 MiB symbol-name, 4096 named-RTTI candidate, \
+             16384 metadata-item and eight-million metadata-lookup budgets of full class recovery."
+                .to_owned(),
+        ],
+    };
+    if max_tables != 0 && max_slots != 0 {
+        recover_named_into(binary, &mut result, max_tables, max_slots, Some(MAX_NAMED_TEXT_BYTES));
+    }
+    result
 }
 
 /// Reports class evidence without inserting types or asserting a class layout.
@@ -309,19 +340,32 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
                 .to_owned(),
         ],
     };
+    recover_named_into(binary, &mut result, MAX_CLASSES, MAX_SLOTS, None);
+    let named: std::collections::BTreeSet<&str> = result.classes.iter().map(|class| class.name.as_str()).collect();
+    result.rtti_classes.retain(|class| !named.contains(class.name.as_str()));
+    result
+}
+
+fn recover_named_into(
+    binary: &Binary,
+    result: &mut ClassRecovery,
+    max_tables: usize,
+    max_slots: u64,
+    mut text_budget: Option<usize>,
+) {
     if !matches!(binary.format, Format::Elf | Format::MachO) {
         result.warnings.push(
             "Named vtable evidence requires a static ELF or Mach-O image; only `rtti_classes` is reported for \
              this format."
                 .to_owned(),
         );
-        return result;
+        return;
     }
     if is_mips64_n32(binary) {
         result
             .warnings
             .push("Class evidence is disabled for unsupported MIPS64 ELFCLASS32/N32 pointer width.".to_owned());
-        return result;
+        return;
     }
     let mut candidates = Vec::new();
     let mut rtti_symbols = BTreeMap::new();
@@ -340,7 +384,7 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
         }
         let name = normalized(&symbol.name);
         if name.starts_with("_ZTV") {
-            if candidates.len() < MAX_CLASSES {
+            if candidates.len() < max_tables {
                 candidates.push(symbol);
             } else {
                 vtable_limit = true;
@@ -357,20 +401,20 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
         }
     }
     if vtable_limit {
-        result.warnings.push("Class evidence reached its 4096 named-vtable candidate limit.".to_owned());
+        result.warnings.push(format!("Class evidence reached its {max_tables} named-vtable candidate limit."));
     }
     if rtti_limit {
         result.warnings.push("Class evidence reached its 4096 named-RTTI candidate limit.".to_owned());
     }
     if candidates.is_empty() {
-        return result;
+        return;
     }
     let metadata_items = binary.sections.len().saturating_add(binary.segments.len()).saturating_add(binary.thumb.len());
     if metadata_items > MAX_METADATA_ITEMS {
         result.warnings.push("Class evidence exceeded its 16384-item metadata budget.".to_owned());
-        return result;
+        return;
     }
-    let table_work = binary.sections.len() * 2 + binary.segments.len() * (MAX_SLOTS as usize * 5 + 8);
+    let table_work = binary.sections.len() * 2 + binary.segments.len() * (max_slots as usize * 5 + 8);
     let mut lookup_work = MAX_LOOKUP_WORK;
     let target = binary.target();
     for symbol in candidates {
@@ -379,12 +423,16 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
             break;
         };
         lookup_work = remaining;
-        match evidence(binary, &target, symbol, &rtti_symbols) {
-            Ok(evidence) => result.classes.push(evidence),
+        match evidence(binary, &target, symbol, &rtti_symbols, max_slots, text_budget) {
+            Ok(evidence) => {
+                if let Some(budget) = &mut text_budget {
+                    *budget -= evidence.name.len()
+                        + evidence.vtable_symbol.len()
+                        + evidence.rtti_candidate.symbol.as_ref().map_or(0, String::len);
+                }
+                result.classes.push(evidence);
+            }
             Err(reason) => result.warnings.push(format!("Skipped named vtable at {:#x}: {reason}.", symbol.address)),
         }
     }
-    let named: std::collections::BTreeSet<&str> = result.classes.iter().map(|class| class.name.as_str()).collect();
-    result.rtti_classes.retain(|class| !named.contains(class.name.as_str()));
-    result
 }

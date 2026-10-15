@@ -2,7 +2,9 @@ use std::io::{self, Write};
 
 use serde::Serialize;
 
-use super::{DebugLayoutImport, DebugLayoutPreview, DebugLayoutReport, Sha256, hex_digest, invalid};
+use super::{
+    DebugLayoutImport, DebugLayoutPreview, DebugLayoutReport, DebugLayoutVirtualEvidence, Sha256, hex_digest, invalid,
+};
 use crate::{ApiError, Project};
 use sha2::Digest;
 
@@ -17,6 +19,7 @@ pub struct DebugLayoutReview {
     pub compiler_spec_sha256: String,
     pub report: DebugLayoutReport,
     pub producer_report: Option<rampage_loaders::debug::DebugLayoutReport>,
+    pub virtual_evidence: DebugLayoutVirtualEvidence,
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
     pub approved: Vec<u64>,
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
@@ -54,7 +57,7 @@ impl DebugLayoutPreview<'_> {
             rampage_decompiler::Platform::Darwin => "darwin",
         };
         let content = (
-            "rampage-debug-layout-review-v1",
+            "rampage-debug-layout-review-v2",
             &self.image_sha256,
             &self.compiler_spec_sha256,
             (platform, &self.options.compiler, self.options.arm_be8),
@@ -62,6 +65,7 @@ impl DebugLayoutPreview<'_> {
             &self.producer,
             &self.approved,
             &self.preserved,
+            &self.virtual_evidence,
         );
         let mut writer = ReviewHasher { hash: Sha256::new(), remaining: MAX_REVIEW_BYTES };
         serde_json::to_writer(&mut writer, &content).map_err(|error| invalid(&error.to_string()))?;
@@ -75,6 +79,7 @@ impl DebugLayoutPreview<'_> {
             compiler_spec_sha256: rampage_arch::hex::bytes(&self.compiler_spec_sha256),
             report: self.report,
             producer_report: self.producer,
+            virtual_evidence: self.virtual_evidence,
             approved: self.approved.into_iter().map(|function| function.address).collect(),
             preserved: self.preserved,
             imported,
@@ -199,5 +204,79 @@ mod tests {
         assert!(error.contains("review encoded-byte limit"), "{error}");
         assert_eq!(serde_json::to_value(project.annotation_list()).unwrap(), before);
         assert!(project.undo().unwrap().is_empty());
+    }
+
+    #[test]
+    fn projection_and_every_retained_virtual_association_fact_are_part_of_review_approval() {
+        use rampage_analysis::classes::{
+            ClassEvidence, HeaderClassification, RttiClassification, RttiEvidence, ScanStop, SlotClassification,
+            VtableSlot,
+        };
+        use rampage_loaders::debug::DebugLayoutTypeId;
+
+        let project = Project::new(binary());
+        let mut preview = project.preview_debug_layout_plan(plan(&project)).unwrap();
+        let original = preview.review_sha256().unwrap();
+        preview.report.types[0] = crate::debug_layout_import::projected_bundle_tests::projected_type();
+        assert_ne!(preview.review_sha256().unwrap(), original);
+        let projected = preview.review_sha256().unwrap();
+        let super::super::DebugLayoutProjection::OpaqueVptr { pointer_alignment, .. } =
+            &mut preview.report.types[0].projections[0];
+        *pointer_alignment = Some(8);
+        assert_ne!(preview.review_sha256().unwrap(), projected);
+        let id = |die_offset| DebugLayoutTypeId { unit_offset: 16, die_offset };
+        preview.virtual_evidence.tables.push(super::super::DebugLayoutVtableEvidence {
+            raw: ClassEvidence {
+                name: "Record".to_owned(),
+                vtable_symbol: "_ZTV6Record".to_owned(),
+                address: 0x2000,
+                source: "named_itanium_vtable_symbol",
+                confidence: "raw_named_vtable_evidence",
+                pointer_size: 8,
+                header: HeaderClassification::UnverifiedPrefix,
+                raw_offset_word: 0,
+                offset_to_top: None,
+                rtti_candidate: RttiEvidence { address: 0, classification: RttiClassification::Null, symbol: None },
+                bound: "symbol_size",
+                scan_limit: 0x2018,
+                scan_end: 0x2018,
+                slots: vec![VtableSlot {
+                    index: 0,
+                    address: 0x2010,
+                    raw_value: 0x1000,
+                    classification: SlotClassification::Function,
+                    target: Some(0x1000),
+                }],
+                stop: ScanStop::Bound,
+            },
+            methods: vec![super::super::DebugLayoutVirtualMethodEvidence {
+                slot_index: 0,
+                declared_virtual_slot_index: 0,
+                method_address: 0x1000,
+                definition_id: id(80),
+                record_id: id(32),
+                declaration_id: id(72),
+                object_pointer_id: id(88),
+                linkage_name: "_ZN6Record4readEv".to_owned(),
+                layout_name: "debug_layout_10_20_Record".to_owned(),
+                verification: "native_checked_source_evidence",
+            }],
+        });
+        let baseline = preview.review_sha256().unwrap();
+        assert_ne!(baseline, projected);
+        preview.virtual_evidence.tables[0].raw.slots[0].raw_value += 1;
+        assert_ne!(preview.review_sha256().unwrap(), baseline);
+        preview.virtual_evidence.tables[0].raw.slots[0].raw_value -= 1;
+        preview.virtual_evidence.tables[0].raw.header = HeaderClassification::KnownRtti;
+        assert_ne!(preview.review_sha256().unwrap(), baseline);
+        preview.virtual_evidence.tables[0].raw.header = HeaderClassification::UnverifiedPrefix;
+        preview.virtual_evidence.tables[0].methods[0].declared_virtual_slot_index = 1;
+        assert_ne!(preview.review_sha256().unwrap(), baseline);
+        preview.virtual_evidence.tables[0].methods[0].declared_virtual_slot_index = 0;
+        preview.virtual_evidence.tables[0].methods[0].object_pointer_id = id(96);
+        assert_ne!(preview.review_sha256().unwrap(), baseline);
+        preview.virtual_evidence.tables[0].methods[0].object_pointer_id = id(88);
+        preview.virtual_evidence.warnings.push("evidence bounded".to_owned());
+        assert_ne!(preview.review_sha256().unwrap(), baseline);
     }
 }

@@ -272,7 +272,6 @@ fn unsupported_cpp_records_and_symbols_only_controls_never_install_dependent_typ
             ("const-method", "debug"),
             ("reference-argument", "debug"),
             ("byvalue", "debug"),
-            ("virtual", "debug"),
             ("inherited", "debug"),
             ("static-method", "debug"),
         ];
@@ -289,6 +288,37 @@ fn unsupported_cpp_records_and_symbols_only_controls_never_install_dependent_typ
             assert!(!logs.0.exists());
             assert!(project.undo().unwrap().is_empty());
         }
+    }
+}
+
+#[test]
+#[ignore = "requires centrally compiled owned C++ fixtures through the --check wrapper"]
+fn formerly_refused_virtual_control_projects_storage_without_linking_its_writable_table() {
+    for variant in ["dwarf4-o1", "dwarf5-o2"] {
+        let path = image(variant, "virtual", "debug");
+        let logs = LogFiles::new();
+        let project = open(&path, &logs.0);
+        let entry = project.binary.symbol_by_name("_ZN13VirtualRecord9readCountEv").unwrap().address;
+        let before = annotations(&project);
+        let review = project.review_debug_layouts().unwrap();
+        assert_eq!(review.approved, vec![entry]);
+        assert_eq!(review.report.types.len(), 1);
+        let ty = &review.report.types[0];
+        assert_eq!(ty.projections.len(), 1);
+        assert_eq!(ty.layout.fields[0].name, "rampage_vptr");
+        assert_eq!(ty.layout.fields[0].offset, 0);
+        let source =
+            review.producer_report.as_ref().unwrap().signatures.iter().find(|raw| raw.address == entry).unwrap();
+        assert_eq!(source.method.as_ref().unwrap().virtual_slot, Some(0));
+        assert!(review.virtual_evidence.tables.is_empty(), "a writable table is not named read-only evidence");
+        assert!(review.virtual_evidence.warnings.iter().any(|warning| warning.contains("not mapped read-only data")));
+        assert_eq!(annotations(&project), before);
+        let applied = project.apply_reviewed_debug_layouts(&review.review_sha256).unwrap().imported.unwrap();
+        assert_eq!(applied.applied, vec![entry]);
+        assert!(project.annotation_list().types[0].text.starts_with("!rampage-plain-layout-v2\n"));
+        assert!(project.decompile(entry).unwrap().code.contains("->count"));
+        project.undo().unwrap();
+        assert_eq!(annotations(&project), before);
     }
 }
 

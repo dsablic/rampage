@@ -607,7 +607,8 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Initial producer-described C++ slice: base-free non-polymorphic records with explicit object-pointer evidence,
   exact layout facts and bounded same-CU method-definition/declaration association. No inferred vptr or class fields.
 - [x] Owned C++ record-layout constants, source field-use and refusal oracles. RTTI/vtable evidence remains separate
-  from object-layout proof and indirect-call destinations; polymorphic projection and inheritance are not acceptance.
+  from object-layout proof and indirect-call destinations; those initial gates did not cover polymorphic projection
+  or inheritance. The next bounded storage/evidence slice is recorded below.
 - [x] Finite local worker-startup/native/supervisor diagnostic probes, capturing owned-process phases if a stall
   recurs. Existing worker timeout is not an end-to-end deadline for native validation, synchronous spawn or reaping.
   Published-binary probes passed in 1.00 s, 3.02 s and 14.35 s (two exact tests, then the complete API suite);
@@ -627,6 +628,33 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   independent compiler/source oracles are not that benchmark or general class-layout/virtual-dispatch acceptance.
 - [x] Protected committed-tree/full-history audit and 877-file secret/private-key/artifact preflight. Generated
   compiler outputs and owned validation scratch are removed; the verified audit scanner is removed before publication.
+
+### Bounded virtual-method evidence
+
+- [x] Producer-proved opaque vptr storage for base-free, explicitly aligned C++ records; exact record/member and
+  pointer/pointer/subroutine roles remain separate from the generated flat-C `void *` storage counterpart.
+  Unknown producer widths/alignments remain unknown. This does not recover a callback prototype or native C++ ABI.
+- [x] Projection-sensitive v2 type persistence, unchanged projection-free v1 bundles and v1 dependent signature seals;
+  bounded metadata preflight and source/context validation precede native initialization. Older clients refuse v2.
+- [x] One fresh, detached native source-closure check for exact virtual-slot/method-entry associations, including
+  preserved analyst signatures and persistent reopen. Named-table recovery is separately bounded and skips RTTI
+  scanning. Raw header confidence is unchanged; no table owner, arbitrary object-vptr or indirect-call target is proved.
+- [x] Read-only paged CLI/MCP rows and UI evidence with explicit exact-entry navigation. Approval binds all projection,
+  raw-table and source-method facts. Independent review closed unrelated C++ variable-name budget regressions,
+  unowned virtual-declaration index exemptions and non-vacuous row/capacity/rendering coverage gaps.
+- [x] Local core gates: 408 library tests and seven bounded named-table regressions. Virtual acceptance: 20 tests,
+  zero ignored, in 73 seconds across both owned variants, including actual worker/native parity and UI navigation.
+  Existing C acceptance: 43 tests in 99 seconds; existing C++ acceptance: nine tests, zero ignored. The former C++
+  virtual control now projects storage but correctly refuses its writable table as raw slot evidence.
+- [x] Loader-only optimized gate: 166 library tests plus two compiled virtual controls passed in 32 seconds, without
+  API/YARA/Wasmtime or full-workspace release linking. Workspace all-target Clippy, all 50 UI library tests, class
+  evidence regressions and the unchanged accuracy/evaluation gate passed in a separate 42-second bounded run.
+- [ ] Actual installed-Ghidra matched-input six-method corpus, separate CLI persistence integration and observed
+  process-group memory/timing evidence. The runner's privacy, supervision and oracle-first scoring review is pending.
+- [ ] Broad C++ differential/corpus/performance acceptance, typed virtual dispatch, inheritance and adjusting thunks.
+  The owned source/compiler oracles and exact slot correlations do not earn these broader capabilities.
+- [x] GitHub Actions remains manual-only. No run is dispatched during this push; dispatch still requires explicit
+  user approval after all work is complete. Release optimization settings and the two-job shared target are unchanged.
 
 ### Validation and external blockers
 

@@ -90,6 +90,7 @@ fn leaf_proof(leaf: &debug::DebugLayoutLeaf) -> bool {
         debug::DebugLayoutLeaf::Pointer { producer_alignment, pointee, .. } => {
             producer_alignment.is_some() && pointee.as_ref().is_none_or(|scalar| scalar.producer_alignment.is_some())
         }
+        debug::DebugLayoutLeaf::OpaqueVptr { .. } => false,
     }
 }
 

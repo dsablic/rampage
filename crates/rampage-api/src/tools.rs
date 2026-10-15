@@ -383,7 +383,7 @@ struct DebugLayoutImportArgs {
     /// Exact lowercase SHA-256 from a fresh preview. Required with apply=true, otherwise omitted.
     #[schemars(length(min = 64, max = 64), regex(pattern = "^[0-9a-f]{64}$"))]
     review_sha256: Option<String>,
-    /// Evidence rows to skip (checked types/fields/functions/warnings, then producer evidence); never a write subset.
+    /// Evidence rows to skip, including read-only projection and virtual evidence; never a write subset.
     offset: Option<usize>,
     /// Evidence rows per page (default 100, 1..=1000), also limited to 60000 JSON bytes.
     #[schemars(range(min = 1, max = 1000))]
@@ -431,6 +431,8 @@ fn debug_layout_receipt(apply_requested: Option<bool>) -> Value {
         "applied_total": 0, "imported_types_total": 0, "warnings_total": null,
         "producer_types_total": null, "producer_fields_total": null, "producer_functions_total": null,
         "producer_parameters_total": null, "producer_warnings_total": null,
+        "projections_total": null, "vtables_total": null, "vtable_slots_total": null,
+        "virtual_methods_total": null, "virtual_warnings_total": null, "virtual_limitations_total": null,
         "details_total": null, "offset": 0, "limit": 0, "details": [],
         "more": false, "next_offset": null, "byte_capped": false,
         "error": null, "error_truncated": false,
@@ -479,12 +481,19 @@ fn debug_layout_rows(review: &crate::DebugLayoutReview) -> Result<Vec<Value>, Ap
         let status = if necessary.contains(ty.layout.name.as_str()) { "verified" } else { "unverified" };
         let mut data = debug_layout_value(ty)?;
         data["layout"].as_object_mut().unwrap().remove("fields");
+        data.as_object_mut().unwrap().remove("projections");
         rows.push(serde_json::json!({ "kind": "type", "source": "checked", "status": status, "data": data }));
-        for field in &ty.layout.fields {
-            rows.push(serde_json::json!({
+        for (index, field) in ty.layout.fields.iter().enumerate() {
+            let mut row = serde_json::json!({
                 "kind": "field", "source": "checked", "status": status,
                 "type_name": ty.layout.name, "data": debug_layout_value(field)?,
-            }));
+            });
+            if ty.projections.iter().any(|projection| match projection {
+                crate::DebugLayoutProjection::OpaqueVptr { field_index, .. } => *field_index == index,
+            }) {
+                row["storage_role"] = serde_json::json!("opaque_projection_storage_not_exact_producer_type");
+            }
+            rows.push(row);
         }
     }
     for function in &review.report.functions {
@@ -534,6 +543,46 @@ fn debug_layout_rows(review: &crate::DebugLayoutReview) -> Result<Vec<Value>, Ap
             rows.push(serde_json::json!({ "kind": "warning", "source": "producer", "text": warning }));
         }
     }
+    for ty in &review.report.types {
+        for projection in &ty.projections {
+            rows.push(serde_json::json!({
+                "kind": "projection", "source": "virtual_evidence", "status": "read_only",
+                "type_name": ty.layout.name, "data": debug_layout_value(projection)?,
+                "storage_role": "opaque_projection_storage_not_exact_producer_type",
+            }));
+        }
+    }
+    for table in &review.virtual_evidence.tables {
+        let table_address = format!("{:#x}", table.raw.address);
+        let mut data = debug_layout_value(&table.raw)?;
+        data.as_object_mut().unwrap().remove("slots");
+        rows.push(serde_json::json!({
+            "kind": "vtable", "source": "virtual_evidence", "status": "read_only",
+            "table_address": table_address, "data": data,
+        }));
+        for slot in &table.raw.slots {
+            rows.push(serde_json::json!({
+                "kind": "vtable_slot", "source": "virtual_evidence", "status": "read_only",
+                "table_address": table_address, "data": debug_layout_value(slot)?,
+            }));
+        }
+        for method in &table.methods {
+            rows.push(serde_json::json!({
+                "kind": "virtual_method", "source": "virtual_evidence", "status": "read_only",
+                "table_address": table_address, "slot_index": method.slot_index,
+                "data": debug_layout_value(method)?,
+            }));
+        }
+    }
+    for (kind, messages) in
+        [("warning", &review.virtual_evidence.warnings), ("limitation", &review.virtual_evidence.limitations)]
+    {
+        for text in messages {
+            rows.push(serde_json::json!({
+                "kind": kind, "source": "virtual_evidence", "status": "read_only", "text": text,
+            }));
+        }
+    }
     Ok(rows)
 }
 
@@ -570,6 +619,16 @@ fn debug_layout_page(review: &crate::DebugLayoutReview, offset: usize, limit: us
             .map_or(0, |report| { report.signatures.iter().map(|function| function.parameters.len()).sum::<usize>() })
     );
     receipt["producer_warnings_total"] = serde_json::json!(producer.map_or(0, |report| report.warnings.len()));
+    receipt["projections_total"] =
+        serde_json::json!(review.report.types.iter().map(|ty| ty.projections.len()).sum::<usize>());
+    let virtual_evidence = &review.virtual_evidence;
+    receipt["vtables_total"] = serde_json::json!(virtual_evidence.tables.len());
+    receipt["vtable_slots_total"] =
+        serde_json::json!(virtual_evidence.tables.iter().map(|table| table.raw.slots.len()).sum::<usize>());
+    receipt["virtual_methods_total"] =
+        serde_json::json!(virtual_evidence.tables.iter().map(|table| table.methods.len()).sum::<usize>());
+    receipt["virtual_warnings_total"] = serde_json::json!(virtual_evidence.warnings.len());
+    receipt["virtual_limitations_total"] = serde_json::json!(virtual_evidence.limitations.len());
     let total = rows.len();
     let offset = offset.min(total);
     receipt["details_total"] = serde_json::json!(total);
@@ -596,15 +655,23 @@ fn debug_layout_page(review: &crate::DebugLayoutReview, offset: usize, limit: us
 fn import_debug_layout_page(project: &Project, args: DebugLayoutImportArgs) -> Result<Value, ApiError> {
     args.validate().map_err(ApiError::Invalid)?;
     let review = project.review_debug_layouts()?;
+    debug_layout_page_before_apply(&review, &args, |digest| project.apply_reviewed_debug_layouts(digest))
+}
+
+fn debug_layout_page_before_apply(
+    review: &crate::DebugLayoutReview,
+    args: &DebugLayoutImportArgs,
+    apply: impl FnOnce(&str) -> Result<crate::DebugLayoutReview, ApiError>,
+) -> Result<Value, ApiError> {
     // Serialize every evidence row and reserve the whole receipt before any annotation action.
-    let mut receipt = debug_layout_page(&review, args.offset.unwrap_or(0), args.limit.unwrap_or(DEFAULT_PAGE))?;
+    let mut receipt = debug_layout_page(review, args.offset.unwrap_or(0), args.limit.unwrap_or(DEFAULT_PAGE))?;
     if let Some(digest) = &args.review_sha256 {
         if review.review_sha256 != *digest {
             return Err(ApiError::Invalid(
                 "debug layout review changed; preview and review again; nothing imported".to_owned(),
             ));
         }
-        let applied = project.apply_reviewed_debug_layouts(digest)?;
+        let applied = apply(digest)?;
         debug_layout_applied_receipt(&mut receipt, &applied);
     }
     Ok(receipt)
@@ -1139,7 +1206,11 @@ pub fn tools() -> Vec<Tool> {
              dependency batch atomically, preserving analyst signatures. offset/limit page whole evidence rows only; \
              they never select writes. Receipts retain hashes, exact counts and whole_apply_succeeded within 60000 \
              JSON bytes; more/next_offset continue evidence. Fetch later pages with apply=false and no review_sha256. \
-             Producer evidence is not native layout proof. Undo is same-process only, not recovered after CLI exit.",
+             Opaque vptr projections describe consumer storage, not exact producer void pointers or callback types. \
+             Read-only named vtable rows retain raw header confidence and candidate slots. Exact method associations \
+             are native-checked source evidence, not current/applied analyst types, table ownership, object-vptr proof \
+             or virtual-call targets. Producer evidence alone is not native layout proof. \
+             Undo is same-process only, not recovered after CLI exit.",
             import_debug_layout_page,
         )
         .annotates(),

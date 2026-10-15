@@ -959,6 +959,58 @@ fn render_debug_layout_receipt(out: &mut impl Write, receipt: &serde_json::Value
                     writeln!(out, "  evidence: {data}")?;
                 }
                 Some("parameter") => writeln!(out, "  parameter [{source}/{status}] {data}")?,
+                Some("projection") => {
+                    writeln!(
+                        out,
+                        "opaque consumer storage projection for {} [{source}/{status}]: {data}",
+                        row["type_name"].as_str().unwrap_or("?")
+                    )?;
+                    writeln!(
+                        out,
+                        "  void pointer is storage only; producer pointer -> pointer -> subroutine roles \
+                         do not claim an exact void pointer or callback type; null facts remain unknown"
+                    )?;
+                }
+                Some("vtable") => {
+                    writeln!(
+                        out,
+                        "raw named table {} [{source}/{status}], header {}, confidence {}: {data}",
+                        row["table_address"].as_str().unwrap_or("?"),
+                        data["header"],
+                        data["confidence"]
+                    )?;
+                    writeln!(
+                        out,
+                        "  unverified prefixes imply candidate slot positions only; \
+                         unknown offset-to-top is not inferred; no object-vptr or table-owner proof"
+                    )?;
+                }
+                Some("vtable_slot") => writeln!(
+                    out,
+                    "  candidate slot {} of table {} [{source}/{status}], raw target {}: {data}",
+                    data["index"],
+                    row["table_address"].as_str().unwrap_or("?"),
+                    data["target"]
+                )?,
+                Some("virtual_method") => {
+                    writeln!(
+                        out,
+                        "  exact method entry {} at table {} / candidate slot {}, declared virtual slot {} \
+                         [{source}/{status}]: {data}",
+                        data["method_address"].as_str().unwrap_or("?"),
+                        row["table_address"].as_str().unwrap_or("?"),
+                        data["slot_index"],
+                        data["declared_virtual_slot_index"]
+                    )?;
+                    writeln!(
+                        out,
+                        "  native-checked source association only; not applied/current analyst types, \
+                         authorization or a resolved virtual-call target"
+                    )?;
+                }
+                Some("limitation") => {
+                    writeln!(out, "limitation ({source}/{status}): {}", row["text"].as_str().unwrap_or("?"))?;
+                }
                 _ => writeln!(out, "<unreadable debug layout evidence>")?,
             }
         }
@@ -1003,6 +1055,73 @@ mod debug_layout_output_tests {
     use std::io::{self, BufWriter, Write};
 
     use super::write_debug_layout_receipt;
+
+    #[test]
+    fn readable_virtual_rows_keep_unknown_projection_facts_candidate_confidence_and_exact_method_entry() {
+        let receipt = serde_json::json!({
+            "status": "preview", "details": [
+                {
+                    "kind": "projection", "source": "virtual_evidence", "status": "read_only",
+                    "type_name": "opaque_record", "data": {
+                        "kind": "opaque_vptr", "pointer_byte_size": null, "member_alignment": null,
+                        "pointer_id": { "unit_offset": 0, "die_offset": 3 },
+                        "pointee_pointer_id": { "unit_offset": 0, "die_offset": 4 },
+                        "subroutine_id": { "unit_offset": 0, "die_offset": 5 },
+                    },
+                },
+                {
+                    "kind": "vtable", "source": "virtual_evidence", "status": "read_only",
+                    "table_address": "0x800000", "data": {
+                        "header": "unverified_prefix", "confidence": "raw_named_vtable_evidence",
+                        "offset_to_top": null, "raw_offset_word": "0xfffffffffffffff8",
+                        "scan_limit": "0x800020", "scan_end": "0x800018", "stop": "non_function",
+                    },
+                },
+                {
+                    "kind": "vtable_slot", "source": "virtual_evidence", "status": "read_only",
+                    "table_address": "0x800000", "data": {
+                        "index": 7, "address": "0x800048", "raw_value": "0x400030", "target": "0x400030",
+                    },
+                },
+                {
+                    "kind": "virtual_method", "source": "virtual_evidence", "status": "read_only",
+                    "table_address": "0x800000", "data": {
+                        "slot_index": 7, "declared_virtual_slot_index": 7, "method_address": "0x400030",
+                        "verification": "native_checked_source_evidence", "linkage_name": "misleading\"λ",
+                    },
+                },
+                { "kind": "warning", "source": "virtual_evidence", "status": "read_only", "text": "raw warning" },
+                {
+                    "kind": "limitation", "source": "virtual_evidence", "status": "read_only",
+                    "text": "not virtual-call targets",
+                },
+            ],
+        });
+        let mut output = Vec::new();
+        super::render_debug_layout_receipt(&mut output, &receipt).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        for text in [
+            "opaque consumer storage projection for opaque_record",
+            "void pointer is storage only",
+            "pointer -> pointer -> subroutine",
+            "null facts remain unknown",
+            "raw_named_vtable_evidence",
+            "unverified_prefix",
+            "0xfffffffffffffff8",
+            "0x800020",
+            "non_function",
+            "candidate slot 7 of table 0x800000",
+            "exact method entry 0x400030",
+            "declared virtual slot 7",
+            "native_checked_source_evidence",
+            "not applied/current analyst types",
+            "warning (virtual_evidence): raw warning",
+            "limitation (virtual_evidence/read_only): not virtual-call targets",
+        ] {
+            assert!(output.contains(text), "{text}: {output}");
+        }
+        assert!(!output.contains("<unreadable debug layout evidence>"), "{output}");
+    }
 
     #[derive(Default)]
     struct FlushFailure {
