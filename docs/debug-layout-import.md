@@ -279,3 +279,5 @@ hashes establish observable association and agreement, not producer authenticati
 arbitrary debug information. Backing checks do not create an atomic filesystem snapshot or eliminate races with
 concurrent writes/truncation. No target execution, attachment, resume, expressions, binary writes or provider
 submission occurs.
+
+The owned six-method comparison protocol and its limits are documented in [C++ virtual corpus](cpp-virtual-corpus.md).

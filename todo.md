@@ -649,12 +649,31 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Loader-only optimized gate: 166 library tests plus two compiled virtual controls passed in 32 seconds, without
   API/YARA/Wasmtime or full-workspace release linking. Workspace all-target Clippy, all 50 UI library tests, class
   evidence regressions and the unchanged accuracy/evaluation gate passed in a separate 42-second bounded run.
-- [ ] Actual installed-Ghidra matched-input six-method corpus, separate CLI persistence integration and observed
-  process-group memory/timing evidence. The runner's privacy, supervision and oracle-first scoring review is pending.
+- [x] Complete ordinary API/native-decompiler/worker suites and their doctests passed in a 150-second bounded run;
+  compiled opt-in acceptance is recorded separately above. The installed-Ghidra exporter compiles against the
+  existing SDK/JDK without running the reference backend or any target.
+- [x] Remaining affected analysis/loader/CLI/MCP/UI suites and doctests passed in a separate 136-second bounded run,
+  including unchanged ordinary UI snapshots. Controlled existing Python and fixture checks: 713 tests plus 168 subtests.
+- [x] The remaining workspace packages and doctests passed in a separate 66-second bounded debug run. Together with
+  the three scoped runs above this completes ordinary workspace coverage, not one uninterrupted full-suite run.
+- [x] Actual installed-Ghidra 12.1.4 / JDK 21.0.12.1 comparison: six selected methods per DWARF/optimization variant,
+  all 12 cases passed both backend oracles, matched settings/storage and CLI persistence checks in 37.3 seconds.
+  Raw table-word checks and memory/layout readback passed; unverified prefixes stayed unverified. Sanitized hashes
+  and observed timing/RSS scopes are recorded in `docs/cpp-virtual-corpus.md`, not general quality/performance scores.
+- [x] Fresh runner reviews closed Java-option directory escapes, coupled reference scoring, both-wrong agreement,
+  missing RSS observations and unsafe startup/process cleanup. Cleanup authority is the held direct guardian group,
+  never a sampled PID. Controlled CLI copies explicitly avoid automatic sibling-worker selection; the standalone
+  protocol-4 comparison stays isolated. Per-record parser operations match normal replay, not concatenated definitions.
+- [x] Final controlled Python gate including 64 runner regressions: 777 tests and 236 subtests passed. Scoped Ruff,
+  formatting and ty checks passed; fixture formatting preserved parsed expressions and literals. Both recorded image
+  hashes were reproduced from the final recipe, and owned compiler/reference/export scratch was removed.
+- [x] Protected 904-file secret/private-key/artifact preflight, scanner regressions and committed-tree/full-history
+  audits passed. The checksum-verified scanner and owned audit scratch were removed; raw reports are not committed.
 - [ ] Broad C++ differential/corpus/performance acceptance, typed virtual dispatch, inheritance and adjusting thunks.
   The owned source/compiler oracles and exact slot correlations do not earn these broader capabilities.
 - [x] GitHub Actions remains manual-only. No run is dispatched during this push; dispatch still requires explicit
-  user approval after all work is complete. Release optimization settings and the two-job shared target are unchanged.
+  user approval after all work is complete. The virtual acceptance wrapper is wired into the manual workflow but
+  has not run there. Release optimization settings and the two-job shared target are unchanged.
 
 ### Validation and external blockers
 
