@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import signal
@@ -29,18 +28,80 @@ def run_lldb(arguments: list[str]) -> tuple[int, str]:
     return process.returncode, output
 
 
+def refusal_script(destination: Path, minimum_threads: int, modules: list[Path]) -> str:
+    return (
+        "from pathlib import Path\n"
+        "from typing import Any\n"
+        "import shlex\n"
+        "import lldb\n"
+        "import lldb_snapshot\n"
+        "class Guard:\n"
+        "    def __init__(self, methods: dict[str, Any]) -> None:\n"
+        "        self.methods = methods\n"
+        "    def __getattr__(self, name: str) -> Any:\n"
+        "        assert name in self.methods, f'exporter attempted forbidden SDK access: {name}'\n"
+        "        return self.methods[name]\n"
+        "def capture(debugger: Any, command: str, result: Any, internal: dict[str, Any]) -> None:\n"
+        "    target = debugger.GetSelectedTarget()\n"
+        "    process = target.GetProcess()\n"
+        "    assert target.GetTriple().split('-')[0] == 'arm64'\n"
+        "    assert target.GetByteOrder() == lldb.eByteOrderLittle\n"
+        f"    assert process.GetNumThreads() >= {minimum_threads}\n"
+        "    paths = {str(target.GetModuleAtIndex(index).GetFileSpec())\n"
+        "             for index in range(target.GetNumModules())}\n"
+        f"    assert set({[str(module) for module in modules]!r}) <= paths\n"
+        "    def context() -> tuple[Any, ...]:\n"
+        "        thread = process.GetSelectedThread()\n"
+        "        frame = thread.GetFrameAtIndex(0)\n"
+        "        error = lldb.SBError()\n"
+        "        status = frame.FindRegister('cpsr').GetValueAsUnsigned(error)\n"
+        "        assert error.Success()\n"
+        "        return (debugger.GetIndexOfTarget(debugger.GetSelectedTarget()),\n"
+        "                process.GetUniqueID(), process.GetProcessID(), process.GetState(),\n"
+        "                process.GetStopID(True), process.GetNumThreads(), thread.GetThreadID(),\n"
+        "                thread.GetStopReason(), frame.GetPC(), frame.GetSP(), status)\n"
+        "    before = context()\n"
+        "    assert process.GetState() == lldb.eStateStopped\n"
+        "    guarded_process = Guard({'GetState': process.GetState, 'GetStopID': process.GetStopID})\n"
+        "    guarded_target = Guard({'GetProcess': lambda: guarded_process,\n"
+        "                            'GetTriple': target.GetTriple, 'GetByteOrder': target.GetByteOrder,\n"
+        "                            'GetAddressByteSize': target.GetAddressByteSize})\n"
+        "    guarded_debugger = Guard({'GetSelectedTarget': lambda: guarded_target})\n"
+        f"    destination = Path({str(destination)!r})\n"
+        "    files_before = set(destination.parent.iterdir())\n"
+        "    def forbidden(*args: Any, **kwargs: Any) -> Any:\n"
+        "        raise AssertionError('ARM64 refusal attempted publication')\n"
+        "    original_publish = lldb_snapshot.publish_snapshot\n"
+        "    lldb_snapshot.publish_snapshot = forbidden\n"
+        "    refusal = lldb.SBCommandReturnObject()\n"
+        "    try:\n"
+        "        lldb_snapshot.export_snapshot(guarded_debugger,\n"
+        "            f'{shlex.quote(str(destination))} --region 0x1000:4:r-x --all-threads', refusal, {})\n"
+        "    finally:\n"
+        "        lldb_snapshot.publish_snapshot = original_publish\n"
+        "    assert not refusal.Succeeded()\n"
+        "    assert 'current LLDB SDK cannot affirm runtime DATA endianness' in refusal.GetError()\n"
+        "    assert not destination.exists()\n"
+        "    assert set(destination.parent.iterdir()) == files_before\n"
+        "    assert context() == before\n"
+        "    result.AppendMessage('ARM64 export refused without reads, publication, or state changes')\n"
+        "def __lldb_init_module(debugger: Any, internal: dict[str, Any]) -> None:\n"
+        "    debugger.HandleCommand('command script add -f capture_fixture.capture capture-fixture')\n"
+    )
+
+
 @pytest.mark.skipif(
     os.environ.get("RAMPAGE_LLDB_LIVE") != "1",
     reason="opt-in debugger integration on a controlled local ARM64 fixture",
 )
-def test_stopped_fixture_exports_runtime_metadata_and_correlates_original(
+def test_stopped_arm64_fixture_refuses_export_without_reads_publication_or_state_changes(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "fixture.c"
     executable = tmp_path / "fixture"
     source.write_text("int main(void) { return 42; }\n")
     subprocess.run(
-        ["clang", "-g", "-O0", str(source), "-o", str(executable)],
+        ["clang", "-arch", "arm64", "-g", "-O0", str(source), "-o", str(executable)],
         check=True,
         capture_output=True,
         timeout=30,
@@ -48,27 +109,7 @@ def test_stopped_fixture_exports_runtime_metadata_and_correlates_original(
     root = Path(__file__).resolve().parents[1]
     snapshot_path = tmp_path / "capture.json"
     capture = tmp_path / "capture_fixture.py"
-    export_command = f"rampage-snapshot {shlex.quote(str(snapshot_path))} "
-    capture.write_text(
-        "from typing import Any\n"
-        "def capture(\n"
-        "    debugger: Any, command: str, result: Any, internal: dict[str, Any]\n"
-        ") -> None:\n"
-        "    target = debugger.GetSelectedTarget()\n"
-        "    context = target.FindFunctions('main').GetContextAtIndex(0)\n"
-        "    function = context.GetFunction()\n"
-        "    start = function.GetStartAddress().GetLoadAddress(target)\n"
-        "    end = function.GetEndAddress().GetLoadAddress(target)\n"
-        "    module = context.GetModule()\n"
-        "    uuid = module.GetUUIDString()\n"
-        "    image = function.GetStartAddress().GetFileAddress()\n"
-        f"    destination = {export_command!r}\n"
-        "    region = f'--module-region {uuid}:{image:#x}:{end-start}:r-x --module-seed {uuid}:{image:#x}'\n"
-        "    debugger.HandleCommand(destination + region)\n"
-        "def __lldb_init_module(debugger: Any, internal: dict[str, Any]) -> None:\n"
-        "    debugger.HandleCommand(\n"
-        "        'command script add -f capture_fixture.capture capture-fixture')\n"
-    )
+    capture.write_text(refusal_script(snapshot_path, 1, [executable]))
     commands = [
         "settings set target.disable-aslr false",
         "breakpoint set -n main",
@@ -87,88 +128,15 @@ def test_stopped_fixture_exports_runtime_metadata_and_correlates_original(
         ],
     )
     assert status == 0, output
-    assert snapshot_path.is_file(), output
-    snapshot = json.loads(snapshot_path.read_text())
-    assert snapshot["arch"] == "aarch64"
-    assert snapshot["target"]["platform"] == "darwin"
-    seed = snapshot["seeds"][0]
-    registers = {
-        register["name"]: int(register["value"], 16)
-        for register in snapshot["registers"]
-    }
-    assert (
-        int(seed, 16)
-        <= registers["pc"]
-        < int(seed, 16) + len(bytes.fromhex(snapshot["regions"][0]["bytes"]))
-    )
-    assert registers["sp"] != 0
-    module = next(
-        module for module in snapshot["modules"] if module["name"] == "fixture"
-    )
-    cli = os.environ.get("RAMPAGE_CLI", str(root / "target/debug/rampage"))
-    summary_output = subprocess.run(
-        [str(cli), "--json", "summarize", str(snapshot_path), "--at", seed],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    summary = json.loads(summary_output.stdout)
-    assert summary["ir"] and all(
-        instruction["complete"] for instruction in summary["ir"]
-    )
-    assert summary["ssa"]["blocks"]
-    correlation_output = subprocess.run(
-        [
-            str(cli),
-            "--json",
-            "correlate",
-            str(snapshot_path),
-            "--original",
-            str(executable),
-            "--module",
-            module["uuid"],
-            "--at",
-            seed,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    correlation = json.loads(correlation_output.stdout)
-    assert int(correlation["image_address"], 16) == int(seed, 16) - int(
-        module["runtime_base"], 16
-    ) + int(module["image_base"], 16)
-    comparison_output = subprocess.run(
-        [
-            str(cli),
-            "--json",
-            "compare-runtime",
-            str(snapshot_path),
-            "--original",
-            str(executable),
-            "--module",
-            module["uuid"],
-            "--range",
-            f"{seed}:4",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    comparison = json.loads(comparison_output.stdout)
-    assert comparison["requested_bytes"] == comparison["equal_bytes"] == 4
-    assert comparison["changed_bytes"] == comparison["unavailable_bytes"] == 0
-    assert comparison["original_image_sha256"]
+    assert "ARM64 export refused without reads, publication, or state changes" in output
+    assert not snapshot_path.exists(), output
 
 
 @pytest.mark.skipif(
     os.environ.get("RAMPAGE_LLDB_LIVE") != "1",
     reason="opt-in debugger integration on a controlled local ARM64 fixture",
 )
-def test_stopped_owned_fixture_captures_two_modules_and_all_threads(
+def test_stopped_owned_arm64_two_module_fixture_refuses_export_with_all_threads(
     tmp_path: Path,
 ) -> None:
     library_source = tmp_path / "fixture_library.c"
@@ -204,6 +172,8 @@ def test_stopped_owned_fixture_captures_two_modules_and_all_threads(
     subprocess.run(
         [
             "clang",
+            "-arch",
+            "arm64",
             "-g",
             "-O0",
             "-dynamiclib",
@@ -220,6 +190,8 @@ def test_stopped_owned_fixture_captures_two_modules_and_all_threads(
     subprocess.run(
         [
             "clang",
+            "-arch",
+            "arm64",
             "-g",
             "-O0",
             "-pthread",
@@ -234,41 +206,15 @@ def test_stopped_owned_fixture_captures_two_modules_and_all_threads(
     )
     root = Path(__file__).resolve().parents[1]
     output_path = tmp_path / "multi-capture.json"
-    expected_path = tmp_path / "expected-context.json"
-    capture = tmp_path / "capture_multi.py"
-    destination = f"rampage-snapshot {shlex.quote(str(output_path))} --all-threads"
-    capture.write_text(
-        "import json\n"
-        "from pathlib import Path\n"
-        "from typing import Any\n"
-        "def capture(debugger: Any, command: str, result: Any, internal: dict[str, Any]) -> None:\n"
-        "    target = debugger.GetSelectedTarget()\n"
-        f"    arguments = [{destination!r}]\n"
-        "    seeds = []\n"
-        "    for name in ('main', 'capture_ready'):\n"
-        "        context = target.FindFunctions(name).GetContextAtIndex(0)\n"
-        "        function = context.GetFunction()\n"
-        "        image = function.GetStartAddress().GetFileAddress()\n"
-        "        size = function.GetEndAddress().GetFileAddress() - image\n"
-        "        uuid = context.GetModule().GetUUIDString()\n"
-        "        seeds.append(hex(function.GetStartAddress().GetLoadAddress(target)))\n"
-        "        arguments.append(f'--module-region {uuid}:{image:#x}:{size}:r-x')\n"
-        "        arguments.append(f'--module-seed {uuid}:{image:#x}')\n"
-        "    process = target.GetProcess()\n"
-        "    threads = [hex(process.GetThreadAtIndex(index).GetThreadID())\n"
-        "               for index in range(process.GetNumThreads())]\n"
-        f"    Path({str(expected_path)!r}).write_text(json.dumps({{'seeds': seeds, 'threads': threads}}))\n"
-        "    debugger.HandleCommand(' '.join(arguments))\n"
-        "def __lldb_init_module(debugger: Any, internal: dict[str, Any]) -> None:\n"
-        "    debugger.HandleCommand('command script add -f capture_multi.capture capture-multi')\n"
-    )
+    capture = tmp_path / "capture_fixture.py"
+    capture.write_text(refusal_script(output_path, 2, [executable, library]))
     commands = [
         "settings set target.disable-aslr false",
         "breakpoint set -n capture_ready",
         "run",
         f"command script import {shlex.quote(str(root / 'tools/lldb_snapshot.py'))}",
         f"command script import {shlex.quote(str(capture))}",
-        "capture-multi",
+        "capture-fixture",
         "process kill",
     ]
     status, output = run_lldb(
@@ -280,41 +226,8 @@ def test_stopped_owned_fixture_captures_two_modules_and_all_threads(
         ]
     )
     assert status == 0, output
-    assert output_path.is_file(), output
-    snapshot = json.loads(output_path.read_text())
-    expected = json.loads(expected_path.read_text())
-    assert snapshot["arch"] == "aarch64"
-    assert len(snapshot["regions"]) == len(snapshot["seeds"]) == 2
-    assert snapshot["seeds"] == expected["seeds"]
-    owned_modules = [
-        module
-        for module in snapshot["modules"]
-        if module["path"] in {str(executable), str(library)}
-    ]
-    assert len(owned_modules) == 2
-    assert len({module["uuid"] for module in owned_modules}) == 2
-    for seed in snapshot["seeds"]:
-        assert (
-            sum(
-                int(region["address"], 16)
-                <= int(seed, 16)
-                < int(region["address"], 16) + len(bytes.fromhex(region["bytes"]))
-                for region in snapshot["regions"]
-            )
-            == 1
-        )
-    threads = {register["thread_id"] for register in snapshot["registers"]}
-    assert len(threads) == 2
-    assert threads == set(expected["threads"])
-    for thread in threads:
-        registers = {
-            register["name"]: int(register["value"], 16)
-            for register in snapshot["registers"]
-            if register["thread_id"] == thread
-        }
-        assert registers["pc"] != 0 and registers["sp"] != 0
-        assert f"{thread} (stop reason " in snapshot["provenance"]
-    assert "software-breakpoint traps normalized" in snapshot["provenance"]
+    assert "ARM64 export refused without reads, publication, or state changes" in output
+    assert not output_path.exists(), output
 
 
 @pytest.mark.parametrize("failure", [KeyboardInterrupt, subprocess.TimeoutExpired])

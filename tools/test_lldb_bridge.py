@@ -601,6 +601,53 @@ def test_describe_stop_identity_is_not_pid_or_content_identity(
     )
 
 
+@pytest.mark.parametrize("machine", ["arm64", "arm64e", "aarch64"])
+def test_arm64_architecture_defaults_and_cpsr_never_prove_runtime_data_order(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, machine: str
+) -> None:
+    environment.target.triple = f"{machine}-apple-macosx14.0.0"
+    environment.target.modules[0].triple = environment.target.triple
+    monkeypatch.setattr(
+        environment.process,
+        "GetByteOrder",
+        environment.target.GetByteOrder,
+        raising=False,
+    )
+    expected = token(environment)
+    unknown = {
+        "order": "unknown",
+        "source": "target byte order does not establish ARM data endianness",
+    }
+    for status in [0, 1 << 9, 0xF0000000]:
+        environment.thread.registers["cpsr"] = status
+        session = send(environment, expected_token=expected)
+        assert session["ok"], session
+        assert session["data"]["architecture"] == "aarch64"
+        assert session["data"]["target_byte_order"] == "little"
+        assert session["data"]["data_byte_order"] == unknown
+        registers = send(
+            environment,
+            "read_registers",
+            expected_token=expected,
+            thread_id=1,
+            registers=["pc", "sp", "cpsr"],
+        )
+        assert registers["ok"], registers
+        assert registers["data"]["data_byte_order"] == unknown
+        assert int(registers["data"]["context"]["registers"]["cpsr"], 16) == status
+        memory = read_memory(environment, expected, thread_id=1)
+        assert memory["ok"], memory
+        assert memory["data"]["data_byte_order"] == unknown
+        assert memory["data"]["interpretation"] == "raw-bytes-only"
+        resolved = resolve_address(environment, expected)
+        assert resolved["ok"], resolved
+        assert resolved["data"]["module_context"]["data_byte_order"] == {
+            "order": "unknown",
+            "source": "no runtime data interpretation",
+        }
+    assert environment.process.stop_id == expected["stop_id"]
+
+
 @pytest.mark.parametrize(
     "command",
     [

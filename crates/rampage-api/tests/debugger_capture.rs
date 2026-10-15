@@ -56,9 +56,13 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::for_image("hello-x64.macho")
+    }
+
+    fn for_image(name: &str) -> Self {
         let directory = Directory::new();
         let source_path = directory.join("original.macho");
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.macho");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name);
         std::fs::copy(fixture, &source_path).unwrap();
         let source = Arc::new(Project::new(Binary::open(&source_path).unwrap()));
         let Details::MachO(details) = &source.binary.details else { panic!("owned Mach-O fixture") };
@@ -117,9 +121,16 @@ fn replies(binary: &Binary, request: &DebuggerCaptureRequest) -> Vec<Value> {
     let mapping = binary.segment_containing(request.file_address).unwrap();
     let header = binary.segments.iter().find(|segment| segment.file_offset == 0 && segment.file_size > 0).unwrap();
     let leaf = binary.sections.iter().find(|section| section.address == request.file_address).unwrap();
-    let data_order = json!({"order": "little", "source": "LLDB target byte order"});
+    let arm64 = binary.arch == rampage_arch::Arch::Aarch64;
+    let (architecture, triple) =
+        if arm64 { ("aarch64", "arm64-apple-macosx14.0.0") } else { ("x86_64", "x86_64-apple-macosx14.0.0") };
+    let data_order = if arm64 {
+        json!({"order": "unknown", "source": "target byte order does not establish ARM data endianness"})
+    } else {
+        json!({"order": "little", "source": "LLDB target byte order"})
+    };
     let session = json!({
-        "pid": 42, "state": "stopped", "triple": "x86_64-apple-macosx14.0.0", "architecture": "x86_64",
+        "pid": 42, "state": "stopped", "triple": triple, "architecture": architecture,
         "target_byte_order": "little", "data_byte_order": data_order, "address_byte_size": 8,
         "module_count": 1, "thread_count": 1,
         "operations": [
@@ -134,7 +145,7 @@ fn replies(binary: &Binary, request: &DebuggerCaptureRequest) -> Vec<Value> {
     });
     let module = json!({
         "index": request.module_index, "name": "controlled fixture", "path": "/backend-provenance/never-open.macho",
-        "uuid": request.module_uuid, "triple": "x86_64-apple-macosx14.0.0", "target_byte_order": "little",
+        "uuid": request.module_uuid, "triple": triple, "target_byte_order": "little",
         "lldb_byte_order": 4, "address_byte_size": 8,
         "image_base": format!("{:#x}", header.address), "runtime_base": format!("{:#x}", header.address + SLIDE),
     });
@@ -145,7 +156,7 @@ fn replies(binary: &Binary, request: &DebuggerCaptureRequest) -> Vec<Value> {
     let resolution = json!({
         "module_uuid": request.module_uuid, "module": resolved_module,
         "module_context": {
-            "triple": "x86_64-apple-macosx14.0.0", "object_byte_order": "little", "address_byte_size": 8,
+            "triple": triple, "object_byte_order": "little", "address_byte_size": 8,
             "data_byte_order": {"order": "unknown", "source": "no runtime data interpretation"},
         },
         "file_address": format!("{:#x}", request.file_address),
@@ -173,14 +184,27 @@ fn replies(binary: &Binary, request: &DebuggerCaptureRequest) -> Vec<Value> {
     let stop = json!({
         "source": "SBThread.GetStopReason/current-process-stop", "is_stopped": false, "stop_reason": 3,
     });
+    let (required_registers, values) = if arm64 {
+        (
+            json!(["cpsr", "pc", "sp"]),
+            json!({
+                "pc": format!("{:#x}", request.file_address + SLIDE), "sp": "0x7fff0000", "cpsr": "0x0",
+            }),
+        )
+    } else {
+        (
+            json!(["rflags", "rip", "rsp"]),
+            json!({
+                "rip": format!("{:#x}", request.file_address + SLIDE), "rsp": "0x7fff0000", "rflags": "0x202",
+            }),
+        )
+    };
     let registers = json!({
-        "thread_id": format!("{:#x}", request.thread_id), "required_registers": ["rflags", "rip", "rsp"],
+        "thread_id": format!("{:#x}", request.thread_id), "required_registers": required_registers,
         "data_byte_order": data_order,
         "context": {
             "stop_evidence": stop, "frame_id": 0, "pc": format!("{:#x}", request.file_address + SLIDE),
-            "sp": "0x7fff0000", "registers": {
-                "rip": format!("{:#x}", request.file_address + SLIDE), "rsp": "0x7fff0000", "rflags": "0x202",
-            },
+            "sp": "0x7fff0000", "registers": values,
         },
     });
     let bytes = binary.read(request.file_address, request.size).unwrap();
@@ -493,6 +517,23 @@ fn assert_refusal_at(fixture: &Fixture, index: usize, pointer: &str, value: Valu
     let requests = server.finish();
     assert_eq!(requests.len(), index + 1, "must refuse without refresh/retry: {pointer}");
     assert_queries(&requests, &fixture.request);
+}
+
+#[test]
+fn owned_arm64_image_with_coherent_unknown_data_session_refuses_before_any_sdk_queries() {
+    let fixture = Fixture::for_image("hello-arm64.macho");
+    assert_eq!(fixture.source.binary.arch, rampage_arch::Arch::Aarch64);
+    let session = &fixture.replies[0]["data"];
+    assert_eq!(session["architecture"], "aarch64");
+    assert_eq!(session["triple"], "arm64-apple-macosx14.0.0");
+    assert_eq!(session["target_byte_order"], "little");
+    assert_eq!(session["data_byte_order"]["order"], "unknown");
+    let server = fixture.server();
+    let error = fixture.prepare(&server.path).unwrap_err();
+    assert!(error.to_string().contains("ordinary little-endian x86_64 static Mach-O"), "{error}");
+    assert!(server.finish().is_empty(), "unsupported static architecture must refuse before connecting");
+    assert!(!fixture.directory.join("capture.json").exists());
+    assert_eq!(std::fs::read(&fixture.source_path).unwrap(), fixture.source.binary.image_bytes());
 }
 
 #[test]

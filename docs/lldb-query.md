@@ -91,7 +91,8 @@ arbitrary debugger commands.
   revalidate registers and stop evidence. Raw `IsStopped()` may be false on Apple LLDB while current SDK stop
   info is valid; `stop_evidence` reports that distinction without fabricating a true flag or latest stop cause.
 - Memory bytes remain raw. ARM32 data byte order requires explicitly selected, revalidated CPSR.E;
-  AArch64 data byte order remains unknown. Unsupported ARM/ILP32 variants are rejected, not treated as ARM32.
+  AArch64 data byte order remains `unknown`, including ARM64/arm64e sessions with little-endian target and
+  process architecture defaults or readable CPSR. Unsupported ARM/ILP32 variants are rejected, not treated as ARM32.
 - Observations have `atomic_snapshot: false`. Keep debugger operations and external writers quiescent:
   matching stop tokens and content hashes do not establish coherent point-in-time capture or proven call flow.
 
@@ -99,6 +100,14 @@ Metadata paths are reported, not opened automatically. Captured bytes and regist
 keep query results local unless sharing them is authorized. The operation/data content hash covers the returned
 query envelope, not memory bytes alone; identical bytes with different metadata can have different hashes. It is
 separate from the debugger stop token and from persisted snapshot capture identity.
+
+ARM64 session descriptions, module/thread enumeration, register reads, bounded raw memory reads and qualified
+module-address observations remain available under these guards. An unknown DATA order does not prevent raw
+inspection, but it cannot authorize snapshot export. Neither `SBTarget.GetByteOrder()` nor
+`SBProcess.GetByteOrder()` supplies the missing runtime DATA fact. There is no assumption override, privileged
+register read or target-expression fallback. See [runtime data order](runtime-data-order.md) for the pinned
+SDK/architecture evidence, historical correction and acceptance boundary; the
+[snapshot guide](runtime-snapshots.md#export-from-lldb) describes the supported x86-64/ARM32 export workflow.
 
 ## Module-qualified address observations
 

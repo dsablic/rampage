@@ -402,12 +402,18 @@ def export_snapshot(
             )
         stop_id = process.GetStopID(True)
 
-        threads = select_threads(process, arguments.thread, arguments.all_threads)
         target_context = (
             target.GetTriple(),
             target.GetByteOrder(),
             target.GetAddressByteSize(),
         )
+        machine = target_context[0].split("-")[0]
+        if machine in {"arm64", "arm64e", "aarch64", "aarch64_be"}:
+            raise ValueError(
+                "ARM64 snapshot export refused: current LLDB SDK cannot affirm runtime DATA endianness; "
+                "target byte order and CPSR do not establish EL0 DATA byte order"
+            )
+        threads = select_threads(process, arguments.thread, arguments.all_threads)
         frames: dict[int, tuple[int, int, int]] = {}
 
         def ensure_stopped() -> None:
@@ -431,10 +437,7 @@ def export_snapshot(
                 ):
                     raise ValueError("thread top-frame context changed during capture")
 
-        machine = target_context[0].split("-")[0]
         arch = {
-            "arm64": "aarch64",
-            "arm64e": "aarch64",
             "x86_64": "x86_64",
             "arm": "arm",
         }.get(machine)

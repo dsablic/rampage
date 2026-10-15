@@ -35,9 +35,15 @@ No IDA comparison is recorded.
 
 The controlled stopped-process capture recorded at `35508ff` used Apple LLDB `2103.0.34.103` with ASLR enabled.
 The exporter captured executable bytes, 82 module records and 34 selected-thread registers; the captured
-function lifted completely and its UUID/header slide mapped back to the original image address.
+function lifted completely and its UUID/header slide mapped back to the original image address. Those historical
+byte/identity measurements remain recorded, but their SDK runtime DATA-order acceptance premise is superseded:
+SBTarget/SBProcess byte-order getters derive object ArchSpec order, not independent runtime DATA-order evidence.
+The standalone exporter now refuses ARM64/arm64e/aarch64 before thread/map/read/write work. Loading existing manual
+ARM64 snapshots remains unchanged and old documents are not automatically invalidated. See the
+[runtime data-order review](runtime-data-order.md) for the source-proof boundary.
 The opt-in regression runs with `RAMPAGE_LLDB_LIVE=1 python3 -m pytest tools/test_lldb_live.py` after building
-the CLI. Broader debugger/platform acceptance and derived-analysis cache persistence remain separate gates;
+the CLI; its ARM64 capture expectation is now refusal, not a rerun of the historical exporter success.
+Broader debugger/platform acceptance and derived-analysis cache persistence remain separate gates;
 see [Runtime snapshots](runtime-snapshots.md) for capture, identity and annotation persistence behavior.
 
 `rampage function compare program --reference export.json --json` compares function starts against a reference export:

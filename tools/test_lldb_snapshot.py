@@ -98,13 +98,13 @@ class Process:
 
     def ReadMemory(self, address: int, size: int, error: ReadError) -> bytes:
         self.reads.append((address, size))
-        return b"\xc0\x03\x5f\xd6"[:size]
+        return b"\x55\x48\x89\xe5"[:size]
 
 
 def debugger(process: Process) -> Any:
     target = SimpleNamespace(
         GetProcess=lambda: process,
-        GetTriple=lambda: "arm64-apple-macosx",
+        GetTriple=lambda: "x86_64-apple-macosx",
         GetByteOrder=lambda: 0,
         GetAddressByteSize=lambda: 8,
         GetNumModules=lambda: 0,
@@ -136,7 +136,7 @@ def test_export_reads_only_requested_ranges_and_never_overwrites(
     assert result.error is None
     assert process.reads == [(0x1000, 4)]
     snapshot = json.loads(output.read_text())
-    assert snapshot["regions"][0]["bytes"] == "c0035fd6"
+    assert snapshot["regions"][0]["bytes"] == "554889e5"
     assert snapshot["seeds"] == ["0x1000"]
     assert snapshot["target"] == {"platform": "darwin"}
     assert "software-breakpoint traps normalized" in snapshot["provenance"]
@@ -198,7 +198,7 @@ def test_export_records_module_slides_and_register_provenance(
         GetPC=lambda: 0x1000,
         GetSP=lambda: 0x8000,
         FindRegister=lambda name: SimpleNamespace(
-            IsValid=lambda: name == "sp",
+            IsValid=lambda: name == "rsp",
             GetValueAsUnsigned=lambda error: 0x8000,
         ),
     )
@@ -228,7 +228,7 @@ def test_export_records_module_slides_and_register_provenance(
             GetSelectedThread=lambda: thread,
             GetThreadByID=lambda identity: thread,
         ),
-        GetTriple=lambda: "arm64-apple-macosx",
+        GetTriple=lambda: "x86_64-apple-macosx",
         GetByteOrder=lambda: 0,
         GetAddressByteSize=lambda: 8,
         GetNumModules=lambda: 1,
@@ -247,7 +247,7 @@ def test_export_records_module_slides_and_register_provenance(
     assert snapshot["modules"][0]["runtime_base"] == "0x1000"
     assert snapshot["modules"][0]["image_base"] == "0x0"
     assert snapshot["registers"] == [
-        {"thread_id": "0x1", "name": "sp", "value": "0x8000"}
+        {"thread_id": "0x1", "name": "rsp", "value": "0x8000"}
     ]
 
     def failed_register(error: Any) -> int:
@@ -255,7 +255,7 @@ def test_export_records_module_slides_and_register_provenance(
         return 0
 
     frame.FindRegister = lambda name: SimpleNamespace(
-        IsValid=lambda: name == "sp",
+        IsValid=lambda: name == "rsp",
         GetValueAsUnsigned=failed_register,
     )
     result = Result()
@@ -664,7 +664,7 @@ class FileSpec:
 
 
 def loaded_module(
-    runtime: int = 0x1000, machine: str = "arm64", hole: bool = False
+    runtime: int = 0x1000, machine: str = "x86_64", hole: bool = False
 ) -> Any:
     def section(image: int, load: int) -> Any:
         return SimpleNamespace(
@@ -757,7 +757,7 @@ def test_invalid_module_selections_fail_before_target_memory_reads(
     target.GetNumModules = lambda: 2 if issue == "ambiguous" else 1
     target.GetModuleAtIndex = lambda index: loaded_module(
         2**64 - 2 if issue == "overflow" else 0x1000,
-        "x86_64" if issue == "architecture" else "arm64",
+        "arm64" if issue == "architecture" else "x86_64",
         issue == "hole",
     )
     identity = "0" * 32 if issue == "unknown" else "0123456789abcdef0123456789abcdef"
@@ -808,7 +808,7 @@ def test_opaque_module_identifiers_do_not_prevent_explicit_runtime_range_capture
 def test_contained_overlapping_section_cannot_hide_a_contradictory_slide() -> None:
     exporter = load_exporter()
     target = SimpleNamespace(
-        GetTriple=lambda: "arm64-apple-macosx",
+        GetTriple=lambda: "x86_64-apple-macosx",
         GetByteOrder=lambda: 0,
         GetAddressByteSize=lambda: 8,
     )
@@ -833,7 +833,7 @@ def test_contained_overlapping_section_cannot_hide_a_contradictory_slide() -> No
 def test_runtime_aliases_of_unselected_sections_are_rejected() -> None:
     exporter = load_exporter()
     target = SimpleNamespace(
-        GetTriple=lambda: "arm64-apple-macosx",
+        GetTriple=lambda: "x86_64-apple-macosx",
         GetByteOrder=lambda: 0,
         GetAddressByteSize=lambda: 8,
     )
@@ -878,7 +878,11 @@ class CaptureThread:
 
     def __init__(self, identity: int) -> None:
         self.identity = identity
-        self.registers = {"pc": 0x1100, "sp": 0x8000 + identity * 0x100, "x0": identity}
+        self.registers = {
+            "rip": 0x1100,
+            "rsp": 0x8000 + identity * 0x100,
+            "rax": identity,
+        }
         self.register_queries = []
 
     def IsValid(self) -> bool:
@@ -957,6 +961,59 @@ def capture_api(monkeypatch: pytest.MonkeyPatch) -> Any:
     return api
 
 
+@pytest.mark.parametrize("machine", ["arm64", "arm64e", "aarch64", "aarch64_be"])
+@pytest.mark.parametrize("selection", ["", "--thread 1", "--all-threads"])
+@pytest.mark.parametrize("status", [0, 1 << 9])
+@pytest.mark.parametrize("byte_order", [0, 1])
+def test_arm64_export_refuses_unknown_data_order_before_reads_or_files(
+    tmp_path: Path,
+    capture_api: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    machine: str,
+    selection: str,
+    status: int,
+    byte_order: int,
+) -> None:
+    exporter = load_exporter()
+    thread = CaptureThread(1)
+    thread.registers = {"pc": 0x1100, "sp": 0x8100, "x0": 1, "cpsr": status}
+    process = ThreadProcess([thread])
+    target = debugger(process).GetSelectedTarget()
+    target.GetTriple = lambda: f"{machine}-apple-macosx14.0.0"
+    target.GetByteOrder = lambda: byte_order
+    monkeypatch.setattr(process, "GetByteOrder", target.GetByteOrder, raising=False)
+    before = (process.state, process.stop_id, thread.identity, thread.registers.copy())
+
+    def forbidden(*arguments: Any, **options: Any) -> Any:
+        pytest.fail(
+            "unknown ARM64 DATA order must refuse before reads or filesystem writes"
+        )
+
+    monkeypatch.setattr(process, "ReadMemory", forbidden)
+    monkeypatch.setattr(process, "GetMemoryRegionInfo", forbidden)
+    monkeypatch.setattr(exporter.tempfile, "NamedTemporaryFile", forbidden)
+    monkeypatch.setattr(exporter.os, "link", forbidden)
+    monkeypatch.setattr(exporter, "publish_snapshot", forbidden)
+    monkeypatch.setattr(Path, "mkdir", forbidden)
+    monkeypatch.setattr(Path, "open", forbidden)
+    output = tmp_path / "capture.json"
+    result = Result()
+    exporter.export_snapshot(
+        SimpleNamespace(GetSelectedTarget=lambda: target),
+        f"{output} --region 0x1000:4:r-x {selection}",
+        result,
+        {},
+    )
+    assert "current LLDB SDK cannot affirm runtime DATA endianness" in (
+        result.error or ""
+    )
+    assert result.message is None
+    assert process.reads == process.thread_indices == process.thread_lookups == []
+    assert thread.register_queries == []
+    assert before == (process.state, process.stop_id, thread.identity, thread.registers)
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize("selection", ["", "--thread 0x2 --thread 1", "--all-threads"])
 def test_thread_selection_preserves_default_and_flattened_register_provenance(
     tmp_path: Path, capture_api: Any, selection: str
@@ -986,7 +1043,7 @@ def test_thread_selection_preserves_default_and_flattened_register_provenance(
             "value": hex(thread.registers[name]),
         }
         for thread in wanted
-        for name in ("x0", "sp", "pc")
+        for name in ("rax", "rsp", "rip")
     ]
     for thread in wanted:
         assert (
@@ -1188,10 +1245,9 @@ def test_thread_context_changes_never_publish_partial_or_mislabelled_registers(
 @pytest.mark.parametrize(
     "byte_order,address_size,machine",
     [
-        (2, 8, "arm64"),
-        (0, 4, "arm64"),
+        (2, 8, "x86_64"),
+        (0, 4, "x86_64"),
         (1, 4, "arm"),
-        (1, 8, "arm64"),
         (1, 8, "x86_64"),
     ],
 )
@@ -1250,7 +1306,7 @@ def test_multiple_modules_and_threads_keep_uuid_slides_and_context_separate(
     tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, issue: str | None
 ) -> None:
     process = ThreadProcess([CaptureThread(1), CaptureThread(2)])
-    modules = [loaded_module(0x1000), loaded_module(0x3000, "arm64e")]
+    modules = [loaded_module(0x1000), loaded_module(0x3000)]
     uuids = ["0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"]
     modules[1].GetUUIDString = lambda: uuids[1]
     if issue == "byte-order":
@@ -1258,7 +1314,7 @@ def test_multiple_modules_and_threads_keep_uuid_slides_and_context_separate(
     elif issue == "address-size":
         modules[1].GetAddressByteSize = lambda: 4
     elif issue == "architecture":
-        modules[1].GetTriple = lambda: "x86_64-apple-macosx"
+        modules[1].GetTriple = lambda: "arm64-apple-macosx"
 
     def mapping(address: int, region: MemoryRegion) -> ReadError:
         region.base = address & ~0xFFF
@@ -1334,7 +1390,7 @@ def test_changed_module_provenance_is_not_published(
         elif change == "address-size":
             module.GetAddressByteSize = lambda: 4
         else:
-            module.GetTriple = lambda: "x86_64-apple-macosx"
+            module.GetTriple = lambda: "arm64-apple-macosx"
 
     if stage == "memory":
 
@@ -1396,7 +1452,7 @@ def test_bad_registers_in_a_later_thread_refuse_the_entire_capture(
     if issue == "missing":
         threads[1].registers.clear()
     elif issue == "overflow":
-        threads[1].registers["x0"] = 2**64
+        threads[1].registers["rax"] = 2**64
     else:
 
         def register(name: str) -> Any:
@@ -1405,7 +1461,7 @@ def test_bad_registers_in_a_later_thread_refuse_the_entire_capture(
                 return 0
 
             return SimpleNamespace(
-                IsValid=lambda: name == "sp", GetValueAsUnsigned=value
+                IsValid=lambda: name == "rsp", GetValueAsUnsigned=value
             )
 
         monkeypatch.setattr(threads[1], "find_register", register)
@@ -1534,6 +1590,7 @@ def test_arm32_unknown_or_big_endian_cpsr_refuses_capture_before_memory_reads(
     tmp_path: Path, capture_api: Any, selection: str, status: int | None
 ) -> None:
     thread = CaptureThread(1)
+    thread.registers = {"pc": 0x1100, "sp": 0x8100, "r0": 1}
     if status is not None:
         thread.registers["cpsr"] = status
     process = ThreadProcess([thread])
@@ -1557,6 +1614,7 @@ def test_arm32_default_cannot_guess_data_byte_order_without_readable_status(
     tmp_path: Path, capture_api: Any, monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
     thread = CaptureThread(1)
+    thread.registers = {"pc": 0x1100, "sp": 0x8100, "r0": 1}
     thread.registers["cpsr"] = 0
     process = ThreadProcess([] if missing == "thread" else [thread])
     if missing == "frame":
@@ -1597,6 +1655,7 @@ def test_arm32_status_changes_at_publication_are_rejected_without_guessing_be8(
 ) -> None:
     exporter = load_exporter()
     thread = CaptureThread(1)
+    thread.registers = {"pc": 0x1100, "sp": 0x8100, "r0": 1}
     thread.registers["cpsr"] = 0
     process = ThreadProcess([thread])
     target = debugger(process).GetSelectedTarget()
@@ -1623,7 +1682,7 @@ def test_arm32_status_changes_at_publication_are_rejected_without_guessing_be8(
 
 
 @pytest.mark.parametrize("selection", ["--thread 1", "--all-threads"])
-@pytest.mark.parametrize("registers", [{"x0": 1}, {"pc": 0x1100}, {"sp": 0x8100}])
+@pytest.mark.parametrize("registers", [{"rax": 1}, {"rip": 0x1100}, {"rsp": 0x8100}])
 def test_explicit_thread_capture_requires_pc_and_sp_not_any_single_register(
     tmp_path: Path, capture_api: Any, selection: str, registers: dict[str, int]
 ) -> None:
@@ -1645,7 +1704,7 @@ def test_legacy_default_still_skips_unsupported_named_registers(
     tmp_path: Path, capture_api: Any
 ) -> None:
     thread = CaptureThread(1)
-    thread.registers = {"x0": 1}
+    thread.registers = {"rax": 1}
     process = ThreadProcess([thread])
     output = tmp_path / "partial-default.json"
     result = Result()
@@ -1654,7 +1713,7 @@ def test_legacy_default_still_skips_unsupported_named_registers(
     )
     assert result.error is None
     assert json.loads(output.read_text())["registers"] == [
-        {"thread_id": "0x1", "name": "x0", "value": "0x1"}
+        {"thread_id": "0x1", "name": "rax", "value": "0x1"}
     ]
 
 
@@ -1770,9 +1829,9 @@ def test_publication_uses_fresh_resolved_thread_top_frame_not_retained_valid_obj
     def mutate() -> None:
         replacement = CaptureThread(1)
         if change == "pc":
-            replacement.registers["pc"] = 0x9900
+            replacement.registers["rip"] = 0x9900
         elif change == "sp":
-            replacement.registers["sp"] = 0xA000
+            replacement.registers["rsp"] = 0xA000
         elif change == "invalid":
             replacement.frame_valid = False
         else:

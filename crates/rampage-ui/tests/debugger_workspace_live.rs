@@ -40,6 +40,116 @@ fn address(metadata: &Value, field: &str) -> u64 {
 }
 
 #[test]
+#[ignore = "requires the opt-in Python runner's owned stopped native ARM64 LLDB fixture; no ARM64 capture"]
+fn owned_lldb_native_arm64_workspace_readonly_inspection() {
+    assert_eq!(std::env::var("RAMPAGE_LLDB_ARM64_WORKSPACE_LIVE").as_deref(), Ok("1"));
+    let metadata: Value = serde_json::from_str(&std::env::var("RAMPAGE_LLDB_WORKSPACE_METADATA").unwrap()).unwrap();
+    let source = PathBuf::from(metadata["source"].as_str().unwrap());
+    let source_bytes = std::fs::read(&source).unwrap();
+    assert_eq!(&source_bytes[..4], &[0xcf, 0xfa, 0xed, 0xfe]);
+    assert_eq!(u32::from_le_bytes(source_bytes[4..8].try_into().unwrap()), 0x0100_000c);
+    assert_eq!(u32::from_le_bytes(source_bytes[8..12].try_into().unwrap()), 0, "ordinary ARM64, not arm64e");
+    let output = PathBuf::from(metadata["output"].as_str().unwrap());
+    assert!(!output.exists());
+    let mut app = App::blocking();
+    app.open(&egui::Context::default(), source.clone(), None);
+    app.show_debugger();
+    let workspace = app.workspace_mut().expect("owned ordinary ARM64 Mach-O must open");
+    let original = Arc::clone(&workspace.project);
+    assert_eq!(original.binary.format, Format::MachO);
+    let annotations = serde_json::to_string(&original.annotation_list()).unwrap();
+    workspace.goto(address(&metadata, "file_address") + 4);
+    let cursor = workspace.cursor;
+    let mut harness =
+        Harness::builder().with_size(egui::vec2(1900.0, 4000.0)).build_ui_state(|ui, app: &mut App| app.show(ui), app);
+    harness.run();
+    harness.get_by_label("Not connected. No query has been sent by opening this window.");
+    replace_input(&mut harness, "debugger-socket", metadata["socket"].as_str().unwrap());
+    click(&mut harness, "Connect stopped session");
+    wait_for(&mut harness, "Runtime data byte order: unknown (no scalar interpretation)");
+    click(&mut harness, "List modules page");
+    let module_label = format!(
+        "Module {} · {} · {} · {}",
+        metadata["module_index"].as_u64().unwrap(),
+        metadata["module_name"].as_str().unwrap(),
+        metadata["module_uuid"].as_str().unwrap(),
+        metadata["module_triple"].as_str().unwrap(),
+    );
+    wait_for(&mut harness, &module_label);
+    click(&mut harness, &module_label);
+    click(&mut harness, "List threads page");
+    let thread_id = metadata["thread_id"].as_u64().unwrap();
+    let thread_label = format!(
+        "Thread {thread_id:#x} · stop reason {} · SDK is_stopped {}",
+        metadata["stop_reason"].as_u64().unwrap(),
+        metadata["is_stopped"].as_bool().unwrap(),
+    );
+    wait_for(&mut harness, &thread_label);
+    click(&mut harness, &thread_label);
+    replace_input(&mut harness, "debugger-memory-address", metadata["load_address"].as_str().unwrap());
+    replace_input(&mut harness, "debugger-file-address", metadata["file_address"].as_str().unwrap());
+    let (target_node, target_tree) = harness.get_by_value("64").accesskit_node().locate();
+    harness.event(egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+        target_node,
+        target_tree,
+        action: egui::accesskit::Action::SetValue,
+        data: Some(egui::accesskit::ActionData::NumericValue(4.0)),
+    }));
+    harness.step();
+    harness.get_by_role(egui::accesskit::Role::ComboBox).click_accesskit();
+    harness.run();
+    click(&mut harness, "r-x");
+    let editor_text = "keep this unsaved ARM64 inspection comment";
+    let workspace = harness.state_mut().workspace_mut().unwrap();
+    workspace.begin_comment();
+    workspace.editing.as_mut().unwrap().text = editor_text.to_owned();
+    harness.run();
+    click(&mut harness, "Read selected thread registers");
+    wait_for(&mut harness, &format!("Raw registers · thread {thread_id:#x}"));
+    {
+        let debugger_window = harness.get_by_label("Read-only debugger");
+        debugger_window.get_by_label("Runtime data byte order: unknown");
+        for (name, value) in metadata["registers"].as_object().unwrap() {
+            debugger_window.get_by_label(name);
+            assert!(
+                debugger_window.query_all_by_label(value.as_str().unwrap()).count() > 0,
+                "missing SDK register {name} value in the debugger window",
+            );
+        }
+    }
+    click(&mut harness, "Read raw memory");
+    wait_for(&mut harness, &format!("Raw memory · {:#x} · 4 bytes", address(&metadata, "load_address")));
+    harness.get_by_label("Runtime data byte order: unknown. Hex bytes only; no scalar interpretation.");
+    harness.get_by_label("LLDB ReadMemory may normalize software-breakpoint trap bytes.");
+    let hex = metadata["bytes_hex"].as_str().unwrap();
+    let bytes = hex.as_bytes().chunks(2).map(|pair| std::str::from_utf8(pair).unwrap()).collect::<Vec<_>>().join(" ");
+    harness.get_by_label(&format!("{:016x}  {bytes}", address(&metadata, "load_address")));
+    click(&mut harness, "Resolve selected file address");
+    wait_for(&mut harness, "Go to matching static image address");
+    assert_eq!(harness.state_mut().workspace_mut().unwrap().cursor, cursor, "inspection navigated implicitly");
+    assert!(harness.get_by_label("Prepare capture preview (9 queries)").accesskit_node().is_disabled());
+    harness.get_by_label(concat!(
+        "Capture supports ordinary little-endian x86_64 Mach-O only. ",
+        "ARM64 data order remains unknown.",
+    ));
+    click(&mut harness, "Go to matching static image address");
+    harness.run();
+    assert!(harness.get_by_label("Prepare capture preview (9 queries)").accesskit_node().is_disabled());
+    let workspace = harness.state_mut().workspace_mut().unwrap();
+    assert_eq!(workspace.path, source);
+    assert!(Arc::ptr_eq(&workspace.project, &original));
+    assert_eq!(workspace.cursor, address(&metadata, "file_address"));
+    assert!(workspace.can_go_back());
+    let editing = workspace.editing.as_ref().expect("inspection must preserve the unsaved editor");
+    assert_eq!(editing.address, cursor);
+    assert_eq!(editing.text, editor_text);
+    assert_eq!(serde_json::to_string(&original.annotation_list()).unwrap(), annotations);
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    original.binary.validate_backing_source().unwrap();
+    assert!(!output.exists(), "read-only ARM64 inspection must not publish a capture");
+}
+
+#[test]
 #[ignore = "requires the opt-in Python runner's owned stopped x86_64 LLDB fixture"]
 fn owned_lldb_workspace_connect_inspect_prepare_compare_save_open() {
     assert_eq!(std::env::var("RAMPAGE_LLDB_WORKSPACE_LIVE").as_deref(), Ok("1"));

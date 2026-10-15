@@ -714,6 +714,11 @@ class QueryContext:
     def data_byte_order(
         self, registers: dict[str, Any] | None = None
     ) -> dict[str, Any]:
+        """AArch64 CPSR lacks EL0 DATA endianness; SDK byte-order getters use ArchSpec.
+
+        See SBTarget.cpp and SBProcess.cpp at Swift LLVM
+        1b669c3f63758879bb0c517a589abdea4c6efbeb; neither getter samples SCTLR_EL1.E0E.
+        """
         arch = self.architecture()
         if arch == "arm" and registers is not None:
             status = int(registers["registers"]["cpsr"], 16)

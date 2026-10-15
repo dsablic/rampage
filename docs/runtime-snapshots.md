@@ -12,6 +12,13 @@ command script import /path/to/rampage/tools/lldb_snapshot.py
 rampage-snapshot capture.json --region 0x1000:0x100:r-x --region 0x3000:0x20:rw- --seed 0x1000
 ```
 
+These export commands support little-endian x86-64 and ARM32 targets, not ARM64. ARM64, arm64e and AArch64
+exports are refused before thread selection, mapping inspection, memory reads or output-file access because
+the inspected LLDB SDK cannot affirm runtime DATA byte order. Target and process byte-order getters report
+architecture context, not that missing runtime fact. There is no `--assume` override. Use the
+[query bridge](lldb-query.md) for raw ARM64 inspection; see [runtime data order](runtime-data-order.md) for the
+evidence boundary and the superseded ARM64 export claim.
+
 Select ranges explicitly. The exporter reads those ranges, refuses partial reads and existing output files,
 and limits captured bytes to 64 MiB. Requested permissions must exactly match every underlying readable mapped
 range reported by LLDB; writable memory cannot be labelled immutable and non-executable memory cannot be
@@ -24,12 +31,12 @@ Preserve the actual runtime addresses: they already include ASLR.
 
 Top-frame registers default to the selected thread. Repeat `--thread ID` to select specific thread IDs, or
 use `--all-threads` to capture the stopped process's complete thread set; these options are mutually exclusive
-and bounded to 64 threads. Explicit selections require valid top frames and core registers: `pc/sp` on ARM64,
-`pc/sp/cpsr` on ARM32, and `rip/rsp` on x86-64. Other named registers remain optional.
+and bounded to 64 threads. Explicit selections require valid top frames and core registers: `pc/sp/cpsr` on
+ARM32 and `rip/rsp` on x86-64. Other named registers remain optional.
 Thread IDs/stop context, target context and module UUID/header mappings are checked before publication.
 Selecting threads does not change debugger selection or process execution state.
 
-The exporter accepts little-endian ARM64, ARM32 and x86-64 targets with matching address widths. Selected
+The exporter accepts little-endian ARM32 and x86-64 targets with matching address widths. Selected
 module architecture, byte order and address width must agree with the target. Unknown and big-endian target
 byte orders are rejected rather than guessing separate code/data order; ARM BE8 and heterogeneous module
 endian context remain unsupported by this exporter. The snapshot loader retains its explicit endian fields.
@@ -100,6 +107,8 @@ candidate entries are reported separately; flagged prefixes do not assess every 
 Addresses are hexadecimal strings. Regions must be nonempty and nonoverlapping; seeds and entry must be in
 captured executable memory. `big_endian` selects instruction byte order, `data_big_endian` selects data byte
 order, and `thumb` on an executable ARM region selects Thumb. Unknown fields and malformed hex are rejected.
+The ARM64 example describes the loader format, not current LLDB export support. Existing and synthetic ARM64
+snapshots remain loadable; their declared data byte order is not independent stopped-process evidence.
 
 ## Limits
 
@@ -171,9 +180,11 @@ fixpoints and general alias proofs remain unsupported.
 Optional `modules` entries have `name`, `path`, `uuid`, `image_base` and `runtime_base`. Optional `registers`
 entries have hexadecimal `thread_id`/`value` and a register `name`. Both lists are limited to 4,096 entries;
 module UUIDs and per-thread register names must be unique. The LLDB adapter exports those fields from the
-stopped target without evaluating expressions or executing target code. The opt-in controlled ARM64 integration
-test verifies live export and original-image correlation with ASLR enabled; the earlier launch stall was avoided
-by leaving ASLR enabled rather than requesting its disablement.
+stopped target without evaluating expressions or executing target code, on supported export architectures.
+Earlier owned ARM64 export tests verified byte contents and identity under the then-assumed data order, with
+ASLR enabled; subsequent review **superseded that data-order claim**. Those historical measurements do not
+validate the current refusal contract. See [runtime data order](runtime-data-order.md#acceptance-boundary)
+for the separate source/mock and live acceptance boundaries.
 
 `rampage runtime module correlate capture.json --original module.dylib --module <uuid> --at 0x1010` checks the UUID
 against the explicitly supplied Mach-O image and translates the runtime address using the recorded header
