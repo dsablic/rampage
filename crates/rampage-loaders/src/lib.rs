@@ -2,6 +2,7 @@ pub mod carve;
 pub mod container;
 mod details;
 mod entropy;
+pub mod linkage;
 mod load;
 mod macho;
 mod model;
@@ -15,7 +16,11 @@ pub use details::{
     RichEntry,
 };
 pub use entropy::shannon_entropy;
-pub use load::{Binary, Embedded, ImageAt, LoadError};
+pub use linkage::{
+    LinkageCoverage, LinkageCoverageStatus, LinkageExport, LinkageExportTarget, LinkageImport, LinkageImportProvenance,
+    LinkageLimitation, LinkageLimits, LinkageMetadata, LinkageStatus, LinkageSymbol, linkage_metadata,
+};
+pub use load::{Binary, Embedded, ImageAt, InventorySourceContext, LoadError};
 pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
 mod checked_snapshot;
 pub mod debug;

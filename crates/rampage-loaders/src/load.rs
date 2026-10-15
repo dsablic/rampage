@@ -14,6 +14,8 @@ use crate::details::{Details, Overlay};
 use crate::model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
 use crate::starts;
 
+pub type InventorySourceContext<'a> = (Range<usize>, &'a [Range<u64>], &'a [(u64, u64)]);
+
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
     #[error("cannot read {path}")]
@@ -217,6 +219,20 @@ impl Deref for Bytes {
 }
 
 impl Binary {
+    /// Bounded linkage evidence from this retained image, without opening dependency paths.
+    pub fn linkage_metadata(&self, limits: crate::LinkageLimits) -> Result<crate::LinkageMetadata, LoadError> {
+        crate::linkage_metadata(self, limits)
+    }
+
+    /// Actual retained selection and loader context for consistency keys; this grants no source authority.
+    pub fn inventory_source_context(&self) -> InventorySourceContext<'_> {
+        (self.image.clone(), &self.code_ranges, &self.rebases)
+    }
+
+    pub(crate) fn linkage_private_vectors_over_limit(&self, limit: usize) -> bool {
+        self.code_ranges.len() > limit || self.rebases.len() > limit
+    }
+
     /// Detects observable changes to the original mapped file without reading mapped bytes. This metadata check
     /// does not make subsequent reads atomic with external writes or truncation. Owned inputs have no such proof.
     pub fn validate_backing_source(&self) -> Result<(), LoadError> {

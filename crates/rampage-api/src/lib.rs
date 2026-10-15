@@ -20,6 +20,7 @@ mod files;
 mod graph;
 mod jumptable;
 mod listing;
+mod module_references;
 mod offset;
 pub mod packs;
 mod pointer_compare;
@@ -78,6 +79,13 @@ pub use files::{
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
 pub use jumptable::{JumpTable, JumpTableEntry};
 pub use listing::{DisassemblyLine, FunctionListing};
+pub use module_references::{
+    MAX_MODULE_REFERENCE_MODULES, MAX_MODULE_REFERENCE_PAGE, MAX_MODULE_REFERENCE_RESULT_BYTES,
+    ModuleReferenceCandidate, ModuleReferenceCoverage, ModuleReferenceInput, ModuleReferenceMetadataOrigin,
+    ModuleReferenceMetadataStatus, ModuleReferenceName, ModuleReferenceQuery, ModuleReferenceReport,
+    ModuleReferenceRow, ModuleReferenceStatus, ModuleReferenceView, module_references, prepare_module_reference_view,
+    validate_module_reference_inputs,
+};
 pub use offset::{FileOffset, parse_file_offset};
 pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
 pub use pointer_compare::{PointerChange, PointerComparison};
