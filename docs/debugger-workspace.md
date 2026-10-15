@@ -186,7 +186,7 @@ annotation interfaces; opening does not execute a target or import proven types/
 ## Acceptance boundary
 
 API/UI capture tests use owned fixture images and controlled LLDB protocol responses. Local acceptance includes
-21 capture API integration cases, the ordinary UI suite and unchanged offscreen snapshots, including actual
+22 capture API integration cases, the ordinary UI suite and unchanged offscreen snapshots, including actual
 App-control Prepare and explicit Save/Open failure paths. The debug workspace suites passed in bounded package
 slices, and all-target Clippy passed. A new live end-to-end workspace Prepare/Compare/Save/Open gate is not yet
 earned. The opt-in owned x86-64 live test compiled and LLDB loaded its Mach-O, but Apple LLDB

@@ -3,7 +3,7 @@
 use std::fs::{DirBuilder, File, Permissions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt, symlink};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -212,6 +212,31 @@ struct Server {
     worker: Option<JoinHandle<Vec<Value>>>,
 }
 
+fn blocking_connection(stream: UnixStream) -> UnixStream {
+    stream.set_nonblocking(false).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    stream.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
+    stream
+}
+
+#[test]
+fn controlled_server_connections_clear_inherited_nonblocking_flags_before_framed_reads() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    server.set_nonblocking(true).unwrap();
+    let server = blocking_connection(server);
+    assert!(!rustix::fs::fcntl_getfl(&server).unwrap().contains(rustix::fs::OFlags::NONBLOCK));
+    assert_eq!(server.read_timeout().unwrap(), Some(Duration::from_secs(3)));
+    client.write_all(b"{\"version\":1}\n").unwrap();
+    client.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut reader = BufReader::new(server);
+    let mut frame = String::new();
+    reader.read_line(&mut frame).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&frame).unwrap(), json!({"version":1}));
+    let mut tail = Vec::new();
+    reader.read_to_end(&mut tail).unwrap();
+    assert!(tail.is_empty());
+}
+
 impl Server {
     fn new(
         path: PathBuf,
@@ -235,9 +260,7 @@ impl Server {
                     }
                     Err(error) => panic!("fake server accept: {error}"),
                 };
-                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-                stream.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
-                let mut reader = BufReader::new(stream);
+                let mut reader = BufReader::new(blocking_connection(stream));
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();

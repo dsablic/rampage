@@ -691,7 +691,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Independent reviews reconciled import-stub NOP boundaries, covered data extents, conditional transfers,
   whole-JSON byte-budget progress and publication/resource lifecycle issues, with retained regressions.
 - [x] Ordinary debug workspace tests and doctests passed in bounded package slices, including the accuracy/
-  evaluation gate and unchanged UI snapshots. New gates include 36 entry samples, 21 capture API cases, 74 UI
+  evaluation gate and unchanged UI snapshots. New gates include 36 entry samples, 22 capture API cases, 74 UI
   library tests, native/worker parity, both CLI spellings and actual v1/v2 checked exact-entry replay.
   The explicitly selected isolated CLI dispatch test passed; compiled opt-in gates remain separately scoped.
 - [x] All-target workspace Clippy passed with warnings denied. One combined API/native validation batch reached
@@ -706,12 +706,15 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   arm64 host, before UI observations. No Rosetta installation or ARM64 data-order guess bypassed that blocker.
 - [x] Final publication review closed 32-bit sample-width handling and capture paint-time mapped-header reads.
   Metadata-only painting and explicit-action physical checks retain separate authority, with regressions.
-- [x] Protected candidate-source scan and scanner bypass regressions passed; committed-tree/full-history scans
-  are required before private push. No release tag or Actions dispatch is part of publication; capture artifacts
+- [x] Protected 929-file candidate-source scan, scanner bypass regressions and committed-tree/full-history audits
+  passed before private publication. No release tag or Actions dispatch is part of publication; capture artifacts
   and scanner scratch stay outside commits.
 - [x] Measurement tooling: 17 tests and 621 subtests passed, with scoped Ruff/format/ty checks. The 64-test combined
   CI runner command passed. Its initial run returned an unavailable baseline in an unchanged corpus regression;
   a focused diagnostic matched the baseline and the unchanged command passed, not evidence of a startup fix.
+- [x] Final capture regression exposed inherited nonblocking flags on accepted controlled-server sockets on macOS.
+  The API helper now matches the UI helper's explicit clearing before framed reads, with a descriptor-state
+  regression rather than relaxed deadlines or retries. Production debugger socket behavior is unchanged.
 - [x] Inline exact/legacy measurements on owned ELF, PE and Mach-O: 18/18 source-oracle attempts passed in
   6.986 seconds, with wall-time, sampled RSS and exact API phase ranges recorded in `docs/entry-measurements.md`.
   No speedup or constant-latency claim is earned. The separate mixed pilot retained six passes, one unsupported
