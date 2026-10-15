@@ -141,6 +141,8 @@ pub struct Xrefs {
 
 pub struct Workspace {
     pub(crate) instance: Arc<()>,
+    pub(crate) annotations_epoch: Arc<()>,
+    pub(crate) debug_layout: crate::debug_layout::DebugLayouts,
     pub path: PathBuf,
     /// The embedded image opened, when not the whole file.
     pub image: Option<ImageAt>,
@@ -215,6 +217,8 @@ impl Workspace {
         let address_width = (64 - highest.leading_zeros() as usize).div_ceil(4).max(4);
         let mut workspace = Self {
             instance: Arc::new(()),
+            annotations_epoch: Arc::new(()),
+            debug_layout: crate::debug_layout::DebugLayouts::default(),
             path,
             image,
             project,
@@ -310,6 +314,15 @@ impl Workspace {
             }
             ctx.request_repaint_after(ANNOTATION_REFRESH);
         }
+        let mut review = std::mem::take(&mut self.debug_layout);
+        review.poll(self);
+        self.debug_layout = review;
+    }
+
+    pub(crate) fn review_debug_layouts(&mut self, ctx: &egui::Context) {
+        let mut review = std::mem::take(&mut self.debug_layout);
+        review.start(self, ctx, self.blocking);
+        self.debug_layout = review;
     }
 
     pub fn analysis_ready(&self) -> bool {
@@ -457,7 +470,9 @@ impl Workspace {
     }
 
     /// Refreshes everything that shows names or comments after an edit at `address`, or anywhere.
-    fn annotations_changed(&mut self, address: Option<u64>) {
+    pub(crate) fn annotations_changed(&mut self, address: Option<u64>) {
+        self.annotations_epoch = Arc::new(());
+        self.debug_layout.invalidate();
         self.pseudocode_address = None;
         self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
         if !self.pseudocode.is_running() {

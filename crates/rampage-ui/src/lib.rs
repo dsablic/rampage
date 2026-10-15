@@ -4,6 +4,7 @@ mod about;
 pub mod assistant;
 mod band;
 mod carve;
+mod debug_layout;
 mod debugger;
 mod graph;
 mod listing;
@@ -29,6 +30,8 @@ pub struct App {
     /// One line per pack or content that did not load, once the packs have loaded.
     pack_problems: Option<Vec<String>>,
     workspace: Option<Workspace>,
+    /// Shared with replacement workspaces; dropping a receiver does not stop its preview thread.
+    debug_layout_gate: debug_layout::PreviewGate,
     /// The carving of the file last opened, for opening what it embeds.
     carve: Option<carve::Carve>,
     error: Option<String>,
@@ -58,6 +61,7 @@ impl Default for App {
             session: Session::default(),
             pack_problems: None,
             workspace: None,
+            debug_layout_gate: debug_layout::PreviewGate::default(),
             carve: None,
             error: None,
             dock: default_layout(),
@@ -87,7 +91,8 @@ impl App {
             self.carve = Some(carve::Carve::start(path.clone(), ctx, self.blocking));
         }
         match Workspace::open(&self.session, path, arch, image, ctx, self.blocking) {
-            Ok(workspace) => {
+            Ok(mut workspace) => {
+                workspace.debug_layout = debug_layout::DebugLayouts::with_gate(self.debug_layout_gate.clone());
                 self.debugger.invalidate_navigation();
                 self.workspace = Some(workspace);
                 self.error = None;
@@ -133,6 +138,13 @@ impl App {
     /// Opens the local read-only debugger window without connecting or requiring a loaded binary.
     pub fn show_debugger(&mut self) {
         self.debugger.shown = true;
+    }
+
+    /// Opens a fresh checked layout review without importing anything.
+    pub fn show_debug_layout_review(&mut self, ctx: &egui::Context) {
+        if let Some(workspace) = &mut self.workspace {
+            workspace.review_debug_layouts(ctx);
+        }
     }
 
     pub fn workspace_mut(&mut self) -> Option<&mut Workspace> {
@@ -188,6 +200,7 @@ impl App {
                 .show_inside(ui, &mut tabs::Viewer { workspace });
         });
         if let Some(workspace) = &mut self.workspace {
+            debug_layout::show(ui.ctx(), workspace);
             Self::edit_dialog(&ui.ctx().clone(), workspace);
             Self::undo_dialog(&ui.ctx().clone(), workspace);
         }
@@ -223,7 +236,10 @@ impl App {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // Space switches between the listing and the graph, as in IDA.
         let toggle = !ctx.egui_wants_keyboard_input()
-            && self.workspace.as_ref().is_some_and(|workspace| workspace.editing.is_none())
+            && self
+                .workspace
+                .as_ref()
+                .is_some_and(|workspace| workspace.editing.is_none() && !workspace.debug_layout.shown())
             && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Space));
         if toggle {
             let view = if self.graph_in_use(ctx) { Tab::Disassembly } else { Tab::Graph };
@@ -234,7 +250,7 @@ impl App {
             self.show_debugger();
         }
         let Some(workspace) = &mut self.workspace else { return };
-        if typing || self.typing || workspace.editing.is_some() {
+        if typing || self.typing || workspace.editing.is_some() || workspace.debug_layout.shown() {
             return;
         }
         // Consuming the keys keeps them from reaching anything else. Matching ignores extra Shift, so Cmd+Shift+Z
@@ -345,6 +361,13 @@ impl App {
                 egui::Label::new(RichText::new("rampage").strong().color(theme::LINK)).sense(egui::Sense::click()),
             );
             brand.context_menu(|ui| {
+                if ui
+                    .add_enabled(self.workspace.is_some(), egui::Button::new("Review checked debug layouts…"))
+                    .clicked()
+                {
+                    self.show_debug_layout_review(ui.ctx());
+                    ui.close();
+                }
                 if ui.button("Read-only debugger (Cmd+D)").clicked() {
                     self.show_debugger();
                     ui.close();

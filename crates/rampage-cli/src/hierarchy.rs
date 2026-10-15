@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Arg, ArgMatches, Subcommand};
 
 use crate::args::ArchiveInventoryArgs;
+use crate::args::ImportDebugLayoutsArgs;
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
@@ -101,8 +102,9 @@ impl RootCommand {
             Self::Annotation(AnnotationCommand::Comment(args)) => Command::Comment(args),
             Self::Annotation(AnnotationCommand::ApplyBatch(args)) => Command::AnnotateBatch(args),
             Self::Annotation(AnnotationCommand::CheckNames(args)) => Command::CheckNames(args),
-            Self::Type(TypeCommand::ImportDebug(args)) => Command::DebugTypes(args),
-            Self::Type(TypeCommand::ImportPdbNames(args)) => Command::ImportPdbNames(args),
+            Self::Type(TypeCommand::Debug(args)) => Command::DebugTypes(args),
+            Self::Type(TypeCommand::DebugLayouts(args)) => Command::ImportDebugLayouts(args),
+            Self::Type(TypeCommand::PdbNames(args)) => Command::ImportPdbNames(args),
             Self::Runtime(RuntimeCommand::Pointer(PointerCommand::Observe(args))) => Command::ObservePointer(args),
             Self::Runtime(RuntimeCommand::Pointer(PointerCommand::Compare(args))) => Command::ComparePointers(args),
             Self::Runtime(RuntimeCommand::Branch(BranchCommand::Inspect(args))) => Command::ObserveIndirectBranch(args),
@@ -217,9 +219,14 @@ pub(crate) enum AnnotationCommand {
 #[derive(Subcommand)]
 pub(crate) enum TypeCommand {
     /// Preview embedded DWARF scalar/pointer function signatures, optionally persist them
-    ImportDebug(DebugTypesArgs),
+    #[command(name = "import-debug")]
+    Debug(DebugTypesArgs),
+    /// Review checked embedded DWARF layouts/signatures; apply only with --apply --review-sha256 from a fresh preview
+    #[command(name = "import-debug-layouts")]
+    DebugLayouts(ImportDebugLayoutsArgs),
     /// Preview names from an explicit identity-matched PDB, or apply all eligible names as one atomic annotation batch
-    ImportPdbNames(ImportPdbNamesArgs),
+    #[command(name = "import-pdb-names")]
+    PdbNames(ImportPdbNamesArgs),
 }
 
 #[derive(Subcommand)]

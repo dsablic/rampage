@@ -274,6 +274,28 @@ pub(crate) struct DebugTypesArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct ImportDebugLayoutsArgs {
+    #[arg(value_name = "IMAGE")]
+    pub(crate) file: PathBuf,
+    /// Apply the complete reviewed dependency batch atomically; undo is same-process only, not after CLI exit
+    #[arg(long, requires = "review_sha256")]
+    pub(crate) apply: bool,
+    /// Exact lowercase SHA-256 from a fresh preview; binds the complete review, not only this evidence page
+    #[arg(long, requires = "apply", value_parser = rampage_api::tools::parse_debug_layout_review_sha256)]
+    pub(crate) review_sha256: Option<String>,
+    /// Evidence rows to skip; never selects which layouts or signatures are applied
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// Evidence rows per page (1 to 1000); the 60000-byte receipt budget may shorten the page
+    #[arg(
+        long,
+        default_value_t = 100,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=1000)
+    )]
+    pub(crate) limit: usize,
+}
+
+#[derive(Args)]
 pub(crate) struct ImportPdbNamesArgs {
     pub(crate) file: PathBuf,
     /// Explicit PDB file; no recorded path, sidecar discovery, symbol server or download is used

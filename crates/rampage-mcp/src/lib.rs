@@ -69,6 +69,9 @@ loaded with their licence and provenance. Types: set_signature, set_types and se
 language_metadata exposes demangled names and bounded metadata. import_pdb_names requires an explicit pdb path \
 matching the PE image's RSDS GUID/age; preview is the default, apply=true imports names only as one undo batch. \
 Its detail pages never restrict the whole import; whole_apply_succeeded and exact totals survive byte caps. \
+import_debug_layouts previews checked DWARF layouts/signatures; only apply=true with the exact review_sha256 from a \
+fresh preview applies the complete atomic batch. The hash binds all evidence, not just the page; changed content \
+requires re-review. Undo is same-process only and is not recovered after CLI exit. \
 Diagnostics: analysis_diagnostics reports decode \
 confidence limits. Runtime: compare_runtime_bytes takes an explicit original path, module UUID and hexadecimal runtime \
 ranges, returning paginated byte evidence without sidecars or annotation transfer; verify identities when combining \
@@ -311,6 +314,9 @@ impl RampageServer {
         let outcome = (|| -> Result<(String, bool), String> {
             let tool =
                 self.tools.iter().find(|tool| tool.name == name).ok_or_else(|| format!("unknown tool {name}"))?;
+            if name == "import_debug_layouts" {
+                tools::validate_debug_layout_arguments(&Value::Object(arguments.clone()))?;
+            }
             let path = path.as_ref().and_then(Value::as_str).ok_or("`path` is required")?;
             let arch = match arch.as_ref() {
                 None | Some(Value::Null) => None,
@@ -343,6 +349,10 @@ impl RampageServer {
             Ok((message, true)) => CallToolResult::error(vec![ContentBlock::text(message)]),
             Err(message) if name == "import_pdb_names" => {
                 CallToolResult::error(vec![ContentBlock::text(tools::pdb_import_error(&message, apply_requested))])
+            }
+            Err(message) if name == "import_debug_layouts" => {
+                let receipt = tools::debug_layout_import_error(&message, apply_requested);
+                CallToolResult::error(vec![ContentBlock::text(receipt)])
             }
             Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
         }
@@ -420,6 +430,9 @@ impl ServerHandler for RampageServer {
             let reason = if name == "import_pdb_names" {
                 let apply_requested = arguments.get("apply").map_or(Some(false), Value::as_bool);
                 tools::pdb_import_error(&reason, apply_requested)
+            } else if name == "import_debug_layouts" {
+                let apply_requested = arguments.get("apply").map_or(Some(false), Value::as_bool);
+                tools::debug_layout_import_error(&reason, apply_requested)
             } else {
                 reason
             };

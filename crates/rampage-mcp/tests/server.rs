@@ -95,6 +95,7 @@ async fn lists_all_tools_with_instructions() {
         "function_graph",
         "function_summary",
         "identify_functions",
+        "import_debug_layouts",
         "import_debug_signatures",
         "import_pdb_names",
         "inspect_jump_table",

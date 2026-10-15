@@ -14,6 +14,7 @@ use rampage_api::{FunctionsQuery, ListQuery, Packs, StringsQuery};
 use rampage_arch::Arch;
 
 use crate::args::ArchiveInventoryArgs;
+use crate::args::ImportDebugLayoutsArgs;
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
@@ -180,6 +181,8 @@ enum Command {
     DebugTypes(DebugTypesArgs),
     #[command(skip)]
     ImportPdbNames(ImportPdbNamesArgs),
+    #[command(skip)]
+    ImportDebugLayouts(ImportDebugLayoutsArgs),
     /// Run a guided investigation workflow and print its bounded, evidence-backed report
     #[command(hide = true)]
     Report(ReportArgs),
@@ -379,6 +382,7 @@ fn main() -> ExitCode {
         Command::Annotations(FileArgs { file }) => commands::annotations(&mut out, &file, &options),
         Command::DebugTypes(DebugTypesArgs { file, apply }) => commands::debug_types(&mut out, &file, apply, &options),
         Command::ImportPdbNames(args) => commands::import_pdb_names(&mut out, &args, &options),
+        Command::ImportDebugLayouts(args) => commands::import_debug_layouts(&mut out, &args, &options),
         Command::Report(ReportArgs {
             workflow,
             file,

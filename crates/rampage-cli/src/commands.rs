@@ -842,6 +842,222 @@ pub fn debug_types(out: &mut impl Write, path: &Path, apply: bool, options: &Opt
     Ok(())
 }
 
+pub fn import_debug_layouts(
+    out: &mut impl Write,
+    args: &crate::args::ImportDebugLayoutsArgs,
+    options: &Options,
+) -> Result<()> {
+    let input = serde_json::json!({
+        "apply": args.apply, "review_sha256": args.review_sha256, "offset": args.offset, "limit": args.limit,
+    });
+    let result = (|| -> Result<(String, bool)> {
+        rampage_api::tools::validate_debug_layout_arguments(&input).map_err(anyhow::Error::msg)?;
+        let project = open(&args.file, options)?;
+        Ok(rampage_api::tools::call(&rampage_api::tools::tools(), &project, "import_debug_layouts", input))
+    })();
+    let (text, failed) = match result {
+        Ok(result) => result,
+        Err(error) => (rampage_api::tools::debug_layout_import_error(&format!("{error:#}"), Some(args.apply)), true),
+    };
+    let receipt: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+        anyhow::anyhow!("debug layout result decoding failed after the operation; do not assume no action: {error}")
+    })?;
+    write_debug_layout_receipt(out, &text, &receipt, options.json)?;
+    if failed {
+        anyhow::bail!("{}", receipt["error"].as_str().unwrap_or("debug layout import rejected; nothing imported"));
+    }
+    Ok(())
+}
+
+fn write_debug_layout_receipt(out: &mut impl Write, text: &str, receipt: &serde_json::Value, json: bool) -> Result<()> {
+    let result = (|| -> Result<()> {
+        if json {
+            out.write_all(text.as_bytes())?;
+        } else {
+            render_debug_layout_receipt(out, receipt)?;
+        }
+        out.flush()?;
+        Ok(())
+    })();
+    result.map_err(|error| {
+        anyhow::anyhow!(
+            "debug layout output failed (status={}, whole_apply_succeeded={}, \
+             applied_total={}, imported_types_total={}): {error}",
+            receipt["status"].as_str().unwrap_or("unknown"),
+            receipt["whole_apply_succeeded"],
+            receipt["applied_total"],
+            receipt["imported_types_total"]
+        )
+    })
+}
+
+fn render_debug_layout_receipt(out: &mut impl Write, receipt: &serde_json::Value) -> Result<()> {
+    match receipt["status"].as_str() {
+        Some("preview") => writeln!(out, "preview only; annotations unchanged")?,
+        Some("applied") => {
+            writeln!(out, "whole apply succeeded; complete checked dependency batch applied atomically")?
+        }
+        _ => writeln!(out, "import rejected; whole apply did not succeed; nothing imported")?,
+    }
+    for key in ["review_sha256", "image_sha256", "compiler_spec_sha256"] {
+        if let Some(hash) = receipt[key].as_str() {
+            writeln!(out, "{key}: {hash}")?;
+        }
+    }
+    if receipt["ok"] == true {
+        writeln!(
+            out,
+            "{} review types, {} fields, {} functions; {} approved, {} applied, {} preserved; {} imported types",
+            receipt["types_total"],
+            receipt["fields_total"],
+            receipt["functions_total"],
+            receipt["approved_total"],
+            receipt["applied_total"],
+            receipt["preserved_total"],
+            receipt["imported_types_total"]
+        )?;
+        writeln!(
+            out,
+            "{} checked warnings; producer-only evidence: {} types, {} fields, {} functions, {} warnings",
+            receipt["warnings_total"],
+            receipt["producer_types_total"],
+            receipt["producer_fields_total"],
+            receipt["producer_functions_total"],
+            receipt["producer_warnings_total"]
+        )?;
+    }
+    if let Some(details) = receipt["details"].as_array() {
+        for row in details {
+            let source = row["source"].as_str().unwrap_or("unknown source");
+            let status = row["status"].as_str().unwrap_or("evidence");
+            let data = &row["data"];
+            match row["kind"].as_str() {
+                Some("warning") => {
+                    writeln!(out, "warning ({source}): {}", row["text"].as_str().unwrap_or("<unreadable warning>"))?;
+                }
+                Some("type") => {
+                    let name = data["layout"]["name"].as_str().or_else(|| data["emitted_name"].as_str());
+                    writeln!(out, "type {} [{source}/{status}] {data}", name.unwrap_or("<unreadable type>"))?;
+                }
+                Some("field") => {
+                    let name = data["name"].as_str().or_else(|| data["emitted_name"].as_str());
+                    writeln!(
+                        out,
+                        "  field {}.{} +{} [{source}/{status}] {data}",
+                        row["type_name"].as_str().unwrap_or("?"),
+                        name.unwrap_or("?"),
+                        data["offset"]
+                    )?;
+                }
+                Some("function") => {
+                    writeln!(
+                        out,
+                        "{} {} [{source}/{status}]",
+                        data["address"].as_str().unwrap_or("?"),
+                        data["declaration"].as_str().unwrap_or("?")
+                    )?;
+                    writeln!(out, "  evidence: {data}")?;
+                }
+                Some("parameter") => writeln!(out, "  parameter [{source}/{status}] {data}")?,
+                _ => writeln!(out, "<unreadable debug layout evidence>")?,
+            }
+        }
+        if receipt["ok"] == true {
+            writeln!(
+                out,
+                "{} of {} evidence rows shown, starting at offset {} (pages never select writes)",
+                details.len(),
+                receipt["details_total"],
+                receipt["offset"]
+            )?;
+        }
+    }
+    if receipt["byte_capped"] == true {
+        writeln!(out, "evidence page byte-capped; whole review hash and operation counts retained")?;
+    }
+    if let Some(next) = receipt["next_offset"].as_u64() {
+        writeln!(
+            out,
+            "more evidence: --offset {next} --limit {} (omit --apply and --review-sha256)",
+            receipt["limit"]
+        )?;
+    }
+    if let Some(hash) = receipt["review_sha256"].as_str() {
+        if receipt["status"] == "preview" {
+            writeln!(out, "to apply the complete reviewed batch: --apply --review-sha256 {hash}")?;
+        }
+        writeln!(out, "hash binds all reviewed evidence, not just this page; changes require re-review")?;
+        writeln!(out, "undo is same-process only; it is not recovered after CLI exit")?;
+    }
+    if let Some(error) = receipt["error"].as_str() {
+        writeln!(out, "error: {error}")?;
+        if receipt["error_truncated"] == true {
+            writeln!(out, "error detail truncated")?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod debug_layout_output_tests {
+    use std::io::{self, BufWriter, Write};
+
+    use super::write_debug_layout_receipt;
+
+    #[derive(Default)]
+    struct FlushFailure {
+        bytes: Vec<u8>,
+        flushes: usize,
+    }
+
+    impl Write for FlushFailure {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            Err(io::Error::other("simulated flush failure"))
+        }
+    }
+
+    #[test]
+    fn buffered_flush_failure_reports_committed_apply_status_for_json_and_readable_output() {
+        let receipt = serde_json::json!({
+            "ok": true, "status": "applied", "apply_requested": true, "whole_apply_succeeded": true,
+            "types_total": 1, "fields_total": 6, "functions_total": 9, "approved_total": 9,
+            "applied_total": 9, "preserved_total": 0, "imported_types_total": 1,
+            "warnings_total": 0, "producer_types_total": 1, "producer_fields_total": 6,
+            "producer_functions_total": 9, "producer_warnings_total": 0, "details": [],
+        });
+        let text = receipt.to_string();
+        for json in [true, false] {
+            let mut out = BufWriter::new(FlushFailure::default());
+            let error = write_debug_layout_receipt(&mut out, &text, &receipt, json).unwrap_err().to_string();
+            assert_eq!(out.get_ref().flushes, 1);
+            assert!(!out.get_ref().bytes.is_empty(), "all writes succeeded before the flush failed");
+            for phrase in [
+                "status=applied",
+                "whole_apply_succeeded=true",
+                "applied_total=9",
+                "imported_types_total=1",
+                "simulated flush failure",
+            ] {
+                assert!(error.contains(phrase), "{phrase}: {error}");
+            }
+            assert!(!error.contains("nothing imported"), "{error}");
+            assert!(!error.contains("no action"), "{error}");
+            if json {
+                assert_eq!(out.get_ref().bytes, text.as_bytes());
+            } else {
+                let output = std::str::from_utf8(&out.get_ref().bytes).unwrap();
+                assert!(output.contains("whole apply succeeded"), "{output}");
+            }
+        }
+    }
+}
+
 pub fn import_pdb_names(out: &mut impl Write, args: &crate::args::ImportPdbNamesArgs, options: &Options) -> Result<()> {
     let result = serde_json::to_value(&args.pdb)
         .map_err(|error| {

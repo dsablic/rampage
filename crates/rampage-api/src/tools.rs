@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 /// Results longer than this are cut, so that one large answer cannot crowd out the conversation. Workflow reports
-/// and PDB import receipts fit themselves below it instead, preserving valid JSON and whole-operation status.
+/// and import receipts fit themselves below it instead, preserving valid JSON and whole-operation status.
 const MAX_RESULT_CHARS: usize = 60_000;
 const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
@@ -59,8 +59,8 @@ impl Group {
                  build), capability tags, YARA and capa rules, and the find_crypto workflow."
             }
             Group::Types => {
-                "C signatures, type declarations and globals, embedded DWARF signature import, demangled names and \
-                 Itanium vtable/RTTI evidence, and explicit identity-matched PDB function-name import."
+                "C signatures, type declarations and globals, reviewed checked DWARF layout/signature import, \
+                 demangled names and Itanium vtable/RTTI evidence, and explicit identity-matched PDB name import."
             }
             Group::Runtime => {
                 "Memory snapshot evidence: captured pointer slots, pointer comparisons across captures, runtime \
@@ -373,6 +373,281 @@ struct DebugImportArgs {
     #[serde(default)]
     apply: bool,
 }
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DebugLayoutImportArgs {
+    /// Apply the complete reviewed import atomically; omitted or false is a read-only fresh preview.
+    #[serde(default)]
+    apply: bool,
+    /// Exact lowercase SHA-256 from a fresh preview. Required with apply=true, otherwise omitted.
+    #[schemars(length(min = 64, max = 64), regex(pattern = "^[0-9a-f]{64}$"))]
+    review_sha256: Option<String>,
+    /// Evidence rows to skip (checked types/fields/functions/warnings, then producer evidence); never a write subset.
+    offset: Option<usize>,
+    /// Evidence rows per page (default 100, 1..=1000), also limited to 60000 JSON bytes.
+    #[schemars(range(min = 1, max = 1000))]
+    limit: Option<usize>,
+}
+
+impl DebugLayoutImportArgs {
+    fn validate(&self) -> Result<(), String> {
+        if self.apply != self.review_sha256.is_some() {
+            return Err("apply=true and review_sha256 must be supplied together; nothing imported".to_owned());
+        }
+        if let Some(digest) = &self.review_sha256 {
+            parse_debug_layout_review_sha256(digest)?;
+        }
+        if !(1..=1000).contains(&self.limit.unwrap_or(DEFAULT_PAGE)) {
+            return Err("limit must be in 1..=1000; nothing imported".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// Validates a reviewed layout digest before a CLI or MCP client opens an image or its annotation sidecar.
+pub fn parse_debug_layout_review_sha256(text: &str) -> Result<String, String> {
+    if text.len() != 64 || !text.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+        return Err("review_sha256 must be exactly 64 lowercase hexadecimal characters; nothing imported".to_owned());
+    }
+    Ok(text.to_owned())
+}
+
+/// Preflights shared-tool arguments before opening source images or annotation sidecars.
+pub fn validate_debug_layout_arguments(input: &Value) -> Result<(), String> {
+    if input.to_string().len() > 48_000 {
+        return Err("debug layout arguments exceed the input byte budget; nothing imported".to_owned());
+    }
+    let args: DebugLayoutImportArgs = arguments(input.clone())?;
+    args.validate()
+}
+
+fn debug_layout_receipt(apply_requested: Option<bool>) -> Value {
+    serde_json::json!({
+        "ok": false, "status": "rejected", "apply_requested": apply_requested,
+        "whole_apply_succeeded": false, "review_sha256": null, "image_sha256": null,
+        "compiler_spec_sha256": null, "types_total": null, "fields_total": null,
+        "functions_total": null, "approved_total": null, "preserved_total": null,
+        "applied_total": 0, "imported_types_total": 0, "warnings_total": null,
+        "producer_types_total": null, "producer_fields_total": null, "producer_functions_total": null,
+        "producer_parameters_total": null, "producer_warnings_total": null,
+        "details_total": null, "offset": 0, "limit": 0, "details": [],
+        "more": false, "next_offset": null, "byte_capped": false,
+        "error": null, "error_truncated": false,
+    })
+}
+
+/// A bounded, unambiguous failure receipt, including failures before the shared layout tool can run.
+pub fn debug_layout_import_error(message: &str, apply_requested: Option<bool>) -> String {
+    let mut receipt = debug_layout_receipt(apply_requested);
+    let bounded = pdb_bounded_text(message, MAX_PDB_ERROR_BYTES);
+    receipt["error"] = Value::String(bounded.to_owned());
+    receipt["error_truncated"] = Value::Bool(bounded.len() != message.len());
+    receipt.to_string()
+}
+
+fn debug_layout_detail_capacity() -> Result<usize, ApiError> {
+    let mut envelope = debug_layout_receipt(Some(false));
+    for (key, value) in envelope.as_object_mut().unwrap() {
+        if key.ends_with("_total") || matches!(key.as_str(), "offset" | "limit" | "next_offset") {
+            *value = serde_json::json!(usize::MAX);
+        } else if key.ends_with("_sha256") {
+            *value = Value::String("f".repeat(64));
+        }
+    }
+    envelope["error"] = Value::String("\0".repeat(MAX_PDB_ERROR_BYTES));
+    MAX_RESULT_CHARS
+        .checked_sub(envelope.to_string().len() + 512)
+        .filter(|capacity| *capacity >= 32_000)
+        .ok_or_else(|| ApiError::Invalid("debug layout receipt exceeds output capacity; nothing imported".to_owned()))
+}
+
+fn debug_layout_value(value: impl Serialize) -> Result<Value, ApiError> {
+    serde_json::to_value(value).map_err(|error| ApiError::Invalid(format!("debug layout evidence: {error}")))
+}
+
+fn debug_layout_rows(review: &crate::DebugLayoutReview) -> Result<Vec<Value>, ApiError> {
+    let mut rows = Vec::new();
+    let necessary: std::collections::BTreeSet<_> = review
+        .report
+        .functions
+        .iter()
+        .filter(|function| review.approved.contains(&function.address))
+        .flat_map(|function| function.dependencies.iter().map(String::as_str))
+        .collect();
+    for ty in &review.report.types {
+        let status = if necessary.contains(ty.layout.name.as_str()) { "verified" } else { "unverified" };
+        let mut data = debug_layout_value(ty)?;
+        data["layout"].as_object_mut().unwrap().remove("fields");
+        rows.push(serde_json::json!({ "kind": "type", "source": "checked", "status": status, "data": data }));
+        for field in &ty.layout.fields {
+            rows.push(serde_json::json!({
+                "kind": "field", "source": "checked", "status": status,
+                "type_name": ty.layout.name, "data": debug_layout_value(field)?,
+            }));
+        }
+    }
+    for function in &review.report.functions {
+        let status = if review.approved.contains(&function.address) {
+            "approved"
+        } else if review.preserved.contains(&function.address) {
+            "preserved"
+        } else {
+            "not_approved"
+        };
+        rows.push(serde_json::json!({
+            "kind": "function", "source": "checked", "status": status, "data": debug_layout_value(function)?,
+        }));
+    }
+    for warning in &review.report.warnings {
+        rows.push(serde_json::json!({ "kind": "warning", "source": "checked", "text": warning }));
+    }
+    if let Some(producer) = &review.producer_report {
+        for ty in &producer.layouts {
+            let mut data = debug_layout_value(ty)?;
+            data.as_object_mut().unwrap().remove("fields");
+            rows.push(serde_json::json!({
+                "kind": "type", "source": "producer", "status": "preview_only", "data": data,
+            }));
+            for field in &ty.fields {
+                rows.push(serde_json::json!({
+                    "kind": "field", "source": "producer", "status": "preview_only",
+                    "type_id": debug_layout_value(ty.id)?, "type_name": ty.emitted_name,
+                    "data": debug_layout_value(field)?,
+                }));
+            }
+        }
+        for function in &producer.signatures {
+            let mut data = debug_layout_value(function)?;
+            data.as_object_mut().unwrap().remove("parameters");
+            rows.push(serde_json::json!({
+                "kind": "function", "source": "producer", "status": "preview_only", "data": data,
+            }));
+            for parameter in &function.parameters {
+                rows.push(serde_json::json!({
+                    "kind": "parameter", "source": "producer", "status": "preview_only",
+                    "function_id": debug_layout_value(function.id)?, "data": debug_layout_value(parameter)?,
+                }));
+            }
+        }
+        for warning in &producer.warnings {
+            rows.push(serde_json::json!({ "kind": "warning", "source": "producer", "text": warning }));
+        }
+    }
+    Ok(rows)
+}
+
+fn debug_layout_page(review: &crate::DebugLayoutReview, offset: usize, limit: usize) -> Result<Value, ApiError> {
+    let capacity = debug_layout_detail_capacity()?;
+    let rows = debug_layout_rows(review)?;
+    let sizes: Vec<_> = rows.iter().map(|row| row.to_string().len() + 1).collect();
+    if sizes.iter().any(|size| *size > capacity) {
+        return Err(ApiError::Invalid(
+            "debug layout evidence row exceeds output capacity; nothing imported".to_owned(),
+        ));
+    }
+    let mut receipt = debug_layout_receipt(Some(false));
+    receipt["ok"] = Value::Bool(true);
+    receipt["status"] = serde_json::json!("preview");
+    receipt["review_sha256"] = serde_json::json!(review.review_sha256);
+    receipt["image_sha256"] = serde_json::json!(review.image_sha256);
+    receipt["compiler_spec_sha256"] = serde_json::json!(review.compiler_spec_sha256);
+    receipt["types_total"] = serde_json::json!(review.report.types.len());
+    let fields_total = review.report.types.iter().map(|ty| ty.layout.fields.len()).sum::<usize>();
+    receipt["fields_total"] = serde_json::json!(fields_total);
+    receipt["functions_total"] = serde_json::json!(review.report.functions.len());
+    receipt["approved_total"] = serde_json::json!(review.approved.len());
+    receipt["preserved_total"] = serde_json::json!(review.preserved.len());
+    receipt["warnings_total"] = serde_json::json!(review.report.warnings.len());
+    let producer = review.producer_report.as_ref();
+    receipt["producer_types_total"] = serde_json::json!(producer.map_or(0, |report| report.layouts.len()));
+    receipt["producer_fields_total"] = serde_json::json!(
+        producer.map_or(0, |report| { report.layouts.iter().map(|ty| ty.fields.len()).sum::<usize>() })
+    );
+    receipt["producer_functions_total"] = serde_json::json!(producer.map_or(0, |report| report.signatures.len()));
+    receipt["producer_parameters_total"] = serde_json::json!(
+        producer
+            .map_or(0, |report| { report.signatures.iter().map(|function| function.parameters.len()).sum::<usize>() })
+    );
+    receipt["producer_warnings_total"] = serde_json::json!(producer.map_or(0, |report| report.warnings.len()));
+    let total = rows.len();
+    let offset = offset.min(total);
+    receipt["details_total"] = serde_json::json!(total);
+    receipt["offset"] = serde_json::json!(offset);
+    receipt["limit"] = serde_json::json!(limit);
+    let mut bytes = 0;
+    let count = sizes
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .take_while(|size| {
+            bytes += **size;
+            bytes <= capacity
+        })
+        .count();
+    let next = offset + count;
+    receipt["byte_capped"] = Value::Bool(count < limit.min(total - offset));
+    receipt["details"] = Value::Array(rows.into_iter().skip(offset).take(count).collect());
+    receipt["more"] = Value::Bool(next < total);
+    receipt["next_offset"] = if next < total { serde_json::json!(next) } else { Value::Null };
+    Ok(receipt)
+}
+
+fn import_debug_layout_page(project: &Project, args: DebugLayoutImportArgs) -> Result<Value, ApiError> {
+    args.validate().map_err(ApiError::Invalid)?;
+    let review = project.review_debug_layouts()?;
+    // Serialize every evidence row and reserve the whole receipt before any annotation action.
+    let mut receipt = debug_layout_page(&review, args.offset.unwrap_or(0), args.limit.unwrap_or(DEFAULT_PAGE))?;
+    if let Some(digest) = &args.review_sha256 {
+        if review.review_sha256 != *digest {
+            return Err(ApiError::Invalid(
+                "debug layout review changed; preview and review again; nothing imported".to_owned(),
+            ));
+        }
+        let applied = project.apply_reviewed_debug_layouts(digest)?;
+        debug_layout_applied_receipt(&mut receipt, &applied);
+    }
+    Ok(receipt)
+}
+
+fn debug_layout_applied_receipt(receipt: &mut Value, applied: &crate::DebugLayoutReview) {
+    receipt["apply_requested"] = Value::Bool(true);
+    receipt["whole_apply_succeeded"] = Value::Bool(true);
+    receipt["status"] = serde_json::json!("applied");
+    if let Some(imported) = &applied.imported {
+        receipt["applied_total"] = serde_json::json!(imported.applied.len());
+        receipt["preserved_total"] = serde_json::json!(imported.preserved.len());
+        receipt["imported_types_total"] = serde_json::json!(imported.imported_types.len());
+        for row in receipt["details"].as_array_mut().unwrap() {
+            if row["source"] != "checked" {
+                continue;
+            }
+            let is_applied = match row["kind"].as_str() {
+                Some("function") => imported
+                    .applied
+                    .iter()
+                    .any(|address| row["data"]["address"].as_str() == Some(format!("{address:#x}").as_str())),
+                Some("type") => imported.imported_types.iter().any(|name| row["data"]["layout"]["name"] == *name),
+                Some("field") => imported.imported_types.iter().any(|name| row["type_name"] == *name),
+                _ => false,
+            };
+            if is_applied {
+                row["status"] = serde_json::json!("applied");
+            } else if row["kind"] == "function"
+                && imported
+                    .preserved
+                    .iter()
+                    .any(|address| row["data"]["address"].as_str() == Some(format!("{address:#x}").as_str()))
+            {
+                row["status"] = serde_json::json!("preserved");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "tools/debug_layout_tests.rs"]
+mod debug_layout_tests;
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -855,6 +1130,21 @@ pub fn tools() -> Vec<Tool> {
         .annotates(),
         tool(
             Group::Types,
+            "import_debug_layouts",
+            "Review bounded embedded-DWARF checked plain layouts and function signatures (x86_64 ELF/GCC only). \
+             Preview is read-only. Apply requires apply=true plus the exact lowercase review_sha256 from a fresh \
+             preview, binding ALL admitted layouts, functions, producer evidence, warnings and current image/options/\
+             specifications and annotation eligibility, not just the page. Changed content requires re-review; \
+             the hash is not authentication or rebinding of an old process-local receipt. The core applies the whole \
+             dependency batch atomically, preserving analyst signatures. offset/limit page whole evidence rows only; \
+             they never select writes. Receipts retain hashes, exact counts and whole_apply_succeeded within 60000 \
+             JSON bytes; more/next_offset continue evidence. Fetch later pages with apply=false and no review_sha256. \
+             Producer evidence is not native layout proof. Undo is same-process only, not recovered after CLI exit.",
+            import_debug_layout_page,
+        )
+        .annotates(),
+        tool(
+            Group::Types,
             "import_pdb_names",
             "Preview function names from an explicit `pdb` path matching this PE image's RSDS GUID and age. \
              Only apply=true persists names, atomically as one undo batch, for preexisting unnamed function entries; \
@@ -1313,10 +1603,15 @@ pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (Str
         .get("apply")
         .and_then(Value::as_bool)
         .or_else(|| (input.is_object() && input.get("apply").is_none()).then_some(false));
+    if name == "import_debug_layouts"
+        && let Err(error) = validate_debug_layout_arguments(&input)
+    {
+        return (debug_layout_import_error(&error, apply_requested), true);
+    }
     match (tool.handler)(project, input) {
         Ok(value) => {
             let mut text = value.to_string();
-            if text.len() > MAX_RESULT_CHARS {
+            if text.len() > MAX_RESULT_CHARS && name != "import_debug_layouts" {
                 let cut = (0..=MAX_RESULT_CHARS).rev().find(|&index| text.is_char_boundary(index)).unwrap_or(0);
                 text.truncate(cut);
                 text.push_str("... (truncated: ask for a narrower range, a smaller count, or a page)");
@@ -1324,6 +1619,7 @@ pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (Str
             (text, false)
         }
         Err(error) if name == "import_pdb_names" => (pdb_import_error(&error, apply_requested), true),
+        Err(error) if name == "import_debug_layouts" => (debug_layout_import_error(&error, apply_requested), true),
         Err(error) => (error, true),
     }
 }
