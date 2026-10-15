@@ -49,7 +49,7 @@ pub use carve::{CarvingPage, MAX_CARVE_PAGE, carve, carve_page};
 pub use correlation::RuntimeCorrelation;
 pub use debug_import::DebugImport;
 pub use debug_layout_import::{
-    DebugLayoutFunction, DebugLayoutImport, DebugLayoutPreview, DebugLayoutReport, DebugLayoutType,
+    DebugLayoutFunction, DebugLayoutImport, DebugLayoutPreview, DebugLayoutReport, DebugLayoutReview, DebugLayoutType,
 };
 pub use debugger::{
     DebuggerAddress, DebuggerBackend, DebuggerError, DebuggerObservation, DebuggerPermissions, DebuggerRequest,

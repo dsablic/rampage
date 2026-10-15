@@ -5,6 +5,10 @@ use rampage_decompiler::layout::{
 };
 use sha2::{Digest, Sha256};
 
+mod review;
+
+pub use review::DebugLayoutReview;
+
 use crate::{
     ApiError, Project,
     annotations::{Annotations, Field},
@@ -891,6 +895,7 @@ fn adapt_producer(producer: &rampage_loaders::debug::DebugLayoutReport) -> Resul
     }
     let mut seen = BTreeSet::new();
     for function in &producer.signatures {
+        let original_name = method_identity_name(function)?;
         if !seen.insert(function.id)
             || function.parameters.len() > 32
             || function.dependencies.len() > MAX_LAYOUTS
@@ -928,7 +933,7 @@ fn adapt_producer(producer: &rampage_loaders::debug::DebugLayoutReport) -> Resul
         );
         report.functions.push(DebugLayoutFunction {
             address: function.address,
-            original_name: function.original_name.clone(),
+            original_name: original_name.to_owned(),
             unit_offset: function.id.unit_offset,
             die_offset: function.id.die_offset,
             declaration,
@@ -937,6 +942,27 @@ fn adapt_producer(producer: &rampage_loaders::debug::DebugLayoutReport) -> Resul
     }
     validate_report(&report)?;
     Ok(report)
+}
+
+fn method_identity_name(function: &rampage_loaders::debug::DebugLayoutSignature) -> Result<&str, ApiError> {
+    let Some(method) = &function.method else { return Ok(&function.original_name) };
+    let unit = function.id.unit_offset;
+    if method.linkage_name.is_empty()
+        || method.linkage_name.len() > 128
+        || method.record_id.unit_offset != unit
+        || method.declaration_id.unit_offset != unit
+        || method.object_pointer_id.unit_offset != unit
+        || function.parameters.first().is_none_or(|parameter| {
+            parameter.id != method.object_pointer_id
+                || !matches!(&parameter.ty,
+                    rampage_loaders::debug::DebugLayoutValue::StructPointer { layout_id, .. }
+                    if *layout_id == method.record_id)
+        })
+        || !function.dependencies.contains(&method.record_id)
+    {
+        return Err(invalid("C++ method projection lacks its exact object-pointer/record/linkage association"));
+    }
+    Ok(&method.linkage_name)
 }
 
 #[cfg(test)]
@@ -963,7 +989,7 @@ mod tests {
         }
     }
 
-    fn binary() -> rampage_loaders::Binary {
+    pub(super) fn binary() -> rampage_loaders::Binary {
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/debug-x64.elf");
         rampage_loaders::Binary::open(fixture).unwrap()
     }
@@ -1010,7 +1036,7 @@ mod tests {
         }
     }
 
-    fn plan(project: &Project) -> DebugLayoutReport {
+    pub(super) fn plan(project: &Project) -> DebugLayoutReport {
         let address = project.resolve("debug_mix").unwrap();
         DebugLayoutReport {
             types: vec![DebugLayoutType {
