@@ -90,6 +90,7 @@ async fn lists_all_tools_with_instructions() {
         "dotnet_il",
         "dotnet_metadata",
         "enable_tools",
+        "entry_diagnostics",
         "find_crypto",
         "find_main",
         "function_graph",

@@ -24,7 +24,7 @@ use rampage_decompiler::DecompilerOptions;
 use rampage_decompiler::worker::WorkerOperation;
 use rampage_loaders::gopclntab::GoArguments;
 
-use crate::Project;
+use crate::{ApiError, Project};
 
 /// Rounds of the call-graph fixpoint; each round can only raise result counts, which are bounded.
 const MAX_ROUNDS: usize = 24;
@@ -148,6 +148,114 @@ pub(super) fn plan(
     GoPlan { types: prototypes.types.clone(), prototypes: operations }
 }
 
+pub(super) fn entry_types(
+    project: &Project,
+    annotations: &crate::annotations::Annotations,
+    options: &DecompilerOptions,
+) -> Result<Vec<String>, ApiError> {
+    use crate::debug_layout_import;
+
+    debug_layout_import::validate_entry_replay_source(project, annotations)?;
+    let register_abi = options.compiler.as_deref() == Some("golang") && !project.binary.big_endian;
+    let maximum = match project.binary.arch {
+        Arch::X86_64 if register_abi => AMD64.integers.len(),
+        Arch::Aarch64 if register_abi => ARM64.integers.len(),
+        _ => 0,
+    };
+    let layouts = debug_layout_import::stored_layouts(annotations)?;
+    let mut widths = std::collections::BTreeSet::new();
+    for text in annotations.types().values() {
+        if text.starts_with('!') {
+            if debug_layout_import::words(text).any(|word| result_suffix(word).is_some()) {
+                return Err(entry_type_error("checked layouts cannot redefine canonical Go result names"));
+            }
+            continue;
+        }
+        super::types::validate(text)?;
+        for declaration in super::types::declarations(text)? {
+            entry_result_dependencies(declaration, maximum, true, &mut widths)?;
+        }
+    }
+    for text in annotations.globals().values() {
+        super::types::validate(text)?;
+        entry_result_dependencies(text, maximum, false, &mut widths)?;
+    }
+    for text in annotations.signatures().values() {
+        let text = debug_layout_import::signature(text, &layouts)?;
+        super::types::validate(text)?;
+        entry_result_dependencies(text, maximum, false, &mut widths)?;
+    }
+    Ok(widths.into_iter().map(result_type).collect())
+}
+
+fn entry_type_error(message: &str) -> ApiError {
+    ApiError::Invalid(format!("entry Go type dependency: {message}"))
+}
+
+fn result_suffix(word: &str) -> Option<&str> {
+    word.strip_prefix("go_results_").filter(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn entry_result_dependencies(
+    declaration: &str,
+    maximum: usize,
+    allow_canonical_definition: bool,
+    widths: &mut std::collections::BTreeSet<usize>,
+) -> Result<(), ApiError> {
+    if !crate::debug_layout_import::words(declaration).any(|word| result_suffix(word).is_some()) {
+        return Ok(());
+    }
+    let tokens: Vec<_> = super::types::declaration_tokens(declaration).collect();
+    for (index, token) in tokens.iter().enumerate() {
+        let Some(suffix) = result_suffix(token) else { continue };
+        let count = suffix
+            .parse::<usize>()
+            .ok()
+            .filter(|&count| count >= 2 && count <= maximum && !suffix.starts_with('0'))
+            .ok_or_else(|| entry_type_error("unsupported canonical result width or selected compiler/target ABI"))?;
+        if allow_canonical_definition
+            && super::types::declaration_tokens(declaration).eq(super::types::declaration_tokens(&result_type(count)))
+        {
+            widths.insert(count);
+            continue;
+        }
+        // Reserve generated names rather than interpret arbitrary analyst C definitions as ABI evidence.
+        let previous = index.checked_sub(1).and_then(|index| tokens.get(index)).copied();
+        let next = tokens.get(index + 1).copied();
+        let type_position = previous.is_none_or(|token| {
+            matches!(
+                token,
+                "typedef"
+                    | "const"
+                    | "volatile"
+                    | "restrict"
+                    | "extern"
+                    | "static"
+                    | "register"
+                    | "auto"
+                    | "{"
+                    | ";"
+                    | ","
+                    | "("
+            )
+        });
+        let named_use = next.is_some_and(|token| {
+            token == "*"
+                || token.chars().next().is_some_and(|character| character.is_ascii_alphabetic() || character == '_')
+        });
+        if !type_position || !named_use {
+            return Err(entry_type_error("shadowing or ambiguous use of a canonical result name is unsupported"));
+        }
+        widths.insert(count);
+    }
+    Ok(())
+}
+
+fn result_type(count: usize) -> String {
+    let fields: String = (0..count).map(|index| format!(" xunknown8 r{index};")).collect();
+    format!("typedef struct {{{fields} }} go_results_{count};")
+}
+
 fn derive(project: &Project) -> Option<GoPrototypes> {
     let binary = &project.binary;
     let (abi, mut registers) = match binary.arch {
@@ -222,13 +330,7 @@ fn derive(project: &Project) -> Option<GoPrototypes> {
         }
         prototypes.declarations.insert(address, declaration(arguments, count));
     }
-    prototypes.types = widths
-        .into_iter()
-        .map(|count| {
-            let fields: String = (0..count).map(|index| format!(" xunknown8 r{index};")).collect();
-            format!("typedef struct {{{fields} }} go_results_{count};")
-        })
-        .collect();
+    prototypes.types = widths.into_iter().map(result_type).collect();
     Some(prototypes)
 }
 
@@ -346,6 +448,10 @@ fn liveness(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "go_abi/entry_replay_tests.rs"]
+mod entry_replay_tests;
 
 #[cfg(test)]
 mod tests {

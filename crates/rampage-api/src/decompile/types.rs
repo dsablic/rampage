@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::ApiError;
 use rampage_decompiler::worker::WorkerOperation;
 
@@ -6,8 +8,35 @@ pub(super) fn plan(
     annotations: &crate::annotations::Annotations,
     generated_types: &[String],
 ) -> Result<Vec<WorkerOperation>, ApiError> {
+    plan_with(project, annotations, generated_types, ReplaySource::WholeProgram)
+}
+
+pub(super) fn plan_entry(
+    project: &crate::Project,
+    annotations: &crate::annotations::Annotations,
+    generated_types: &[String],
+    stub_targets: &BTreeMap<u64, Vec<u64>>,
+) -> Result<Vec<WorkerOperation>, ApiError> {
+    plan_with(project, annotations, generated_types, ReplaySource::Entry(stub_targets))
+}
+
+#[derive(Clone, Copy)]
+enum ReplaySource<'a> {
+    WholeProgram,
+    Entry(&'a BTreeMap<u64, Vec<u64>>),
+}
+
+fn plan_with(
+    project: &crate::Project,
+    annotations: &crate::annotations::Annotations,
+    generated_types: &[String],
+    source: ReplaySource<'_>,
+) -> Result<Vec<WorkerOperation>, ApiError> {
     use crate::debug_layout_import::{self, LayoutBundle};
-    debug_layout_import::validate_replay_source(project, annotations)?;
+    match source {
+        ReplaySource::WholeProgram => debug_layout_import::validate_replay_source(project, annotations)?,
+        ReplaySource::Entry(_) => debug_layout_import::validate_entry_replay_source(project, annotations)?,
+    }
     let layouts = debug_layout_import::stored_layouts(annotations)?;
     let image = if layouts.is_empty() {
         None
@@ -80,7 +109,11 @@ pub(super) fn plan(
         }
         operations.push(WorkerOperation::Prototype { address, indirect, declaration: declaration.to_owned() });
         if indirect {
-            for stub in super::symbols::stub_targets(project, address) {
+            let stubs = match source {
+                ReplaySource::WholeProgram => super::symbols::stub_targets(project, address),
+                ReplaySource::Entry(targets) => targets.get(&address).cloned().unwrap_or_default(),
+            };
+            for stub in stubs {
                 operations.push(WorkerOperation::Prototype {
                     address: stub,
                     indirect: false,
@@ -92,7 +125,7 @@ pub(super) fn plan(
     Ok(operations)
 }
 
-fn declaration_tokens(mut text: &str) -> impl Iterator<Item = &str> {
+pub(super) fn declaration_tokens(mut text: &str) -> impl Iterator<Item = &str> {
     std::iter::from_fn(move || {
         text = text.trim_start();
         let first = text.chars().next()?;
@@ -170,6 +203,10 @@ pub(super) fn declarations(text: &str) -> Result<Vec<&str>, ApiError> {
     }
     Ok(declarations)
 }
+
+#[cfg(test)]
+#[path = "types/entry_replay_tests.rs"]
+mod entry_replay_tests;
 
 #[cfg(test)]
 mod tests {

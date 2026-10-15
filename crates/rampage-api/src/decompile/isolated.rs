@@ -93,6 +93,15 @@ pub(super) fn decompile(
     let output = run_supervised(&request, &remaining, Some(cancellation))
         .map_err(|error| ApiError::Unavailable(error.to_string()))?;
     crate::debug_layout_import::validate_replay_source(project, annotations)?;
+    finish_output(output, address, name, validate_only)
+}
+
+pub(super) fn finish_output(
+    output: rampage_decompiler::worker::WorkerOutput,
+    address: u64,
+    name: String,
+    validate_only: bool,
+) -> Result<Decompilation, ApiError> {
     let tokens = output
         .tokens
         .unwrap_or_default()

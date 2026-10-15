@@ -2,6 +2,8 @@
 //! is built once per project over its executable segments and reused for every function.
 
 mod context;
+mod entry;
+mod entry_plan;
 mod go_abi;
 mod image;
 mod isolated;
@@ -12,6 +14,11 @@ use rampage_decompiler::{Decompiler, DecompilerOptions, Platform};
 use serde::Serialize;
 
 use crate::{ApiError, Project};
+
+pub use entry::{
+    DecompileEntryOrigin, DecompileEntryRequest, EntryContextCounts, EntryDecompilation, EntryDecompilationContext,
+    EntryPreparationTimings, EntryValidation,
+};
 
 pub(crate) use go_abi::GoPrototypes;
 
@@ -87,7 +94,6 @@ pub(crate) fn default_options(binary: &rampage_loaders::Binary) -> DecompilerOpt
         rampage_loaders::Format::MachO => Platform::Darwin,
         rampage_loaders::Format::Elf | rampage_loaders::Format::Snapshot => Platform::Default,
     };
-    let target = binary.target();
     let (platform, compiler) = binary.snapshot_target.as_ref().map_or((platform, None), |context| {
         let platform = match context.platform {
             rampage_loaders::snapshot::SnapshotPlatform::Default => Platform::Default,
@@ -96,11 +102,13 @@ pub(crate) fn default_options(binary: &rampage_loaders::Binary) -> DecompilerOpt
         };
         (platform, context.compiler.clone())
     });
-    DecompilerOptions {
-        platform,
-        compiler: compiler.or_else(|| go_compiler(binary)),
-        arm_be8: binary.arch == rampage_arch::Arch::Arm && target.data_big_endian && !target.big_endian,
-    }
+    let arm_be8 = if binary.arch == rampage_arch::Arch::Arm {
+        let target = binary.target();
+        target.data_big_endian && !target.big_endian
+    } else {
+        false
+    };
+    DecompilerOptions { platform, compiler: compiler.or_else(|| go_compiler(binary)), arm_be8 }
 }
 
 /// Go's register ABI for a binary whose pclntab proves it. Go passes arguments in registers from go1.17 on

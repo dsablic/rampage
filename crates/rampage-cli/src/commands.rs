@@ -22,8 +22,51 @@ pub struct Options {
     pub packs: Arc<Packs>,
 }
 
-pub fn audit(out: &mut impl Write, path: &Path, include_discovery: bool, options: &Options) -> Result<()> {
+pub fn audit(
+    out: &mut impl Write,
+    path: &Path,
+    include_discovery: bool,
+    entries: bool,
+    at: Option<&str>,
+    options: &Options,
+) -> Result<()> {
     let project = open(path, options)?;
+    if entries {
+        let address = at.map(|at| project.resolve(at)).transpose()?;
+        let audit = project.entry_diagnostics(address)?;
+        if options.json {
+            return write_json(out, &audit);
+        }
+        writeln!(
+            out,
+            "{} entry samples; {} declaration records, not verified functions",
+            audit.entries.len(),
+            audit.usage.declaration_records
+        )?;
+        for entry in &audit.entries {
+            writeln!(
+                out,
+                "{:#x}: {} / {}; {} bytes, {} instructions, {} invalid; stop {}",
+                entry.address,
+                label(&entry.status),
+                label(&entry.assessment),
+                entry.bytes_sampled,
+                entry.instruction_count,
+                entry.invalid_count,
+                label(&entry.stop)
+            )?;
+            for origin in &entry.origins {
+                writeln!(out, "  {}: {}", label(&origin.kind), origin.name.as_deref().unwrap_or("unnamed"))?;
+            }
+        }
+        for limit in &audit.truncation {
+            writeln!(out, "limit: {}", label(limit))?;
+        }
+        for note in audit.warnings.iter().chain(&audit.limitations) {
+            writeln!(out, "note: {note}")?;
+        }
+        return Ok(());
+    }
     let audit = project.analysis_diagnostics(include_discovery)?;
     if options.json {
         return write_json(out, &audit);
@@ -212,6 +255,7 @@ pub fn decompile(
     at: &str,
     compiler: Option<&str>,
     isolated: bool,
+    exact_entry: bool,
     options: &Options,
 ) -> Result<()> {
     let project = open(path, options)?;
@@ -224,7 +268,24 @@ pub fn decompile(
             ..Default::default()
         }));
     }
-    let decompilation = project.decompile(project.resolve(at)?)?;
+    let address = project.resolve(at)?;
+    if exact_entry {
+        let result = project.decompile_entry(&rampage_api::DecompileEntryRequest {
+            address,
+            validation: rampage_api::EntryValidation::AnalystAsserted,
+        })?;
+        if options.json {
+            return write_json(out, &result);
+        }
+        writeln!(out, "/* Exact-entry analysis: bounded host context, full mapped image; not boundary proof. */")?;
+        write!(out, "{}", result.decompilation.code)?;
+        writeln!(out, "\n/* Native recovery status: {} */", label(&result.decompilation.recovery_status))?;
+        for omission in &result.context.omissions {
+            writeln!(out, "/* Context: {omission} */")?;
+        }
+        return Ok(());
+    }
+    let decompilation = project.decompile(address)?;
     if options.json {
         return write_json(out, &decompilation);
     }

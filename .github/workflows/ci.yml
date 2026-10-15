@@ -51,7 +51,7 @@ jobs:
         timeout-minutes: 3
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 -m unittest tools.test_decompiler_corpus -v
+        run: python3 -m unittest tools.test_decompiler_corpus tools.test_entry_measurements -v
       - name: Scan with checksum-pinned official Gitleaks release
         timeout-minutes: 10
         run: |

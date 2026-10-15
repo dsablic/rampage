@@ -102,6 +102,12 @@ pub(crate) struct AuditArgs {
     /// Run whole-program discovery and correlate candidates with bounded samples
     #[arg(long)]
     pub(crate) include_discovery: bool,
+    /// Sample bounded metadata-declared entries without whole-program discovery
+    #[arg(long, conflicts_with = "include_discovery")]
+    pub(crate) entries: bool,
+    /// Sample one exact address/name; requires --entries and does not verify a function boundary
+    #[arg(long, requires = "entries")]
+    pub(crate) at: Option<String>,
 }
 
 #[derive(Args)]
@@ -346,6 +352,9 @@ pub(crate) struct DecompileArgs {
     /// Isolate native decompilation in a supervised sibling rampage-worker process
     #[arg(long)]
     pub(crate) isolated: bool,
+    /// Treat --at as an exact entry with bounded local context, not a containing-function query
+    #[arg(long)]
+    pub(crate) exact_entry: bool,
 }
 
 #[derive(Args)]

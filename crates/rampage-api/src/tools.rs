@@ -66,7 +66,9 @@ impl Group {
                 "Memory snapshot evidence: captured pointer slots, pointer comparisons across captures, runtime \
                  bytes against the original Mach-O, ARM64 indirect-branch windows."
             }
-            Group::Diagnostics => "Decode coverage and unreliable-code evidence, and explicit ARM64 jump-table checks.",
+            Group::Diagnostics => {
+                "Bounded entry/decode evidence and unreliable-code diagnostics, and explicit ARM64 jump-table checks."
+            }
             Group::DotNet => "Managed (.NET) metadata (types, methods, properties, P/Invokes, attributes) and CIL.",
             Group::Carve => concat!(
                 "Scan files for embedded executables/containers and inventory ",
@@ -367,6 +369,128 @@ pub struct At {
     /// An address (`0x401000`) or a name: symbol, export, import, user name, or `sub_<hex>`.
     pub at: String,
 }
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct DecompileToolArgs {
+    /// Exact address or existing name. Default behavior resolves the containing function.
+    at: String,
+    /// Assert this exact entry and use bounded local context, without whole-program discovery.
+    #[serde(default)]
+    exact_entry: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EntryDiagnosticsArgs {
+    /// One exact address/name; omitted samples at most 64 metadata-declared addresses.
+    at: Option<String>,
+    /// Entries to skip; does not change the bounded sampling work.
+    offset: Option<usize>,
+    /// Entries per page (default 64, 1..64); the encoded byte budget can shorten a page.
+    #[schemars(range(min = 1, max = 64))]
+    limit: Option<usize>,
+}
+
+fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, ApiError> {
+    let address = project.resolve(&args.at)?;
+    let value = if args.exact_entry {
+        serde_json::to_value(project.decompile_entry(&crate::DecompileEntryRequest {
+            address,
+            validation: crate::EntryValidation::AnalystAsserted,
+        })?)
+    } else {
+        serde_json::to_value(project.decompile(address)?)
+    };
+    let value = value.map_err(|error| ApiError::Invalid(format!("decompilation serialization: {error}")))?;
+    if value.to_string().len() > MAX_RESULT_CHARS {
+        return Err(ApiError::Invalid(
+            "decompilation result exceeds the tool JSON byte budget; use the CLI or API for the complete result"
+                .to_owned(),
+        ));
+    }
+    Ok(value)
+}
+
+fn entry_diagnostics_page(
+    report: rampage_analysis::entry_audit::EntryAudit,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, ApiError> {
+    if !(1..=64).contains(&limit) {
+        return Err(ApiError::Invalid("entry diagnostic limit must be 1..64".to_owned()));
+    }
+    let mut value = serde_json::to_value(report)
+        .map_err(|error| ApiError::Invalid(format!("entry diagnostic serialization: {error}")))?;
+    let mut rows = value["entries"]
+        .take()
+        .as_array()
+        .cloned()
+        .ok_or_else(|| ApiError::Invalid("entry diagnostic rows unavailable".to_owned()))?;
+    let offset = offset.min(rows.len());
+    value["entries"] = serde_json::json!([]);
+    value["entries_total"] = serde_json::json!(rows.len());
+    value["offset"] = serde_json::json!(offset);
+    value["limit"] = serde_json::json!(limit);
+    value["more"] = Value::Bool(false);
+    value["next_offset"] = Value::Null;
+    value["byte_capped"] = Value::Bool(false);
+    value["transport"] = serde_json::json!({
+        "json_byte_budget": MAX_RESULT_CHARS,
+        "names_omitted_total": 0,
+        "note": "Paging and omitted display aliases do not change code samples or declaration counts."
+    });
+    let envelope = value.to_string().len() + 256;
+    if envelope >= MAX_RESULT_CHARS {
+        return Err(ApiError::Invalid("entry diagnostic envelope exceeds the JSON byte budget".to_owned()));
+    }
+    let mut names_omitted = 0usize;
+    for row in &mut rows {
+        if row.to_string().len() + 1 + envelope <= MAX_RESULT_CHARS {
+            continue;
+        }
+        let mut omitted = 0usize;
+        if let Some(origins) = row["origins"].as_array_mut() {
+            for origin in origins {
+                if origin["name"].is_string() {
+                    origin["name"] = Value::Null;
+                    origin["name_omitted"] = Value::Bool(true);
+                    omitted += 1;
+                }
+            }
+        }
+        row["transport_names_omitted"] = serde_json::json!(omitted);
+        names_omitted += omitted;
+        if row.to_string().len() + 1 + envelope > MAX_RESULT_CHARS {
+            return Err(ApiError::Invalid("entry diagnostic row exceeds the JSON byte budget".to_owned()));
+        }
+    }
+    value["transport"]["names_omitted_total"] = serde_json::json!(names_omitted);
+    let mut entries = Vec::new();
+    let mut bytes = envelope;
+    for row in rows.iter().skip(offset).take(limit) {
+        let row_bytes = row.to_string().len() + 1;
+        if bytes + row_bytes > MAX_RESULT_CHARS {
+            value["byte_capped"] = Value::Bool(true);
+            break;
+        }
+        bytes += row_bytes;
+        entries.push(row.clone());
+    }
+    let next = offset + entries.len();
+    value["more"] = Value::Bool(next < rows.len());
+    if next < rows.len() {
+        value["next_offset"] = serde_json::json!(next);
+    }
+    value["entries"] = Value::Array(entries);
+    if value.to_string().len() > MAX_RESULT_CHARS {
+        return Err(ApiError::Invalid("entry diagnostic result exceeds the JSON byte budget".to_owned()));
+    }
+    Ok(value)
+}
+
+#[cfg(test)]
+#[path = "tools/entry_diagnostics_tests.rs"]
+mod entry_diagnostics_tests;
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct DebugImportArgs {
@@ -1170,10 +1294,12 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "decompile",
-            "Decompile the function at an address or name to C, using the embedded Ghidra decompiler. This is \
-             real decompilation (types, control flow, expressions), the best starting point for understanding a \
-              function. Processor specs are bundled; if unavailable, use function_summary.",
-            |project, arguments: At| project.decompile(project.resolve(&arguments.at)?),
+            "Decompile C with embedded Ghidra and retain native recovery diagnostics. Default behavior uses the \
+             containing function and whole-program context. exact_entry=true treats at as an analyst-asserted \
+             exact entry with bounded local context and the full mapped image (little-endian x86/x64/AArch64). \
+             Entry metadata and successful decoding are not boundary or completeness proof; exact output includes \
+             context counts, omissions and preparation timings. No silent whole-program fallback.",
+            decompile_tool,
         ),
         tool(
             Group::Types,
@@ -1282,6 +1408,26 @@ pub fn tools() -> Vec<Tool> {
     // The workflow registry's tools, at the place in the order models have always seen them.
     tools.extend(WORKFLOWS.iter().map(|&workflow| workflow_tool(workflow)));
     tools.extend([
+        tool(
+            Group::Diagnostics,
+            "entry_diagnostics",
+            "Sample one exact at address/name, or at most 64 metadata-declared entries when omitted. Returns \
+             origins, bounded local decode evidence, limits and truncation without whole-program discovery. \
+             Metadata and decode success do not verify a function; suspicious bytes do not prove encryption. \
+             offset/limit page whole entry rows within 60000 JSON bytes. Oversized display aliases may be omitted \
+             explicitly without changing sample evidence or declaration counts; more/next_offset continue pages.",
+            |project, args: EntryDiagnosticsArgs| {
+                let limit = args.limit.unwrap_or(64);
+                if !(1..=64).contains(&limit) {
+                    return Err(ApiError::Invalid("entry diagnostic limit must be 1..64".to_owned()));
+                }
+                entry_diagnostics_page(
+                    project.entry_diagnostics(args.at.as_deref().map(|at| project.resolve(at)).transpose()?)?,
+                    args.offset.unwrap_or(0),
+                    limit,
+                )
+            },
+        ),
         tool(
             Group::Diagnostics,
             "analysis_diagnostics",

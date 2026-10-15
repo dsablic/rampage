@@ -57,7 +57,10 @@ pub use debugger::{
     DebuggerAddress, DebuggerBackend, DebuggerError, DebuggerObservation, DebuggerPermissions, DebuggerRequest,
     DebuggerResponse, DebuggerToken, MAX_DEBUGGER_REQUEST_BYTES, MAX_DEBUGGER_RESPONSE_BYTES, query_debugger,
 };
-pub use decompile::Decompilation;
+pub use decompile::{
+    Decompilation, DecompileEntryOrigin, DecompileEntryRequest, EntryContextCounts, EntryDecompilation,
+    EntryDecompilationContext, EntryPreparationTimings, EntryValidation,
+};
 pub use detect::ToolDetections;
 pub use dotnet::{DotNetCounts, DotNetIl, DotNetIlQuery, DotNetList, DotNetQuery, DotNetSummary, parse_il_offset};
 pub use files::{

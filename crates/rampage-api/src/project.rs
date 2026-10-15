@@ -669,6 +669,10 @@ fn default_name_address(text: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
+#[path = "debug_layout_import/entry_replay_history_tests.rs"]
+mod entry_replay_history_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use rampage_analysis::discover::{Block, DiscoveredFunction};

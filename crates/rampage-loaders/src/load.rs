@@ -226,6 +226,15 @@ impl Binary {
         }
     }
 
+    /// Checks an original mapping when present. False means owned bytes, not a physical-source identity proof.
+    /// As with `validate_backing_source`, this does not make later reads atomic with external modification.
+    pub fn validate_available_backing_source(&self) -> Result<bool, LoadError> {
+        match &self.data {
+            Bytes::Mapped(source) => source.validate().map(|()| true),
+            Bytes::Owned(_) => Ok(false),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_snapshot(
         arch: Arch,
@@ -281,6 +290,15 @@ impl Binary {
     /// preference, else the first supported one.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, LoadError> {
         Self::open_with(path, None)
+    }
+
+    /// Validates and owns a complete snapshot document using the same semantic loader as file opening.
+    /// This performs no filesystem access and provides no original mapped-file identity proof.
+    pub fn from_snapshot_bytes(source: Vec<u8>) -> Result<Self, LoadError> {
+        if source.len() > 2 * crate::snapshot::MAX_SNAPSHOT_BYTES + 1024 * 1024 {
+            return Err(LoadError::Malformed("snapshot JSON exceeds size limit".to_owned()));
+        }
+        crate::snapshot::load(source, None)
     }
 
     /// Opens a binary, requiring the given architecture when one is requested.

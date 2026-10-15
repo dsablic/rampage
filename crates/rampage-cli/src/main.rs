@@ -316,8 +316,8 @@ fn main() -> ExitCode {
         Command::Packs { action: PacksCommand::Check(DirectoryArgs { directory }) } => {
             commands::packs_check(&mut out, &directory, &options)
         }
-        Command::Audit(AuditArgs { file, include_discovery }) => {
-            commands::audit(&mut out, &file, include_discovery, &options)
+        Command::Audit(AuditArgs { file, include_discovery, entries, at }) => {
+            commands::audit(&mut out, &file, include_discovery, entries, at.as_deref(), &options)
         }
         Command::Metadata(FileArgs { file }) => commands::metadata(&mut out, &file, &options),
         Command::Inventory(DirectoryArgs { directory }) => commands::inventory(&mut out, &directory, &options),
@@ -325,8 +325,8 @@ fn main() -> ExitCode {
             commands::carve(&mut out, &file, max_candidates, &options)
         }
         Command::Summarize(AtArgs { file, at }) => commands::summarize(&mut out, &file, &at, &options),
-        Command::Decompile(DecompileArgs { file, at, compiler, isolated }) => {
-            commands::decompile(&mut out, &file, &at, compiler.as_deref(), isolated, &options)
+        Command::Decompile(DecompileArgs { file, at, compiler, isolated, exact_entry }) => {
+            commands::decompile(&mut out, &file, &at, compiler.as_deref(), isolated, exact_entry, &options)
         }
         Command::Pseudocode(PseudocodeArgs { file, at, structured }) => {
             commands::pseudocode(&mut out, &file, &at, structured, &options)

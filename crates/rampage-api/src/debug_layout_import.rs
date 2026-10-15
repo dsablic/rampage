@@ -6,6 +6,10 @@ use rampage_decompiler::layout::{
 use sha2::{Digest, Sha256};
 
 #[cfg(test)]
+mod entry_native_replay_tests;
+#[cfg(test)]
+mod entry_replay_tests;
+#[cfg(test)]
 mod projected_bundle_tests;
 mod projections;
 mod review;
@@ -82,12 +86,27 @@ pub(crate) fn current_specification_digest() -> Result<String, ApiError> {
 }
 
 pub(crate) fn validate_replay_source(project: &Project, annotations: &Annotations) -> Result<(), ApiError> {
+    validate_replay_source_with(project, annotations, ReplayWork::WholeProgram)
+}
+
+pub(crate) fn validate_entry_replay_source(project: &Project, annotations: &Annotations) -> Result<(), ApiError> {
+    validate_replay_budget(annotations)?;
+    validate_replay_source_with(project, annotations, ReplayWork::Entry)
+}
+
+#[derive(Clone, Copy)]
+enum ReplayWork {
+    WholeProgram,
+    Entry,
+}
+
+fn validate_replay_source_with(project: &Project, annotations: &Annotations, work: ReplayWork) -> Result<(), ApiError> {
     if annotations.has_checked_layouts() {
         check_backing(project)?;
         annotations.preflight_checked().map_err(ApiError::Invalid)?;
         let layouts = stored_layouts(annotations)?;
         validate_replay_budget(annotations)?;
-        validate_native_work(project)?;
+        validate_native_source_work(project, work)?;
         let image = rampage_arch::hex::bytes(&image_digest(project)?);
         let specifications = current_specification_digest()?;
         for text in annotations.types().values().filter(|text| text.starts_with('!')) {
@@ -104,6 +123,10 @@ pub(crate) fn validate_replay_source(project: &Project, annotations: &Annotation
 }
 
 fn validate_native_work(project: &Project) -> Result<(), ApiError> {
+    validate_native_source_work(project, ReplayWork::WholeProgram)
+}
+
+fn validate_native_source_work(project: &Project, work: ReplayWork) -> Result<(), ApiError> {
     let binary = &project.binary;
     if binary.image_bytes().len() > MAX_CHECKED_IMAGE_BYTES {
         return Err(invalid("selected image exceeds the checked hash/native-work byte budget"));
@@ -141,10 +164,13 @@ fn validate_native_work(project: &Project) -> Result<(), ApiError> {
             return Err(invalid("native name work budget exceeded"));
         }
     }
-    if project.cached_analysis().is_some_and(|analysis| {
-        analysis.program.functions.len() > 16_384
-            || analysis.program.functions.len().saturating_mul(binary.symbols.len().max(1)) > 262_144
-    }) {
+    // Entry replay's function-resolution work is bounded by its actual plan, not a prior discovery request.
+    if matches!(work, ReplayWork::WholeProgram)
+        && project.cached_analysis().is_some_and(|analysis| {
+            analysis.program.functions.len() > 16_384
+                || analysis.program.functions.len().saturating_mul(binary.symbols.len().max(1)) > 262_144
+        })
+    {
         return Err(invalid("symbol/function resolution exceeds the checked native-work budget"));
     }
     Ok(())
@@ -779,7 +805,7 @@ impl Project {
         })
     }
 
-    fn check_layout_options(&self, options: &rampage_decompiler::DecompilerOptions) -> Result<(), ApiError> {
+    pub(crate) fn check_layout_options(&self, options: &rampage_decompiler::DecompilerOptions) -> Result<(), ApiError> {
         if self.binary.format != rampage_loaders::Format::Elf
             || self.binary.arch != rampage_arch::Arch::X86_64
             || self.binary.big_endian
