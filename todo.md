@@ -337,6 +337,11 @@ unsandboxed native code. Three layers instead, in this order:
 - [ ] WASM component plugins (wasmtime is already a dependency via yara-x): sandboxed, language-agnostic code for
   detectors, format loaders and workflows behind a WIT interface; bytes plus read-only analysis queries in,
   findings out. The output schema enforces the evidence/confidence/limitations contract.
+  This is still an open implementation gap: no executable host, WIT world, stable public API, or builtin feature
+  converted into a separately loadable executable plugin is present. Static workflow registries are not that
+  conversion. Prioritize an experimental component contract and genuine `triage_report` composition migration
+  after the current source/identity, supervision and cache contracts settle; componentization/binding dependencies
+  and the owned source-to-component pipeline still need verification. No unsafe native artifact deserialization.
 - Freeze a public plugin API only after the internal traits settle. Many extensions need no in-process plugin:
   another MCP server composes with rampage at the agent level.
 
@@ -585,9 +590,9 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   and fixed copied Go result declarations/signatures, with earlier-dependency and native/worker regressions.
 - [x] Combined-tree focused loader/architecture/API/CLI/worker tests and all 20 compiled DWARF acceptance tests;
   post-fix API/ABI/worker regressions, workspace warnings-denied Clippy and formatting. Controlled Python: 678 tests.
-- [ ] One uninterrupted local post-reconciliation debug workspace pass: capped after 127 executables / 1,779 passes,
-  during worker API tests. Worker/YARA remainder and workspace doctests passed separately; delay cause unestablished.
-  Final affected suites were rerun after the additional upstream commit and replay fix, not the full workspace.
+- [x] Uninterrupted ordinary debug workspace pass on the combined tree: 2,270 passes across 170 executable/doctest
+  groups in 244.6 seconds, with 59 explicit opt-ins skipped; all 50 evaluation tests passed separately.
+  Earlier capped runs do not establish a delay cause; no startup-stall fix is claimed.
 - [ ] Initial layout-batch optimized acceptance: the selected API/worker fixture build hit its five-minute cap
   while linking, before assertions. No optimized-suite success is claimed;
   release ThinLTO/codegen settings are unchanged.
@@ -719,8 +724,10 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   6.986 seconds, with wall-time, sampled RSS and exact API phase ranges recorded in `docs/entry-measurements.md`.
   No speedup or constant-latency claim is earned. The separate mixed pilot retained six passes, one unsupported
   separate-worker-group failure and 29 unrun attempts; isolated wall/RSS remain unavailable under this guardian.
-- [ ] Isolated-worker performance measurements and larger matched-setting corpora; bounded host context does
-  not promise constant latency, complete discovery context or cropped-image behavior.
+- [x] Owned isolated exact-entry API pilot now records full-image ELF/PE/Mach-O attempts and actual root lifecycle;
+  see the scoped integration milestone below. The existing CLI guardian remains inline-only.
+- [ ] Larger matched-setting corpora; bounded host context does not promise constant latency, complete discovery
+  context or cropped-image behavior.
 - [x] First bounded static multi-module workspace slice is implemented below; broader type/ABI recovery and
   runtime cross-module resolution still require independent acceptance.
 - [ ] Future: read-only GDB and Windows debugger inspection backends, each with separate platform acceptance.
@@ -763,8 +770,45 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   warnings-denied workspace Clippy passed; source/descriptor and callback-race fixes retain regressions.
 - [x] Protected 940-file candidate-source audit and scanner bypass regressions passed. Committed-tree/full-history
   audit is required before private push; no release tag or Actions dispatch is part of this milestone.
-- [ ] Persist derived caches, dependencies and cross-module references; add broader ABI/type recovery, GDB/Windows
-  backends and affirmative ARM64 runtime DATA-order evidence. Execution controls require separate reviewed scope.
+- [ ] Broader derived analysis caches and runtime cross-module resolution; the historical inventory and static PE
+  declaration slices below do not complete these. Broader ABI/type recovery, GDB/Windows backends and affirmative
+  ARM64 runtime DATA-order evidence remain open. Execution controls require separate reviewed scope.
+
+### Static references, responsive file operations and historical inventory
+
+- [x] Explicit loaded-PE module-reference query/window: raw import DLL versus producer export-directory identity,
+  whole ASCII case comparison and exact symbol bytes. No basename or runtime/function-proof join. Ordinals,
+  forwarders, snapshots, ELF and Mach-O remain unsupported coverage, not inferred edges. Matching comparisons,
+  sorting and whole-row pages are bounded. Central owned-compiler acceptance: 23 loader, 28 API and three UI cases.
+- [x] Workspace file operations use one background execution lease across cancellation and bank changes, bounded
+  progress, metadata-only adoption checks and typed publication history retained before stale-binding handling.
+  Normal annotation refresh still has existing synchronous I/O; this does not claim all desktop I/O is asynchronous.
+- [x] Optional worker/API host observations preserve failures, actual pipe delivery/EOF and root-only sampled RSS.
+  Private completion holds the Rust worker root alive through owned-group cleanup without changing protocol v4.
+  Ambient control descriptors are duplicated, not adopted; completion followed by EOF/reset revokes authority.
+  Decompiler library: 81 passed plus one isolated helper; actual worker entry/parity/error gates: seven passed.
+  Legacy/custom workers require successful anchored cleanup; custom SIGCHLD handlers remain unsupported.
+- [x] Full-image owned ELF/PE/Mach-O exact-entry API measurement: all 18 attempts passed independent source oracles
+  and per-format output/token/structure parity. Three native and three isolated attempts per format, no retries
+  or fallback. Actual SIGKILL/reap/EOF/cleanup observations retained. No stall reproduced or stall-fix claim.
+- [x] Bounded historical inventory API: explicit private read/save, complete dependency key and permanently
+  cached/unverified rows; no Program/native/solver/type restoration or function-entry authority. The names-only
+  token ignores comment/no-op replay while meaningful rename ABA invalidates. Central API integration: 18 passed;
+  lexical and real annotation-contention regressions and all 229 API library tests passed (four opt-ins skipped).
+- [x] Selected generated-fixture cache GO: median full reopen 93.86 ms fresh versus 22.41 ms cached (4.19x),
+  with 2,048 of 2,301 historical rows. The two-function control was slower (0.294 versus 1.083 ms). No generic
+  cache speedup, cold-disk or RSS claim. Reproduction and limitations are documented separately.
+- [x] Cache desktop acceptance: 12 explicitly selected cases passed, including forged-checksum labeling,
+  no-discovery load/save controls, source replacement, name ABA and shared cancellation/resource retention.
+  Ordinary UI library tests: 125 passed, one host-tool opt-in; unchanged snapshots: 16 passed, one Chrome opt-in.
+- [x] All-target workspace Clippy passed with warnings denied; format, 120-column and diff checks passed.
+  The installed rust-objcopy/libLLVM stripping warning remains visible and unresolved.
+- [x] Final independent worker, metadata-reference, cache/UI and journal reviews closed their findings; ordinary
+  workspace, explicit compiler fixtures and the durable 18-attempt journal passed after corrections.
+  Controlled Python: 804 tests and 797 subtests passed, six live opt-ins skipped.
+- [x] Protected 969-file candidate-source audit, scanner-bypass regressions and committed-tree/full-history scans.
+  Publication is private main only, without a release tag or Actions dispatch; owned audit scratch is removed.
+- [ ] Runtime/converted executable plugins, broader recovery and remaining TODOs are not part of this milestone.
 
 ### Validation and external blockers
 

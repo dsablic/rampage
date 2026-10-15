@@ -5,6 +5,25 @@ functions), so that each surface (CLI, MCP, the UI's assistant) enumerates them 
 These registries are the internal shape a later sandboxed (WASM) plugin layer would plug into; they are not a
 stable public API.
 
+## Completion status
+
+| Layer | Status |
+| --- | --- |
+| Bounded detector/signature/rule/constants data packs | Implemented; data, not executable code |
+| Shared builtin workflow and tool registries | Implemented; statically linked Rust modules |
+| Loadable WASM components and WIT boundary | Not implemented |
+| Public versioned plugin API and runtime capability/resource controls | Not implemented |
+| Existing feature modules shipped as separately loadable executable plugins | None |
+
+The seven builtin workflows use the shared `Workflow` interface, but remain builtin code. Wasmtime's presence
+through YARA-X does not supply a rampage component host, guest build pipeline or plugin admission policy.
+
+The next executable-extension milestone is an experimental component boundary and a genuine workflow migration,
+not a guest stub that calls the entire existing builtin. It requires bounded immutable input views, explicit
+capability grants, no ambient filesystem/network/process/environment authority, compilation admission and runtime
+fuel/memory/deadline/output limits. Guest findings remain plugin claims, never native/layout/runtime-flow proof.
+Validated raw components—not untrusted precompiled native artifacts—are the intended executable input.
+
 ## Workflows
 
 A guided workflow implements `rampage_api::workflows::Workflow` and is listed in `WORKFLOWS`

@@ -97,6 +97,9 @@ Additional focused guides:
 - [Exact-entry analysis](docs/entry-analysis.md): opt-in decompilation, independent entry diagnostics and limits.
 - [Desktop exact-entry](docs/exact-entry-ui.md): deferred opening, validation, explicit Run and cooperative Cancel.
 - [Project workspaces](docs/project-workspaces.md): retained modules, qualified addresses and reviewed local manifests.
+- [Module references](docs/module-references.md): bounded loaded-PE declarations, coverage and explicit navigation.
+- [Historical inventory cache](docs/function-inventory-cache.md): explicit cached/unverified candidate browsing.
+- [Owned worker observations](docs/worker-observations.md): host milestones, cleanup ownership and owned measurements.
 - [Debugger workspace](docs/debugger-workspace.md): explicit local inspection, Prepare/Compare/Save/Open and privacy.
 - [Debug signature import](docs/debug-signatures.md) and [ARM64 semantics validation](docs/arm64-development.md).
 - [Benchmarks](docs/benchmarks.md) and the [decompiler integration corpus](docs/decompiler-corpus.md).

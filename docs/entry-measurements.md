@@ -21,6 +21,9 @@ separate gate and does not supply missing performance measurements. The parent's
 by `Bad CPU type`; no Rosetta installation or architecture-check weakening was attempted. Static Mach-O decompilation
 does not establish live SDK execution acceptance.
 
+A separate [owned exact-entry API pilot](worker-observations.md) records native/isolated full-image measurements
+and actual worker lifecycle observations. It does not change this CLI guardian's inline-only policy.
+
 ## Workload and settings
 
 The source-only runner compares exact-entry and legacy decompilation of the same complete owned fixture image.
