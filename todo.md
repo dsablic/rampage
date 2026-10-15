@@ -585,15 +585,48 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   and fixed copied Go result declarations/signatures, with earlier-dependency and native/worker regressions.
 - [x] Combined-tree focused loader/architecture/API/CLI/worker tests and all 20 compiled DWARF acceptance tests;
   post-fix API/ABI/worker regressions, workspace warnings-denied Clippy and formatting. Controlled Python: 678 tests.
-- [ ] One uninterrupted post-reconciliation debug workspace pass: capped after 127 executables / 1,779 passes,
+- [ ] One uninterrupted local post-reconciliation debug workspace pass: capped after 127 executables / 1,779 passes,
   during worker API tests. Worker/YARA remainder and workspace doctests passed separately; delay cause unestablished.
   Final affected suites were rerun after the additional upstream commit and replay fix, not the full workspace.
-- [ ] Current-batch optimized acceptance: the selected API/worker fixture build hit its five-minute cap while linking,
-  before assertions. No optimized-suite success is claimed; release ThinLTO/codegen settings are unchanged.
+- [ ] Initial layout-batch optimized acceptance: the selected API/worker fixture build hit its five-minute cap
+  while linking, before assertions. No optimized-suite success is claimed;
+  release ThinLTO/codegen settings are unchanged.
 - [x] Final independent reconciliation review, 845-file private-key/artifact preflight and protected committed-tree/
   full-history secret audit. Owned scanner scratch and generated compiler outputs removed before publication.
   Refreshed architecture/decompiler/API/CLI/worker, manifest, compiled-DWARF, Clippy and format checks passed in
   258 seconds after the ARM64 Go update. Full-workspace release is not a routine increment gate.
+- [x] Hosted CI at `a3d4fb1`: full ordinary macOS debug workspace/UI/accuracy, compiled-DWARF and selected opt-in
+  gates, Linux core and protected HEAD/history secrets. This does not cover the next typed-decompilation push.
+
+### Usable typed-decompilation push
+
+- [x] Reviewed checked-layout CLI/MCP and UI workflow, preserving exact content approval, analyst edits, one atomic
+  dependency batch and process-local undo; preview remains read-only and old scalar import behavior unchanged.
+- [x] Independent compiled acceptance through actual CLI processes, shared/MCP routes and offscreen UI, including
+  stale approvals, workspace identity/revision changes, refusal visibility and persistent native/worker replay.
+- [x] Initial producer-described C++ slice: base-free non-polymorphic records with explicit object-pointer evidence,
+  exact layout facts and bounded same-CU method-definition/declaration association. No inferred vptr or class fields.
+- [x] Owned C++ record-layout constants, source field-use and refusal oracles. RTTI/vtable evidence remains separate
+  from object-layout proof and indirect-call destinations; polymorphic projection and inheritance are not acceptance.
+- [x] Finite local worker-startup/native/supervisor diagnostic probes, capturing owned-process phases if a stall
+  recurs. Existing worker timeout is not an end-to-end deadline for native validation, synchronous spawn or reaping.
+  Published-binary probes passed in 1.00 s, 3.02 s and 14.35 s (two exact tests, then the complete API suite);
+  no stall was reproduced, so no root-cause or resolution claim is earned.
+- [x] Fresh reviews closed C++ declaration/address-index and C budget regressions, non-vacuous overload gates,
+  App-wide preview accounting, verification labels, post-apply output failures and relative fixture tool paths.
+- [x] Combined compiled acceptance: 50 tests / zero ignored in 101 seconds, covering both independent C/C++ recipes,
+  actual cross-process CLI approval, shared/MCP atomic apply, offscreen UI, reopen/undo and native/worker parity.
+- [x] Debug workspace coverage completed in bounded runs: the runner's long temporary path first exceeded macOS
+  Unix-socket limits; short paths passed. The additive MCP tool-list expectation was updated, then its full server
+  suite, UI/worker/YARA remainder and all workspace doctests passed. This is not one uninterrupted local suite pass.
+  Ordinary UI snapshots and the 13-slice accuracy gate are unchanged. Controlled Python: 691 tests.
+- [x] Optimized loader-only acceptance: 38 raw layout regressions plus two compiled C++ gates passed in 65 seconds,
+  without API/YARA/Wasmtime or full-workspace release linking. Workspace Clippy, Rust formatting and scoped
+  Python Ruff/format/ty checks passed. Release optimization settings are unchanged.
+- [ ] Broader matched-setting C/C++ differential decompilation corpus and runtime/memory metrics. These initial
+  independent compiler/source oracles are not that benchmark or general class-layout/virtual-dispatch acceptance.
+- [x] Protected committed-tree/full-history audit and 877-file secret/private-key/artifact preflight. Generated
+  compiler outputs and owned validation scratch are removed; the verified audit scanner is removed before publication.
 
 ### Validation and external blockers
 

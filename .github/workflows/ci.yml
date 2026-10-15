@@ -110,7 +110,7 @@ jobs:
       - name: Workspace tests including offscreen UI snapshots
         timeout-minutes: 20
         run: time cargo test --locked --workspace --exclude rampage-eval
-      - name: Owned DWARF layout import and worker acceptance
+      - name: Owned DWARF reviewed import surfaces and worker acceptance
         timeout-minutes: 5
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -120,7 +120,19 @@ jobs:
           export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
           bash tools/ci/debug-layout-oracle.sh --check \
             cargo test --locked -p rampage-loaders -p rampage-api -p rampage-worker \
-            --test debug_layouts --test debug_layout_import --test debug_layout_acceptance -- --include-ignored
+            -p rampage-cli -p rampage-mcp -p rampage-ui \
+            --test debug_layouts --test debug_layout_import --test debug_layout_acceptance \
+            --test debug_layout_review --test debug_layout_tools --test debug_layout -- --include-ignored
+      - name: Owned bounded C++ record and this-method acceptance
+        timeout-minutes: 5
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          export RUST_SYSROOT="$(rustc --print sysroot)"
+          export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
+          bash tools/ci/debug-cpp-layout-oracle.sh --check \
+            cargo test --locked -p rampage-loaders -p rampage-api -p rampage-worker \
+            --test debug_cpp_layouts --test debug_cpp_layout_acceptance -- --include-ignored
       - name: Opt-in native compiled fixture and isolated CLI acceptance
         timeout-minutes: 5
         run: |

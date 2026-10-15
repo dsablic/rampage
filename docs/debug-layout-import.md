@@ -1,14 +1,14 @@
 # Checked embedded-DWARF layout import
 
-The library API previews and imports producer-described flat structs used through pointers. It compares those
-facts with the native decompiler's measured layout before applying dependent prototypes. This is separate from
-the scalar-only `import_debug_signatures` API and existing `type import-debug` CLI/MCP behavior; there is no new
-automatic CLI, MCP or UI import action.
+The checked API previews and imports producer-described flat structs used through pointers. It compares necessary
+dependencies with the native decompiler's measured layout before applying dependent prototypes. Reviewed CLI, MCP
+and UI actions use the same checked core, separately from the scalar-only `import_debug_signatures` API and existing
+`type import-debug` behavior. Import is explicit, never an automatic consequence of opening or decompiling an image.
 
 ## Supported evidence
 
-The initial consumer is x86-64 little-endian ELF64 with bundled `x86:LE:64:default:gcc` specifications. Supported
-compilation-unit languages are C89, C, C99, C11 and C17. Complete fixed prototypes require at least one flat-struct
+The initial consumer is x86-64 little-endian ELF64 with bundled `x86:LE:64:default:gcc` specifications. The C path
+supports C89, C, C99, C11 and C17 compilation units. Complete fixed prototypes require at least one flat-struct
 pointer parameter. Results are void or supported scalar/scalar-pointer types, not struct-pointer results. Members
 are supported exact-width scalars or ordinary scalar/void pointers.
 
@@ -24,10 +24,32 @@ names, sanitized collisions and incomplete concrete address indexes are refused.
 
 Unions, bitfields, nested/recursive aggregates, arrays, flexible arrays, inheritance, callbacks, references, pointer
 chains and aggregate-by-value arguments/results are unsupported. Unsupported qualifiers, calling conventions,
-address classes, range-based entries, expression-valued layout attributes and inherited prototypes are refused.
+address classes, range-based entries, expression-valued layout attributes and general inherited-prototype
+reconstruction are refused.
 External, compressed, split and type-unit DWARF are not loaded. Normal body-local and inlined-call metadata does
 not become caller parameters. Present function extents must fit one backed code range; absent extents establish
 an entry point only.
+
+### Bounded C++ method projection
+
+C++, C++11, C++14 and C++17 compilation units additionally support complete CU-scoped, non-polymorphic, base-free
+class/struct records with the same exact flat-field and explicit record-alignment requirements. C++ fields are
+exact-width scalars or pointers to exact scalar pointees; `void *` fields remain C-only. Mutable out-of-line instance
+methods require a single same-CU `DW_AT_specification` reference to a declaration owned by that exact record.
+The concrete definition's `DW_AT_object_pointer` must identify its actual first artificial formal parameter, with
+a direct unqualified pointer to the exact owning record DIE. A first argument or a parameter named `this` alone
+establishes nothing. Distinct pointer DIEs are allowed only when their exact record target agrees.
+
+The result is a C-facing record pointer named `self` plus scalar arguments, with scalar/void return. It is not a
+general C++ ABI recovery. Producer method metadata retains record, declaration and object-parameter DIE identities
+and the linkage name. The checked API uses the method's linkage name as `original_name`; the producer report keeps
+the unqualified source name separately. Same-named methods and overloads are not joined by display spelling.
+
+Namespace-scoped/nested records, in-class/inline definitions, declaration-reference chains, constructors/destructors,
+operators, templates, static methods, const/volatile object pointers, references and aggregate-by-value signatures
+remain unsupported. Record-level `DW_CC_pass_by_value` is ABI metadata, not permission to import by-value calls.
+Artificial vptr fields, polymorphic records, inheritance, thunk following, typed virtual dispatch and RTTI-derived
+object fields remain refused. Existing vtable/RTTI evidence is separate from checked record-layout proof.
 
 ## API and consent
 
@@ -39,6 +61,9 @@ an entry point only.
   `compiler_spec_sha256`.
 - `Project::try_set_decompiler_options(options)` validates remaining annotations before publishing the selection.
   A refusal preserves the old options/cache. The legacy void setter retains deferred validation.
+- `Project::review_debug_layouts()` returns owned `DebugLayoutReview` display data and a complete `review_sha256`.
+- `Project::apply_reviewed_debug_layouts(review_sha256)` recomputes a fresh checked preview, refuses a fingerprint
+  mismatch and otherwise applies that new Project-bound receipt through the same atomic path.
 
 Preview changes no annotations or undo history. A client calls apply only after reviewing the report and obtaining
 approval. The receipt is immutable, process-local, non-deserializable and cannot be rebound to a reloaded project.
@@ -64,6 +89,42 @@ fn import_after_review(
 Accepted type bundles and dependent signatures are one atomic annotation batch and one same-process undo step.
 Undo/redo validates remaining dependencies. Undo history is not recovered after the writer exits; persistent reopen
 replays the accepted annotations and assertions, not the old process's undo stack.
+
+## Reviewed CLI, MCP and UI actions
+
+The canonical CLI action previews by default:
+
+```sh
+rampage --json type import-debug-layouts example.elf
+rampage --json type import-debug-layouts example.elf --apply --review-sha256 REVIEW_SHA256
+```
+
+`REVIEW_SHA256` is the exact lowercase 64-character fingerprint from the reviewed preview, not an image hash.
+Apply requires both flags. A changed or incorrect review fingerprint refuses the operation without importing.
+The types-group MCP/shared tool is `import_debug_layouts`, with `apply` defaulting to false and `review_sha256`
+required only for apply. Detail paging does not select a subset of the operation. Review all relevant pages before
+approval; byte-bounded receipts retain whole-operation status, identities, totals and paging progress.
+Preview rejects a supplied non-null fingerprint: use `apply=false` and omit `review_sha256` or set it to `null`.
+`offset` selects the first evidence row; `limit` defaults to 100 and accepts 1–1000. JSON receipts are capped at
+60,000 bytes, with `more` and `next_offset` for continuation. Fetch later preview pages without apply or a digest.
+
+The fingerprint commits to the complete producer and consumer reports, unknown alignments, warnings, exact
+declarations/dependencies, approved/preserved membership, selected image and compiler options/specification bundle.
+It is independent of output formatting and detail paging. These are content associations, not authentication or
+proof that a person reviewed the report. An owned review is not a serialized opaque receipt: another process can
+confirm matching content only by creating and validating a new checked preview of its own retained image.
+
+The UI review window additionally binds the displayed content to the exact workspace and Project instance and
+annotation/request revisions. Reopening a workspace, replacing a project, editing/undoing annotations or discarding
+the review invalidates approval. Apply does not silently replace changed content and continue. It reports actual
+applied/preserved counts and refreshes affected analysis views; undo uses the existing single atomic batch.
+One preview may remain in flight per App, including across workspace replacement. Closing or reopening a window
+does not cancel an active native check or automatically launch another preview. Requests while work is pending
+are refused; request a new preview explicitly after completion.
+
+Only types needed by approved functions are proposed additions. Other admitted or producer-only records are
+evidence, not promises that every displayed type will be imported or has received native validation. Preserved
+addresses do not imply a specific refusal reason unless the retained producer facts establish it.
 
 ## Persistent replay and compiler context
 
