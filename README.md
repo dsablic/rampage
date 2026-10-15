@@ -76,7 +76,10 @@ Run the desktop client with:
 cargo run --release -p rampage-ui -- sample.elf
 ```
 
-The UI offers listings, graphs, decompilation and shared annotations. Its optional Assistant tab sends questions
+The UI offers listings, graphs, decompilation and shared annotations. **Open for exact-entry…** defers global
+analysis and opens a separate explicit-Run window; **Project workspace…** retains up to eight modules with
+qualified navigation and separate local Save, manifest-only Preview and reviewed Open actions. Ordinary open and
+Pseudocode behavior remain unchanged. Its optional Assistant tab sends questions
 and model-read code/tool results to Anthropic's API; use it only with permission to disclose that material.
 Local analysis and MCP serving do not require an API key. See the client references before connecting an AI model.
 
@@ -92,6 +95,8 @@ Additional focused guides:
 
 - [Runtime snapshots](docs/runtime-snapshots.md) and the [read-only LLDB query bridge](docs/lldb-query.md).
 - [Exact-entry analysis](docs/entry-analysis.md): opt-in decompilation, independent entry diagnostics and limits.
+- [Desktop exact-entry](docs/exact-entry-ui.md): deferred opening, validation, explicit Run and cooperative Cancel.
+- [Project workspaces](docs/project-workspaces.md): retained modules, qualified addresses and reviewed local manifests.
 - [Debugger workspace](docs/debugger-workspace.md): explicit local inspection, Prepare/Compare/Save/Open and privacy.
 - [Debug signature import](docs/debug-signatures.md) and [ARM64 semantics validation](docs/arm64-development.md).
 - [Benchmarks](docs/benchmarks.md) and the [decompiler integration corpus](docs/decompiler-corpus.md).

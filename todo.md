@@ -721,10 +721,50 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   separate-worker-group failure and 29 unrun attempts; isolated wall/RSS remain unavailable under this guardian.
 - [ ] Isolated-worker performance measurements and larger matched-setting corpora; bounded host context does
   not promise constant latency, complete discovery context or cropped-image behavior.
-- [ ] Future: explicitly bounded multi-module workspaces and broader type/ABI recovery with independent evidence.
+- [x] First bounded static multi-module workspace slice is implemented below; broader type/ABI recovery and
+  runtime cross-module resolution still require independent acceptance.
 - [ ] Future: read-only GDB and Windows debugger inspection backends, each with separate platform acceptance.
 - [ ] Any execution-control debugger integration requires separate design/review; launch, attach, resume, step,
   breakpoints, expressions and target writes are not part of the read-only workspace milestone.
+
+### Deferred exact-entry UI and reviewed static workspaces
+
+- [x] Explicit exact-entry window and deferred Open route: no functions, triage, strings, listing, xrefs or legacy
+  pseudocode work starts merely from opening or painting the deferred workspace. Explicit global analysis restores
+  the ordinary workflow. Existing Session caches may already contain analysis; this is not a pristine-history claim.
+- [x] Actual API phase observations, cooperative cancellation and nonserialized configuration identities. Callbacks
+  execute outside Project locks, count toward the original worker deadline and revalidate source backing before
+  mapped-byte/native work. Native FFI remains noninterruptible; execution owns the App-wide exact-job permit.
+- [x] Retained eight-module bank with explicit ID-qualified navigation, independent editors/undo/selection and
+  per-module histories. Switching invalidates request authority even across same-frame A→B→A; a missing retained
+  source does not prevent adding an unrelated module. Critical rereads still require fresh backing checks.
+- [x] Strict reviewed manifest persistence: Save, manifest-only Preview and Open reviewed are separate actions.
+  Fresh checked sessions retain exact loaded Project Arcs, explicit configured options and recognized persistent
+  annotations. Missing/changed/nth-failing sources or logs leave the old bank and its editors intact.
+- [x] Checked admission before allocation: 256 KiB manifest, eight modules, 128 MiB/source and 256 MiB aggregate;
+  snapshot sources additionally preflight 16 MiB documents, 1 MiB raw strings, depth eight, 4096 array items and
+  65536 structural units before copying/serde. Save rejects legacy snapshots outside the restorable checked profile.
+  Ordinary legacy snapshot loading remains unchanged. Navigation uses exact 64-bit hexadecimal strings.
+- [x] Independent review closed original snapshot descriptor retention, sidecar-directory context, address precision,
+  callback source invalidation, cross-module egui state and retained-source deduplication findings with regressions.
+- [x] Native ARM64 UI inspection acceptance: one controlled real-LLDB gate, six protocol operations, explicit static
+  navigation, unknown DATA order, disabled Prepare and no capture publication. ASLR stayed enabled; fixture/source,
+  annotations, editor and stopped-process identity were preserved. Full ARM64 capture is not earned.
+- [x] ARM64 exporter correctness correction: target/process byte-order getters delegate to architecture defaults,
+  not an independent EL0 DATA-order observation. Export now refuses ARM64 before thread/mapping/memory/file work.
+  Historical ARM64-positive export acceptance is superseded for DATA-order provenance, not erased as a byte/identity
+  observation. Native export-refusal tests passed; x86-64 and ARM32 export coverage remains separate.
+- [x] Final ordinary workspace tests and doctests passed in bounded package slices, including the accuracy gate,
+  219 API library tests, 23 workspace API tests, 23 capture API cases, 96 UI library tests, 14 public workspace UI
+  cases and unchanged snapshots. Broad combined batches hit their outer caps; their remaining package/snapshot
+  slices passed separately. This is not an uninterrupted full-suite or startup-stall-fix claim.
+- [x] Full controlled Python gate: 804 tests and 797 subtests passed, with six default-skipped opt-in cases.
+  Native ARM64 inspection and exporter-refusal opt-ins passed separately. Scoped Ruff/format/ty and all-target
+  warnings-denied workspace Clippy passed; source/descriptor and callback-race fixes retain regressions.
+- [x] Protected 940-file candidate-source audit and scanner bypass regressions passed. Committed-tree/full-history
+  audit is required before private push; no release tag or Actions dispatch is part of this milestone.
+- [ ] Persist derived caches, dependencies and cross-module references; add broader ABI/type recovery, GDB/Windows
+  backends and affirmative ARM64 runtime DATA-order evidence. Execution controls require separate reviewed scope.
 
 ### Validation and external blockers
 
@@ -732,6 +772,8 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Opt-in optimized C fixtures: native execution plus evaluated lifted arithmetic/selects and recovered byte spills.
 - [x] Controlled live export on Apple LLDB `2103.0.34.103`: executable bytes, module identities and registers;
   explicit original Mach-O correlation verified with ASLR enabled. Capture artifacts were removed.
+  This is a historical byte/identity result: the later DATA-order review supersedes its ARM64 export-provenance
+  claim, and current export refuses ARM64 rather than inferring DATA order from target architecture.
 - [x] Previous committed milestones passed full debug/release suites and fresh-context review.
 - [x] Ghidra comparisons for rampage's own analysis: `tools/cfg-benchmark.py` (+ `tools/ghidra_cfg_export.java`,
   hidden `rampage export-cfg`) compares blocks, CFG edges and call edges on 18 fixtures (docs/benchmarks.md), Ghidra
@@ -801,7 +843,8 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Successful permitted stopped-process capture, module UUIDs/bases, register provenance and original correlation.
 - [x] Mapping-aware snapshot identity and durable identity-scoped annotation persistence, including addresses,
   permissions and endianness. Per-file provenance/register observations are not conflated by identity reuse.
-- [ ] Persist derived analysis caches and decompiler configuration as reproducible sessions.
+- [x] Persist explicit decompiler configuration, module/source identities and navigation in reviewed workspace files.
+- [ ] Persist derived analysis caches and broader reproducible analysis state; the manifest is not an engine cache.
 - [ ] Multiple modules/threads and stripped/relocated images; module-qualified navigation and cross-module references.
 - [ ] Broader debugger/platform integration, capture failure handling and provenance validation on larger fixtures.
 
@@ -924,9 +967,10 @@ read-only triage inputs, never bypass or patch fixtures. Runtime tests use progr
 
 - [x] Sparse snapshot loader with virtual addresses, region/seed validation, provenance and resource bounds.
 - [x] Snapshot loading through CLI/API/MCP/UI and controlled integration fixtures.
-- [x] Read-only LLDB snapshot export command with preflight validation and no-overwrite behavior.
-  Mocked export tests and the opt-in controlled live ARM64 capture pass with ASLR left enabled. Module UUID/header
-  mapping and selected-thread register provenance are verified against the explicitly supplied original image.
+- [x] Read-only LLDB snapshot export command with preflight validation and no-overwrite behavior for its documented
+  x86-64/ARM32 paths. Historical ARM64 byte/identity capture tests ran with ASLR enabled, but their assumed DATA
+  order is superseded: current ARM64 export refuses until an affirmative runtime evidence path is implemented.
+  Static snapshot loading remains available; raw ARM64 query/UI inspection keeps DATA order unknown.
 - [x] AArch64 conservative ADR/ADRP/ADD/MOV/LDR/BR/BLR tracking with stores/calls invalidating memory inference.
   Writable capture regions remain excluded from pointer evidence. Exact-store forwarding exists in summaries,
   but is not a general alias proof or a reason to enable mutable-pointer discovery.

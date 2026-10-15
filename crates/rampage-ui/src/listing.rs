@@ -13,6 +13,7 @@ enum Action {
     Select(u64),
     /// Follow a reference, remembering where we came from.
     Follow(u64),
+    Entry,
 }
 
 /// A function's disassembly and the rows that display it.
@@ -156,6 +157,12 @@ fn line_ui(ui: &mut Ui, workspace: &Workspace, line: &DisassemblyLine, action: &
         }
     });
     let response = row.response.interact(Sense::click());
+    response.context_menu(|ui| {
+        if ui.button(format!("Exact entry at current cursor {:#x}...", workspace.cursor)).clicked() {
+            *action = Action::Entry;
+            ui.close();
+        }
+    });
     if is_cursor {
         ui.painter().rect_filled(response.rect.expand2(egui::vec2(4.0, 1.0)), 2.0, highlight());
     }
@@ -173,8 +180,31 @@ fn truncate(text: &str, width: usize) -> String {
 }
 
 pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
+    let mut open_entry = false;
+    ui.interact(ui.available_rect_before_wrap(), ui.id().with("exact-entry-menu"), Sense::click()).context_menu(|ui| {
+        if ui.button(format!("Exact entry at current cursor {:#x}...", workspace.cursor)).clicked() {
+            open_entry = true;
+            ui.close();
+        }
+    });
+    if open_entry {
+        workspace.show_entry_decompilation();
+    }
     let Some(listing) = &workspace.listing else {
-        if workspace.analysis_ready() {
+        if workspace.analysis_deferred() {
+            ui.label("Global analysis not started; showing mapped bytes only.");
+            if ui.button("Exact entry at current cursor...").clicked() {
+                workspace.show_entry_decompilation();
+            }
+            if ui.button("Start global analysis").clicked() {
+                workspace.start_analysis(ui.ctx());
+            }
+            if let Err(error) = workspace.project.binary.validate_available_backing_source() {
+                ui.colored_label(theme::WARNING, error.to_string());
+            } else {
+                hex(ui, workspace);
+            }
+        } else if workspace.analysis_ready() {
             hex(ui, workspace);
         } else {
             ui.centered_and_justified(|ui| ui.label(RichText::new("Analyzing...").color(theme::DIM)));
@@ -217,6 +247,7 @@ pub fn show(ui: &mut Ui, workspace: &mut Workspace) {
         Action::None => {}
         Action::Select(address) => workspace.select(address),
         Action::Follow(address) => workspace.goto(address),
+        Action::Entry => workspace.show_entry_decompilation(),
     }
 }
 

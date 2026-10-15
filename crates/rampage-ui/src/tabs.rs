@@ -59,6 +59,15 @@ impl egui_dock::TabViewer for Viewer<'_> {
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Tab) {
+        if self.workspace.analysis_deferred()
+            && matches!(tab, Tab::Functions | Tab::Strings | Tab::Graph | Tab::Xrefs | Tab::Triage)
+        {
+            ui.label("Global analysis not started.");
+            if ui.button("Start global analysis").clicked() {
+                self.workspace.start_analysis(ui.ctx());
+            }
+            return;
+        }
         match tab {
             Tab::Functions => functions(ui, self.workspace),
             Tab::Strings => strings(ui, self.workspace),
@@ -87,6 +96,26 @@ impl egui_dock::TabViewer for Viewer<'_> {
 }
 
 fn pseudocode(ui: &mut Ui, workspace: &mut Workspace) {
+    let mut open_entry = false;
+    ui.interact(ui.available_rect_before_wrap(), ui.id().with("exact-entry-menu"), Sense::click()).context_menu(|ui| {
+        if ui.button("Exact entry at current cursor...").clicked() {
+            open_entry = true;
+            ui.close();
+        }
+    });
+    if open_entry {
+        workspace.show_entry_decompilation();
+    }
+    if workspace.analysis_deferred() {
+        if ui.button("Exact entry at current cursor...").clicked() {
+            workspace.show_entry_decompilation();
+        }
+        ui.label("Global analysis not started. Exact-entry decompilation runs only from its explicit Run button.");
+        if ui.button("Start global analysis").clicked() {
+            workspace.start_analysis(ui.ctx());
+        }
+        return;
+    }
     workspace.want_pseudocode(ui.ctx());
     if let Some(error) = workspace.pseudocode.error() {
         ui.label(error);

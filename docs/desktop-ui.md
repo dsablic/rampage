@@ -16,8 +16,25 @@ when installed; see the [decompiler reference](../crates/rampage-decompiler/READ
 
 Docked functions, strings, imports and exports lists share a disassembly listing with clickable references,
 a hex view for data, a control-flow graph, cross-references, triage and a navigation band across the image.
-The Pseudocode tab loads Ghidra decompilation in the background and navigates inline address-linked tokens;
-reported recovery issues remain visible rather than treating any rendered C as correct.
+On an ordinary open, the Pseudocode tab loads Ghidra decompilation in the background and navigates address-linked
+tokens; reported recovery issues remain visible rather than treating any rendered C as correct.
+
+The brand context menu's **Open for exact-entry…** opens a selected source with global analysis deferred;
+**Exact-entry decompilation…** opens separate controls for the current cursor. **Entry validation** defaults to
+**Metadata-backed**; **Analyst-asserted** requires explicit selection. Only **Run** executes, with no containing-
+function snap, navigation autorun or automatic fallback. Listing/Pseudocode context actions open controls, not a
+request. **Cancel** is cooperative; native FFI can keep the App-wide exact-entry permit until it returns.
+Coarse observed host phases are not percentages. See [desktop exact-entry](exact-entry-ui.md) for stale-result
+guards, native warnings and host-context evidence. **Start global analysis** is a separate active-module action.
+
+**Project workspace…** retains up to eight actual module Workspaces, including filters, navigation/history and
+unsaved editors. Stable module IDs qualify addresses rather than joining by basename or virtual address.
+**Save workspace…**, **Preview workspace file…** and **Open reviewed workspace** are separate explicit local
+actions; Preview reads only the manifest, while reviewed Open approves listed sources and checked recognized
+annotation logs. Restored modules are deferred, and any failed staged load leaves the old bank intact. These
+bounded public handlers perform synchronous I/O, not background paint work. See
+[project workspaces](project-workspaces.md) for limits, privacy, annotation-directory context and private
+no-overwrite publication.
 
 When a file embeds executables or containers, Carve lists candidates from the same scan as `binary carve`.
 A validated executable opens as its own project. A file that cannot open whole shows the candidate list
@@ -72,8 +89,8 @@ automatic deletion. Uncertain publication cannot authorize Open or same-destinat
 **Open saved snapshot** requires a current comparison and successful publication, rechecks source/bindings and
 actual session document bytes/digest, and refuses while an annotation editor is unsaved. Save never opens itself.
 
-ARM64 runtime DATA order remains unknown, so this new capture composition refuses it while inspection remains
-available. Existing standalone exporter architecture support is separate and unchanged. Matching observations
+ARM64 runtime DATA order remains unknown, so capture composition and the standalone exporter refuse ARM64
+capture; raw inspection and loading existing manual ARM64 snapshots remain available. Matching observations
 are non-atomic, not proof of authenticity, equal bytes, a current stop, flow or layout; client timeouts cannot
 prove SDK work stopped. The window offers no launch, attach, resume, step, breakpoint, expression or target-write
 controls. See the [debugger workspace guide](debugger-workspace.md) for the complete action sequence, source/form/
@@ -107,7 +124,7 @@ tools do not execute the target or arbitrary shell commands.
 UPDATE_SNAPSHOTS=1 cargo test -p rampage-ui --test snapshots
 ```
 
-Review refreshed images rather than treating an update as a correctness check. Analysis runs in the background;
+Review refreshed images rather than treating an update as a correctness check. Analysis jobs run in the background;
 previously reported Chrome framework samples (about 190,000 functions and 930,000 strings) rendered frames in
 a few milliseconds. This sample-specific result is not a frame-time guarantee. See
 [reported discovery timings and benchmark limits](features.md#measurements-and-development).

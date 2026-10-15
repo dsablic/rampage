@@ -40,8 +40,10 @@ paged: an oversized result is refused with a suggestion to use the CLI or API, n
 
 Without the new opt-in, `function decompile`, flat `decompile`, the `decompile` tool and `Project::decompile`
 retain their containing-function and whole-program-context behavior. `binary audit` without `--entries` retains
-its region-sampling behavior. The desktop Pseudocode tab still uses the legacy decompilation path; opening an
-address there is not an exact-entry integration.
+its region-sampling behavior. The ordinary desktop Pseudocode tab still uses the legacy decompilation path;
+opening an address there alone is not an exact-entry request. The separate
+[desktop exact-entry window](exact-entry-ui.md) supports deferred opening, explicit validation and Run without
+global analysis. Its context-menu actions open those controls rather than executing automatically.
 
 ## Exact-entry API
 

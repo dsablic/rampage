@@ -143,6 +143,8 @@ pub struct Workspace {
     pub(crate) instance: Arc<()>,
     pub(crate) annotations_epoch: Arc<()>,
     pub(crate) debug_layout: crate::debug_layout::DebugLayouts,
+    entry_ui: crate::entry_ui::EntryUi,
+    deferred: bool,
     pub path: PathBuf,
     /// The embedded image opened, when not the whole file.
     pub image: Option<ImageAt>,
@@ -205,6 +207,31 @@ impl Workspace {
     ) -> Result<Self, String> {
         let image = image.filter(|image| !image.is_whole_file());
         let project = session.open_at(&path, arch, image).map_err(text)?;
+        Ok(Self::from_loaded_project(path, image, project, ctx, blocking, false))
+    }
+
+    /// Opens the same session project without starting or requiring global analysis.
+    pub fn open_exact(
+        session: &Session,
+        path: PathBuf,
+        arch: Option<Arch>,
+        image: Option<ImageAt>,
+        ctx: &egui::Context,
+        blocking: bool,
+    ) -> Result<Self, String> {
+        let image = image.filter(|image| !image.is_whole_file());
+        let project = session.open_at(&path, arch, image).map_err(text)?;
+        Ok(Self::from_loaded_project(path, image, project, ctx, blocking, true))
+    }
+
+    pub(crate) fn from_loaded_project(
+        path: PathBuf,
+        image: Option<ImageAt>,
+        project: Arc<Project>,
+        ctx: &egui::Context,
+        blocking: bool,
+        deferred: bool,
+    ) -> Self {
         let imports = project.imports(&ListQuery::default()).items;
         let exports = project.exports(&ListQuery::default()).items;
         let cursor = project
@@ -219,6 +246,8 @@ impl Workspace {
             instance: Arc::new(()),
             annotations_epoch: Arc::new(()),
             debug_layout: crate::debug_layout::DebugLayouts::default(),
+            entry_ui: crate::entry_ui::EntryUi::default(),
+            deferred: true,
             path,
             image,
             project,
@@ -256,20 +285,75 @@ impl Workspace {
             assistant: crate::assistant::Assistant::default(),
             annotations_checked: Instant::now(),
         };
-        let project = Arc::clone(&workspace.project);
-        workspace.functions.start(blocking, ctx, move || {
+        if !deferred {
+            workspace.start_analysis(ctx);
+        }
+        workspace
+    }
+
+    pub fn start_analysis(&mut self, ctx: &egui::Context) {
+        if !self.deferred {
+            return;
+        }
+        self.deferred = false;
+        let project = Arc::clone(&self.project);
+        self.functions.start(self.blocking, ctx, move || {
             project.functions(&FunctionsQuery::default()).map(|page| page.items).map_err(text)
         });
-        let project = Arc::clone(&workspace.project);
-        workspace.triage.start(blocking, ctx, move || Ok(project.triage().clone()));
-        if blocking {
-            workspace.refresh_cursor_views();
+        let project = Arc::clone(&self.project);
+        self.triage.start(self.blocking, ctx, move || Ok(project.triage().clone()));
+        if self.blocking {
+            self.refresh_cursor_views();
         }
-        Ok(workspace)
+    }
+
+    pub fn analysis_deferred(&self) -> bool {
+        self.deferred
+    }
+
+    pub fn show_entry_decompilation(&mut self) {
+        self.entry_ui.show();
+    }
+
+    pub(crate) fn show_entry_window(&mut self, ctx: &egui::Context) {
+        let mut entry = std::mem::take(&mut self.entry_ui);
+        entry.window(self, ctx, self.blocking);
+        self.entry_ui = entry;
+    }
+
+    pub(crate) fn set_entry_gate(&mut self, gate: crate::entry_ui::EntryGate) {
+        self.entry_ui.set_gate(gate);
+    }
+
+    pub(crate) fn navigation_snapshot(&self) -> (u64, Vec<u64>, Vec<u64>) {
+        (self.cursor, self.back.clone(), self.forward.clone())
+    }
+
+    pub(crate) fn restore_navigation(&mut self, cursor: u64, back: Vec<u64>, forward: Vec<u64>) {
+        self.entry_ui.invalidate();
+        self.cursor = cursor;
+        self.back = back;
+        self.forward = forward;
+        self.listing = None;
+        self.xrefs = None;
+        self.graph = None;
+        self.scroll_to_cursor = true;
+        self.refresh_cursor_views();
+    }
+
+    pub(crate) fn deactivate(&mut self) {
+        self.entry_ui.invalidate();
+        self.instance = Arc::new(());
+        self.debug_layout.invalidate();
+        self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.pseudocode_address = None;
     }
 
     /// Starts the string scan the first time the strings panel is shown.
     pub fn want_strings(&mut self, ctx: &egui::Context) {
+        if self.deferred {
+            return;
+        }
         if matches!(self.strings, Job::Idle) {
             let project = Arc::clone(&self.project);
             self.strings.start(self.blocking, ctx, move || Ok(project.strings(&StringsQuery::default()).items));
@@ -278,7 +362,10 @@ impl Workspace {
 
     /// Collects finished background work and edits other clients saved.
     pub fn poll(&mut self, ctx: &egui::Context) {
-        if self.pseudocode.is_running() {
+        let mut entry = std::mem::take(&mut self.entry_ui);
+        entry.poll(self);
+        self.entry_ui = entry;
+        if !self.deferred && self.pseudocode.is_running() {
             let address = self.project.function_containing(self.cursor).ok().flatten().unwrap_or(self.cursor);
             if self.pseudocode_address != Some(address) {
                 self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -384,6 +471,7 @@ impl Workspace {
     /// Moves the cursor to `address`, remembering where it was.
     pub fn goto(&mut self, address: u64) {
         if address != self.cursor {
+            self.entry_ui.invalidate();
             self.back.push(self.cursor);
             self.forward.clear();
         }
@@ -471,6 +559,7 @@ impl Workspace {
 
     /// Refreshes everything that shows names or comments after an edit at `address`, or anywhere.
     pub(crate) fn annotations_changed(&mut self, address: Option<u64>) {
+        self.entry_ui.invalidate();
         self.annotations_epoch = Arc::new(());
         self.debug_layout.invalidate();
         self.pseudocode_address = None;
@@ -491,6 +580,9 @@ impl Workspace {
 
     /// Moves the cursor within the current listing without adding to the history.
     pub fn select(&mut self, address: u64) {
+        if address != self.cursor {
+            self.entry_ui.invalidate();
+        }
         self.cursor = address;
     }
 
@@ -528,6 +620,9 @@ impl Workspace {
     }
 
     fn revisit(&mut self, address: u64) {
+        if address != self.cursor {
+            self.entry_ui.invalidate();
+        }
         self.cursor = address;
         self.scroll_to_cursor = true;
         self.show_listing = true;
@@ -566,6 +661,7 @@ impl Workspace {
 
 impl Drop for Workspace {
     fn drop(&mut self) {
+        self.entry_ui.invalidate();
         self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -573,6 +669,27 @@ impl Drop for Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deferred_poll_annotation_refresh_does_not_initialize_backend_analysis_caches() {
+        for file in ["hello-x64-dyn.elf", "hello-x64.exe", "hello-arm64.macho"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(file);
+            let ctx = egui::Context::default();
+            let mut workspace = Workspace::open_exact(&Session::default(), path, None, None, &ctx, false).unwrap();
+            assert_eq!(workspace.project.analysis_cache_status(), rampage_api::AnalysisCacheStatus::default());
+            let previous_check = Instant::now() - ANNOTATION_REFRESH;
+            workspace.annotations_checked = previous_check;
+            workspace.poll(&ctx);
+            assert!(workspace.annotations_checked > previous_check);
+            assert_eq!(workspace.project.analysis_cache_status(), rampage_api::AnalysisCacheStatus::default());
+            assert!(matches!(workspace.functions, Job::Idle));
+            assert!(matches!(workspace.strings, Job::Idle));
+            assert!(matches!(workspace.triage, Job::Idle));
+            assert!(matches!(workspace.pseudocode, Job::Idle));
+            assert!(workspace.listing.is_none());
+            assert!(workspace.xrefs.is_none());
+        }
+    }
 
     #[test]
     fn polling_cancels_obsolete_hidden_pseudocode_and_clears_its_cache_key() {

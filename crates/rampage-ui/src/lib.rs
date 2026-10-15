@@ -6,11 +6,13 @@ mod band;
 mod carve;
 mod debug_layout;
 mod debugger;
+mod entry_ui;
 mod graph;
 mod listing;
 mod tabs;
 pub mod theme;
 mod workspace;
+mod workspace_bank;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,12 +26,15 @@ use rampage_loaders::ImageAt;
 
 pub use tabs::Tab;
 pub use workspace::Workspace;
+pub use workspace_bank::{ModuleInfo, ProjectWorkspaceSaveNotice};
 
 pub struct App {
     session: Session,
     /// One line per pack or content that did not load, once the packs have loaded.
     pack_problems: Option<Vec<String>>,
     workspace: Option<Workspace>,
+    workspace_bank: workspace_bank::WorkspaceBank,
+    entry_gate: entry_ui::EntryGate,
     /// Shared with replacement workspaces; dropping a receiver does not stop its preview thread.
     debug_layout_gate: debug_layout::PreviewGate,
     /// The carving of the file last opened, for opening what it embeds.
@@ -61,6 +66,8 @@ impl Default for App {
             session: Session::default(),
             pack_problems: None,
             workspace: None,
+            workspace_bank: workspace_bank::WorkspaceBank::default(),
+            entry_gate: entry_ui::EntryGate::default(),
             debug_layout_gate: debug_layout::PreviewGate::default(),
             carve: None,
             error: None,
@@ -87,14 +94,17 @@ impl App {
     /// Opens `path`, or the executable embedded at `image` in it, and carves the file for what else it embeds. When
     /// the file cannot be opened, the Carve window shows what it embeds instead.
     pub fn open_at(&mut self, ctx: &egui::Context, path: PathBuf, arch: Option<Arch>, image: Option<ImageAt>) {
+        if let Err(error) = self.ensure_bank_replaceable() {
+            self.error = Some(error);
+            return;
+        }
         if self.carve.as_ref().is_none_or(|carve| carve.path != path) {
             self.carve = Some(carve::Carve::start(path.clone(), ctx, self.blocking));
         }
-        match Workspace::open(&self.session, path, arch, image, ctx, self.blocking) {
-            Ok(mut workspace) => {
-                workspace.debug_layout = debug_layout::DebugLayouts::with_gate(self.debug_layout_gate.clone());
-                self.debugger.invalidate_workspace();
-                self.workspace = Some(workspace);
+        let opened = Workspace::open(&self.session, path, arch, image, ctx, self.blocking)
+            .and_then(|workspace| self.replace_workspace(workspace));
+        match opened {
+            Ok(()) => {
                 self.error = None;
             }
             Err(error) => {
@@ -181,6 +191,8 @@ impl App {
             about::show(&ui.ctx().clone(), &mut self.about, &self.session.packs());
         }
         self.carve_window(&ui.ctx().clone());
+        self.project_workspace_window(ui.ctx());
+        self.open_path_window(ui.ctx());
         let debugger_action = self.debugger.show_action(ui.ctx(), self.workspace.as_mut());
         if let Some(action) = debugger_action {
             self.open_debugger_snapshot(ui.ctx(), action);
@@ -202,9 +214,11 @@ impl App {
                 .show_leaf_close_all_buttons(false)
                 .show_inside(ui, &mut tabs::Viewer { workspace });
         });
+        let editor_scope = self.annotation_editor_scope();
         if let Some(workspace) = &mut self.workspace {
+            workspace.show_entry_window(ui.ctx());
             debug_layout::show(ui.ctx(), workspace);
-            Self::edit_dialog(&ui.ctx().clone(), workspace);
+            Self::edit_dialog(&ui.ctx().clone(), workspace, editor_scope);
             Self::undo_dialog(&ui.ctx().clone(), workspace);
         }
         self.shortcuts(ui.ctx());
@@ -229,6 +243,7 @@ impl App {
 
     fn open_debugger_snapshot(&mut self, ctx: &egui::Context, action: debugger::OpenSnapshot) {
         let result = (|| {
+            self.ensure_bank_replaceable()?;
             action.validate_source(self.workspace.as_ref())?;
             let verified = rampage_api::read_debugger_capture_publication(&action.path, &action.document_sha256)
                 .map_err(|error| error.to_string())?;
@@ -244,7 +259,7 @@ impl App {
         &mut self,
         action: &debugger::OpenSnapshot,
         verified: &[u8],
-        mut workspace: Workspace,
+        workspace: Workspace,
     ) -> Result<(), String> {
         if workspace.project.binary.format != rampage_loaders::Format::Snapshot
             || workspace.project.binary.file_bytes() != verified
@@ -252,9 +267,8 @@ impl App {
             return Err("Saved capture changed while opening; the original workspace remains open.".to_owned());
         }
         action.validate_source(self.workspace.as_ref())?;
-        workspace.debug_layout = debug_layout::DebugLayouts::with_gate(self.debug_layout_gate.clone());
-        self.debugger.invalidate_workspace();
-        self.workspace = Some(workspace);
+        self.ensure_bank_replaceable()?;
+        self.replace_workspace(workspace)?;
         self.carve = None;
         self.error = None;
         Ok(())
@@ -327,7 +341,7 @@ impl App {
     }
 
     /// The rename or comment dialog.
-    fn edit_dialog(ctx: &egui::Context, workspace: &mut Workspace) {
+    fn edit_dialog(ctx: &egui::Context, workspace: &mut Workspace, editor_scope: egui::Id) {
         let Some(editing) = &mut workspace.editing else { return };
         let title = match editing.field {
             Field::Name => format!("Rename {:#x}", editing.address),
@@ -338,14 +352,26 @@ impl App {
         };
         let mut done = false;
         let mut cancel = false;
+        let window_id = editor_scope.with(("window", &title));
+        let text_id = editor_scope.with(("text", &title));
         egui::Window::new(title)
+            .id(window_id)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 120.0))
             .show(ctx, |ui| {
-                let field = ui
-                    .add(TextEdit::singleline(&mut editing.text).desired_width(360.0).font(egui::TextStyle::Monospace));
-                field.request_focus();
+                // An unfocused TextEdit collapses its saved selection before handling input.
+                ui.memory_mut(|memory| {
+                    if !memory.has_focus(text_id) {
+                        memory.request_focus(text_id);
+                    }
+                });
+                ui.add(
+                    TextEdit::singleline(&mut editing.text)
+                        .id(text_id)
+                        .desired_width(360.0)
+                        .font(egui::TextStyle::Monospace),
+                );
                 ui.label(RichText::new("Enter to save, Escape to cancel, empty to remove").color(theme::DIM).small());
                 if let Some(error) = &workspace.edit_error {
                     ui.label(RichText::new(error).color(theme::WARNING));
@@ -397,6 +423,21 @@ impl App {
                 egui::Label::new(RichText::new("rampage").strong().color(theme::LINK)).sense(egui::Sense::click()),
             );
             brand.context_menu(|ui| {
+                if ui.button("Project workspace…").clicked() {
+                    self.show_project_workspace();
+                    ui.close();
+                }
+                if ui.button("Open for exact-entry…").clicked() {
+                    self.show_open_path(workspace_bank::OpenPathAction::ReplaceExact);
+                    ui.close();
+                }
+                if ui.add_enabled(self.workspace.is_some(), egui::Button::new("Exact-entry decompilation…")).clicked()
+                {
+                    if let Some(workspace) = &mut self.workspace {
+                        workspace.show_entry_decompilation();
+                    }
+                    ui.close();
+                }
                 if ui
                     .add_enabled(self.workspace.is_some(), egui::Button::new("Review checked debug layouts…"))
                     .clicked()
@@ -412,6 +453,7 @@ impl App {
             if brand.on_hover_text("About rampage").clicked() {
                 self.about = true;
             }
+            self.module_selector(ui);
             let Some(workspace) = &mut self.workspace else { return };
             ui.separator();
             let name = workspace.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
