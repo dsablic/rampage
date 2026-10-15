@@ -1,5 +1,9 @@
 //! Bounded, explicitly reviewed local multi-module workspaces. No analysis state is serialized.
 
+mod control;
+use control::uncontrolled;
+pub use control::{ProjectWorkspacePhase, ProjectWorkspaceProgress, ProjectWorkspaceTaskControl};
+
 use std::collections::HashSet;
 use std::fs::{File, Metadata};
 use std::path::{Path, PathBuf};
@@ -162,6 +166,7 @@ pub struct ProjectWorkspaceManifest {
     pub annotation_policy: String,
 }
 
+#[derive(Clone)]
 pub struct ProjectWorkspaceModuleInput {
     pub id: String,
     pub label: String,
@@ -211,21 +216,39 @@ impl ProjectWorkspacePreview {
 
     /// Explicit approval opens all listed sources into a fresh session before returning any candidate bank.
     pub fn open_reviewed(&self, session: &Session) -> Result<LoadedProjectWorkspace, ApiError> {
-        self.validate_document()?;
+        uncontrolled(|control| self.open_reviewed_controlled(session, control))
+    }
+
+    pub fn validate_metadata(&self) -> Result<(), ApiError> {
+        validate_source_file(&self.path, &self.source)
+    }
+
+    pub fn open_reviewed_controlled(
+        &self,
+        session: &Session,
+        control: &mut ProjectWorkspaceTaskControl<'_>,
+    ) -> Result<LoadedProjectWorkspace, ApiError> {
+        let total = self.manifest.modules.len();
+        control.phase(ProjectWorkspacePhase::PreflightingSources, None, 0, total)?;
+        self.validate_document_controlled(control)?;
         let sources = preflight_sources(&self.manifest)?;
         let fresh = session.unloaded_copy();
         let mut modules = Vec::with_capacity(self.manifest.modules.len());
-        for (module, source) in self.manifest.modules.iter().zip(sources) {
+        for (index, (module, source)) in self.manifest.modules.iter().zip(sources).enumerate() {
+            control.phase(ProjectWorkspacePhase::LoadingModule, Some(&module.id), index, total)?;
+            self.validate_document_controlled(control)?;
+            validate_source_file(&module.source_path, &source)?;
             validate_annotation_context(module, &fresh)?;
-            let source_hash = source.hash()?;
+            let source_hash = source.hash_controlled(control)?;
             if source_hash != module.identity.source_sha256 {
                 return Err(invalid("workspace source hash changed; no modules adopted"));
             }
             let arch = architecture(&module.identity.architecture)?;
             let image = module.image.map(ProjectWorkspaceImage::selection);
             let project = fresh.open_workspace_at(&module.source_path, Some(arch), image)?;
+            control.phase(ProjectWorkspacePhase::ValidatingIdentity, Some(&module.id), index, total)?;
             validate_source_file(&module.source_path, &source)?;
-            if identity(&project.binary)? != module.identity {
+            if identity_controlled(&project.binary, control)? != module.identity {
                 return Err(invalid("workspace selected image or capture document changed; no modules adopted"));
             }
             project.set_decompiler_options(module.options.as_ref().map(ProjectWorkspaceOptions::options));
@@ -235,15 +258,17 @@ impl ProjectWorkspacePreview {
             let configuration_revision = project.decompiler_configuration_revision()?;
             modules.push(LoadedProjectModule { module: module.clone(), project, configuration_revision, source });
         }
-        self.validate_document()?;
+        control.phase(ProjectWorkspacePhase::ResultValidation, None, total, total)?;
+        self.validate_document_controlled(control)?;
         let loaded = LoadedProjectWorkspace { manifest: self.manifest.clone(), modules, session: fresh };
-        loaded.validate()?;
+        loaded.validate_controlled(control)?;
         Ok(loaded)
     }
 
-    fn validate_document(&self) -> Result<(), ApiError> {
+    fn validate_document_controlled(&self, control: &ProjectWorkspaceTaskControl<'_>) -> Result<(), ApiError> {
+        control.check()?;
         validate_source_file(&self.path, &self.source)?;
-        if self.source.hash()? != self.document_sha256 {
+        if self.source.hash_controlled(control)? != self.document_sha256 {
             return Err(invalid("workspace document changed since review; preview again"));
         }
         Ok(())
@@ -296,19 +321,41 @@ impl LoadedProjectWorkspace {
 
     /// Rechecks the exact returned Arcs, not replacement projects looked up by names or addresses.
     pub fn validate(&self) -> Result<(), ApiError> {
+        uncontrolled(|control| self.validate_controlled(control))
+    }
+
+    /// Cheap adoption checks only: original descriptors, pathname stamps, settings and bounded metadata.
+    /// Full source hashes are validated by the background operation, not by this method.
+    pub fn validate_metadata(&self) -> Result<(), ApiError> {
         validate_manifest(&self.manifest)?;
         if self.modules.len() != self.manifest.modules.len() {
             return Err(invalid("incomplete loaded workspace"));
         }
-        for loaded in &self.modules {
+        for (loaded, module) in self.modules.iter().zip(&self.manifest.modules) {
             validate_source_file(&loaded.module.source_path, &loaded.source)?;
-        }
-        let sources = preflight_sources(&self.manifest)?;
-        for ((loaded, module), source) in self.modules.iter().zip(&self.manifest.modules).zip(&sources) {
+            loaded.project.binary.validate_available_backing_source().map_err(|error| invalid(error.to_string()))?;
             validate_annotation_context(module, &self.session)?;
             if loaded.module != *module
-                || identity(&loaded.project.binary)? != module.identity
-                || source.hash()? != module.identity.source_sha256
+                || loaded.project.decompiler_configuration_revision()? != loaded.configuration_revision
+                || loaded.project.configured_decompiler_options()?.map(ProjectWorkspaceOptions::from_options)
+                    != module.options
+            {
+                return Err(invalid("loaded workspace metadata changed before adoption"));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_controlled(&self, control: &ProjectWorkspaceTaskControl<'_>) -> Result<(), ApiError> {
+        control.check()?;
+        self.validate_metadata()?;
+        let sources = preflight_sources(&self.manifest)?;
+        for ((loaded, module), source) in self.modules.iter().zip(&self.manifest.modules).zip(&sources) {
+            control.check()?;
+            validate_annotation_context(module, &self.session)?;
+            if loaded.module != *module
+                || identity_controlled(&loaded.project.binary, control)? != module.identity
+                || source.hash_controlled(control)? != module.identity.source_sha256
                 || loaded.project.decompiler_configuration_revision()? != loaded.configuration_revision
                 || loaded.project.configured_decompiler_options()?.map(ProjectWorkspaceOptions::from_options)
                     != module.options
@@ -318,6 +365,7 @@ impl LoadedProjectWorkspace {
             validate_source_file(&module.source_path, source)?;
             validate_source_file(&module.source_path, &loaded.source)?;
         }
+        control.check()?;
         Ok(())
     }
 }
@@ -333,13 +381,24 @@ pub struct ProjectWorkspacePublication {
 
 /// Reads only this regular bounded UTF-8 manifest. It does not stat, canonicalize or open any module path.
 pub fn preview_project_workspace(path: &Path) -> Result<ProjectWorkspacePreview, ApiError> {
+    uncontrolled(|control| preview_project_workspace_controlled(path, control))
+}
+
+pub fn preview_project_workspace_controlled(
+    path: &Path,
+    control: &mut ProjectWorkspaceTaskControl<'_>,
+) -> Result<ProjectWorkspacePreview, ApiError> {
+    control.phase(ProjectWorkspacePhase::ReadingManifest, None, 0, 0)?;
     let source = open_regular(path, MANIFEST_BYTES)?;
-    let document = source.read_bounded(MANIFEST_BYTES)?;
+    let document = source.read_bounded_controlled(MANIFEST_BYTES, control)?;
     raw_preflight(&document)?;
-    let manifest: ProjectWorkspaceManifest =
-        serde_json::from_slice(&document).map_err(|error| invalid(format!("invalid workspace document: {error}")))?;
+    let manifest: ProjectWorkspaceManifest = serde_json::from_slice(&document).map_err(|error| {
+        invalid(format!("invalid workspace document at line {}, column {}", error.line(), error.column(),))
+    })?;
     validate_manifest(&manifest)?;
+    control.phase(ProjectWorkspacePhase::ResultValidation, None, 0, manifest.modules.len())?;
     validate_source_file(path, &source)?;
+    control.check()?;
     Ok(ProjectWorkspacePreview { manifest, source, path: path.to_owned(), document_sha256: digest(&document) })
 }
 
@@ -357,16 +416,28 @@ pub fn capture_project_workspace_with_session(
     active: &str,
     session: &Session,
 ) -> Result<ProjectWorkspaceManifest, ApiError> {
+    uncontrolled(|control| capture_project_workspace_controlled(modules, active, session, control))
+}
+
+pub fn capture_project_workspace_controlled(
+    modules: &[ProjectWorkspaceModuleInput],
+    active: &str,
+    session: &Session,
+    control: &mut ProjectWorkspaceTaskControl<'_>,
+) -> Result<ProjectWorkspaceManifest, ApiError> {
     if modules.is_empty() || modules.len() > 8 {
         return Err(invalid("a workspace must contain between one and eight modules"));
     }
+    control.phase(ProjectWorkspacePhase::CapturingInputs, None, 0, modules.len())?;
     // All sizes and canonical selection collisions are checked before any map or hash work.
     let mut sources = Vec::with_capacity(modules.len());
     let mut total = 0u64;
     let mut selections = HashSet::new();
     let mut ids = HashSet::new();
     let mut configuration_revisions = Vec::with_capacity(modules.len());
+    let mut annotation_revisions = Vec::with_capacity(modules.len());
     for input in modules {
+        control.check()?;
         check_id(&input.id)?;
         check_label(&input.label)?;
         check_path(&input.source_path)?;
@@ -375,6 +446,7 @@ pub fn capture_project_workspace_with_session(
             return Err(invalid("duplicate workspace module ID"));
         }
         configuration_revisions.push(input.project.decompiler_configuration_revision()?);
+        annotation_revisions.push(input.project.annotation_revision()?);
         let source = open_source(&input.source_path)?;
         total = total.checked_add(source.stamp.length).ok_or_else(|| invalid("source size overflow"))?;
         if total > TOTAL_SOURCE_BYTES {
@@ -388,7 +460,9 @@ pub fn capture_project_workspace_with_session(
         sources.push(source);
     }
     let mut captured = Vec::with_capacity(modules.len());
-    for (input, source) in modules.iter().zip(&sources) {
+    for (index, (input, source)) in modules.iter().zip(&sources).enumerate() {
+        control.phase(ProjectWorkspacePhase::ValidatingIdentity, Some(&input.id), index, modules.len())?;
+        validate_source_file(&input.source_path, source)?;
         let binary = &input.project.binary;
         binary.validate_checked_source_profile().map_err(|error| invalid(error.to_string()))?;
         if let Some(backing) = binary.backing_path()
@@ -397,12 +471,24 @@ pub fn capture_project_workspace_with_session(
         {
             return Err(invalid("workspace source is not the project's resolved backing file"));
         }
-        let identity = identity(binary)?;
-        if identity.source_sha256 != source.hash()? || identity.source_bytes != source.stamp.length {
+        let identity = identity_controlled(binary, control)?;
+        if identity.source_sha256 != source.hash_controlled(control)? || identity.source_bytes != source.stamp.length {
             return Err(invalid("workspace source does not match the retained project"));
         }
         validate_selection(binary, input.image)?;
-        validate_annotation_persistence(input, session)?;
+        let (annotations, log) = detached_annotations(&input.project)?;
+        control.phase(ProjectWorkspacePhase::ReadingAnnotations, Some(&input.id), index, modules.len())?;
+        validate_source_file(&input.source_path, source)?;
+        binary.validate_available_backing_source().map_err(|error| invalid(error.to_string()))?;
+        validate_annotation_persistence(
+            binary,
+            &input.source_path,
+            input.image,
+            &annotations,
+            log.as_deref(),
+            session,
+            control,
+        )?;
         validate_source_file(&input.source_path, source)?;
         captured.push(ProjectWorkspaceModule {
             id: input.id.clone(),
@@ -425,16 +511,24 @@ pub fn capture_project_workspace_with_session(
         active_module_id: active.to_owned(),
         annotation_policy: ANNOTATION_POLICY.to_owned(),
     };
-    for ((input, revision), source) in modules.iter().zip(&configuration_revisions).zip(&sources) {
-        if input.project.decompiler_configuration_revision()? != *revision {
-            return Err(invalid("workspace configuration changed during capture"));
-        }
-        validate_source_file(&input.source_path, source)?;
-        input.project.binary.validate_available_backing_source().map_err(|error| invalid(error.to_string()))?;
-    }
+    control.phase(ProjectWorkspacePhase::PreparingDocument, None, modules.len(), modules.len())?;
     validate_manifest(&manifest)?;
     let bytes = serde_json::to_vec(&manifest).map_err(|error| invalid(error.to_string()))?;
     raw_preflight(&bytes)?;
+    control.phase(ProjectWorkspacePhase::ResultValidation, None, modules.len(), modules.len())?;
+    for (index, ((input, revision), source)) in modules.iter().zip(&configuration_revisions).zip(&sources).enumerate() {
+        control.check()?;
+        if input.project.decompiler_configuration_revision()? != *revision {
+            return Err(invalid("workspace configuration changed during capture"));
+        }
+        if !Arc::ptr_eq(&input.project.annotation_revision()?, &annotation_revisions[index]) {
+            return Err(invalid("workspace annotations changed during capture"));
+        }
+        validate_annotation_context(&manifest.modules[index], session)?;
+        validate_source_file(&input.source_path, source)?;
+        input.project.binary.validate_available_backing_source().map_err(|error| invalid(error.to_string()))?;
+    }
+    control.check()?;
     Ok(manifest)
 }
 
@@ -442,21 +536,31 @@ pub fn publish_project_workspace(
     manifest: &ProjectWorkspaceManifest,
     output: &Path,
 ) -> Result<ProjectWorkspacePublication, ApiError> {
+    uncontrolled(|control| publish_project_workspace_controlled(manifest, output, control))
+}
+
+pub fn publish_project_workspace_controlled(
+    manifest: &ProjectWorkspaceManifest,
+    output: &Path,
+    control: &mut ProjectWorkspaceTaskControl<'_>,
+) -> Result<ProjectWorkspacePublication, ApiError> {
+    control.phase(ProjectWorkspacePhase::PreparingDocument, None, 0, manifest.modules.len().min(8))?;
     validate_manifest(manifest)?;
     let bytes = serde_json::to_vec(manifest).map_err(|error| invalid(error.to_string()))?;
     raw_preflight(&bytes)?;
+    control.phase(ProjectWorkspacePhase::PreflightingSources, None, 0, manifest.modules.len())?;
     let sources = preflight_sources(manifest)?;
-    let check = || {
-        for (module, source) in manifest.modules.iter().zip(&sources) {
-            validate_source_file(&module.source_path, source)?;
-            if source.hash()? != module.identity.source_sha256 {
-                return Err(invalid("workspace source changed before publication"));
-            }
-        }
-        Ok(())
-    };
-    check()?;
-    let publication = crate::debugger_capture::publish_private_document(output, &bytes, check)?;
+    validate_publication_sources(manifest, &sources, control)?;
+    let publication = crate::debugger_capture::publish_private_document_observed(output, &bytes, |phase| {
+        use crate::debugger_capture::PublicationCheckPhase;
+        let (phase, completed) = match phase {
+            PublicationCheckPhase::BeforeStaging => (ProjectWorkspacePhase::Publishing, 0),
+            PublicationCheckPhase::BeforeLink => (ProjectWorkspacePhase::PublicationStaged, 0),
+            PublicationCheckPhase::AfterLink => (ProjectWorkspacePhase::ResultValidation, manifest.modules.len()),
+        };
+        control.phase(phase, None, completed, manifest.modules.len())?;
+        validate_publication_sources(manifest, &sources, control)
+    })?;
     Ok(ProjectWorkspacePublication {
         path: publication.path,
         document_sha256: publication.document_sha256,
@@ -466,51 +570,83 @@ pub fn publish_project_workspace(
     })
 }
 
+fn validate_publication_sources(
+    manifest: &ProjectWorkspaceManifest,
+    sources: &[SourceFile],
+    control: &ProjectWorkspaceTaskControl<'_>,
+) -> Result<(), ApiError> {
+    control.check()?;
+    for (module, source) in manifest.modules.iter().zip(sources) {
+        validate_source_file(&module.source_path, source)?;
+        if source.hash_controlled(control)? != module.identity.source_sha256 {
+            return Err(invalid("workspace source changed before publication"));
+        }
+    }
+    control.check()
+}
+
 fn normalized_image(image: Option<ImageAt>) -> Option<ProjectWorkspaceImage> {
     image
         .filter(|image| !image.is_whole_file())
         .map(|image| ProjectWorkspaceImage { offset: image.offset(), length: image.length() })
 }
 
-fn validate_annotation_persistence(input: &ProjectWorkspaceModuleInput, session: &Session) -> Result<(), ApiError> {
-    let current = input.project.annotations();
+fn detached_annotations(project: &Project) -> Result<(crate::annotations::Annotations, Option<PathBuf>), ApiError> {
+    let current = project.annotations();
     current.preflight_checked().map_err(invalid)?;
+    Ok((current.snapshot(), current.persistent_path().map(Path::to_owned)))
+}
+
+fn validate_annotation_persistence(
+    binary: &Binary,
+    source_path: &Path,
+    selected_image: Option<ImageAt>,
+    current: &crate::annotations::Annotations,
+    log: Option<&Path>,
+    session: &Session,
+    control: &ProjectWorkspaceTaskControl<'_>,
+) -> Result<(), ApiError> {
+    control.check()?;
     let empty = current.names().is_empty()
         && current.comments().is_empty()
         && current.signatures().is_empty()
         && current.types().is_empty()
         && current.globals().is_empty();
-    let Some(log) = current.persistent_path() else {
+    let Some(log) = log else {
         return if empty {
             Ok(())
         } else {
             Err(invalid("workspace cannot persist in-memory analyst edits; save them to recognized local logs first"))
         };
     };
-    let binary = &input.project.binary;
     if binary.format == Format::Snapshot {
         let capture = capture_identity(binary).ok_or_else(|| invalid("invalid capture annotation identity"))?;
         let filename = format!(".{}-{}.jsonl", capture.schema, capture.sha256);
         let parent = log.parent().ok_or_else(|| invalid("snapshot annotation log has no parent directory"))?;
         let actual_root = parent.canonicalize().map_err(|error| invalid(error.to_string()))?;
         if log.file_name() != Some(std::ffi::OsStr::new(&filename))
-            || actual_root != annotation_root(&input.source_path, session)?
+            || actual_root != annotation_root(source_path, session)?
         {
             return Err(invalid("snapshot annotations do not match the current session's recognized log directory"));
         }
     } else {
         let expected = crate::session::annotation_path(
-            &input.source_path,
-            normalized_image(input.image).map(ProjectWorkspaceImage::selection),
+            source_path,
+            normalized_image(selected_image).map(ProjectWorkspaceImage::selection),
             binary,
         );
         if log != expected.as_path() {
             return Err(invalid("workspace annotations are not in the source's recognized local log"));
         }
     }
-    let image_hash = (binary.format != Format::Snapshot).then(|| Sha256::digest(binary.image_bytes()).into());
+    let image_hash = if binary.format != Format::Snapshot {
+        Some(digest_bytes_controlled(binary.image_bytes(), control)?)
+    } else {
+        None
+    };
     let persisted =
         crate::annotations::Annotations::open_for_image_checked(log.to_owned(), image_hash).map_err(invalid)?;
+    control.check()?;
     if current.names() != persisted.names()
         || current.comments() != persisted.comments()
         || current.signatures() != persisted.signatures()
@@ -572,16 +708,20 @@ fn validate_selection(binary: &Binary, image: Option<ImageAt>) -> Result<(), Api
     }
 }
 
-fn identity(binary: &Binary) -> Result<ProjectWorkspaceIdentity, ApiError> {
+fn identity_controlled(
+    binary: &Binary,
+    control: &ProjectWorkspaceTaskControl<'_>,
+) -> Result<ProjectWorkspaceIdentity, ApiError> {
+    control.check()?;
     if binary.file_bytes().len() as u64 > SOURCE_BYTES {
         return Err(invalid("workspace source exceeds 128 MiB"));
     }
     binary.validate_available_backing_source().map_err(|error| invalid(error.to_string()))?;
-    let source_sha256 = digest(binary.file_bytes());
+    let source_sha256 = digest_controlled(binary.file_bytes(), control)?;
     let target = binary.target();
     let identity = ProjectWorkspaceIdentity {
         source_sha256: source_sha256.clone(),
-        image_sha256: digest(binary.image_bytes()),
+        image_sha256: digest_controlled(binary.image_bytes(), control)?,
         source_bytes: binary.file_bytes().len() as u64,
         format: match binary.format {
             Format::Elf => "elf",
@@ -600,7 +740,22 @@ fn identity(binary: &Binary) -> Result<ProjectWorkspaceIdentity, ApiError> {
         snapshot_document_sha256: (binary.format == Format::Snapshot).then_some(source_sha256),
     };
     binary.validate_available_backing_source().map_err(|error| invalid(error.to_string()))?;
+    control.check()?;
     Ok(identity)
+}
+
+fn digest_controlled(bytes: &[u8], control: &ProjectWorkspaceTaskControl<'_>) -> Result<String, ApiError> {
+    Ok(rampage_arch::hex::bytes(&digest_bytes_controlled(bytes, control)?))
+}
+
+fn digest_bytes_controlled(bytes: &[u8], control: &ProjectWorkspaceTaskControl<'_>) -> Result<[u8; 32], ApiError> {
+    let mut hash = Sha256::new();
+    for chunk in bytes.chunks(65536) {
+        control.check()?;
+        hash.update(chunk);
+    }
+    control.check()?;
+    Ok(hash.finalize().into())
 }
 
 fn validate_manifest(manifest: &ProjectWorkspaceManifest) -> Result<(), ApiError> {
@@ -822,11 +977,17 @@ pub(crate) struct SourceFile {
 }
 
 impl SourceFile {
-    fn read_bounded(&self, limit: u64) -> Result<Vec<u8>, ApiError> {
+    fn read_bounded_controlled(
+        &self,
+        limit: u64,
+        control: &ProjectWorkspaceTaskControl<'_>,
+    ) -> Result<Vec<u8>, ApiError> {
+        control.check()?;
         self.check_descriptor()?;
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 8192];
         while bytes.len() as u64 <= limit {
+            control.check()?;
             let remaining = (limit + 1 - bytes.len() as u64).min(buffer.len() as u64) as usize;
             let count = self.read_at(&mut buffer[..remaining], bytes.len() as u64)?;
             if count == 0 {
@@ -841,12 +1002,14 @@ impl SourceFile {
         Ok(bytes)
     }
 
-    fn hash(&self) -> Result<String, ApiError> {
+    fn hash_controlled(&self, control: &ProjectWorkspaceTaskControl<'_>) -> Result<String, ApiError> {
+        control.check()?;
         self.check_descriptor()?;
         let mut hash = Sha256::new();
         let mut length = 0u64;
         let mut buffer = [0u8; 65536];
         while length <= self.stamp.length {
+            control.check()?;
             let remaining = (self.stamp.length + 1 - length).min(buffer.len() as u64) as usize;
             let count = self.read_at(&mut buffer[..remaining], length)?;
             if count == 0 {

@@ -13,6 +13,7 @@ mod debug_layout_import;
 mod debugger;
 mod debugger_capture;
 mod decompile;
+pub mod derived_cache;
 mod detect;
 mod diagnostics;
 mod dotnet;
@@ -94,13 +95,16 @@ pub use project::{AnalysisCacheStatus, PdbImport, PdbPreview, Project};
 pub use project_workspace::{
     LoadedProjectModule, LoadedProjectWorkspace, ProjectWorkspaceCaptureIdentity, ProjectWorkspaceIdentity,
     ProjectWorkspaceImage, ProjectWorkspaceManifest, ProjectWorkspaceModule, ProjectWorkspaceModuleInput,
-    ProjectWorkspaceNavigation, ProjectWorkspaceOptions, ProjectWorkspacePlatform, ProjectWorkspacePreview,
-    ProjectWorkspacePublication, QualifiedProjectAddress, capture_project_workspace,
-    capture_project_workspace_with_session, preview_project_workspace, publish_project_workspace,
+    ProjectWorkspaceNavigation, ProjectWorkspaceOptions, ProjectWorkspacePhase, ProjectWorkspacePlatform,
+    ProjectWorkspacePreview, ProjectWorkspaceProgress, ProjectWorkspacePublication, ProjectWorkspaceTaskControl,
+    QualifiedProjectAddress, capture_project_workspace, capture_project_workspace_controlled,
+    capture_project_workspace_with_session, preview_project_workspace, preview_project_workspace_controlled,
+    publish_project_workspace, publish_project_workspace_controlled,
 };
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
 pub use rampage_decompiler::results::RecoveryStatus;
+pub use rampage_decompiler::worker::SupervisedMetrics;
 pub use rampage_decompiler::worker::WorkerConfig as DecompilerWorkerConfig;
 pub use rampage_decompiler::{DecompilerOptions, Platform as DecompilerPlatform};
 pub use rampage_detect::{Confidence as DetectionConfidence, Detection, Kind as DetectionKind};

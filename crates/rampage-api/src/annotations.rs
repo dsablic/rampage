@@ -115,6 +115,8 @@ impl Refusal {
 
 #[derive(Default)]
 pub struct Annotations {
+    revision: std::sync::Arc<()>,
+    names_revision: std::sync::Arc<()>,
     names: BTreeMap<u64, String>,
     /// Each name's address, for resolving names.
     addresses: HashMap<String, u64>,
@@ -225,6 +227,14 @@ impl Log {
 }
 
 impl Annotations {
+    pub(crate) fn revision(&self) -> std::sync::Arc<()> {
+        std::sync::Arc::clone(&self.revision)
+    }
+
+    pub(crate) fn names_revision(&self) -> std::sync::Arc<()> {
+        std::sync::Arc::clone(&self.names_revision)
+    }
+
     pub(crate) fn persistent_path(&self) -> Option<&std::path::Path> {
         self.log.as_ref().map(|log| log.path.as_path())
     }
@@ -378,6 +388,8 @@ impl Annotations {
 
     pub(crate) fn snapshot(&self) -> Self {
         Self {
+            revision: std::sync::Arc::clone(&self.revision),
+            names_revision: std::sync::Arc::clone(&self.names_revision),
             names: self.names.clone(),
             addresses: self.addresses.clone(),
             name_owners: self.name_owners.clone(),
@@ -432,6 +444,10 @@ impl Annotations {
             }
         }
         if restart {
+            self.revision = std::sync::Arc::new(());
+            if !self.names.is_empty() {
+                self.names_revision = std::sync::Arc::new(());
+            }
             self.names.clear();
             self.addresses.clear();
             self.name_owners.clear();
@@ -448,6 +464,7 @@ impl Annotations {
     }
 
     fn apply(&mut self, edit: &Edit) {
+        self.revision = std::sync::Arc::new(());
         if matches!(edit.field, Field::Types | Field::Signature) {
             let old = self.field_map(edit.field).get(&edit.address).is_some_and(|text| text.starts_with('!'));
             let new = edit.value.as_ref().is_some_and(|text| text.starts_with('!'));
@@ -461,6 +478,9 @@ impl Annotations {
         }
         match edit.field {
             Field::Name => {
+                if self.names.get(&edit.address).map(String::as_str) != edit.value.as_deref() {
+                    self.names_revision = std::sync::Arc::new(());
+                }
                 if let Some(old) = self.names.remove(&edit.address) {
                     let owners = self.name_owners.get_mut(&old).expect("indexed name owners");
                     owners.remove(&edit.address);

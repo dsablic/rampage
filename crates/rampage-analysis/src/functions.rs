@@ -230,6 +230,11 @@ impl Names {
         self.names.get(&address).map(String::as_str)
     }
 
+    /// Actual rendered constructor names, borrowed in canonical address order without rebuilding the namer.
+    pub fn entries(&self) -> impl ExactSizeIterator<Item = (u64, &str)> {
+        self.names.iter().map(|(&address, name)| (address, name.as_str()))
+    }
+
     pub fn function_name(&self, address: u64) -> String {
         self.get(address).map_or_else(|| default_name(address), str::to_owned)
     }

@@ -103,7 +103,7 @@ pub(crate) struct PublicationOutcome {
 }
 
 impl PublicationOutcome {
-    fn uncertain(&mut self, error: ApiError) {
+    pub(crate) fn uncertain(&mut self, error: ApiError) {
         self.status = DebuggerCapturePublicationStatus::PublishedUncertain;
         if self.warnings.len() < 8 {
             self.warnings.push(error.to_string().chars().take(512).collect());
@@ -157,10 +157,7 @@ impl DebuggerCapturePreview {
         if identity.sha256 != self.summary.source_image_sha256 {
             return Err(invalid("original selected image changed; prepare again"));
         }
-        let mut outcome = local::publish(output, &self.document, || backing(&self.source.binary))?;
-        if let Err(error) = backing(&self.source.binary) {
-            outcome.uncertain(error);
-        }
+        let outcome = publish_private_document(output, &self.document, || backing(&self.source.binary))?;
         let mut retained_staging_paths = self.summary.retained_staging_paths.clone();
         retained_staging_paths.extend(outcome.retained_staging_paths);
         Ok(DebuggerCapturePublication {
@@ -179,12 +176,27 @@ pub(crate) fn publish_private_document(
     document: &[u8],
     validate: impl Fn() -> Result<(), ApiError>,
 ) -> Result<PublicationOutcome, ApiError> {
+    publish_private_document_observed(output, document, |_| validate())
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PublicationCheckPhase {
+    BeforeStaging,
+    BeforeLink,
+    AfterLink,
+}
+
+pub(crate) fn publish_private_document_observed(
+    output: &Path,
+    document: &[u8],
+    mut validate: impl FnMut(PublicationCheckPhase) -> Result<(), ApiError>,
+) -> Result<PublicationOutcome, ApiError> {
     if document.is_empty() || document.len() > DOCUMENT_BYTES {
         return Err(ApiError::Invalid("private document exceeds its publication byte budget".into()));
     }
-    validate()?;
-    let mut outcome = local::publish(output, document, &validate)?;
-    if let Err(error) = validate() {
+    validate(PublicationCheckPhase::BeforeStaging)?;
+    let mut outcome = local::publish(output, document, || validate(PublicationCheckPhase::BeforeLink))?;
+    if let Err(error) = validate(PublicationCheckPhase::AfterLink) {
         outcome.uncertain(error);
     }
     Ok(outcome)
@@ -199,6 +211,14 @@ pub fn read_debugger_capture_publication(path: &Path, document_sha256: &str) -> 
         return Err(invalid("publication SHA-256 must be exactly 64 lowercase hexadecimal characters"));
     }
     local::read_publication(path, document_sha256)
+}
+
+/// Reads an explicitly selected private document as untrusted bytes, never as a source or consent receipt.
+pub(crate) fn read_private_document(path: &Path, limit: usize) -> Result<Vec<u8>, ApiError> {
+    if limit == 0 || limit > DOCUMENT_BYTES {
+        return Err(ApiError::Invalid("private document read limit must be within one MiB".into()));
+    }
+    local::read_private_document(path, limit)
 }
 
 pub fn prepare_debugger_capture(
@@ -989,6 +1009,10 @@ mod local {
         Err(ApiError::Unavailable("debugger capture publication reading is unsupported on this platform".into()))
     }
 
+    pub(super) fn read_private_document(_: &Path, _: usize) -> Result<Vec<u8>, ApiError> {
+        Err(ApiError::Unavailable("private document reading is unsupported on this platform".into()))
+    }
+
     pub(super) fn publish(
         _: &Path,
         _: &[u8],
@@ -1169,14 +1193,22 @@ mod local {
             self.directory.revalidate(true)
         }
 
-        fn read(mut self, expected_sha256: &str) -> Result<Vec<u8>, ApiError> {
+        fn read_bytes(&mut self, limit: usize) -> Result<Vec<u8>, ApiError> {
+            if self.stamp.len() > limit as u64 {
+                return Err(invalid("private document exceeds the requested byte limit"));
+            }
             self.verify()?;
             let mut bytes = Vec::with_capacity(self.stamp.len() as usize);
-            (&mut self.file).take(DOCUMENT_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(io_error)?;
+            (&mut self.file).take(limit as u64 + 1).read_to_end(&mut bytes).map_err(io_error)?;
             self.verify()?;
-            if bytes.len() != self.stamp.len() as usize || bytes.len() > DOCUMENT_BYTES {
+            if bytes.len() != self.stamp.len() as usize || bytes.len() > limit {
                 return Err(invalid("publication size changed or exceeds the bounded document limit"));
             }
+            Ok(bytes)
+        }
+
+        fn read(mut self, expected_sha256: &str) -> Result<Vec<u8>, ApiError> {
+            let bytes = self.read_bytes(DOCUMENT_BYTES)?;
             if digest(&bytes) != expected_sha256 {
                 return Err(invalid("publication document SHA-256 does not match the explicitly expected bytes"));
             }
@@ -1187,6 +1219,13 @@ mod local {
 
     pub(super) fn read_publication(path: &Path, expected_sha256: &str) -> Result<Vec<u8>, ApiError> {
         PublicationReader::open(path)?.read(expected_sha256)
+    }
+
+    pub(super) fn read_private_document(path: &Path, limit: usize) -> Result<Vec<u8>, ApiError> {
+        let mut reader = PublicationReader::open(path)?;
+        let bytes = reader.read_bytes(limit)?;
+        reader.verify()?;
+        Ok(bytes)
     }
 
     #[cfg(test)]

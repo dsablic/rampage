@@ -120,6 +120,42 @@ struct BlockSpan {
 }
 
 impl Project {
+    /// Process-local names-only identity for Arc::ptr_eq; not serialized authority or source freshness.
+    pub fn names_revision(&self) -> Result<Arc<()>, ApiError> {
+        let current = match self.annotations.try_read() {
+            Ok(current) => current,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(ApiError::Unavailable("annotations are busy".into()));
+            }
+        };
+        Ok(current.names_revision())
+    }
+
+    pub(crate) fn inventory_loader_names(&self) -> impl ExactSizeIterator<Item = (u64, &str)> {
+        self.names.entries()
+    }
+
+    pub(crate) fn inventory_function_name_in<'a>(
+        &'a self,
+        annotations: &'a Annotations,
+        address: u64,
+    ) -> Option<&'a str> {
+        annotations.name(address).or_else(|| self.names.get(address))
+    }
+
+    /// Process-local in-memory annotation identity for `Arc::ptr_eq`; not serialized consent or disk freshness.
+    pub fn annotation_revision(&self) -> Result<Arc<()>, ApiError> {
+        let current = match self.annotations.try_read() {
+            Ok(current) => current,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(ApiError::Unavailable("annotations are busy".into()));
+            }
+        };
+        Ok(current.revision())
+    }
+
     /// Observes completed cache initialization without starting, waiting for or reconstructing analysis.
     pub fn analysis_cache_status(&self) -> AnalysisCacheStatus {
         AnalysisCacheStatus {

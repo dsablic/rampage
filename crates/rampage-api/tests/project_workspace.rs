@@ -8,8 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use rampage_api::{
     DebuggerCapturePublicationStatus, Project, ProjectWorkspaceManifest, ProjectWorkspaceModuleInput,
-    ProjectWorkspaceNavigation, QualifiedProjectAddress, Session, capture_project_workspace,
-    capture_project_workspace_with_session, preview_project_workspace, publish_project_workspace,
+    ProjectWorkspaceNavigation, ProjectWorkspacePhase, ProjectWorkspaceTaskControl, QualifiedProjectAddress, Session,
+    capture_project_workspace, capture_project_workspace_controlled, capture_project_workspace_with_session,
+    preview_project_workspace, preview_project_workspace_controlled, publish_project_workspace,
+    publish_project_workspace_controlled,
 };
 use rampage_arch::Arch;
 use rampage_decompiler::{DecompilerOptions, Platform};
@@ -102,6 +104,143 @@ fn capture_refuses_a_legacy_snapshot_that_cannot_be_restored_under_checked_sourc
     assert!(error.contains("raw structural or text budget"), "{error}");
     assert!(!directory.join("workspace.json").exists());
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+}
+
+#[test]
+fn controlled_preview_cancels_before_opening_and_revalidates_observer_changes_before_returning() {
+    use std::sync::atomic::AtomicBool;
+    let directory = Directory::new();
+    let cancellation = AtomicBool::new(true);
+    let mut observer = |_| panic!("pre-cancelled preview must not notify or access a file");
+    let mut control = ProjectWorkspaceTaskControl::new(&cancellation, &mut observer);
+    let error = preview_project_workspace_controlled(&directory.join("missing.json"), &mut control).unwrap_err();
+    assert!(error.to_string().contains("cancellation"));
+    let input = directory.ordinary("owned.elf", "owned");
+    let manifest = capture_project_workspace(&[input], "owned").unwrap();
+    let path = directory.manifest_path(&manifest);
+    let cancellation = AtomicBool::new(false);
+    let mut phases = Vec::new();
+    let mut observer = |event: rampage_api::ProjectWorkspaceProgress| {
+        phases.push(event.phase);
+        if event.phase == ProjectWorkspacePhase::ResultValidation {
+            std::fs::write(&path, b"replaced manifest").unwrap();
+        }
+    };
+    let mut control = ProjectWorkspaceTaskControl::new(&cancellation, &mut observer);
+    assert!(preview_project_workspace_controlled(&path, &mut control).is_err());
+    assert_eq!(phases, vec![ProjectWorkspacePhase::ReadingManifest, ProjectWorkspacePhase::ResultValidation]);
+}
+
+#[test]
+fn controlled_capture_rejects_callback_truncation_and_annotation_aba_without_native_or_program_work() {
+    use std::sync::atomic::AtomicBool;
+    let directory = Directory::new();
+    let input = directory.ordinary("owned.elf", "owned");
+    let cancellation = AtomicBool::new(false);
+    let mut observer = |event: rampage_api::ProjectWorkspaceProgress| {
+        if event.phase == ProjectWorkspacePhase::ValidatingIdentity {
+            std::fs::write(&input.source_path, b"truncated owned source").unwrap();
+        }
+    };
+    let mut control = ProjectWorkspaceTaskControl::new(&cancellation, &mut observer);
+    assert!(
+        capture_project_workspace_controlled(std::slice::from_ref(&input), "owned", &Session::default(), &mut control)
+            .is_err()
+    );
+    let input = directory.ordinary("other.elf", "other");
+    let original = input.project.annotation_revision().unwrap();
+    let mut observer = |event: rampage_api::ProjectWorkspaceProgress| {
+        if event.phase == ProjectWorkspacePhase::ReadingAnnotations {
+            input.project.comment(0x1000, Some("transient annotation")).unwrap();
+            input.project.comment(0x1000, None).unwrap();
+        }
+    };
+    let mut control = ProjectWorkspaceTaskControl::new(&cancellation, &mut observer);
+    let error =
+        capture_project_workspace_controlled(std::slice::from_ref(&input), "other", &Session::default(), &mut control)
+            .unwrap_err()
+            .to_string();
+    assert!(error.contains("annotations changed"), "{error}");
+    assert!(!Arc::ptr_eq(&original, &input.project.annotation_revision().unwrap()));
+    assert_eq!(input.project.analysis_cache_status(), Default::default());
+}
+
+#[test]
+fn loaded_metadata_validation_checks_original_sources_and_settings_without_initializing_analysis() {
+    let directory = Directory::new();
+    let input = directory.ordinary("owned.elf", "owned");
+    let manifest = capture_project_workspace(&[input], "owned").unwrap();
+    let path = directory.manifest_path(&manifest);
+    let preview = preview_project_workspace(&path).unwrap();
+    preview.validate_metadata().unwrap();
+    let loaded = preview.open_reviewed(&Session::default()).unwrap();
+    loaded.validate_metadata().unwrap();
+    assert_eq!(loaded.modules()[0].project().analysis_cache_status(), Default::default());
+    loaded.modules()[0].project().set_decompiler_options(None);
+    assert!(loaded.validate_metadata().is_err(), "configuration identity change must revoke adoption");
+}
+
+#[test]
+fn publication_cancellation_before_stage_writes_nothing_and_after_commit_keeps_actual_outcome() {
+    use std::sync::atomic::AtomicBool;
+    let directory = Directory::new();
+    let input = directory.ordinary("owned.elf", "owned");
+    let manifest = capture_project_workspace(&[input], "owned").unwrap();
+    let output = directory.join("cancelled-workspace.json");
+    let cancellation = AtomicBool::new(false);
+    let mut observer = |event: rampage_api::ProjectWorkspaceProgress| {
+        if event.phase == ProjectWorkspacePhase::Publishing {
+            cancellation.store(true, Ordering::Relaxed);
+        }
+    };
+    let mut control = ProjectWorkspaceTaskControl::new(&cancellation, &mut observer);
+    assert!(publish_project_workspace_controlled(&manifest, &output, &mut control).is_err());
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    assert!(!output.exists());
+    cancellation.store(false, Ordering::Relaxed);
+    let mut observer = |event: rampage_api::ProjectWorkspaceProgress| {
+        if event.phase == ProjectWorkspacePhase::ResultValidation {
+            cancellation.store(true, Ordering::Relaxed);
+        }
+    };
+    let mut control = ProjectWorkspaceTaskControl::new(&cancellation, &mut observer);
+    let published = publish_project_workspace_controlled(&manifest, &output, &mut control).unwrap();
+    assert_eq!(published.status, DebuggerCapturePublicationStatus::PublishedUncertain);
+    assert_eq!(published.path, output);
+    assert!(published.path.is_file());
+    assert!(!published.retained_staging_paths.is_empty());
+    assert!(published.warnings.iter().any(|warning| warning.contains("cancellation")));
+}
+
+#[test]
+fn cancellation_after_real_staging_before_link_retains_exact_private_resources_without_a_destination() {
+    use std::sync::atomic::AtomicBool;
+    let directory = Directory::new();
+    let input = directory.ordinary("owned.elf", "owned");
+    let manifest = capture_project_workspace(&[input], "owned").unwrap();
+    let output = directory.join("never-linked.json");
+    let cancellation = AtomicBool::new(false);
+    let mut staged = false;
+    let mut observer = |event: rampage_api::ProjectWorkspaceProgress| {
+        if event.phase == ProjectWorkspacePhase::PublicationStaged {
+            staged = true;
+            cancellation.store(true, Ordering::Relaxed);
+        }
+    };
+    let mut control = ProjectWorkspaceTaskControl::new(&cancellation, &mut observer);
+    let error = publish_project_workspace_controlled(&manifest, &output, &mut control).unwrap_err();
+    assert!(staged);
+    assert!(!output.exists());
+    let rampage_api::ApiError::DebuggerCaptureStagingRetained(retained) = error else {
+        panic!("real pre-link cancellation must preserve typed staging paths");
+    };
+    assert_eq!(retained.paths.len(), 1);
+    assert!(retained.message.contains("cancellation"));
+    assert_eq!(retained.paths[0].parent(), Some(directory.0.as_path()));
+    let bytes = std::fs::read(&retained.paths[0]).unwrap();
+    let staged_manifest: ProjectWorkspaceManifest = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(staged_manifest, manifest);
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 2);
 }
 
 fn write_value(directory: &Directory, value: &Value) -> PathBuf {
