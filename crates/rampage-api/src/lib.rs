@@ -25,6 +25,7 @@ pub mod packs;
 mod pointer_compare;
 mod pointer_observation;
 mod project;
+mod project_workspace;
 mod rows;
 mod runtime_compare;
 mod session;
@@ -82,6 +83,13 @@ pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
 pub use pointer_compare::{PointerChange, PointerComparison};
 pub use pointer_observation::{PointerAssessment, PointerObservation};
 pub use project::{AnalysisCacheStatus, PdbImport, PdbPreview, Project};
+pub use project_workspace::{
+    LoadedProjectModule, LoadedProjectWorkspace, ProjectWorkspaceCaptureIdentity, ProjectWorkspaceIdentity,
+    ProjectWorkspaceImage, ProjectWorkspaceManifest, ProjectWorkspaceModule, ProjectWorkspaceModuleInput,
+    ProjectWorkspaceNavigation, ProjectWorkspaceOptions, ProjectWorkspacePlatform, ProjectWorkspacePreview,
+    ProjectWorkspacePublication, QualifiedProjectAddress, capture_project_workspace,
+    capture_project_workspace_with_session, preview_project_workspace, publish_project_workspace,
+};
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
 pub use rampage_decompiler::results::RecoveryStatus;

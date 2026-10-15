@@ -98,9 +98,34 @@ impl Session {
     /// [`Binary::open_at`]). An embedded image is a project of its own, with its own annotation sidecar; a location
     /// that [is the whole file](ImageAt::is_whole_file) is the project [`Session::open`] gives.
     pub fn open_at(&self, path: &Path, arch: Option<Arch>, image: Option<ImageAt>) -> Result<Arc<Project>, ApiError> {
+        self.open_at_policy(path, arch, image, false)
+    }
+
+    /// Workspace restores never reuse ordinary cached projects or resolve a directory as a container.
+    pub(crate) fn open_workspace_at(
+        &self,
+        path: &Path,
+        arch: Option<Arch>,
+        image: Option<ImageAt>,
+    ) -> Result<Arc<Project>, ApiError> {
+        self.open_at_policy(path, arch, image, true)
+    }
+
+    fn open_at_policy(
+        &self,
+        path: &Path,
+        arch: Option<Arch>,
+        image: Option<ImageAt>,
+        checked: bool,
+    ) -> Result<Arc<Project>, ApiError> {
         let image = image.filter(|image| !image.is_whole_file());
-        let executable = rampage_loaders::container::resolve_executable(path)
-            .map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
+        let held_source = checked.then(|| crate::project_workspace::open_source(path)).transpose()?;
+        let executable = if checked {
+            path.to_owned()
+        } else {
+            rampage_loaders::container::resolve_executable(path)
+                .map_err(|source| ApiError::Load { path: path.to_owned(), source })?
+        };
         let path = executable.as_path();
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_owned());
         // Taken before loading, so a write racing the load leaves a stamp the next open finds stale.
@@ -109,7 +134,8 @@ impl Session {
             let state = self.state.lock().expect("session lock");
             let loaded = arch.or_else(|| state.defaults.get(&(canonical.clone(), image)).copied());
             let key = loaded.map(|arch| (canonical.clone(), image, arch));
-            if let Some(key) = key
+            if !checked
+                && let Some(key) = key
                 && let Some(project) = state.projects.get(&key)
                 && project.binary.format != Format::Snapshot
                 && !state.capture_paths.contains(&canonical)
@@ -127,7 +153,8 @@ impl Session {
             return Ok(project);
         }
         let mut binary =
-            Binary::open_image(path, image, arch).map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
+            if checked { Binary::open_image_checked(path, image, arch) } else { Binary::open_image(path, image, arch) }
+                .map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
         let legacy = annotation_path(path, image, &binary);
         let log = if binary.format == Format::Snapshot {
             self.state.lock().expect("session lock").capture_paths.insert(canonical.clone());
@@ -167,8 +194,17 @@ impl Session {
         };
         // Snapshots share identity-scoped logs across captures whose bytes differ, so only ordinary images are named.
         let digest = (binary.format != Format::Snapshot).then(|| Sha256::digest(binary.image_bytes()).into());
-        let annotations = Annotations::open_for_image(log, digest).map_err(ApiError::Invalid)?;
+        let annotations = if checked {
+            Annotations::open_for_image_checked(log, digest)
+        } else {
+            Annotations::open_for_image(log, digest)
+        }
+        .map_err(ApiError::Invalid)?;
         binary.warnings.extend(annotations.warnings());
+        if let Some(source) = &held_source {
+            crate::project_workspace::validate_source_file(path, source)?;
+            binary.validate_available_backing_source().map_err(|error| ApiError::Invalid(error.to_string()))?;
+        }
 
         let mut state = self.state.lock().expect("session lock");
         if arch.is_none() {
@@ -180,7 +216,8 @@ impl Session {
         let previous = state.projects.get(&key).cloned();
         let ordinary_source: Option<[u8; 32]> =
             (revalidate && binary.format != Format::Snapshot).then(|| Sha256::digest(binary.file_bytes()).into());
-        if let Some(project) = state.projects.get(&key)
+        if !checked
+            && let Some(project) = state.projects.get(&key)
             && project.binary.format == binary.format
             && project.binary.warnings == binary.warnings
             && (binary.format == Format::Snapshot && project.binary.file_bytes() == binary.file_bytes()
@@ -210,6 +247,9 @@ impl Session {
             let sibling = std::env::current_exe().ok()?.with_file_name("rampage-worker");
             sibling.is_file().then_some(sibling)
         });
+        if checked {
+            state.projects.remove(&key);
+        }
         let project = state.projects.entry(key).or_insert_with(|| {
             let mut annotations = annotations;
             if let Some(previous) = previous {
@@ -252,7 +292,7 @@ fn can_reuse_ordinary_input(path: &Path) -> Result<bool, ApiError> {
 /// `<file>.rampage`, with `.<arch>` for one slice of a universal binary. An embedded image's sidecar is
 /// `<file>@0x<offset>[+0x<length>][.<arch>].rampage-image`: no plain file's sidecar ends that way, and neither the
 /// location nor the architecture can contain the `@` that separates them from the file name.
-fn annotation_path(path: &Path, image: Option<ImageAt>, binary: &Binary) -> PathBuf {
+pub(crate) fn annotation_path(path: &Path, image: Option<ImageAt>, binary: &Binary) -> PathBuf {
     let mut log = path.as_os_str().to_owned();
     if let Some(image) = image {
         log.push(format!("@{:#x}", image.offset()));

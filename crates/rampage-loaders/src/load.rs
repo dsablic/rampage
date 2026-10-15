@@ -235,6 +235,15 @@ impl Binary {
         }
     }
 
+    /// The actual loaded executable source, not a bundle directory or target-reported provenance path.
+    /// Owned snapshots have no original mapped-file path; callers must retain their explicit document source.
+    pub fn backing_path(&self) -> Option<&Path> {
+        match &self.data {
+            Bytes::Mapped(source) => Some(&source.path),
+            Bytes::Owned(_) => None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_snapshot(
         arch: Arch,
@@ -304,6 +313,10 @@ impl Binary {
     /// Opens a binary, requiring the given architecture when one is requested.
     pub fn open_with(path: impl AsRef<Path>, wanted: Option<Arch>) -> Result<Self, LoadError> {
         let data = map_executable(path.as_ref())?;
+        Self::open_mapped(data, wanted)
+    }
+
+    fn open_mapped(data: MappedSource, wanted: Option<Arch>) -> Result<Self, LoadError> {
         if data.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') {
             if data.len() > 2 * crate::snapshot::MAX_SNAPSHOT_BYTES + 1024 * 1024 {
                 return Err(LoadError::Malformed("snapshot JSON exceeds size limit".to_owned()));
@@ -337,6 +350,36 @@ impl Binary {
             Some(image) => Self::open_at_with(path, image.offset, image.length, wanted),
             None => Self::open_with(path, wanted),
         }
+    }
+
+    /// Opens one explicit regular source without bundle resolution or following a final symlink.
+    /// The 128 MiB source cap is enforced before mapping; metadata checks are not atomic with external writes.
+    pub fn open_image_checked(
+        path: impl AsRef<Path>,
+        image: Option<ImageAt>,
+        wanted: Option<Arch>,
+    ) -> Result<Self, LoadError> {
+        let data = map_executable_checked(path.as_ref())?;
+        match image.filter(|image| !image.is_whole_file()) {
+            Some(image) => Self::open_mapped_at(data, image.offset, image.length, wanted),
+            None => {
+                if data.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') {
+                    crate::checked_snapshot::preflight(&data)?;
+                }
+                Self::open_mapped(data, wanted)
+            }
+        }
+    }
+
+    /// Checks the admission limits used by checked opening without reopening or deriving source identity.
+    pub fn validate_checked_source_profile(&self) -> Result<(), LoadError> {
+        if self.file_bytes().len() > 128 * 1024 * 1024 {
+            return Err(LoadError::Unsupported("checked source exceeds 128 MiB".into()));
+        }
+        if self.format == Format::Snapshot {
+            crate::checked_snapshot::preflight(self.file_bytes())?;
+        }
+        Ok(())
     }
 
     /// Enumerates supported universal-header architectures without requiring any individual slice to load.
@@ -382,6 +425,15 @@ impl Binary {
         wanted: Option<Arch>,
     ) -> Result<Self, LoadError> {
         let data = map_executable(path.as_ref())?;
+        Self::open_mapped_at(data, offset, length, wanted)
+    }
+
+    fn open_mapped_at(
+        data: MappedSource,
+        offset: u64,
+        length: Option<u64>,
+        wanted: Option<Arch>,
+    ) -> Result<Self, LoadError> {
         let file_size = data.len() as u64;
         let start = usize::try_from(offset).ok().filter(|&start| start < data.len()).ok_or_else(|| {
             LoadError::Location(format!("offset {offset:#x} is past the end of the file ({file_size:#x} bytes)"))
@@ -964,6 +1016,33 @@ fn map_executable(path: &Path) -> Result<MappedSource, LoadError> {
     let after = file.metadata().ok().and_then(|metadata| BackingStamp::from_metadata(&metadata));
     let stamp = stamp.filter(|stamp| Some(*stamp) == after);
     Ok(MappedSource { map, file, path: std::path::absolute(path).unwrap_or_else(|_| path.to_owned()), stamp })
+}
+
+#[cfg(unix)]
+fn map_executable_checked(path: &Path) -> Result<MappedSource, LoadError> {
+    use rustix::fs::{Mode, OFlags, open};
+    let io_error = |source| LoadError::Io { path: path.to_owned(), source };
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let file = File::from(open(path, flags, Mode::empty()).map_err(|error| io_error(error.into()))?);
+    let metadata = file.metadata().map_err(io_error)?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 128 * 1024 * 1024 {
+        return Err(LoadError::Unsupported("checked source must be a nonempty regular file of at most 128 MiB".into()));
+    }
+    let stamp = BackingStamp::from_metadata(&metadata)
+        .ok_or_else(|| LoadError::Unsupported("checked source identity is unavailable".into()))?;
+    // SAFETY: this read-only mapping is capped before creation. External truncation still requires quiescent inputs.
+    let map = unsafe { memmap2::MmapOptions::new().len(metadata.len() as usize).map(&file) }.map_err(io_error)?;
+    let source = MappedSource { map, file, path: std::path::absolute(path).map_err(io_error)?, stamp: Some(stamp) };
+    if !std::fs::symlink_metadata(path).map_err(io_error)?.is_file() {
+        return Err(LoadError::Unsupported("checked source pathname is no longer a regular file".into()));
+    }
+    source.validate()?;
+    Ok(source)
+}
+
+#[cfg(not(unix))]
+fn map_executable_checked(_: &Path) -> Result<MappedSource, LoadError> {
+    Err(LoadError::Unsupported("checked workspace sources are unsupported on this platform".into()))
 }
 
 /// Whether a section name is the Go pclntab under any of its spellings. Go's linker names a PIE's relro copy

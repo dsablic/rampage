@@ -4466,6 +4466,7 @@ dependencies = [
  "pdb",
  "plist",
  "rampage-arch",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "sha2 0.11.0",

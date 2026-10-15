@@ -225,6 +225,10 @@ impl Log {
 }
 
 impl Annotations {
+    pub(crate) fn persistent_path(&self) -> Option<&std::path::Path> {
+        self.log.as_ref().map(|log| log.path.as_path())
+    }
+
     /// Loads the log at `path` if it exists; later edits are appended to it.
     pub fn open(path: PathBuf) -> Result<Self, String> {
         Self::open_for_image(path, None)

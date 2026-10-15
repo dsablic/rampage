@@ -17,6 +17,7 @@ pub use details::{
 pub use entropy::shannon_entropy;
 pub use load::{Binary, Embedded, ImageAt, LoadError};
 pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
+mod checked_snapshot;
 pub mod debug;
 pub mod dotnet;
 pub mod gopclntab;

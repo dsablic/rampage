@@ -94,12 +94,12 @@ impl std::fmt::Display for DebuggerCaptureStagingRetention {
 impl std::error::Error for DebuggerCaptureStagingRetention {}
 
 #[derive(Debug)]
-struct PublicationOutcome {
-    path: PathBuf,
-    document_sha256: String,
-    status: DebuggerCapturePublicationStatus,
-    warnings: Vec<String>,
-    retained_staging_paths: Vec<PathBuf>,
+pub(crate) struct PublicationOutcome {
+    pub(crate) path: PathBuf,
+    pub(crate) document_sha256: String,
+    pub(crate) status: DebuggerCapturePublicationStatus,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) retained_staging_paths: Vec<PathBuf>,
 }
 
 impl PublicationOutcome {
@@ -172,6 +172,22 @@ impl DebuggerCapturePreview {
             retained_staging_paths,
         })
     }
+}
+
+pub(crate) fn publish_private_document(
+    output: &Path,
+    document: &[u8],
+    validate: impl Fn() -> Result<(), ApiError>,
+) -> Result<PublicationOutcome, ApiError> {
+    if document.is_empty() || document.len() > DOCUMENT_BYTES {
+        return Err(ApiError::Invalid("private document exceeds its publication byte budget".into()));
+    }
+    validate()?;
+    let mut outcome = local::publish(output, document, &validate)?;
+    if let Err(error) = validate() {
+        outcome.uncertain(error);
+    }
+    Ok(outcome)
 }
 
 /// Reads an explicitly selected local publication with matching bytes, not an authority-bearing receipt.
