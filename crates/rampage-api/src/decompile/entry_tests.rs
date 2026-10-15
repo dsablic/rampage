@@ -390,3 +390,43 @@ fn observer_work_is_charged_to_the_original_worker_deadline_before_dispatch() {
     assert_eq!(phases, vec![EntryPreparationPhase::Configuration]);
     assert_no_discovery(&project);
 }
+
+#[test]
+fn measured_exact_entry_emits_no_supervisor_observation_for_inline_native_execution() {
+    let project = project();
+    let result = project
+        .decompile_entry_measured(
+            &request(&project),
+            &AtomicBool::new(false),
+            |_| {},
+            |_| panic!("inline execution has no worker supervisor"),
+        )
+        .unwrap();
+    assert!(result.decompilation.code.contains("return 5;"));
+    assert_eq!(result.context.execution, "in_process_native");
+    assert_no_discovery(&project);
+}
+
+#[test]
+fn measured_exact_entry_delivers_partial_supervisor_observations_before_spawn_error() {
+    let project = project();
+    project.set_decompiler_worker(Some(rampage_decompiler::worker::WorkerConfig {
+        executable: Some(std::env::temp_dir().join("missing-entry-measurement-worker")),
+        ..Default::default()
+    }));
+    let mut observations = Vec::new();
+    let error = project
+        .decompile_entry_measured(
+            &request(&project),
+            &AtomicBool::new(false),
+            |_| {},
+            |metrics| observations.push(metrics),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("spawn"), "{error}");
+    assert_eq!(observations.len(), 1);
+    let metrics = serde_json::to_value(&observations[0]).unwrap();
+    assert_eq!(metrics["ownership"], "not_spawned");
+    assert!(metrics["cleanup_succeeded"].is_null());
+    assert_no_discovery(&project);
+}

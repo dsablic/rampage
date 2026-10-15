@@ -17,6 +17,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Decompiler, DecompilerOptions, MemoryRegion, Platform};
 
+mod metrics;
+
+use metrics::Measurement;
+pub use metrics::{
+    SupervisedCleanupError, SupervisedExitStatus, SupervisedInputMetrics, SupervisedInputOutcome, SupervisedMetrics,
+    SupervisedOwnership, SupervisedRssBackend, SupervisedRssError, SupervisedRssMetrics, SupervisedRun,
+    SupervisedStreamMetrics, SupervisedStreamOutcome,
+};
+
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
@@ -242,13 +251,31 @@ impl Default for WorkerConfig {
 
 #[derive(Debug)]
 pub enum WorkerError {
-    Io { action: &'static str, source: io::Error },
-    RequestTooLarge { limit: usize },
-    OutputTooLarge { stream: &'static str, limit: usize },
-    MemoryLimit { limit: u64 },
+    Io {
+        action: &'static str,
+        source: io::Error,
+    },
+    RequestTooLarge {
+        limit: usize,
+    },
+    OutputTooLarge {
+        stream: &'static str,
+        limit: usize,
+    },
+    MemoryLimit {
+        limit: u64,
+    },
     Timeout,
     Cancelled,
-    Exit { status: String, stderr: String },
+    Exit {
+        status: String,
+        stderr: String,
+    },
+    /// Group signaling failed; `root: None` means direct-child cleanup succeeded, not group cleanup.
+    Cleanup {
+        group: io::Error,
+        root: Option<Box<WorkerError>>,
+    },
     Protocol(String),
     Decompile(String),
     UnsupportedPlatform,
@@ -264,6 +291,13 @@ impl fmt::Display for WorkerError {
             Self::Timeout => formatter.write_str("decompiler worker timed out"),
             Self::Cancelled => formatter.write_str("decompiler worker cancelled"),
             Self::Exit { status, stderr } => write!(formatter, "decompiler worker exited with {status}: {stderr}"),
+            Self::Cleanup { group, root } => {
+                write!(formatter, "worker group cleanup failed: {group}")?;
+                if let Some(root) = root {
+                    write!(formatter, "; direct-child cleanup failed: {root}")?;
+                }
+                Ok(())
+            }
             Self::Protocol(message) => write!(formatter, "invalid worker protocol: {message}"),
             Self::Decompile(message) => write!(formatter, "decompiler worker: {message}"),
             Self::UnsupportedPlatform => {
@@ -277,6 +311,7 @@ impl std::error::Error for WorkerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
+            Self::Cleanup { group, .. } => Some(group),
             _ => None,
         }
     }
@@ -309,19 +344,61 @@ impl SupervisorBudget<'_> {
     }
 }
 
-/// Launch one worker, drain all three pipes concurrently, and always kill/reap it before returning.
+/// Launch one worker, drain all three pipes concurrently, and attempt owned-group cleanup before reaping its root.
 /// Missing workers are errors; supervision never falls back to an in-process native call.
 /// Supported supervisor hosts are 64-bit Linux and macOS; other hosts return UnsupportedPlatform.
+/// Requires default SIGCHLD handling and exclusive ownership of the child's wait status. Concurrent signal
+/// disposition changes or external child reaping are unsupported; lost ownership prevents further signals.
+/// Descendants that leave the worker's process group are outside this supervisor's cleanup boundary.
+/// Prior supervision errors retain precedence over failures in best-effort Drop cleanup.
+/// Failed child/response outcomes also retain their primary category; the measured API records secondary
+/// cleanup failure. A successful response never waives a cleanup failure.
+/// Legacy workers without private completion must exit, permit anchored group cleanup, and produce actual
+/// pipe EOF. On Darwin even a valid exit-zero p4 response may fail with zombie-group EPERM; this is a restricted
+/// compatibility contract, not proof that the group is empty. All custom SIGCHLD handlers are rejected,
+/// including handlers that do not reap; callers must retain SIG_DFL and exclusive child-wait ownership.
 pub fn run_supervised(
     request: &WorkerRequest,
     config: &WorkerConfig,
     cancellation: Option<&AtomicBool>,
 ) -> Result<WorkerOutput, WorkerError> {
     let started = std::time::Instant::now();
+    let measurement = Measurement::new(started, false);
+    run_supervised_inner(request, config, cancellation, started, &measurement)
+}
+
+/// Opt-in host-only observations, retained even when supervision fails. This does not change protocol v4.
+/// Offsets share this call's start, overlap, and do not expose worker-internal initialization phases.
+/// The ownership and cleanup requirements of [`run_supervised`] apply. Sampling is synchronous; neither
+/// OS queries nor spawn are forcibly interruptible, and observation overhead counts toward the budget.
+pub fn run_supervised_measured(
+    request: &WorkerRequest,
+    config: &WorkerConfig,
+    cancellation: Option<&AtomicBool>,
+) -> SupervisedRun {
+    let started = std::time::Instant::now();
+    let measurement = Measurement::new(started, true);
+    let result = run_supervised_inner(request, config, cancellation, started, &measurement);
+    SupervisedRun { result, metrics: measurement.finish().expect("enabled supervisor measurement") }
+}
+
+fn run_supervised_inner(
+    request: &WorkerRequest,
+    config: &WorkerConfig,
+    cancellation: Option<&AtomicBool>,
+    started: std::time::Instant,
+    measurement: &Measurement,
+) -> Result<WorkerOutput, WorkerError> {
     let budget = SupervisorBudget { started, timeout: config.timeout, cancellation };
     budget.check()?;
     validate_layout_operations(request, Some(budget))?;
+    measurement.record(|data, elapsed| data.request_preflight_complete_us = Some(elapsed));
+    measurement.record(|data, elapsed| data.request_serialization_started_us = Some(elapsed));
     let bytes = serialize_supervised(request, config.max_request_bytes.min(MAX_REQUEST_BYTES), budget)?;
+    measurement.record(|data, elapsed| {
+        data.request_serialization_complete_us = Some(elapsed);
+        data.input.requested_bytes = Some(bytes.len() as u64);
+    });
     let executable = match &config.executable {
         Some(path) => path.clone(),
         None => match std::env::var_os("RAMPAGE_WORKER") {
@@ -332,18 +409,49 @@ pub fn run_supervised(
         },
     };
     budget.check()?;
-    let (stdout, stderr, status) = supervised_process(&executable, bytes, config, cancellation, started)?;
-    budget.check()?;
-    if !status.success() {
-        return Err(WorkerError::Exit {
-            status: status.to_string(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    let process = supervised_process(&executable, bytes, config, cancellation, started, measurement)?;
+    finish_process(process, config.max_stdout_bytes, budget, measurement)
+}
+
+fn finish_process(
+    process: ProcessOutput,
+    stdout_limit: usize,
+    budget: SupervisorBudget<'_>,
+    measurement: &Measurement,
+) -> Result<WorkerOutput, WorkerError> {
+    if let Some(error) = &process.cleanup_error {
+        measurement.record(|data, _| {
+            data.cleanup_succeeded = Some(false);
+            data.cleanup_error = Some(SupervisedCleanupError::from(error));
         });
     }
-    let response = decode_supervised_response(stdout.as_slice(), config.max_stdout_bytes, budget)?;
+    budget.check()?;
+    if !process.allows_response_validation() && !(process.control_error.is_some() && process.ended_with_host_stop()) {
+        return Err(WorkerError::Exit {
+            status: process.status.to_string(),
+            stderr: String::from_utf8_lossy(&process.stderr).into_owned(),
+        });
+    }
+    if let Some(error) = process.control_error {
+        return Err(error);
+    }
+    measurement.record(|data, elapsed| data.response_decode_started_us = Some(elapsed));
+    let response = decode_supervised_response(process.stdout.as_slice(), stdout_limit, budget)?;
+    measurement.record(|data, elapsed| data.response_decoded_us = Some(elapsed));
     budget.check()?;
     match response {
-        WorkerResponse::Ok { version, output } if version == PROTOCOL_VERSION => Ok(*output),
+        WorkerResponse::Ok { version, output } if version == PROTOCOL_VERSION => {
+            if !process.outputs_eof {
+                return Err(WorkerError::Protocol("worker output pipes did not reach EOF".to_owned()));
+            }
+            if process.controlled_stop && !process.input_fully_delivered {
+                return Err(WorkerError::Protocol("controlled worker did not receive the complete request".to_owned()));
+            }
+            match process.cleanup_error {
+                Some(error) => Err(error),
+                None => Ok(*output),
+            }
+        }
         WorkerResponse::Error { version, message } if version == PROTOCOL_VERSION => {
             Err(WorkerError::Decompile(message))
         }
@@ -475,7 +583,8 @@ fn serialize_bounded(value: &impl Serialize, limit: usize) -> Result<Vec<u8>, Wo
     }
 }
 
-/// The worker binary handles exactly one JSON request, then exits. Errors are JSON responses, not stderr text.
+/// Handles exactly one raw stdio JSON request. Errors are JSON responses, not stderr text. The supervised
+/// binary entry point may hold the process after this returns, without accepting another request.
 pub fn serve_stdio() -> Result<(), WorkerError> {
     let response = match read_request(io::stdin().lock()).and_then(execute_request) {
         Ok(output) => WorkerResponse::Ok { version: PROTOCOL_VERSION, output: Box::new(output) },
@@ -493,6 +602,20 @@ pub fn serve_stdio() -> Result<(), WorkerError> {
         Err(error) => return Err(error),
     };
     io::stdout().lock().write_all(&bytes).map_err(|error| io_error("write response", error))
+}
+
+/// Binary-only lifecycle entry point. Standalone calls without the private control environment retain
+/// serve_stdio behavior. Library callers should use serve_stdio, which never consumes ambient descriptors.
+/// The control descriptor is duplicated before validation; only the fresh duplicate is owned or closed.
+pub fn serve_worker_stdio() -> Result<(), WorkerError> {
+    #[cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))]
+    {
+        unix::serve_worker_stdio()
+    }
+    #[cfg(not(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")))]
+    {
+        serve_stdio()
+    }
 }
 
 fn read_request(input: impl Read) -> Result<WorkerRequest, String> {
@@ -689,8 +812,51 @@ fn supervised_process(
     _config: &WorkerConfig,
     _cancellation: Option<&AtomicBool>,
     _started: std::time::Instant,
-) -> Result<(Vec<u8>, Vec<u8>, std::process::ExitStatus), WorkerError> {
+    _measurement: &Measurement,
+) -> Result<ProcessOutput, WorkerError> {
     Err(WorkerError::UnsupportedPlatform)
+}
+
+#[derive(Debug)]
+struct ProcessOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    status: std::process::ExitStatus,
+    controlled_stop: bool,
+    host_stopped_root: bool,
+    input_fully_delivered: bool,
+    outputs_eof: bool,
+    control_error: Option<WorkerError>,
+    cleanup_error: Option<WorkerError>,
+}
+
+impl ProcessOutput {
+    fn ended_with_host_stop(&self) -> bool {
+        #[cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            self.host_stopped_root && self.status.signal() == Some(libc::SIGKILL)
+        }
+        #[cfg(not(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")))]
+        {
+            false
+        }
+    }
+
+    fn allows_response_validation(&self) -> bool {
+        if self.status.success() {
+            return true;
+        }
+        #[cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            self.controlled_stop && self.status.signal() == Some(libc::SIGKILL)
+        }
+        #[cfg(not(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")))]
+        {
+            false
+        }
+    }
 }
 
 #[cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))]
@@ -698,8 +864,9 @@ mod unix {
     use std::ffi::c_int;
     #[cfg(target_os = "linux")]
     use std::ffi::c_ulong;
-    use std::os::fd::{AsRawFd, RawFd};
-    use std::os::unix::process::CommandExt;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::path::Path;
     use std::process::{Child, Command, ExitStatus, Stdio};
     use std::sync::{Arc, mpsc};
@@ -709,6 +876,267 @@ mod unix {
     use super::*;
 
     const POLL_INTERVAL: Duration = Duration::from_millis(5);
+    const CONTROL_ENV: &str = "RAMPAGE_SUPERVISOR_CONTROL";
+    const CONTROL_HELLO: &[u8] = b"RAMPAGE-CONTROL/1/HOST\0";
+    const CONTROL_DONE: &[u8] = b"RAMPAGE-CONTROL/1/RESPONSE-FLUSHED/0\0";
+
+    struct HostControl {
+        socket: UnixStream,
+        bytes: [u8; CONTROL_DONE.len()],
+        received: usize,
+        complete: bool,
+        closed: bool,
+    }
+
+    impl HostControl {
+        fn authorized(&self) -> bool {
+            self.complete && !self.closed
+        }
+
+        fn pair() -> Result<(Self, UnixStream), WorkerError> {
+            let (host, child) = UnixStream::pair().map_err(|error| io_error("create control socket", error))?;
+            let mut host = control_above_stdio(host)?;
+            let child = control_above_stdio(child)?;
+            // UnixStream::pair creates close-on-exec endpoints. Queue the bounded handshake before spawning,
+            // so the child can validate it with a non-consuming, nonblocking peek before claiming the fd.
+            host.write_all(CONTROL_HELLO).map_err(|error| io_error("write control handshake", error))?;
+            host.set_nonblocking(true).map_err(|error| io_error("configure control socket", error))?;
+            Ok((
+                Self { socket: host, bytes: [0; CONTROL_DONE.len()], received: 0, complete: false, closed: false },
+                child,
+            ))
+        }
+
+        fn poll(&mut self, measurement: &Measurement) -> Result<(), WorkerError> {
+            if self.closed {
+                return Ok(());
+            }
+            if self.complete {
+                let mut extra = [0];
+                for _ in 0..8 {
+                    match self.socket.read(&mut extra) {
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                        result => {
+                            self.complete = false;
+                            self.closed = true;
+                            return match result {
+                                Ok(0) => {
+                                    Err(WorkerError::Protocol("private completion peer closed before stop".to_owned()))
+                                }
+                                Ok(_) => Err(WorkerError::Protocol("unexpected private completion bytes".to_owned())),
+                                Err(error) if error.kind() == io::ErrorKind::ConnectionReset => {
+                                    Err(WorkerError::Protocol("private completion peer reset before stop".to_owned()))
+                                }
+                                Err(error) => Err(io_error("inspect control completion tail", error)),
+                            };
+                        }
+                    }
+                }
+                self.complete = false;
+                self.closed = true;
+                return Err(io_error("inspect control completion tail", io::ErrorKind::Interrupted.into()));
+            }
+            match self.socket.read(&mut self.bytes[self.received..]) {
+                Ok(0) => {
+                    self.closed = true;
+                    if self.received != 0 {
+                        return Err(WorkerError::Protocol("truncated private control completion".to_owned()));
+                    }
+                }
+                Ok(count) => {
+                    self.received += count;
+                    if self.received == self.bytes.len() {
+                        if self.bytes.as_slice() != CONTROL_DONE {
+                            return Err(WorkerError::Protocol("invalid private control completion".to_owned()));
+                        }
+                        self.complete = true;
+                        measurement.record(|data, elapsed| data.control_completion_us = Some(elapsed));
+                        return self.poll(measurement);
+                    }
+                }
+                Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => {}
+                // Legacy executables may close the inherited socket without consuming its queued handshake.
+                Err(error) if error.kind() == io::ErrorKind::ConnectionReset && self.received == 0 => {
+                    self.closed = true;
+                }
+                Err(error) => return Err(io_error("read control completion", error)),
+            }
+            Ok(())
+        }
+    }
+
+    fn control_above_stdio(socket: UnixStream) -> Result<UnixStream, WorkerError> {
+        if socket.as_raw_fd() >= 3 {
+            return Ok(socket);
+        }
+        // SAFETY: duplicate this owned socket above standard descriptors before Command configures child stdio.
+        let fd = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+        if fd < 0 {
+            return Err(io_error("reserve control descriptor", io::Error::last_os_error()));
+        }
+        // SAFETY: fcntl returned a fresh owned descriptor; dropping the original only closes our own socket.
+        Ok(unsafe { UnixStream::from_raw_fd(fd) })
+    }
+
+    fn inherit_control(fd: RawFd) -> io::Result<()> {
+        // SAFETY: only the child endpoint is made inheritable in this pre-exec callback; fcntl is signal-safe.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn validate_worker_control(value: &str) -> Result<OwnedFd, WorkerError> {
+        let invalid = || WorkerError::Protocol("invalid private worker control capability".to_owned());
+        let text = value.strip_prefix("1:").filter(|_| value.len() <= 32).ok_or_else(invalid)?;
+        if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(invalid());
+        }
+        let candidate: c_int = text.parse().map_err(|_| invalid())?;
+        if candidate < 3 {
+            return Err(invalid());
+        }
+        // SAFETY: fcntl atomically returns a fresh descriptor or fails; the selected ambient fd is neither
+        // owned nor closed here. Validation and all subsequent I/O operate only on the fresh duplicate.
+        let duplicate = unsafe { libc::fcntl(candidate, libc::F_DUPFD_CLOEXEC, 3) };
+        if duplicate < 0 {
+            return Err(io_error("duplicate worker control descriptor", io::Error::last_os_error()));
+        }
+        // SAFETY: this descriptor was freshly allocated by fcntl, independently of any existing Rust/C owner.
+        let owned = unsafe { OwnedFd::from_raw_fd(duplicate) };
+        let fd = owned.as_raw_fd();
+        let mut kind: c_int = 0;
+        // The v1 worker endpoint must block while holding the completed root, unlike the host endpoint.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags < 0 || flags & libc::O_NONBLOCK != 0 {
+            return Err(invalid());
+        }
+        let mut kind_size = std::mem::size_of::<c_int>() as libc::socklen_t;
+        // SAFETY: read-only descriptor checks use writable, correctly sized host socket structures.
+        let mut peer: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut peer_size = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        let socket_result = unsafe {
+            libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_TYPE, (&mut kind as *mut c_int).cast(), &mut kind_size)
+        };
+        if socket_result != 0
+            || kind_size != std::mem::size_of::<c_int>() as libc::socklen_t
+            || kind != libc::SOCK_STREAM
+            || unsafe { libc::getpeername(fd, (&mut peer as *mut libc::sockaddr_storage).cast(), &mut peer_size) } != 0
+            || peer_size < 2
+            || c_int::from(peer.ss_family) != libc::AF_UNIX
+        {
+            return Err(invalid());
+        }
+        let mut hello = [0; CONTROL_HELLO.len()];
+        let mut verified = false;
+        for _ in 0..8 {
+            // SAFETY: MSG_PEEK does not consume data or claim ownership of an ambient descriptor.
+            let count =
+                unsafe { libc::recv(fd, hello.as_mut_ptr().cast(), hello.len(), libc::MSG_PEEK | libc::MSG_DONTWAIT) };
+            if count == hello.len() as isize && hello.as_slice() == CONTROL_HELLO {
+                verified = true;
+                break;
+            }
+            if count < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(invalid());
+        }
+        if !verified {
+            return Err(invalid());
+        }
+        Ok(owned)
+    }
+
+    fn claim_worker_control(value: &str) -> Result<UnixStream, WorkerError> {
+        let descriptor = validate_worker_control(value)?;
+        let mut socket = UnixStream::from(descriptor);
+        let mut hello = [0; CONTROL_HELLO.len()];
+        socket.read_exact(&mut hello).map_err(|error| io_error("consume control handshake", error))?;
+        if hello.as_slice() != CONTROL_HELLO {
+            return Err(WorkerError::Protocol("private control handshake changed".to_owned()));
+        }
+        Ok(socket)
+    }
+
+    pub(super) fn serve_worker_stdio() -> Result<(), WorkerError> {
+        let Some(value) = std::env::var_os(CONTROL_ENV) else {
+            return serve_stdio();
+        };
+        let value =
+            value.to_str().ok_or_else(|| WorkerError::Protocol("invalid private control version".to_owned()))?;
+        let mut control = claim_worker_control(value)?;
+        serve_stdio()?;
+        io::stdout().lock().flush().map_err(|error| io_error("flush response", error))?;
+        io::stderr().lock().flush().map_err(|error| io_error("flush diagnostics", error))?;
+        // SAFETY: flush native C stdio before releasing its original pipe endpoints.
+        if unsafe { libc::fflush(std::ptr::null_mut()) } != 0 {
+            return Err(io_error("flush native stdio", io::Error::last_os_error()));
+        }
+        let null = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .map_err(|error| io_error("open null output", error))?;
+        if null.as_raw_fd() < 3 {
+            return Err(WorkerError::Protocol("worker standard descriptors were not retained".to_owned()));
+        }
+        for fd in [libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+            // SAFETY: dup2 atomically replaces an owned standard endpoint; 1/2 are never left closed and reused.
+            if unsafe { libc::dup2(null.as_raw_fd(), fd) } < 0 {
+                return Err(io_error("release worker output pipe", io::Error::last_os_error()));
+            }
+        }
+        control.write_all(CONTROL_DONE).map_err(|error| io_error("write control completion", error))?;
+        let mut byte = [0];
+        loop {
+            match control.read(&mut byte) {
+                Ok(0) => return Ok(()),
+                Ok(_) => return Err(WorkerError::Protocol("unexpected private control command".to_owned())),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(io_error("wait for supervisor release", error)),
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn closed_control_fixture(response: &WorkerResponse) -> String {
+        control_fixture(response, true, "", "eval \"exec $control_fd>&-\"\nexec >/dev/null 2>&1\nexec /bin/sleep 10")
+    }
+
+    #[cfg(test)]
+    pub(super) fn pipe_holder_control_fixture(response: &WorkerResponse) -> String {
+        control_fixture(response, true, "/bin/sleep 10 </dev/null &", "exec >/dev/null 2>&1\nexec /bin/sleep 10")
+    }
+
+    #[cfg(test)]
+    pub(super) fn failed_control_fixture(response: &WorkerResponse, crash: bool) -> String {
+        control_fixture(response, false, "", if crash { "kill -SEGV $$" } else { "exit 42" })
+    }
+
+    #[cfg(test)]
+    fn control_fixture(response: &WorkerResponse, read_request: bool, setup: &str, finish: &str) -> String {
+        let json = serde_json::to_string(response).unwrap().replace('\'', "'\\''");
+        let frame = std::str::from_utf8(&CONTROL_DONE[..CONTROL_DONE.len() - 1]).unwrap();
+        let input = if read_request { "/bin/cat >/dev/null" } else { "" };
+        // Test-only Bash handles arbitrary inherited descriptor numbers. Live fixtures have a finite fallback;
+        // exit/crash fixtures deliberately do not consume a large request, preventing early authorized stop.
+        let script = format!(
+            "set +m\n\
+             control_fd=\"${{{CONTROL_ENV}#1:}}\"\n\
+             eval \"/bin/dd bs=1 count={} <&$control_fd >/dev/null 2>&1\"\n\
+             {input}\n\
+             {setup}\n\
+             printf '%s' '{json}'\n\
+             eval \"printf '{frame}\\\\000' >&$control_fd\"\n\
+             {finish}\n",
+            CONTROL_HELLO.len(),
+        );
+        format!("exec /bin/bash -c '{}'", script.replace('\'', "'\\''"))
+    }
+
     #[cfg(target_os = "macos")]
     type Rlim = u64;
     #[cfg(target_os = "linux")]
@@ -782,7 +1210,7 @@ mod unix {
     }
 
     #[cfg(target_os = "macos")]
-    fn check_memory(pid: u32, limit: u64) -> Result<(), WorkerError> {
+    fn resident_memory(pid: u32) -> io::Result<Option<u64>> {
         let mut info = ProcTaskInfo::default();
         let size = std::mem::size_of::<ProcTaskInfo>() as c_int;
         // SAFETY: proc_taskinfo's layout and PROC_PIDTASKINFO (4) match the Darwin SDK; buffer is writable.
@@ -791,14 +1219,62 @@ mod unix {
             let error = io::Error::last_os_error();
             // An exiting process can disappear from proc_pidinfo before waitpid reports its exit.
             if error.raw_os_error() == Some(3) {
-                return Ok(());
+                return Ok(None);
             }
-            return Err(io_error("inspect memory", error));
+            return Err(error);
         }
-        if info.resident_size > limit {
+        Ok(Some(info.resident_size))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn check_memory(pid: u32, limit: u64, measurement: &Measurement) -> Result<(), WorkerError> {
+        let sample = resident_memory(pid);
+        measurement.rss(&sample);
+        if sample.map_err(|error| io_error("inspect memory", error))?.is_some_and(|bytes| bytes > limit) {
             return Err(WorkerError::MemoryLimit { limit });
         }
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn resident_memory(pid: u32) -> io::Result<Option<u64>> {
+        let file = match std::fs::File::open(format!("/proc/{pid}/status")) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let mut bytes = Vec::new();
+        file.take(16 * 1024 + 1).read_to_end(&mut bytes)?;
+        if bytes.len() > 16 * 1024 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "proc status exceeds observation bound"));
+        }
+        parse_linux_rss(&bytes)
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn parse_linux_rss(bytes: &[u8]) -> io::Result<Option<u64>> {
+        let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid proc resident-memory field");
+        let mut rss = None;
+        for line in bytes.split(|byte| *byte == b'\n') {
+            let Some(value) = line.strip_prefix(b"VmRSS:") else { continue };
+            if rss.is_some() {
+                return Err(invalid());
+            }
+            let value = std::str::from_utf8(value).map_err(|_| invalid())?;
+            let mut fields = value.split_ascii_whitespace();
+            let bytes = fields
+                .next()
+                .ok_or_else(invalid)?
+                .parse::<u64>()
+                .map_err(|_| invalid())?
+                .checked_mul(1024)
+                .ok_or_else(invalid)?;
+            if fields.next() != Some("kB") || fields.next().is_some() {
+                return Err(invalid());
+            }
+            rss = Some(bytes);
+        }
+        Ok(rss)
     }
 
     fn nonblocking(fd: RawFd) -> Result<(), WorkerError> {
@@ -810,36 +1286,262 @@ mod unix {
         Ok(())
     }
 
-    struct ProcessGuard {
+    struct ProcessGuard<'a> {
         child: Child,
         stop: Arc<AtomicBool>,
         terminated: bool,
+        cleanup_complete: bool,
+        status: Option<ExitStatus>,
+        stopped_live_root: bool,
+        measurement: Option<&'a Measurement>,
     }
 
-    impl ProcessGuard {
-        fn terminate(&mut self) {
-            if self.terminated {
-                return;
-            }
-            self.terminated = true;
-            self.stop.store(true, Ordering::Release);
-            // SAFETY: process_group(0) gives this worker its own group; a negative PID targets only that group.
-            unsafe { kill(-(self.child.id() as c_int), 9) };
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+    fn require_default_child_reaping() -> io::Result<()> {
+        // SAFETY: a null new action only reads the process disposition into a correctly sized host structure.
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut action) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if action.sa_sigaction != libc::SIG_DFL || action.sa_flags & libc::SA_NOCLDWAIT != 0 {
+            return Err(io::Error::other("worker supervision requires default SIGCHLD handling without SA_NOCLDWAIT"));
+        }
+        Ok(())
+    }
+
+    fn observe_child(pid: u32, budget: Option<SupervisorBudget<'_>>) -> Result<bool, WorkerError> {
+        observe_child_with(pid, budget, probe_child)
+    }
+
+    fn probe_child(pid: u32) -> io::Result<bool> {
+        // SAFETY: the host siginfo_t is writable; WNOWAIT leaves an exited direct child unreaped.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOHANG | libc::WNOWAIT)
+        };
+        if result == 0 {
+            // SAFETY: successful waitid initialized siginfo; zero si_pid denotes a still-running child.
+            Ok(unsafe { info.si_pid() } != 0)
+        } else {
+            Err(io::Error::last_os_error())
         }
     }
 
-    impl Drop for ProcessGuard {
+    fn observe_child_with(
+        pid: u32,
+        budget: Option<SupervisorBudget<'_>>,
+        mut probe: impl FnMut(u32) -> io::Result<bool>,
+    ) -> Result<bool, WorkerError> {
+        for _ in 0..8 {
+            if let Some(budget) = budget {
+                budget.check()?;
+            }
+            require_default_child_reaping().map_err(|error| io_error("inspect SIGCHLD", error))?;
+            match probe(pid) {
+                Ok(exited) => return Ok(exited),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(io_error("observe owned child", error)),
+            }
+        }
+        if let Some(budget) = budget {
+            budget.check()?;
+        }
+        Err(io_error("observe owned child", io::ErrorKind::Interrupted.into()))
+    }
+
+    fn signal_process(pid: c_int, signal: c_int) -> io::Result<()> {
+        // SAFETY: the caller has just revalidated its unreaped direct child before signaling its PID/group.
+        if unsafe { kill(pid, signal) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+    }
+
+    impl ProcessGuard<'_> {
+        fn note_observation(&self, result: &Result<bool, WorkerError>) {
+            if let Some(measurement) = self.measurement {
+                measurement.record(|data, elapsed| match result {
+                    Ok(true) => {
+                        data.exit_observed_us.get_or_insert(elapsed);
+                    }
+                    Err(error) if !matches!(error, WorkerError::Timeout | WorkerError::Cancelled) => {
+                        data.ownership = SupervisedOwnership::Unverified;
+                    }
+                    _ => {}
+                });
+            }
+        }
+
+        fn observe(&mut self, budget: SupervisorBudget<'_>) -> Result<bool, WorkerError> {
+            let result = observe_child(self.child.id(), Some(budget));
+            self.note_observation(&result);
+            if let Err(error) = &result
+                && !matches!(error, WorkerError::Timeout | WorkerError::Cancelled)
+            {
+                self.terminated = true;
+                self.stop.store(true, Ordering::Release);
+            }
+            result
+        }
+
+        fn terminate(&mut self) -> Result<Option<ExitStatus>, WorkerError> {
+            self.terminate_with(signal_process)
+        }
+
+        fn terminate_with(
+            &mut self,
+            signal: impl FnMut(c_int, c_int) -> io::Result<()>,
+        ) -> Result<Option<ExitStatus>, WorkerError> {
+            self.terminate_using(|pid| observe_child(pid, None), signal)
+        }
+
+        fn terminate_using(
+            &mut self,
+            observe: impl FnMut(u32) -> Result<bool, WorkerError>,
+            signal: impl FnMut(c_int, c_int) -> io::Result<()>,
+        ) -> Result<Option<ExitStatus>, WorkerError> {
+            self.terminate_with_budget(observe, signal, None)
+        }
+
+        fn terminate_completed(&mut self, budget: SupervisorBudget<'_>) -> Result<Option<ExitStatus>, WorkerError> {
+            self.terminate_with_budget(|pid| observe_child(pid, None), signal_process, Some(budget))
+        }
+
+        fn terminate_with_budget(
+            &mut self,
+            mut observe: impl FnMut(u32) -> Result<bool, WorkerError>,
+            mut signal: impl FnMut(c_int, c_int) -> io::Result<()>,
+            completion_budget: Option<SupervisorBudget<'_>>,
+        ) -> Result<Option<ExitStatus>, WorkerError> {
+            if self.terminated {
+                return if self.cleanup_complete {
+                    Ok(self.status)
+                } else {
+                    Err(io_error(
+                        "cleanup",
+                        io::Error::other("previous cleanup did not complete; signaling is disabled"),
+                    ))
+                };
+            }
+            // Disarm even on an unknown ownership/probe failure: Drop must never retry numeric signaling.
+            self.terminated = true;
+            if completion_budget.is_none() {
+                self.stop.store(true, Ordering::Release);
+            }
+            if let Some(measurement) = self.measurement {
+                measurement.record(|data, elapsed| data.cleanup_started_us = Some(elapsed));
+            }
+            let result = self.cleanup_using(&mut observe, &mut signal, completion_budget);
+            if let Some(measurement) = self.measurement {
+                measurement.record(|data, elapsed| {
+                    data.cleanup_finished_us = Some(elapsed);
+                    data.cleanup_succeeded = Some(result.is_ok());
+                    data.cleanup_error = result.as_ref().err().map(SupervisedCleanupError::from);
+                });
+            }
+            result
+        }
+
+        fn cleanup_using(
+            &mut self,
+            observe: &mut impl FnMut(u32) -> Result<bool, WorkerError>,
+            signal: &mut impl FnMut(c_int, c_int) -> io::Result<()>,
+            completion_budget: Option<SupervisorBudget<'_>>,
+        ) -> Result<Option<ExitStatus>, WorkerError> {
+            let pid = self.child.id();
+            // A std Child alone is not proof: ECHILD or an unsafe disposition forbids either signal.
+            let observed = observe(pid);
+            self.note_observation(&observed);
+            let was_exited = observed?;
+            let group_result = signal(-(pid as c_int), libc::SIGKILL);
+            if !was_exited && group_result.is_ok() {
+                self.stopped_live_root = true;
+                if let Some(budget) = completion_budget {
+                    // A completed worker is waiting on control, not further request work. Observe the accepted
+                    // group stop before considering a redundant direct signal that can race zombie permission
+                    // checks on Darwin. This uses the existing deadline, not a new performance/grace threshold.
+                    loop {
+                        let observed = observe(pid);
+                        self.note_observation(&observed);
+                        if observed? || budget.check().is_err() {
+                            break;
+                        }
+                        let remaining = budget.timeout.saturating_sub(budget.started.elapsed()).min(POLL_INTERVAL);
+                        thread::park_timeout(remaining);
+                    }
+                }
+            }
+            let group_error = group_result.err().filter(|error| error.raw_os_error() != Some(libc::ESRCH));
+            let root_result = (|| {
+                // Group failure does not revoke direct-child authority; independently check it again.
+                let mut direct_error = None;
+                let observed = observe(pid);
+                self.note_observation(&observed);
+                if !observed? {
+                    match signal(pid as c_int, libc::SIGKILL) {
+                        Ok(()) => self.stopped_live_root = true,
+                        Err(error) => {
+                            let observed = observe(pid);
+                            self.note_observation(&observed);
+                            if !observed? {
+                                return Err(io_error("terminate owned child", error));
+                            }
+                            if error.raw_os_error() != Some(libc::ESRCH) {
+                                direct_error = Some(error);
+                            }
+                        }
+                    }
+                }
+                // An already-exited root needs no direct signal, including on hosts denying zombie signals.
+                // Reap only after the group attempt, keeping its identity anchored throughout signaling.
+                let status = self.child.wait().map_err(|error| {
+                    if let Some(measurement) = self.measurement {
+                        measurement.record(|data, _| data.ownership = SupervisedOwnership::Unverified);
+                    }
+                    io_error("reap owned child", error)
+                })?;
+                self.status = Some(status);
+                if let Some(measurement) = self.measurement {
+                    measurement.record(|data, elapsed| {
+                        data.root_reaped_us = Some(elapsed);
+                        data.exit_observed_us.get_or_insert(elapsed);
+                        data.root_exit_status = Some(SupervisedExitStatus {
+                            success: status.success(),
+                            code: status.code(),
+                            signal: status.signal(),
+                        });
+                        data.ownership = SupervisedOwnership::Reaped;
+                    });
+                }
+                match direct_error {
+                    Some(error) => Err(io_error("terminate owned child", error)),
+                    None => Ok(self.status),
+                }
+            })();
+            match group_error {
+                Some(group) => Err(WorkerError::Cleanup { group, root: root_result.err().map(Box::new) }),
+                None => {
+                    self.cleanup_complete = root_result.is_ok();
+                    root_result
+                }
+            }
+        }
+    }
+
+    impl Drop for ProcessGuard<'_> {
         fn drop(&mut self) {
-            self.terminate();
+            // Controlled cleanup leaves readers draining to real EOF. Abort/timeout must still release the
+            // scoped nonblocking threads, including when the root has already been reaped.
+            self.stop.store(true, Ordering::Release);
+            let _ = self.terminate();
         }
     }
 
     enum PipeResult {
-        Input(Result<(), WorkerError>),
-        Stdout(Result<Vec<u8>, WorkerError>),
-        Stderr(Result<Vec<u8>, WorkerError>),
+        Input(Result<bool, WorkerError>),
+        Stdout(Result<PipeRead, WorkerError>),
+        Stderr(Result<PipeRead, WorkerError>),
+    }
+
+    struct PipeRead {
+        bytes: Vec<u8>,
+        eof: bool,
     }
 
     fn read_pipe(
@@ -847,47 +1549,113 @@ mod unix {
         limit: usize,
         stream: &'static str,
         stop: &AtomicBool,
-    ) -> Result<Vec<u8>, WorkerError> {
-        let mut bytes = Vec::new();
-        let mut buffer = [0u8; 8192];
-        loop {
-            match pipe.read(&mut buffer) {
-                Ok(0) => return Ok(bytes),
-                Ok(count) => {
-                    if count > limit.saturating_sub(bytes.len()) {
-                        return Err(WorkerError::OutputTooLarge { stream, limit });
+        measurement: &Measurement,
+    ) -> Result<PipeRead, WorkerError> {
+        let mut observation = measurement
+            .enabled()
+            .then(|| SupervisedStreamMetrics { started_us: Some(measurement.elapsed_us()), ..Default::default() });
+        let result = (|| {
+            let mut bytes = Vec::new();
+            let mut buffer = [0u8; 8192];
+            loop {
+                match pipe.read(&mut buffer) {
+                    Ok(0) => {
+                        if let Some(observation) = &mut observation {
+                            observation.eof_us = Some(measurement.elapsed_us());
+                            observation.outcome = Some(SupervisedStreamOutcome::Eof);
+                        }
+                        return Ok(PipeRead { bytes, eof: true });
                     }
-                    bytes.extend_from_slice(&buffer[..count]);
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    if stop.load(Ordering::Acquire) {
-                        return Ok(bytes);
+                    Ok(count) => {
+                        if let Some(observation) = &mut observation {
+                            observation.first_byte_us.get_or_insert_with(|| measurement.elapsed_us());
+                            observation.read_bytes = observation.read_bytes.saturating_add(count as u64);
+                        }
+                        if count > limit.saturating_sub(bytes.len()) {
+                            if let Some(observation) = &mut observation {
+                                observation.outcome = Some(SupervisedStreamOutcome::OutputLimit);
+                            }
+                            return Err(WorkerError::OutputTooLarge { stream, limit });
+                        }
+                        bytes.extend_from_slice(&buffer[..count]);
                     }
-                    thread::park_timeout(POLL_INTERVAL);
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if stop.load(Ordering::Acquire) {
+                            if let Some(observation) = &mut observation {
+                                observation.outcome = Some(SupervisedStreamOutcome::Stopped);
+                            }
+                            return Ok(PipeRead { bytes, eof: false });
+                        }
+                        thread::park_timeout(POLL_INTERVAL);
+                    }
+                    Err(error) => return Err(io_error("read pipe", error)),
                 }
-                Err(error) => return Err(io_error("read pipe", error)),
             }
+        })();
+        if let Some(mut observation) = observation {
+            observation.finished_us = Some(measurement.elapsed_us());
+            observation.outcome.get_or_insert(SupervisedStreamOutcome::ReadError);
+            measurement.record(|data, _| match stream {
+                "stdout" => data.stdout = observation,
+                _ => data.stderr = observation,
+            });
         }
+        result
     }
 
-    fn write_pipe(mut pipe: impl Write, bytes: &[u8], stop: &AtomicBool) -> Result<(), WorkerError> {
-        let mut remaining = bytes;
-        while !remaining.is_empty() {
-            if stop.load(Ordering::Acquire) {
-                return Ok(());
+    fn write_pipe(
+        mut pipe: impl Write,
+        bytes: &[u8],
+        stop: &AtomicBool,
+        measurement: &Measurement,
+    ) -> Result<bool, WorkerError> {
+        let mut observation = measurement.enabled().then(|| SupervisedInputMetrics {
+            requested_bytes: Some(bytes.len() as u64),
+            started_us: Some(measurement.elapsed_us()),
+            ..Default::default()
+        });
+        let result = (|| {
+            let mut remaining = bytes;
+            while !remaining.is_empty() {
+                if stop.load(Ordering::Acquire) {
+                    if let Some(observation) = &mut observation {
+                        observation.outcome = Some(SupervisedInputOutcome::Stopped);
+                    }
+                    return Ok(false);
+                }
+                match pipe.write(remaining) {
+                    Ok(0) => return Err(io_error("write request", io::ErrorKind::WriteZero.into())),
+                    Ok(count) => {
+                        if let Some(observation) = &mut observation {
+                            observation.first_write_us.get_or_insert_with(|| measurement.elapsed_us());
+                            observation.written_bytes = observation.written_bytes.saturating_add(count as u64);
+                        }
+                        remaining = &remaining[count..];
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::park_timeout(POLL_INTERVAL),
+                    // Preserve existing success/error precedence, but never label this full delivery.
+                    Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {
+                        if let Some(observation) = &mut observation {
+                            observation.outcome = Some(SupervisedInputOutcome::BrokenPipe);
+                        }
+                        return Ok(false);
+                    }
+                    Err(error) => return Err(io_error("write request", error)),
+                }
             }
-            match pipe.write(remaining) {
-                Ok(0) => return Err(io_error("write request", io::ErrorKind::WriteZero.into())),
-                Ok(count) => remaining = &remaining[count..],
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::park_timeout(POLL_INTERVAL),
-                // The exit status/protocol distinguish early closure from a successful response.
-                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => return Ok(()),
-                Err(error) => return Err(io_error("write request", error)),
+            if let Some(observation) = &mut observation {
+                observation.outcome = Some(SupervisedInputOutcome::FullyDelivered);
             }
+            Ok(true)
+        })();
+        if let Some(mut observation) = observation {
+            observation.finished_us = Some(measurement.elapsed_us());
+            observation.outcome.get_or_insert(SupervisedInputOutcome::WriteError);
+            measurement.record(|data, _| data.input = observation);
         }
-        Ok(())
+        result
     }
 
     pub(super) fn supervised_process(
@@ -896,20 +1664,45 @@ mod unix {
         config: &WorkerConfig,
         cancellation: Option<&AtomicBool>,
         started: Instant,
-    ) -> Result<(Vec<u8>, Vec<u8>, ExitStatus), WorkerError> {
+        measurement: &Measurement,
+    ) -> Result<ProcessOutput, WorkerError> {
         let memory_limit = config.memory_limit_bytes;
         if memory_limit == 0 {
             return Err(io_error("spawn", io::Error::other("worker memory limit must be nonzero")));
         }
+        let (mut control, child_control) = HostControl::pair()?;
+        let control_fd = child_control.as_raw_fd();
         let mut command = Command::new(executable);
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
-        // SAFETY: the callback only calls setrlimit/last_os_error; it allocates nothing and touches no locks.
-        unsafe { command.pre_exec(move || limit_memory(memory_limit)) };
+        command.env(CONTROL_ENV, format!("1:{control_fd}"));
+        // SAFETY: only signal-safe setrlimit/fcntl operations run here; the parent's fd flags stay unchanged.
+        unsafe {
+            command.pre_exec(move || {
+                limit_memory(memory_limit)?;
+                inherit_control(control_fd)
+            })
+        };
+        require_default_child_reaping().map_err(|error| io_error("inspect SIGCHLD", error))?;
+        measurement.record(|data, elapsed| data.spawn_started_us = Some(elapsed));
         let child = command.spawn().map_err(|error| io_error("spawn", error))?;
+        drop(child_control);
+        measurement.record(|data, elapsed| {
+            data.spawn_complete_us = Some(elapsed);
+            data.ownership = SupervisedOwnership::Unreaped;
+            data.rss.nominal_poll_interval_us = Some(POLL_INTERVAL.as_micros() as u64);
+        });
         let stop = Arc::new(AtomicBool::new(false));
         thread::scope(|scope| {
             // The guard must drop inside the scope, before scope waits for the nonblocking I/O threads.
-            let mut process = ProcessGuard { child, stop: stop.clone(), terminated: false };
+            let mut process = ProcessGuard {
+                child,
+                stop: stop.clone(),
+                terminated: false,
+                cleanup_complete: false,
+                status: None,
+                stopped_live_root: false,
+                measurement: measurement.enabled().then_some(measurement),
+            };
             let stdin = process.child.stdin.take().ok_or_else(|| WorkerError::Protocol("missing stdin".to_owned()))?;
             let stdout =
                 process.child.stdout.take().ok_or_else(|| WorkerError::Protocol("missing stdout".to_owned()))?;
@@ -918,13 +1711,15 @@ mod unix {
             nonblocking(stdin.as_raw_fd())?;
             nonblocking(stdout.as_raw_fd())?;
             nonblocking(stderr.as_raw_fd())?;
+            measurement.record(|data, elapsed| data.pipe_setup_complete_us = Some(elapsed));
             let (sender, receiver) = mpsc::channel();
             let input_sender = sender.clone();
             let input_stop = stop.clone();
             thread::Builder::new()
                 .name("decompiler-worker-stdin".to_owned())
                 .spawn_scoped(scope, move || {
-                    let _ = input_sender.send(PipeResult::Input(write_pipe(stdin, &bytes, &input_stop)));
+                    let result = write_pipe(stdin, &bytes, &input_stop, measurement);
+                    let _ = input_sender.send(PipeResult::Input(result));
                 })
                 .map_err(|error| io_error("spawn stdin thread", error))?;
             let output_sender = sender.clone();
@@ -933,7 +1728,7 @@ mod unix {
             thread::Builder::new()
                 .name("decompiler-worker-stdout".to_owned())
                 .spawn_scoped(scope, move || {
-                    let result = read_pipe(stdout, stdout_limit, "stdout", &output_stop);
+                    let result = read_pipe(stdout, stdout_limit, "stdout", &output_stop, measurement);
                     let _ = output_sender.send(PipeResult::Stdout(result));
                 })
                 .map_err(|error| io_error("spawn stdout thread", error))?;
@@ -942,12 +1737,18 @@ mod unix {
             thread::Builder::new()
                 .name("decompiler-worker-stderr".to_owned())
                 .spawn_scoped(scope, move || {
-                    let result = read_pipe(stderr, stderr_limit, "stderr", &error_stop);
+                    let result = read_pipe(stderr, stderr_limit, "stderr", &error_stop, measurement);
                     let _ = sender.send(PipeResult::Stderr(result));
                 })
                 .map_err(|error| io_error("spawn stderr thread", error))?;
-            let (mut stdout, mut stderr, mut status) = (None, None, None);
+            let mut stdout: Option<PipeRead> = None;
+            let mut stderr: Option<PipeRead> = None;
+            let mut status = None;
             let mut input_finished = false;
+            let mut input_fully_delivered = false;
+            let mut controlled_stop = false;
+            let mut cleanup_error = None;
+            let mut control_error = None;
             loop {
                 if cancelled(cancellation) {
                     return Err(WorkerError::Cancelled);
@@ -956,30 +1757,77 @@ mod unix {
                     return Err(WorkerError::Timeout);
                 }
                 if status.is_none() {
-                    status = process.child.try_wait().map_err(|error| io_error("wait", error))?;
-                    #[cfg(target_os = "macos")]
-                    if status.is_none()
-                        && let Err(error) = check_memory(process.child.id(), memory_limit)
-                    {
-                        // An exit between try_wait and proc_pidinfo is not a monitoring failure.
-                        status = process.child.try_wait().map_err(|error| io_error("wait", error))?;
-                        if status.is_none() {
-                            return Err(error);
-                        }
+                    if control_error.is_none() {
+                        control_error = control.poll(measurement).err();
                     }
-                    if status.is_some() {
-                        // Kill inherited-pipe holders too; drain buffered bytes, then stop on WouldBlock.
-                        process.terminate();
+                    let budget = SupervisorBudget { started, timeout: config.timeout, cancellation };
+                    let exited = process.observe(budget)?;
+                    #[cfg(target_os = "macos")]
+                    let exited = {
+                        let mut exited = exited;
+                        if !exited && let Err(error) = check_memory(process.child.id(), memory_limit, measurement) {
+                            // An exit between observation and proc_pidinfo is not a monitoring failure.
+                            exited = process.observe(budget)?;
+                            if !exited {
+                                return Err(error);
+                            }
+                        }
+                        exited
+                    };
+                    #[cfg(target_os = "linux")]
+                    if !exited && measurement.enabled() {
+                        // Only the just-observed, directly owned unreaped root is read; sampled IDs grant no authority.
+                        measurement.rss(&resident_memory(process.child.id()));
+                    }
+                    if !exited && input_finished && input_fully_delivered && control_error.is_none() {
+                        // Pipe holders may be descendants awaiting our group stop. Revalidate control, then
+                        // stop the authenticated live group before waiting for their real output EOF.
+                        control_error = control.poll(measurement).err();
+                    }
+                    let completed_live = !exited
+                        && control_error.is_none()
+                        && control.authorized()
+                        && input_finished
+                        && input_fully_delivered;
+                    if exited || completed_live || control_error.is_some() {
+                        // Retain control failure until the real status is known: an actual failed exit/crash
+                        // outranks that transport error, but killing a still-live invalid peer does not.
+                        let cleanup =
+                            if completed_live { process.terminate_completed(budget) } else { process.terminate() };
+                        match cleanup {
+                            Ok(value) => status = value,
+                            Err(error) => {
+                                status = process.status;
+                                if status.is_none() {
+                                    return Err(error);
+                                }
+                                cleanup_error = Some(error);
+                            }
+                        }
+                        controlled_stop = completed_live
+                            && process.stopped_live_root
+                            && status.is_some_and(|value| value.signal() == Some(libc::SIGKILL));
+                        measurement.record(|data, _| data.intentional_stop = controlled_stop);
                     }
                 }
                 if input_finished && let (Some(stdout), Some(stderr), Some(status)) = (&mut stdout, &mut stderr, status)
                 {
-                    return Ok((std::mem::take(stdout), std::mem::take(stderr), status));
+                    return Ok(ProcessOutput {
+                        stdout: std::mem::take(&mut stdout.bytes),
+                        stderr: std::mem::take(&mut stderr.bytes),
+                        status,
+                        controlled_stop,
+                        host_stopped_root: process.stopped_live_root,
+                        input_fully_delivered,
+                        outputs_eof: stdout.eof && stderr.eof,
+                        control_error,
+                        cleanup_error,
+                    });
                 }
                 let remaining = config.timeout.saturating_sub(started.elapsed()).min(POLL_INTERVAL);
                 match receiver.recv_timeout(remaining) {
                     Ok(PipeResult::Input(result)) => {
-                        result?;
+                        input_fully_delivered = result?;
                         input_finished = true;
                     }
                     Ok(PipeResult::Stdout(result)) => stdout = Some(result?),
@@ -994,6 +1842,731 @@ mod unix {
                 }
             }
         })
+    }
+
+    #[cfg(test)]
+    mod measurement_tests {
+        use super::*;
+
+        struct PartialBrokenWriter(bool);
+
+        impl Write for PartialBrokenWriter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.0 {
+                    Err(io::ErrorKind::BrokenPipe.into())
+                } else {
+                    self.0 = true;
+                    Ok(bytes.len().min(2))
+                }
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        struct BlockedReader;
+
+        impl Read for BlockedReader {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::WouldBlock.into())
+            }
+        }
+
+        #[test]
+        fn partial_broken_and_stopped_writers_never_claim_full_delivery() {
+            let measurement = Measurement::new(Instant::now(), true);
+            assert!(!write_pipe(PartialBrokenWriter(false), b"abcd", &AtomicBool::new(false), &measurement).unwrap());
+            let metrics = measurement.finish().unwrap();
+            assert_eq!(metrics.input.written_bytes, 2);
+            assert_eq!(metrics.input.requested_bytes, Some(4));
+            assert_eq!(metrics.input.outcome, Some(SupervisedInputOutcome::BrokenPipe));
+            assert!(metrics.input.first_write_us.is_some());
+
+            let measurement = Measurement::new(Instant::now(), true);
+            assert!(!write_pipe(Vec::new(), b"abcd", &AtomicBool::new(true), &measurement).unwrap());
+            let metrics = measurement.finish().unwrap();
+            assert_eq!(metrics.input.written_bytes, 0);
+            assert_eq!(metrics.input.outcome, Some(SupervisedInputOutcome::Stopped));
+            assert!(metrics.input.first_write_us.is_none());
+        }
+
+        #[test]
+        fn full_writes_eof_and_output_limits_record_actual_pipe_observations() {
+            let measurement = Measurement::new(Instant::now(), true);
+            let stop = AtomicBool::new(false);
+            assert!(write_pipe(Vec::new(), b"abcd", &stop, &measurement).unwrap());
+            let output = read_pipe(&b"abc"[..], 8, "stdout", &stop, &measurement).unwrap();
+            assert_eq!(output.bytes, b"abc");
+            assert!(output.eof);
+            assert!(matches!(
+                read_pipe(&b"toolong"[..], 2, "stderr", &stop, &measurement),
+                Err(WorkerError::OutputTooLarge { stream: "stderr", .. })
+            ));
+            let metrics = measurement.finish().unwrap();
+            assert_eq!(metrics.input.outcome, Some(SupervisedInputOutcome::FullyDelivered));
+            assert_eq!(metrics.input.written_bytes, metrics.input.requested_bytes.unwrap());
+            assert_eq!(metrics.stdout.read_bytes, 3);
+            assert!(metrics.stdout.first_byte_us.is_some());
+            assert!(metrics.stdout.first_byte_us <= metrics.stdout.eof_us);
+            assert!(metrics.stdout.eof_us.is_some());
+            assert_eq!(metrics.stdout.outcome, Some(SupervisedStreamOutcome::Eof));
+            assert_eq!(metrics.stderr.read_bytes, 7);
+            assert_eq!(metrics.stderr.outcome, Some(SupervisedStreamOutcome::OutputLimit));
+            assert!(metrics.stderr.eof_us.is_none());
+        }
+
+        #[test]
+        fn stopped_readers_do_not_invent_eof_or_first_byte_timestamps() {
+            let measurement = Measurement::new(Instant::now(), true);
+            let output = read_pipe(BlockedReader, 8, "stdout", &AtomicBool::new(true), &measurement).unwrap();
+            assert!(output.bytes.is_empty());
+            assert!(!output.eof);
+            let metrics = measurement.finish().unwrap();
+            assert_eq!(metrics.stdout.outcome, Some(SupervisedStreamOutcome::Stopped));
+            assert_eq!(metrics.stdout.read_bytes, 0);
+            assert!(metrics.stdout.first_byte_us.is_none());
+            assert!(metrics.stdout.eof_us.is_none());
+        }
+
+        #[test]
+        fn proc_rss_units_missing_fields_duplicates_and_overflow_are_checked() {
+            assert_eq!(parse_linux_rss(b"Name:\towned\nVmRSS:\t12 kB\n").unwrap(), Some(12 * 1024));
+            assert_eq!(parse_linux_rss(b"Name:\tzombie\n").unwrap(), None);
+            assert_eq!(parse_linux_rss(b"VmRSS: 0 kB\n").unwrap(), Some(0));
+            for value in [
+                &b"VmRSS: 12 MB\n"[..],
+                &b"VmRSS: -1 kB\n"[..],
+                &b"VmRSS: 18446744073709551615 kB\n"[..],
+                &b"VmRSS: 2 kB\nVmRSS: 3 kB\n"[..],
+                &b"VmRSS: 1 kB unexpected\n"[..],
+            ] {
+                assert_eq!(parse_linux_rss(value).unwrap_err().kind(), io::ErrorKind::InvalidData);
+            }
+        }
+
+        #[test]
+        fn reaped_root_and_failed_group_cleanup_remain_separate_in_metrics() {
+            let measurement = Measurement::new(Instant::now(), true);
+            require_default_child_reaping().unwrap();
+            let child = Command::new("/bin/sh")
+                .args(["-c", "exit 23"])
+                .process_group(0)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut process = ProcessGuard {
+                child,
+                stop: Arc::new(AtomicBool::new(false)),
+                terminated: false,
+                cleanup_complete: false,
+                status: None,
+                stopped_live_root: false,
+                measurement: Some(&measurement),
+            };
+            let budget =
+                SupervisorBudget { started: Instant::now(), timeout: Duration::from_secs(5), cancellation: None };
+            while !process.observe(budget).unwrap() {
+                thread::park_timeout(POLL_INTERVAL);
+            }
+            let pid = process.child.id();
+            let error = process
+                .terminate_with(|target, _| {
+                    assert_eq!(target, -(pid as c_int));
+                    Err(io::Error::from_raw_os_error(libc::EPERM))
+                })
+                .unwrap_err();
+            assert!(matches!(error, WorkerError::Cleanup { root: None, .. }));
+            drop(process);
+            let metrics = measurement.finish().unwrap();
+            assert_eq!(metrics.root_exit_status.unwrap().code, Some(23));
+            assert_eq!(metrics.ownership, SupervisedOwnership::Reaped);
+            assert_eq!(metrics.cleanup_succeeded, Some(false));
+            assert!(metrics.cleanup_finished_us.is_some());
+            assert!(metrics.root_reaped_us.is_some());
+        }
+
+        #[test]
+        fn completed_cleanup_keeps_readers_draining_and_drop_still_aborts_them() {
+            require_default_child_reaping().unwrap();
+            let child = Command::new("/bin/sh").args(["-c", "exit 0"]).process_group(0).spawn().unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let mut process = ProcessGuard {
+                child,
+                stop: stop.clone(),
+                terminated: false,
+                cleanup_complete: false,
+                status: None,
+                stopped_live_root: false,
+                measurement: None,
+            };
+            let budget =
+                SupervisorBudget { started: Instant::now(), timeout: Duration::from_secs(5), cancellation: None };
+            while !process.observe(budget).unwrap() {
+                thread::park_timeout(POLL_INTERVAL);
+            }
+            assert!(
+                process
+                    .terminate_with_budget(|pid| observe_child(pid, None), |_, _| Ok(()), Some(budget))
+                    .unwrap()
+                    .unwrap()
+                    .success()
+            );
+            assert!(!stop.load(Ordering::Acquire), "group cleanup must not fabricate stopped-reader EOF");
+            drop(process);
+            assert!(stop.load(Ordering::Acquire), "abort must release readers even after root reap");
+        }
+    }
+
+    #[cfg(test)]
+    mod control_tests {
+        use super::*;
+
+        #[test]
+        fn invalid_capabilities_leave_ambient_files_and_socket_data_untouched() {
+            let file = std::fs::File::open("/dev/null").unwrap();
+            assert!(claim_worker_control(&format!("1:{}", file.as_raw_fd())).is_err());
+            file.metadata().unwrap();
+            for value in ["1:0", "1:1", "1:2", "2:3", "1:-1", "1:+3"] {
+                assert!(claim_worker_control(value).is_err());
+            }
+            let (mut host, mut child) = UnixStream::pair().unwrap();
+            let data = b"not-a-worker-control-handshake";
+            host.write_all(data).unwrap();
+            assert!(claim_worker_control(&format!("1:{}", child.as_raw_fd())).is_err());
+            let mut retained = vec![0; data.len()];
+            child.read_exact(&mut retained).unwrap();
+            assert_eq!(retained, data);
+        }
+
+        #[test]
+        fn handshake_validation_is_non_consuming_and_completion_is_not_a_root_exit() {
+            let measurement = Measurement::new(Instant::now(), true);
+            let (mut host, mut child) = HostControl::pair().unwrap();
+            let value = format!("1:{}", child.as_raw_fd());
+            let duplicate = validate_worker_control(&value).unwrap();
+            assert_ne!(duplicate.as_raw_fd(), child.as_raw_fd());
+            drop(duplicate);
+            let mut hello = [0; CONTROL_HELLO.len()];
+            child.read_exact(&mut hello).unwrap();
+            assert_eq!(hello.as_slice(), CONTROL_HELLO);
+            child.write_all(CONTROL_DONE).unwrap();
+            host.poll(&measurement).unwrap();
+            assert!(host.complete);
+            assert!(host.authorized());
+            let metrics = measurement.finish().unwrap();
+            assert!(metrics.control_completion_us.is_some());
+            assert!(!metrics.intentional_stop);
+            assert!(metrics.root_exit_status.is_none());
+        }
+
+        #[test]
+        fn claiming_and_dropping_control_owns_only_a_fresh_duplicate() {
+            let (mut host, mut original) = HostControl::pair().unwrap();
+            let fd = original.as_raw_fd();
+            // SAFETY: these only inspect descriptors owned by this test.
+            let descriptor_flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            let status_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            assert!(descriptor_flags >= 0 && status_flags >= 0);
+            let duplicate = claim_worker_control(&format!("1:{fd}")).unwrap();
+            assert!(duplicate.as_raw_fd() >= 3);
+            assert_ne!(duplicate.as_raw_fd(), fd);
+            assert_ne!(unsafe { libc::fcntl(duplicate.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC, 0);
+            drop(duplicate);
+            assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, descriptor_flags);
+            assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFL) }, status_flags);
+            original.peer_addr().unwrap();
+            host.socket.write_all(b"retained").unwrap();
+            let mut bytes = [0; 8];
+            original.read_exact(&mut bytes).unwrap();
+            assert_eq!(&bytes, b"retained");
+        }
+
+        #[test]
+        fn completion_followed_by_peer_eof_revokes_authorization() {
+            for poll_before_close in [false, true] {
+                let measurement = Measurement::new(Instant::now(), true);
+                let (mut host, mut child) = HostControl::pair().unwrap();
+                let mut hello = [0; CONTROL_HELLO.len()];
+                child.read_exact(&mut hello).unwrap();
+                child.write_all(CONTROL_DONE).unwrap();
+                if poll_before_close {
+                    host.poll(&measurement).unwrap();
+                    assert!(host.authorized());
+                }
+                drop(child);
+                assert!(matches!(host.poll(&measurement), Err(WorkerError::Protocol(_))));
+                assert!(host.closed);
+                assert!(!host.complete);
+                assert!(!host.authorized());
+                host.poll(&measurement).unwrap();
+                assert!(!host.authorized());
+                assert!(measurement.finish().unwrap().control_completion_us.is_some());
+            }
+        }
+
+        #[test]
+        fn legacy_close_and_incomplete_or_unknown_private_completions_are_distinct() {
+            let measurement = Measurement::new(Instant::now(), false);
+            let (mut host, child) = HostControl::pair().unwrap();
+            drop(child);
+            host.poll(&measurement).unwrap();
+            assert!(host.closed && !host.complete);
+            for frame in [&b"partial"[..], &[0; CONTROL_DONE.len()][..]] {
+                let (mut host, mut child) = HostControl::pair().unwrap();
+                let mut hello = [0; CONTROL_HELLO.len()];
+                child.read_exact(&mut hello).unwrap();
+                child.write_all(frame).unwrap();
+                drop(child);
+                let result = host.poll(&measurement);
+                if frame.len() == CONTROL_DONE.len() {
+                    assert!(matches!(result, Err(WorkerError::Protocol(_))));
+                } else {
+                    result.unwrap();
+                    assert!(matches!(host.poll(&measurement), Err(WorkerError::Protocol(_))));
+                }
+            }
+            let (mut host, mut child) = HostControl::pair().unwrap();
+            child.write_all(CONTROL_DONE).unwrap();
+            child.write_all(b"extra").unwrap();
+            assert!(matches!(host.poll(&measurement), Err(WorkerError::Protocol(_))));
+        }
+    }
+
+    #[cfg(test)]
+    mod ownership_tests {
+        use std::cell::Cell;
+
+        use super::*;
+
+        const DISPOSITION_HELPER_SUCCESS: i32 = 73;
+
+        fn guard(script: &str) -> ProcessGuard<'static> {
+            require_default_child_reaping().unwrap();
+            let child = Command::new("/bin/sh")
+                .args(["-c", script])
+                .process_group(0)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            ProcessGuard {
+                child,
+                stop: Arc::new(AtomicBool::new(false)),
+                terminated: false,
+                cleanup_complete: false,
+                status: None,
+                stopped_live_root: false,
+                measurement: None,
+            }
+        }
+
+        fn await_exit(process: &mut ProcessGuard<'_>) {
+            let budget =
+                SupervisorBudget { started: Instant::now(), timeout: Duration::from_secs(5), cancellation: None };
+            while !process.observe(budget).unwrap() {
+                thread::park_timeout(POLL_INTERVAL);
+            }
+        }
+
+        fn assert_lost_ownership(error: WorkerError) {
+            assert!(matches!(error,
+                WorkerError::Io { action: "observe owned child", source }
+                    if source.raw_os_error() == Some(libc::ECHILD)
+            ));
+        }
+
+        #[test]
+        fn exited_root_remains_waitable_through_group_cleanup_then_reaps_once() {
+            let mut process = guard("exit 23");
+            let pid = process.child.id();
+            await_exit(&mut process);
+            assert!(observe_child(pid, None).unwrap());
+            assert!(observe_child(pid, None).unwrap());
+            let mut targets = Vec::new();
+            let status = process
+                .terminate_with(|target, _| {
+                    assert!(observe_child(pid, None).unwrap());
+                    targets.push(target);
+                    // Mock the signal boundary here; the descendant witness test exercises real group cleanup.
+                    assert!(observe_child(pid, None).unwrap());
+                    Ok(())
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(targets, [-(pid as c_int)]);
+            assert_eq!(status.code(), Some(23));
+            assert_lost_ownership(observe_child(pid, None).unwrap_err());
+            let repeated = process.terminate_with(|_, _| panic!("signaled after reaping")).unwrap().unwrap();
+            assert_eq!(repeated.code(), Some(23));
+        }
+
+        #[test]
+        fn group_permission_failure_still_revalidates_kills_and_reaps_a_running_root() {
+            // Closing the owned stdin also lets this root exit if an injected assertion panics.
+            let mut process = guard("read release");
+            let pid = process.child.id();
+            let probes = Cell::new(0);
+            let mut targets = Vec::new();
+            let error = process
+                .terminate_using(
+                    |pid| {
+                        probes.set(probes.get() + 1);
+                        observe_child(pid, None)
+                    },
+                    |target, signal| {
+                        targets.push(target);
+                        if target < 0 {
+                            assert_eq!(probes.get(), 1);
+                            Err(io::Error::from_raw_os_error(libc::EPERM))
+                        } else {
+                            assert_eq!(probes.get(), 2);
+                            signal_process(target, signal)
+                        }
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(targets, [-(pid as c_int), pid as c_int]);
+            assert!(matches!(error, WorkerError::Cleanup { group, root: None }
+                if group.raw_os_error() == Some(libc::EPERM)));
+            assert!(!process.status.unwrap().success());
+            assert_lost_ownership(observe_child(pid, None).unwrap_err());
+            process.terminate_with(|_, _| panic!("retried incomplete group cleanup after reaping")).unwrap_err();
+        }
+
+        #[test]
+        fn group_permission_failure_reaps_an_exited_root_without_direct_signaling() {
+            let mut process = guard("exit 23");
+            let pid = process.child.id();
+            await_exit(&mut process);
+            let mut targets = Vec::new();
+            let error = process
+                .terminate_with(|target, _| {
+                    targets.push(target);
+                    assert_eq!(target, -(pid as c_int));
+                    Err(io::Error::from_raw_os_error(libc::EPERM))
+                })
+                .unwrap_err();
+            assert!(matches!(error, WorkerError::Cleanup { group, root: None }
+                if group.raw_os_error() == Some(libc::EPERM)));
+            assert_eq!(targets, [-(pid as c_int)]);
+            assert_eq!(process.status.unwrap().code(), Some(23));
+            assert_lost_ownership(observe_child(pid, None).unwrap_err());
+            process.terminate_with(|_, _| panic!("retried group cleanup after reaping")).unwrap_err();
+        }
+
+        #[test]
+        fn unknown_probe_errors_and_interruption_exhaustion_disarm_without_signaling() {
+            for code in [libc::EIO, libc::EINTR] {
+                let mut process = guard("exit 0");
+                await_exit(&mut process);
+                let mut attempts = 0;
+                let error = process
+                    .terminate_using(
+                        |pid| {
+                            observe_child_with(pid, None, |_| {
+                                attempts += 1;
+                                assert!(attempts <= 16, "interrupted observation did not stop retrying");
+                                Err(io::Error::from_raw_os_error(code))
+                            })
+                        },
+                        |_, _| panic!("signaled without successful observation"),
+                    )
+                    .unwrap_err();
+                match error {
+                    WorkerError::Io { action: "observe owned child", source } if code == libc::EINTR => {
+                        assert_eq!(source.kind(), io::ErrorKind::Interrupted);
+                        assert!(attempts > 1);
+                    }
+                    WorkerError::Io { action: "observe owned child", source } => {
+                        assert_eq!(source.raw_os_error(), Some(code));
+                        assert_eq!(attempts, 1);
+                    }
+                    other => panic!("unexpected observation error: {other}"),
+                }
+                process.terminate_with(|_, _| panic!("retried after unknown ownership")).unwrap_err();
+                assert!(process.child.wait().unwrap().success());
+            }
+        }
+
+        #[test]
+        fn interrupted_observation_retries_and_rechecks_cancellation_before_the_next_probe() {
+            let mut process = guard("exit 0");
+            let pid = process.child.id();
+            await_exit(&mut process);
+            let mut attempts = 0;
+            assert!(
+                observe_child_with(pid, None, |_| {
+                    attempts += 1;
+                    if attempts == 1 { Err(io::ErrorKind::Interrupted.into()) } else { probe_child(pid) }
+                })
+                .unwrap()
+            );
+            assert_eq!(attempts, 2);
+            let cancellation = AtomicBool::new(false);
+            let budget = SupervisorBudget {
+                started: Instant::now(),
+                timeout: Duration::from_secs(5),
+                cancellation: Some(&cancellation),
+            };
+            attempts = 0;
+            let result = observe_child_with(pid, Some(budget), |_| {
+                attempts += 1;
+                cancellation.store(true, Ordering::Release);
+                Err(io::ErrorKind::Interrupted.into())
+            });
+            assert!(matches!(result, Err(WorkerError::Cancelled)));
+            assert_eq!(attempts, 1);
+            assert!(matches!(
+                observe_child_with(
+                    pid,
+                    Some(SupervisorBudget { timeout: Duration::ZERO, cancellation: None, ..budget }),
+                    |_| panic!("probed after deadline"),
+                ),
+                Err(WorkerError::Timeout)
+            ));
+            assert!(process.child.wait().unwrap().success());
+        }
+
+        #[test]
+        fn group_failure_and_unknown_revalidation_are_both_preserved_without_direct_signaling() {
+            let mut process = guard("exit 0");
+            let pid = process.child.id();
+            await_exit(&mut process);
+            let mut observations = 0;
+            let mut signals = 0;
+            let error = process
+                .terminate_using(
+                    |pid| {
+                        observations += 1;
+                        if observations == 1 {
+                            observe_child(pid, None)
+                        } else {
+                            observe_child_with(pid, None, |_| Err(io::Error::from_raw_os_error(libc::EIO)))
+                        }
+                    },
+                    |target, _| {
+                        signals += 1;
+                        assert_eq!(target, -(pid as c_int));
+                        Err(io::Error::from_raw_os_error(libc::EPERM))
+                    },
+                )
+                .unwrap_err();
+            match error {
+                WorkerError::Cleanup { group, root: Some(root) } => {
+                    assert_eq!(group.raw_os_error(), Some(libc::EPERM));
+                    assert!(matches!(*root, WorkerError::Io { action: "observe owned child", source }
+                        if source.raw_os_error() == Some(libc::EIO)));
+                }
+                other => panic!("lost combined cleanup failure: {other}"),
+            }
+            assert_eq!(signals, 1);
+            process.terminate_with(|_, _| panic!("retried after failed revalidation")).unwrap_err();
+            assert!(process.child.wait().unwrap().success());
+        }
+
+        #[test]
+        fn group_cleanup_terminates_a_handshaken_descendant_not_just_supervisor_readers() {
+            require_default_child_reaping().unwrap();
+            let child = Command::new("/bin/sh")
+                .args(["-c", "exec 3<&0; (read release <&3) & printf '%s\\n' \"$!\"; exit 23"])
+                .process_group(0)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut process = ProcessGuard {
+                child,
+                stop: Arc::new(AtomicBool::new(false)),
+                terminated: false,
+                cleanup_complete: false,
+                status: None,
+                stopped_live_root: false,
+                measurement: None,
+            };
+            // Holding stdin keeps the descendant's builtin read alive; dropping it also cleans up on panic.
+            let input = process.child.stdin.take().unwrap();
+            let mut witness = process.child.stdout.take().unwrap();
+            nonblocking(witness.as_raw_fd()).unwrap();
+            let started = Instant::now();
+            let mut handshake = Vec::with_capacity(16);
+            loop {
+                assert!(started.elapsed() < Duration::from_secs(5), "descendant handshake stalled");
+                let mut byte = [0];
+                match witness.read(&mut byte) {
+                    Ok(1) if byte[0] == b'\n' => break,
+                    Ok(1) => {
+                        assert!(handshake.len() < 16);
+                        handshake.push(byte[0]);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::park_timeout(POLL_INTERVAL),
+                    other => panic!("incomplete descendant handshake: {other:?}"),
+                }
+            }
+            let descendant: u32 = std::str::from_utf8(&handshake).unwrap().parse().unwrap();
+            assert!(descendant > 0 && descendant != process.child.id());
+            await_exit(&mut process);
+            let mut byte = [0];
+            assert_eq!(witness.read(&mut byte).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+            let cleanup = process.terminate();
+            let started = Instant::now();
+            loop {
+                assert!(started.elapsed() < Duration::from_secs(5), "descendant still holds its lifetime witness");
+                match witness.read(&mut byte) {
+                    Ok(0) => break,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::park_timeout(POLL_INTERVAL),
+                    other => panic!("unexpected descendant witness: {other:?}"),
+                }
+            }
+            // This raw pipe never consults ProcessGuard.stop; EOF requires the blocked descendant to exit.
+            drop(input);
+            assert_eq!(cleanup.unwrap().unwrap().code(), Some(23));
+        }
+
+        #[test]
+        fn externally_reaped_root_forbids_both_signals_and_drop_retry() {
+            for observe_first in [false, true] {
+                let mut process = guard("exit 0");
+                await_exit(&mut process);
+                assert!(process.child.wait().unwrap().success());
+                if observe_first {
+                    let budget = SupervisorBudget {
+                        started: Instant::now(),
+                        timeout: Duration::from_secs(5),
+                        cancellation: None,
+                    };
+                    assert_lost_ownership(process.observe(budget).unwrap_err());
+                    process.terminate_with(|_, _| panic!("signaled a reaped root")).unwrap_err();
+                } else {
+                    let error = process.terminate_with(|_, _| panic!("signaled a reaped root")).unwrap_err();
+                    assert_lost_ownership(error);
+                }
+                assert!(process.terminated);
+                process.terminate_with(|_, _| panic!("retried lost ownership")).unwrap_err();
+            }
+        }
+
+        #[test]
+        fn ownership_is_revalidated_between_group_and_direct_signal() {
+            let mut process = guard("exit 0");
+            let pid = process.child.id();
+            await_exit(&mut process);
+            let mut signals = 0;
+            let error = process
+                .terminate_with(|target, _| {
+                    signals += 1;
+                    assert_eq!(target, -(pid as c_int));
+                    let mut status = 0;
+                    // SAFETY: this simulates an unsupported foreign reaper for this test's exited direct child.
+                    assert_eq!(unsafe { libc::waitpid(pid as c_int, &mut status, libc::WNOHANG) }, pid as c_int);
+                    Ok(())
+                })
+                .unwrap_err();
+            assert_lost_ownership(error);
+            assert_eq!(signals, 1);
+            process.terminate_with(|_, _| panic!("retried after foreign reaping")).unwrap_err();
+        }
+
+        #[test]
+        fn unsafe_sigchld_dispositions_are_refused_in_isolated_subprocesses() {
+            for case in ["ignore", "no_cldwait", "non_reaping_handler"] {
+                let child = Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "worker::unix::ownership_tests::sigchld_disposition_subprocess",
+                        "--ignored",
+                        "--test-threads=1",
+                    ])
+                    .env("RAMPAGE_SUPERVISOR_SIGCHLD_CASE", case)
+                    .process_group(0)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let mut process = ProcessGuard {
+                    child,
+                    stop: Arc::new(AtomicBool::new(false)),
+                    terminated: false,
+                    cleanup_complete: false,
+                    status: None,
+                    stopped_live_root: false,
+                    measurement: None,
+                };
+                await_exit(&mut process);
+                let cleanup = process.terminate();
+                // This driver verifies the isolated helper, not successful cleanup of an unknown group.
+                // Keep zombie-only group EPERM visible, while checking that its root was nevertheless reaped.
+                match cleanup {
+                    Ok(Some(_)) => {}
+                    Err(WorkerError::Cleanup { group, root: None }) if group.raw_os_error() == Some(libc::EPERM) => {
+                        assert!(!process.cleanup_complete);
+                        eprintln!(
+                            "SIGCHLD helper {case}: group cleanup EPERM retained; root status checked separately"
+                        );
+                    }
+                    other => panic!("SIGCHLD helper cleanup failed: {other:?}"),
+                }
+                assert_eq!(process.status.unwrap().code(), Some(DISPOSITION_HELPER_SUCCESS), "SIGCHLD case {case}",);
+            }
+        }
+
+        #[test]
+        #[ignore = "isolated helper selected by unsafe_sigchld_dispositions_are_refused_in_isolated_subprocesses"]
+        fn sigchld_disposition_subprocess() {
+            let Ok(case) = std::env::var("RAMPAGE_SUPERVISOR_SIGCHLD_CASE") else {
+                return;
+            };
+            struct RestoreDisposition(libc::sigaction);
+            impl Drop for RestoreDisposition {
+                fn drop(&mut self) {
+                    // SAFETY: restore the disposition saved in this isolated test subprocess.
+                    assert_eq!(unsafe { libc::sigaction(libc::SIGCHLD, &self.0, std::ptr::null_mut()) }, 0);
+                }
+            }
+            extern "C" fn non_reaping_child_handler(_: c_int) {}
+
+            require_default_child_reaping().unwrap();
+            let mut process = guard("exit 0");
+            await_exit(&mut process);
+            // SAFETY: these are correctly sized host structures; only this helper process mutates SIGCHLD.
+            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+            let mut previous: libc::sigaction = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::sigemptyset(&mut action.sa_mask) }, 0);
+            match case.as_str() {
+                "ignore" => action.sa_sigaction = libc::SIG_IGN,
+                "no_cldwait" => {
+                    action.sa_sigaction = libc::SIG_DFL;
+                    action.sa_flags = libc::SA_NOCLDWAIT;
+                }
+                "non_reaping_handler" => action.sa_sigaction = non_reaping_child_handler as *const () as usize,
+                _ => panic!("unknown SIGCHLD test case"),
+            }
+            assert_eq!(unsafe { libc::sigaction(libc::SIGCHLD, &action, &mut previous) }, 0);
+            let restore = RestoreDisposition(previous);
+            let result = supervised_process(
+                Path::new("/definitely-missing-rampage-worker"),
+                Vec::new(),
+                &WorkerConfig::default(),
+                None,
+                Instant::now(),
+                &Measurement::new(Instant::now(), false),
+            );
+            assert!(matches!(result, Err(WorkerError::Io { action: "inspect SIGCHLD", .. })));
+            let error = process.terminate_with(|_, _| panic!("signaled under unsafe SIGCHLD handling")).unwrap_err();
+            assert!(matches!(error, WorkerError::Io { action: "inspect SIGCHLD", .. }));
+            process.terminate_with(|_, _| panic!("retried after unsafe disposition")).unwrap_err();
+            drop(restore);
+            require_default_child_reaping().unwrap();
+            // The root exited before changing disposition; reap it if the kernel has not already done so.
+            let _ = process.child.wait();
+            // A distinct status proves the exact helper ran, rather than a mistyped filter selecting no tests.
+            std::process::exit(DISPOSITION_HELPER_SUCCESS);
+        }
     }
 }
 
@@ -1090,6 +2663,329 @@ mod tests {
 
     fn budget(cancellation: Option<&AtomicBool>) -> SupervisorBudget<'_> {
         SupervisorBudget { started: Instant::now(), timeout: Duration::from_secs(5), cancellation }
+    }
+
+    #[test]
+    fn secondary_group_failure_preserves_primary_categories_and_rejects_valid_legacy_success() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let output = WorkerOutput {
+            text: "return 0;".to_owned(),
+            language_id: "x86:LE:64:default:gcc".to_owned(),
+            data_organization: WorkerDataOrganization { pointer: 8, int: 4, long: 8 },
+            tokens: None,
+            structure: None,
+        };
+        let success =
+            serde_json::to_vec(&WorkerResponse::Ok { version: PROTOCOL_VERSION, output: Box::new(output) }).unwrap();
+        let worker_error = serde_json::to_vec(&WorkerResponse::Error {
+            version: PROTOCOL_VERSION,
+            message: "fixture error".to_owned(),
+        })
+        .unwrap();
+        let partial_request_error = worker_error.clone();
+        let wrong_version = serde_json::to_vec(&WorkerResponse::Error {
+            version: PROTOCOL_VERSION + 1,
+            message: "wrong version".to_owned(),
+        })
+        .unwrap();
+        for (raw_status, stdout, expected) in [
+            (42 << 8, Vec::new(), "exit"),
+            (libc::SIGSEGV, Vec::new(), "exit"),
+            (0, b"not json".to_vec(), "protocol"),
+            (0, wrong_version, "protocol"),
+            (0, worker_error, "decompile"),
+            (0, success.clone(), "cleanup"),
+        ] {
+            let measurement = Measurement::new(Instant::now(), true);
+            let result = finish_process(
+                ProcessOutput {
+                    stdout,
+                    stderr: b"native failure".to_vec(),
+                    status: std::process::ExitStatus::from_raw(raw_status),
+                    controlled_stop: false,
+                    host_stopped_root: false,
+                    input_fully_delivered: true,
+                    outputs_eof: true,
+                    control_error: None,
+                    cleanup_error: Some(WorkerError::Cleanup {
+                        group: io::Error::from_raw_os_error(libc::EPERM),
+                        root: None,
+                    }),
+                },
+                MAX_STDOUT_BYTES,
+                budget(None),
+                &measurement,
+            );
+            match expected {
+                "exit" => {
+                    assert!(matches!(result, Err(WorkerError::Exit { stderr, .. }) if stderr == "native failure"));
+                }
+                "protocol" => assert!(matches!(result, Err(WorkerError::Protocol(_)))),
+                "decompile" => assert!(matches!(result, Err(WorkerError::Decompile(_)))),
+                "cleanup" => assert!(matches!(result, Err(WorkerError::Cleanup { .. }))),
+                _ => unreachable!(),
+            }
+            let metrics = measurement.finish().unwrap();
+            assert_eq!(metrics.cleanup_succeeded, Some(false));
+            assert!(matches!(
+                metrics.cleanup_error,
+                Some(SupervisedCleanupError::GroupSignal { os_code: Some(libc::EPERM), root_failed: false, .. })
+            ));
+        }
+        for (signal, controlled_stop, input_fully_delivered, expected_success) in [
+            (libc::SIGKILL, false, true, false),
+            (libc::SIGKILL, true, true, true),
+            (libc::SIGSEGV, true, true, false),
+            (libc::SIGKILL, true, false, false),
+        ] {
+            let measurement = Measurement::new(Instant::now(), false);
+            let result = finish_process(
+                ProcessOutput {
+                    stdout: success.clone(),
+                    stderr: Vec::new(),
+                    status: std::process::ExitStatus::from_raw(signal),
+                    controlled_stop,
+                    host_stopped_root: controlled_stop,
+                    input_fully_delivered,
+                    outputs_eof: true,
+                    control_error: None,
+                    cleanup_error: None,
+                },
+                MAX_STDOUT_BYTES,
+                budget(None),
+                &measurement,
+            );
+            assert_eq!(result.is_ok(), expected_success);
+            if !input_fully_delivered {
+                assert!(matches!(result, Err(WorkerError::Protocol(_))));
+            } else if !expected_success {
+                assert!(matches!(result, Err(WorkerError::Exit { .. })));
+            }
+        }
+        let measurement = Measurement::new(Instant::now(), false);
+        let result = finish_process(
+            ProcessOutput {
+                stdout: partial_request_error,
+                stderr: Vec::new(),
+                status: std::process::ExitStatus::from_raw(libc::SIGKILL),
+                controlled_stop: true,
+                host_stopped_root: true,
+                input_fully_delivered: false,
+                outputs_eof: true,
+                control_error: None,
+                cleanup_error: None,
+            },
+            MAX_STDOUT_BYTES,
+            budget(None),
+            &measurement,
+        );
+        assert!(matches!(result, Err(WorkerError::Decompile(_))));
+        for raw_status in [42 << 8, libc::SIGSEGV] {
+            let result = finish_process(
+                ProcessOutput {
+                    stdout: success.clone(),
+                    stderr: b"actual failed child".to_vec(),
+                    status: std::process::ExitStatus::from_raw(raw_status),
+                    controlled_stop: false,
+                    host_stopped_root: true,
+                    input_fully_delivered: true,
+                    outputs_eof: true,
+                    control_error: Some(WorkerError::Protocol("completion peer closed".to_owned())),
+                    cleanup_error: None,
+                },
+                MAX_STDOUT_BYTES,
+                budget(None),
+                &measurement,
+            );
+            assert!(matches!(result, Err(WorkerError::Exit { stderr, .. }) if stderr == "actual failed child"));
+        }
+        let result = finish_process(
+            ProcessOutput {
+                stdout: success,
+                stderr: Vec::new(),
+                status: std::process::ExitStatus::from_raw(0),
+                controlled_stop: false,
+                host_stopped_root: false,
+                input_fully_delivered: true,
+                outputs_eof: false,
+                control_error: None,
+                cleanup_error: None,
+            },
+            MAX_STDOUT_BYTES,
+            budget(None),
+            &measurement,
+        );
+        assert!(matches!(result, Err(WorkerError::Protocol(message)) if message.contains("EOF")));
+    }
+
+    #[test]
+    fn measured_preflight_serialization_and_spawn_failures_keep_partial_observations() {
+        let mut invalid = request();
+        invalid.version = PROTOCOL_VERSION + 1;
+        let run = run_supervised_measured(&invalid, &WorkerConfig::default(), None);
+        assert!(matches!(run.result, Err(WorkerError::Protocol(_))));
+        assert!(run.metrics.request_preflight_complete_us.is_none());
+        assert!(run.metrics.spawn_started_us.is_none());
+        assert_eq!(run.metrics.ownership, SupervisedOwnership::NotSpawned);
+        assert!(run.metrics.rss.max_observed_child_rss_bytes.is_none());
+
+        let config = WorkerConfig { timeout: Duration::ZERO, ..Default::default() };
+        let run = run_supervised_measured(&request(), &config, None);
+        assert!(matches!(run.result, Err(WorkerError::Timeout)));
+        assert!(run.metrics.spawn_started_us.is_none());
+        assert!(run.metrics.cleanup_started_us.is_none());
+
+        let config = WorkerConfig { max_request_bytes: 1, ..Default::default() };
+        let run = run_supervised_measured(&request(), &config, None);
+        assert!(matches!(run.result, Err(WorkerError::RequestTooLarge { .. })));
+        assert!(run.metrics.request_preflight_complete_us.is_some());
+        assert!(run.metrics.request_serialization_complete_us.is_none());
+        assert!(run.metrics.input.requested_bytes.is_none());
+        assert!(run.metrics.spawn_started_us.is_none());
+
+        let fixture = Fixture::new("exit 0");
+        let config = WorkerConfig { executable: Some(fixture.directory.join("missing")), ..fixture.config() };
+        let run = run_supervised_measured(&request(), &config, None);
+        assert!(matches!(run.result, Err(WorkerError::Io { action: "spawn", .. })));
+        assert!(run.metrics.request_serialization_complete_us.is_some());
+        assert!(run.metrics.spawn_started_us.is_some());
+        assert!(run.metrics.spawn_complete_us.is_none());
+        assert!(run.metrics.cleanup_succeeded.is_none());
+        assert!(!fixture.pid.exists());
+    }
+
+    fn successful_fixture_response() -> WorkerResponse {
+        WorkerResponse::Ok {
+            version: PROTOCOL_VERSION,
+            output: Box::new(WorkerOutput {
+                text: "return 0;".to_owned(),
+                language_id: "x86:LE:64:default:gcc".to_owned(),
+                data_organization: WorkerDataOrganization { pointer: 8, int: 4, long: 8 },
+                tokens: None,
+                structure: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn closed_completion_peer_cannot_authorize_success_from_a_still_running_worker() {
+        let response = successful_fixture_response();
+        let fixture = Fixture::new(&unix::closed_control_fixture(&response));
+        let run = run_supervised_measured(&request(), &fixture.config(), None);
+        assert!(matches!(run.result, Err(WorkerError::Protocol(message)) if message.contains("peer")));
+        assert!(run.metrics.control_completion_us.is_some());
+        assert!(!run.metrics.intentional_stop);
+        assert_eq!(run.metrics.stdout.read_bytes, serde_json::to_vec(&response).unwrap().len() as u64);
+        assert!(run.metrics.root_reaped_us.is_some());
+        let status = run.metrics.root_exit_status.unwrap();
+        assert!(!status.success);
+        assert_eq!(status.signal, Some(libc::SIGKILL));
+        fixture.assert_reaped();
+    }
+
+    #[test]
+    fn authenticated_completion_stops_live_group_before_waiting_for_descendant_pipe_eof() {
+        let response = successful_fixture_response();
+        let fixture = Fixture::new(&unix::pipe_holder_control_fixture(&response));
+        let run = run_supervised_measured(&request(), &fixture.config(), None);
+        let output = run.result.expect("authenticated live group must stop before ten-second holders exit naturally");
+        assert_eq!(output.text, "return 0;");
+        assert!(run.metrics.intentional_stop);
+        assert_eq!(run.metrics.cleanup_succeeded, Some(true));
+        assert_eq!(run.metrics.root_exit_status.unwrap().signal, Some(libc::SIGKILL));
+        assert_eq!(run.metrics.stdout.outcome, Some(SupervisedStreamOutcome::Eof));
+        assert_eq!(run.metrics.stderr.outcome, Some(SupervisedStreamOutcome::Eof));
+        let cleanup = run.metrics.cleanup_started_us.unwrap();
+        let decode = run.metrics.response_decode_started_us.unwrap();
+        assert!(cleanup <= run.metrics.stdout.eof_us.unwrap());
+        assert!(cleanup <= run.metrics.stderr.eof_us.unwrap());
+        assert!(run.metrics.stdout.eof_us.unwrap() <= decode);
+        assert!(run.metrics.stderr.eof_us.unwrap() <= decode);
+        assert!(run.metrics.root_reaped_us.unwrap() <= decode);
+        fixture.assert_reaped();
+    }
+
+    #[test]
+    fn completed_control_then_failed_child_exit_keeps_exit_and_crash_precedence() {
+        for crash in [false, true] {
+            let response = successful_fixture_response();
+            let fixture = Fixture::new(&unix::failed_control_fixture(&response, crash));
+            let mut request = request();
+            request.mappings[0].hex_bytes = "ab".repeat(512 * 1024);
+            request.mappings[0].size = 512 * 1024;
+            let run = run_supervised_measured(&request, &fixture.config(), None);
+            assert!(matches!(run.result, Err(WorkerError::Exit { .. })));
+            assert!(run.metrics.control_completion_us.is_some());
+            assert!(!run.metrics.intentional_stop);
+            let status = run.metrics.root_exit_status.unwrap();
+            if crash {
+                assert_eq!(status.signal, Some(libc::SIGSEGV));
+            } else {
+                assert_eq!(status.code, Some(42));
+            }
+            assert!(run.metrics.root_reaped_us.is_some());
+            fixture.assert_reaped();
+        }
+    }
+
+    #[test]
+    fn measured_decode_failures_keep_delivered_input_output_and_reap_observations() {
+        let fixture = Fixture::new("printf '%s' 'not json'; /bin/cat >/dev/null");
+        let run = run_supervised_measured(&request(), &fixture.config(), None);
+        assert!(matches!(run.result, Err(WorkerError::Protocol(_))));
+        assert_eq!(run.metrics.input.outcome, Some(SupervisedInputOutcome::FullyDelivered));
+        assert_eq!(run.metrics.input.requested_bytes, Some(run.metrics.input.written_bytes));
+        assert_eq!(run.metrics.stdout.read_bytes, 8);
+        assert!(run.metrics.stdout.first_byte_us.is_some());
+        assert!(run.metrics.response_decoded_us.is_none());
+        assert!(run.metrics.root_reaped_us.is_some());
+        if run.metrics.cleanup_succeeded == Some(false) {
+            assert!(run.metrics.cleanup_error.is_some());
+        }
+        assert_eq!(run.metrics.ownership, SupervisedOwnership::Reaped);
+        fixture.assert_reaped();
+    }
+
+    #[test]
+    fn measured_cancellation_keeps_drop_cleanup_and_joined_pipe_reports() {
+        let fixture = Fixture::new("exec /bin/sleep 60");
+        let cancellation = AtomicBool::new(false);
+        let run = thread::scope(|scope| {
+            scope.spawn(|| {
+                await_file(&fixture.pid);
+                cancellation.store(true, Ordering::Release);
+            });
+            run_supervised_measured(&request(), &fixture.config(), Some(&cancellation))
+        });
+        assert!(matches!(run.result, Err(WorkerError::Cancelled)));
+        assert!(run.metrics.spawn_complete_us.is_some());
+        assert!(run.metrics.root_reaped_us.is_some());
+        assert!(run.metrics.root_exit_status.is_some());
+        assert!(run.metrics.cleanup_finished_us.is_some());
+        assert_eq!(run.metrics.cleanup_succeeded, Some(true));
+        assert!(run.metrics.stdout.finished_us.is_some());
+        assert!(run.metrics.stderr.finished_us.is_some());
+        fixture.assert_reaped();
+
+        let run = run_supervised_measured(&request(), &fixture.config(), Some(&AtomicBool::new(true)));
+        assert!(matches!(run.result, Err(WorkerError::Cancelled)));
+        assert!(run.metrics.spawn_started_us.is_none());
+        assert!(run.metrics.cleanup_started_us.is_none());
+    }
+
+    #[test]
+    fn measured_output_limit_keeps_the_failing_reader_report_after_guard_cleanup() {
+        let fixture = Fixture::new("/bin/dd if=/dev/zero bs=1024 count=1 2>/dev/null; exec /bin/sleep 60");
+        let config = WorkerConfig { max_stdout_bytes: 16, ..fixture.config() };
+        let run = run_supervised_measured(&request(), &config, None);
+        assert!(matches!(run.result, Err(WorkerError::OutputTooLarge { stream: "stdout", .. })));
+        assert_eq!(run.metrics.stdout.outcome, Some(SupervisedStreamOutcome::OutputLimit));
+        assert!(run.metrics.stdout.read_bytes > 16);
+        assert!(run.metrics.stdout.eof_us.is_none());
+        assert!(run.metrics.root_reaped_us.is_some());
+        assert_eq!(run.metrics.cleanup_succeeded, Some(true));
+        fixture.assert_reaped();
     }
 
     struct GatedSerialization {

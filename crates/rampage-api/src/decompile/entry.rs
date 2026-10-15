@@ -124,7 +124,29 @@ impl Project {
         &self,
         request: &DecompileEntryRequest,
         cancellation: &AtomicBool,
+        progress: impl FnMut(EntryPreparationProgress),
+    ) -> Result<EntryDecompilation, ApiError> {
+        self.decompile_entry_observed(request, cancellation, progress, None)
+    }
+
+    /// Opt-in supervisor observations, delivered even when the worker fails. Native-inline calls emit none.
+    /// Supervisor offsets exclude these observers and are not child-internal native initialization timings.
+    pub fn decompile_entry_measured(
+        &self,
+        request: &DecompileEntryRequest,
+        cancellation: &AtomicBool,
+        progress: impl FnMut(EntryPreparationProgress),
+        mut supervisor: impl FnMut(rampage_decompiler::worker::SupervisedMetrics),
+    ) -> Result<EntryDecompilation, ApiError> {
+        self.decompile_entry_observed(request, cancellation, progress, Some(&mut supervisor))
+    }
+
+    fn decompile_entry_observed(
+        &self,
+        request: &DecompileEntryRequest,
+        cancellation: &AtomicBool,
         mut progress: impl FnMut(EntryPreparationProgress),
+        mut supervisor: Option<&mut dyn FnMut(rampage_decompiler::worker::SupervisedMetrics)>,
     ) -> Result<EntryDecompilation, ApiError> {
         let started = Instant::now();
         if cancellation.load(Ordering::Relaxed) {
@@ -280,8 +302,17 @@ impl Project {
             check("worker dispatch")?;
             let mut remaining = config.clone();
             remaining.timeout = remaining.timeout.saturating_sub(started.elapsed());
-            let output = run_supervised(&request, &remaining, Some(cancellation))
-                .map_err(|error| ApiError::Unavailable(format!("exact-entry worker: {error}")))?;
+            let output = if let Some(observer) = &mut supervisor {
+                let observed =
+                    rampage_decompiler::worker::run_supervised_measured(&request, &remaining, Some(cancellation));
+                observer(observed.metrics);
+                observed.result
+            } else {
+                run_supervised(&request, &remaining, Some(cancellation))
+            }
+            .map_err(|error| ApiError::Unavailable(format!("exact-entry worker: {error}")))?;
+            check("supervisor observer")?;
+            source(self)?;
             (isolated::finish_output(output, plan.address, plan.name, false)?, "supervised_worker")
         } else {
             report_phase(EntryPreparationPhase::NativeInitialization)?;
