@@ -167,6 +167,16 @@ pub struct DebugLayoutParameter {
     pub ty: DebugLayoutValue,
 }
 
+/// Exact concrete-method association through one same-CU definition-to-declaration specification.
+#[derive(Debug, Clone, Serialize)]
+pub struct DebugLayoutMethod {
+    pub record_id: DebugLayoutTypeId,
+    pub declaration_id: DebugLayoutTypeId,
+    /// The definition's actual first formal, explicitly referenced by `DW_AT_object_pointer`.
+    pub object_pointer_id: DebugLayoutTypeId,
+    pub linkage_name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DebugLayoutSignature {
     pub id: DebugLayoutTypeId,
@@ -179,6 +189,8 @@ pub struct DebugLayoutSignature {
     pub parameters: Vec<DebugLayoutParameter>,
     pub dependencies: Vec<DebugLayoutTypeId>,
     pub source: DebugLayoutSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<DebugLayoutMethod>,
     pub strictly_applicable: bool,
     /// Requires checked native counterpart evidence before any unknown alignment can be admitted.
     pub eligible_for_native_verification: bool,
@@ -197,7 +209,7 @@ impl DebugLayoutReport {
     }
 }
 
-/// Explicit flat-struct preview, separate from scalar-only `signatures`.
+/// Explicit flat-record preview, separate from scalar-only `signatures`.
 /// Unknown producer alignment is retained as unknown and is never strictly applicable.
 /// Addresses identify entry points only. Absent high_pc does not establish a function extent.
 /// An incomplete concrete address index refuses the whole preview; explicitly proven abstract C inline
@@ -313,6 +325,10 @@ struct LayoutNode {
     children: Vec<usize>,
     source: Option<DebugLayoutSource>,
     name: Option<String>,
+    linkage_name: Option<String>,
+    specification: TypeRef,
+    object_pointer: TypeRef,
+    artificial: bool,
     target: TypeRef,
     size: Option<u64>,
     alignment: Option<u64>,
@@ -406,7 +422,25 @@ fn supported_language(language: gimli::DwLang) -> bool {
     matches!(
         language,
         gimli::DW_LANG_C89 | gimli::DW_LANG_C | gimli::DW_LANG_C99 | gimli::DW_LANG_C11 | gimli::DW_LANG_C17
+    ) || cpp_language(language.0)
+}
+
+fn cpp_language(language: u16) -> bool {
+    matches!(
+        gimli::DwLang(language),
+        gimli::DW_LANG_C_plus_plus
+            | gimli::DW_LANG_C_plus_plus_11
+            | gimli::DW_LANG_C_plus_plus_14
+            | gimli::DW_LANG_C_plus_plus_17
     )
+}
+
+fn cpp_node(node: &LayoutNode) -> bool {
+    node.source.as_ref().is_some_and(|source| cpp_language(source.language))
+}
+
+fn record_tag(tag: gimli::DwTag) -> bool {
+    matches!(tag, gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type)
 }
 
 #[derive(Default)]
@@ -620,7 +654,10 @@ fn read_layout_nodes_budget(
             }
             if let Some(&parent_offset) = parents.last() {
                 let parent: &LayoutNode = nodes.get(&parent_offset).ok_or_else(|| "missing DWARF parent".to_owned())?;
-                if parent.tag == gimli::DW_TAG_structure_type && parent.children.len() >= MAX_FIELDS {
+                if (parent.tag == gimli::DW_TAG_structure_type
+                    || (parent.tag == gimli::DW_TAG_class_type && cpp_node(parent)))
+                    && parent.children.len() >= MAX_FIELDS
+                {
                     return Err("DWARF struct field limit exceeded (128)".to_owned());
                 }
                 if parent.children.len() >= MAX_TOTAL_FIELDS {
@@ -638,7 +675,11 @@ fn read_layout_nodes_budget(
                 return Err("DWARF formal/variadic DIE has no prototype parent".to_owned());
             }
             types += usize::from(is_type(tag));
-            layouts += usize::from(tag == gimli::DW_TAG_structure_type);
+            layouts += usize::from(
+                tag == gimli::DW_TAG_structure_type
+                    || (tag == gimli::DW_TAG_class_type
+                        && source.as_ref().is_some_and(|source: &DebugLayoutSource| cpp_language(source.language))),
+            );
             fields += usize::from(tag == gimli::DW_TAG_member);
             functions += usize::from(tag == gimli::DW_TAG_subprogram);
             parameters += usize::from(tag == gimli::DW_TAG_formal_parameter);
@@ -657,6 +698,10 @@ fn read_layout_nodes_budget(
                 children: Vec::new(),
                 source: source.clone(),
                 name: None,
+                linkage_name: None,
+                specification: TypeRef::Absent,
+                object_pointer: TypeRef::Absent,
+                artificial: false,
                 target: TypeRef::Absent,
                 size: None,
                 alignment: None,
@@ -696,11 +741,13 @@ fn read_layout_nodes_budget(
                             | gimli::DW_TAG_formal_parameter
                             | gimli::DW_TAG_unspecified_parameters
                     );
-                if relevant && !allowed_attribute(tag, attr.name()) {
+                let cpp = cpp_node(&node);
+                if relevant && !allowed_attribute(tag, attr.name()) && !(cpp && allowed_cpp_attribute(tag, attr.name()))
+                {
                     node.invalid = true;
                 }
                 match attr.name() {
-                    gimli::DW_AT_name if relevant => {
+                    gimli::DW_AT_name | gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name if relevant => {
                         work += MAX_NAME + 1;
                         if work > MAX_WORK {
                             return Err("DWARF cumulative name lookup work limit exceeded".to_owned());
@@ -719,21 +766,32 @@ fn read_layout_nodes_budget(
                                 return Err("DWARF layout names exceed ASCII/32 KiB retained-text limit".to_owned());
                             }
                             names += bytes.len();
-                            node.name = Some(std::str::from_utf8(&bytes).unwrap().to_owned());
+                            let name = std::str::from_utf8(&bytes).unwrap().to_owned();
+                            if attr.name() == gimli::DW_AT_name {
+                                node.name = Some(name);
+                            } else {
+                                node.invalid |= node.linkage_name.is_some();
+                                node.linkage_name = Some(name);
+                            }
                         }
                     }
-                    gimli::DW_AT_type => {
+                    gimli::DW_AT_type | gimli::DW_AT_specification | gimli::DW_AT_object_pointer => {
                         edges += 1;
                         if edges > MAX_EDGES {
                             return Err("DWARF cumulative type-edge limit exceeded".to_owned());
                         }
-                        node.target = match value {
+                        let reference = match value {
                             AttributeValue::UnitRef(reference) if reference.is_in_bounds(&unit.header) => {
                                 TypeRef::Offset(reference.to_debug_info_offset(&unit.header).unwrap().0)
                             }
                             AttributeValue::DebugInfoRef(reference) => TypeRef::Offset(reference.0),
                             _ => TypeRef::Unsupported,
                         };
+                        match attr.name() {
+                            gimli::DW_AT_type => node.target = reference,
+                            gimli::DW_AT_specification => node.specification = reference,
+                            _ => node.object_pointer = reference,
+                        }
                     }
                     gimli::DW_AT_byte_size => {
                         node.size = constant(value);
@@ -783,6 +841,18 @@ fn read_layout_nodes_budget(
                         AttributeValue::Flag(flag) => node.declaration = flag,
                         _ => node.invalid = true,
                     },
+                    gimli::DW_AT_artificial => match value {
+                        AttributeValue::Flag(flag) => node.artificial = flag,
+                        _ => node.invalid = true,
+                    },
+                    gimli::DW_AT_accessibility if cpp => {
+                        node.invalid |= !matches!(
+                            value,
+                            AttributeValue::Accessibility(
+                                gimli::DW_ACCESS_public | gimli::DW_ACCESS_protected | gimli::DW_ACCESS_private
+                            )
+                        );
+                    }
                     gimli::DW_AT_prototyped => {
                         node.prototyped = matches!(value, AttributeValue::Flag(true));
                         node.invalid |= !node.prototyped;
@@ -801,7 +871,11 @@ fn read_layout_nodes_budget(
                         _ => node.invalid = true,
                     },
                     gimli::DW_AT_calling_convention => {
-                        node.invalid |= !matches!(value, AttributeValue::CallingConvention(gimli::DW_CC_normal));
+                        node.invalid |= if cpp && record_tag(tag) {
+                            !matches!(value, AttributeValue::CallingConvention(gimli::DW_CC_pass_by_value))
+                        } else {
+                            !matches!(value, AttributeValue::CallingConvention(gimli::DW_CC_normal))
+                        };
                     }
                     gimli::DW_AT_address_class => {
                         node.invalid |= !matches!(value, AttributeValue::AddressClass(gimli::DW_ADDR_none));
@@ -884,11 +958,18 @@ struct Resolver<'a> {
     contextual_failures: usize,
 }
 
+struct MethodProof {
+    metadata: DebugLayoutMethod,
+    original_name: String,
+    return_type: TypeRef,
+}
+
 impl<'a> Resolver<'a> {
     fn new(nodes: &'a BTreeMap<usize, LayoutNode>) -> Self {
         let mut names: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (&offset, node) in nodes {
             if node.tag == gimli::DW_TAG_structure_type
+                && !cpp_node(node)
                 && let Some(name) = node.name.as_deref().filter(|name| !name.is_empty())
             {
                 names.entry(c_name(name)).or_default().push(offset);
@@ -903,7 +984,12 @@ impl<'a> Resolver<'a> {
             active: BTreeSet::new(),
             ambiguous_layouts,
             work: 0,
-            text: nodes.values().filter_map(|node| node.name.as_ref()).map(String::len).sum(),
+            text: nodes
+                .values()
+                .map(|node| {
+                    node.name.as_ref().map_or(0, String::len) + node.linkage_name.as_ref().map_or(0, String::len)
+                })
+                .sum(),
             contextual_failures: 0,
         }
     }
@@ -965,7 +1051,7 @@ impl<'a> Resolver<'a> {
         let nodes = self.nodes;
         let node = nodes.get(&offset).ok_or_else(|| "unresolved absolute DIE reference".to_owned())?;
         clean(node)?;
-        if !node.children.is_empty() && node.tag != gimli::DW_TAG_structure_type {
+        if !node.children.is_empty() && !record_tag(node.tag) {
             return Err("type has unsupported child DIEs".to_owned());
         }
         match node.tag {
@@ -992,6 +1078,7 @@ impl<'a> Resolver<'a> {
                 Ok(Resolved::Pointer { offset, target })
             }
             gimli::DW_TAG_structure_type => Ok(Resolved::Struct(offset)),
+            gimli::DW_TAG_class_type if cpp_node(node) => Ok(Resolved::Struct(offset)),
             _ => Err(format!("unsupported layout type {} (qualifiers/aggregates are not erased)", node.tag)),
         }
     }
@@ -1052,7 +1139,10 @@ impl<'a> Resolver<'a> {
         if self.ambiguous_layouts.contains(&offset) {
             return Err("duplicate or sanitized-colliding struct names have distinct DIE identities".to_owned());
         }
-        if node.tag != gimli::DW_TAG_structure_type || !matches!(node.target, TypeRef::Absent) {
+        if !record_tag(node.tag)
+            || (node.tag == gimli::DW_TAG_class_type && !cpp_node(node))
+            || !matches!(node.target, TypeRef::Absent)
+        {
             return Err("not a complete flat struct".to_owned());
         }
         if node.parent.is_some_and(|parent| self.nodes[&parent].tag != gimli::DW_TAG_compile_unit) {
@@ -1062,6 +1152,11 @@ impl<'a> Resolver<'a> {
             .size
             .filter(|&size| size > 0 && size <= MAX_SIZE)
             .ok_or_else(|| "struct requires complete nonzero byte size at most 1 MiB".to_owned())?;
+        if cpp_node(node)
+            && (node.alignment.is_none() || node.name.as_deref().is_none_or(|name| !ordinary_identifier(name)))
+        {
+            return Err("C++ records require explicit producer alignment and a non-template source name".to_owned());
+        }
         if node.alignment.is_some_and(|alignment| size % alignment != 0) {
             return Err("struct byte size conflicts with explicit producer alignment".to_owned());
         }
@@ -1086,8 +1181,15 @@ impl<'a> Resolver<'a> {
         for (index, &child) in node.children.iter().enumerate() {
             self.charge_work()?;
             let field = &nodes[&child];
+            if cpp_node(node) && field.tag == gimli::DW_TAG_subprogram {
+                clean_declaration(field)?;
+                if field.id.unit_offset != node.id.unit_offset || field.parent != Some(offset) {
+                    return Err("method declaration is not owned by the exact record DIE".to_owned());
+                }
+                continue;
+            }
             clean(field)?;
-            if field.tag != gimli::DW_TAG_member || !field.children.is_empty() {
+            if field.tag != gimli::DW_TAG_member || !field.children.is_empty() || field.artificial {
                 return Err("struct has inheritance, nested types, or non-member children".to_owned());
             }
             let emitted = emitted_name_for(field.name.as_deref(), &format!("field_{}", index + 1))?;
@@ -1096,6 +1198,9 @@ impl<'a> Resolver<'a> {
             }
             self.retain_text(field.name.as_ref().map_or(0, String::len) + emitted.len())?;
             let resolved = self.resolve(field.target, 0)?;
+            if cpp_node(node) && matches!(resolved, Resolved::Pointer { target: Pointee::Void, .. }) {
+                return Err("C++ record pointer fields require an exact scalar pointee".to_owned());
+            }
             let leaf = self.leaf(resolved)?;
             alignment_proof &= field.alignment.is_some() && leaf.alignment_proven();
             let field_size = leaf.size();
@@ -1134,6 +1239,9 @@ impl<'a> Resolver<'a> {
                 producer_alignment: field.alignment,
                 leaf,
             });
+        }
+        if fields.is_empty() {
+            return Err("record has no supported data members".to_owned());
         }
         intervals.sort_unstable();
         if intervals.windows(2).any(|pair| pair[0].1 > pair[1].0) {
@@ -1183,14 +1291,139 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    fn method_parameters(&mut self, offset: usize, record: usize) -> Result<Vec<usize>, String> {
+        self.charge_work()?;
+        let nodes = self.nodes;
+        let node = &nodes[&offset];
+        let mut parameters = Vec::new();
+        for &child in &node.children {
+            self.charge_work()?;
+            let parameter = &nodes[&child];
+            match parameter.tag {
+                gimli::DW_TAG_formal_parameter => {
+                    clean(parameter)?;
+                    if parameter.parent != Some(offset)
+                        || parameter.id.unit_offset != node.id.unit_offset
+                        || !parameter.children.is_empty()
+                        || parameters.len() >= MAX_FIELDS
+                    {
+                        return Err("method formal parameter has unsupported ownership, children, or count".to_owned());
+                    }
+                    parameters.push(child);
+                }
+                gimli::DW_TAG_variable | gimli::DW_TAG_lexical_block | gimli::DW_TAG_inlined_subroutine
+                    if !node.declaration => {}
+                _ => return Err("method has variadic, template, or unsupported prototype children".to_owned()),
+            }
+        }
+        let object = match node.object_pointer {
+            TypeRef::Offset(object) => object,
+            TypeRef::Absent if node.declaration => {
+                // Only the explicit definition object pointer establishes the method role; specification pairs formals.
+                *parameters
+                    .first()
+                    .ok_or_else(|| "associated declaration has no artificial object formal".to_owned())?
+            }
+            _ => return Err("instance method definition requires an explicit object-pointer DIE reference".to_owned()),
+        };
+        if parameters.first() != Some(&object) || parameters.iter().filter(|&&id| id == object).count() != 1 {
+            return Err("DW_AT_object_pointer must reference the actual first formal parameter".to_owned());
+        }
+        if !nodes[&object].artificial {
+            return Err("associated method object formals must have explicit artificial-parameter evidence".to_owned());
+        }
+        let TypeRef::Offset(pointer) = nodes[&object].target else {
+            return Err("object formal has no direct pointer type".to_owned());
+        };
+        self.charge_work()?;
+        let pointer = nodes.get(&pointer).ok_or_else(|| "unresolved object-pointer type".to_owned())?;
+        if pointer.tag != gimli::DW_TAG_pointer_type
+            || !matches!(pointer.target, TypeRef::Offset(target) if target == record)
+        {
+            return Err("object pointer must target the exact unqualified owning record DIE".to_owned());
+        }
+        self.resolve(nodes[&object].target, 0)?;
+        for &parameter in parameters.iter().skip(1) {
+            if nodes[&parameter].artificial
+                || !matches!(self.resolve(nodes[&parameter].target, 0)?, Resolved::Scalar(_))
+            {
+                return Err("method arguments must be ordinary non-artificial scalar formals".to_owned());
+            }
+        }
+        Ok(parameters)
+    }
+
+    fn method_proof(&mut self, offset: usize) -> Result<MethodProof, String> {
+        self.charge_work()?;
+        let nodes = self.nodes;
+        let node = &nodes[&offset];
+        let declaration_offset = method_declaration(offset, nodes)?;
+        let declaration = &nodes[&declaration_offset];
+        let record = declaration.parent.unwrap();
+        let mut declarations = 0;
+        for &child in &nodes[&record].children {
+            self.charge_work()?;
+            declarations += usize::from(child == declaration_offset);
+        }
+        if declarations != 1 {
+            return Err("method declaration must occur exactly once in its owning record".to_owned());
+        }
+        let original = declaration.name.as_deref().unwrap();
+        if !ordinary_identifier(original)
+            || nodes[&record].name.as_deref() == Some(original)
+            || node.artificial
+            || declaration.artificial
+            || node.inline.is_some()
+            || declaration.inline.is_some()
+        {
+            return Err(
+                "constructors, destructors, operators, templates, artificial and inline methods are unsupported"
+                    .to_owned(),
+            );
+        }
+        let linkage = node.linkage_name.as_ref().or(declaration.linkage_name.as_ref()).unwrap();
+        if !linkage.starts_with("_ZN") {
+            return Err("method linkage is not an ordinary non-thunk Itanium member symbol".to_owned());
+        }
+        let parameters = self.method_parameters(offset, record)?;
+        let declared_parameters = self.method_parameters(declaration_offset, record)?;
+        if parameters.len() != declared_parameters.len() {
+            return Err("method definition and declaration have different formal counts".to_owned());
+        }
+        for (&actual, &declared) in parameters.iter().zip(&declared_parameters).skip(1) {
+            self.charge_work()?;
+            if !same_reference(nodes[&actual].target, nodes[&declared].target) {
+                return Err("method definition and declaration have conflicting formal types".to_owned());
+            }
+        }
+        if !matches!(declaration.target, TypeRef::Absent)
+            && !matches!(self.resolve(declaration.target, 0)?, Resolved::Scalar(_))
+        {
+            return Err("method return must be void or an ordinary scalar".to_owned());
+        }
+        self.layout(record)?;
+        self.retain_text(linkage.len())?;
+        Ok(MethodProof {
+            metadata: DebugLayoutMethod {
+                record_id: nodes[&record].id,
+                declaration_id: declaration.id,
+                object_pointer_id: nodes[&parameters[0]].id,
+                linkage_name: linkage.clone(),
+            },
+            original_name: original.to_owned(),
+            return_type: declaration.target,
+        })
+    }
+
     fn signature(&mut self, offset: usize, declaration_limit: usize) -> Result<DebugLayoutSignature, String> {
         let nodes = self.nodes;
         let node = &nodes[&offset];
         clean(node)?;
-        if node.parent.is_none_or(|parent| nodes[&parent].tag != gimli::DW_TAG_compile_unit) {
+        let method = if cpp_node(node) { Some(self.method_proof(offset)?) } else { None };
+        if method.is_none() && node.parent.is_none_or(|parent| nodes[&parent].tag != gimli::DW_TAG_compile_unit) {
             return Err("function is not an ordinary CU-scoped C subprogram".to_owned());
         }
-        if !node.prototyped {
+        if method.is_none() && !node.prototyped {
             return Err("function has no explicit complete fixed C prototype".to_owned());
         }
         if node.inline.is_some() {
@@ -1208,14 +1441,16 @@ impl<'a> Resolver<'a> {
         if !has_struct_pointer {
             return Err("function has no supported pointer-to-struct parameter".to_owned());
         }
-        let original = node
-            .name
-            .as_deref()
+        let original = method
+            .as_ref()
+            .map(|proof| proof.original_name.as_str())
+            .or(node.name.as_deref())
             .filter(|name| !name.is_empty())
             .ok_or_else(|| "function has no original name".to_owned())?;
-        let emitted = emitted_name_for(Some(original), "")?;
+        let emitted =
+            if method.is_some() { method_emitted_name(node, original)? } else { emitted_name_for(Some(original), "")? };
         self.retain_text(original.len() + emitted.len())?;
-        let result = match node.target {
+        let result = match method.as_ref().map_or(node.target, |proof| proof.return_type) {
             TypeRef::Absent => DebugLayoutValue::Void,
             target => self.value(target, false)?,
         };
@@ -1240,7 +1475,12 @@ impl<'a> Resolver<'a> {
             if !parameter.children.is_empty() {
                 return Err("parameter has unsupported children".to_owned());
             }
-            let name = emitted_name_for(parameter.name.as_deref(), &format!("arg_{}", parameters.len() + 1))?;
+            let object = method.as_ref().is_some_and(|proof| proof.metadata.object_pointer_id == parameter.id);
+            let name = if object {
+                "self".to_owned()
+            } else {
+                emitted_name_for(parameter.name.as_deref(), &format!("arg_{}", parameters.len() + 1))?
+            };
             if !names.insert(name.clone()) {
                 return Err("duplicate or sanitized-colliding parameter names".to_owned());
             }
@@ -1288,6 +1528,7 @@ impl<'a> Resolver<'a> {
             parameters,
             dependencies: dependencies.into_iter().collect(),
             source: node.source.clone().unwrap(),
+            method: method.map(|proof| proof.metadata),
             strictly_applicable: applicable,
             eligible_for_native_verification: candidate,
         })
@@ -1296,9 +1537,81 @@ impl<'a> Resolver<'a> {
 
 fn clean(node: &LayoutNode) -> Result<(), String> {
     if node.invalid || node.declaration || node.source.is_none() {
-        return Err("invalid/unsupported attributes, declaration-only DIE, or unverified C source context".to_owned());
+        return Err("invalid/unsupported attributes, declaration-only DIE, or unverified source context".to_owned());
     }
     Ok(())
+}
+
+fn clean_declaration(node: &LayoutNode) -> Result<(), String> {
+    if node.invalid
+        || !node.declaration
+        || !cpp_node(node)
+        || node.address_evidence
+        || node.address.is_some()
+        || node.address_index_incomplete
+        || !matches!(node.specification, TypeRef::Absent)
+    {
+        return Err("record has an unsupported or non-declaration member method".to_owned());
+    }
+    Ok(())
+}
+
+fn same_reference(left: TypeRef, right: TypeRef) -> bool {
+    match (left, right) {
+        (TypeRef::Absent, TypeRef::Absent) => true,
+        (TypeRef::Offset(left), TypeRef::Offset(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn ordinary_identifier(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn method_emitted_name(node: &LayoutNode, original: &str) -> Result<String, String> {
+    let name = format!("debug_method_{:x}_{:x}_{original}", node.id.unit_offset, node.id.die_offset);
+    emitted_name_for(Some(&name), "")
+}
+
+fn method_declaration(offset: usize, nodes: &BTreeMap<usize, LayoutNode>) -> Result<usize, String> {
+    let node = &nodes[&offset];
+    clean(node)?;
+    if !cpp_node(node) || node.parent.is_none_or(|parent| nodes[&parent].tag != gimli::DW_TAG_compile_unit) {
+        return Err("C++ method definition must be a concrete CU-scoped subprogram".to_owned());
+    }
+    let TypeRef::Offset(declaration_offset) = node.specification else {
+        return Err("C++ method requires a single explicit definition-to-declaration specification".to_owned());
+    };
+    let declaration = nodes.get(&declaration_offset).ok_or_else(|| "unresolved method specification".to_owned())?;
+    clean_declaration(declaration)?;
+    if declaration.tag != gimli::DW_TAG_subprogram || declaration.id.unit_offset != node.id.unit_offset {
+        return Err("method specification must target one declaration in the same CU".to_owned());
+    }
+    let record = declaration
+        .parent
+        .and_then(|parent| nodes.get(&parent))
+        .filter(|record| record_tag(record.tag) && cpp_node(record))
+        .ok_or_else(|| "method declaration is not owned by a C++ record".to_owned())?;
+    if record.id.unit_offset != node.id.unit_offset
+        || record.parent.is_none_or(|parent| nodes[&parent].tag != gimli::DW_TAG_compile_unit)
+    {
+        return Err("method declaration must belong to the exact same-CU, CU-scoped record".to_owned());
+    }
+    if declaration.name.as_deref().is_none_or(str::is_empty)
+        || (node.name.is_some() && node.name != declaration.name)
+        || (node.linkage_name.is_some()
+            && declaration.linkage_name.is_some()
+            && node.linkage_name != declaration.linkage_name)
+        || node.linkage_name.as_ref().or(declaration.linkage_name.as_ref()).is_none_or(String::is_empty)
+        || (!matches!(node.target, TypeRef::Absent) && !same_reference(node.target, declaration.target))
+    {
+        return Err(
+            "method definition and declaration have missing or conflicting name/linkage/return evidence".to_owned()
+        );
+    }
+    Ok(declaration_offset)
 }
 
 fn emitted_name_for(original: Option<&str>, fallback: &str) -> Result<String, String> {
@@ -1332,6 +1645,7 @@ fn abstract_inline_metadata(node: &LayoutNode, nodes: &BTreeMap<usize, LayoutNod
         && !node.declaration
         && !node.invalid
         && node.source.is_some()
+        && !cpp_node(node)
         && node.prototyped
         && !node.address_evidence
         && !node.address_index_incomplete
@@ -1347,21 +1661,48 @@ fn build_report(
     report: &mut DebugLayoutReport,
 ) {
     let mut resolver = Resolver::new(nodes);
-    let mut function_names: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut function_names: BTreeMap<String, Vec<(usize, usize)>> = BTreeMap::new();
     let mut addresses: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+    let mut definitions: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (&offset, node) in nodes {
         if node.tag == gimli::DW_TAG_subprogram {
             if resolver.charge_work().is_err() {
                 report.warn("DWARF function-name index reached the work limit".to_owned());
                 return;
             }
-            let Some(name) = node.name.as_deref().filter(|name| !name.is_empty()) else {
-                report.warn("incomplete DWARF function-name index cannot establish uniqueness".to_owned());
-                return;
-            };
-            function_names.entry(c_name(name)).or_default().push(offset);
+            let cpp = cpp_node(node);
+            if cpp {
+                if !node.declaration
+                    && let TypeRef::Offset(declaration) = node.specification
+                {
+                    definitions.entry(declaration).or_default().push(offset);
+                }
+                let declaration = method_declaration(offset, nodes).ok();
+                let linkage =
+                    node.linkage_name.as_ref().or_else(|| declaration.and_then(|id| nodes[&id].linkage_name.as_ref()));
+                let key = match linkage {
+                    Some(linkage) => format!("cpp:{linkage}"),
+                    None => format!("cpp-die:{}:{}", node.id.unit_offset, node.id.die_offset),
+                };
+                function_names.entry(key).or_default().push((offset, declaration.unwrap_or(offset)));
+                if let Some(declaration) = declaration
+                    && let Ok(emitted) = method_emitted_name(node, nodes[&declaration].name.as_deref().unwrap())
+                {
+                    function_names.entry(format!("emitted:{emitted}")).or_default().push((offset, offset));
+                }
+            } else {
+                let Some(name) = node.name.as_deref().filter(|name| !name.is_empty()) else {
+                    report.warn("incomplete DWARF function-name index cannot establish uniqueness".to_owned());
+                    return;
+                };
+                function_names.entry(format!("emitted:{}", c_name(name))).or_default().push((offset, offset));
+            }
             if node.address_index_incomplete
-                || (node.declaration && (node.address_evidence || node.invalid))
+                || (node.declaration
+                    && (node.address_evidence
+                        || node.address.is_some()
+                        || node.invalid
+                        || !matches!(node.specification, TypeRef::Absent)))
                 || (!node.declaration && node.address.is_none() && !abstract_inline_metadata(node, nodes))
             {
                 report.warn("incomplete concrete DWARF function-address index cannot establish uniqueness".to_owned());
@@ -1372,13 +1713,17 @@ fn build_report(
             }
         }
     }
-    let ambiguous: BTreeSet<_> = function_names
+    let mut ambiguous: BTreeSet<_> = function_names
         .values()
-        .chain(addresses.values())
-        .filter(|offsets| offsets.len() != 1)
+        .filter(|identities| {
+            identities.iter().map(|&(_, identity)| identity).collect::<BTreeSet<_>>().len() != 1
+                || identities.iter().filter(|&&(offset, _)| !nodes[&offset].declaration).count() > 1
+        })
         .flatten()
-        .copied()
+        .map(|&(offset, _)| offset)
         .collect();
+    ambiguous.extend(addresses.values().filter(|offsets| offsets.len() != 1).flatten().copied());
+    ambiguous.extend(definitions.values().filter(|offsets| offsets.len() != 1).flatten().copied());
     let mut declaration_bytes = 0;
     let mut dependencies = BTreeSet::new();
     for (&offset, node) in nodes {
@@ -1491,6 +1836,26 @@ fn allowed_attribute(tag: gimli::DwTag, name: gimli::DwAt) -> bool {
                 | gimli::DW_AT_call_all_tail_calls
         ),
         gimli::DW_TAG_formal_parameter => matches!(name, gimli::DW_AT_type | gimli::DW_AT_location),
+        _ => false,
+    }
+}
+
+fn allowed_cpp_attribute(tag: gimli::DwTag, name: gimli::DwAt) -> bool {
+    match tag {
+        gimli::DW_TAG_class_type | gimli::DW_TAG_structure_type => {
+            matches!(name, gimli::DW_AT_byte_size | gimli::DW_AT_alignment | gimli::DW_AT_calling_convention)
+        }
+        gimli::DW_TAG_member => matches!(name, gimli::DW_AT_accessibility | gimli::DW_AT_artificial),
+        gimli::DW_TAG_subprogram => matches!(
+            name,
+            gimli::DW_AT_linkage_name
+                | gimli::DW_AT_MIPS_linkage_name
+                | gimli::DW_AT_specification
+                | gimli::DW_AT_object_pointer
+                | gimli::DW_AT_accessibility
+                | gimli::DW_AT_artificial
+        ),
+        gimli::DW_TAG_formal_parameter => name == gimli::DW_AT_artificial,
         _ => false,
     }
 }
@@ -1670,6 +2035,428 @@ mod tests {
         let mut report = DebugLayoutReport::default();
         build_report(nodes, |_| true, |start, end| end > start, &mut report);
         report
+    }
+
+    fn reference(name: gimli::DwAt, offset: usize) -> RawAttribute {
+        (name, gimli::DW_FORM_ref4, (offset as u32).to_le_bytes().to_vec())
+    }
+
+    fn linkage(name: &str) -> RawAttribute {
+        let (_, form, bytes) = text(name);
+        (gimli::DW_AT_linkage_name, form, bytes)
+    }
+
+    struct Cpp {
+        raw: Raw,
+        record: usize,
+        declaration: usize,
+        declared_object: usize,
+        definition: usize,
+        object: usize,
+        pointer: usize,
+        declared_pointer: usize,
+        integer: usize,
+        field: usize,
+    }
+
+    fn cpp(language: gimli::DwLang, tag: gimli::DwTag, declaration_extra: Vec<RawAttribute>) -> Cpp {
+        let mut raw = Raw::default();
+        raw.root(language);
+        let character = raw.scalar("signed char", Some(1), gimli::DW_ATE_signed_char);
+        let integer = raw.scalar("int", Some(4), gimli::DW_ATE_signed);
+        let flags = raw.scalar("unsigned short", Some(2), gimli::DW_ATE_unsigned);
+        let weight = raw.scalar("double", Some(8), gimli::DW_ATE_float);
+        let tail = raw.scalar("unsigned char", Some(1), gimli::DW_ATE_unsigned_char);
+        let scalar_pointer = raw.die(gimli::DW_TAG_pointer_type, false, vec![target(integer)]);
+        let declared_pointer = raw.die(gimli::DW_TAG_pointer_type, false, vec![target(0)]);
+        let pointer_patch = raw.entries.len() - 4;
+        let record = raw.die(
+            tag,
+            true,
+            vec![
+                text("CheckedRecord"),
+                number(gimli::DW_AT_byte_size, 40),
+                number(gimli::DW_AT_alignment, 8),
+                number(gimli::DW_AT_calling_convention, u64::from(gimli::DW_CC_pass_by_value.0)),
+            ],
+        );
+        raw.entries[pointer_patch..pointer_patch + 4].copy_from_slice(&(record as u32).to_le_bytes());
+        let mut field = 0;
+        for (name, offset, ty) in [
+            ("tag", 0, character),
+            ("count", 4, integer),
+            ("flags", 8, flags),
+            ("weight", 16, weight),
+            ("value", 24, scalar_pointer),
+            ("tail", 32, tail),
+        ] {
+            field = raw.die(
+                gimli::DW_TAG_member,
+                false,
+                vec![
+                    text(name),
+                    target(ty),
+                    number(gimli::DW_AT_data_member_location, offset),
+                    number(gimli::DW_AT_accessibility, u64::from(gimli::DW_ACCESS_public.0)),
+                ],
+            );
+        }
+        let mut attributes = vec![
+            text("readcount"),
+            linkage("_ZN13CheckedRecord9readcountEv"),
+            flag(gimli::DW_AT_declaration, true),
+            target(integer),
+        ];
+        attributes.extend(declaration_extra);
+        let declaration = raw.die(gimli::DW_TAG_subprogram, true, attributes);
+        let declared_object = raw.die(
+            gimli::DW_TAG_formal_parameter,
+            false,
+            vec![target(declared_pointer), flag(gimli::DW_AT_artificial, true)],
+        );
+        raw.close();
+        raw.close();
+        let pointer = raw.die(gimli::DW_TAG_pointer_type, false, vec![target(record)]);
+        let definition = raw.die(
+            gimli::DW_TAG_subprogram,
+            true,
+            vec![
+                reference(gimli::DW_AT_specification, declaration),
+                (gimli::DW_AT_low_pc, gimli::DW_FORM_addr, 0x1234_5678_9000u64.to_le_bytes().to_vec()),
+                reference(gimli::DW_AT_object_pointer, 0),
+            ],
+        );
+        let definition_patch = raw.entries.len() - 4;
+        let object = raw.die(
+            gimli::DW_TAG_formal_parameter,
+            false,
+            vec![text("not_named_this"), target(pointer), flag(gimli::DW_AT_artificial, true)],
+        );
+        raw.entries[definition_patch..definition_patch + 4].copy_from_slice(&(object as u32).to_le_bytes());
+        raw.close();
+        raw.close();
+        Cpp { raw, record, declaration, declared_object, definition, object, pointer, declared_pointer, integer, field }
+    }
+
+    #[test]
+    fn cpp_methods_require_exact_producer_owned_object_identity_not_a_this_name() {
+        for language in [
+            gimli::DW_LANG_C_plus_plus,
+            gimli::DW_LANG_C_plus_plus_11,
+            gimli::DW_LANG_C_plus_plus_14,
+            gimli::DW_LANG_C_plus_plus_17,
+        ] {
+            for tag in [gimli::DW_TAG_class_type, gimli::DW_TAG_structure_type] {
+                let cpp = cpp(language, tag, Vec::new());
+                let nodes = read(&cpp.raw).unwrap();
+                let output = report(&nodes);
+                assert_eq!(output.signatures.len(), 1, "{language} {tag}: {output:?}");
+                assert_eq!(output.layouts.len(), 1, "{output:?}");
+                let layout = &output.layouts[0];
+                assert_eq!(layout.id, nodes[&cpp.record].id);
+                assert_eq!((layout.byte_size, layout.producer_alignment), (40, Some(8)));
+                assert_eq!(layout.fields.len(), 6);
+                let signature = &output.signatures[0];
+                let method = signature.method.as_ref().unwrap();
+                assert_eq!(method.record_id, layout.id);
+                assert_eq!(method.declaration_id, nodes[&cpp.declaration].id);
+                assert_eq!(method.object_pointer_id, nodes[&cpp.object].id);
+                assert_ne!(method.object_pointer_id, nodes[&cpp.declared_object].id);
+                assert!(matches!(nodes[&cpp.declaration].object_pointer, TypeRef::Absent));
+                assert_ne!(nodes[&cpp.pointer].id, nodes[&cpp.declared_pointer].id);
+                assert_eq!(method.linkage_name, "_ZN13CheckedRecord9readcountEv");
+                assert_eq!(signature.id, nodes[&cpp.definition].id);
+                assert_eq!(signature.original_name, "readcount");
+                assert!(ordinary_identifier(&signature.emitted_name));
+                assert_eq!(signature.parameters[0].emitted_name, "self");
+                assert_eq!(signature.parameters[0].original_name.as_deref(), Some("not_named_this"));
+                assert!(signature.declaration.contains(&format!("struct {} * self", layout.emitted_name)));
+                assert!(signature.eligible_for_native_verification);
+                assert!(!signature.strictly_applicable);
+            }
+        }
+        let flat = flat(Some(number(gimli::DW_AT_alignment, 8)));
+        let output = report(&read(&flat.raw).unwrap());
+        assert!(output.signatures[0].method.is_none());
+        let json = serde_json::to_value(&output).unwrap();
+        assert!(json["signatures"][0].get("method").is_none());
+    }
+
+    #[test]
+    fn cpp_object_pointer_must_be_first_actual_formal_and_direct_exact_record_pointer() {
+        let cpp = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+        let original = read(&cpp.raw).unwrap();
+        for case in 0..12 {
+            let mut nodes = original.clone();
+            match case {
+                0 => nodes.get_mut(&cpp.definition).unwrap().object_pointer = TypeRef::Absent,
+                1 => nodes.get_mut(&cpp.definition).unwrap().object_pointer = TypeRef::Unsupported,
+                2 => nodes.get_mut(&cpp.definition).unwrap().object_pointer = TypeRef::Offset(cpp.declared_object),
+                3 => nodes.get_mut(&cpp.definition).unwrap().object_pointer = TypeRef::Offset(cpp.integer),
+                4 => nodes.get_mut(&cpp.object).unwrap().parent = Some(cpp.declaration),
+                5 => nodes.get_mut(&cpp.object).unwrap().target = TypeRef::Offset(cpp.record),
+                6 => nodes.get_mut(&cpp.pointer).unwrap().target = TypeRef::Offset(cpp.integer),
+                7 => nodes.get_mut(&cpp.declared_object).unwrap().artificial = false,
+                8 => {
+                    let mut alias = nodes[&cpp.integer].clone();
+                    alias.id.die_offset = 9999;
+                    alias.tag = gimli::DW_TAG_typedef;
+                    alias.target = TypeRef::Offset(cpp.record);
+                    nodes.insert(9999, alias);
+                    nodes.get_mut(&cpp.pointer).unwrap().target = TypeRef::Offset(9999);
+                }
+                9 => {
+                    let mut parameter = nodes[&cpp.object].clone();
+                    parameter.id.die_offset = 9999;
+                    parameter.name = Some("earlier".to_owned());
+                    nodes.insert(9999, parameter);
+                    nodes.get_mut(&cpp.definition).unwrap().children.insert(0, 9999);
+                }
+                10 => nodes.get_mut(&cpp.declaration).unwrap().object_pointer = TypeRef::Offset(cpp.object),
+                11 => nodes.get_mut(&cpp.object).unwrap().artificial = false,
+                _ => unreachable!(),
+            }
+            let output = report(&nodes);
+            assert!(output.layouts.is_empty() && output.signatures.is_empty(), "case {case}: {output:?}");
+        }
+        let mut nodes = original;
+        nodes.get_mut(&cpp.declaration).unwrap().object_pointer = TypeRef::Offset(cpp.declared_object);
+        assert_eq!(report(&nodes).signatures.len(), 1);
+    }
+
+    #[test]
+    fn cpp_specification_is_one_same_cu_hop_and_conflicting_definition_facts_never_override_it() {
+        let cpp = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+        let original = read(&cpp.raw).unwrap();
+        for case in 0..12 {
+            let mut nodes = original.clone();
+            match case {
+                0 => nodes.get_mut(&cpp.definition).unwrap().specification = TypeRef::Absent,
+                1 => nodes.get_mut(&cpp.definition).unwrap().specification = TypeRef::Offset(cpp.definition),
+                2 => nodes.get_mut(&cpp.declaration).unwrap().specification = TypeRef::Offset(cpp.definition),
+                3 => nodes.get_mut(&cpp.declaration).unwrap().id.unit_offset = 1000,
+                4 => nodes.get_mut(&cpp.definition).unwrap().name = Some("different".to_owned()),
+                5 => nodes.get_mut(&cpp.definition).unwrap().linkage_name = Some("_ZN5Other4readEv".to_owned()),
+                6 => nodes.get_mut(&cpp.definition).unwrap().target = TypeRef::Offset(cpp.pointer),
+                7 => nodes.get_mut(&cpp.declaration).unwrap().declaration = false,
+                8 => nodes.get_mut(&cpp.declaration).unwrap().parent = nodes[&cpp.record].parent,
+                9 => nodes.get_mut(&cpp.declaration).unwrap().invalid = true,
+                10 => nodes.get_mut(&cpp.definition).unwrap().invalid = true,
+                11 => nodes.get_mut(&cpp.declaration).unwrap().specification = TypeRef::Offset(cpp.declaration),
+                _ => unreachable!(),
+            }
+            let output = report(&nodes);
+            assert!(output.layouts.is_empty() && output.signatures.is_empty(), "case {case}: {output:?}");
+        }
+        let mut nodes = original;
+        nodes.get_mut(&cpp.definition).unwrap().name = nodes[&cpp.declaration].name.clone();
+        nodes.get_mut(&cpp.definition).unwrap().linkage_name = nodes[&cpp.declaration].linkage_name.clone();
+        nodes.get_mut(&cpp.definition).unwrap().target = nodes[&cpp.declaration].target;
+        assert_eq!(report(&nodes).signatures.len(), 1, "equal explicit facts must not create a namesake collision");
+    }
+
+    #[test]
+    fn cpp_virtuality_unknown_qualifiers_static_methods_and_non_natural_layouts_refuse_atomically() {
+        for attribute in [
+            number(gimli::DW_AT_virtuality, 1),
+            reference(gimli::DW_AT_abstract_origin, 0),
+            number(gimli::DW_AT_reference, 1),
+            number(gimli::DW_AT_rvalue_reference, 1),
+            number(gimli::DW_AT_GNU_deleted, 1),
+        ] {
+            let cpp = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, vec![attribute]);
+            let nodes = read(&cpp.raw).unwrap();
+            assert!(nodes[&cpp.declaration].invalid);
+            let output = report(&nodes);
+            assert!(output.signatures.is_empty() && output.layouts.is_empty(), "{output:?}");
+        }
+        let cpp = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+        let original = read(&cpp.raw).unwrap();
+        for case in 0..12 {
+            let mut nodes = original.clone();
+            match case {
+                0 => nodes.get_mut(&cpp.record).unwrap().alignment = None,
+                1 => nodes.get_mut(&cpp.record).unwrap().alignment = Some(4),
+                2 => nodes.get_mut(&cpp.field).unwrap().member_offset = Some(40),
+                3 => nodes.get_mut(&cpp.field).unwrap().artificial = true,
+                4 => nodes.get_mut(&cpp.field).unwrap().tag = gimli::DW_TAG_inheritance,
+                5 => nodes.get_mut(&cpp.field).unwrap().tag = gimli::DW_TAG_template_type_parameter,
+                6 => nodes.get_mut(&cpp.declaration).unwrap().name = Some("CheckedRecord".to_owned()),
+                7 => nodes.get_mut(&cpp.declaration).unwrap().name = Some("~CheckedRecord".to_owned()),
+                8 => {
+                    nodes.get_mut(&cpp.declaration).unwrap().linkage_name =
+                        Some("_ZThn8_N13CheckedRecord9readcountEv".to_owned());
+                }
+                9 => {
+                    nodes.get_mut(&cpp.definition).unwrap().object_pointer = TypeRef::Absent;
+                    nodes.get_mut(&cpp.declaration).unwrap().object_pointer = TypeRef::Absent;
+                    nodes.get_mut(&cpp.object).unwrap().name = Some("this".to_owned());
+                }
+                10 => nodes.get_mut(&cpp.record).unwrap().name = Some("CheckedRecord<int>".to_owned()),
+                11 => nodes.get_mut(&cpp.pointer).unwrap().tag = gimli::DW_TAG_reference_type,
+                _ => unreachable!(),
+            }
+            let output = report(&nodes);
+            assert!(output.signatures.is_empty() && output.layouts.is_empty(), "case {case}: {output:?}");
+        }
+        for qualifier in [gimli::DW_TAG_const_type, gimli::DW_TAG_volatile_type] {
+            let mut nodes = original.clone();
+            let mut qualified = nodes[&cpp.integer].clone();
+            qualified.id.die_offset = 9999;
+            qualified.tag = qualifier;
+            qualified.target = TypeRef::Offset(cpp.record);
+            nodes.insert(9999, qualified);
+            nodes.get_mut(&cpp.pointer).unwrap().target = TypeRef::Offset(9999);
+            assert!(report(&nodes).signatures.is_empty());
+        }
+    }
+
+    #[test]
+    fn cpp_method_proof_and_new_reference_and_linkage_reads_consume_existing_budgets() {
+        let cpp = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+        let nodes = read(&cpp.raw).unwrap();
+        let mut resolver = Resolver::new(&nodes);
+        resolver.work = MAX_WORK;
+        assert!(resolver.signature(cpp.definition, MAX_DECLARATION).unwrap_err().contains("work limit"));
+        assert!(resolver.layouts.is_empty());
+        let mut resolver = Resolver::new(&nodes);
+        resolver.text = MAX_NAMES;
+        assert!(resolver.signature(cpp.definition, MAX_DECLARATION).unwrap_err().contains("text"));
+        assert!(Resolver::new(&nodes).signature(cpp.definition, 1).unwrap_err().contains("declaration"));
+        let mut raw = Raw::default();
+        raw.root(gimli::DW_LANG_C_plus_plus_14);
+        raw.die(gimli::DW_TAG_subprogram, false, vec![linkage(&"x".repeat(MAX_NAME + 1))]);
+        raw.close();
+        assert!(read(&raw).unwrap_err().contains("128"));
+    }
+
+    #[test]
+    fn cpp_linkage_and_explicit_declaration_identity_disambiguate_same_named_methods() {
+        let cpp = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+        let original = read(&cpp.raw).unwrap();
+        for duplicate_linkage in [false, true] {
+            let mut nodes = original.clone();
+            let mut declaration = nodes[&cpp.declaration].clone();
+            declaration.id.die_offset = 10_000;
+            declaration.children = vec![10_001];
+            declaration.object_pointer = TypeRef::Offset(10_001);
+            if !duplicate_linkage {
+                declaration.linkage_name = Some("_ZN13CheckedRecord9readcountEi".to_owned());
+            }
+            let mut declared_object = nodes[&cpp.declared_object].clone();
+            declared_object.id.die_offset = 10_001;
+            declared_object.parent = Some(10_000);
+            let mut definition = nodes[&cpp.definition].clone();
+            definition.id.die_offset = 10_002;
+            definition.address = Some(definition.address.unwrap() + 32);
+            definition.specification = TypeRef::Offset(10_000);
+            definition.object_pointer = TypeRef::Offset(10_003);
+            definition.children = vec![10_003];
+            let mut object = nodes[&cpp.object].clone();
+            object.id.die_offset = 10_003;
+            object.parent = Some(10_002);
+            if !duplicate_linkage {
+                let mut declared_argument = nodes[&cpp.declared_object].clone();
+                declared_argument.id.die_offset = 10_004;
+                declared_argument.parent = Some(10_000);
+                declared_argument.target = TypeRef::Offset(cpp.integer);
+                declared_argument.artificial = false;
+                declaration.children.push(10_004);
+                let mut argument = declared_argument.clone();
+                argument.id.die_offset = 10_005;
+                argument.parent = Some(10_002);
+                argument.name = Some("delta".to_owned());
+                definition.children.push(10_005);
+                nodes.insert(10_004, declared_argument);
+                nodes.insert(10_005, argument);
+            }
+            nodes.insert(10_000, declaration);
+            nodes.insert(10_001, declared_object);
+            nodes.insert(10_002, definition);
+            nodes.insert(10_003, object);
+            nodes.get_mut(&cpp.record).unwrap().children.push(10_000);
+            let output = report(&nodes);
+            if duplicate_linkage {
+                assert!(output.signatures.is_empty() && output.layouts.is_empty(), "{output:?}");
+            } else {
+                assert_eq!(output.signatures.len(), 2, "{output:?}");
+                assert_eq!(output.layouts.len(), 1, "{output:?}");
+                assert_ne!(output.signatures[0].emitted_name, output.signatures[1].emitted_name);
+                assert_eq!(output.signatures[0].original_name, output.signatures[1].original_name);
+                assert_eq!(output.signatures[1].parameters.len(), 2);
+                assert_eq!(output.signatures[1].parameters[1].emitted_name, "delta");
+            }
+        }
+        let mut nodes = original;
+        let mut wrapper = nodes[&cpp.definition].clone();
+        wrapper.id.die_offset = 20_000;
+        wrapper.name = Some("debug_cpp_read_count".to_owned());
+        wrapper.address = Some(wrapper.address.unwrap() + 64);
+        wrapper.specification = TypeRef::Absent;
+        wrapper.object_pointer = TypeRef::Absent;
+        wrapper.prototyped = true;
+        let mut argument = nodes[&cpp.object].clone();
+        argument.id.die_offset = 20_001;
+        argument.name = Some("this".to_owned());
+        argument.parent = Some(20_000);
+        argument.artificial = false;
+        wrapper.children = vec![20_001];
+        nodes.insert(20_000, wrapper);
+        nodes.insert(20_001, argument);
+        let output = report(&nodes);
+        assert_eq!(output.signatures.len(), 1, "{output:?}");
+        assert_eq!(output.signatures[0].id, nodes[&cpp.definition].id);
+        let mut concrete = nodes[&cpp.definition].clone();
+        concrete.id.die_offset = 30_000;
+        concrete.address = Some(concrete.address.unwrap() + 128);
+        nodes.insert(30_000, concrete);
+        let output = report(&nodes);
+        assert!(output.signatures.is_empty() && output.layouts.is_empty(), "duplicate definition: {output:?}");
+        nodes.get_mut(&30_000).unwrap().linkage_name = Some("_ZN5Other4readEv".to_owned());
+        let output = report(&nodes);
+        assert!(output.signatures.is_empty() && output.layouts.is_empty(), "conflicting duplicate: {output:?}");
+    }
+
+    #[test]
+    fn cpp_scalar_setter_is_lowered_but_reference_byvalue_variadic_and_artificial_arguments_are_not() {
+        let cpp = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+        let mut original = read(&cpp.raw).unwrap();
+        original.get_mut(&cpp.declaration).unwrap().name = Some("writeCount".to_owned());
+        original.get_mut(&cpp.declaration).unwrap().linkage_name = Some("_ZN13CheckedRecord10writeCountEi".to_owned());
+        original.get_mut(&cpp.declaration).unwrap().target = TypeRef::Absent;
+        let mut declared = original[&cpp.declared_object].clone();
+        declared.id.die_offset = 10_000;
+        declared.target = TypeRef::Offset(cpp.integer);
+        declared.artificial = false;
+        let mut actual = declared.clone();
+        actual.id.die_offset = 10_001;
+        actual.parent = Some(cpp.definition);
+        actual.name = Some("replacement".to_owned());
+        original.insert(10_000, declared);
+        original.insert(10_001, actual);
+        original.get_mut(&cpp.declaration).unwrap().children.push(10_000);
+        original.get_mut(&cpp.definition).unwrap().children.push(10_001);
+        let output = report(&original);
+        assert_eq!(output.signatures.len(), 1, "{output:?}");
+        assert!(matches!(&output.signatures[0].return_type, DebugLayoutValue::Void));
+        assert_eq!(output.signatures[0].parameters.len(), 2);
+        assert!(output.signatures[0].declaration.contains("int32_t replacement"));
+        for case in 0..8 {
+            let mut nodes = original.clone();
+            match case {
+                0 => nodes.get_mut(&10_001).unwrap().target = TypeRef::Absent,
+                1 => nodes.get_mut(&10_001).unwrap().target = TypeRef::Offset(cpp.record),
+                2 => nodes.get_mut(&10_001).unwrap().tag = gimli::DW_TAG_unspecified_parameters,
+                3 => nodes.get_mut(&10_001).unwrap().artificial = true,
+                4 => nodes.get_mut(&10_001).unwrap().name = Some("self".to_owned()),
+                5 => nodes.get_mut(&cpp.declaration).unwrap().target = TypeRef::Offset(cpp.record),
+                6 => nodes.get_mut(&cpp.integer).unwrap().tag = gimli::DW_TAG_reference_type,
+                7 => nodes.get_mut(&cpp.integer).unwrap().tag = gimli::DW_TAG_ptr_to_member_type,
+                _ => unreachable!(),
+            }
+            let output = report(&nodes);
+            assert!(output.signatures.is_empty() && output.layouts.is_empty(), "case {case}: {output:?}");
+        }
     }
 
     #[test]
@@ -2005,7 +2792,7 @@ mod tests {
             assert!(report(&nodes).signatures.is_empty(), "case {case}");
         }
         let mut raw = Raw::default();
-        raw.root(gimli::DW_LANG_C_plus_plus);
+        raw.root(gimli::DW_LANG_Rust);
         let scalar = raw.scalar("int", Some(4), gimli::DW_ATE_signed);
         raw.close();
         let nodes = read(&raw).unwrap();
@@ -2046,13 +2833,14 @@ mod tests {
 
     #[test]
     fn cumulative_layout_type_function_field_and_attribute_work_caps_are_not_just_depth_limits() {
-        for (tag, count) in [
-            (gimli::DW_TAG_structure_type, MAX_LAYOUTS + 1),
-            (gimli::DW_TAG_base_type, MAX_TYPES + 1),
-            (gimli::DW_TAG_subprogram, MAX_FUNCTIONS + 1),
+        for (language, tag, count) in [
+            (gimli::DW_LANG_C11, gimli::DW_TAG_structure_type, MAX_LAYOUTS + 1),
+            (gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, MAX_LAYOUTS + 1),
+            (gimli::DW_LANG_C11, gimli::DW_TAG_base_type, MAX_TYPES + 1),
+            (gimli::DW_LANG_C11, gimli::DW_TAG_subprogram, MAX_FUNCTIONS + 1),
         ] {
             let mut raw = Raw::default();
-            raw.root(gimli::DW_LANG_C11);
+            raw.root(language);
             for _ in 0..count {
                 raw.die(tag, false, Vec::new());
             }
@@ -2491,6 +3279,60 @@ mod tests {
                 assert!(output.warnings.iter().any(|warning| warning.contains("function-address index")));
             }
         }
+    }
+
+    #[test]
+    fn cpp_sibling_declarations_require_direct_valid_address_free_evidence_for_index_exemption() {
+        for case in 0..6 {
+            let mut cpp = cpp(gimli::DW_LANG_C_plus_plus_14, gimli::DW_TAG_class_type, Vec::new());
+            cpp.raw.entries.pop();
+            let mut attributes = vec![text("unrelated_declaration"), flag(gimli::DW_AT_declaration, true)];
+            match case {
+                0 => {}
+                1 => attributes.push(reference(gimli::DW_AT_specification, cpp.definition)),
+                2 => attributes.push(reference(gimli::DW_AT_abstract_origin, cpp.definition)),
+                3 => attributes.push(number(gimli::DW_AT_virtuality, 1)),
+                4 => attributes.push(expression(gimli::DW_AT_specification)),
+                5 => attributes.push(reference(gimli::DW_AT_specification, cpp.declaration)),
+                _ => unreachable!(),
+            }
+            let sibling = cpp.raw.die(gimli::DW_TAG_subprogram, false, attributes);
+            cpp.raw.close();
+            let nodes = read(&cpp.raw).unwrap();
+            assert!(nodes[&sibling].declaration);
+            assert!(nodes[&sibling].address.is_none());
+            assert!(!nodes[&sibling].address_evidence);
+            if case == 1 {
+                assert!(!nodes[&sibling].invalid, "specification must be checked independently of invalid bits");
+            }
+            let output = report(&nodes);
+            if case == 0 {
+                assert_eq!(output.signatures.len(), 1, "{output:?}");
+                assert_eq!(output.layouts.len(), 1, "{output:?}");
+            } else {
+                assert!(output.signatures.is_empty() && output.layouts.is_empty(), "case {case}: {output:?}");
+                assert!(output.warnings.iter().any(|warning| warning.contains("function-address index")));
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_c_classes_do_not_consume_the_cpp_layout_or_record_child_budgets() {
+        let mut flat = flat(Some(number(gimli::DW_AT_alignment, 8)));
+        flat.raw.entries.pop();
+        for _ in 0..=MAX_LAYOUTS {
+            flat.raw.die(gimli::DW_TAG_class_type, false, Vec::new());
+        }
+        flat.raw.die(gimli::DW_TAG_class_type, true, Vec::new());
+        for _ in 0..=MAX_FIELDS {
+            flat.raw.die(gimli::DW_TAG_variable, false, Vec::new());
+        }
+        flat.raw.close();
+        flat.raw.close();
+        let output = report(&read(&flat.raw).unwrap());
+        assert_eq!(output.signatures.len(), 1, "{output:?}");
+        assert_eq!(output.layouts.len(), 1, "{output:?}");
+        assert_eq!(output.signatures[0].original_name, "read_record");
     }
 
     #[test]

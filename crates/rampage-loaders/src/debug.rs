@@ -10,7 +10,7 @@ use crate::{Binary, Format, LoadError};
 
 mod layouts;
 pub use layouts::{
-    DebugLayoutField, DebugLayoutLeaf, DebugLayoutParameter, DebugLayoutReport, DebugLayoutScalar,
+    DebugLayoutField, DebugLayoutLeaf, DebugLayoutMethod, DebugLayoutParameter, DebugLayoutReport, DebugLayoutScalar,
     DebugLayoutScalarKind, DebugLayoutSignature, DebugLayoutSource, DebugLayoutTypeId, DebugLayoutValue,
     DebugStructLayout, layout_signatures,
 };

@@ -1,0 +1,159 @@
+{
+  "license": "Apache-2.0",
+  "scope": "Initial non-polymorphic base-free records; mutable explicit-this method projection only",
+  "target": {
+    "triple": "x86_64-linux-gnu",
+    "format": "ELF64",
+    "byte_order": "little",
+    "address_size": 8,
+    "elf_type": 2,
+    "elf_machine": 62,
+    "max_binary_bytes": 1048576,
+    "max_debug_info_bytes": 131072,
+    "max_function_bytes": 128,
+    "max_sections": 128,
+    "max_symbols": 256
+  },
+  "constant_encoding": {
+    "description": "25 little-endian unsigned 64-bit words, C linkage, no relocations",
+    "magic": "0x52414d5043505031",
+    "version": 1,
+    "byte_order_tag": 1,
+    "byte_size": 200
+  },
+  "layout": {
+    "size": 40,
+    "alignment": 8,
+    "padding": [[1, 4], [10, 16], [33, 40]],
+    "fields": [
+      {"name": "tag", "offset": 0, "size": 1, "alignment": 1, "kind": "signed", "ctype": "signed char"},
+      {"name": "count", "offset": 4, "size": 4, "alignment": 4, "kind": "signed", "ctype": "int"},
+      {"name": "flags", "offset": 8, "size": 2, "alignment": 2, "kind": "unsigned", "ctype": "unsigned short"},
+      {"name": "weight", "offset": 16, "size": 8, "alignment": 8, "kind": "float", "ctype": "double"},
+      {"name": "value", "offset": 24, "size": 8, "alignment": 8, "kind": "pointer", "ctype": "int *"},
+      {"name": "tail", "offset": 32, "size": 1, "alignment": 1, "kind": "unsigned", "ctype": "unsigned char"}
+    ]
+  },
+  "records": {
+    "checked": {
+      "tag": "CheckedRecord",
+      "dwarf_tag": "DW_TAG_class_type",
+      "alignment_source": "alignas(8), equal to natural alignment",
+      "section": ".rampage_cpp_checked",
+      "symbol": "debug_cpp_checked_constants"
+    },
+    "companion": {
+      "tag": "CompanionRecord",
+      "dwarf_tag": "DW_TAG_structure_type",
+      "alignment_source": "alignas(8), equal to natural alignment",
+      "section": ".rampage_cpp_companion",
+      "symbol": "debug_cpp_companion_constants"
+    },
+    "unaligned": {
+      "tag": "UnalignedRecord",
+      "dwarf_tag": "DW_TAG_class_type",
+      "alignment_source": "No explicit annotation; inspect compiler DWARF before treating as missing evidence",
+      "section": ".rampage_cpp_unaligned",
+      "symbol": "debug_cpp_unaligned_constants"
+    }
+  },
+  "common_constants": ["checked", "companion"],
+  "groups": {
+    "records": {
+      "source": "records.cpp",
+      "extra_constants": [],
+      "expectation": "Admit only with complete bounded record and method/object-pointer proof",
+      "functions": [
+        "_ZN13CheckedRecord7readTagEv", "_ZN13CheckedRecord9readCountEv",
+        "_ZN13CheckedRecord8readTailEv", "_ZN13CheckedRecord10writeCountEi",
+        "_ZN15CompanionRecord9readCountEv", "debug_cpp_read_tag", "debug_cpp_read_count",
+        "debug_cpp_read_tail", "debug_cpp_write_count", "debug_cpp_companion_read"
+      ],
+      "methods": [
+        {
+          "symbol": "_ZN13CheckedRecord7readTagEv", "object": "CheckedRecord *",
+          "field": "tag", "access": "read-signed"
+        },
+        {
+          "symbol": "_ZN13CheckedRecord9readCountEv", "object": "CheckedRecord *",
+          "field": "count", "access": "read"
+        },
+        {
+          "symbol": "_ZN13CheckedRecord8readTailEv", "object": "CheckedRecord *",
+          "field": "tail", "access": "read-unsigned"
+        },
+        {
+          "symbol": "_ZN13CheckedRecord10writeCountEi", "object": "CheckedRecord *",
+          "field": "count", "access": "write"
+        },
+        {
+          "symbol": "_ZN15CompanionRecord9readCountEv", "object": "CompanionRecord *",
+          "field": "count", "access": "read"
+        }
+      ]
+    },
+    "unaligned": {
+      "source": "unaligned.cpp",
+      "extra_constants": ["unaligned"],
+      "expectation": "Refuse absent explicit alignment evidence, not because the natural layout is invalid",
+      "functions": ["_ZN15UnalignedRecord9readCountEv", "debug_cpp_unaligned_read"]
+    },
+    "const-method": {
+      "source": "const_method.cpp",
+      "extra_constants": [],
+      "expectation": "Refuse const-qualified object method in mutable-this-only first slice",
+      "functions": ["_ZNK11ConstRecord9readCountEv", "debug_cpp_const_read"]
+    },
+    "reference-argument": {
+      "source": "reference_argument.cpp",
+      "extra_constants": [],
+      "expectation": "Refuse reference parameter; never rewrite it as an ordinary scalar pointer",
+      "functions": ["_ZN15ReferenceRecord10writeCountERi", "debug_cpp_reference_write"]
+    },
+    "byvalue": {
+      "source": "byvalue.cpp",
+      "extra_constants": [],
+      "expectation": "Refuse aggregate by-value argument and aggregate by-value return independently",
+      "functions": [
+        "_ZN11ValueRecord9readOtherES_", "_ZN11ValueRecord4copyEv",
+        "debug_cpp_byvalue_argument", "debug_cpp_byvalue_return"
+      ]
+    },
+    "virtual": {
+      "source": "virtual_record.cpp",
+      "extra_constants": [],
+      "expectation": "Refuse polymorphic record; no vptr projection, vtable inference, or RTTI recovery",
+      "functions": ["_ZN13VirtualRecord9readCountEv", "debug_cpp_virtual_read"]
+    },
+    "inherited": {
+      "source": "inherited_record.cpp",
+      "extra_constants": [],
+      "expectation": "Refuse any base class or inheritance, including nonvirtual inheritance",
+      "functions": ["_ZN15InheritedRecord9readCountEv", "debug_cpp_inherited_read"]
+    },
+    "static-method": {
+      "source": "static_method.cpp",
+      "extra_constants": [],
+      "expectation": "Refuse this-method projection: static member has no implicit object pointer",
+      "functions": ["_ZN12StaticRecord9readCountEPS_", "debug_cpp_static_read"]
+    },
+    "overloads": {
+      "source": "overloads.cpp",
+      "extra_constants": [],
+      "expectation": "Parent may admit separately or refuse; never join by source name readCount",
+      "functions": [
+        "_ZN14OverloadRecord9readCountEv", "_ZN14OverloadRecord9readCountEi",
+        "debug_cpp_overload_plain", "debug_cpp_overload_delta"
+      ]
+    }
+  },
+  "parent_dwarf_contract": [
+    "Positive class/struct DIEs have complete sizes, explicit alignment and ordinary constant member offsets",
+    "Positive in-record method declarations and out-of-line definitions are both present",
+    "Definition DW_AT_specification resolves to the exact declaration, not a source-name match",
+    "Definition DW_AT_object_pointer resolves to an artificial this parameter with the exact record-pointer type",
+    "Real DW_AT_linkage_name and ELF mangled symbols identify individual methods, including overloads",
+    "Positive methods are mutable, nonvirtual, nonstatic, base-free; no reference or aggregate-by-value ABI",
+    "Constants and ELF headers alone do not prove these DWARF relationships"
+  ]
+}
