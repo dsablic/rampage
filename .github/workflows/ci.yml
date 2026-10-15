@@ -132,6 +132,14 @@ jobs:
           bash tools/ci/debug-cpp-layout-oracle.sh --check \
             cargo test --locked -p rampage-loaders -p rampage-api -p rampage-worker \
             --test debug_cpp_layouts --test debug_cpp_layout_acceptance -- --include-ignored
+      - name: Owned opaque-vptr and exact source-slot acceptance
+        timeout-minutes: 5
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          export RUST_SYSROOT="$(rustc --print sysroot)"
+          export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
+          bash tools/ci/debug-cpp-virtual-acceptance.sh
       - name: Opt-in native compiled fixture and isolated CLI acceptance
         timeout-minutes: 5
         run: |
