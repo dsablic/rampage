@@ -1,11 +1,16 @@
 //! Explicit, local-only debugger observations, kept apart from the loaded project and assistant.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use egui::{RichText, TextBuffer, TextEdit, Ui};
-use rampage_api::{DebuggerAddress, DebuggerRequest, DebuggerToken, MAX_DEBUGGER_REQUEST_BYTES, Project};
+use rampage_api::{
+    DebuggerAddress, DebuggerCapturePreview, DebuggerCapturePublication, DebuggerCapturePublicationStatus,
+    DebuggerCaptureRequest, DebuggerPermissions, DebuggerRequest, DebuggerResponse, DebuggerToken,
+    MAX_DEBUGGER_REQUEST_BYTES, Project,
+};
 use rampage_arch::Arch;
 use rampage_loaders::{Binary, Details, Format};
 
@@ -28,6 +33,9 @@ pub(crate) struct Debugger {
     input_revision: Arc<()>,
     click_context: Option<ClickContext>,
     navigation_notice: Option<String>,
+    gate: WorkGate,
+    workflow: Workflow,
+    was_shown: bool,
 }
 
 impl Default for Debugger {
@@ -44,28 +52,59 @@ impl Default for Debugger {
             input_revision: Arc::new(()),
             click_context: None,
             navigation_notice: None,
+            gate: WorkGate::default(),
+            workflow: Workflow::default(),
+            was_shown: false,
         }
     }
 }
 
 impl Debugger {
-    pub fn show(&mut self, ctx: &egui::Context, workspace: Option<&mut Workspace>) {
-        self.job.poll();
+    #[cfg(test)]
+    fn show(&mut self, ctx: &egui::Context, workspace: Option<&mut Workspace>) {
+        let _ = self.show_action(ctx, workspace);
+    }
+
+    pub fn show_action(&mut self, ctx: &egui::Context, workspace: Option<&mut Workspace>) -> Option<OpenSnapshot> {
+        if self.was_shown && !self.shown {
+            self.close();
+        }
+        self.was_shown = self.shown;
+        let raw_arrived = self.job.poll();
+        if raw_arrived
+            && (self.job.error().is_some()
+                || self.job.ready().is_some_and(|reply| reply.resolution.as_ref().is_some_and(Result::is_err)))
+        {
+            self.workflow.refresh_required = true;
+            self.workflow.invalidate_form();
+        }
         self.check_context(workspace.as_deref());
+        self.workflow.poll(&self.socket, workspace.as_deref());
         if !self.shown {
-            return;
+            return None;
         }
         let mut shown = self.shown;
+        let mut action = None;
         egui::Window::new("Read-only debugger")
             .open(&mut shown)
             .collapsible(false)
-            .default_size(egui::vec2(720.0, 560.0))
+            .default_size(egui::vec2(820.0, 760.0))
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 60.0))
-            .show(ctx, |ui| self.contents(ui, workspace));
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().id_salt("debugger-workspace").show(ui, |ui| {
+                    action = self.contents(ui, workspace);
+                });
+            });
+        if !shown {
+            self.close();
+            action = None;
+        }
         self.shown = shown;
+        self.was_shown = shown;
+        action
     }
 
-    fn contents(&mut self, ui: &mut Ui, workspace: Option<&mut Workspace>) {
+    fn contents(&mut self, ui: &mut Ui, workspace: Option<&mut Workspace>) -> Option<OpenSnapshot> {
         ui.label(RichText::new("Local runtime observation only").strong());
         ui.label(
             "Socket paths, requests and results stay in this window; they are never sent to an assistant or provider.",
@@ -73,7 +112,7 @@ impl Debugger {
         ui.label(
             RichText::new(
                 "Start the read-only LLDB endpoint yourself while stopped. Opening this window does not connect. \
-                 Only Query connects; nothing is attached, resumed, evaluated or written.",
+                 Only explicit buttons connect; nothing is attached, resumed, evaluated or written to the target.",
             )
             .color(theme::DIM)
             .small(),
@@ -90,7 +129,35 @@ impl Debugger {
         );
         if socket_edit.changed() {
             self.invalidate_navigation();
+            self.workflow.reset_stop();
+            self.workflow.socket = self.socket.clone();
         }
+        let action = self.workflow.ui(ui, &self.socket, workspace.as_deref(), &self.gate, self.job.is_running());
+        if self.workflow.form_changed {
+            self.invalidate_raw_navigation();
+            self.workflow.form_changed = false;
+        }
+        let mut open = None;
+        match action {
+            Some(WorkflowAction::Resolve(request)) => {
+                self.request = request;
+                self.request_rejected = false;
+                self.query(ui.ctx(), workspace.as_deref());
+            }
+            Some(WorkflowAction::Open(action)) => open = Some(action),
+            None => {}
+        }
+        egui::CollapsingHeader::new("Advanced: raw requests and JSON responses")
+            .id_salt("debugger-advanced")
+            .show(ui, |ui| self.advanced_ui(ui, workspace.as_deref()));
+        if open.is_some() && self.workflow.validate_preview(&self.socket, workspace.as_deref()).is_err() {
+            open = None;
+        }
+        self.navigation_ui(ui, workspace);
+        open
+    }
+
+    fn advanced_ui(&mut self, ui: &mut Ui, workspace: Option<&Workspace>) {
         ui.horizontal(|ui| {
             ui.label("Template");
             let previous_template = self.template;
@@ -135,10 +202,11 @@ impl Debugger {
             );
         }
         ui.horizontal(|ui| {
-            if ui.add_enabled(!self.job.is_running(), egui::Button::new("Query")).clicked() {
-                self.query(ui.ctx(), workspace.as_deref());
+            if ui.add_enabled(!self.busy(), egui::Button::new("Query")).clicked() {
+                self.workflow.reset_stop();
+                self.query(ui.ctx(), workspace);
             }
-            if ui.add_enabled(!self.job.is_running(), egui::Button::new("Clear local data")).clicked() {
+            if ui.add_enabled(!self.busy(), egui::Button::new("Clear local data")).clicked() {
                 self.clear(ui.ctx());
             }
             ui.label(RichText::new(format!("Client deadline: {TIMEOUT_MS} ms")).color(theme::DIM).small());
@@ -160,7 +228,6 @@ impl Debugger {
             .color(theme::DIM)
             .small(),
         );
-        self.navigation_ui(ui, workspace);
         ui.label(
             RichText::new("Shared tool response limits apply; reduce page or memory size if a query is refused.")
                 .color(theme::DIM)
@@ -210,15 +277,25 @@ impl Debugger {
     }
 
     fn clear(&mut self, ctx: &egui::Context) {
+        if self.busy() {
+            return;
+        }
         let shown = self.shown;
-        *self = Self { shown, request: String::new(), ..Self::default() };
-        for field in ["debugger-socket", "debugger-request"] {
+        let gate = self.gate.clone();
+        *self = Self { shown, gate, request: String::new(), ..Self::default() };
+        for field in [
+            "debugger-socket",
+            "debugger-request",
+            "debugger-memory-address",
+            "debugger-file-address",
+            "debugger-capture-output",
+        ] {
             egui::text_edit::TextEditState::default().store(ctx, egui::Id::new(field));
         }
     }
 
     fn query(&mut self, ctx: &egui::Context, workspace: Option<&Workspace>) {
-        if self.job.is_running() {
+        if self.busy() {
             return;
         }
         self.job = Job::Idle;
@@ -252,10 +329,33 @@ impl Debugger {
             workspace: binding,
         });
         let revision = Arc::clone(&self.input_revision);
-        self.job.start(false, ctx, move || run_query(socket, request, deadline, revision));
+        let Some(permit) = self.gate.acquire() else { return };
+        self.job.start(false, ctx, move || {
+            let _permit = permit;
+            run_query(socket, request, deadline, revision)
+        });
+    }
+
+    fn busy(&self) -> bool {
+        self.gate.busy() || self.job.is_running() || self.workflow.job.is_running()
+    }
+
+    fn close(&mut self) {
+        self.invalidate_navigation();
+        self.workflow.reset_stop();
+    }
+
+    pub(crate) fn invalidate_workspace(&mut self) {
+        self.invalidate_navigation();
+        self.workflow.reset_stop();
     }
 
     pub(crate) fn invalidate_navigation(&mut self) {
+        self.workflow.invalidate_form();
+        self.invalidate_raw_navigation();
+    }
+
+    fn invalidate_raw_navigation(&mut self) {
         self.input_revision = Arc::new(());
         self.click_context = None;
         if self.submitted.is_some() {
@@ -312,7 +412,7 @@ impl Debugger {
     }
 
     fn navigate(&mut self, workspace: Option<&mut Workspace>) {
-        match self.destination(workspace.as_deref()) {
+        match self.destination_on_click(workspace.as_deref()) {
             Ok(address) => {
                 if let Some(workspace) = workspace {
                     workspace.goto(address);
@@ -320,6 +420,13 @@ impl Debugger {
             }
             Err(error) => self.navigation_notice = Some(error),
         }
+    }
+
+    fn destination_on_click(&self, workspace: Option<&Workspace>) -> Result<u64, String> {
+        let address = self.destination(workspace)?;
+        let workspace = workspace.ok_or("The submitted workspace was closed; query again.")?;
+        StaticDestination::capture(&workspace.project.binary, address)?;
+        self.destination(Some(workspace))
     }
 
     fn navigation_ui(&mut self, ui: &mut Ui, workspace: Option<&mut Workspace>) {
@@ -340,6 +447,1288 @@ impl Debugger {
         if let Some(notice) = &self.navigation_notice {
             ui.label(RichText::new(notice).color(theme::WARNING));
         }
+    }
+}
+
+#[derive(Clone, Default)]
+struct WorkGate(Arc<AtomicBool>);
+
+impl WorkGate {
+    fn busy(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    fn acquire(&self) -> Option<WorkPermit> {
+        self.0.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).ok()?;
+        Some(WorkPermit(Arc::clone(&self.0)))
+    }
+}
+
+struct WorkPermit(Arc<AtomicBool>);
+
+impl Drop for WorkPermit {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Clone)]
+struct SourceIdentity {
+    instance: Arc<()>,
+    project: Arc<Project>,
+    path: PathBuf,
+    image: Option<rampage_loaders::ImageAt>,
+}
+
+struct CaptureSourceMetadata<'a> {
+    format: Format,
+    architecture: Arch,
+    big_endian: bool,
+    uuid: Option<&'a str>,
+}
+
+impl<'a> CaptureSourceMetadata<'a> {
+    fn from_cached(binary: &'a Binary) -> Self {
+        Self {
+            format: binary.format,
+            architecture: binary.arch,
+            big_endian: binary.big_endian,
+            uuid: match &binary.details {
+                Details::MachO(details) => details.uuid.as_deref(),
+                _ => None,
+            },
+        }
+    }
+
+    fn supports_capture_family(&self) -> bool {
+        // The loader does not retain CPU subtypes; this is button eligibility, never capture authority.
+        self.format == Format::MachO && self.architecture == Arch::X86_64 && !self.big_endian
+    }
+}
+
+impl SourceIdentity {
+    fn capture(workspace: &Workspace) -> Self {
+        Self {
+            instance: Arc::clone(&workspace.instance),
+            project: Arc::clone(&workspace.project),
+            path: workspace.path.clone(),
+            image: workspace.image,
+        }
+    }
+
+    fn matches(&self, workspace: &Workspace) -> bool {
+        Arc::ptr_eq(&self.instance, &workspace.instance)
+            && Arc::ptr_eq(&self.project, &workspace.project)
+            && self.path == workspace.path
+            && self.image == workspace.image
+    }
+
+    fn validate(&self, workspace: &Workspace) -> Result<(), String> {
+        if !self.matches(workspace) {
+            return Err("Original workspace was replaced; explicitly refresh and prepare again.".into());
+        }
+        self.project.binary.validate_backing_source().map_err(|error| error.to_string())
+    }
+}
+
+fn same_source(source: Option<&SourceIdentity>, workspace: Option<&Workspace>) -> bool {
+    match (source, workspace) {
+        (Some(source), Some(workspace)) => source.matches(workspace),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+#[derive(Clone)]
+struct WorkBinding {
+    revision: Arc<()>,
+    stop: Arc<()>,
+    output: Option<Arc<()>>,
+    socket: String,
+    source: Option<SourceIdentity>,
+}
+
+impl WorkBinding {
+    fn validate(&self, workflow: &Workflow, socket: &str, workspace: Option<&Workspace>) -> Result<(), String> {
+        if !Arc::ptr_eq(&self.revision, &workflow.revision)
+            || !Arc::ptr_eq(&self.stop, &workflow.stop)
+            || self.output.as_ref().is_some_and(|output| !Arc::ptr_eq(output, &workflow.output_revision))
+            || self.socket != socket
+            || !same_source(self.source.as_ref(), workspace)
+        {
+            return Err(
+                "Obsolete debugger result refused. Use an explicit Refresh or Prepare; nothing was retried.".into()
+            );
+        }
+        if let (Some(source), Some(workspace)) = (&self.source, workspace)
+            && source.project.binary.format != Format::Snapshot
+        {
+            source.validate(workspace)?;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) struct OpenSnapshot {
+    pub path: PathBuf,
+    pub document_sha256: String,
+    publication_status: DebuggerCapturePublicationStatus,
+    source: SourceIdentity,
+}
+
+impl OpenSnapshot {
+    pub fn validate_source(&self, workspace: Option<&Workspace>) -> Result<(), String> {
+        if self.publication_status != DebuggerCapturePublicationStatus::Published {
+            return Err(
+                "Uncertain publication cannot authorize opening a snapshot; inspect its output explicitly.".into()
+            );
+        }
+        let workspace = workspace.ok_or("The original workspace was closed.")?;
+        self.source.validate(workspace)?;
+        if workspace.editing.is_some() {
+            return Err("Finish or cancel the unsaved annotation editor before opening a saved capture.".into());
+        }
+        Ok(())
+    }
+}
+
+enum WorkflowAction {
+    Resolve(String),
+    Open(OpenSnapshot),
+}
+
+struct SessionView {
+    token: DebuggerToken,
+    token_json: String,
+    triple: String,
+    width: u64,
+    data_order: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ModuleRow {
+    index: usize,
+    name: String,
+    uuid: String,
+    triple: String,
+    width: u64,
+    object_order: String,
+}
+
+struct ThreadRow {
+    id: u64,
+    reason: u64,
+    stopped: bool,
+}
+
+struct Page<T> {
+    items: Vec<T>,
+    offset: usize,
+    total: usize,
+    next: Option<usize>,
+}
+
+struct RegisterView {
+    thread: u64,
+    order: String,
+    rows: Vec<(String, String)>,
+}
+
+struct MemoryView {
+    address: u64,
+    size: usize,
+    order: String,
+    bytes: String,
+}
+
+#[derive(Clone, Copy)]
+enum WorkKind {
+    Query,
+    Prepare,
+    Save,
+    Compare,
+}
+
+enum WorkResult {
+    Query(DebuggerRequest, Box<DebuggerResponse>),
+    Prepared(Arc<DebuggerCapturePreview>),
+    Saved { requested: PathBuf, publication: DebuggerCapturePublication },
+    SaveFailed { requested: PathBuf, document_sha256: String, error: rampage_api::ApiError },
+    Compared(rampage_api::RuntimeComparison),
+}
+
+enum SaveResourceNotice {
+    Publication(DebuggerCapturePublication),
+    Failure {
+        requested: PathBuf,
+        document_sha256: String,
+        message: String,
+        retention: Option<rampage_api::DebuggerCaptureStagingRetention>,
+    },
+}
+
+struct Workflow {
+    revision: Arc<()>,
+    stop: Arc<()>,
+    output_revision: Arc<()>,
+    cancellation: Arc<AtomicBool>,
+    job: Job<WorkResult>,
+    job_kind: WorkKind,
+    binding: Option<WorkBinding>,
+    source: Option<SourceIdentity>,
+    socket: String,
+    session: Option<SessionView>,
+    refresh_required: bool,
+    modules: Option<Page<ModuleRow>>,
+    threads: Option<Page<ThreadRow>>,
+    module_offset: usize,
+    thread_offset: usize,
+    module: Option<ModuleRow>,
+    thread: Option<u64>,
+    registers: Option<RegisterView>,
+    memory: Option<MemoryView>,
+    memory_address: String,
+    file_address: String,
+    size: usize,
+    permissions: usize,
+    preview: Option<Arc<DebuggerCapturePreview>>,
+    preview_binding: Option<WorkBinding>,
+    output: String,
+    saved: Option<DebuggerCapturePublication>,
+    save_resources: Vec<SaveResourceNotice>,
+    comparison: Option<rampage_api::RuntimeComparison>,
+    response: Option<DebuggerResponse>,
+    error: Option<String>,
+    form_changed: bool,
+}
+
+impl Default for Workflow {
+    fn default() -> Self {
+        Self {
+            revision: Arc::new(()),
+            stop: Arc::new(()),
+            output_revision: Arc::new(()),
+            cancellation: Arc::new(AtomicBool::new(false)),
+            job: Job::Idle,
+            job_kind: WorkKind::Query,
+            binding: None,
+            source: None,
+            socket: String::new(),
+            session: None,
+            refresh_required: false,
+            modules: None,
+            threads: None,
+            module_offset: 0,
+            thread_offset: 0,
+            module: None,
+            thread: None,
+            registers: None,
+            memory: None,
+            memory_address: String::new(),
+            file_address: String::new(),
+            size: 64,
+            permissions: 0,
+            preview: None,
+            preview_binding: None,
+            output: String::new(),
+            saved: None,
+            save_resources: Vec::new(),
+            comparison: None,
+            response: None,
+            error: None,
+            form_changed: false,
+        }
+    }
+}
+
+impl Workflow {
+    fn retain_save_resources(&mut self, result: &WorkResult) {
+        match result {
+            WorkResult::Saved { publication, .. } => {
+                self.save_resources.push(SaveResourceNotice::Publication(publication.clone()));
+            }
+            WorkResult::SaveFailed { requested, document_sha256, error } => {
+                let retention = match error {
+                    rampage_api::ApiError::DebuggerCaptureStagingRetained(retention) => Some(retention.clone()),
+                    _ => None,
+                };
+                self.save_resources.push(SaveResourceNotice::Failure {
+                    requested: requested.clone(),
+                    document_sha256: document_sha256.clone(),
+                    message: error.to_string(),
+                    retention,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(test)]
+    fn latest_publication_notice(&self) -> Option<&DebuggerCapturePublication> {
+        self.save_resources.iter().rev().find_map(|notice| match notice {
+            SaveResourceNotice::Publication(publication) => Some(publication),
+            SaveResourceNotice::Failure { .. } => None,
+        })
+    }
+
+    fn published_destination(&self, output: &std::path::Path) -> bool {
+        self.save_resources.iter().any(|notice| match notice {
+            SaveResourceNotice::Publication(publication) => publication.path.as_path() == output,
+            SaveResourceNotice::Failure { .. } => false,
+        })
+    }
+
+    fn invalidate_form(&mut self) {
+        self.revision = Arc::new(());
+        self.cancellation.store(true, Ordering::Release);
+        self.preview = None;
+        self.preview_binding = None;
+        self.saved = None;
+        self.comparison = None;
+    }
+
+    fn reset_stop(&mut self) {
+        self.invalidate_form();
+        self.stop = Arc::new(());
+        self.session = None;
+        self.modules = None;
+        self.threads = None;
+        self.module = None;
+        self.thread = None;
+        self.registers = None;
+        self.memory = None;
+        self.response = None;
+        self.module_offset = 0;
+        self.thread_offset = 0;
+        self.refresh_required = false;
+    }
+
+    fn edited(&mut self) {
+        self.invalidate_form();
+        self.form_changed = true;
+    }
+
+    fn poll(&mut self, socket: &str, workspace: Option<&Workspace>) {
+        if self.socket != socket || !same_source(self.source.as_ref(), workspace) {
+            self.reset_stop();
+            self.socket = socket.to_owned();
+            self.source = workspace.map(SourceIdentity::capture);
+        }
+        self.job.poll();
+        if matches!(self.job, Job::Done(_)) {
+            let Job::Done(result) = std::mem::replace(&mut self.job, Job::Idle) else { unreachable!() };
+            if let Ok(result) = &result {
+                self.retain_save_resources(result);
+            }
+            let result = (|| {
+                let binding = self.binding.take().ok_or("Missing debugger job binding.")?;
+                binding.validate(self, socket, workspace)?;
+                match result? {
+                    WorkResult::Query(request, response) => self.accept_response(&request, *response)?,
+                    WorkResult::Prepared(preview) => {
+                        let source = binding.source.as_ref().ok_or("Capture requires an original static source.")?;
+                        if !Arc::ptr_eq(preview.source_project(), &source.project) {
+                            return Err("Prepared capture belongs to a different source project.".into());
+                        }
+                        self.preview = Some(preview);
+                        self.preview_binding = Some(binding);
+                    }
+                    WorkResult::Saved { requested, publication } => {
+                        let preview = self.preview.as_ref().ok_or("Prepared capture was invalidated.")?;
+                        if requested.as_path() != std::path::Path::new(&self.output)
+                            || publication.path != requested
+                            || publication.document_sha256 != preview.summary().document_sha256
+                        {
+                            return Err("Publication does not match the explicit destination and preview.".into());
+                        }
+                        if publication.status == DebuggerCapturePublicationStatus::Published {
+                            self.saved = Some(publication);
+                        } else {
+                            self.saved = None;
+                            self.error = Some(
+                                concat!(
+                                    "Publication is uncertain: output may exist. Inspect the reported path; ",
+                                    "no open, retry, overwrite or cleanup was performed.",
+                                )
+                                .into(),
+                            );
+                        }
+                    }
+                    WorkResult::SaveFailed { error, .. } => return Err(error.to_string()),
+                    WorkResult::Compared(comparison) => self.comparison = Some(comparison),
+                }
+                Ok::<_, String>(())
+            })();
+            if let Err(error) = result {
+                self.form_changed = true;
+                if matches!(self.job_kind, WorkKind::Query | WorkKind::Prepare) {
+                    self.refresh_required = true;
+                    self.registers = None;
+                    self.memory = None;
+                    self.preview = None;
+                    self.preview_binding = None;
+                }
+                self.error = Some(error);
+            }
+        }
+        if let Some(binding) = &self.preview_binding
+            && let Err(error) = binding.validate(self, socket, workspace)
+        {
+            self.invalidate_form();
+            self.error = Some(error);
+        }
+    }
+
+    fn start(
+        &mut self,
+        ui: &Ui,
+        socket: &str,
+        workspace: Option<&Workspace>,
+        gate: &WorkGate,
+        kind: WorkKind,
+        work: impl FnOnce() -> Result<WorkResult, String> + Send + 'static,
+    ) {
+        if self.job.is_running() {
+            return;
+        }
+        let Some(permit) = gate.acquire() else { return };
+        self.binding = Some(WorkBinding {
+            revision: Arc::clone(&self.revision),
+            stop: Arc::clone(&self.stop),
+            output: matches!(kind, WorkKind::Save).then(|| Arc::clone(&self.output_revision)),
+            source: workspace.map(SourceIdentity::capture),
+            socket: socket.to_owned(),
+        });
+        self.job_kind = kind;
+        self.error = None;
+        self.job.start(false, ui.ctx(), move || {
+            let _permit = permit;
+            work()
+        });
+    }
+
+    fn query(
+        &mut self,
+        ui: &Ui,
+        socket: &str,
+        workspace: Option<&Workspace>,
+        gate: &WorkGate,
+        request: DebuggerRequest,
+    ) {
+        if gate.busy() || self.job.is_running() {
+            return;
+        }
+        self.invalidate_form();
+        self.form_changed = true;
+        match &request {
+            DebuggerRequest::ReadRegisters { .. } => self.registers = None,
+            DebuggerRequest::ReadMemory { .. } => self.memory = None,
+            _ => {}
+        }
+        if !PathBuf::from(socket).is_absolute() {
+            self.error = Some("Enter an explicit absolute Unix socket path before querying.".into());
+            return;
+        }
+        self.response = None;
+        let socket_path = PathBuf::from(socket);
+        let deadline = Instant::now() + Duration::from_millis(TIMEOUT_MS);
+        self.start(ui, socket, workspace, gate, WorkKind::Query, move || {
+            let response =
+                rampage_api::query_debugger(&socket_path, &request, deadline).map_err(|error| error.to_string())?;
+            Ok(WorkResult::Query(request, Box::new(response)))
+        });
+    }
+
+    fn accept_response(&mut self, request: &DebuggerRequest, response: DebuggerResponse) -> Result<(), String> {
+        let result = self.read_response(request, &response);
+        self.response = Some(response);
+        result
+    }
+
+    fn read_response(&mut self, request: &DebuggerRequest, response: &DebuggerResponse) -> Result<(), String> {
+        if !response.ok {
+            let error = response.error.as_ref().ok_or("Debugger returned an unspecified refusal.")?;
+            return Err(format!("{}: {}. Explicit Refresh is required; no retry was sent.", error.code, error.message));
+        }
+        if response.operation.as_deref() != Some(request.operation()) {
+            return Err("Debugger operation does not match the explicit request.".into());
+        }
+        let token = response.token.as_ref().ok_or("Missing stopped-session token.")?;
+        let expected = match request {
+            DebuggerRequest::DescribeSession { expected_token, .. } => expected_token.as_ref(),
+            DebuggerRequest::ListModules { expected_token, .. }
+            | DebuggerRequest::ListThreads { expected_token, .. }
+            | DebuggerRequest::ReadRegisters { expected_token, .. }
+            | DebuggerRequest::ReadMemory { expected_token, .. }
+            | DebuggerRequest::ResolveModuleAddress { expected_token, .. } => Some(expected_token),
+        };
+        if expected.is_some_and(|expected| expected != token) {
+            return Err("Debugger stop token changed. Explicit Refresh is required.".into());
+        }
+        let data = response.data.as_ref().ok_or("Missing debugger observation data.")?;
+        let order = data
+            .get("data_byte_order")
+            .and_then(|value| value.get("order"))
+            .and_then(|value| value.as_str())
+            .filter(|order| matches!(*order, "little" | "big"))
+            .unwrap_or("unknown")
+            .to_owned();
+        match request {
+            DebuggerRequest::DescribeSession { .. } => {
+                if data.get("state").and_then(|value| value.as_str()) != Some("stopped") {
+                    return Err("The endpoint did not describe a stopped session. Explicit Refresh is required.".into());
+                }
+                let mut encoded = data.clone();
+                let fields = encoded.as_object_mut().ok_or("Invalid stopped-session observation.")?;
+                fields.clear();
+                fields.insert("backend".into(), "lldb-sb".into());
+                fields.insert("session_id".into(), token.session_id.clone().into());
+                fields.insert("process_unique_id".into(), token.process_unique_id.into());
+                fields.insert("stop_id".into(), token.stop_id.into());
+                fields.insert("target_index".into(), token.target_index.into());
+                self.session = Some(SessionView {
+                    token: token.clone(),
+                    token_json: encoded.to_string(),
+                    triple: data.get("triple").and_then(|value| value.as_str()).unwrap_or("unknown").into(),
+                    width: data.get("address_byte_size").and_then(|value| value.as_u64()).unwrap_or(0),
+                    data_order: order,
+                });
+                self.refresh_required = false;
+            }
+            DebuggerRequest::ListModules { offset, limit, .. } | DebuggerRequest::ListThreads { offset, limit, .. } => {
+                let offset = offset.unwrap_or(0);
+                let items = data.get("items").and_then(|value| value.as_array()).ok_or("Missing page items.")?;
+                let total = data.get("total").and_then(|value| value.as_u64()).ok_or("Missing page total.")?;
+                let next = data.get("next_offset").ok_or("Missing page boundary.")?;
+                let end = offset.checked_add(items.len()).ok_or("Page boundary overflow.")?;
+                if total > 4096
+                    || items.len() > 32
+                    || items.len() > limit.unwrap_or(32)
+                    || end > total as usize
+                    || data.get("offset").and_then(|value| value.as_u64()) != Some(offset as u64)
+                    || if end < total as usize { next.as_u64() != Some(end as u64) } else { !next.is_null() }
+                {
+                    return Err("Enumeration page does not match the requested bounded range.".into());
+                }
+                let next = next.as_u64().map(|value| value as usize);
+                if matches!(request, DebuggerRequest::ListModules { .. }) {
+                    let mut rows = Vec::new();
+                    for (relative, row) in items.iter().enumerate() {
+                        let index = row.get("index").and_then(|value| value.as_u64()).ok_or("Missing module index.")?;
+                        if index != (offset + relative) as u64 {
+                            return Err("Module page index mismatch.".into());
+                        }
+                        rows.push(ModuleRow {
+                            index: index as usize,
+                            name: row.get("name").and_then(|value| value.as_str()).unwrap_or("unnamed").into(),
+                            uuid: row.get("uuid").and_then(|value| value.as_str()).unwrap_or("").into(),
+                            triple: row.get("triple").and_then(|value| value.as_str()).unwrap_or("unknown").into(),
+                            width: row.get("address_byte_size").and_then(|value| value.as_u64()).unwrap_or(0),
+                            object_order: row
+                                .get("target_byte_order")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown")
+                                .into(),
+                        });
+                    }
+                    self.modules = Some(Page { items: rows, offset, total: total as usize, next });
+                } else {
+                    let mut rows = Vec::new();
+                    for row in items {
+                        let id = address_value(
+                            row.get("thread_id").and_then(|value| value.as_str()).ok_or("Missing thread identity.")?,
+                        )?;
+                        if id == 0 || rows.iter().any(|row: &ThreadRow| row.id == id) {
+                            return Err("Duplicate or invalid thread identity.".into());
+                        }
+                        rows.push(ThreadRow {
+                            id,
+                            reason: row.get("stop_reason").and_then(|value| value.as_u64()).unwrap_or(0),
+                            stopped: row.get("is_stopped").and_then(|value| value.as_bool()).unwrap_or(false),
+                        });
+                    }
+                    self.threads = Some(Page { items: rows, offset, total: total as usize, next });
+                }
+            }
+            DebuggerRequest::ReadRegisters { thread_id, .. } => {
+                let thread = request_address(thread_id)?;
+                let observed = data.get("thread_id").and_then(|value| value.as_str()).map(address_value).transpose()?;
+                if observed != Some(thread) {
+                    return Err("Register observation belongs to another thread.".into());
+                }
+                let values = data
+                    .get("context")
+                    .and_then(|value| value.get("registers"))
+                    .and_then(|value| value.as_object())
+                    .ok_or("Missing raw register values.")?;
+                if values.is_empty() || values.len() > 34 {
+                    return Err("Register observation exceeds the bounded view.".into());
+                }
+                let rows = values
+                    .iter()
+                    .map(|(name, value)| {
+                        let text = value.as_str().ok_or("Invalid raw register value.")?;
+                        let digits = text.strip_prefix("0x").ok_or("Register is not raw hexadecimal.")?;
+                        if digits.is_empty()
+                            || digits.len() > 16
+                            || !digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        {
+                            return Err("Invalid raw register hexadecimal value.".to_owned());
+                        }
+                        Ok((name.clone(), text.to_owned()))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                self.registers = Some(RegisterView { thread, order, rows });
+            }
+            DebuggerRequest::ReadMemory { address, size, permissions, thread_id, .. } => {
+                let address = request_address(address)?;
+                let bytes =
+                    data.get("bytes_hex").and_then(|value| value.as_str()).ok_or("Missing raw memory bytes.")?;
+                let observed_address =
+                    data.get("address").and_then(|value| value.as_str()).map(address_value).transpose()?;
+                let observed_thread = data.get("thread_id").and_then(|value| {
+                    value.as_u64().or_else(|| value.as_str().and_then(|text| address_value(text).ok()))
+                });
+                if !(1..=4096).contains(size)
+                    || address.checked_add(*size as u64).is_none()
+                    || bytes.len() != *size * 2
+                    || !bytes.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    || observed_address != Some(address)
+                    || observed_thread != thread_id.as_ref().map(request_address).transpose()?
+                    || data.get("size").and_then(|value| value.as_u64()) != Some(*size as u64)
+                    || data.get("permissions").and_then(|value| value.as_str()) != Some(permission_name(permissions))
+                    || data.get("interpretation").and_then(|value| value.as_str()) != Some("raw-bytes-only")
+                {
+                    return Err("Memory observation does not match the complete requested raw-byte range.".into());
+                }
+                self.memory = Some(MemoryView { address, size: *size, order, bytes: bytes.to_owned() });
+            }
+            DebuggerRequest::ResolveModuleAddress { .. } => {
+                return Err("Use the guarded static-resolution view.".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn token(&self) -> Option<DebuggerToken> {
+        self.session.as_ref().filter(|_| !self.refresh_required).map(|session| session.token.clone())
+    }
+
+    fn capture_request(&self, workspace: Option<&Workspace>) -> Result<DebuggerCaptureRequest, String> {
+        let token = self.token().ok_or("Connect or explicitly Refresh the stopped session first.")?;
+        let session = self.session.as_ref().ok_or("No retained stopped session.")?;
+        let workspace =
+            workspace.ok_or("Inspection works without a source; capture requires the original static image.")?;
+        let source = self.source.as_ref().ok_or("Explicitly Refresh after opening the original image.")?;
+        source.validate(workspace)?;
+        let metadata = CaptureSourceMetadata::from_cached(&source.project.binary);
+        let module = self.module.as_ref().ok_or("Explicitly list and select a module.")?;
+        let thread_id = self.thread.ok_or("Explicitly list and select a thread.")?;
+        if !metadata.supports_capture_family()
+            || module_arch(&module.triple) != Ok(Arch::X86_64)
+            || module_arch(&session.triple) != Ok(Arch::X86_64)
+            || module.width != 8
+            || session.width != 8
+            || module.object_order != "little"
+            || session.data_order != "little"
+        {
+            return Err(concat!(
+                "Capture supports ordinary little-endian x86_64 Mach-O only. ",
+                "ARM64 data order remains unknown.",
+            )
+            .into());
+        }
+        if metadata.uuid.map(macho_uuid).transpose()? != Some(macho_uuid(&module.uuid)?) {
+            return Err("Selected module UUID does not exactly match the retained original image.".into());
+        }
+        let file_address = address_value(&self.file_address)?;
+        if !(1..=4096).contains(&self.size) || file_address.checked_add(self.size as u64).is_none() {
+            return Err("Capture requires one non-overflowing file-VA range of 1..4096 bytes.".into());
+        }
+        Ok(DebuggerCaptureRequest {
+            expected_token: token,
+            module_index: module.index,
+            module_uuid: module.uuid.clone(),
+            thread_id,
+            file_address,
+            size: self.size as u64,
+            permissions: selected_permissions(self.permissions),
+        })
+    }
+
+    fn validate_preview(&self, socket: &str, workspace: Option<&Workspace>) -> Result<(), String> {
+        let binding = self.preview_binding.as_ref().ok_or("Prepare a new capture first.")?;
+        binding.validate(self, socket, workspace)?;
+        let preview = self.preview.as_ref().ok_or("Prepare a new capture first.")?;
+        let source = binding.source.as_ref().ok_or("Missing retained source identity.")?;
+        if !Arc::ptr_eq(preview.source_project(), &source.project) {
+            return Err("Prepared capture source identity changed.".into());
+        }
+        Ok(())
+    }
+
+    fn ui(
+        &mut self,
+        ui: &mut Ui,
+        socket: &str,
+        workspace: Option<&Workspace>,
+        gate: &WorkGate,
+        other_running: bool,
+    ) -> Option<WorkflowAction> {
+        let busy = other_running || gate.busy() || self.job.is_running();
+        ui.horizontal(|ui| {
+            for label in ["Connect stopped session", "Refresh stopped session"] {
+                if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                    self.reset_stop();
+                    self.query(
+                        ui,
+                        socket,
+                        workspace,
+                        gate,
+                        DebuggerRequest::DescribeSession { version: 1, expected_token: None, response_budget: None },
+                    );
+                    self.form_changed = true;
+                }
+            }
+            if busy {
+                ui.spinner();
+                ui.label("One bounded local job is pending; closing this window does not release its permit.");
+            }
+        });
+        ui.label("Each inspection button sends one query. No automatic refresh, retry, navigation or target control.");
+        ui.label(concat!(
+            "Historical, revalidated non-atomic observations: a token does not prove the current stop, ",
+            "target authenticity, control flow or layout.",
+        ));
+        if let Some(session) = &self.session {
+            ui.label(format!(
+                "Retained stop {} · process {} · target {} · {}",
+                session.token.stop_id, session.token.process_unique_id, session.token.target_index, session.triple
+            ));
+            ui.label(format!("Runtime data byte order: {} (no scalar interpretation)", session.data_order));
+        } else {
+            ui.label("Not connected. No query has been sent by opening this window.");
+        }
+        if self.refresh_required {
+            ui.colored_label(
+                theme::WARNING,
+                "Observation refused. Explicit Refresh is required; no recovery was attempted.",
+            );
+        }
+        if let Some(error) = &self.error {
+            ui.colored_label(theme::WARNING, error);
+        }
+        self.selectors(ui, socket, workspace, gate, busy);
+        let mut memory_changed = false;
+        ui.horizontal(|ui| {
+            ui.label("Raw runtime load address (0x)");
+            memory_changed |= ui
+                .add(
+                    TextEdit::singleline(&mut self.memory_address)
+                        .id(egui::Id::new("debugger-memory-address"))
+                        .char_limit(18)
+                        .desired_width(180.0),
+                )
+                .changed();
+            ui.label("Bytes");
+            memory_changed |= ui.add(egui::DragValue::new(&mut self.size).range(1..=4096)).changed();
+        });
+        let mut file_changed = false;
+        ui.horizontal(|ui| {
+            ui.label("Exact mapping permissions");
+            let previous = self.permissions;
+            egui::ComboBox::from_id_salt("debugger-permissions")
+                .selected_text(PERMISSION_NAMES[self.permissions])
+                .show_ui(ui, |ui| {
+                    for (index, name) in PERMISSION_NAMES.iter().enumerate() {
+                        ui.selectable_value(&mut self.permissions, index, *name);
+                    }
+                });
+            memory_changed |= previous != self.permissions;
+            ui.label("File virtual address (0x), not a file offset");
+            file_changed |= ui
+                .add(
+                    TextEdit::singleline(&mut self.file_address)
+                        .id(egui::Id::new("debugger-file-address"))
+                        .char_limit(18)
+                        .desired_width(180.0),
+                )
+                .changed();
+        });
+        if memory_changed || file_changed {
+            self.edited();
+        }
+        if memory_changed {
+            self.memory = None;
+        }
+        let token = self.token();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    !busy && token.is_some() && self.thread.is_some(),
+                    egui::Button::new("Read selected thread registers"),
+                )
+                .clicked()
+            {
+                self.query(
+                    ui,
+                    socket,
+                    workspace,
+                    gate,
+                    DebuggerRequest::ReadRegisters {
+                        version: 1,
+                        expected_token: token.clone().unwrap(),
+                        response_budget: None,
+                        thread_id: DebuggerAddress::Integer(self.thread.unwrap()),
+                        registers: None,
+                    },
+                );
+            }
+            let address = address_value(&self.memory_address);
+            if ui
+                .add_enabled(!busy && token.is_some() && address.is_ok(), egui::Button::new("Read raw memory"))
+                .clicked()
+            {
+                self.query(
+                    ui,
+                    socket,
+                    workspace,
+                    gate,
+                    DebuggerRequest::ReadMemory {
+                        version: 1,
+                        expected_token: token.clone().unwrap(),
+                        response_budget: None,
+                        address: DebuggerAddress::Integer(address.unwrap()),
+                        size: self.size,
+                        permissions: selected_permissions(self.permissions),
+                        thread_id: self.thread.map(DebuggerAddress::Integer),
+                    },
+                );
+            }
+        });
+        if let Some(registers) = &self.registers {
+            ui.label(RichText::new(format!("Raw registers · thread {:#x}", registers.thread)).strong());
+            ui.label(format!("Runtime data byte order: {}", registers.order));
+            egui::Grid::new("debugger-register-values").num_columns(2).show(ui, |ui| {
+                for (name, value) in &registers.rows {
+                    ui.monospace(name);
+                    ui.monospace(value);
+                    ui.end_row();
+                }
+            });
+        }
+        if let Some(memory) = &self.memory {
+            ui.label(RichText::new(format!("Raw memory · {:#x} · {} bytes", memory.address, memory.size)).strong());
+            ui.label(format!("Runtime data byte order: {}. Hex bytes only; no scalar interpretation.", memory.order));
+            ui.label("LLDB ReadMemory may normalize software-breakpoint trap bytes.");
+            egui::ScrollArea::vertical().id_salt("debugger-hex").max_height(180.0).show(ui, |ui| {
+                for (index, chunk) in memory.bytes.as_bytes().chunks(32).enumerate() {
+                    let bytes =
+                        chunk.chunks(2).map(|pair| std::str::from_utf8(pair).unwrap()).collect::<Vec<_>>().join(" ");
+                    ui.monospace(format!("{:016x}  {bytes}", memory.address + (index * 16) as u64));
+                }
+            });
+        }
+        let mut action = None;
+        let can_resolve = token.is_some() && self.module.is_some() && address_value(&self.file_address).is_ok();
+        if ui.add_enabled(!busy && can_resolve, egui::Button::new("Resolve selected file address")).clicked() {
+            let module = self.module.as_ref().unwrap();
+            if macho_uuid(&module.uuid).is_ok() {
+                action = Some(WorkflowAction::Resolve(format!(
+                    "{{\"version\":1,\"operation\":\"resolve_module_address\",\"expected_token\":{},\
+                    \"module_uuid\":\"{}\",\"file_address\":\"{}\"}}",
+                    self.session.as_ref().unwrap().token_json,
+                    module.uuid,
+                    self.file_address,
+                )));
+            } else {
+                self.error = Some("Static navigation requires an exact Mach-O module UUID.".into());
+            }
+        }
+        ui.label("Resolution never navigates automatically. Go to uses only the matching already-open static image.");
+        ui.separator();
+        if let Some(open) = self.capture_ui(ui, socket, workspace, gate, busy) {
+            action = Some(WorkflowAction::Open(open));
+        }
+        ui.collapsing("Advanced: last structured observation JSON", |ui| {
+            if let Some(response) = &self.response {
+                ui.monospace(format!("operation: {:?}; token: {:?}", response.operation, response.token));
+                if let Some(data) = &response.data {
+                    ui.add(egui::Label::new(RichText::new(format!("{data:#}")).monospace()).selectable(true));
+                }
+                if let Some(error) = &response.error {
+                    ui.monospace(format!("{}: {}", error.code, error.message));
+                }
+                ui.monospace(format!("observation: {:?}", response.observation));
+            }
+        });
+        action
+    }
+
+    fn selectors(&mut self, ui: &mut Ui, socket: &str, workspace: Option<&Workspace>, gate: &WorkGate, busy: bool) {
+        let token = self.token();
+        for modules in [true, false] {
+            let mut offset = if modules { self.module_offset } else { self.thread_offset };
+            let name = if modules { "modules" } else { "threads" };
+            let mut query = false;
+            ui.horizontal(|ui| {
+                ui.label(format!("{name} page offset (32 rows maximum)"));
+                if ui.add(egui::DragValue::new(&mut offset).range(0..=4096)).changed() {
+                    self.edited();
+                }
+                query |=
+                    ui.add_enabled(!busy && token.is_some(), egui::Button::new(format!("List {name} page"))).clicked();
+                let next = if modules {
+                    self.modules.as_ref().and_then(|page| page.next)
+                } else {
+                    self.threads.as_ref().and_then(|page| page.next)
+                };
+                let previous = if modules {
+                    self.modules.as_ref().map(|page| page.offset)
+                } else {
+                    self.threads.as_ref().map(|page| page.offset)
+                };
+                if ui
+                    .add_enabled(
+                        !busy && token.is_some() && previous.is_some_and(|offset| offset > 0),
+                        egui::Button::new(format!("Previous {name} page")),
+                    )
+                    .clicked()
+                {
+                    offset = previous.unwrap().saturating_sub(32);
+                    query = true;
+                    self.edited();
+                }
+                if ui
+                    .add_enabled(
+                        !busy && token.is_some() && next.is_some(),
+                        egui::Button::new(format!("Next {name} page")),
+                    )
+                    .clicked()
+                {
+                    offset = next.unwrap();
+                    query = true;
+                    self.edited();
+                }
+            });
+            if modules {
+                self.module_offset = offset;
+            } else {
+                self.thread_offset = offset;
+            }
+            if query {
+                let expected_token = token.clone().unwrap();
+                let request = if modules {
+                    DebuggerRequest::ListModules {
+                        version: 1,
+                        expected_token,
+                        response_budget: None,
+                        offset: Some(offset),
+                        limit: Some(32),
+                    }
+                } else {
+                    DebuggerRequest::ListThreads {
+                        version: 1,
+                        expected_token,
+                        response_budget: None,
+                        offset: Some(offset),
+                        limit: Some(32),
+                    }
+                };
+                self.query(ui, socket, workspace, gate, request);
+            }
+        }
+        let mut module = None;
+        if let Some(page) = &self.modules {
+            ui.label(format!(
+                "Modules {}..{} of {} · select explicitly",
+                page.offset,
+                page.offset + page.items.len(),
+                page.total
+            ));
+            for row in &page.items {
+                let selected = self.module.as_ref().is_some_and(|module| module.index == row.index);
+                if ui
+                    .selectable_label(
+                        selected,
+                        format!("Module {} · {} · {} · {}", row.index, row.name, row.uuid, row.triple),
+                    )
+                    .clicked()
+                {
+                    module = Some(row.clone());
+                }
+            }
+        }
+        if let Some(module) = module
+            && self.module.as_ref() != Some(&module)
+        {
+            self.edited();
+            self.registers = None;
+            self.memory = None;
+            self.module = Some(module);
+        }
+        let mut thread = None;
+        if let Some(page) = &self.threads {
+            ui.label(format!(
+                "Threads {}..{} of {} · select explicitly",
+                page.offset,
+                page.offset + page.items.len(),
+                page.total
+            ));
+            for row in &page.items {
+                if ui
+                    .selectable_label(
+                        self.thread == Some(row.id),
+                        format!("Thread {:#x} · stop reason {} · SDK is_stopped {}", row.id, row.reason, row.stopped),
+                    )
+                    .clicked()
+                {
+                    thread = Some(row.id);
+                }
+            }
+        }
+        if let Some(thread) = thread
+            && self.thread != Some(thread)
+        {
+            self.edited();
+            self.registers = None;
+            self.memory = None;
+            self.thread = Some(thread);
+        }
+    }
+
+    fn capture_ui(
+        &mut self,
+        ui: &mut Ui,
+        socket: &str,
+        workspace: Option<&Workspace>,
+        gate: &WorkGate,
+        busy: bool,
+    ) -> Option<OpenSnapshot> {
+        ui.label(RichText::new("Client-local capture preview → Compare / Save → Open saved snapshot").strong());
+        ui.label("Prepare authorizes nine fixed token-bound queries under one deadline, with no retry or publication.");
+        ui.label(concat!(
+            "Button availability uses cached metadata, not CPU subtype/header proof. ",
+            "Explicit Prepare validates the exact source header before any query.",
+        ));
+        ui.label(
+            "Historical observations, not the current stop or an atomic transaction. No proven C++ layout or flow.",
+        );
+        let request = self.capture_request(workspace);
+        if let Err(reason) = &request {
+            ui.colored_label(theme::DIM, reason);
+        }
+        if ui.add_enabled(!busy && request.is_ok(), egui::Button::new("Prepare capture preview (9 queries)")).clicked()
+        {
+            self.invalidate_form();
+            self.form_changed = true;
+            let request = request.unwrap();
+            let source = Arc::clone(&workspace.unwrap().project);
+            let socket_path = PathBuf::from(socket);
+            self.cancellation = Arc::new(AtomicBool::new(false));
+            let cancellation = Arc::clone(&self.cancellation);
+            self.start(ui, socket, workspace, gate, WorkKind::Prepare, move || {
+                rampage_api::prepare_debugger_capture(
+                    source,
+                    &socket_path,
+                    &request,
+                    Duration::from_millis(TIMEOUT_MS),
+                    &cancellation,
+                )
+                .map(|preview| WorkResult::Prepared(Arc::new(preview)))
+                .map_err(|error| error.to_string())
+            });
+        }
+        let current = self.validate_preview(socket, workspace).is_ok();
+        if let Some(preview) = &self.preview {
+            let summary = preview.summary();
+            ui.label(format!(
+                "Module {} · thread {:#x} · file VA {:#x} → load VA {:#x} · {} bytes",
+                summary.module_uuid, summary.thread_id, summary.file_address, summary.load_address, summary.size
+            ));
+            ui.label(format!(
+                "Prepared token: process {} · stop {} · target {}",
+                summary.token.process_unique_id, summary.token.stop_id, summary.token.target_index
+            ));
+            ui.label(format!("Exact captured mapping permissions: {}", permission_name(&summary.permissions)));
+            ui.monospace(format!("Bytes SHA-256: {}", summary.bytes_sha256));
+            ui.monospace(format!("Document SHA-256: {}", summary.document_sha256));
+            for limitation in &summary.limitations {
+                ui.colored_label(theme::WARNING, limitation);
+            }
+            for path in &summary.retained_staging_paths {
+                ui.colored_label(
+                    theme::WARNING,
+                    format!("Prepared capture staging requires operator inspection/cleanup: {}", path.display(),),
+                );
+            }
+        }
+        if ui.add_enabled(!busy && current, egui::Button::new("Compare prepared capture with original")).clicked() {
+            let preview = Arc::clone(self.preview.as_ref().unwrap());
+            self.comparison = None;
+            self.start(ui, socket, workspace, gate, WorkKind::Compare, move || {
+                preview.compare_original().map(WorkResult::Compared).map_err(|error| error.to_string())
+            });
+        }
+        if let Some(comparison) = &self.comparison {
+            ui.label(format!(
+                "Prepared capture comparison: {} equal · {} changed · {} unavailable bytes",
+                comparison.equal_bytes, comparison.changed_bytes, comparison.unavailable_bytes
+            ));
+            ui.label("This compares the prepared observations with the retained original, not the saved file.");
+            for span in &comparison.spans {
+                ui.monospace(format!(
+                    "{:#x} → {:#x} · {} bytes · {:?}",
+                    span.runtime_address, span.image_address, span.size, span.status
+                ));
+            }
+            for limitation in &comparison.limitations {
+                ui.colored_label(theme::WARNING, limitation);
+            }
+        }
+        ui.label("Explicit client-local output path in an existing private 0700 directory; never overwrites a file.");
+        ui.label(concat!(
+            "An authorized Save may finish after inputs change or this window closes; ",
+            "it never opens the file automatically.",
+        ));
+        if ui
+            .add(
+                TextEdit::singleline(&mut self.output)
+                    .id(egui::Id::new("debugger-capture-output"))
+                    .char_limit(1024)
+                    .desired_width(f32::INFINITY),
+            )
+            .changed()
+        {
+            self.output_revision = Arc::new(());
+            self.saved = None;
+        }
+        let published_output = self.published_destination(&PathBuf::from(&self.output));
+        if ui
+            .add_enabled(
+                !busy && current && !published_output && PathBuf::from(&self.output).is_absolute(),
+                egui::Button::new("Save prepared capture"),
+            )
+            .clicked()
+        {
+            // Revalidate at the click, not only when deciding whether to draw an enabled button.
+            if let Err(error) = self.validate_preview(socket, workspace) {
+                self.error = Some(error);
+            } else {
+                let preview = Arc::clone(self.preview.as_ref().unwrap());
+                let path = PathBuf::from(&self.output);
+                let document_sha256 = preview.summary().document_sha256.clone();
+                self.saved = None;
+                self.start(ui, socket, workspace, gate, WorkKind::Save, move || {
+                    Ok(match preview.publish(&path) {
+                        Ok(publication) => WorkResult::Saved { requested: path, publication },
+                        Err(error) => WorkResult::SaveFailed { requested: path, document_sha256, error },
+                    })
+                });
+            }
+        }
+        if let Some(saved) = &self.saved {
+            ui.label(format!("Saved locally: {}. The original workspace is still open.", saved.path.display()));
+        }
+        self.save_resources_ui(ui);
+        let editing = workspace.is_some_and(|workspace| workspace.editing.is_some());
+        if editing {
+            ui.label("Finish or cancel the unsaved annotation editor before opening a saved capture.");
+        }
+        let published =
+            self.saved.as_ref().is_some_and(|saved| saved.status == DebuggerCapturePublicationStatus::Published);
+        if ui
+            .add_enabled(
+                !busy && current && !editing && published && self.comparison.is_some(),
+                egui::Button::new("Open saved snapshot"),
+            )
+            .clicked()
+        {
+            if let Err(error) = self.validate_preview(socket, workspace) {
+                self.error = Some(error);
+                return None;
+            }
+            let saved = self.saved.as_ref().unwrap();
+            return Some(OpenSnapshot {
+                path: saved.path.clone(),
+                document_sha256: saved.document_sha256.clone(),
+                publication_status: saved.status,
+                source: SourceIdentity::capture(workspace.unwrap()),
+            });
+        }
+        None
+    }
+
+    fn save_resources_ui(&self, ui: &mut Ui) {
+        if !self.save_resources.is_empty() {
+            ui.label(
+                "Save resource notices survive input/workspace changes; they authorize neither opening nor cleanup.",
+            );
+        }
+        for notice in &self.save_resources {
+            match notice {
+                SaveResourceNotice::Publication(publication) => Self::publication_notice_ui(ui, publication),
+                SaveResourceNotice::Failure { requested, document_sha256, message, retention } => {
+                    ui.colored_label(
+                        theme::WARNING,
+                        format!(
+                            "Save refusal retained for inspection (not publication authority): {}",
+                            requested.display(),
+                        ),
+                    );
+                    ui.monospace(format!("Expected publication document SHA-256: {document_sha256}"));
+                    ui.colored_label(theme::WARNING, message);
+                    if let Some(retention) = retention {
+                        Self::retained_paths_ui(ui, &retention.paths);
+                    }
+                }
+            }
+        }
+    }
+
+    fn retained_paths_ui(ui: &mut Ui, paths: &[PathBuf]) {
+        for path in paths {
+            ui.colored_label(
+                theme::WARNING,
+                format!(
+                    "Retained staging requires operator inspection/cleanup (not automatic deletion): {}",
+                    path.display(),
+                ),
+            );
+        }
+    }
+
+    fn publication_notice_ui(ui: &mut Ui, publication: &DebuggerCapturePublication) {
+        let status = match publication.status {
+            DebuggerCapturePublicationStatus::Published => "Published by an explicit Save",
+            DebuggerCapturePublicationStatus::PublishedUncertain => "Publication uncertain; output may exist",
+        };
+        ui.colored_label(theme::WARNING, format!("{status}: {}", publication.path.display()));
+        ui.monospace(format!("Expected publication document SHA-256: {}", publication.document_sha256));
+        for warning in &publication.warnings {
+            ui.colored_label(theme::WARNING, warning);
+        }
+        Self::retained_paths_ui(ui, &publication.retained_staging_paths);
+    }
+}
+
+const PERMISSION_NAMES: [&str; 4] = ["r--", "rw-", "r-x", "rwx"];
+
+fn permission_name(permissions: &DebuggerPermissions) -> &'static str {
+    match permissions {
+        DebuggerPermissions::Read => "r--",
+        DebuggerPermissions::ReadWrite => "rw-",
+        DebuggerPermissions::ReadExecute => "r-x",
+        DebuggerPermissions::ReadWriteExecute => "rwx",
+    }
+}
+
+fn selected_permissions(index: usize) -> DebuggerPermissions {
+    match index {
+        1 => DebuggerPermissions::ReadWrite,
+        2 => DebuggerPermissions::ReadExecute,
+        3 => DebuggerPermissions::ReadWriteExecute,
+        _ => DebuggerPermissions::Read,
     }
 }
 
@@ -555,7 +1944,7 @@ impl StaticDestination {
             return Err("The selected static image is not Mach-O".into());
         };
         let uuid = macho_uuid(details.uuid.as_deref().ok_or("The selected static Mach-O has no UUID")?)?;
-        if binary.format != Format::MachO || !supported_static_variant(binary) {
+        if binary.format != Format::MachO || !read_supported_static_variant(binary) {
             return Err("Unsupported selected static architecture or variant".into());
         }
         validate_static_span(binary, address)?;
@@ -765,7 +2154,15 @@ fn module_arch(triple: &str) -> Result<Arch, String> {
     }
 }
 
-fn supported_static_variant(binary: &Binary) -> bool {
+#[cfg(test)]
+std::thread_local! {
+    static STATIC_HEADER_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn read_supported_static_variant(binary: &Binary) -> bool {
+    // Mapped-byte validation belongs to explicit query/navigation actions, not paint-time eligibility.
+    #[cfg(test)]
+    STATIC_HEADER_READS.with(|reads| reads.set(reads.get() + 1));
     let bytes = binary.image_bytes();
     let Some(header) = bytes.get(..12) else { return false };
     if !matches!(&header[..4], [0xcf, 0xfa, 0xed, 0xfe] | [0xce, 0xfa, 0xed, 0xfe]) {
@@ -846,11 +2243,16 @@ fn template(index: usize) -> String {
 mod tests {
     use super::*;
     use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     const TEST_UUID: &str = "01234567-89ab-cdef-0123-456789abcdef";
     const FILE_BASE: u64 = 0x1_0000_0000;
     const FILE_ADDRESS: u64 = FILE_BASE + 0x204;
+
+    fn open_advanced<T>(harness: &mut Harness<'_, T>) {
+        harness.get_by_label("Advanced: raw requests and JSON responses").click_accesskit();
+        harness.run();
+    }
 
     struct StaticFixture {
         directory: PathBuf,
@@ -887,8 +2289,8 @@ mod tests {
 
     impl Drop for StaticFixture {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.path);
-            let _ = std::fs::remove_dir(&self.directory);
+            // This fixture owns its freshly created directory; production never cleans publication paths.
+            let _ = std::fs::remove_dir_all(&self.directory);
         }
     }
 
@@ -1239,6 +2641,129 @@ mod tests {
         debugger
     }
 
+    fn capture_ready_workflow(workspace: &Workspace) -> Workflow {
+        let mut workflow = stopped_workflow("x86_64", "little", Some(workspace));
+        workflow.module = Some(ModuleRow {
+            index: 0,
+            name: "controlled image".into(),
+            uuid: TEST_UUID.into(),
+            triple: "x86_64-apple-macosx".into(),
+            width: 8,
+            object_order: "little".into(),
+        });
+        workflow.thread = Some(7);
+        workflow.file_address = format!("{FILE_ADDRESS:#x}");
+        workflow.size = 4;
+        workflow.permissions = 2;
+        workflow
+    }
+
+    fn x64_bound_debugger(workspace: &Workspace) -> Debugger {
+        let mut debugger = bound_debugger(Some(workspace));
+        let Job::Done(Ok(reply)) = &mut debugger.job else { panic!("missing controlled resolution") };
+        let Some(Ok(resolution)) = &mut reply.resolution else { panic!("missing controlled resolution") };
+        resolution.architecture = Arch::X86_64;
+        debugger.workflow = capture_ready_workflow(workspace);
+        debugger.workflow.socket = debugger.socket.clone();
+        debugger
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn debugger_paint_never_reads_mapped_headers_before_or_after_source_mutation_or_truncation() {
+        use std::io::Write;
+
+        for truncate in [false, true] {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            let workspace = fixture.workspace();
+            let project = Arc::clone(&workspace.project);
+            let metadata = CaptureSourceMetadata::from_cached(&project.binary);
+            let debugger = x64_bound_debugger(&workspace);
+            let initial_reads = STATIC_HEADER_READS.with(std::cell::Cell::get);
+            let mut harness = Harness::builder().with_size(egui::vec2(1500.0, 1300.0)).build_ui_state(
+                |ui, state: &mut (Debugger, Workspace)| state.0.show(ui.ctx(), Some(&mut state.1)),
+                (debugger, workspace),
+            );
+            harness.run();
+            assert!(!harness.get_by_label("Prepare capture preview (9 queries)").accesskit_node().is_disabled());
+            harness.get_by_label("Go to matching static image address");
+            assert_eq!(STATIC_HEADER_READS.with(std::cell::Cell::get), initial_reads);
+            if truncate {
+                std::fs::OpenOptions::new().write(true).open(&fixture.path).unwrap().set_len(0).unwrap();
+            } else {
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&fixture.path)
+                    .unwrap()
+                    .write_all(b"observable backing mutation before paint")
+                    .unwrap();
+            }
+            assert!(project.binary.validate_backing_source().is_err());
+            assert!(metadata.supports_capture_family(), "cached family is not proof of current backing");
+            assert_eq!(metadata.uuid.map(macho_uuid).transpose().unwrap(), Some(macho_uuid(TEST_UUID).unwrap()));
+            for _ in 0..3 {
+                harness.run();
+                assert!(harness.get_by_label("Prepare capture preview (9 queries)").accesskit_node().is_disabled());
+                assert!(harness.query_by_label("Go to matching static image address").is_none());
+                assert!(harness.state().0.click_context.is_none());
+                assert_eq!(harness.state().1.cursor, 0);
+                assert_eq!(STATIC_HEADER_READS.with(std::cell::Cell::get), initial_reads);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_goto_revalidates_the_static_header_but_paint_uses_only_cached_navigation_facts() {
+        let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+        let workspace = fixture.workspace();
+        let debugger = x64_bound_debugger(&workspace);
+        let initial_reads = STATIC_HEADER_READS.with(std::cell::Cell::get);
+        let mut harness = Harness::builder().with_size(egui::vec2(1500.0, 1300.0)).build_ui_state(
+            |ui, state: &mut (Debugger, Workspace)| state.0.show(ui.ctx(), Some(&mut state.1)),
+            (debugger, workspace),
+        );
+        harness.run();
+        assert_eq!(STATIC_HEADER_READS.with(std::cell::Cell::get), initial_reads);
+        assert_eq!(harness.state().1.cursor, 0);
+        harness.get_by_label("Go to matching static image address").click_accesskit();
+        harness.run();
+        assert_eq!(STATIC_HEADER_READS.with(std::cell::Cell::get), initial_reads + 1);
+        assert_eq!(harness.state().1.cursor, FILE_ADDRESS);
+        assert!(harness.state().1.can_go_back());
+        for _ in 0..3 {
+            harness.run();
+            assert_eq!(STATIC_HEADER_READS.with(std::cell::Cell::get), initial_reads + 1);
+            assert!(!harness.state().0.busy());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_capture_eligibility_disables_known_unsupported_sdk_variants_without_reading_the_image() {
+        for triple in ["x86_64h-apple-macosx", "arm64e-apple-macosx", "unknown"] {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            let workspace = fixture.workspace();
+            let mut workflow = capture_ready_workflow(&workspace);
+            workflow.module.as_mut().unwrap().triple = triple.into();
+            let debugger = Debugger { shown: true, socket: workflow.socket.clone(), workflow, ..Default::default() };
+            let initial_reads = STATIC_HEADER_READS.with(std::cell::Cell::get);
+            let mut harness = Harness::builder().with_size(egui::vec2(1500.0, 1300.0)).build_ui_state(
+                |ui, state: &mut (Debugger, Workspace)| state.0.show(ui.ctx(), Some(&mut state.1)),
+                (debugger, workspace),
+            );
+            harness.run();
+            assert!(harness.get_by_label("Prepare capture preview (9 queries)").accesskit_node().is_disabled());
+            harness.get_by_label(concat!(
+                "Button availability uses cached metadata, not CPU subtype/header proof. ",
+                "Explicit Prepare validates the exact source header before any query.",
+            ));
+            assert!(harness.state().0.workflow.token().is_some(), "inspection remains independent of capture scope");
+            assert_eq!(STATIC_HEADER_READS.with(std::cell::Cell::get), initial_reads);
+            assert!(!harness.state().0.busy());
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn workspace_instance_project_replacement_and_missing_submission_workspace_refuse_navigation() {
@@ -1360,6 +2885,7 @@ mod tests {
                 (debugger, workspace),
             );
             harness.run();
+            open_advanced(&mut harness);
             let id = egui::Id::new("debugger-request");
             harness.ctx.memory_mut(|memory| memory.request_focus(id));
             harness.run();
@@ -1398,6 +2924,9 @@ mod tests {
                 (debugger, workspace),
             );
             harness.run();
+            assert!(harness.query_by_label("Request JSON (at most 16 KiB)").is_none());
+            open_advanced(&mut harness);
+            harness.get_by_label("Request JSON (at most 16 KiB)");
             harness.get_by_label("Go to matching static image address");
             match action {
                 "socket" => {
@@ -1406,12 +2935,12 @@ mod tests {
                     harness.event(egui::Event::Paste("changed".into()));
                 }
                 "template" => {
-                    harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+                    harness.get_by_value("describe_session").click_accesskit();
                     harness.run();
-                    harness.get_by_label("list_modules").click();
+                    harness.get_by_label("list_modules").click_accesskit();
                 }
-                "insert-template" => harness.get_by_label("Insert template").click(),
-                "clear" => harness.get_by_label("Clear local data").click(),
+                "insert-template" => harness.get_by_label("Insert template").click_accesskit(),
+                "clear" => harness.get_by_label("Clear local data").click_accesskit(),
                 _ => unreachable!(),
             }
             harness.run();
@@ -1454,6 +2983,7 @@ mod tests {
                 .with_size(egui::vec2(1400.0, 860.0))
                 .build_ui_state(|ui, debugger: &mut Debugger| debugger.show(ui.ctx(), None), debugger);
             harness.run();
+            open_advanced(&mut harness);
             let id = egui::Id::new("debugger-request");
             harness.ctx.memory_mut(|memory| memory.request_focus(id));
             harness.run();
@@ -1499,6 +3029,7 @@ mod tests {
                 .with_size(egui::vec2(1400.0, 860.0))
                 .build_ui_state(|ui, debugger: &mut Debugger| debugger.show(ui.ctx(), None), debugger);
             harness.run();
+            open_advanced(&mut harness);
             let id = egui::Id::new("debugger-request");
             harness.ctx.memory_mut(|memory| memory.request_focus(id));
             harness.run();
@@ -1533,6 +3064,7 @@ mod tests {
                 .with_size(egui::vec2(1400.0, 860.0))
                 .build_ui_state(|ui, debugger: &mut Debugger| debugger.show(ui.ctx(), None), debugger);
             harness.run();
+            open_advanced(&mut harness);
             let id = egui::Id::new("debugger-request");
             harness.ctx.memory_mut(|memory| memory.request_focus(id));
             harness.run();
@@ -1659,6 +3191,358 @@ mod tests {
         }
     }
 
+    fn controlled_response(operation: &str, data: serde_json::Value) -> DebuggerResponse {
+        serde_json::from_value(serde_json::json!({
+            "protocol":"rampage-lldb-query-v1", "ok":true, "operation":operation, "token":test_token(),
+            "data":data, "observation":{"content_sha256":"a".repeat(64), "consistency":"revalidated-non-atomic",
+                "atomic_snapshot":false, "identity_scope":"controlled session/process/stop"},
+        }))
+        .unwrap()
+    }
+
+    fn work_binding(workflow: &Workflow, workspace: Option<&Workspace>) -> WorkBinding {
+        WorkBinding {
+            revision: Arc::clone(&workflow.revision),
+            stop: Arc::clone(&workflow.stop),
+            output: None,
+            socket: workflow.socket.clone(),
+            source: workspace.map(SourceIdentity::capture),
+        }
+    }
+
+    fn complete_observation(
+        workflow: &mut Workflow,
+        workspace: Option<&Workspace>,
+        request: DebuggerRequest,
+        response: DebuggerResponse,
+    ) {
+        workflow.binding = Some(work_binding(workflow, workspace));
+        workflow.job_kind = WorkKind::Query;
+        workflow.job = Job::Done(Ok(WorkResult::Query(request, Box::new(response))));
+        let socket = workflow.socket.clone();
+        workflow.poll(&socket, workspace);
+    }
+
+    fn stopped_workflow(arch: &str, order: &str, workspace: Option<&Workspace>) -> Workflow {
+        let mut workflow = Workflow::default();
+        workflow.poll("/operator/chosen.sock", workspace);
+        complete_observation(
+            &mut workflow,
+            workspace,
+            DebuggerRequest::DescribeSession { version: 1, expected_token: None, response_budget: None },
+            controlled_response(
+                "describe_session",
+                serde_json::json!({
+                    "state":"stopped", "triple":format!("{arch}-apple-macosx"), "address_byte_size":8,
+                    "data_byte_order":{"order":order,"source":"controlled runtime data order"},
+                }),
+            ),
+        );
+        workflow
+    }
+
+    #[test]
+    fn structured_pages_retain_the_token_but_never_select_or_fetch_the_next_page_automatically() {
+        let mut workflow = stopped_workflow("arm64", "unknown", None);
+        let token = workflow.token().unwrap();
+        complete_observation(
+            &mut workflow,
+            None,
+            DebuggerRequest::ListModules {
+                version: 1,
+                expected_token: token.clone(),
+                response_budget: None,
+                offset: Some(0),
+                limit: Some(1),
+            },
+            controlled_response(
+                "list_modules",
+                serde_json::json!({
+                    "offset":0,"total":2,"next_offset":1,"items":[{
+                        "index":0,"name":"controlled image","uuid":TEST_UUID,"triple":"arm64-apple-macosx",
+                        "address_byte_size":8,"target_byte_order":"little",
+                    }],
+                }),
+            ),
+        );
+        complete_observation(
+            &mut workflow,
+            None,
+            DebuggerRequest::ListThreads {
+                version: 1,
+                expected_token: token.clone(),
+                response_budget: None,
+                offset: Some(0),
+                limit: Some(32),
+            },
+            controlled_response(
+                "list_threads",
+                serde_json::json!({
+                    "offset":0,"total":1,"next_offset":null,
+                    "items":[{"thread_id":"0x7","stop_reason":3,"is_stopped":false}],
+                }),
+            ),
+        );
+        assert_eq!(workflow.token().unwrap(), token);
+        assert_eq!(workflow.modules.as_ref().unwrap().next, Some(1));
+        assert!(workflow.module.is_none() && workflow.thread.is_none());
+        assert!(matches!(workflow.job, Job::Idle));
+        assert!(workflow.memory.is_none() && workflow.registers.is_none() && workflow.preview.is_none());
+        assert_eq!(workflow.modules.as_ref().unwrap().items[0].uuid, TEST_UUID);
+        assert_eq!(workflow.threads.as_ref().unwrap().items[0].id, 7);
+    }
+
+    #[test]
+    fn mismatched_and_oversized_pages_refuse_without_retaining_a_partial_selection() {
+        for change in ["offset", "next", "count", "index"] {
+            let mut workflow = stopped_workflow("x86_64", "little", None);
+            let mut page = serde_json::json!({"offset":0,"total":1,"next_offset":null,
+                "items":[{"index":0,"name":"image","uuid":TEST_UUID}]});
+            match change {
+                "offset" => page["offset"] = 1.into(),
+                "next" => page["next_offset"] = 1.into(),
+                "count" => {
+                    page["total"] = 33.into();
+                    page["items"] = serde_json::json!(vec![page["items"][0].clone(); 33]);
+                }
+                "index" => page["items"][0]["index"] = 1.into(),
+                _ => unreachable!(),
+            }
+            complete_observation(
+                &mut workflow,
+                None,
+                DebuggerRequest::ListModules {
+                    version: 1,
+                    expected_token: test_token(),
+                    response_budget: None,
+                    offset: Some(0),
+                    limit: Some(32),
+                },
+                controlled_response("list_modules", page),
+            );
+            assert!(workflow.modules.is_none(), "accepted {change}");
+            assert!(workflow.refresh_required && workflow.token().is_none());
+            assert!(workflow.module.is_none());
+        }
+    }
+
+    #[test]
+    fn raw_memory_and_register_views_keep_unknown_data_order_and_never_interpret_scalars() {
+        let mut workflow = stopped_workflow("arm64", "unknown", None);
+        complete_observation(
+            &mut workflow,
+            None,
+            DebuggerRequest::ReadRegisters {
+                version: 1,
+                expected_token: test_token(),
+                response_budget: None,
+                thread_id: DebuggerAddress::Integer(7),
+                registers: None,
+            },
+            controlled_response(
+                "read_registers",
+                serde_json::json!({
+                    "thread_id":"0x7","context":{"registers":{"pc":"0x1000","x0":"0xffffffffffffffff"}},
+                    "data_byte_order":{"order":"unknown"},
+                }),
+            ),
+        );
+        complete_observation(
+            &mut workflow,
+            None,
+            DebuggerRequest::ReadMemory {
+                version: 1,
+                expected_token: test_token(),
+                response_budget: None,
+                address: DebuggerAddress::Integer(0x1000),
+                size: 4,
+                permissions: DebuggerPermissions::Read,
+                thread_id: Some(DebuggerAddress::Integer(7)),
+            },
+            controlled_response(
+                "read_memory",
+                serde_json::json!({
+                    "address":"0x1000","size":4,"permissions":"r--","bytes_hex":"0102ff00","thread_id":7,
+                    "interpretation":"raw-bytes-only","data_byte_order":{"order":"unknown"},
+                }),
+            ),
+        );
+        let mut harness = Harness::builder().with_size(egui::vec2(1500.0, 1300.0)).build_ui_state(
+            |ui, workflow: &mut Workflow| {
+                let _ = workflow.ui(ui, "/operator/chosen.sock", None, &WorkGate::default(), false);
+            },
+            workflow,
+        );
+        harness.run();
+        harness.get_by_label("Raw registers · thread 0x7");
+        harness.get_by_label("0xffffffffffffffff");
+        harness.get_by_label("Runtime data byte order: unknown. Hex bytes only; no scalar interpretation.");
+        harness.get_by_label("0000000000001000  01 02 ff 00");
+        assert!(harness.state().preview.is_none() && harness.state().saved.is_none());
+        assert!(matches!(harness.state().job, Job::Idle));
+    }
+
+    #[test]
+    fn stale_token_retains_historical_identity_but_refuses_followups_until_explicit_refresh() {
+        let mut workflow = stopped_workflow("x86_64", "little", None);
+        let refusal = serde_json::from_value(serde_json::json!({
+            "protocol":"rampage-lldb-query-v1","ok":false,"operation":"list_threads",
+            "error":{"code":"stale_token","message":"controlled stop changed"},
+        }))
+        .unwrap();
+        complete_observation(
+            &mut workflow,
+            None,
+            DebuggerRequest::ListThreads {
+                version: 1,
+                expected_token: test_token(),
+                response_budget: None,
+                offset: Some(0),
+                limit: Some(32),
+            },
+            refusal,
+        );
+        assert_eq!(workflow.session.as_ref().unwrap().token, test_token());
+        assert!(workflow.token().is_none() && workflow.refresh_required);
+        assert!(workflow.error.as_deref().unwrap().contains("stale_token"));
+        assert!(matches!(workflow.job, Job::Idle));
+        for _ in 0..3 {
+            workflow.poll("/operator/chosen.sock", None);
+            assert!(matches!(workflow.job, Job::Idle));
+            assert!(workflow.token().is_none());
+        }
+    }
+
+    #[test]
+    fn a_success_response_from_another_stop_cannot_replace_the_retained_token() {
+        let mut workflow = stopped_workflow("x86_64", "little", None);
+        let mut response = controlled_response(
+            "list_threads",
+            serde_json::json!({
+                "offset":0,"total":0,"next_offset":null,"items":[],
+            }),
+        );
+        response.token.as_mut().unwrap().stop_id += 1;
+        complete_observation(
+            &mut workflow,
+            None,
+            DebuggerRequest::ListThreads {
+                version: 1,
+                expected_token: test_token(),
+                response_budget: None,
+                offset: Some(0),
+                limit: Some(32),
+            },
+            response,
+        );
+        assert_eq!(workflow.session.as_ref().unwrap().token, test_token());
+        assert!(workflow.refresh_required && workflow.token().is_none());
+        assert!(workflow.threads.is_none());
+    }
+
+    #[test]
+    fn socket_form_stop_and_output_epochs_refuse_late_completions_and_text_aba() {
+        for change in ["socket", "form-aba", "stop", "output"] {
+            let mut workflow = stopped_workflow("x86_64", "little", None);
+            let mut binding = work_binding(&workflow, None);
+            if change == "output" {
+                binding.output = Some(Arc::clone(&workflow.output_revision));
+            }
+            match change {
+                "socket" => {
+                    workflow.poll("/operator/other.sock", None);
+                    workflow.poll("/operator/chosen.sock", None);
+                }
+                "form-aba" => {
+                    workflow.memory_address.push('x');
+                    workflow.edited();
+                    workflow.memory_address.pop();
+                    workflow.edited();
+                }
+                "stop" => workflow.reset_stop(),
+                "output" => workflow.output_revision = Arc::new(()),
+                _ => unreachable!(),
+            }
+            workflow.binding = Some(binding);
+            workflow.job = Job::Done(Ok(WorkResult::Query(
+                DebuggerRequest::DescribeSession { version: 1, expected_token: None, response_budget: None },
+                Box::new(controlled_response("describe_session", serde_json::json!({"state":"stopped"}))),
+            )));
+            workflow.poll("/operator/chosen.sock", None);
+            assert!(workflow.error.as_deref().unwrap().contains("Obsolete"), "accepted {change}");
+            assert!(workflow.token().is_none());
+        }
+    }
+
+    #[test]
+    fn close_clear_and_reopen_never_release_or_replace_a_pending_job_permit() {
+        let mut debugger = Debugger { shown: true, ..Default::default() };
+        let gate = debugger.gate.clone();
+        let permit = gate.acquire().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        debugger.workflow.job = Job::Running(receiver);
+        let cancellation = Arc::clone(&debugger.workflow.cancellation);
+        debugger.close();
+        debugger.shown = false;
+        debugger.clear(&egui::Context::default());
+        assert!(gate.busy() && debugger.workflow.job.is_running());
+        assert!(cancellation.load(Ordering::Acquire));
+        debugger.shown = true;
+        debugger.query(&egui::Context::default(), None);
+        assert!(matches!(debugger.job, Job::Idle));
+        assert!(gate.acquire().is_none());
+        drop(permit);
+        assert!(debugger.busy(), "uncollected old receiver still blocks replacement");
+        drop(sender);
+        debugger.workflow.poll("", None);
+        assert!(!debugger.busy());
+        let next = gate.acquire().unwrap();
+        assert!(gate.acquire().is_none());
+        drop(next);
+        assert!(!gate.busy());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_selection_requires_exact_source_and_disables_arm64_without_guessing_data_order() {
+        for arch in [Arch::X86_64, Arch::Aarch64] {
+            let fixture = StaticFixture::new(&thin_macho(arch, TEST_UUID));
+            let workspace = fixture.workspace();
+            let machine = if arch == Arch::X86_64 { "x86_64" } else { "arm64" };
+            let order = if arch == Arch::X86_64 { "little" } else { "unknown" };
+            let mut workflow = stopped_workflow(machine, order, Some(&workspace));
+            workflow.module = Some(ModuleRow {
+                index: 0,
+                name: "controlled image".into(),
+                uuid: TEST_UUID.into(),
+                triple: format!("{machine}-apple-macosx"),
+                width: 8,
+                object_order: "little".into(),
+            });
+            workflow.thread = Some(7);
+            workflow.file_address = format!("{FILE_ADDRESS:#x}");
+            workflow.size = 4;
+            let request = workflow.capture_request(Some(&workspace));
+            if arch == Arch::X86_64 {
+                let request = request.unwrap();
+                assert_eq!(request.expected_token, test_token());
+                assert_eq!(request.file_address, FILE_ADDRESS);
+                let reopened = fixture.workspace();
+                assert!(workflow.capture_request(Some(&reopened)).is_err());
+                assert!(
+                    work_binding(&workflow, Some(&workspace))
+                        .validate(&workflow, "/operator/chosen.sock", Some(&reopened))
+                        .is_err()
+                );
+            } else {
+                assert!(request.unwrap_err().contains("ARM64 data order remains unknown"));
+                assert_eq!(workflow.session.as_ref().unwrap().data_order, "unknown");
+                assert!(workflow.token().is_some(), "inspection still works on ARM64");
+            }
+            assert!(workflow.preview.is_none() && workflow.saved.is_none());
+        }
+    }
+
     #[cfg(unix)]
     mod local_socket {
         use super::*;
@@ -1779,6 +3663,941 @@ mod tests {
             response
         }
 
+        fn capture_replies(size: usize) -> [serde_json::Value; 9] {
+            let mut session = session_response();
+            let order = serde_json::json!({"order":"little","source":"LLDB target byte order"});
+            session["data"] = serde_json::json!({
+                "pid":42,"state":"stopped","triple":"x86_64-apple-macosx","architecture":"x86_64",
+                "target_byte_order":"little","data_byte_order":order,"address_byte_size":8,
+                "module_count":2,"thread_count":2,"operations":OPERATIONS,
+                "limits":{"request_bytes":16384,"response_bytes":262144,"memory_bytes":65536,"page_items":128,
+                    "modules":4096,"threads":4096,"resolution_work":16384,"module_sections":4096,
+                    "section_depth":32,"module_uuid_bytes":64},
+            });
+            let mut resolution = resolution_response();
+            resolution["data"]["module"]["triple"] = "x86_64-apple-macosx".into();
+            resolution["data"]["module_context"]["triple"] = "x86_64-apple-macosx".into();
+            let mut module = resolution["data"]["module"].clone();
+            module["image_base"] = format!("{FILE_BASE:#x}").into();
+            module["runtime_base"] = "0x1600".into();
+            let mut modules = session_response();
+            modules["operation"] = "list_modules".into();
+            modules["data"] = serde_json::json!({"items":[module],"offset":1,"total":2,"next_offset":null});
+            let stop = serde_json::json!({
+                "source":"SBThread.GetStopReason/current-process-stop","is_stopped":false,"stop_reason":3,
+            });
+            let mut registers = session_response();
+            registers["operation"] = "read_registers".into();
+            registers["data"] = serde_json::json!({
+                "thread_id":"0x7","required_registers":["rflags","rip","rsp"],"data_byte_order":order,
+                "context":{"stop_evidence":stop,"frame_id":0,"pc":"0x1804","sp":"0x4000",
+                    "registers":{"rip":"0x1804","rsp":"0x4000","rflags":"0x202"}},
+            });
+            let mut memory = session_response();
+            memory["operation"] = "read_memory".into();
+            memory["data"] = serde_json::json!({
+                "address":"0x1804","size":size,"permissions":"r-x","bytes_hex":"c3".repeat(size),
+                "data_byte_order":order,"stop_evidence":stop,"thread_id":7,"interpretation":"raw-bytes-only",
+                "read_semantics":"LLDB ReadMemory may normalize software-breakpoint trap bytes",
+            });
+            [
+                session.clone(),
+                modules.clone(),
+                resolution.clone(),
+                registers.clone(),
+                memory,
+                registers,
+                resolution,
+                modules,
+                session,
+            ]
+        }
+
+        fn controlled_capture_preview(workspace: &Workspace) -> DebuggerCapturePreview {
+            let mock = MockSocket::new();
+            let source = Arc::clone(&workspace.project);
+            let socket = mock.path.clone();
+            let worker = std::thread::spawn(move || {
+                rampage_api::prepare_debugger_capture(
+                    source,
+                    &socket,
+                    &DebuggerCaptureRequest {
+                        expected_token: test_token(),
+                        module_index: 1,
+                        module_uuid: TEST_UUID.into(),
+                        thread_id: 7,
+                        file_address: FILE_ADDRESS,
+                        size: 4,
+                        permissions: DebuggerPermissions::ReadExecute,
+                    },
+                    Duration::from_secs(5),
+                    &AtomicBool::new(false),
+                )
+            });
+            let replies = capture_replies(4);
+            for (index, response) in replies.into_iter().enumerate() {
+                let operation = response["operation"].clone();
+                let request = mock.respond(response);
+                assert_eq!(request["operation"], operation, "capture query {index}");
+                assert_eq!(request["expected_token"], serde_json::to_value(test_token()).unwrap());
+            }
+            let preview = worker.join().unwrap().unwrap();
+            mock.assert_no_connection();
+            preview
+        }
+
+        fn finish_workflow(workflow: &mut Workflow) {
+            let Job::Running(receiver) = &workflow.job else { panic!("explicit action did not start a local job") };
+            workflow.job = Job::Done(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+
+        #[test]
+        fn explicit_prepare_refuses_an_uncached_static_cpu_subtype_before_any_debugger_query() {
+            let mut bytes = thin_macho(Arch::X86_64, TEST_UUID);
+            bytes[8..12].copy_from_slice(&8u32.to_le_bytes());
+            let fixture = StaticFixture::new(&bytes);
+            let workspace = fixture.workspace();
+            let workflow = capture_ready_workflow(&workspace);
+            let initial_reads = STATIC_HEADER_READS.with(std::cell::Cell::get);
+            let request = workflow.capture_request(Some(&workspace)).unwrap();
+            assert_eq!(STATIC_HEADER_READS.with(std::cell::Cell::get), initial_reads);
+            let mock = MockSocket::new();
+            let error = rampage_api::prepare_debugger_capture(
+                Arc::clone(&workspace.project),
+                &mock.path,
+                &request,
+                Duration::from_secs(5),
+                &AtomicBool::new(false),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("subtype"), "{error}");
+            assert!(workflow.preview.is_none() && workflow.saved.is_none());
+            mock.assert_no_connection();
+        }
+
+        fn replace_input(harness: &mut Harness<'_, crate::App>, id: &str, text: &str) {
+            harness.ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(id)));
+            harness.step();
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            harness.step();
+            harness.event(egui::Event::Paste(text.to_owned()));
+            harness.step();
+        }
+
+        fn settle_input_undo(harness: &mut Harness<'_, crate::App>) {
+            let time = harness.ctx.input(|input| input.time);
+            harness.input_mut().time = Some(time + 2.0);
+            harness.step();
+        }
+
+        fn undo_input(harness: &mut Harness<'_, crate::App>) {
+            harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+            harness.step();
+        }
+
+        fn inspection_harness(fixture: &StaticFixture, mock: &MockSocket) -> Harness<'static, crate::App> {
+            let mut app = crate::App::blocking();
+            app.open(&egui::Context::default(), fixture.path.clone(), None);
+            app.show_debugger();
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1700.0, 1500.0))
+                .build_ui_state(|ui, app: &mut crate::App| app.show(ui), app);
+            harness.run();
+            replace_input(&mut harness, "debugger-socket", mock.path.to_str().unwrap());
+            mock.assert_no_connection();
+            let replies = capture_replies(64);
+            harness.get_by_label("Connect stopped session").click_accesskit();
+            harness.step();
+            let request = mock.respond(replies[0].clone());
+            assert_eq!(request["operation"], "describe_session");
+            assert!(request.get("expected_token").is_none());
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            let mut modules = replies[1].clone();
+            let target = modules["data"]["items"][0].clone();
+            let mut other = target.clone();
+            other["index"] = 0.into();
+            other["name"] = "other".into();
+            other["uuid"] = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into();
+            modules["data"] = serde_json::json!({"items":[other,target],"offset":0,"total":2,"next_offset":null});
+            harness.get_by_label("List modules page").click_accesskit();
+            harness.step();
+            let request = mock.respond(modules);
+            assert_eq!(request["operation"], "list_modules");
+            assert_eq!(request["limit"], 32);
+            assert_eq!(request["expected_token"], serde_json::to_value(test_token()).unwrap());
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            assert!(harness.state().debugger.workflow.module.is_none());
+            harness
+                .get_by_label(&format!("Module 1 · image · {} · x86_64-apple-macosx", TEST_UUID.to_uppercase()))
+                .click_accesskit();
+            harness.run();
+            let threads = controlled_response(
+                "list_threads",
+                serde_json::json!({
+                    "offset":0,"total":2,"next_offset":null,"items":[
+                        {"thread_id":"0x7","stop_reason":3,"is_stopped":false},
+                        {"thread_id":"0x8","stop_reason":3,"is_stopped":false},
+                    ],
+                }),
+            );
+            harness.get_by_label("List threads page").click_accesskit();
+            harness.step();
+            let request = mock.respond(serde_json::to_value(threads).unwrap());
+            assert_eq!(request["operation"], "list_threads");
+            assert_eq!(request["limit"], 32);
+            assert_eq!(request["expected_token"], serde_json::to_value(test_token()).unwrap());
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            assert!(harness.state().debugger.workflow.thread.is_none());
+            harness.get_by_label("Thread 0x7 · stop reason 3 · SDK is_stopped false").click_accesskit();
+            harness.run();
+            replace_input(&mut harness, "debugger-file-address", &format!("{FILE_ADDRESS:#x}"));
+            replace_input(&mut harness, "debugger-memory-address", "0x1804");
+            replace_input(
+                &mut harness,
+                "debugger-capture-output",
+                fixture.directory.join("operator.capture.json").to_str().unwrap(),
+            );
+            harness.get_by_role(egui::accesskit::Role::ComboBox).click_accesskit();
+            harness.run();
+            harness.get_by_label("r-x").click_accesskit();
+            harness.run();
+            mock.assert_no_connection();
+            assert_eq!(harness.state().debugger.workflow.thread, Some(7));
+            assert_eq!(harness.state().debugger.workflow.module.as_ref().unwrap().index, 1);
+            assert!(harness.state().debugger.workflow.preview.is_none());
+            harness
+        }
+
+        fn click_prepare(harness: &mut Harness<'_, crate::App>, mock: &MockSocket) {
+            harness.get_by_label("Prepare capture preview (9 queries)").click_accesskit();
+            harness.step();
+            assert!(harness.state().debugger.workflow.job.is_running());
+            assert!(!harness.state().debugger.workflow.cancellation.load(Ordering::Acquire));
+            let operations = [
+                "describe_session",
+                "list_modules",
+                "resolve_module_address",
+                "read_registers",
+                "read_memory",
+                "read_registers",
+                "resolve_module_address",
+                "list_modules",
+                "describe_session",
+            ];
+            for (index, response) in capture_replies(64).into_iter().enumerate() {
+                let request = mock.respond(response);
+                assert_eq!(request["operation"], operations[index]);
+                assert_eq!(request["version"], 1);
+                assert_eq!(request["expected_token"], serde_json::to_value(test_token()).unwrap());
+                assert!(request["response_budget"].as_u64().unwrap() <= 65536);
+                assert!(request.get("output").is_none() && request.get("path").is_none());
+                match operations[index] {
+                    "list_modules" => {
+                        assert_eq!(request["offset"], 1);
+                        assert_eq!(request["limit"], 1);
+                    }
+                    "read_registers" => {
+                        assert_eq!(request["thread_id"], 7);
+                        assert_eq!(request["registers"], serde_json::json!(["rip", "rsp", "rflags"]));
+                    }
+                    "read_memory" => {
+                        assert_eq!(request["thread_id"], 7);
+                        assert_eq!(request["size"], 64);
+                        assert_eq!(request["address"], 0x1804);
+                        assert_eq!(request["permissions"], "r-x");
+                    }
+                    "resolve_module_address" => {
+                        assert_eq!(request["module_uuid"], TEST_UUID.to_uppercase());
+                        assert_eq!(request["file_address"], FILE_ADDRESS);
+                    }
+                    _ => {}
+                }
+            }
+            assert!(!harness.state().debugger.workflow.cancellation.load(Ordering::Acquire));
+        }
+
+        fn hold_completed_work(
+            workflow: &mut Workflow,
+        ) -> (std::sync::mpsc::Sender<Result<WorkResult, String>>, Result<WorkResult, String>) {
+            let Job::Running(receiver) = &workflow.job else { panic!("expected an explicitly started job") };
+            let result = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            workflow.job = Job::Running(receiver);
+            (sender, result)
+        }
+
+        fn resolve_navigation(harness: &mut Harness<'_, crate::App>, mock: &MockSocket) {
+            harness.get_by_label("Resolve selected file address").click_accesskit();
+            harness.step();
+            let request = mock.respond(capture_replies(64)[2].clone());
+            assert_eq!(request["operation"], "resolve_module_address");
+            finish(&mut harness.state_mut().debugger);
+            harness.run();
+            harness.get_by_label("Go to matching static image address");
+            assert!(harness.state().debugger.destination(harness.state().workspace.as_ref()).is_ok());
+        }
+
+        #[test]
+        fn app_prepare_button_runs_nine_token_queries_without_self_cancellation_or_followup_actions() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            let mock = MockSocket::new();
+            let mut harness = inspection_harness(&fixture, &mock);
+            let original = Arc::clone(&harness.state().workspace.as_ref().unwrap().project);
+            let annotations = serde_json::to_string(&original.annotation_list()).unwrap();
+            click_prepare(&mut harness, &mock);
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            let preview = harness.state().debugger.workflow.preview.as_ref().unwrap();
+            assert!(Arc::ptr_eq(preview.source_project(), &original));
+            assert_eq!(preview.summary().size, 64);
+            for _ in 0..3 {
+                harness.run();
+                let app = harness.state();
+                assert!(app.debugger.workflow.saved.is_none() && app.debugger.workflow.comparison.is_none());
+                assert!(!fixture.directory.join("operator.capture.json").exists());
+                assert!(Arc::ptr_eq(&app.workspace.as_ref().unwrap().project, &original));
+                assert_eq!(app.workspace.as_ref().unwrap().cursor, 0);
+                assert!(app.debugger.click_context.is_none());
+                mock.assert_no_connection();
+            }
+            assert_eq!(serde_json::to_string(&original.annotation_list()).unwrap(), annotations);
+        }
+
+        #[test]
+        fn successive_register_and_memory_buttons_preserve_compatible_views_but_selection_changes_clear_them() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            let mock = MockSocket::new();
+            let mut harness = inspection_harness(&fixture, &mock);
+            let replies = capture_replies(64);
+            harness.get_by_label("Read selected thread registers").click_accesskit();
+            harness.step();
+            let request = mock.respond(replies[3].clone());
+            assert_eq!(request["operation"], "read_registers");
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            harness.get_by_label("Raw registers · thread 0x7");
+            harness.get_by_label("Read raw memory").click_accesskit();
+            harness.step();
+            assert!(harness.state().debugger.workflow.registers.is_some());
+            let request = mock.respond(replies[4].clone());
+            assert_eq!(request["operation"], "read_memory");
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            harness.get_by_label("Raw registers · thread 0x7");
+            harness.get_by_label("Raw memory · 0x1804 · 64 bytes");
+            assert_eq!(harness.state().debugger.workflow.memory.as_ref().unwrap().bytes, "c3".repeat(64));
+            harness.get_by_label("Thread 0x7 · stop reason 3 · SDK is_stopped false").click_accesskit();
+            harness.run();
+            assert!(harness.state().debugger.workflow.memory.is_some());
+            assert!(harness.state().debugger.workflow.registers.is_some());
+            replace_input(&mut harness, "debugger-memory-address", "0x1810");
+            assert!(harness.state().debugger.workflow.memory.is_none());
+            assert!(harness.state().debugger.workflow.registers.is_some());
+            harness.get_by_label("Thread 0x8 · stop reason 3 · SDK is_stopped false").click_accesskit();
+            harness.run();
+            assert!(harness.state().debugger.workflow.registers.is_none());
+            assert!(harness.state().debugger.workflow.memory.is_none());
+            assert_eq!(harness.state().debugger.workflow.token().unwrap(), test_token());
+            mock.assert_no_connection();
+        }
+
+        #[test]
+        fn an_egui_form_edit_then_undo_cannot_reauthorize_a_held_real_prepare_or_compare_result() {
+            for compare in [false, true] {
+                let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+                let mock = MockSocket::new();
+                let mut harness = inspection_harness(&fixture, &mock);
+                let original = Arc::clone(&harness.state().workspace.as_ref().unwrap().project);
+                let initial_address = harness.state().debugger.workflow.file_address.clone();
+                resolve_navigation(&mut harness, &mock);
+                settle_input_undo(&mut harness);
+                click_prepare(&mut harness, &mock);
+                if compare {
+                    finish_workflow(&mut harness.state_mut().debugger.workflow);
+                    harness.run();
+                    harness.get_by_label("Compare prepared capture with original").click_accesskit();
+                    harness.step();
+                }
+                let (release, result) = hold_completed_work(&mut harness.state_mut().debugger.workflow);
+                assert!(result.is_ok());
+                if compare {
+                    assert!(matches!(&result, Ok(WorkResult::Compared(_))));
+                } else {
+                    let Ok(WorkResult::Prepared(preview)) = &result else { panic!("expected opaque real preview") };
+                    assert!(Arc::ptr_eq(preview.source_project(), &original));
+                }
+                replace_input(&mut harness, "debugger-file-address", &format!("{:#x}", FILE_ADDRESS + 4));
+                assert_ne!(harness.state().debugger.workflow.file_address, initial_address);
+                assert!(harness.state().debugger.workflow.cancellation.load(Ordering::Acquire));
+                undo_input(&mut harness);
+                assert_eq!(harness.state().debugger.workflow.file_address, initial_address);
+                assert!(release.send(result).is_ok());
+                harness.run();
+                let app = harness.state();
+                assert!(app.debugger.workflow.preview.is_none() && app.debugger.workflow.comparison.is_none());
+                assert!(app.debugger.workflow.saved.is_none() && app.debugger.click_context.is_none());
+                assert!(Arc::ptr_eq(&app.workspace.as_ref().unwrap().project, &original));
+                assert_eq!(app.workspace.as_ref().unwrap().cursor, 0);
+                assert!(harness.get_by_label("Save prepared capture").accesskit_node().is_disabled());
+                assert!(harness.get_by_label("Open saved snapshot").accesskit_node().is_disabled());
+                assert!(harness.query_by_label("Go to matching static image address").is_none());
+                assert!(!fixture.directory.join("operator.capture.json").exists());
+                mock.assert_no_connection();
+            }
+        }
+
+        #[test]
+        fn an_egui_output_path_aba_refuses_late_save_authority_but_reports_the_actual_publication() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            std::fs::set_permissions(&fixture.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mock = MockSocket::new();
+            let mut harness = inspection_harness(&fixture, &mock);
+            let original = Arc::clone(&harness.state().workspace.as_ref().unwrap().project);
+            let output = fixture.directory.join("operator.capture.json");
+            resolve_navigation(&mut harness, &mock);
+            settle_input_undo(&mut harness);
+            click_prepare(&mut harness, &mock);
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            harness.get_by_label("Compare prepared capture with original").click_accesskit();
+            harness.step();
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            harness.get_by_label("Save prepared capture").click_accesskit();
+            harness.step();
+            let (release, result) = hold_completed_work(&mut harness.state_mut().debugger.workflow);
+            assert!(matches!(&result, Ok(WorkResult::Saved { .. })));
+            assert!(output.exists());
+            replace_input(
+                &mut harness,
+                "debugger-capture-output",
+                fixture.directory.join("not-authorized.json").to_str().unwrap(),
+            );
+            undo_input(&mut harness);
+            assert_eq!(PathBuf::from(&harness.state().debugger.workflow.output), output);
+            assert!(release.send(result).is_ok());
+            harness.run();
+            let workflow = &harness.state().debugger.workflow;
+            assert!(workflow.saved.is_none());
+            assert_eq!(workflow.latest_publication_notice().unwrap().path, output);
+            assert!(workflow.error.as_deref().unwrap().contains("Obsolete"));
+            assert!(harness.get_by_label("Save prepared capture").accesskit_node().is_disabled());
+            assert!(harness.get_by_label("Open saved snapshot").accesskit_node().is_disabled());
+            assert!(harness.query_by_label("Go to matching static image address").is_none());
+            assert!(Arc::ptr_eq(&harness.state().workspace.as_ref().unwrap().project, &original));
+            assert!(output.exists(), "stale completion must not delete the authorized output");
+            assert!(!fixture.directory.join("not-authorized.json").exists());
+            mock.assert_no_connection();
+        }
+
+        #[test]
+        fn uncertain_publication_is_reported_without_open_retry_overwrite_or_staging_cleanup() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            std::fs::set_permissions(&fixture.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mock = MockSocket::new();
+            let mut harness = inspection_harness(&fixture, &mock);
+            let original = Arc::clone(&harness.state().workspace.as_ref().unwrap().project);
+            click_prepare(&mut harness, &mock);
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            harness.get_by_label("Compare prepared capture with original").click_accesskit();
+            harness.step();
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            let workspace = harness.state_mut().workspace.as_mut().unwrap();
+            workspace.begin_comment();
+            workspace.editing.as_mut().unwrap().text = "keep unsaved annotation".into();
+            harness.step();
+            harness.get_by_label("Save prepared capture").click_accesskit();
+            harness.step();
+            let (release, mut result) = hold_completed_work(&mut harness.state_mut().debugger.workflow);
+            let Ok(WorkResult::Saved { publication, .. }) = &mut result else { panic!("expected actual Save result") };
+            publication.status = DebuggerCapturePublicationStatus::PublishedUncertain;
+            publication.warnings.push("controlled post-publication namespace uncertainty".into());
+            let retained = fixture.directory.join("retained.staging");
+            std::fs::write(&retained, b"must not be removed automatically").unwrap();
+            publication.retained_staging_paths.push(retained.clone());
+            let output = publication.path.clone();
+            let document = std::fs::read(&output).unwrap();
+            assert!(release.send(result).is_ok());
+            harness.run();
+            assert!(harness.state().debugger.workflow.saved.is_none());
+            harness.get_by_label(&format!("Publication uncertain; output may exist: {}", output.display()));
+            harness.get_by_label("controlled post-publication namespace uncertainty");
+            harness.get_by_label(&format!(
+                "Retained staging requires operator inspection/cleanup (not automatic deletion): {}",
+                retained.display(),
+            ));
+            let receipt = harness.state().debugger.workflow.latest_publication_notice().unwrap();
+            harness.get_by_label(&format!("Expected publication document SHA-256: {}", receipt.document_sha256));
+            assert!(
+                harness
+                    .query_by_label(&format!(
+                        "Saved locally: {}. The original workspace is still open.",
+                        output.display(),
+                    ))
+                    .is_none()
+            );
+            let workspace = harness.state().workspace.as_ref().unwrap();
+            assert!(Arc::ptr_eq(&workspace.project, &original));
+            assert_eq!(workspace.editing.as_ref().unwrap().text, "keep unsaved annotation");
+            harness.state_mut().workspace.as_mut().unwrap().editing = None;
+            for _ in 0..3 {
+                harness.run();
+                assert!(harness.get_by_label("Save prepared capture").accesskit_node().is_disabled());
+                assert!(harness.get_by_label("Open saved snapshot").accesskit_node().is_disabled());
+                assert_eq!(std::fs::read(&output).unwrap(), document);
+                assert_eq!(std::fs::read(&retained).unwrap(), b"must not be removed automatically");
+                mock.assert_no_connection();
+            }
+            let receipt = harness.state().debugger.workflow.latest_publication_notice().unwrap().clone();
+            let action = OpenSnapshot {
+                path: receipt.path,
+                document_sha256: receipt.document_sha256,
+                publication_status: receipt.status,
+                source: SourceIdentity::capture(harness.state().workspace.as_ref().unwrap()),
+            };
+            let ctx = harness.ctx.clone();
+            harness.state_mut().open_debugger_snapshot(&ctx, action);
+            assert!(harness.state().error.as_deref().unwrap().contains("Uncertain publication"));
+            assert!(Arc::ptr_eq(&harness.state().workspace.as_ref().unwrap().project, &original));
+            assert_eq!(std::fs::read(&output).unwrap(), document);
+        }
+
+        #[test]
+        fn uncertain_destination_and_resources_survive_a_later_publication_and_return_to_the_old_path() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            std::fs::set_permissions(&fixture.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mock = MockSocket::new();
+            let mut harness = inspection_harness(&fixture, &mock);
+            let original = Arc::clone(&harness.state().workspace.as_ref().unwrap().project);
+            let first = fixture.directory.join("operator.capture.json");
+            let second = fixture.directory.join("second.capture.json");
+            click_prepare(&mut harness, &mock);
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            harness.get_by_label("Save prepared capture").click_accesskit();
+            harness.step();
+            let (release, mut result) = hold_completed_work(&mut harness.state_mut().debugger.workflow);
+            let Ok(WorkResult::Saved { publication, .. }) = &mut result else { panic!("expected actual publication") };
+            publication.status = DebuggerCapturePublicationStatus::PublishedUncertain;
+            publication.warnings.push("first destination still requires inspection".into());
+            let first_receipt = publication.clone();
+            let first_document = std::fs::read(&first).unwrap();
+            assert!(!first_receipt.retained_staging_paths.is_empty());
+            assert!(release.send(result).is_ok());
+            harness.run();
+            assert!(harness.get_by_label("Save prepared capture").accesskit_node().is_disabled());
+            replace_input(&mut harness, "debugger-capture-output", second.to_str().unwrap());
+            assert!(!harness.get_by_label("Save prepared capture").accesskit_node().is_disabled());
+            harness.get_by_label("Save prepared capture").click_accesskit();
+            harness.step();
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            let second_receipt = harness.state().debugger.workflow.saved.as_ref().unwrap().clone();
+            assert_eq!(second_receipt.path, second);
+            assert_eq!(second_receipt.status, DebuggerCapturePublicationStatus::Published);
+            assert_eq!(harness.state().debugger.workflow.latest_publication_notice().unwrap().path, second);
+            replace_input(&mut harness, "debugger-capture-output", first.to_str().unwrap());
+            let app = harness.state();
+            let workflow = &app.debugger.workflow;
+            assert!(workflow.validate_preview(mock.path.to_str().unwrap(), app.workspace.as_ref()).is_ok());
+            assert!(workflow.saved.is_none());
+            assert_eq!(workflow.save_resources.len(), 2);
+            assert!(workflow.published_destination(&first));
+            let SaveResourceNotice::Publication(retained_first) = &workflow.save_resources[0] else {
+                panic!("first publication was forgotten")
+            };
+            assert_eq!(retained_first.status, DebuggerCapturePublicationStatus::PublishedUncertain);
+            assert_eq!(retained_first.document_sha256, first_receipt.document_sha256);
+            assert_eq!(retained_first.warnings, first_receipt.warnings);
+            assert_eq!(retained_first.retained_staging_paths, first_receipt.retained_staging_paths);
+            assert!(harness.get_by_label("Save prepared capture").accesskit_node().is_disabled());
+            assert!(harness.get_by_label("Open saved snapshot").accesskit_node().is_disabled());
+            harness.get_by_label(&format!("Publication uncertain; output may exist: {}", first.display()));
+            harness.get_by_label(&format!("Published by an explicit Save: {}", second.display()));
+            harness.get_by_label("first destination still requires inspection");
+            replace_input(&mut harness, "debugger-file-address", &format!("{:#x}", FILE_ADDRESS + 4));
+            harness.state_mut().debugger.invalidate_workspace();
+            for _ in 0..3 {
+                harness.run();
+                assert_eq!(harness.state().debugger.workflow.save_resources.len(), 2);
+                harness.get_by_label(&format!("Publication uncertain; output may exist: {}", first.display()));
+                harness.get_by_label("first destination still requires inspection");
+                for path in first_receipt.retained_staging_paths.iter().chain(&second_receipt.retained_staging_paths) {
+                    harness.get_by_label(&format!(
+                        "Retained staging requires operator inspection/cleanup (not automatic deletion): {}",
+                        path.display(),
+                    ));
+                    assert_eq!(std::fs::read(path).unwrap(), first_document);
+                }
+                assert_eq!(std::fs::read(&first).unwrap(), first_document);
+                assert_eq!(std::fs::read(&second).unwrap(), first_document);
+                assert!(Arc::ptr_eq(&harness.state().workspace.as_ref().unwrap().project, &original));
+                mock.assert_no_connection();
+            }
+        }
+
+        #[test]
+        fn genuine_save_resource_paths_survive_source_backing_change_without_restoring_authority() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            std::fs::set_permissions(&fixture.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mock = MockSocket::new();
+            let mut harness = inspection_harness(&fixture, &mock);
+            let original = Arc::clone(&harness.state().workspace.as_ref().unwrap().project);
+            click_prepare(&mut harness, &mock);
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            harness.get_by_label("Save prepared capture").click_accesskit();
+            harness.step();
+            let (release, result) = hold_completed_work(&mut harness.state_mut().debugger.workflow);
+            let Ok(WorkResult::Saved { publication, .. }) = &result else { panic!("expected genuine Save result") };
+            let receipt = publication.clone();
+            assert!(!receipt.retained_staging_paths.is_empty());
+            let document = std::fs::read(&receipt.path).unwrap();
+            let workspace = harness.state_mut().workspace.as_mut().unwrap();
+            workspace.begin_comment();
+            workspace.editing.as_mut().unwrap().text = "keep editor across obsolete Save".into();
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&fixture.path)
+                .unwrap()
+                .write_all(b"changed backing after publication")
+                .unwrap();
+            assert!(original.binary.validate_backing_source().is_err());
+            assert!(release.send(result).is_ok());
+            harness.run();
+            let app = harness.state();
+            assert!(app.debugger.workflow.saved.is_none() && app.debugger.workflow.preview.is_none());
+            assert!(app.debugger.click_context.is_none());
+            assert!(Arc::ptr_eq(&app.workspace.as_ref().unwrap().project, &original));
+            assert_eq!(
+                app.workspace.as_ref().unwrap().editing.as_ref().unwrap().text,
+                "keep editor across obsolete Save"
+            );
+            assert_eq!(app.debugger.workflow.latest_publication_notice().unwrap().path, receipt.path);
+            harness.state_mut().debugger.invalidate_workspace();
+            for _ in 0..3 {
+                harness.run();
+                assert_eq!(harness.state().debugger.workflow.save_resources.len(), 1);
+                assert!(harness.get_by_label("Open saved snapshot").accesskit_node().is_disabled());
+                for path in &receipt.retained_staging_paths {
+                    harness.get_by_label(&format!(
+                        "Retained staging requires operator inspection/cleanup (not automatic deletion): {}",
+                        path.display(),
+                    ));
+                    assert_eq!(std::fs::read(path).unwrap(), document);
+                }
+                assert_eq!(std::fs::read(&receipt.path).unwrap(), document);
+                mock.assert_no_connection();
+            }
+        }
+
+        #[test]
+        fn typed_retention_error_with_real_staging_paths_survives_an_obsolete_binding() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            std::fs::set_permissions(&fixture.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mock = MockSocket::new();
+            let mut harness = inspection_harness(&fixture, &mock);
+            click_prepare(&mut harness, &mock);
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            harness.get_by_label("Save prepared capture").click_accesskit();
+            harness.step();
+            let (release, result) = hold_completed_work(&mut harness.state_mut().debugger.workflow);
+            let Ok(WorkResult::Saved { requested, publication }) = result else {
+                panic!("expected real staging files")
+            };
+            let document = std::fs::read(&publication.path).unwrap();
+            assert!(!publication.retained_staging_paths.is_empty());
+            let retention = rampage_api::DebuggerCaptureStagingRetention {
+                paths: publication.retained_staging_paths,
+                message: "controlled typed retained-stage refusal".into(),
+            };
+            let error = rampage_api::ApiError::DebuggerCaptureStagingRetained(retention.clone());
+            let displayed_error = error.to_string();
+            let failed = WorkResult::SaveFailed {
+                requested: requested.clone(),
+                document_sha256: publication.document_sha256.clone(),
+                error,
+            };
+            replace_input(&mut harness, "debugger-file-address", &format!("{:#x}", FILE_ADDRESS + 4));
+            assert!(release.send(Ok(failed)).is_ok());
+            harness.run();
+            let workflow = &harness.state().debugger.workflow;
+            assert!(workflow.saved.is_none() && workflow.preview.is_none());
+            assert!(workflow.error.as_deref().unwrap().contains("Obsolete"));
+            let [
+                SaveResourceNotice::Failure {
+                    requested: retained_request,
+                    document_sha256,
+                    message,
+                    retention: Some(retained),
+                },
+            ] = workflow.save_resources.as_slice()
+            else {
+                panic!("typed resource details were discarded with the stale authorization")
+            };
+            assert_eq!(retained_request, &requested);
+            assert_eq!(document_sha256, &publication.document_sha256);
+            assert_eq!(message, &displayed_error);
+            assert_eq!(retained.paths, retention.paths);
+            assert_eq!(retained.message, retention.message);
+            harness.get_by_label(&displayed_error);
+            harness.state_mut().debugger.invalidate_workspace();
+            for _ in 0..3 {
+                harness.run();
+                assert_eq!(harness.state().debugger.workflow.save_resources.len(), 1);
+                harness.get_by_label(&displayed_error);
+                assert!(harness.get_by_label("Open saved snapshot").accesskit_node().is_disabled());
+                assert!(harness.get_by_label("Save prepared capture").accesskit_node().is_disabled());
+                for path in &retention.paths {
+                    harness.get_by_label(&format!(
+                        "Retained staging requires operator inspection/cleanup (not automatic deletion): {}",
+                        path.display(),
+                    ));
+                    assert_eq!(std::fs::read(path).unwrap(), document);
+                }
+                mock.assert_no_connection();
+            }
+        }
+
+        #[test]
+        fn genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            std::fs::set_permissions(&fixture.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mock = MockSocket::new();
+            let mut harness = inspection_harness(&fixture, &mock);
+            click_prepare(&mut harness, &mock);
+            finish_workflow(&mut harness.state_mut().debugger.workflow);
+            harness.run();
+            let output = fixture.directory.join("operator.capture.json");
+            let document_sha256 =
+                harness.state().debugger.workflow.preview.as_ref().unwrap().summary().document_sha256.clone();
+            std::fs::write(&output, b"preexisting output must remain unchanged").unwrap();
+            harness.get_by_label("Save prepared capture").click_accesskit();
+            harness.step();
+            let (release, result) = hold_completed_work(&mut harness.state_mut().debugger.workflow);
+            let Ok(WorkResult::SaveFailed { requested, document_sha256: returned_hash, error }) = &result else {
+                panic!("genuine API error was flattened into an unbound string")
+            };
+            assert_eq!(requested, &output);
+            assert_eq!(returned_hash, &document_sha256);
+            assert!(matches!(error, rampage_api::ApiError::Invalid(_)));
+            let displayed_error = error.to_string();
+            assert!(displayed_error.contains("already exists"));
+            replace_input(&mut harness, "debugger-file-address", &format!("{:#x}", FILE_ADDRESS + 4));
+            assert!(release.send(result).is_ok());
+            harness.run();
+            let workflow = &harness.state().debugger.workflow;
+            assert!(workflow.saved.is_none() && workflow.preview.is_none());
+            assert!(workflow.error.as_deref().unwrap().contains("Obsolete"));
+            let [SaveResourceNotice::Failure { requested, document_sha256: retained_hash, message, retention: None }] =
+                workflow.save_resources.as_slice()
+            else {
+                panic!("genuine Save failure resources were discarded")
+            };
+            assert_eq!(requested, &output);
+            assert_eq!(retained_hash, &document_sha256);
+            assert_eq!(message, &displayed_error);
+            harness.get_by_label(&displayed_error);
+            assert!(harness.get_by_label("Open saved snapshot").accesskit_node().is_disabled());
+            assert_eq!(std::fs::read(&output).unwrap(), b"preexisting output must remain unchanged");
+            mock.assert_no_connection();
+        }
+
+        #[test]
+        fn normal_session_document_mismatch_refuses_at_the_second_check_and_preserves_original_editor() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            std::fs::set_permissions(&fixture.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let workspace = fixture.workspace();
+            let preview = controlled_capture_preview(&workspace);
+            let publication = preview.publish(&fixture.directory.join("operator.capture.json")).unwrap();
+            let action = OpenSnapshot {
+                path: publication.path.clone(),
+                document_sha256: publication.document_sha256.clone(),
+                publication_status: publication.status,
+                source: SourceIdentity::capture(&workspace),
+            };
+            action.validate_source(Some(&workspace)).unwrap();
+            let verified =
+                rampage_api::read_debugger_capture_publication(&action.path, &action.document_sha256).unwrap();
+            let mut changed = verified.clone();
+            changed.push(b'\n');
+            std::fs::write(&action.path, &changed).unwrap();
+            let candidate = Workspace::open(
+                &rampage_api::Session::default(),
+                action.path.clone(),
+                None,
+                None,
+                &egui::Context::default(),
+                true,
+            )
+            .unwrap();
+            assert_eq!(candidate.project.binary.format, Format::Snapshot);
+            assert_eq!(candidate.project.binary.file_bytes(), changed.as_slice());
+            let original = Arc::clone(&workspace.project);
+            let annotations = serde_json::to_string(&original.annotation_list()).unwrap();
+            let mut app = crate::App::blocking();
+            app.workspace = Some(workspace);
+            let workspace = app.workspace.as_mut().unwrap();
+            workspace.goto(FILE_ADDRESS + 1);
+            workspace.begin_comment();
+            workspace.editing.as_mut().unwrap().text = "editor remains unsaved".into();
+            let error = app.finish_debugger_snapshot_open(&action, &verified, candidate).unwrap_err();
+            assert_eq!(error, "Saved capture changed while opening; the original workspace remains open.");
+            let workspace = app.workspace.as_ref().unwrap();
+            assert!(Arc::ptr_eq(&workspace.project, &original));
+            assert_eq!(workspace.cursor, FILE_ADDRESS + 1);
+            assert!(workspace.can_go_back());
+            assert_eq!(workspace.editing.as_ref().unwrap().text, "editor remains unsaved");
+            assert_eq!(serde_json::to_string(&original.annotation_list()).unwrap(), annotations);
+            assert_eq!(std::fs::read(&action.path).unwrap(), changed);
+        }
+
+        #[test]
+        fn prepared_capture_compare_save_and_verified_open_are_separate_actions_without_annotation_writes() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            std::fs::set_permissions(&fixture.directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut workspace = fixture.workspace();
+            let original = Arc::clone(&workspace.project);
+            let annotations = serde_json::to_string(&original.annotation_list()).unwrap();
+            let preview = Arc::new(controlled_capture_preview(&workspace));
+            assert!(Arc::ptr_eq(preview.source_project(), &original));
+            let output = fixture.directory.join("operator.capture.json");
+            let mut workflow = stopped_workflow("x86_64", "little", Some(&workspace));
+            workflow.module = Some(ModuleRow {
+                index: 1,
+                name: "image".into(),
+                uuid: TEST_UUID.into(),
+                triple: "x86_64-apple-macosx".into(),
+                width: 8,
+                object_order: "little".into(),
+            });
+            workflow.thread = Some(7);
+            workflow.file_address = format!("{FILE_ADDRESS:#x}");
+            workflow.size = 4;
+            workflow.permissions = 2;
+            workflow.output = output.to_str().unwrap().into();
+            workflow.preview_binding = Some(work_binding(&workflow, Some(&workspace)));
+            workflow.preview = Some(preview);
+            workspace.goto(FILE_ADDRESS + 1);
+            workspace.begin_comment();
+            workspace.editing.as_mut().unwrap().text = "unsaved operator annotation".into();
+            let cursor = workspace.cursor;
+            let mut harness = Harness::builder().with_size(egui::vec2(1600.0, 1500.0)).build_ui_state(
+                |ui, state: &mut (Workflow, Workspace, WorkGate, Option<OpenSnapshot>)| {
+                    state.0.poll("/operator/chosen.sock", Some(&state.1));
+                    let busy = state.2.busy() || state.0.job.is_running();
+                    let action = state.0.capture_ui(ui, "/operator/chosen.sock", Some(&state.1), &state.2, busy);
+                    if let Some(action) = action {
+                        state.3 = Some(action);
+                    }
+                },
+                (workflow, workspace, WorkGate::default(), None),
+            );
+            for _ in 0..3 {
+                harness.run();
+                assert!(!output.exists());
+                assert!(harness.state().0.saved.is_none() && harness.state().0.comparison.is_none());
+                assert!(harness.state().3.is_none());
+            }
+            harness.get_by_label("Compare prepared capture with original").click_accesskit();
+            harness.step();
+            finish_workflow(&mut harness.state_mut().0);
+            harness.run();
+            assert_eq!(harness.state().0.comparison.as_ref().unwrap().equal_bytes, 4);
+            assert!(!output.exists() && harness.state().3.is_none());
+            harness.get_by_label("Save prepared capture").click_accesskit();
+            harness.step();
+            finish_workflow(&mut harness.state_mut().0);
+            harness.run();
+            assert_eq!(harness.state().0.saved.as_ref().unwrap().path, output);
+            let receipt = harness.state().0.saved.as_ref().unwrap();
+            for path in &receipt.retained_staging_paths {
+                harness.get_by_label(&format!(
+                    "Retained staging requires operator inspection/cleanup (not automatic deletion): {}",
+                    path.display(),
+                ));
+            }
+            assert!(output.exists() && harness.state().3.is_none());
+            assert!(harness.get_by_label("Open saved snapshot").accesskit_node().is_disabled());
+            let workspace = &harness.state().1;
+            assert!(Arc::ptr_eq(&workspace.project, &original));
+            assert_eq!(workspace.cursor, cursor);
+            assert!(workspace.can_go_back());
+            assert_eq!(workspace.editing.as_ref().unwrap().text, "unsaved operator annotation");
+            assert_eq!(serde_json::to_string(&original.annotation_list()).unwrap(), annotations);
+            harness.state_mut().1.editing = None;
+            harness.run();
+            harness.get_by_label("Open saved snapshot").click_accesskit();
+            harness.run();
+            let (workflow, workspace, _, action) = harness.into_state();
+            let mut app = crate::App::blocking();
+            app.workspace = Some(workspace);
+            let document = std::fs::read(&output).unwrap();
+            let mut changed = document.clone();
+            changed.push(b'\n');
+            std::fs::write(&output, changed).unwrap();
+            app.open_debugger_snapshot(&egui::Context::default(), action.unwrap());
+            assert!(app.error.is_some());
+            assert!(Arc::ptr_eq(&app.workspace.as_ref().unwrap().project, &original));
+            assert_eq!(app.workspace.as_ref().unwrap().cursor, cursor);
+            std::fs::write(&output, document).unwrap();
+            let saved = workflow.saved.as_ref().unwrap();
+            let action = OpenSnapshot {
+                path: saved.path.clone(),
+                document_sha256: saved.document_sha256.clone(),
+                publication_status: saved.status,
+                source: SourceIdentity::capture(app.workspace.as_ref().unwrap()),
+            };
+            app.open_debugger_snapshot(&egui::Context::default(), action);
+            assert!(app.error.is_none(), "{:?}", app.error);
+            let snapshot = app.workspace.as_ref().unwrap();
+            assert_eq!(snapshot.path, output);
+            assert_eq!(snapshot.project.binary.format, Format::Snapshot);
+            assert_eq!(snapshot.cursor, 0, "register PC must not authorize automatic navigation");
+            assert!(snapshot.project.binary.entry.is_none());
+            assert!(snapshot.project.binary.function_starts.is_empty());
+            assert_eq!(snapshot.project.binary.snapshot_registers.len(), 3);
+            assert_eq!(serde_json::to_string(&original.annotation_list()).unwrap(), annotations);
+            assert!(
+                std::fs::read_dir(&fixture.directory)
+                    .unwrap()
+                    .all(|entry| { entry.unwrap().path().extension().is_none_or(|extension| extension != "jsonl") })
+            );
+            drop(app);
+            std::fs::remove_file(output).unwrap();
+        }
+
+        #[test]
+        fn an_opaque_prepared_reply_cannot_adopt_a_reopened_workspace_even_with_the_same_project_arc() {
+            let fixture = StaticFixture::new(&thin_macho(Arch::X86_64, TEST_UUID));
+            let workspace = fixture.workspace();
+            let preview = Arc::new(controlled_capture_preview(&workspace));
+            for change in ["instance", "project", "close-reopen"] {
+                let mut workflow = stopped_workflow("x86_64", "little", Some(&workspace));
+                let binding = work_binding(&workflow, Some(&workspace));
+                let mut replacement = fixture.workspace();
+                if change == "instance" {
+                    replacement.project = Arc::clone(&workspace.project);
+                }
+                if change == "close-reopen" {
+                    workflow.reset_stop();
+                }
+                workflow.binding = Some(binding);
+                workflow.job_kind = WorkKind::Prepare;
+                workflow.job = Job::Done(Ok(WorkResult::Prepared(Arc::clone(&preview))));
+                let current = if change == "close-reopen" { &workspace } else { &replacement };
+                workflow.poll("/operator/chosen.sock", Some(current));
+                assert!(workflow.preview.is_none() && workflow.saved.is_none(), "accepted {change}");
+                assert!(workflow.validate_preview("/operator/chosen.sock", Some(current)).is_err());
+            }
+        }
+
         #[test]
         fn explicit_resolution_click_uses_file_address_and_existing_navigation_history_without_connecting() {
             let fixture = StaticFixture::new(&thin_macho(Arch::Aarch64, TEST_UUID));
@@ -1794,9 +4613,10 @@ mod tests {
                 .with_size(egui::vec2(1500.0, 1200.0))
                 .build_ui_state(|ui, app: &mut crate::App| app.show(ui), app);
             harness.run();
+            open_advanced(&mut harness);
             mock.assert_no_connection();
             assert!(harness.query_by_label("Go to matching static image address").is_none());
-            harness.get_by_label("Query").click();
+            harness.get_by_label("Query").click_accesskit();
             harness.step();
             assert!(harness.state().debugger.job.is_running());
             assert_eq!(harness.state().workspace.as_ref().unwrap().cursor, initial);
@@ -1808,7 +4628,7 @@ mod tests {
             assert_eq!(harness.state().workspace.as_ref().unwrap().cursor, initial);
             assert!(!harness.state().workspace.as_ref().unwrap().can_go_back());
             mock.assert_no_connection();
-            harness.get_by_label("Go to matching static image address").click();
+            harness.get_by_label("Go to matching static image address").click_accesskit();
             harness.run();
             let workspace = harness.state_mut().workspace_mut().unwrap();
             assert_eq!(workspace.path, fixture.path);

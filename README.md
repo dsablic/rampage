@@ -46,8 +46,10 @@ optionally with the desktop client. The examples below assume `rampage` is on `P
 
 ```sh
 rampage binary triage sample.elf --json
+rampage binary audit sample.elf --entries --at main --json
 rampage function list sample.elf --name main
 rampage function disassemble sample.elf --at main --count 20
+rampage function decompile sample.elf --at main --exact-entry --isolated --json
 rampage function xrefs sample.elf --to main
 rampage string list sample.elf --contains greeting
 rampage binary analyze module.dylib --all-architectures --workflow triage-report --function exported_entry --json
@@ -62,6 +64,9 @@ Use `rampage --help` or a group's `--help` to discover routes. The
 [CLI reference](docs/cli-reference.md) maps every route to its compatibility spelling and documents flags,
 addresses, managed-code paging and annotation persistence. See [CLI batch analysis](docs/cli-analysis.md)
 for multi-architecture task selection, failure reporting and output budgets.
+
+`--exact-entry` opts into bounded local host context over the full mapped image, without whole-program discovery;
+it is an analyst assertion, not proof of a function boundary. Default decompilation semantics remain unchanged.
 
 ## Clients and documentation
 
@@ -86,6 +91,8 @@ Local analysis and MCP serving do not require an API key. See the client referen
 Additional focused guides:
 
 - [Runtime snapshots](docs/runtime-snapshots.md) and the [read-only LLDB query bridge](docs/lldb-query.md).
+- [Exact-entry analysis](docs/entry-analysis.md): opt-in decompilation, independent entry diagnostics and limits.
+- [Debugger workspace](docs/debugger-workspace.md): explicit local inspection, Prepare/Compare/Save/Open and privacy.
 - [Debug signature import](docs/debug-signatures.md) and [ARM64 semantics validation](docs/arm64-development.md).
 - [Benchmarks](docs/benchmarks.md) and the [decompiler integration corpus](docs/decompiler-corpus.md).
 - [Extension points](docs/plugins.md): internal registries, not dynamic plugin loading or a stable public plugin API.

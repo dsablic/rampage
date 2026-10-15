@@ -676,6 +676,53 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   workflow was dispatched during this work. The virtual acceptance wrapper is wired but has not run in Actions.
   Release optimization settings and the two-job shared target are unchanged.
 
+### Exact-entry analysis and local debugger workspace
+
+- [x] Separate exact-entry API, opt-in CLI hierarchy/compatibility flag and shared/MCP decompile argument, with
+  fresh native/worker context, full-image permissions/backing and no whole-program discovery/cache consumption.
+  Actual type/global/signature dependencies, v1/v2 assertions and canonical Go dependencies replay or refuse;
+  metadata/analyst entry assertions remain separate from boundary proof and native recovery diagnostics.
+- [x] Independent bounded entry diagnostics through API, `binary audit --entries [--at]` and paged MCP, retaining
+  origins, local evidence, counts, omissions and explicit caps without encryption or function-verification claims.
+- [x] Structured local stopped-session Connect/Refresh, explicit module/thread pages, raw register/memory reads
+  and guarded matching-static navigation. Separate client-local Prepare/Compare/Save/Open uses unchanged queries,
+  retained original identity, private no-clobber publication, retained staging and uncertain-publication refusals.
+  New capture is x86-64 Darwin only; broader existing standalone-exporter support remains separate and unchanged.
+- [x] Independent reviews reconciled import-stub NOP boundaries, covered data extents, conditional transfers,
+  whole-JSON byte-budget progress and publication/resource lifecycle issues, with retained regressions.
+- [x] Ordinary debug workspace tests and doctests passed in bounded package slices, including the accuracy/
+  evaluation gate and unchanged UI snapshots. New gates include 36 entry samples, 21 capture API cases, 74 UI
+  library tests, native/worker parity, both CLI spellings and actual v1/v2 checked exact-entry replay.
+  The explicitly selected isolated CLI dispatch test passed; compiled opt-in gates remain separately scoped.
+- [x] All-target workspace Clippy passed with warnings denied. One combined API/native validation batch reached
+  its outer 150-second cap; API completed and the remaining native/worker suite passed separately. This does not
+  establish a fix for the earlier intermittent startup stall or the local LLVM stripping warning.
+- [x] Final formatting, 120-column and diff checks passed. Changed/new files contain only Rust source/tests and
+  Markdown in the implementation batch; wrap-up adds controlled Python acceptance tooling. CI triggers, build
+  settings, commercial inputs and capture artifacts are unchanged or absent.
+- [ ] New live end-to-end LLDB workspace acceptance, broader ABI/platform coverage and performance measurements.
+  Owned protocol mocks and image fixtures do not establish arbitrary-host or commercial-runtime acceptance.
+  The owned x86-64 live gate compiled but Apple LLDB refused launch with `Bad CPU type in executable` on the
+  arm64 host, before UI observations. No Rosetta installation or ARM64 data-order guess bypassed that blocker.
+- [x] Final publication review closed 32-bit sample-width handling and capture paint-time mapped-header reads.
+  Metadata-only painting and explicit-action physical checks retain separate authority, with regressions.
+- [x] Protected candidate-source scan and scanner bypass regressions passed; committed-tree/full-history scans
+  are required before private push. No release tag or Actions dispatch is part of publication; capture artifacts
+  and scanner scratch stay outside commits.
+- [x] Measurement tooling: 17 tests and 621 subtests passed, with scoped Ruff/format/ty checks. The 64-test combined
+  CI runner command passed. Its initial run returned an unavailable baseline in an unchanged corpus regression;
+  a focused diagnostic matched the baseline and the unchanged command passed, not evidence of a startup fix.
+- [x] Inline exact/legacy measurements on owned ELF, PE and Mach-O: 18/18 source-oracle attempts passed in
+  6.986 seconds, with wall-time, sampled RSS and exact API phase ranges recorded in `docs/entry-measurements.md`.
+  No speedup or constant-latency claim is earned. The separate mixed pilot retained six passes, one unsupported
+  separate-worker-group failure and 29 unrun attempts; isolated wall/RSS remain unavailable under this guardian.
+- [ ] Isolated-worker performance measurements and larger matched-setting corpora; bounded host context does
+  not promise constant latency, complete discovery context or cropped-image behavior.
+- [ ] Future: explicitly bounded multi-module workspaces and broader type/ABI recovery with independent evidence.
+- [ ] Future: read-only GDB and Windows debugger inspection backends, each with separate platform acceptance.
+- [ ] Any execution-control debugger integration requires separate design/review; launch, attach, resume, step,
+  breakpoints, expressions and target writes are not part of the read-only workspace milestone.
+
 ### Validation and external blockers
 
 - [x] LLVM-checked encodings and native ARM64 boundary comparisons, including all 16 conditions × 16 NZCV states.

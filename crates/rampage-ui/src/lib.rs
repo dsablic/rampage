@@ -93,7 +93,7 @@ impl App {
         match Workspace::open(&self.session, path, arch, image, ctx, self.blocking) {
             Ok(mut workspace) => {
                 workspace.debug_layout = debug_layout::DebugLayouts::with_gate(self.debug_layout_gate.clone());
-                self.debugger.invalidate_navigation();
+                self.debugger.invalidate_workspace();
                 self.workspace = Some(workspace);
                 self.error = None;
             }
@@ -181,7 +181,10 @@ impl App {
             about::show(&ui.ctx().clone(), &mut self.about, &self.session.packs());
         }
         self.carve_window(&ui.ctx().clone());
-        self.debugger.show(ui.ctx(), self.workspace.as_mut());
+        let debugger_action = self.debugger.show_action(ui.ctx(), self.workspace.as_mut());
+        if let Some(action) = debugger_action {
+            self.open_debugger_snapshot(ui.ctx(), action);
+        }
         let Some(workspace) = &mut self.workspace else {
             egui::CentralPanel::default().show(ui, |ui| self.empty(ui));
             self.shortcuts(ui.ctx());
@@ -222,6 +225,39 @@ impl App {
             let path = carve.path.clone();
             self.open_at(ctx, path, None, Some(image));
         }
+    }
+
+    fn open_debugger_snapshot(&mut self, ctx: &egui::Context, action: debugger::OpenSnapshot) {
+        let result = (|| {
+            action.validate_source(self.workspace.as_ref())?;
+            let verified = rampage_api::read_debugger_capture_publication(&action.path, &action.document_sha256)
+                .map_err(|error| error.to_string())?;
+            let workspace = Workspace::open(&self.session, action.path.clone(), None, None, ctx, self.blocking)?;
+            self.finish_debugger_snapshot_open(&action, &verified, workspace)
+        })();
+        if let Err(error) = result {
+            self.error = Some(error);
+        }
+    }
+
+    fn finish_debugger_snapshot_open(
+        &mut self,
+        action: &debugger::OpenSnapshot,
+        verified: &[u8],
+        mut workspace: Workspace,
+    ) -> Result<(), String> {
+        if workspace.project.binary.format != rampage_loaders::Format::Snapshot
+            || workspace.project.binary.file_bytes() != verified
+        {
+            return Err("Saved capture changed while opening; the original workspace remains open.".to_owned());
+        }
+        action.validate_source(self.workspace.as_ref())?;
+        workspace.debug_layout = debug_layout::DebugLayouts::with_gate(self.debug_layout_gate.clone());
+        self.debugger.invalidate_workspace();
+        self.workspace = Some(workspace);
+        self.carve = None;
+        self.error = None;
+        Ok(())
     }
 
     /// Whether the graph was on screen in this pass or the last, so navigation should stay in it.

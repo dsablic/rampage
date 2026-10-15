@@ -45,32 +45,39 @@ without reverting its edits. It does not force an undo through the conflict. Dat
 ## Local debugger observations
 
 The brand's context menu or Ctrl/Cmd+D opens **Read-only debugger**, even without a loaded binary. Opening the
-window does not connect. Enter an explicit local Unix socket and request, then select **Query**. The LLDB operator
-must start the stopped-session endpoint separately; the window cannot attach, launch, resume, evaluate expressions
-or write target memory. Read-only request templates correspond to the [LLDB protocol](lldb-query.md), including
-explicit module-UUID/image-address resolution. Qualified runtime observations never navigate automatically.
+window does not connect. Enter an explicit absolute local Unix socket, then use **Connect stopped session** or
+**Refresh stopped session**. The LLDB operator starts the authorized stopped-session endpoint separately.
+Module/thread pages, row selection, raw registers, raw memory and UUID-qualified file-address resolution are
+explicit actions, without automatic polling, stale-token refresh, retry or navigation. Pages have at most 32 rows;
+the structured memory view accepts 1–4,096 bytes and exact mapping permissions.
 
-Session tokens are copied into follow-up requests explicitly; stale tokens are not refreshed or retried.
-Responses and backend errors remain local to this window, separate from the loaded project's addresses and
-annotations. They are not sent to the assistant/provider. **Clear local data** clears
-inputs, results and editor undo state. Memory observations are non-atomic, and a client timeout does not prove an
-LLDB SDK operation stopped.
+**Advanced: raw requests and JSON responses** retains the [LLDB protocol](lldb-query.md) templates and **Query**
+button. Raw templates require explicit token/placeholder replacement. Responses, paths, registers and bytes remain
+local, separate from annotations and the Assistant/provider. **Clear local data** clears window inputs/results
+and editor undo state when idle, not saved capture files. Runtime bytes/registers can be sensitive.
 
-A successful `resolve_module_address` submitted with a workspace open can offer **Go to matching static image
-address**. Only an explicit click uses the returned file virtual address, never its load address or an inferred
-slide. It navigates the already-open matching Mach-O through ordinary local history without another socket request.
-It opens no module path reported by the debugger and transfers no observation into annotations or assistant state.
+An explicit qualified resolution can offer **Go to matching static image address**. Only a separate click uses
+the returned file virtual address in the already-open matching Mach-O, never a runtime load address or a reported
+module pathname. Typed SDK section/mapping evidence, request/token, exact UUID, architecture/variant, address
+width, byte order and readable static backing must agree; otherwise the result remains raw-only. Inputs,
+templates, rejected edits, new queries and workspace replacement invalidate the action, including late results.
+Source-descriptor/path metadata are checked without mapped-byte reads during painting and revalidated on clicks.
 
-Actionable results require typed, internally consistent SDK section/mapping evidence and matching request/token,
-16-byte UUID, supported architecture/variant, address width and byte order. Static destination bytes must be readable
-and file-backed. Missing evidence, owned snapshots, unsupported source identity or mismatches leave results raw-only.
-Input edits, rejected input, template replacement, clear, new queries and workspace replacement invalidate the action,
-including late completions. A matching UUID alone does not establish equal bytes, a current stop, flow or layout.
+The separate **Prepare capture preview (9 queries)** action composes existing queries for one UUID-matched
+ordinary x86-64 Darwin image, one selected thread and at most 4,096 bytes. Prepare semantically validates owned
+snapshot bytes without writing files. **Compare prepared capture with original** compares those observations
+with the same retained original, not a saved pathname. **Save prepared capture** explicitly publishes historical
+data into a private directory without clobbering; staging paths are retained for operator inspection, not unsafe
+automatic deletion. Uncertain publication cannot authorize Open or same-destination publication retry.
+**Open saved snapshot** requires a current comparison and successful publication, rechecks source/bindings and
+actual session document bytes/digest, and refuses while an annotation editor is unsaved. Save never opens itself.
 
-Original mapping-descriptor identity and precise metadata are checked against the descriptor and source pathname;
-debugger painting does not read mapped headers/bytes, and clicks revalidate before navigation. This detects
-observable source changes, not atomicity between validation and subsequent reads, and does not retrofit other
-existing workspace readers.
+ARM64 runtime DATA order remains unknown, so this new capture composition refuses it while inspection remains
+available. Existing standalone exporter architecture support is separate and unchanged. Matching observations
+are non-atomic, not proof of authenticity, equal bytes, a current stop, flow or layout; client timeouts cannot
+prove SDK work stopped. The window offers no launch, attach, resume, step, breakpoint, expression or target-write
+controls. See the [debugger workspace guide](debugger-workspace.md) for the complete action sequence, source/form/
+stop-epoch guards, private publication rules, API and acceptance boundary.
 
 ## Assistant and data disclosure
 

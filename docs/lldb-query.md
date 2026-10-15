@@ -120,4 +120,6 @@ load symbol metadata. No project image or path reported by the target is opened 
 These are non-atomic qualified observations, not proven cross-module flow or object layout. The local UI template
 requires explicit UUID, address and token replacement and never navigates automatically. A separate explicit
 [matching-static-image action](desktop-ui.md#local-debugger-observations) validates local context before navigation;
-it does not strengthen the protocol's identity, atomicity or flow guarantees.
+the [debugger workspace guide](debugger-workspace.md) covers structured inspection and client-local capture over
+these unchanged operations. Neither navigation nor capture strengthens the protocol's identity, atomicity or flow
+guarantees.
