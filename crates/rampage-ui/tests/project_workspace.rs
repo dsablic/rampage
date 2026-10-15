@@ -362,6 +362,30 @@ fn navigation_annotation_and_bank_aba_changes_revoke_reviewed_open_authority() {
     assert!(Arc::ptr_eq(&old_project, &app.workspace_mut().unwrap().project));
 }
 
+#[test]
+fn explicit_begin_methods_preserve_blocking_compatibility_without_automatic_chaining() {
+    let sources = Sources::new(2);
+    let ctx = egui::Context::default();
+    let mut app = App::blocking();
+    app.add_module_at(&ctx, sources.paths[0].clone(), None, None).unwrap();
+    app.add_module_at(&ctx, sources.paths[1].clone(), None, None).unwrap();
+    let original = Arc::clone(&app.workspace_mut().unwrap().project);
+    let output = sources.directory.join("explicit-begin.json");
+    app.begin_workspace_save(&ctx, output.clone()).unwrap();
+    assert!(!app.workspace_io_running());
+    assert_eq!(app.project_workspace_save_notices().len(), 1);
+    assert!(app.reviewed_project_workspace().is_none());
+    app.begin_workspace_preview(&ctx, output).unwrap();
+    assert!(!app.workspace_io_running());
+    assert!(app.reviewed_project_workspace().is_some());
+    assert!(Arc::ptr_eq(&original, &app.workspace_mut().unwrap().project));
+    app.begin_workspace_open_reviewed(&ctx).unwrap();
+    assert!(!app.workspace_io_running());
+    assert!(app.reviewed_project_workspace().is_none());
+    assert!(!Arc::ptr_eq(&original, &app.workspace_mut().unwrap().project));
+    assert!(app.workspace_mut().unwrap().analysis_deferred());
+}
+
 #[cfg(unix)]
 #[test]
 fn canonical_source_alias_is_rejected_without_activating_or_merging_a_module() {

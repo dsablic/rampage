@@ -14,6 +14,7 @@ use rampage_api::{
 use rampage_arch::Arch;
 use rampage_loaders::ImageAt;
 
+use crate::workspace_jobs::{BindingState, WorkspaceInput, WorkspaceJobBinding, WorkspaceOutput};
 use crate::{App, Workspace, debug_layout, theme};
 
 const MAX_MODULES: usize = 8;
@@ -89,22 +90,29 @@ pub enum ProjectWorkspaceSaveNotice {
     Failure { requested: PathBuf, message: String, retained_paths: Vec<PathBuf> },
 }
 
+#[derive(Clone)]
 struct ModuleBinding {
     id: String,
+    label: String,
+    project: Arc<rampage_api::Project>,
     instance: Arc<()>,
     annotations_epoch: Arc<()>,
     configuration: DecompilerConfigurationRevision,
     navigation: (u64, Vec<u64>, Vec<u64>),
-    annotations: Vec<(rampage_api::annotations::Field, u64, String)>,
+    navigation_revision: Arc<()>,
+    annotations: Arc<()>,
 }
 
-struct BankBinding {
+#[derive(Clone)]
+pub(crate) struct BankBinding {
     generation: Arc<()>,
     modules: Vec<ModuleBinding>,
+    capture_annotations: Option<PathBuf>,
+    packs: Arc<rampage_api::Packs>,
 }
 
 struct ReviewedWorkspace {
-    preview: ProjectWorkspacePreview,
+    preview: Arc<ProjectWorkspacePreview>,
     binding: BankBinding,
 }
 
@@ -132,21 +140,6 @@ pub(crate) struct WorkspaceBank {
     fallback_editor_identity: EditorIdentity,
 }
 
-fn annotation_snapshot(workspace: &Workspace) -> Vec<(rampage_api::annotations::Field, u64, String)> {
-    use rampage_api::annotations::Field;
-    let rows = workspace.project.annotation_list();
-    [
-        (Field::Name, rows.names),
-        (Field::Comment, rows.comments),
-        (Field::Signature, rows.signatures),
-        (Field::Types, rows.types),
-        (Field::Global, rows.globals),
-    ]
-    .into_iter()
-    .flat_map(|(field, rows)| rows.into_iter().map(move |row| (field, row.address, row.text)))
-    .collect()
-}
-
 fn source_path(workspace: &Workspace) -> Result<PathBuf, String> {
     workspace
         .project
@@ -158,32 +151,48 @@ fn source_path(workspace: &Workspace) -> Result<PathBuf, String> {
 }
 
 impl BankBinding {
-    fn capture(app: &App) -> Result<Self, String> {
+    pub(crate) fn capture(app: &App) -> Result<Self, String> {
         let modules = app
             .bank_workspaces()
             .map(|(info, workspace)| {
                 Ok(ModuleBinding {
                     id: info.id.clone(),
+                    label: info.label.clone(),
+                    project: Arc::clone(&workspace.project),
                     instance: Arc::clone(&workspace.instance),
                     annotations_epoch: Arc::clone(&workspace.annotations_epoch),
                     configuration: workspace.project.decompiler_configuration_revision().map_err(|e| e.to_string())?,
-                    navigation: workspace.navigation_snapshot(),
-                    annotations: annotation_snapshot(workspace),
+                    navigation: workspace.bounded_navigation_snapshot()?,
+                    navigation_revision: Arc::clone(&workspace.navigation_revision),
+                    annotations: workspace.project.annotation_revision().map_err(|error| error.to_string())?,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        Ok(Self { generation: Arc::clone(&app.workspace_bank.generation), modules })
+        Ok(Self {
+            generation: Arc::clone(&app.workspace_bank.generation),
+            modules,
+            capture_annotations: app.session.capture_annotations().map(PathBuf::from),
+            packs: app.session.packs(),
+        })
     }
 
-    fn matches(&self, app: &App) -> bool {
+    pub(crate) fn matches(&self, app: &App) -> bool {
         Arc::ptr_eq(&self.generation, &app.workspace_bank.generation)
+            && app.session.capture_annotations() == self.capture_annotations.as_deref()
+            && Arc::ptr_eq(&self.packs, &app.session.packs())
             && app.bank_workspaces().count() == self.modules.len()
             && app.bank_workspaces().zip(&self.modules).all(|((info, workspace), binding)| {
                 info.id == binding.id
+                    && info.label == binding.label
+                    && Arc::ptr_eq(&workspace.project, &binding.project)
                     && Arc::ptr_eq(&workspace.instance, &binding.instance)
                     && Arc::ptr_eq(&workspace.annotations_epoch, &binding.annotations_epoch)
-                    && workspace.navigation_snapshot() == binding.navigation
-                    && annotation_snapshot(workspace) == binding.annotations
+                    && workspace.navigation_matches(&binding.navigation)
+                    && Arc::ptr_eq(&workspace.navigation_revision, &binding.navigation_revision)
+                    && workspace
+                        .project
+                        .annotation_revision()
+                        .is_ok_and(|revision| Arc::ptr_eq(&revision, &binding.annotations))
                     && workspace
                         .project
                         .decompiler_configuration_revision()
@@ -211,7 +220,40 @@ impl App {
             .chain(self.workspace_bank.inactive.iter().map(|module| (&module.info, &module.workspace)))
     }
 
+    pub(crate) fn module_reference_inputs(&self) -> Vec<rampage_api::ModuleReferenceInput> {
+        self.bank_workspaces()
+            .map(|(info, workspace)| rampage_api::ModuleReferenceInput {
+                module_id: info.id.clone(),
+                project: Arc::clone(&workspace.project),
+            })
+            .collect()
+    }
+
+    pub(crate) fn module_reference_inputs_match(&self, inputs: &[rampage_api::ModuleReferenceInput]) -> bool {
+        self.bank_workspaces().count() == inputs.len()
+            && inputs.iter().all(|input| {
+                self.bank_workspaces().any(|(info, workspace)| {
+                    info.id == input.module_id && Arc::ptr_eq(&workspace.project, &input.project)
+                })
+            })
+    }
+
+    pub(crate) fn navigate_module_reference(
+        &mut self,
+        inputs: &[rampage_api::ModuleReferenceInput],
+        address: &QualifiedProjectAddress,
+    ) -> Result<(), String> {
+        if !self.module_reference_inputs_match(inputs) {
+            return Err("The reference observation belongs to an obsolete module set.".into());
+        }
+        rampage_api::validate_module_reference_inputs(inputs).map_err(|error| error.to_string())?;
+        self.select_module(&address.module_id)?;
+        self.workspace.as_mut().ok_or("No active module.")?.goto(address.address);
+        Ok(())
+    }
+
     fn bank_changed(&mut self) {
+        self.workspace_jobs.bank_changed();
         self.workspace_bank.generation = Arc::new(());
         self.workspace_bank.review = None;
     }
@@ -245,6 +287,10 @@ impl App {
 
     /// Publishes without clobbering. Receipts disclose resources; they never authorize opening a workspace.
     pub fn save_project_workspace(&mut self, output: PathBuf) -> Result<ProjectWorkspacePublication, String> {
+        if self.workspace_io_running() {
+            return Err("A workspace file operation is still finishing.".to_owned());
+        }
+        self.ensure_workspace_publication_clear()?;
         let binding = BankBinding::capture(self)?;
         let manifest = self.capture_project_workspace()?;
         if !binding.matches(self) {
@@ -260,7 +306,19 @@ impl App {
         output: PathBuf,
         result: Result<ProjectWorkspacePublication, ApiError>,
     ) -> Result<ProjectWorkspacePublication, String> {
-        match &result {
+        self.record_workspace_publication(output, &result);
+        if !binding.matches(self) || self.ensure_bank_replaceable().is_err() {
+            return Err("Workspace changed during save. Inspect the retained publication notices below.".to_owned());
+        }
+        result.map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn record_workspace_publication(
+        &mut self,
+        output: PathBuf,
+        result: &Result<ProjectWorkspacePublication, ApiError>,
+    ) {
+        match result {
             Ok(publication) => {
                 self.workspace_bank.save_notices.push(ProjectWorkspaceSaveNotice::Publication(publication.clone()));
             }
@@ -276,22 +334,217 @@ impl App {
                 });
             }
         }
-        if !binding.matches(self) || self.ensure_bank_replaceable().is_err() {
-            return Err("Workspace changed during save. Inspect the retained publication notices below.".to_owned());
-        }
-        result.map_err(|error| error.to_string())
     }
 
     pub fn project_workspace_save_notices(&self) -> &[ProjectWorkspaceSaveNotice] {
         &self.workspace_bank.save_notices
     }
 
+    pub(crate) fn ensure_workspace_publication_clear(&self) -> Result<(), String> {
+        let unresolved = self.workspace_bank.save_notices.iter().any(|notice| match notice {
+            ProjectWorkspaceSaveNotice::Publication(publication) => {
+                publication.status == DebuggerCapturePublicationStatus::PublishedUncertain
+                    || !publication.retained_staging_paths.is_empty()
+            }
+            ProjectWorkspaceSaveNotice::Failure { retained_paths, .. } => !retained_paths.is_empty(),
+        });
+        if unresolved {
+            return Err(
+                "A previous publication requires explicit inspection. No further workspace file will be written."
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn workspace_io_running(&self) -> bool {
+        self.workspace_jobs.running()
+    }
+
+    /// Requests cooperative cancellation. A publication already committed is still reported and retained.
+    pub fn cancel_workspace_io(&mut self) {
+        self.workspace_jobs.cancel();
+        self.cancel_pending_inventory();
+    }
+
+    pub(crate) fn ensure_workspace_io_idle(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        self.poll_workspace_jobs(ctx);
+        if self.workspace_jobs.running() {
+            return Err("A workspace file operation is still finishing. No new operation was started.".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Captures only bounded local metadata here; source reads, proofs and publication run off the UI thread.
+    pub fn begin_workspace_save(&mut self, ctx: &egui::Context, output: PathBuf) -> Result<(), String> {
+        self.ensure_workspace_io_idle(ctx)?;
+        self.ensure_workspace_publication_clear()?;
+        self.ensure_bank_replaceable()?;
+        let active = self.active_module_id().ok_or_else(|| "No module is open.".to_owned())?.to_owned();
+        let binding = BankBinding::capture(self)?;
+        let modules = self
+            .bank_workspaces()
+            .map(|(info, workspace)| {
+                let (cursor, back, forward) = workspace.bounded_navigation_snapshot()?;
+                let qualified = |address| QualifiedProjectAddress { module_id: info.id.clone(), address };
+                Ok(ProjectWorkspaceModuleInput {
+                    id: info.id.clone(),
+                    label: info.label.clone(),
+                    source_path: info.canonical_source.clone(),
+                    image: workspace.image,
+                    project: Arc::clone(&workspace.project),
+                    navigation: ProjectWorkspaceNavigation {
+                        current: Some(qualified(cursor)),
+                        back: back.into_iter().map(&qualified).collect(),
+                        forward: forward.into_iter().map(qualified).collect(),
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let input = WorkspaceInput::Save { modules, active, session: self.session.unloaded_copy(), output };
+        self.workspace_jobs.start(ctx, self.blocking, binding, input)?;
+        self.error = None;
+        self.poll_workspace_jobs(ctx);
+        Ok(())
+    }
+
+    /// Reads the selected manifest only; it neither reads modules nor authorizes a later open.
+    pub fn begin_workspace_preview(&mut self, ctx: &egui::Context, path: PathBuf) -> Result<(), String> {
+        self.ensure_workspace_io_idle(ctx)?;
+        let binding = BankBinding::capture(self)?;
+        self.workspace_jobs.start(ctx, self.blocking, binding, WorkspaceInput::Preview { path })?;
+        self.workspace_bank.review = None;
+        self.workspace_bank.shown = true;
+        self.error = None;
+        self.poll_workspace_jobs(ctx);
+        Ok(())
+    }
+
+    /// Consumes this explicit review approval. No save or preview action automatically starts this operation.
+    pub fn begin_workspace_open_reviewed(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        self.ensure_workspace_io_idle(ctx)?;
+        self.ensure_bank_replaceable()?;
+        let review = self
+            .workspace_bank
+            .review
+            .as_ref()
+            .ok_or_else(|| "Preview a workspace file before approving it.".to_owned())?;
+        if !review.binding.matches(self) {
+            self.workspace_bank.review = None;
+            return Err("The current workspace changed since preview. Preview again before opening.".to_owned());
+        }
+        let input = WorkspaceInput::OpenReviewed {
+            preview: Arc::clone(&review.preview),
+            session: self.session.unloaded_copy(),
+        };
+        self.workspace_jobs.start(ctx, self.blocking, review.binding.clone(), input)?;
+        self.workspace_bank.review = None;
+        self.error = None;
+        self.poll_workspace_jobs(ctx);
+        Ok(())
+    }
+
+    pub(crate) fn poll_workspace_jobs(&mut self, ctx: &egui::Context) {
+        self.poll_pending_inventory();
+        let state = self.workspace_jobs.binding().map(|binding| binding.memory_state(self));
+        if state == Some(BindingState::Changed) {
+            self.workspace_jobs.cancel();
+        }
+        if state == Some(BindingState::Busy) && self.workspace_jobs.defer_inventory_adoption() {
+            return;
+        }
+        let Some(completion) = self.workspace_jobs.poll() else { return };
+        let cancelled = completion.cancelled;
+        let binding = match completion.binding {
+            WorkspaceJobBinding::Bank(binding) => binding,
+            WorkspaceJobBinding::Inventory(binding) => {
+                let result = self.finish_inventory_job(binding, cancelled, completion.output);
+                self.finish_workspace_job_status(result);
+                return;
+            }
+        };
+        let result = match completion.output {
+            Ok(WorkspaceOutput::Save { output, result }) => {
+                // Resource disclosure precedes every authority, cancellation and bank-state check.
+                let result = self.finish_workspace_save(&binding, output, result);
+                match result {
+                    Ok(publication) => {
+                        let status = match publication.status {
+                            DebuggerCapturePublicationStatus::Published => {
+                                "Workspace document published. It has not been previewed or opened."
+                            }
+                            DebuggerCapturePublicationStatus::PublishedUncertain => {
+                                "Publication uncertain. Inspect every reported destination and staging path."
+                            }
+                        };
+                        Ok(status.to_owned())
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Ok(WorkspaceOutput::Preview(result)) => {
+                if cancelled || !binding.matches(self) {
+                    Err("Preview discarded after cancellation or workspace changes. Preview explicitly again.".into())
+                } else {
+                    result.map_err(|error| error.to_string()).and_then(|preview| {
+                        preview.validate_metadata().map_err(|error| error.to_string())?;
+                        self.workspace_bank.review = Some(ReviewedWorkspace { preview: Arc::new(preview), binding });
+                        Ok("Manifest preview ready. Opening sources requires separate approval.".to_owned())
+                    })
+                }
+            }
+            Ok(WorkspaceOutput::OpenReviewed(result)) => {
+                if cancelled || !binding.matches(self) {
+                    Err("Load discarded after cancellation or workspace changes. The original modules remain open."
+                        .into())
+                } else {
+                    result
+                        .map_err(|error| error.to_string())
+                        .and_then(|candidate| {
+                            self.adopt_project_workspace_with_sources(
+                                ctx,
+                                &binding,
+                                candidate.loaded,
+                                candidate.canonical_sources,
+                            )
+                        })
+                        .map(|()| "Reviewed workspace opened.".to_owned())
+                }
+            }
+            Err(error) => Err(error),
+            Ok(WorkspaceOutput::InventorySave { output, result }) => {
+                self.record_workspace_publication(output, &result);
+                Err("Inventory result had the wrong operation binding. Inspect publication notices.".to_owned())
+            }
+            Ok(WorkspaceOutput::InventoryLoad(_)) => {
+                Err("Inventory result had the wrong operation binding.".to_owned())
+            }
+        };
+        self.finish_workspace_job_status(result);
+    }
+
+    fn finish_workspace_job_status(&mut self, result: Result<String, String>) {
+        match result {
+            Ok(status) => {
+                self.workspace_jobs.finish(status);
+                self.error = None;
+            }
+            Err(error) => {
+                self.workspace_jobs.finish(error.clone());
+                self.error = Some(error);
+            }
+        }
+    }
+
     /// Reads only the manifest. Sources and recognized annotation logs require separate reviewed approval.
     pub fn preview_project_workspace(&mut self, path: PathBuf) -> Result<(), String> {
+        if self.workspace_io_running() {
+            return Err("A workspace file operation is still finishing.".to_owned());
+        }
         self.workspace_bank.review = None;
         let binding = BankBinding::capture(self)?;
         let preview = rampage_api::preview_project_workspace(&path).map_err(|error| error.to_string())?;
-        self.workspace_bank.review = Some(ReviewedWorkspace { preview, binding });
+        self.workspace_bank.review = Some(ReviewedWorkspace { preview: Arc::new(preview), binding });
         self.workspace_bank.shown = true;
         self.error = None;
         Ok(())
@@ -302,6 +555,9 @@ impl App {
     }
 
     pub fn open_reviewed_project_workspace(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        if self.workspace_io_running() {
+            return Err("A workspace file operation is still finishing.".to_owned());
+        }
         self.ensure_bank_replaceable()?;
         let review = self
             .workspace_bank
@@ -321,13 +577,31 @@ impl App {
         binding: &BankBinding,
         loaded: LoadedProjectWorkspace,
     ) -> Result<(), String> {
+        let canonical_sources = loaded
+            .modules()
+            .iter()
+            .map(|module| module.module().source_path.canonicalize().map_err(|error| error.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.adopt_project_workspace_with_sources(ctx, binding, loaded, canonical_sources)
+    }
+
+    fn adopt_project_workspace_with_sources(
+        &mut self,
+        ctx: &egui::Context,
+        binding: &BankBinding,
+        loaded: LoadedProjectWorkspace,
+        canonical_sources: Vec<PathBuf>,
+    ) -> Result<(), String> {
         self.ensure_bank_replaceable()?;
         if !binding.matches(self) {
             return Err("Workspace changed while loading. The original modules remain open.".to_owned());
         }
-        loaded.validate().map_err(|error| error.to_string())?;
+        loaded.validate_metadata().map_err(|error| error.to_string())?;
+        if canonical_sources.len() != loaded.modules().len() {
+            return Err("Incomplete source metadata. The original modules remain open.".to_owned());
+        }
         let mut staged = Vec::with_capacity(loaded.modules().len());
-        for module in loaded.modules() {
+        for (module, canonical_source) in loaded.modules().iter().zip(canonical_sources) {
             let data = module.module();
             let image = data.image.map(|image| ImageAt::new(image.offset, image.length));
             let mut workspace = Workspace::from_loaded_project(
@@ -351,7 +625,7 @@ impl App {
                 path: data.source_path.clone(),
                 arch: Some(workspace.project.binary.arch),
                 image,
-                canonical_source: source_path(&workspace)?,
+                canonical_source,
                 editor_identity: EditorIdentity::default(),
             };
             staged.push(RetainedModule { info, workspace });
@@ -360,7 +634,7 @@ impl App {
             .iter()
             .position(|module| module.info.id == loaded.active_module_id())
             .ok_or_else(|| "The reviewed active module was not loaded.".to_owned())?;
-        loaded.validate().map_err(|error| error.to_string())?;
+        loaded.validate_metadata().map_err(|error| error.to_string())?;
         self.ensure_bank_replaceable()?;
         if !binding.matches(self) {
             return Err("Workspace changed before adoption. The original modules remain open.".to_owned());
@@ -631,15 +905,8 @@ impl App {
                 OpenPathAction::ReplaceExact => self.open_exact_at(ctx, path, None, None),
                 OpenPathAction::Add => self.add_module_at(ctx, path, None, None).map(|_| ()),
                 OpenPathAction::AddExact => self.add_module_exact_at(ctx, path, None, None).map(|_| ()),
-                OpenPathAction::SaveWorkspace => self.save_project_workspace(path).map(|publication| {
-                    self.error = match publication.status {
-                        DebuggerCapturePublicationStatus::Published => None,
-                        DebuggerCapturePublicationStatus::PublishedUncertain => Some(
-                            "Publication is uncertain. Inspect every reported destination and staging path.".to_owned(),
-                        ),
-                    };
-                }),
-                OpenPathAction::PreviewWorkspace => self.preview_project_workspace(path),
+                OpenPathAction::SaveWorkspace => self.begin_workspace_save(ctx, path),
+                OpenPathAction::PreviewWorkspace => self.begin_workspace_preview(ctx, path),
             };
             match result {
                 Ok(()) => shown = false,
@@ -685,6 +952,7 @@ impl App {
         let active = self.active_module_id().map(str::to_owned);
         let modules = self.modules();
         let replaceable = self.ensure_bank_replaceable().is_ok();
+        let io_idle = !self.workspace_io_running();
         egui::Window::new("Project workspace").open(&mut shown).show(ctx, |ui| {
             ui.label(format!("{} / {MAX_MODULES} modules", modules.len()));
             ui.label("Module selection retains navigation, filters, annotations and unsaved editors.");
@@ -715,11 +983,13 @@ impl App {
                 close_all = ui.add_enabled(!modules.is_empty(), egui::Button::new("Close workspace")).clicked();
             });
             ui.horizontal(|ui| {
-                if ui.add_enabled(!modules.is_empty() && replaceable, egui::Button::new("Save workspace…")).clicked()
+                if ui
+                    .add_enabled(!modules.is_empty() && replaceable && io_idle, egui::Button::new("Save workspace…"))
+                    .clicked()
                 {
                     open_path = Some(OpenPathAction::SaveWorkspace);
                 }
-                if ui.button("Preview workspace file…").clicked() {
+                if ui.add_enabled(io_idle, egui::Button::new("Preview workspace file…")).clicked() {
                     open_path = Some(OpenPathAction::PreviewWorkspace);
                 }
             });
@@ -750,7 +1020,7 @@ impl App {
                 });
                 ui.label(review.preview.annotation_review());
                 open_reviewed = ui
-                    .add_enabled(replaceable, egui::Button::new("Open reviewed workspace"))
+                    .add_enabled(replaceable && io_idle, egui::Button::new("Open reviewed workspace"))
                     .on_hover_text("Replaces all modules only after every source and recognized annotation log loads")
                     .clicked();
             }
@@ -800,6 +1070,10 @@ impl App {
             }
         });
         self.workspace_bank.shown = shown;
+        if !shown {
+            self.workspace_bank.review = None;
+            self.workspace_jobs.close_review();
+        }
         let result = if let Some(id) = select {
             self.select_module(&id)
         } else if let Some(id) = close {
@@ -809,7 +1083,7 @@ impl App {
         } else if navigate {
             self.navigate_module_address()
         } else if open_reviewed {
-            self.open_reviewed_project_workspace(ctx)
+            self.begin_workspace_open_reviewed(ctx)
         } else {
             Ok(())
         };
@@ -870,6 +1144,41 @@ mod tests {
     impl Drop for Sources {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn same_frame_cursor_selection_and_back_forward_aba_revoke_review_and_adoption() {
+        for history_cycle in [false, true] {
+            let sources = Sources::new();
+            let ctx = egui::Context::default();
+            let mut app = App::blocking();
+            app.add_module_at(&ctx, sources.0.join("a.elf"), None, None).unwrap();
+            let cursor = app.workspace.as_ref().unwrap().cursor;
+            if history_cycle {
+                app.workspace.as_mut().unwrap().goto(cursor + 1);
+            }
+            let output = sources.0.join("navigation-aba.json");
+            app.save_project_workspace(output.clone()).unwrap();
+            app.preview_project_workspace(output.clone()).unwrap();
+            let binding = BankBinding::capture(&app).unwrap();
+            let original = Arc::clone(&app.workspace.as_ref().unwrap().project);
+            let navigation = app.workspace.as_ref().unwrap().navigation_snapshot();
+            let preview = rampage_api::preview_project_workspace(&output).unwrap();
+            let loaded = preview.open_reviewed(&app.session).unwrap();
+            let workspace = app.workspace.as_mut().unwrap();
+            if history_cycle {
+                workspace.go_back();
+                workspace.go_forward();
+            } else {
+                workspace.select(cursor + 1);
+                workspace.select(cursor);
+            }
+            assert_eq!(workspace.navigation_snapshot(), navigation);
+            assert!(!binding.matches(&app));
+            assert!(app.open_reviewed_project_workspace(&ctx).is_err());
+            assert!(app.adopt_project_workspace(&ctx, &binding, loaded).is_err());
+            assert!(Arc::ptr_eq(&original, &app.workspace.as_ref().unwrap().project));
         }
     }
 

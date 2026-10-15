@@ -3,16 +3,19 @@
 mod about;
 pub mod assistant;
 mod band;
+mod cached_inventory_ui;
 mod carve;
 mod debug_layout;
 mod debugger;
 mod entry_ui;
 mod graph;
 mod listing;
+mod module_references_ui;
 mod tabs;
 pub mod theme;
 mod workspace;
 mod workspace_bank;
+mod workspace_jobs;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -34,6 +37,9 @@ pub struct App {
     pack_problems: Option<Vec<String>>,
     workspace: Option<Workspace>,
     workspace_bank: workspace_bank::WorkspaceBank,
+    workspace_jobs: workspace_jobs::WorkspaceJobs,
+    cached_inventory: cached_inventory_ui::CachedInventoryUi,
+    module_references: module_references_ui::ModuleReferences,
     entry_gate: entry_ui::EntryGate,
     /// Shared with replacement workspaces; dropping a receiver does not stop its preview thread.
     debug_layout_gate: debug_layout::PreviewGate,
@@ -67,6 +73,9 @@ impl Default for App {
             pack_problems: None,
             workspace: None,
             workspace_bank: workspace_bank::WorkspaceBank::default(),
+            workspace_jobs: workspace_jobs::WorkspaceJobs::default(),
+            cached_inventory: cached_inventory_ui::CachedInventoryUi::default(),
+            module_references: module_references_ui::ModuleReferences::default(),
             entry_gate: entry_ui::EntryGate::default(),
             debug_layout_gate: debug_layout::PreviewGate::default(),
             carve: None,
@@ -150,6 +159,11 @@ impl App {
         self.debugger.shown = true;
     }
 
+    /// Opens controls only. Source metadata is queried solely by an explicit Refresh action.
+    pub fn show_module_references(&mut self) {
+        self.module_references.show();
+    }
+
     /// Opens a fresh checked layout review without importing anything.
     pub fn show_debug_layout_review(&mut self, ctx: &egui::Context) {
         if let Some(workspace) = &mut self.workspace {
@@ -173,6 +187,7 @@ impl App {
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
+        self.poll_workspace_jobs(ui.ctx());
         if !self.themed {
             theme::apply(ui.ctx());
             self.themed = true;
@@ -186,13 +201,24 @@ impl App {
         }
 
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
+        if self.workspace_jobs.visible() {
+            egui::Panel::top("workspace-file-operation").show(ui, |ui| self.workspace_jobs.show(ui));
+        }
         egui::Panel::bottom("status").exact_size(22.0).show(ui, |ui| self.status_bar(ui));
         if self.about {
             about::show(&ui.ctx().clone(), &mut self.about, &self.session.packs());
         }
         self.carve_window(&ui.ctx().clone());
         self.project_workspace_window(ui.ctx());
+        self.cached_inventory_window(ui.ctx());
         self.open_path_window(ui.ctx());
+        let reference_inputs = self.module_reference_inputs();
+        if let Some(navigation) =
+            module_references_ui::show(ui.ctx(), &mut self.module_references, self.blocking, &reference_inputs)
+            && let Err(error) = self.navigate_module_reference(&navigation.inputs, &navigation.address)
+        {
+            self.module_references.navigation_failed(error);
+        }
         let debugger_action = self.debugger.show_action(ui.ctx(), self.workspace.as_mut());
         if let Some(action) = debugger_action {
             self.open_debugger_snapshot(ui.ctx(), action);
@@ -425,6 +451,14 @@ impl App {
             brand.context_menu(|ui| {
                 if ui.button("Project workspace…").clicked() {
                     self.show_project_workspace();
+                    ui.close();
+                }
+                if ui.button("Cached function inventory…").clicked() {
+                    self.show_cached_function_inventory();
+                    ui.close();
+                }
+                if ui.button("Module references…").clicked() {
+                    self.show_module_references();
                     ui.close();
                 }
                 if ui.button("Open for exact-entry…").clicked() {

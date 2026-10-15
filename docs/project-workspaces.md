@@ -27,7 +27,9 @@ number; for example, `{"module_id":"module-a","address":"0xffffffffffffffff"}`.
 The same canonical source, architecture and image selection cannot be added twice. Explicit architecture/image
 selection is available through the API. For an ordinary bundle opened through native source resolution, the
 saved source is its resolved executable file, not the bundle directory. There is no dependency discovery, nested
-extraction, cross-module xref construction, symbol guessing or serialized analysis cache.
+extraction, cross-module call-graph/xref construction, symbol guessing or serialized analysis cache.
+The separate [module references](module-references.md) window queries explicit PE import/export declarations among
+loaded modules; it is not runtime binding or dependency discovery.
 
 ## Save, preview and explicitly open
 
@@ -62,8 +64,44 @@ preview invalidate the review, even when switching away and back.
 
 Every restored module starts deferred. Loading eight modules does not automatically launch eight global
 analyses. **Start global analysis** remains an explicit per-module action with the existing analysis costs;
-this is not a global runtime budget guarantee. Save, Preview and reviewed Open currently perform synchronous,
-bounded I/O in their public handlers. Their bounds are not an asynchronous-paint or responsiveness guarantee.
+this is not a global runtime budget guarantee.
+
+## Background file operations and cancellation
+
+Ordinary desktop **Save workspace file**, **Preview workspace file** and **Open reviewed workspace** dispatch
+background jobs. Save does not automatically Preview, Preview does not automatically Open, and no completion
+silently chains another operation. The UI captures bounded metadata and navigation, checking each history's
+256-entry limit before cloning it. Whole-source hashes, module loading, manifest/log reads and publication run
+off the UI thread. Adoption still performs small descriptor/path, annotation-context and configuration metadata
+checks on the UI thread; these are not whole-source rehashes.
+
+One App-wide workspace-file execution lease covers Save, Preview and reviewed Open. **Cancel workspace operation**
+requests cancellation without releasing that lease. A bank change, replacement or close cannot admit a second
+file job before the first actually returns. Closing the Project workspace review window cancels Preview/Open and
+clears review authority, but does not cancel Save. Publication notices survive those changes.
+
+The task strip shows observed backend phases, module ID/counts and elapsed milliseconds, not a fabricated
+percentage or completion-time estimate. Workspace phases include `CapturingInputs`, `ReadingManifest`,
+`PreflightingSources`, `LoadingModule`, `ValidatingIdentity`, `ReadingAnnotations`, `PreparingDocument`, `Publishing`,
+`PublicationStaged` and `ResultValidation`. `PublicationStaged` is emitted before the no-clobber hard-link commit;
+`ResultValidation` can occur after commit. A phase is an observation, not proof that no later work can fail.
+
+Cancellation is cooperative between phases, modules and hash chunks. It does not forcibly interrupt a regular-file
+filesystem syscall and supplies no hard wall-clock bound. Cancellation before publication can refuse the write;
+after commit, failed/cancelled result validation returns a `PublishedUncertain` publication rather than hiding a
+possibly existing file behind an ordinary error. Own-resource receipts and retained paths are recorded before
+stale-binding or cancellation checks, even when the result cannot be adopted.
+
+Save takes a bounded detached annotation snapshot under the read guard, then releases that guard before log I/O
+or further whole-source hashing. Final configuration and process-local annotation revision/nonce checks reject
+intervening edits, including change-and-change-back. These process-local guards are not serialized consent.
+The review/job binding also checks module instances, navigation, settings and editor state; cancellation or a
+stale binding discards Preview/Open candidates without replacing the old bank.
+
+The public synchronous `App` capture/Save/Preview/Open methods remain for programmatic compatibility. GUI buttons
+use the background `begin_workspace_*` path; `App::blocking` intentionally executes jobs inline for tests. This
+does not move every filesystem access out of painting: ordinary annotation-refresh polling remains, and metadata
+checks can still perform filesystem operations. No general frame-time or all-I/O-asynchronous guarantee follows.
 
 ## Manifest fields and admission limits
 
@@ -109,5 +147,6 @@ intentionally retained for explicit operator inspection; failures can also leave
 and retained staging paths. `PublishedUncertain` means the destination may exist; it is not ordinary success,
 Open authorization, authority to retry the same publication or deletion authority. Even `Published` is not
 continuing immutability or approval to open: Preview and reviewed Open remain separate explicit actions.
-No automatic unlink, overwrite or cleanup is authorized by a receipt. Inspect the current pathname occupant
+Retained staging resources or uncertain publications block further workspace publication pending explicit
+inspection. No automatic unlink, overwrite or cleanup is authorized by a receipt. Inspect the current pathname occupant
 before manual cleanup. Private permissions do not prevent same-user namespace replacement.

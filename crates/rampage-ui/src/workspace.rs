@@ -142,6 +142,7 @@ pub struct Xrefs {
 pub struct Workspace {
     pub(crate) instance: Arc<()>,
     pub(crate) annotations_epoch: Arc<()>,
+    pub(crate) navigation_revision: Arc<()>,
     pub(crate) debug_layout: crate::debug_layout::DebugLayouts,
     entry_ui: crate::entry_ui::EntryUi,
     deferred: bool,
@@ -195,6 +196,11 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    #[cfg(test)]
+    pub(crate) fn request_annotation_refresh_for_test(&mut self) {
+        self.annotations_checked = Instant::now() - ANNOTATION_REFRESH;
+    }
+
     /// Opens `path` in `session`, or the executable embedded at `image`, and starts analysis. With `blocking`,
     /// every background job runs inline instead.
     pub fn open(
@@ -245,6 +251,7 @@ impl Workspace {
         let mut workspace = Self {
             instance: Arc::new(()),
             annotations_epoch: Arc::new(()),
+            navigation_revision: Arc::new(()),
             debug_layout: crate::debug_layout::DebugLayouts::default(),
             entry_ui: crate::entry_ui::EntryUi::default(),
             deferred: true,
@@ -329,7 +336,25 @@ impl Workspace {
         (self.cursor, self.back.clone(), self.forward.clone())
     }
 
+    pub(crate) fn bounded_navigation_snapshot(&self) -> Result<(u64, Vec<u64>, Vec<u64>), String> {
+        if self.back.len() > 256 || self.forward.len() > 256 {
+            return Err("workspace history exceeds the 256-address persistence limit".into());
+        }
+        Ok(self.navigation_snapshot())
+    }
+
+    pub(crate) fn navigation_matches(&self, snapshot: &(u64, Vec<u64>, Vec<u64>)) -> bool {
+        self.back.len() <= 256
+            && self.forward.len() <= 256
+            && self.cursor == snapshot.0
+            && self.back == snapshot.1
+            && self.forward == snapshot.2
+    }
+
     pub(crate) fn restore_navigation(&mut self, cursor: u64, back: Vec<u64>, forward: Vec<u64>) {
+        if self.cursor != cursor || self.back != back || self.forward != forward {
+            self.navigation_revision = Arc::new(());
+        }
         self.entry_ui.invalidate();
         self.cursor = cursor;
         self.back = back;
@@ -471,6 +496,7 @@ impl Workspace {
     /// Moves the cursor to `address`, remembering where it was.
     pub fn goto(&mut self, address: u64) {
         if address != self.cursor {
+            self.navigation_revision = Arc::new(());
             self.entry_ui.invalidate();
             self.back.push(self.cursor);
             self.forward.clear();
@@ -581,6 +607,7 @@ impl Workspace {
     /// Moves the cursor within the current listing without adding to the history.
     pub fn select(&mut self, address: u64) {
         if address != self.cursor {
+            self.navigation_revision = Arc::new(());
             self.entry_ui.invalidate();
         }
         self.cursor = address;
@@ -607,6 +634,7 @@ impl Workspace {
 
     pub fn go_back(&mut self) {
         if let Some(address) = self.back.pop() {
+            self.navigation_revision = Arc::new(());
             self.forward.push(self.cursor);
             self.revisit(address);
         }
@@ -614,6 +642,7 @@ impl Workspace {
 
     pub fn go_forward(&mut self) {
         if let Some(address) = self.forward.pop() {
+            self.navigation_revision = Arc::new(());
             self.back.push(self.cursor);
             self.revisit(address);
         }

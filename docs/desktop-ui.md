@@ -31,10 +31,25 @@ guards, native warnings and host-context evidence. **Start global analysis** is 
 unsaved editors. Stable module IDs qualify addresses rather than joining by basename or virtual address.
 **Save workspace…**, **Preview workspace file…** and **Open reviewed workspace** are separate explicit local
 actions; Preview reads only the manifest, while reviewed Open approves listed sources and checked recognized
-annotation logs. Restored modules are deferred, and any failed staged load leaves the old bank intact. These
-bounded public handlers perform synchronous I/O, not background paint work. See
+annotation logs. Restored modules are deferred, and any failed staged load leaves the old bank intact. Ordinary
+GUI buttons run background jobs with one workspace-file execution lease until actual completion, including after
+**Cancel workspace operation**, review close or bank replacement. The task strip shows backend phases, module
+counts and elapsed time, not percentages. Cancellation is cooperative, not a forced syscall interruption. Save
+never automatically Previews or Opens; committed or uncertain publication receipts remain visible even after a
+stale/cancelled result. Small adoption metadata checks remain on the UI thread, as does existing annotation-refresh
+polling; synchronous programmatic methods and inline `App::blocking` are separate compatibility/test paths. See
 [project workspaces](project-workspaces.md) for limits, privacy, annotation-directory context and private
 no-overwrite publication.
+
+**Module references…** opens a separate window without running a query. **Apply / Refresh** explicitly queries
+PE import/export declarations among the loaded modules, with source-module/hex-slot/filter fields and bounded
+fixed-query **Next page** controls. Coverage, ambiguous/unresolved/unsupported rows and exhausted budgets remain
+visible. **Cancel query** invalidates authority but retains its lease until the bounded metadata call returns.
+**Inspect source slot** navigates raw memory; **Inspect direct target** is offered only for a unique declared direct
+link, which may target data, not a function. Neither action starts global analysis or decompilation. Original-source
+checks occur on explicit queries/clicks, not repaint, and results remain historical. ELF/Mach-O/snapshots, ordinal
+imports and followed forwarders are unsupported. See [module references](module-references.md) for exact raw-byte
+identity rules, process-local source binding and API limits; these declarations do not prove runtime flow or ABI.
 
 When a file embeds executables or containers, Carve lists candidates from the same scan as `binary carve`.
 A validated executable opens as its own project. A file that cannot open whole shows the candidate list

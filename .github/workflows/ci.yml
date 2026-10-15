@@ -113,6 +113,15 @@ jobs:
       - name: Workspace tests including offscreen UI snapshots
         timeout-minutes: 20
         run: time cargo test --locked --workspace --exclude rampage-eval
+      - name: Owned PE declared module references
+        timeout-minutes: 3
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          export RUST_SYSROOT="$(rustc --print sysroot)"
+          export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
+          bash tools/ci/module-linkage-oracle.sh --check \
+            cargo test --locked -p rampage-api -p rampage-ui --test module_references -- --include-ignored
       - name: Owned DWARF reviewed import surfaces and worker acceptance
         timeout-minutes: 5
         env:
