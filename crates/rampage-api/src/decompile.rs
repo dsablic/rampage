@@ -12,13 +12,26 @@ mod types;
 
 use rampage_decompiler::{Decompiler, DecompilerOptions, Platform};
 use serde::Serialize;
+use std::sync::{Arc, TryLockError};
 
 use crate::{ApiError, Project};
 
 pub use entry::{
     DecompileEntryOrigin, DecompileEntryRequest, EntryContextCounts, EntryDecompilation, EntryDecompilationContext,
-    EntryPreparationTimings, EntryValidation,
+    EntryPreparationPhase, EntryPreparationProgress, EntryPreparationTimings, EntryValidation,
 };
+
+/// A process-local configuration identity. Returning to earlier settings does not restore an old identity.
+#[derive(Debug, Clone)]
+pub struct DecompilerConfigurationRevision(Arc<()>);
+
+impl PartialEq for DecompilerConfigurationRevision {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for DecompilerConfigurationRevision {}
 
 pub(crate) use go_abi::GoPrototypes;
 
@@ -86,6 +99,7 @@ pub(crate) struct DecompilerState {
     types: std::collections::BTreeMap<u64, String>,
     globals: std::collections::BTreeMap<u64, String>,
     pub(crate) worker: Option<rampage_decompiler::worker::WorkerConfig>,
+    configuration_revision: Arc<()>,
 }
 
 pub(crate) fn default_options(binary: &rampage_loaders::Binary) -> DecompilerOptions {
@@ -130,6 +144,30 @@ fn validate_cached_layout_source(project: &Project, state: &DecompilerState) -> 
 }
 
 impl Project {
+    /// Reads configured overrides without constructing an engine, deriving defaults or reading mapped bytes.
+    pub fn configured_decompiler_options(&self) -> Result<Option<DecompilerOptions>, ApiError> {
+        let state = match self.decompiler.try_lock() {
+            Ok(state) => state,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(ApiError::Unavailable("decompiler configuration is busy".into()));
+            }
+        };
+        Ok(state.options.clone())
+    }
+
+    /// Nonblocking local identity check; it does not attest specification validity or authorize native work.
+    pub fn decompiler_configuration_revision(&self) -> Result<DecompilerConfigurationRevision, ApiError> {
+        let state = match self.decompiler.try_lock() {
+            Ok(state) => state,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(ApiError::Unavailable("decompiler configuration is busy".into()));
+            }
+        };
+        Ok(DecompilerConfigurationRevision(Arc::clone(&state.configuration_revision)))
+    }
+
     pub(crate) fn validate_annotation_snapshot(
         &self,
         state: &DecompilerState,
@@ -160,6 +198,7 @@ impl Project {
         let mut state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         state.engine = None;
         state.worker = config;
+        state.configuration_revision = Arc::new(());
     }
     /// Stores one address-bound C signature, including an optional calling convention such as __cdecl.
     pub fn set_signature(&self, address: u64, declaration: Option<&str>) -> Result<crate::EditResult, ApiError> {
@@ -230,6 +269,7 @@ impl Project {
         let mut state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         state.engine = None;
         state.options = options;
+        state.configuration_revision = Arc::new(());
     }
 
     /// Validates the selected compiler and remaining annotations before publishing new options.
@@ -262,6 +302,7 @@ impl Project {
             crate::debug_layout_import::validate_replay_source(self, candidate)?;
             state.engine = None;
             state.options = options;
+            state.configuration_revision = Arc::new(());
             Ok(())
         })
     }

@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use rampage_api::{DecompileEntryRequest, DecompilerWorkerConfig, EntryDecompilation, EntryValidation, Project};
+use rampage_api::{
+    DecompileEntryRequest, DecompilerWorkerConfig, EntryDecompilation, EntryPreparationPhase, EntryValidation, Project,
+};
 use rampage_loaders::Binary;
 use serde_json::Value;
 
@@ -52,7 +54,26 @@ fn exact_entry_actual_subprocess_matches_native_imports_tokens_structure_and_loc
         };
         let native = project.decompile_entry(&request).unwrap();
         project.set_decompiler_worker(Some(worker()));
-        let isolated = project.decompile_entry(&request).unwrap();
+        let revision = project.decompiler_configuration_revision().unwrap();
+        let mut phases = Vec::new();
+        let isolated = project
+            .decompile_entry_with_progress(&request, &std::sync::atomic::AtomicBool::new(false), |event| {
+                phases.push(event.phase)
+            })
+            .unwrap();
+        assert_eq!(
+            phases,
+            vec![
+                EntryPreparationPhase::Configuration,
+                EntryPreparationPhase::Metadata,
+                EntryPreparationPhase::Replay,
+                EntryPreparationPhase::Mapping,
+                EntryPreparationPhase::WorkerSerialization,
+                EntryPreparationPhase::WorkerExecution,
+                EntryPreparationPhase::ResultValidation,
+            ]
+        );
+        assert_eq!(isolated.context.configuration_revision, revision);
         assert_parity(&native, &isolated);
         assert!(isolated.decompilation.code.contains("return 5;"), "{name}: {}", isolated.decompilation.code);
         if name == "hello-x64-dyn.elf" {

@@ -169,3 +169,224 @@ fn legacy_interior_requests_still_resolve_the_containing_function() {
     assert_no_discovery(&project);
     assert_eq!(project.decompile(request.address + 1).unwrap().address, request.address);
 }
+
+#[test]
+fn progress_reports_only_real_native_phases_outside_project_locks_and_keeps_json_compatible() {
+    let project = project();
+    let revision = project.decompiler_configuration_revision().unwrap();
+    let mut events = Vec::new();
+    let result = project
+        .decompile_entry_with_progress(&request(&project), &AtomicBool::new(false), |event| {
+            assert!(project.decompiler.try_lock().is_ok());
+            assert!(project.annotations.try_write().is_ok());
+            events.push(event);
+        })
+        .unwrap();
+    assert_eq!(
+        events.iter().map(|event| event.phase).collect::<Vec<_>>(),
+        vec![
+            EntryPreparationPhase::Configuration,
+            EntryPreparationPhase::Metadata,
+            EntryPreparationPhase::Replay,
+            EntryPreparationPhase::Mapping,
+            EntryPreparationPhase::NativeInitialization,
+            EntryPreparationPhase::NativeReplay,
+            EntryPreparationPhase::NativeExecution,
+            EntryPreparationPhase::ResultValidation,
+        ]
+    );
+    assert!(events.windows(2).all(|pair| pair[0].elapsed_ms <= pair[1].elapsed_ms));
+    assert_eq!(result.context.configuration_revision, revision);
+    assert!(result.decompilation.code.contains("return 5;"));
+    let json = serde_json::to_value(result).unwrap();
+    assert!(json["context"].get("configuration_revision").is_none());
+    assert!(json.get("code").is_some());
+    assert_no_discovery(&project);
+}
+
+#[test]
+fn observer_cancellation_stops_before_native_setup_without_emitting_later_phases() {
+    let project = project();
+    let cancellation = AtomicBool::new(false);
+    let mut phases = Vec::new();
+    let error = project
+        .decompile_entry_with_progress(&request(&project), &cancellation, |event| {
+            phases.push(event.phase);
+            if event.phase == EntryPreparationPhase::Mapping {
+                cancellation.store(true, Ordering::Relaxed);
+            }
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("cancelled"));
+    assert_eq!(phases.last(), Some(&EntryPreparationPhase::Mapping));
+    assert!(!phases.contains(&EntryPreparationPhase::NativeInitialization));
+    assert!(project.decompiler.lock().unwrap().engine.is_none());
+    assert_no_discovery(&project);
+    phases.clear();
+    assert!(
+        project
+            .decompile_entry_with_progress(&request(&project), &cancellation, |event| {
+                phases.push(event.phase);
+            })
+            .is_err()
+    );
+    assert!(phases.is_empty());
+}
+
+#[test]
+fn failed_worker_reports_worker_phases_without_a_native_fallback() {
+    let project = project();
+    project.set_decompiler_worker(Some(rampage_decompiler::worker::WorkerConfig {
+        executable: Some(std::env::temp_dir().join("entry-progress-no-such-worker")),
+        ..Default::default()
+    }));
+    let mut phases = Vec::new();
+    let error = project
+        .decompile_entry_with_progress(&request(&project), &AtomicBool::new(false), |event| {
+            phases.push(event.phase);
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("exact-entry worker"));
+    assert_eq!(
+        phases,
+        vec![
+            EntryPreparationPhase::Configuration,
+            EntryPreparationPhase::Metadata,
+            EntryPreparationPhase::Replay,
+            EntryPreparationPhase::Mapping,
+            EntryPreparationPhase::WorkerSerialization,
+            EntryPreparationPhase::WorkerExecution,
+        ]
+    );
+    assert_no_discovery(&project);
+}
+
+#[test]
+fn configuration_identity_rejects_aba_and_getters_do_not_construct_native_or_analysis_state() {
+    let project = project();
+    let original = project.decompiler_configuration_revision().unwrap();
+    assert_eq!(original, project.decompiler_configuration_revision().unwrap());
+    assert!(project.configured_decompiler_options().unwrap().is_none());
+    project.set_decompiler_options(Some(rampage_decompiler::DecompilerOptions {
+        compiler: Some("deliberately_unavailable_configuration".into()),
+        ..Default::default()
+    }));
+    assert_ne!(original, project.decompiler_configuration_revision().unwrap());
+    assert_eq!(
+        project.configured_decompiler_options().unwrap().unwrap().compiler.as_deref(),
+        Some("deliberately_unavailable_configuration")
+    );
+    project.set_decompiler_options(None);
+    assert_ne!(original, project.decompiler_configuration_revision().unwrap());
+    let after = project.decompiler_configuration_revision().unwrap();
+    project.set_decompiler_worker(None);
+    assert_ne!(after, project.decompiler_configuration_revision().unwrap());
+    let guard = project.decompiler.lock().unwrap();
+    assert!(project.decompiler_configuration_revision().is_err());
+    assert!(project.configured_decompiler_options().is_err());
+    assert!(guard.engine.is_none());
+    drop(guard);
+    assert_no_discovery(&project);
+}
+
+#[test]
+fn exact_result_binds_captured_configuration_even_if_an_observer_changes_current_options() {
+    let project = project();
+    let original = project.decompiler_configuration_revision().unwrap();
+    let result = project
+        .decompile_entry_with_progress(&request(&project), &AtomicBool::new(false), |event| {
+            if event.phase == EntryPreparationPhase::Metadata {
+                project.set_decompiler_options(Some(rampage_decompiler::DecompilerOptions {
+                    compiler: Some("new_options_not_used_by_this_request".into()),
+                    ..Default::default()
+                }));
+            }
+        })
+        .unwrap();
+    assert_eq!(result.context.configuration_revision, original);
+    assert_ne!(result.context.configuration_revision, project.decompiler_configuration_revision().unwrap());
+    assert!(result.decompilation.code.contains("return 5;"));
+    assert_no_discovery(&project);
+}
+
+#[test]
+fn phase_observers_cannot_invalidate_mapped_input_before_byte_consumption() {
+    static NEXT_SOURCE: AtomicU64 = AtomicU64::new(0);
+    for phase in [
+        EntryPreparationPhase::Metadata,
+        EntryPreparationPhase::WorkerSerialization,
+        EntryPreparationPhase::NativeInitialization,
+    ] {
+        let file = SnapshotFile(std::env::temp_dir().join(format!(
+            "entry-observer-source-{}-{}.elf",
+            std::process::id(),
+            NEXT_SOURCE.fetch_add(1, Ordering::Relaxed),
+        )));
+        std::fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64-dyn.elf"),
+            &file.0,
+        )
+        .unwrap();
+        let project = Project::new(Binary::open(&file.0).unwrap());
+        if phase == EntryPreparationPhase::WorkerSerialization {
+            project.set_decompiler_worker(Some(rampage_decompiler::worker::WorkerConfig {
+                executable: Some(std::env::temp_dir().join("observer-source-no-worker")),
+                ..Default::default()
+            }));
+        }
+        let request = request(&project);
+        let mut observed = Vec::new();
+        let error = project
+            .decompile_entry_with_progress(&request, &AtomicBool::new(false), |event| {
+                observed.push(event.phase);
+                if event.phase == phase {
+                    std::fs::write(&file.0, b"truncated owned input").unwrap();
+                }
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("exact-entry source"), "{error}");
+        assert_eq!(observed.last(), Some(&phase));
+        assert_no_discovery(&project);
+    }
+}
+
+#[test]
+fn cancellation_from_final_validation_rejects_an_otherwise_completed_result() {
+    let project = project();
+    let cancellation = AtomicBool::new(false);
+    let mut last = None;
+    let error = project
+        .decompile_entry_with_progress(&request(&project), &cancellation, |event| {
+            last = Some(event.phase);
+            if event.phase == EntryPreparationPhase::ResultValidation {
+                cancellation.store(true, Ordering::Relaxed);
+            }
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("cancelled"));
+    assert_eq!(last, Some(EntryPreparationPhase::ResultValidation));
+    assert_no_discovery(&project);
+}
+
+#[test]
+fn observer_work_is_charged_to_the_original_worker_deadline_before_dispatch() {
+    let project = project();
+    project.set_decompiler_worker(Some(rampage_decompiler::worker::WorkerConfig {
+        timeout: std::time::Duration::from_millis(5),
+        executable: Some(std::env::temp_dir().join("observer-budget-no-worker")),
+        ..Default::default()
+    }));
+    let mut phases = Vec::new();
+    let error = project
+        .decompile_entry_with_progress(&request(&project), &AtomicBool::new(false), |event| {
+            phases.push(event.phase);
+            let work = Instant::now();
+            while work.elapsed() < std::time::Duration::from_millis(10) {
+                std::thread::yield_now();
+            }
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"), "{error}");
+    assert_eq!(phases, vec![EntryPreparationPhase::Configuration]);
+    assert_no_discovery(&project);
+}

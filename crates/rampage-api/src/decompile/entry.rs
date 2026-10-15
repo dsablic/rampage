@@ -9,7 +9,10 @@ use rampage_decompiler::worker::{
 use rampage_decompiler::{Decompiler, Platform};
 use serde::Serialize;
 
-use super::{Decompilation, DecompiledToken, default_options, entry_plan, go_abi, image, isolated, symbols, types};
+use super::{
+    Decompilation, DecompiledToken, DecompilerConfigurationRevision, default_options, entry_plan, go_abi, image,
+    isolated, symbols, types,
+};
 use crate::{ApiError, Project, debug_layout_import};
 
 pub use super::entry_plan::{EntryOrigin as DecompileEntryOrigin, EntryPlanCounts as EntryContextCounts};
@@ -53,6 +56,30 @@ pub struct EntryDecompilationContext {
     pub omissions: Vec<String>,
     pub execution: &'static str,
     pub timings: EntryPreparationTimings,
+    /// Process-local binding of the settings actually captured for this request; never a serialized receipt.
+    #[serde(skip)]
+    pub configuration_revision: DecompilerConfigurationRevision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryPreparationPhase {
+    Configuration,
+    Metadata,
+    Replay,
+    Mapping,
+    WorkerSerialization,
+    WorkerExecution,
+    NativeInitialization,
+    NativeReplay,
+    NativeExecution,
+    ResultValidation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct EntryPreparationProgress {
+    pub phase: EntryPreparationPhase,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -88,6 +115,17 @@ impl Project {
         request: &DecompileEntryRequest,
         cancellation: &AtomicBool,
     ) -> Result<EntryDecompilation, ApiError> {
+        self.decompile_entry_with_progress(request, cancellation, |_| {})
+    }
+
+    /// Reports actual host-side phase boundaries on the calling thread, outside Project locks.
+    /// Observer time counts toward the worker deadline. Native FFI calls remain cooperatively cancellable.
+    pub fn decompile_entry_with_progress(
+        &self,
+        request: &DecompileEntryRequest,
+        cancellation: &AtomicBool,
+        mut progress: impl FnMut(EntryPreparationProgress),
+    ) -> Result<EntryDecompilation, ApiError> {
         let started = Instant::now();
         if cancellation.load(Ordering::Relaxed) {
             return Err(ApiError::Unavailable("exact-entry cancelled before configuration".to_owned()));
@@ -101,7 +139,15 @@ impl Project {
                 "exact-entry decompilation supports little-endian x86, x86-64 and AArch64 only".to_owned(),
             ));
         }
-        let (options, worker) = {
+        progress(EntryPreparationProgress {
+            phase: EntryPreparationPhase::Configuration,
+            elapsed_ms: elapsed(started),
+        });
+        if cancellation.load(Ordering::Relaxed) {
+            return Err(ApiError::Unavailable("exact-entry cancelled during configuration".to_owned()));
+        }
+        source(self)?;
+        let (options, worker, configuration_revision) = {
             let state = match self.decompiler.try_lock() {
                 Ok(state) => state,
                 Err(TryLockError::Poisoned(error)) => error.into_inner(),
@@ -109,7 +155,11 @@ impl Project {
                     return Err(ApiError::Unavailable("exact-entry decompiler configuration is busy".to_owned()));
                 }
             };
-            (state.options.clone().unwrap_or_else(|| default_options(&self.binary)), state.worker.clone())
+            (
+                state.options.clone().unwrap_or_else(|| default_options(&self.binary)),
+                state.worker.clone(),
+                DecompilerConfigurationRevision(std::sync::Arc::clone(&state.configuration_revision)),
+            )
         };
         let check = |stage: &'static str| {
             if cancellation.load(Ordering::Relaxed) {
@@ -118,6 +168,13 @@ impl Project {
             if worker.as_ref().is_some_and(|config| started.elapsed() >= config.timeout) {
                 return Err(ApiError::Unavailable(format!("exact-entry timed out during {stage}")));
             }
+            Ok(())
+        };
+        let mut report_phase = |phase| -> Result<(), ApiError> {
+            check("phase transition")?;
+            progress(EntryPreparationProgress { phase, elapsed_ms: elapsed(started) });
+            check("phase observer")?;
+            source(self)?;
             Ok(())
         };
         check("annotation snapshot")?;
@@ -141,12 +198,14 @@ impl Project {
         let mut timings = EntryPreparationTimings { configuration_ms: elapsed(started), ..Default::default() };
 
         let stage = Instant::now();
+        report_phase(EntryPreparationPhase::Metadata)?;
         let plan = entry_plan::prepare(self, &annotations, request, &check)?;
         let sample = self.entry_diagnostics(Some(request.address))?;
         check("entry evidence")?;
         timings.metadata_ms = elapsed(stage);
 
         let stage = Instant::now();
+        report_phase(EntryPreparationPhase::Replay)?;
         let generated = go_abi::entry_types(self, &annotations, &options)?;
         let replay = types::plan_entry(self, &annotations, &generated, &plan.stub_targets)?;
         let replay_operations = replay.len();
@@ -158,6 +217,7 @@ impl Project {
         timings.replay_ms = elapsed(stage);
 
         let stage = Instant::now();
+        report_phase(EntryPreparationPhase::Mapping)?;
         if self.binary.image_bytes().len() > MAX_ENTRY_IMAGE_BYTES {
             return Err(ApiError::Invalid("exact-entry selected image exceeds the 128 MiB byte budget".to_owned()));
         }
@@ -176,6 +236,7 @@ impl Project {
 
         let stage = Instant::now();
         let (decompilation, execution) = if let Some(config) = worker.as_ref() {
+            report_phase(EntryPreparationPhase::WorkerSerialization)?;
             let mut mappings = Vec::with_capacity(regions.len());
             for region in &regions {
                 let mut hex_bytes = String::with_capacity(region.bytes.len() * 2);
@@ -215,6 +276,7 @@ impl Project {
                 tokens: true,
                 validate_only: false,
             };
+            report_phase(EntryPreparationPhase::WorkerExecution)?;
             check("worker dispatch")?;
             let mut remaining = config.clone();
             remaining.timeout = remaining.timeout.saturating_sub(started.elapsed());
@@ -222,12 +284,15 @@ impl Project {
                 .map_err(|error| ApiError::Unavailable(format!("exact-entry worker: {error}")))?;
             (isolated::finish_output(output, plan.address, plan.name, false)?, "supervised_worker")
         } else {
+            report_phase(EntryPreparationPhase::NativeInitialization)?;
             check("native initialization")?;
             let mut engine =
                 Decompiler::open_with_options(self.binary.arch, self.binary.big_endian, &regions, &options)
                     .map_err(|error| ApiError::Unavailable(format!("exact-entry native initialization: {error}")))?;
+            report_phase(EntryPreparationPhase::NativeReplay)?;
             check("native declaration replay")?;
             symbols::apply(operations, &mut engine)?;
+            report_phase(EntryPreparationPhase::NativeExecution)?;
             check("native execution")?;
             let code = engine
                 .decompile(plan.address, &plan.name, false)
@@ -254,6 +319,7 @@ impl Project {
             };
             (result, "in_process_native")
         };
+        report_phase(EntryPreparationPhase::ResultValidation)?;
         check("result validation")?;
         debug_layout_import::validate_entry_replay_source(self, &annotations)?;
         source(self)?;
@@ -289,6 +355,7 @@ impl Project {
                 omissions,
                 execution,
                 timings,
+                configuration_revision,
             },
         })
     }

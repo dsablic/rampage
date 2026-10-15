@@ -20,6 +20,14 @@ use crate::{ApiError, Packs};
 /// The shortest string listed unless a query asks for shorter ones.
 const DEFAULT_STRING_LENGTH: usize = 4;
 
+/// Initialized cache presence only; this is not a history or concurrent-activity attestation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AnalysisCacheStatus {
+    pub program: bool,
+    pub strings: bool,
+    pub triage: bool,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct PdbImport {
     /// Identity-checked PDB names at virtual addresses, including names not eligible for application.
@@ -112,6 +120,15 @@ struct BlockSpan {
 }
 
 impl Project {
+    /// Observes completed cache initialization without starting, waiting for or reconstructing analysis.
+    pub fn analysis_cache_status(&self) -> AnalysisCacheStatus {
+        AnalysisCacheStatus {
+            program: self.analysis.get().is_some(),
+            strings: self.strings.get().is_some(),
+            triage: self.triage.get().is_some(),
+        }
+    }
+
     pub(crate) fn cached_analysis(&self) -> Option<&Analysis> {
         self.analysis.get().and_then(|analysis| analysis.as_ref().ok())
     }

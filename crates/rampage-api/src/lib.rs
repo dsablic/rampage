@@ -64,8 +64,9 @@ pub use debugger_capture::{
     read_debugger_capture_publication,
 };
 pub use decompile::{
-    Decompilation, DecompileEntryOrigin, DecompileEntryRequest, EntryContextCounts, EntryDecompilation,
-    EntryDecompilationContext, EntryPreparationTimings, EntryValidation,
+    Decompilation, DecompileEntryOrigin, DecompileEntryRequest, DecompilerConfigurationRevision, EntryContextCounts,
+    EntryDecompilation, EntryDecompilationContext, EntryPreparationPhase, EntryPreparationProgress,
+    EntryPreparationTimings, EntryValidation,
 };
 pub use detect::ToolDetections;
 pub use dotnet::{DotNetCounts, DotNetIl, DotNetIlQuery, DotNetList, DotNetQuery, DotNetSummary, parse_il_offset};
@@ -80,7 +81,7 @@ pub use offset::{FileOffset, parse_file_offset};
 pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
 pub use pointer_compare::{PointerChange, PointerComparison};
 pub use pointer_observation::{PointerAssessment, PointerObservation};
-pub use project::{PdbImport, PdbPreview, Project};
+pub use project::{AnalysisCacheStatus, PdbImport, PdbPreview, Project};
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
 pub use rampage_decompiler::results::RecoveryStatus;
