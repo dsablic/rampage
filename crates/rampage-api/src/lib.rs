@@ -11,6 +11,7 @@ mod correlation;
 mod debug_import;
 mod debug_layout_import;
 mod debugger;
+mod debugger_capture;
 mod decompile;
 mod detect;
 mod diagnostics;
@@ -56,6 +57,11 @@ pub use debug_layout_import::{
 pub use debugger::{
     DebuggerAddress, DebuggerBackend, DebuggerError, DebuggerObservation, DebuggerPermissions, DebuggerRequest,
     DebuggerResponse, DebuggerToken, MAX_DEBUGGER_REQUEST_BYTES, MAX_DEBUGGER_RESPONSE_BYTES, query_debugger,
+};
+pub use debugger_capture::{
+    DebuggerCapturePreview, DebuggerCapturePublication, DebuggerCapturePublicationStatus, DebuggerCaptureRequest,
+    DebuggerCaptureStagingRetention, DebuggerCaptureSummary, prepare_debugger_capture,
+    read_debugger_capture_publication,
 };
 pub use decompile::{
     Decompilation, DecompileEntryOrigin, DecompileEntryRequest, EntryContextCounts, EntryDecompilation,
@@ -113,4 +119,6 @@ pub enum ApiError {
     /// available in this environment.
     #[error("{0}")]
     Unavailable(String),
+    #[error(transparent)]
+    DebuggerCaptureStagingRetained(#[from] DebuggerCaptureStagingRetention),
 }
