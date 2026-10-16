@@ -35,6 +35,30 @@ pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
 pub const PROTOCOL_VERSION: u32 = 4;
 
+/// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
+/// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ByteCleanup {
+    NotSpawned = 0,
+    Confirmed = 1,
+    Uncertain = 2,
+}
+
+struct CleanupNotification<'a, 'b> {
+    measurement: &'a Measurement,
+    callback: Option<&'b mut dyn FnMut(ByteCleanup)>,
+}
+
+impl Drop for CleanupNotification<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(callback) = self.callback.take() {
+            callback(self.measurement.cleanup_disposition());
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerRequest {
@@ -398,9 +422,34 @@ pub fn run_supervised_bytes(
     config: &WorkerConfig,
     cancellation: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, WorkerError> {
+    run_bytes_guarded(bytes, config, cancellation, None)
+}
+
+/// Trusted, nonpanicking cleanup notification, exactly once after supervisor drop/scoped I/O joins, also
+/// during Rust unwinding. It supplies no PID/signal authority and does not enable optional measurements.
+/// Process abort/termination cannot run Rust drop notifications. Result success/cancellation is not proof.
+#[doc(hidden)]
+pub fn run_supervised_bytes_guarded(
+    bytes: Vec<u8>,
+    config: &WorkerConfig,
+    cancellation: Option<&AtomicBool>,
+    cleanup: &mut dyn FnMut(ByteCleanup),
+) -> Result<Vec<u8>, WorkerError> {
+    run_bytes_guarded(bytes, config, cancellation, Some(cleanup))
+}
+
+fn run_bytes_guarded(
+    bytes: Vec<u8>,
+    config: &WorkerConfig,
+    cancellation: Option<&AtomicBool>,
+    cleanup: Option<&mut dyn FnMut(ByteCleanup)>,
+) -> Result<Vec<u8>, WorkerError> {
     let started = std::time::Instant::now();
     let measurement = Measurement::new(started, false);
-    run_bytes_inner(bytes, config, cancellation, started, &measurement, None)
+    let notification = CleanupNotification { measurement: &measurement, callback: cleanup };
+    let result = run_bytes_inner(bytes, config, cancellation, started, &measurement, None);
+    drop(notification);
+    result
 }
 
 /// Cancellation-only private control v2. The observer runs without parser/control locks while the selected
@@ -415,8 +464,34 @@ pub fn run_supervised_bytes_checkpointed(
     checkpoint: ByteCheckpoint,
     observer: &mut dyn FnMut(ByteCheckpoint),
 ) -> SupervisedBytesRun {
+    run_bytes_checkpointed_guarded(bytes, config, cancellation, checkpoint, observer, None)
+}
+
+/// Checkpointed supervision with the same trusted, nonpanicking, unwind-safe notification contract as
+/// run_supervised_bytes_guarded. The callback carries mandatory cleanup proof; metrics remain diagnostic.
+#[doc(hidden)]
+pub fn run_supervised_bytes_checkpointed_guarded(
+    bytes: Vec<u8>,
+    config: &WorkerConfig,
+    cancellation: &AtomicBool,
+    checkpoint: ByteCheckpoint,
+    observer: &mut dyn FnMut(ByteCheckpoint),
+    cleanup: &mut dyn FnMut(ByteCleanup),
+) -> SupervisedBytesRun {
+    run_bytes_checkpointed_guarded(bytes, config, cancellation, checkpoint, observer, Some(cleanup))
+}
+
+fn run_bytes_checkpointed_guarded(
+    bytes: Vec<u8>,
+    config: &WorkerConfig,
+    cancellation: &AtomicBool,
+    checkpoint: ByteCheckpoint,
+    observer: &mut dyn FnMut(ByteCheckpoint),
+    cleanup: Option<&mut dyn FnMut(ByteCleanup)>,
+) -> SupervisedBytesRun {
     let started = std::time::Instant::now();
     let measurement = Measurement::new(started, true);
+    let notification = CleanupNotification { measurement: &measurement, callback: cleanup };
     let result = run_bytes_inner(
         bytes,
         config,
@@ -425,6 +500,7 @@ pub fn run_supervised_bytes_checkpointed(
         &measurement,
         Some(Observation { selected: checkpoint, observer }),
     );
+    drop(notification);
     SupervisedBytesRun { result, metrics: measurement.finish().expect("enabled byte supervisor measurement") }
 }
 
@@ -1617,6 +1693,11 @@ mod unix {
     impl ProcessGuard<'_> {
         fn note_observation(&self, result: &Result<bool, WorkerError>) {
             if let Some(measurement) = self.measurement {
+                if let Err(error) = result
+                    && !matches!(error, WorkerError::Timeout | WorkerError::Cancelled)
+                {
+                    measurement.cleanup_uncertain();
+                }
                 measurement.record(|data, elapsed| match result {
                     Ok(true) => {
                         data.exit_observed_us.get_or_insert(elapsed);
@@ -1674,6 +1755,9 @@ mod unix {
                 return if self.cleanup_complete {
                     Ok(self.status)
                 } else {
+                    if let Some(measurement) = self.measurement {
+                        measurement.cleanup_uncertain();
+                    }
                     Err(io_error(
                         "cleanup",
                         io::Error::other("previous cleanup did not complete; signaling is disabled"),
@@ -1686,6 +1770,7 @@ mod unix {
                 self.stop.store(true, Ordering::Release);
             }
             if let Some(measurement) = self.measurement {
+                measurement.cleanup_uncertain();
                 measurement.record(|data, elapsed| data.cleanup_started_us = Some(elapsed));
             }
             let result = self.cleanup_using(&mut observe, &mut signal, completion_budget);
@@ -1753,6 +1838,7 @@ mod unix {
                 // Reap only after the group attempt, keeping its identity anchored throughout signaling.
                 let status = self.child.wait().map_err(|error| {
                     if let Some(measurement) = self.measurement {
+                        measurement.cleanup_uncertain();
                         measurement.record(|data, _| data.ownership = SupervisedOwnership::Unverified);
                     }
                     io_error("reap owned child", error)
@@ -1779,6 +1865,12 @@ mod unix {
                 Some(group) => Err(WorkerError::Cleanup { group, root: root_result.err().map(Box::new) }),
                 None => {
                     self.cleanup_complete = root_result.is_ok();
+                    if self.cleanup_complete
+                        && self.status.is_some()
+                        && let Some(measurement) = self.measurement
+                    {
+                        measurement.cleanup_confirmed();
+                    }
                     root_result
                 }
             }
@@ -1956,26 +2048,38 @@ mod unix {
             })
         };
         require_default_child_reaping().map_err(|error| io_error("inspect SIGCHLD", error))?;
-        measurement.record(|data, elapsed| data.spawn_started_us = Some(elapsed));
-        let child = command.spawn().map_err(|error| io_error("spawn", error))?;
-        drop(child_control);
-        measurement.record(|data, elapsed| {
-            data.spawn_complete_us = Some(elapsed);
-            data.ownership = SupervisedOwnership::Unreaped;
-            data.rss.nominal_poll_interval_us = Some(POLL_INTERVAL.as_micros() as u64);
-        });
+        // Prepare allocation-bearing scope/channel/stop state before entering the spawn attempt. After a
+        // successful spawn the first action is construction of the sole owner guard, before metrics or drops.
         let stop = Arc::new(AtomicBool::new(false));
+        let guard_stop = stop.clone();
+        let (sender, receiver) = mpsc::channel();
         thread::scope(|scope| {
+            measurement.record(|data, elapsed| data.spawn_started_us = Some(elapsed));
+            measurement.cleanup_uncertain();
+            let child = match command.spawn() {
+                Ok(child) => child,
+                Err(error) => {
+                    // Command::spawn returned no child; its controlled pre-exec callback creates no descendants.
+                    measurement.spawn_failed();
+                    return Err(io_error("spawn", error));
+                }
+            };
             // The guard must drop inside the scope, before scope waits for the nonblocking I/O threads.
             let mut process = ProcessGuard {
                 child,
-                stop: stop.clone(),
+                stop: guard_stop,
                 terminated: false,
                 cleanup_complete: false,
                 status: None,
                 stopped_live_root: false,
-                measurement: measurement.enabled().then_some(measurement),
+                measurement: Some(measurement),
             };
+            drop(child_control);
+            measurement.record(|data, elapsed| {
+                data.spawn_complete_us = Some(elapsed);
+                data.ownership = SupervisedOwnership::Unreaped;
+                data.rss.nominal_poll_interval_us = Some(POLL_INTERVAL.as_micros() as u64);
+            });
             let stdin = process.child.stdin.take().ok_or_else(|| WorkerError::Protocol("missing stdin".to_owned()))?;
             let stdout =
                 process.child.stdout.take().ok_or_else(|| WorkerError::Protocol("missing stdout".to_owned()))?;
@@ -1985,7 +2089,6 @@ mod unix {
             nonblocking(stdout.as_raw_fd())?;
             nonblocking(stderr.as_raw_fd())?;
             measurement.record(|data, elapsed| data.pipe_setup_complete_us = Some(elapsed));
-            let (sender, receiver) = mpsc::channel();
             let input_sender = sender.clone();
             let input_stop = stop.clone();
             thread::Builder::new()
@@ -2203,31 +2306,36 @@ mod unix {
 
     #[cfg(test)]
     mod checkpoint_tests {
+        use std::cell::Cell;
+
         use super::*;
 
         fn live_guard(measurement: &Measurement) -> (ProcessGuard<'_>, std::process::ChildStdin) {
             require_default_child_reaping().unwrap();
-            let mut child = Command::new("/bin/sh")
+            let stop = Arc::new(AtomicBool::new(false));
+            measurement.cleanup_uncertain();
+            let child = Command::new("/bin/sh")
                 .args(["-c", "read release"])
                 .process_group(0)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
+                .inspect_err(|_| {
+                    measurement.spawn_failed();
+                })
                 .unwrap();
-            let input = child.stdin.take().unwrap();
-            (
-                ProcessGuard {
-                    child,
-                    stop: Arc::new(AtomicBool::new(false)),
-                    terminated: false,
-                    cleanup_complete: false,
-                    status: None,
-                    stopped_live_root: false,
-                    measurement: Some(measurement),
-                },
-                input,
-            )
+            let mut process = ProcessGuard {
+                child,
+                stop,
+                terminated: false,
+                cleanup_complete: false,
+                status: None,
+                stopped_live_root: false,
+                measurement: Some(measurement),
+            };
+            let input = process.child.stdin.take().unwrap();
+            (process, input)
         }
 
         #[test]
@@ -2324,6 +2432,127 @@ mod unix {
             assert_eq!(metrics.ownership, SupervisedOwnership::Unverified);
             assert!(metrics.root_reaped_us.is_none());
             assert_ne!(metrics.cleanup_succeeded, Some(true));
+        }
+
+        #[test]
+        fn cleanup_notification_during_unwind_follows_guard_drop_and_scoped_join_without_metrics() {
+            let measurement = Measurement::new(Instant::now(), false);
+            let joined = Arc::new(AtomicBool::new(false));
+            let saw_stop = Arc::new(AtomicBool::new(false));
+            let calls = Cell::new(0);
+            let notified = Cell::new(None);
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut callback = |state| {
+                    calls.set(calls.get() + 1);
+                    notified.set(Some((state, joined.load(Ordering::Acquire), std::thread::panicking())));
+                };
+                let _notification = CleanupNotification { measurement: &measurement, callback: Some(&mut callback) };
+                thread::scope(|scope| {
+                    let (mut process, _input) = live_guard(&measurement);
+                    let stop = process.stop.clone();
+                    let joined = joined.clone();
+                    let saw_stop = saw_stop.clone();
+                    scope.spawn(move || {
+                        let started = Instant::now();
+                        while !stop.load(Ordering::Acquire) && started.elapsed() < Duration::from_secs(5) {
+                            thread::park_timeout(POLL_INTERVAL);
+                        }
+                        saw_stop.store(stop.load(Ordering::Acquire), Ordering::Release);
+                        joined.store(true, Ordering::Release);
+                    });
+                    let budget = SupervisorBudget {
+                        started: Instant::now(),
+                        timeout: Duration::from_secs(5),
+                        cancellation: None,
+                    };
+                    assert!(process.terminate_completed(budget).unwrap().is_some());
+                    assert_eq!(measurement.cleanup_disposition(), ByteCleanup::Confirmed);
+                    panic!("injected unwind after owned cleanup, before scope joining");
+                });
+            }));
+            assert!(outcome.is_err());
+            assert_eq!(calls.get(), 1);
+            assert_eq!(notified.get(), Some((ByteCleanup::Confirmed, true, true)));
+            assert!(saw_stop.load(Ordering::Acquire));
+            assert!(!measurement.enabled());
+            measurement.record(|_, _| panic!("mandatory proof enabled timestamps"));
+            assert!(measurement.finish().is_none());
+        }
+
+        #[test]
+        fn group_ownership_and_probe_failures_never_confirm_even_with_known_root_status() {
+            for failure in ["group", "ownership", "probe", "interrupted"] {
+                let measurement = Measurement::new(Instant::now(), false);
+                let notified = Cell::new(None);
+                let calls = Cell::new(0);
+                let mut callback = |value| {
+                    calls.set(calls.get() + 1);
+                    notified.set(Some(value));
+                };
+                {
+                    let _notification =
+                        CleanupNotification { measurement: &measurement, callback: Some(&mut callback) };
+                    let (mut process, input) = live_guard(&measurement);
+                    drop(input);
+                    let budget = SupervisorBudget {
+                        started: Instant::now(),
+                        timeout: Duration::from_secs(5),
+                        cancellation: None,
+                    };
+                    // Unknown-probe injection starts only after this owned fixture is observed exited.
+                    // No live leftover needs new authority or a test-only signalling escape hatch.
+                    while !process.observe(budget).unwrap() {
+                        thread::park_timeout(POLL_INTERVAL);
+                    }
+                    if failure == "group" {
+                        process.terminate_with(|_, _| Err(io::Error::from_raw_os_error(libc::EPERM))).unwrap_err();
+                    } else if failure == "ownership" {
+                        process.child.wait().unwrap();
+                        process.terminate_with(|_, _| panic!("signaled an already reaped child")).unwrap_err();
+                    } else {
+                        let code = if failure == "probe" { libc::EIO } else { libc::EINTR };
+                        process
+                            .terminate_using(
+                                |pid| observe_child_with(pid, None, |_| Err(io::Error::from_raw_os_error(code))),
+                                |_, _| panic!("signaled without kernel ownership proof"),
+                            )
+                            .unwrap_err();
+                    }
+                    // This test-only wait can know the root's status but cannot establish missing group cleanup.
+                    process.status = Some(process.child.wait().unwrap());
+                    assert_eq!(measurement.cleanup_disposition(), ByteCleanup::Uncertain);
+                    process.terminate_with(|_, _| panic!("retried incomplete cleanup")).unwrap_err();
+                }
+                assert_eq!(calls.get(), 1);
+                assert_eq!(notified.get(), Some(ByteCleanup::Uncertain));
+                assert!(!measurement.enabled());
+                assert!(measurement.finish().is_none());
+            }
+        }
+
+        #[test]
+        fn group_eperm_keeps_uncertainty_after_independently_owned_live_root_cleanup() {
+            let measurement = Measurement::new(Instant::now(), false);
+            let (mut process, _input) = live_guard(&measurement);
+            let pid = process.child.id() as c_int;
+            let error = process
+                .terminate_with(|target, signal| {
+                    if target == -pid {
+                        Err(io::Error::from_raw_os_error(libc::EPERM))
+                    } else {
+                        assert_eq!(target, pid);
+                        // The guard independently revalidates its unreaped direct child before this fallback.
+                        signal_process(target, signal)
+                    }
+                })
+                .unwrap_err();
+            assert!(matches!(error, WorkerError::Cleanup { root: None, .. }));
+            assert_eq!(process.status.unwrap().signal(), Some(libc::SIGKILL));
+            assert_eq!(measurement.cleanup_disposition(), ByteCleanup::Uncertain);
+            process.terminate_with(|_, _| panic!("signalled after root reap")).unwrap_err();
+            drop(process);
+            assert_eq!(measurement.cleanup_disposition(), ByteCleanup::Uncertain);
+            assert!(measurement.finish().is_none());
         }
     }
 
@@ -3014,7 +3243,33 @@ mod unix {
             extern "C" fn non_reaping_child_handler(_: c_int) {}
 
             require_default_child_reaping().unwrap();
-            let mut process = guard("exit 0");
+            let measurement = Measurement::new(Instant::now(), false);
+            let notified = Cell::new(None);
+            let calls = Cell::new(0);
+            let mut callback = |state| {
+                calls.set(calls.get() + 1);
+                notified.set(Some(state));
+            };
+            let notification = CleanupNotification { measurement: &measurement, callback: Some(&mut callback) };
+            let stop = Arc::new(AtomicBool::new(false));
+            measurement.cleanup_uncertain();
+            let child = Command::new("/bin/sh")
+                .args(["-c", "exit 0"])
+                .process_group(0)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut process = ProcessGuard {
+                child,
+                stop,
+                terminated: false,
+                cleanup_complete: false,
+                status: None,
+                stopped_live_root: false,
+                measurement: Some(&measurement),
+            };
             await_exit(&mut process);
             // SAFETY: these are correctly sized host structures; only this helper process mutates SIGCHLD.
             let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -3047,6 +3302,11 @@ mod unix {
             require_default_child_reaping().unwrap();
             // The root exited before changing disposition; reap it if the kernel has not already done so.
             let _ = process.child.wait();
+            drop(process);
+            drop(notification);
+            assert_eq!(calls.get(), 1);
+            assert_eq!(notified.get(), Some(ByteCleanup::Uncertain));
+            assert!(measurement.finish().is_none());
             // A distinct status proves the exact helper ran, rather than a mistyped filter selecting no tests.
             std::process::exit(DISPOSITION_HELPER_SUCCESS);
         }
@@ -3167,6 +3427,106 @@ mod tests {
             Err(WorkerError::Cancelled)
         ));
         assert!(!fixture.pid.exists());
+    }
+
+    #[test]
+    fn guarded_byte_preflight_and_proved_spawn_failure_notify_not_spawned_once() {
+        use std::cell::Cell;
+
+        let fixture = Fixture::new("exit 0");
+        for config in [
+            WorkerConfig::default(),
+            WorkerConfig { executable: Some(fixture.directory.join("missing")), ..fixture.config() },
+            WorkerConfig { max_request_bytes: 0, ..fixture.config() },
+        ] {
+            let calls = Cell::new(0);
+            let notified = Cell::new(None);
+            let result = run_supervised_bytes_guarded(vec![1], &config, None, &mut |state| {
+                calls.set(calls.get() + 1);
+                notified.set(Some(state));
+            });
+            assert!(result.is_err());
+            assert_eq!(calls.get(), 1);
+            assert_eq!(notified.get(), Some(ByteCleanup::NotSpawned));
+            assert!(!fixture.pid.exists());
+        }
+    }
+
+    #[test]
+    fn guarded_ordinary_bytes_notify_confirmed_without_enabling_metrics() {
+        use std::cell::Cell;
+
+        let fixture = Fixture::new(&unix::binary_control_fixture(b"application bytes"));
+        let calls = Cell::new(0);
+        let notified = Cell::new(None);
+        let output = run_supervised_bytes_guarded(Vec::new(), &fixture.config(), None, &mut |state| {
+            calls.set(calls.get() + 1);
+            notified.set(Some((state, std::thread::panicking())));
+        })
+        .unwrap();
+        assert_eq!(output, b"application bytes");
+        assert_eq!(calls.get(), 1);
+        assert_eq!(notified.get(), Some((ByteCleanup::Confirmed, false)));
+        fixture.assert_reaped();
+    }
+
+    #[test]
+    fn guarded_checkpoint_cancellation_notifies_once_after_joined_cleanup() {
+        use std::cell::Cell;
+
+        let fixture = Fixture::new(&unix::checkpoint_control_fixture(&[1, 1, 0, 0]));
+        let cancellation = AtomicBool::new(false);
+        let calls = Cell::new(0);
+        let notified = Cell::new(None);
+        let run = run_supervised_bytes_checkpointed_guarded(
+            Vec::new(),
+            &fixture.config(),
+            &cancellation,
+            ByteCheckpoint::Run,
+            &mut |_| cancellation.store(true, Ordering::Release),
+            &mut |state| {
+                calls.set(calls.get() + 1);
+                notified.set(Some(state));
+            },
+        );
+        assert!(matches!(run.result, Err(WorkerError::Cancelled)));
+        assert_eq!(calls.get(), 1);
+        assert_eq!(notified.get(), Some(ByteCleanup::Confirmed));
+        assert_eq!(run.metrics.ownership, SupervisedOwnership::Reaped);
+        assert_eq!(run.metrics.cleanup_succeeded, Some(true));
+        assert!(run.metrics.stdout.finished_us.is_some() && run.metrics.stderr.finished_us.is_some());
+        fixture.assert_reaped();
+    }
+
+    #[test]
+    fn guarded_checkpoint_observer_panic_still_notifies_during_unwind() {
+        use std::cell::Cell;
+
+        let fixture = Fixture::new(&unix::checkpoint_control_fixture(&[1, 1, 0, 0]));
+        let cancellation = AtomicBool::new(false);
+        let calls = Cell::new(0);
+        let notified = Cell::new(None);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_supervised_bytes_checkpointed_guarded(
+                Vec::new(),
+                &fixture.config(),
+                &cancellation,
+                ByteCheckpoint::Run,
+                &mut |_| panic!("injected checkpoint observer panic"),
+                &mut |state| {
+                    calls.set(calls.get() + 1);
+                    notified.set(Some((state, std::thread::panicking())));
+                },
+            )
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(calls.get(), 1);
+        let (state, unwinding) = notified.get().unwrap();
+        assert_ne!(state, ByteCleanup::NotSpawned);
+        assert!(unwinding);
+        // Do not infer universal cleanup success from panic/cancellation; an observed uncertain disposition
+        // remains a parent admission-quarantine condition even if this fixture's root was reaped.
+        fixture.assert_reaped();
     }
 
     #[test]

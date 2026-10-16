@@ -5,11 +5,12 @@
 
 use std::io;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 use serde::Serialize;
 
-use super::{WorkerError, WorkerOutput};
+use super::{ByteCleanup, WorkerError, WorkerOutput};
 
 #[derive(Debug)]
 pub struct SupervisedRun {
@@ -224,11 +225,36 @@ pub enum SupervisedRssError {
 pub(super) struct Measurement {
     started: Instant,
     data: Option<Mutex<SupervisedMetrics>>,
+    cleanup: AtomicU8,
 }
 
 impl Measurement {
     pub(super) fn new(started: Instant, enabled: bool) -> Self {
-        Self { started, data: enabled.then(|| Mutex::new(SupervisedMetrics::new())) }
+        Self {
+            started,
+            data: enabled.then(|| Mutex::new(SupervisedMetrics::new())),
+            cleanup: AtomicU8::new(ByteCleanup::NotSpawned as u8),
+        }
+    }
+
+    pub(super) fn cleanup_disposition(&self) -> ByteCleanup {
+        match self.cleanup.load(Ordering::Acquire) {
+            value if value == ByteCleanup::NotSpawned as u8 => ByteCleanup::NotSpawned,
+            value if value == ByteCleanup::Confirmed as u8 => ByteCleanup::Confirmed,
+            _ => ByteCleanup::Uncertain,
+        }
+    }
+
+    pub(super) fn cleanup_uncertain(&self) {
+        self.cleanup.store(ByteCleanup::Uncertain as u8, Ordering::Release);
+    }
+
+    pub(super) fn spawn_failed(&self) {
+        self.cleanup.store(ByteCleanup::NotSpawned as u8, Ordering::Release);
+    }
+
+    pub(super) fn cleanup_confirmed(&self) {
+        self.cleanup.store(ByteCleanup::Confirmed as u8, Ordering::Release);
     }
 
     pub(super) fn enabled(&self) -> bool {
@@ -312,6 +338,22 @@ mod tests {
     fn disabled_measurement_never_evaluates_updates_or_allocates_a_report() {
         let measurement = Measurement::new(Instant::now(), false);
         measurement.record(|_, _| panic!("disabled measurement invoked its update"));
+        assert!(measurement.finish().is_none());
+    }
+
+    #[test]
+    fn mandatory_cleanup_proof_does_not_enable_diagnostic_collection() {
+        let measurement = Measurement::new(Instant::now(), false);
+        assert_eq!(measurement.cleanup_disposition(), ByteCleanup::NotSpawned);
+        measurement.cleanup_uncertain();
+        assert_eq!(measurement.cleanup_disposition(), ByteCleanup::Uncertain);
+        measurement.spawn_failed();
+        assert_eq!(measurement.cleanup_disposition(), ByteCleanup::NotSpawned);
+        measurement.cleanup_uncertain();
+        measurement.cleanup_confirmed();
+        assert_eq!(measurement.cleanup_disposition(), ByteCleanup::Confirmed);
+        assert!(!measurement.enabled());
+        measurement.record(|_, _| panic!("cleanup tracking enabled diagnostic collection"));
         assert!(measurement.finish().is_none());
     }
 }
