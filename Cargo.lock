@@ -4558,6 +4558,8 @@ dependencies = [
  "rampage-decompiler",
  "rampage-detect",
  "rampage-loaders",
+ "rampage-plugin",
+ "rampage-plugin-contract",
  "rampage-signatures",
  "rampage-yara",
  "rustix 1.1.5",

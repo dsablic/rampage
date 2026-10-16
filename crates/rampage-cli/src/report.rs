@@ -52,6 +52,9 @@ pub struct ReportOptions {
     pub other_image: Option<ImageAt>,
     pub limit: Option<usize>,
     pub no_decompile: bool,
+    pub component: Option<PathBuf>,
+    pub component_worker: Option<PathBuf>,
+    pub prepare_analysis: bool,
 }
 
 pub fn report(
@@ -61,12 +64,53 @@ pub fn report(
     report_options: &ReportOptions,
     options: &Options,
 ) -> Result<()> {
+    if report_options.component.is_some() && workflow.workflow.name() != "triage_report" {
+        bail!("--component is supported only for the experimental triage-report workflow");
+    }
+    if report_options.component.is_none()
+        && (report_options.component_worker.is_some() || report_options.prepare_analysis)
+    {
+        bail!("component preparation and worker options require --component");
+    }
     match (workflow.workflow.compares(), &report_options.other) {
         (true, None) => bail!("{} needs --other <file>", workflow.command),
         (true, Some(_)) | (false, None) => {}
         (false, Some(_)) => bail!("--other only applies to {}", comparing_commands()),
     }
-    let project = open(path, options)?;
+    let component = report_options.component.as_deref().map(rampage_api::read_plugin_triage_component).transpose()?;
+    let project = if component.is_some() {
+        let session = rampage_api::Session::default().with_packs(std::sync::Arc::clone(&options.packs));
+        rampage_api::open_plugin_triage_source(&session, path, options.arch, options.image)?
+    } else {
+        open(path, options)?
+    };
+    if let Some(component) = component {
+        use std::sync::atomic::AtomicBool;
+
+        let worker = match &report_options.component_worker {
+            Some(path) => path.clone(),
+            None => match std::env::var_os("RAMPAGE_PLUGIN_WORKER") {
+                Some(path) => PathBuf::from(path),
+                None => std::env::current_exe()?.with_file_name(if cfg!(windows) {
+                    "rampage-plugin-worker.exe"
+                } else {
+                    "rampage-plugin-worker"
+                }),
+            },
+        };
+        let config = rampage_api::ComponentPluginConfig::new(worker.canonicalize()?);
+        let cancellation = AtomicBool::new(false);
+        let mut observer = |_| {};
+        let control = rampage_api::ProjectWorkspaceTaskControl::new(&cancellation, &mut observer);
+        let limits = ReportLimits::new(report_options.limit);
+        let prepared = if report_options.prepare_analysis {
+            rampage_api::prepare_plugin_triage_with_analysis(project, limits, &control)?
+        } else {
+            rampage_api::prepare_plugin_triage(project, limits, &control)?
+        };
+        let result = prepared.run_component(&component, &config, Some(&cancellation), &control)?;
+        return crate::report_plugin::emit(out, result, options.json);
+    }
     let run_options = WorkflowOptions {
         limits: ReportLimits::new(report_options.limit),
         decompile: !report_options.no_decompile,
@@ -86,7 +130,7 @@ fn comparing_commands() -> String {
     comparing.map(|workflow| workflow.command).collect::<Vec<_>>().join(", ")
 }
 
-fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
+pub(crate) fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
     let target = &report.target;
     let entry = target.entry.map_or_else(|| "no entry".to_owned(), |entry| format!("entry {entry:#x}"));
     writeln!(out, "{}: {:?} {}, {entry}, sha256 {}", report.workflow, target.format, target.arch, target.sha256)?;

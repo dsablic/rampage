@@ -388,6 +388,15 @@ pub(crate) struct ReportArgs {
     /// find-main: skip the decompilation preview
     #[arg(long)]
     pub(crate) no_decompile: bool,
+    /// Experimental triage-report component; findings remain plugin claims, with no builtin fallback
+    #[arg(long)]
+    pub(crate) component: Option<PathBuf>,
+    /// Trusted component worker executable (otherwise the sibling rampage-plugin-worker)
+    #[arg(long, requires = "component")]
+    pub(crate) component_worker: Option<PathBuf>,
+    /// Explicitly complete host discovery before preparing plugin facts; outside the component runtime limits
+    #[arg(long, requires = "component")]
+    pub(crate) prepare_analysis: bool,
 }
 
 #[derive(Args)]

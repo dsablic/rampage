@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 use crate::annotations::Annotations;
 use crate::{ApiError, Packs, Project};
 
+type SourceAdmission<'a> = &'a mut dyn FnMut(&[u8]) -> Result<(), ApiError>;
+
 /// Loaded binaries, with snapshots revalidated on each open to notice changed mappings or capture metadata, and
 /// ordinary binaries reloaded when their file's length, modification time or inode changes.
 ///
@@ -98,7 +100,7 @@ impl Session {
     /// [`Binary::open_at`]). An embedded image is a project of its own, with its own annotation sidecar; a location
     /// that [is the whole file](ImageAt::is_whole_file) is the project [`Session::open`] gives.
     pub fn open_at(&self, path: &Path, arch: Option<Arch>, image: Option<ImageAt>) -> Result<Arc<Project>, ApiError> {
-        self.open_at_policy(path, arch, image, false)
+        self.open_at_policy(path, arch, image, false, None)
     }
 
     /// Workspace restores never reuse ordinary cached projects or resolve a directory as a container.
@@ -108,7 +110,19 @@ impl Session {
         arch: Option<Arch>,
         image: Option<ImageAt>,
     ) -> Result<Arc<Project>, ApiError> {
-        self.open_at_policy(path, arch, image, true)
+        self.open_at_policy(path, arch, image, true, None)
+    }
+
+    /// Fresh checked annotations plus admission on the actual original mapping before native parsing.
+    /// Keeping this separate leaves the existing workspace loader's 128 MiB policy unchanged.
+    pub(crate) fn open_plugin_triage_at(
+        &self,
+        path: &Path,
+        arch: Option<Arch>,
+        image: Option<ImageAt>,
+        admit: &mut dyn FnMut(&[u8]) -> Result<(), ApiError>,
+    ) -> Result<Arc<Project>, ApiError> {
+        self.unloaded_copy().open_at_policy(path, arch, image, true, Some(admit))
     }
 
     fn open_at_policy(
@@ -117,6 +131,7 @@ impl Session {
         arch: Option<Arch>,
         image: Option<ImageAt>,
         checked: bool,
+        admission: Option<SourceAdmission<'_>>,
     ) -> Result<Arc<Project>, ApiError> {
         let image = image.filter(|image| !image.is_whole_file());
         let held_source = checked.then(|| crate::project_workspace::open_source(path)).transpose()?;
@@ -152,9 +167,30 @@ impl Session {
         {
             return Ok(project);
         }
-        let mut binary =
-            if checked { Binary::open_image_checked(path, image, arch) } else { Binary::open_image(path, image, arch) }
-                .map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
+        let mut binary = match admission {
+            Some(admit) => {
+                let mut rejected = None;
+                let binary = Binary::open_image_checked_admitted(
+                    path,
+                    image,
+                    arch,
+                    crate::plugin_triage::MAX_PLUGIN_TRIAGE_SOURCE_BYTES,
+                    |bytes| {
+                        admit(bytes).map_err(|error| {
+                            rejected = Some(error);
+                            rampage_loaders::LoadError::Unsupported("source profile admission rejected".into())
+                        })
+                    },
+                );
+                if let Some(error) = rejected {
+                    return Err(error);
+                }
+                binary
+            }
+            None if checked => Binary::open_image_checked(path, image, arch),
+            None => Binary::open_image(path, image, arch),
+        }
+        .map_err(|source| ApiError::Load { path: path.to_owned(), source })?;
         let legacy = annotation_path(path, image, &binary);
         let log = if binary.format == Format::Snapshot {
             self.state.lock().expect("session lock").capture_paths.insert(canonical.clone());

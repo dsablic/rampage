@@ -103,7 +103,8 @@ Additional focused guides:
 - [Debugger workspace](docs/debugger-workspace.md): explicit local inspection, Prepare/Compare/Save/Open and privacy.
 - [Debug signature import](docs/debug-signatures.md) and [ARM64 semantics validation](docs/arm64-development.md).
 - [Benchmarks](docs/benchmarks.md) and the [decompiler integration corpus](docs/decompiler-corpus.md).
-- [Extension points](docs/plugins.md): internal registries, not dynamic plugin loading or a stable public plugin API.
+- [Plugins and extension points](docs/plugins.md): experimental explicit triage components and builtin registries.
+- [Plugin security boundaries](docs/plugin-security.md): admission, resource limits, claim provenance and exclusions.
 
 The [development reference](docs/features.md#measurements-and-development) covers crate layout, fixture rebuilding
 and decoder-table generation. Existing benchmark measurements are sample-specific, not general accuracy or

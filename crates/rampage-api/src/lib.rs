@@ -24,6 +24,7 @@ mod listing;
 mod module_references;
 mod offset;
 pub mod packs;
+mod plugin_triage;
 mod pointer_compare;
 mod pointer_observation;
 mod project;
@@ -89,6 +90,11 @@ pub use module_references::{
 };
 pub use offset::{FileOffset, parse_file_offset};
 pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
+pub use plugin_triage::{
+    MAX_PLUGIN_TRIAGE_REPORT_BYTES, MAX_PLUGIN_TRIAGE_SOURCE_BYTES, PluginTriageProvenance, PluginTriageReport,
+    PreparedPluginTriage, open_plugin_triage_source, prepare_plugin_triage, prepare_plugin_triage_with_analysis,
+    read_plugin_triage_component,
+};
 pub use pointer_compare::{PointerChange, PointerComparison};
 pub use pointer_observation::{PointerAssessment, PointerObservation};
 pub use project::{AnalysisCacheStatus, PdbImport, PdbPreview, Project};
@@ -108,6 +114,7 @@ pub use rampage_decompiler::worker::SupervisedMetrics;
 pub use rampage_decompiler::worker::WorkerConfig as DecompilerWorkerConfig;
 pub use rampage_decompiler::{DecompilerOptions, Platform as DecompilerPlatform};
 pub use rampage_detect::{Confidence as DetectionConfidence, Detection, Kind as DetectionKind};
+pub use rampage_plugin::PluginConfig as ComponentPluginConfig;
 pub use rampage_signatures::SignatureDb;
 pub use rampage_yara::{MatchedString, YaraMatch};
 pub use rows::{

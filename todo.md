@@ -337,13 +337,41 @@ unsandboxed native code. Three layers instead, in this order:
 - [ ] WASM component plugins (wasmtime is already a dependency via yara-x): sandboxed, language-agnostic code for
   detectors, format loaders and workflows behind a WIT interface; bytes plus read-only analysis queries in,
   findings out. The output schema enforces the evidence/confidence/limitations contract.
-  This is still an open implementation gap: no executable host, WIT world, stable public API, or builtin feature
-  converted into a separately loadable executable plugin is present. Static workflow registries are not that
-  conversion. Prioritize an experimental component contract and genuine `triage_report` composition migration
-  after the current source/identity, supervision and cache contracts settle; componentization/binding dependencies
-  and the owned source-to-component pipeline still need verification. No unsafe native artifact deserialization.
+  The bounded triage-component milestone below implements the first explicit executable lane and genuine guest
+  composition, not general detector/loader plugins, automatic discovery, or a stable public SDK. Static builtin
+  registries remain separate. Broader capabilities and module migration require independent acceptance.
 - Freeze a public plugin API only after the internal traits settle. Many extensions need no in-process plugin:
   another MCP server composes with rampage at the agent level.
+
+### Experimental triage component milestone
+
+- [x] Owned Rust source builds to core Wasm and then a genuine WIT component. The import-free ABI 0.0.1 uses
+  schema-1 fact/report bytes, a scalar output length and fixed 32-byte chunks; output admission precedes copying.
+  The guest performs classification, ranking, grouping, report composition and recommendations, not a builtin
+  workflow callback. All 14 native guest oracles and six compiled differential cases passed.
+- [x] Separate trusted plugin worker reuses owned byte supervision without decompiler protocol spoofing or inline
+  fallback. Raw recursive counts/types and flat JSON/hex envelopes are admitted before allocating readers;
+  unsupported component forms are explicit. Wasmtime 49.0.3 is pinned for this lane, separately from YARA.
+- [x] Actual compiled probes cover fuel, execution epochs, memory growth, oversized and malformed output,
+  wrong interface version, ambient imports, pre-cancellation and recovery. Process isolation is not an OS sandbox;
+  neither guest fuel nor execution epochs cover native preparation or compilation.
+- [x] Host-fixed target/hash/provenance wraps all guest output as plugin claims. References are not proof;
+  suggestions remain inert. Exact emitted JSON/text bounds and terminal-control escaping preserve the boundary.
+  Complete-or-reject preparation refuses configured packs, unavailable databases and unsupported managed inputs.
+- [x] Fresh CLI loading uses descriptor-bound admission before parsing and checked sidecars, with canonical
+  unwind spans budgeted against the actual producer. Its conservative profile is unmanaged little-endian x86-64
+  ELF only; already-loaded API targets have separate admission. Cold host analysis requires explicit opt-in.
+- [x] Ordinary combined workspace: 2,334 passes across 180 groups in 317.7 seconds, 63 opt-ins skipped;
+  all 50 evaluation tests passed separately. Initial dependency-rebuild run hit its cap, not an assertion failure.
+  Workspace and host/Wasm guest Clippy passed with warnings denied; targeted compiled API/CLI gates passed.
+- [x] Additional startup reproduction: 54/54 owned native/isolated attempts passed in three fresh cached-harness
+  processes without retries. No stall reproduced, no cause identified and no startup-fix claim.
+- [ ] Linux component gate is wired but not locally executed; cancellation during compilation/guest CPU work,
+  broader source loading and component grammar, other workflow migrations, MCP/UI providers and a stable SDK
+  remain unearned. Existing install tooling does not yet install the optional plugin worker automatically.
+- [x] Protected 1,008-file candidate-source audit, scanner-bypass regressions and committed-tree/history scans;
+  controlled Python: 804 tests and 797 subtests passed, six live opt-ins skipped. Owned scratch is removed;
+  publication is private main only, without a release tag or CI dispatch.
 
 
 ## Decompiler: embedded Ghidra (the decompilation path)

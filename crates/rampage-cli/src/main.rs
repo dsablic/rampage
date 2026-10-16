@@ -3,6 +3,7 @@ mod args;
 mod commands;
 mod hierarchy;
 mod report;
+mod report_plugin;
 
 use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
@@ -391,10 +392,21 @@ fn main() -> ExitCode {
             other_image_length,
             limit,
             no_decompile,
+            component,
+            component_worker,
+            prepare_analysis,
         }) => {
             let other_image =
                 other_image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, other_image_length));
-            let report_options = report::ReportOptions { other, other_image, limit, no_decompile };
+            let report_options = report::ReportOptions {
+                other,
+                other_image,
+                limit,
+                no_decompile,
+                component,
+                component_worker,
+                prepare_analysis,
+            };
             report::report(&mut out, workflow, &file, &report_options, &options)
         }
         Command::Mcp(..) => unreachable!("handled before opening stdout"),

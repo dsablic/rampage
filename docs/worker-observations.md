@@ -79,6 +79,15 @@ Input SHA-256 identifiers:
 - Mach-O (8,464 bytes): `0f45e6b07b65993e7afcea2e2c74d2aeb00dbe813ad2205d11590248798d6c40`.
 - Measured worker: `e4db5c9bd631488b9390eae83faf0214d09887707515e5a7d7403e07e9e52880`.
 
+### Additional startup probe
+
+An additional startup-reproduction probe used the already-built pre-plugin harness in three fresh processes.
+All 54 planned native/isolated attempts passed without retries; the largest driver times per process were
+295.173, 293.604 and 294.340 ms. Each process completed in 4.70 seconds or less. OS/spec caches were uncontrolled,
+and the harness was not rebuilt for this probe. Its SHA-256 was
+`3a81641696acfba38c755f1448d708e06f1edd177b35bc5181fd5b0eb0f7ceae`.
+No stall reproduced, so this probe supplies neither a cause nor an optimization claim.
+
 ### Incremental journal and input admission
 
 The corrected opt-in test requires an explicit new output file in private external scratch and an available

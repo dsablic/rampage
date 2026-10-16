@@ -46,7 +46,10 @@ jobs:
           components: rustfmt
       - name: Check Rust formatting
         timeout-minutes: 3
-        run: cargo fmt --all --check
+        run: |
+          cargo fmt --all --check
+          cargo fmt --manifest-path plugins/triage-report/Cargo.toml --check
+          cargo fmt --manifest-path plugins/runtime-probe/Cargo.toml --check
       - name: Corpus runner and acceptance-gate regressions
         timeout-minutes: 3
         env:
@@ -91,6 +94,9 @@ jobs:
       - name: Require LLVM fixture tools
         timeout-minutes: 3
         run: rustup component add llvm-tools-preview
+      - name: Require the owned component guest target
+        timeout-minutes: 3
+        run: rustup target add wasm32-unknown-unknown
       - name: Warnings-denied workspace Clippy
         timeout-minutes: 30
         run: time cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -122,6 +128,16 @@ jobs:
           export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
           bash tools/ci/module-linkage-oracle.sh --check \
             cargo test --locked -p rampage-api -p rampage-ui --test module_references -- --include-ignored
+      - name: Owned component workflow and resource boundaries
+        timeout-minutes: 5
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          cargo test --locked --manifest-path plugins/triage-report/Cargo.toml --target-dir target
+          bash tools/ci/plugin-triage-oracle.sh --check \
+            cargo test --locked -p rampage-plugin --test component --test resource_controls -- --ignored
+          bash tools/ci/plugin-triage-oracle.sh --check \
+            cargo test --locked -p rampage-api -p rampage-cli --test plugin_triage -- --include-ignored
       - name: Owned DWARF reviewed import surfaces and worker acceptance
         timeout-minutes: 5
         env:
@@ -185,6 +201,29 @@ jobs:
       - name: Warnings-denied core Clippy and tests
         timeout-minutes: 20
         run: bash tools/ci/linux-core.sh
+
+  linux-components:
+    name: Linux component runtime (separate from the core subset)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - name: Component runtime and schema regressions
+        timeout-minutes: 20
+        run: cargo test --locked -p rampage-plugin-contract -p rampage-plugin --lib
+      - name: Owned import-free components and hostile resource probes
+        timeout-minutes: 5
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          bash tools/ci/plugin-triage-oracle.sh --check \
+            cargo test --locked -p rampage-plugin --test component --test resource_controls -- --ignored
 
 # Step/job timeouts bound CI execution, not individual analysis time or memory.
 # macOS runs the ordinary debug workspace suite once, plus the selected compiled-fixture and isolated gates above.
