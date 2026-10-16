@@ -17,8 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Decompiler, DecompilerOptions, MemoryRegion, Platform};
 
+mod checkpoint;
 mod metrics;
 
+use checkpoint::Observation;
+#[doc(hidden)]
+pub use checkpoint::{BinaryCheckpoint, ByteCheckpoint, SupervisedBytesRun};
 use metrics::Measurement;
 pub use metrics::{
     SupervisedCleanupError, SupervisedExitStatus, SupervisedInputMetrics, SupervisedInputOutcome, SupervisedMetrics,
@@ -395,6 +399,43 @@ pub fn run_supervised_bytes(
     cancellation: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, WorkerError> {
     let started = std::time::Instant::now();
+    let measurement = Measurement::new(started, false);
+    run_bytes_inner(bytes, config, cancellation, started, &measurement, None)
+}
+
+/// Cancellation-only private control v2. The observer runs without parser/control locks while the selected
+/// root is still owned and live, and must set cancellation before returning. Its time counts toward the
+/// original budget but cannot be forcibly interrupted. Progress never authorizes normal completion.
+/// Metrics are returned only after guard cleanup and scoped I/O thread joining, including on Cancelled.
+#[doc(hidden)]
+pub fn run_supervised_bytes_checkpointed(
+    bytes: Vec<u8>,
+    config: &WorkerConfig,
+    cancellation: &AtomicBool,
+    checkpoint: ByteCheckpoint,
+    observer: &mut dyn FnMut(ByteCheckpoint),
+) -> SupervisedBytesRun {
+    let started = std::time::Instant::now();
+    let measurement = Measurement::new(started, true);
+    let result = run_bytes_inner(
+        bytes,
+        config,
+        Some(cancellation),
+        started,
+        &measurement,
+        Some(Observation { selected: checkpoint, observer }),
+    );
+    SupervisedBytesRun { result, metrics: measurement.finish().expect("enabled byte supervisor measurement") }
+}
+
+fn run_bytes_inner(
+    bytes: Vec<u8>,
+    config: &WorkerConfig,
+    cancellation: Option<&AtomicBool>,
+    started: std::time::Instant,
+    measurement: &Measurement,
+    observation: Option<Observation<'_>>,
+) -> Result<Vec<u8>, WorkerError> {
     let budget = SupervisorBudget { started, timeout: config.timeout, cancellation };
     budget.check()?;
     let executable = config.executable.as_deref().ok_or_else(|| {
@@ -407,10 +448,14 @@ pub fn run_supervised_bytes(
     if bytes.len() > limit {
         return Err(WorkerError::RequestTooLarge { limit });
     }
-    let measurement = Measurement::new(started, false);
+    measurement.record(|data, elapsed| {
+        data.request_preflight_complete_us = Some(elapsed);
+        data.input.requested_bytes = Some(bytes.len() as u64);
+    });
     budget.check()?;
-    let process = supervised_process(executable, bytes, config, cancellation, started, &measurement)?;
-    finish_bytes_process(process, budget, &measurement)
+    let process =
+        supervised_process_checkpointed(executable, bytes, config, cancellation, started, measurement, observation)?;
+    finish_bytes_process(process, budget, measurement)
 }
 
 fn finish_bytes_process(
@@ -687,6 +732,23 @@ pub fn serve_binary_stdio(handler: impl FnOnce() -> Result<(), WorkerError>) -> 
     }
 }
 
+/// Binary lifecycle with a cloneable checkpoint capability for guest callbacks. Default/v1 operation supplies
+/// a disabled handle and preserves v1 behavior. V2 claims its descriptor once, before invoking the handler;
+/// selected parking has no normal return and never reclaims an ambient descriptor from a guest callback.
+#[doc(hidden)]
+pub fn serve_binary_stdio_checkpointed(
+    handler: impl FnOnce(BinaryCheckpoint) -> Result<(), WorkerError>,
+) -> Result<(), WorkerError> {
+    #[cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))]
+    {
+        unix::serve_binary_stdio_checkpointed(handler)
+    }
+    #[cfg(not(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")))]
+    {
+        handler(BinaryCheckpoint::disabled())
+    }
+}
+
 fn read_request(input: impl Read) -> Result<WorkerRequest, String> {
     let mut bytes = Vec::new();
     input
@@ -872,7 +934,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
 }
 
 #[cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))]
-use unix::supervised_process;
+use unix::{supervised_process, supervised_process_checkpointed};
 
 #[cfg(not(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")))]
 fn supervised_process(
@@ -882,6 +944,19 @@ fn supervised_process(
     _cancellation: Option<&AtomicBool>,
     _started: std::time::Instant,
     _measurement: &Measurement,
+) -> Result<ProcessOutput, WorkerError> {
+    Err(WorkerError::UnsupportedPlatform)
+}
+
+#[cfg(not(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")))]
+fn supervised_process_checkpointed(
+    _executable: &std::path::Path,
+    _bytes: Vec<u8>,
+    _config: &WorkerConfig,
+    _cancellation: Option<&AtomicBool>,
+    _started: std::time::Instant,
+    _measurement: &Measurement,
+    _observation: Option<Observation<'_>>,
 ) -> Result<ProcessOutput, WorkerError> {
     Err(WorkerError::UnsupportedPlatform)
 }
@@ -948,6 +1023,55 @@ mod unix {
     const CONTROL_ENV: &str = "RAMPAGE_SUPERVISOR_CONTROL";
     const CONTROL_HELLO: &[u8] = b"RAMPAGE-CONTROL/1/HOST\0";
     const CONTROL_DONE: &[u8] = b"RAMPAGE-CONTROL/1/RESPONSE-FLUSHED/0\0";
+
+    enum ProcessControl {
+        V1(HostControl),
+        V2(checkpoint::platform::Host),
+    }
+
+    impl ProcessControl {
+        fn pair(selected: Option<ByteCheckpoint>) -> Result<(Self, UnixStream), WorkerError> {
+            let Some(selected) = selected else {
+                let (host, child) = HostControl::pair()?;
+                return Ok((Self::V1(host), child));
+            };
+            let (host, child) = UnixStream::pair().map_err(|error| io_error("create v2 control socket", error))?;
+            let mut host = control_above_stdio(host)?;
+            let child = control_above_stdio(child)?;
+            host.write_all(checkpoint::platform::HELLO).map_err(|error| io_error("write v2 handshake", error))?;
+            host.write_all(&[selected as u8]).map_err(|error| io_error("write checkpoint selection", error))?;
+            host.set_nonblocking(true).map_err(|error| io_error("configure v2 control socket", error))?;
+            Ok((Self::V2(checkpoint::platform::Host::new(host, selected)), child))
+        }
+
+        fn version(&self) -> u8 {
+            match self {
+                Self::V1(_) => 1,
+                Self::V2(_) => 2,
+            }
+        }
+
+        fn poll(&mut self, measurement: &Measurement) -> Result<(), WorkerError> {
+            match self {
+                Self::V1(host) => host.poll(measurement),
+                Self::V2(host) => host.poll(),
+            }
+        }
+
+        fn authorized(&self) -> bool {
+            match self {
+                Self::V1(host) => host.authorized(),
+                Self::V2(_) => false,
+            }
+        }
+
+        fn take_checkpoint(&mut self) -> Option<ByteCheckpoint> {
+            match self {
+                Self::V1(_) => None,
+                Self::V2(host) => host.take(),
+            }
+        }
+    }
 
     struct HostControl {
         socket: UnixStream,
@@ -1058,8 +1182,12 @@ mod unix {
     }
 
     fn validate_worker_control(value: &str) -> Result<OwnedFd, WorkerError> {
+        validate_worker_control_header(value, "1:", CONTROL_HELLO)
+    }
+
+    fn validate_worker_control_header(value: &str, prefix: &str, expected: &[u8]) -> Result<OwnedFd, WorkerError> {
         let invalid = || WorkerError::Protocol("invalid private worker control capability".to_owned());
-        let text = value.strip_prefix("1:").filter(|_| value.len() <= 32).ok_or_else(invalid)?;
+        let text = value.strip_prefix(prefix).filter(|_| value.len() <= 32).ok_or_else(invalid)?;
         if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(invalid());
         }
@@ -1077,7 +1205,7 @@ mod unix {
         let owned = unsafe { OwnedFd::from_raw_fd(duplicate) };
         let fd = owned.as_raw_fd();
         let mut kind: c_int = 0;
-        // The v1 worker endpoint must block while holding the completed root, unlike the host endpoint.
+        // The binary endpoint must block while holding/parking the root, unlike the host endpoint.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         if flags < 0 || flags & libc::O_NONBLOCK != 0 {
             return Err(invalid());
@@ -1099,12 +1227,15 @@ mod unix {
             return Err(invalid());
         }
         let mut hello = [0; CONTROL_HELLO.len()];
+        if expected.len() != hello.len() {
+            return Err(invalid());
+        }
         let mut verified = false;
         for _ in 0..8 {
             // SAFETY: MSG_PEEK does not consume data or claim ownership of an ambient descriptor.
             let count =
                 unsafe { libc::recv(fd, hello.as_mut_ptr().cast(), hello.len(), libc::MSG_PEEK | libc::MSG_DONTWAIT) };
-            if count == hello.len() as isize && hello.as_slice() == CONTROL_HELLO {
+            if count == hello.len() as isize && hello.as_slice() == expected {
                 verified = true;
                 break;
             }
@@ -1138,6 +1269,50 @@ mod unix {
             value.to_str().ok_or_else(|| WorkerError::Protocol("invalid private control version".to_owned()))?;
         let mut control = claim_worker_control(value)?;
         handler()?;
+        release_binary_stdio()?;
+        control.write_all(CONTROL_DONE).map_err(|error| io_error("write control completion", error))?;
+        let mut byte = [0];
+        loop {
+            match control.read(&mut byte) {
+                Ok(0) => return Ok(()),
+                Ok(_) => return Err(WorkerError::Protocol("unexpected private control command".to_owned())),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(io_error("wait for supervisor release", error)),
+            }
+        }
+    }
+
+    pub(super) fn serve_binary_stdio_checkpointed(
+        handler: impl FnOnce(BinaryCheckpoint) -> Result<(), WorkerError>,
+    ) -> Result<(), WorkerError> {
+        let Some(value) = std::env::var_os(CONTROL_ENV) else {
+            return handler(BinaryCheckpoint::disabled());
+        };
+        let value =
+            value.to_str().ok_or_else(|| WorkerError::Protocol("invalid private control version".to_owned()))?;
+        if !value.starts_with("2:") {
+            return serve_binary_stdio(|| handler(BinaryCheckpoint::disabled()));
+        }
+        let handle = claim_checkpoint_control(value)?;
+        handler(handle.clone())?;
+        release_binary_stdio()?;
+        checkpoint::platform::complete(&handle)
+    }
+
+    fn claim_checkpoint_control(value: &str) -> Result<BinaryCheckpoint, WorkerError> {
+        let descriptor = validate_worker_control_header(value, "2:", checkpoint::platform::HELLO)?;
+        let mut socket = UnixStream::from(descriptor);
+        let mut hello = [0; CONTROL_HELLO.len()];
+        socket.read_exact(&mut hello).map_err(|error| io_error("consume v2 handshake", error))?;
+        if hello.as_slice() != checkpoint::platform::HELLO {
+            return Err(WorkerError::Protocol("private v2 handshake changed".to_owned()));
+        }
+        let mut selection = [0];
+        socket.read_exact(&mut selection).map_err(|error| io_error("consume v2 selection", error))?;
+        Ok(checkpoint::platform::handle(socket, checkpoint::platform::selection(selection[0])?))
+    }
+
+    fn release_binary_stdio() -> Result<(), WorkerError> {
         io::stdout().lock().flush().map_err(|error| io_error("flush response", error))?;
         io::stderr().lock().flush().map_err(|error| io_error("flush diagnostics", error))?;
         // SAFETY: flush native C stdio before releasing its original pipe endpoints.
@@ -1158,16 +1333,7 @@ mod unix {
                 return Err(io_error("release worker output pipe", io::Error::last_os_error()));
             }
         }
-        control.write_all(CONTROL_DONE).map_err(|error| io_error("write control completion", error))?;
-        let mut byte = [0];
-        loop {
-            match control.read(&mut byte) {
-                Ok(0) => return Ok(()),
-                Ok(_) => return Err(WorkerError::Protocol("unexpected private control command".to_owned())),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(io_error("wait for supervisor release", error)),
-            }
-        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1193,6 +1359,22 @@ mod unix {
     #[cfg(test)]
     pub(super) fn binary_control_fixture(response: &[u8]) -> String {
         control_bytes_fixture(response, true, "", "exec >/dev/null 2>&1\nexec /bin/sleep 10")
+    }
+
+    #[cfg(test)]
+    pub(super) fn checkpoint_control_fixture(frame: &[u8]) -> String {
+        let frame: String = frame.iter().map(|byte| format!("\\{byte:03o}")).collect();
+        let script = format!(
+            "set +m\n\
+             control_fd=\"${{{CONTROL_ENV}#2:}}\"\n\
+             eval \"/bin/dd bs=1 count={} <&$control_fd >/dev/null 2>&1\"\n\
+             /bin/cat >/dev/null\n\
+             eval \"printf '{frame}' >&$control_fd\"\n\
+             eval \"/bin/dd bs=1 count=1 <&$control_fd >/dev/null 2>&1\"\n\
+             exit 43\n",
+            checkpoint::platform::HELLO.len() + 1,
+        );
+        format!("exec /bin/bash -c '{}'", script.replace('\'', "'\\''"))
     }
 
     #[cfg(test)]
@@ -1745,15 +1927,27 @@ mod unix {
         started: Instant,
         measurement: &Measurement,
     ) -> Result<ProcessOutput, WorkerError> {
+        supervised_process_checkpointed(executable, bytes, config, cancellation, started, measurement, None)
+    }
+
+    pub(super) fn supervised_process_checkpointed(
+        executable: &Path,
+        bytes: Vec<u8>,
+        config: &WorkerConfig,
+        cancellation: Option<&AtomicBool>,
+        started: Instant,
+        measurement: &Measurement,
+        mut observation: Option<Observation<'_>>,
+    ) -> Result<ProcessOutput, WorkerError> {
         let memory_limit = config.memory_limit_bytes;
         if memory_limit == 0 {
             return Err(io_error("spawn", io::Error::other("worker memory limit must be nonzero")));
         }
-        let (mut control, child_control) = HostControl::pair()?;
+        let (mut control, child_control) = ProcessControl::pair(observation.as_ref().map(|item| item.selected))?;
         let control_fd = child_control.as_raw_fd();
         let mut command = Command::new(executable);
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
-        command.env(CONTROL_ENV, format!("1:{control_fd}"));
+        command.env(CONTROL_ENV, format!("{}:{control_fd}", control.version()));
         // SAFETY: only signal-safe setrlimit/fcntl operations run here; the parent's fd flags stay unchanged.
         unsafe {
             command.pre_exec(move || {
@@ -1863,6 +2057,47 @@ mod unix {
                         // stop the authenticated live group before waiting for their real output EOF.
                         control_error = control.poll(measurement).err();
                     }
+                    if observation.is_some() {
+                        // At most three pipe reports exist. Already-reported I/O failures outrank dispatch;
+                        // never call user code after a queued output-limit/read/write failure.
+                        for _ in 0..3 {
+                            match receiver.try_recv() {
+                                Ok(PipeResult::Input(result)) => {
+                                    input_fully_delivered = result?;
+                                    input_finished = true;
+                                }
+                                Ok(PipeResult::Stdout(result)) => stdout = Some(result?),
+                                Ok(PipeResult::Stderr(result)) => stderr = Some(result?),
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    let mut exited = exited;
+                    if control_error.is_none()
+                        && let Some(point) = control.take_checkpoint()
+                    {
+                        if let Some(item) = observation.as_mut() {
+                            if exited {
+                                control_error =
+                                    Some(WorkerError::Protocol("checkpoint root already exited".to_owned()));
+                            } else {
+                                match dispatch_checkpoint(&mut process, budget, point, item.observer) {
+                                    CheckpointDispatch::Exited => {
+                                        exited = true;
+                                        control_error =
+                                            Some(WorkerError::Protocol("checkpoint root already exited".to_owned()));
+                                    }
+                                    CheckpointDispatch::Aborted(error) => return Err(error),
+                                }
+                            }
+                        } else {
+                            control_error = Some(WorkerError::Protocol("unexpected checkpoint dispatch".to_owned()));
+                        }
+                    }
+                    if exited && observation.is_some() && control_error.is_none() {
+                        control_error =
+                            Some(WorkerError::Protocol("v2 worker exited before cancellation checkpoint".to_owned()));
+                    }
                     let completed_live = !exited
                         && control_error.is_none()
                         && control.authorized()
@@ -1921,6 +2156,175 @@ mod unix {
                 }
             }
         })
+    }
+
+    enum CheckpointDispatch {
+        Exited,
+        Aborted(WorkerError),
+    }
+
+    fn dispatch_checkpoint(
+        process: &mut ProcessGuard<'_>,
+        budget: SupervisorBudget<'_>,
+        point: ByteCheckpoint,
+        observer: &mut dyn FnMut(ByteCheckpoint),
+    ) -> CheckpointDispatch {
+        if let Err(error) = budget.check() {
+            return CheckpointDispatch::Aborted(error);
+        }
+        match process.observe(budget) {
+            Ok(true) => return CheckpointDispatch::Exited,
+            Err(error) => return CheckpointDispatch::Aborted(error),
+            Ok(false) => {}
+        }
+        if let Err(error) = budget.check() {
+            return CheckpointDispatch::Aborted(error);
+        }
+        // No parser or control locks are held here. The callback cannot receive or create PID authority.
+        observer(point);
+        let budget_result = budget.check();
+        // Cancellation/deadline must not suppress the mandatory ownership probe after external code ran.
+        // Retry count stays bounded inside observe_child; this does not reset the operation's real budget.
+        let ownership = process.observe(SupervisorBudget { timeout: Duration::MAX, cancellation: None, ..budget });
+        let budget_result = budget_result.and_then(|()| budget.check());
+        let error = match budget_result {
+            Err(error) => error,
+            Ok(()) => match ownership {
+                Err(error) => error,
+                Ok(true) => WorkerError::Protocol("checkpoint root exited during observer".to_owned()),
+                Ok(false) => WorkerError::Protocol("checkpoint observer returned without cancellation".to_owned()),
+            },
+        };
+        // Reuse the existing guard and original cleanup deadline. Cancellation is the only v2 outcome;
+        // progress does not set controlled_stop or authorize response completion. Drop still stops/join readers.
+        let _ = process.terminate_completed(SupervisorBudget { cancellation: None, ..budget });
+        CheckpointDispatch::Aborted(error)
+    }
+
+    #[cfg(test)]
+    mod checkpoint_tests {
+        use super::*;
+
+        fn live_guard(measurement: &Measurement) -> (ProcessGuard<'_>, std::process::ChildStdin) {
+            require_default_child_reaping().unwrap();
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "read release"])
+                .process_group(0)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let input = child.stdin.take().unwrap();
+            (
+                ProcessGuard {
+                    child,
+                    stop: Arc::new(AtomicBool::new(false)),
+                    terminated: false,
+                    cleanup_complete: false,
+                    status: None,
+                    stopped_live_root: false,
+                    measurement: Some(measurement),
+                },
+                input,
+            )
+        }
+
+        #[test]
+        fn v2_claim_owns_one_duplicate_and_v1_stays_disabled_and_unchanged() {
+            let (control, mut original) = ProcessControl::pair(Some(ByteCheckpoint::Output)).unwrap();
+            assert_eq!(control.version(), 2);
+            assert!(!control.authorized());
+            let fd = original.as_raw_fd();
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            let status = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            let handle = claim_checkpoint_control(&format!("2:{fd}")).unwrap();
+            assert_eq!(handle.selected(), Some(ByteCheckpoint::Output));
+            let cloned = handle.clone();
+            drop(handle);
+            assert_eq!(cloned.selected(), Some(ByteCheckpoint::Output));
+            drop(cloned);
+            assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, flags);
+            assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFL) }, status);
+            original.peer_addr().unwrap();
+            if let ProcessControl::V2(mut host) = control {
+                host.socket.write_all(b"retained").unwrap();
+            } else {
+                unreachable!();
+            }
+            let mut bytes = [0; 8];
+            original.read_exact(&mut bytes).unwrap();
+            assert_eq!(&bytes, b"retained");
+
+            let (control, mut child) = ProcessControl::pair(None).unwrap();
+            assert_eq!(control.version(), 1);
+            let mut hello = [0; CONTROL_HELLO.len()];
+            child.read_exact(&mut hello).unwrap();
+            assert_eq!(hello.as_slice(), CONTROL_HELLO);
+            let disabled = BinaryCheckpoint::disabled();
+            assert_eq!(disabled.selected(), None);
+            disabled.park(ByteCheckpoint::Run).unwrap();
+        }
+
+        #[test]
+        fn exited_root_never_dispatches_an_observer() {
+            let measurement = Measurement::new(Instant::now(), true);
+            let (mut process, input) = live_guard(&measurement);
+            drop(input);
+            let budget =
+                SupervisorBudget { started: Instant::now(), timeout: Duration::from_secs(5), cancellation: None };
+            while !process.observe(budget).unwrap() {
+                thread::park_timeout(POLL_INTERVAL);
+            }
+            let mut called = false;
+            assert!(matches!(
+                dispatch_checkpoint(&mut process, budget, ByteCheckpoint::Run, &mut |_| called = true),
+                CheckpointDispatch::Exited
+            ));
+            assert!(!called);
+            let _ = process.terminate();
+            drop(process);
+            assert_eq!(measurement.finish().unwrap().ownership, SupervisedOwnership::Reaped);
+        }
+
+        #[test]
+        fn post_observer_ownership_loss_preserves_cancellation_without_claiming_cleanup() {
+            let measurement = Measurement::new(Instant::now(), true);
+            let (mut process, input) = live_guard(&measurement);
+            let pid = process.child.id() as c_int;
+            let mut input = Some(input);
+            let cancellation = AtomicBool::new(false);
+            let budget = SupervisorBudget {
+                started: Instant::now(),
+                timeout: Duration::from_secs(5),
+                cancellation: Some(&cancellation),
+            };
+            let result = dispatch_checkpoint(&mut process, budget, ByteCheckpoint::Run, &mut |_| {
+                cancellation.store(true, Ordering::Release);
+                drop(input.take());
+                let mut status = 0;
+                let mut reaped = false;
+                for _ in 0..8 {
+                    // SAFETY: deliberately simulate an unsupported foreign reaper for this test's exact
+                    // directly owned child after releasing its stdin. No process-table IDs are used.
+                    let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+                    if waited == pid {
+                        reaped = true;
+                        break;
+                    }
+                    assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::Interrupted);
+                }
+                assert!(reaped);
+            });
+            assert!(matches!(result, CheckpointDispatch::Aborted(WorkerError::Cancelled)));
+            assert!(process.terminated);
+            process.terminate_with(|_, _| panic!("signaled after observer reaped the root")).unwrap_err();
+            drop(process);
+            let metrics = measurement.finish().unwrap();
+            assert_eq!(metrics.ownership, SupervisedOwnership::Unverified);
+            assert!(metrics.root_reaped_us.is_none());
+            assert_ne!(metrics.cleanup_succeeded, Some(true));
+        }
     }
 
     #[cfg(test)]
@@ -2787,6 +3191,120 @@ mod tests {
             Err(WorkerError::OutputTooLarge { stream: "stdout", limit: 1 })
         ));
         fixture.assert_reaped();
+    }
+
+    #[test]
+    fn checkpoint_cancellation_returns_metrics_after_owned_cleanup_and_thread_joining() {
+        for selected in [ByteCheckpoint::Run, ByteCheckpoint::Output] {
+            let fixture = Fixture::new(&unix::checkpoint_control_fixture(&[1, selected as u8, 0, 0]));
+            let cancellation = AtomicBool::new(false);
+            let mut calls = 0;
+            let run = run_supervised_bytes_checkpointed(
+                b"component request".to_vec(),
+                &fixture.config(),
+                &cancellation,
+                selected,
+                &mut |point| {
+                    assert_eq!(point, selected);
+                    calls += 1;
+                    cancellation.store(true, Ordering::Release);
+                },
+            );
+            assert_eq!(calls, 1);
+            assert!(matches!(run.result, Err(WorkerError::Cancelled)));
+            assert_eq!(run.metrics.ownership, SupervisedOwnership::Reaped);
+            assert_eq!(run.metrics.cleanup_succeeded, Some(true));
+            assert_eq!(run.metrics.root_exit_status.unwrap().signal, Some(libc::SIGKILL));
+            assert!(run.metrics.input.finished_us.is_some());
+            assert!(run.metrics.stdout.finished_us.is_some());
+            assert!(run.metrics.stderr.finished_us.is_some());
+            assert!(run.metrics.control_completion_us.is_none(), "progress is not completion");
+            assert!(!run.metrics.intentional_stop, "checkpoint cancellation is not normal completion");
+            assert!(run.metrics.cleanup_finished_us.unwrap() <= run.metrics.total_elapsed_us);
+            fixture.assert_reaped();
+        }
+    }
+
+    #[test]
+    fn checkpoint_observer_without_cancel_is_protocol_failure_not_resume_or_success() {
+        let fixture = Fixture::new(&unix::checkpoint_control_fixture(&[1, 1, 0, 0]));
+        let cancellation = AtomicBool::new(false);
+        let mut calls = 0;
+        let run = run_supervised_bytes_checkpointed(
+            Vec::new(),
+            &fixture.config(),
+            &cancellation,
+            ByteCheckpoint::Run,
+            &mut |_| calls += 1,
+        );
+        assert_eq!(calls, 1);
+        assert!(matches!(run.result, Err(WorkerError::Protocol(message)) if message.contains("without cancellation")));
+        assert_eq!(run.metrics.ownership, SupervisedOwnership::Reaped);
+        assert_eq!(run.metrics.cleanup_succeeded, Some(true));
+        fixture.assert_reaped();
+    }
+
+    #[test]
+    fn malformed_completion_and_unsupported_v2_workers_never_dispatch_or_succeed() {
+        for frame in [[2, 0, 0, 0], [1, 2, 0, 0], [1, 1, 9, 0]] {
+            let fixture = Fixture::new(&unix::checkpoint_control_fixture(&frame));
+            let cancellation = AtomicBool::new(false);
+            let mut calls = 0;
+            let run = run_supervised_bytes_checkpointed(
+                Vec::new(),
+                &fixture.config(),
+                &cancellation,
+                ByteCheckpoint::Run,
+                &mut |_| calls += 1,
+            );
+            assert!(matches!(run.result, Err(WorkerError::Protocol(_))));
+            assert_eq!(calls, 0);
+            assert_eq!(run.metrics.ownership, SupervisedOwnership::Reaped);
+            fixture.assert_reaped();
+        }
+        let fixture = Fixture::new("/bin/cat >/dev/null; exit 0");
+        let cancellation = AtomicBool::new(false);
+        let mut calls = 0;
+        let run = run_supervised_bytes_checkpointed(
+            Vec::new(),
+            &fixture.config(),
+            &cancellation,
+            ByteCheckpoint::Run,
+            &mut |_| calls += 1,
+        );
+        assert!(run.result.is_err());
+        assert_eq!(calls, 0);
+        assert_eq!(run.metrics.ownership, SupervisedOwnership::Reaped);
+        fixture.assert_reaped();
+    }
+
+    #[test]
+    fn v2_failed_exit_and_preexisting_cancellation_keep_primary_precedence() {
+        let fixture = Fixture::new("/bin/cat >/dev/null; exit 42");
+        let cancellation = AtomicBool::new(false);
+        let mut calls = 0;
+        let run = run_supervised_bytes_checkpointed(
+            Vec::new(),
+            &fixture.config(),
+            &cancellation,
+            ByteCheckpoint::Run,
+            &mut |_| calls += 1,
+        );
+        assert!(matches!(run.result, Err(WorkerError::Exit { .. })));
+        assert_eq!(run.metrics.root_exit_status.unwrap().code, Some(42));
+        assert_eq!(calls, 0);
+        fixture.assert_reaped();
+
+        let cancellation = AtomicBool::new(true);
+        let run = run_supervised_bytes_checkpointed(
+            Vec::new(),
+            &WorkerConfig::default(),
+            &cancellation,
+            ByteCheckpoint::Run,
+            &mut |_| panic!("already-cancelled supervision dispatched an observer"),
+        );
+        assert!(matches!(run.result, Err(WorkerError::Cancelled)));
+        assert_eq!(run.metrics.ownership, SupervisedOwnership::NotSpawned);
     }
 
     #[test]
