@@ -1,5 +1,151 @@
 # To do
 
+## Active priority: understand real audio plugins through MCP
+
+This is the execution queue. The older sections below remain the historical backlog, not parallel work.
+The goal is to answer: what features exist, where their code lives, how parameters reach processing, and
+which links are static candidates versus observed execution. Ship reusable improvements driven by actual
+investigation obstacles, not a plugin-specific analyzer or another extension framework.
+
+### Validated investigation baseline
+
+- [x] Reproduce and fix native decompilation rejecting mapped code reached below the requested entry;
+  owned x86-64/AArch64 regression and real installed-image retest.
+- [x] Add explicit MCP `decompile(view="code")`: complete C text without token/graph bulk, retaining native
+  diagnostics, recovery status, exact-entry context and visible detail omissions; oversized code still refuses.
+- [x] Recognize ARM64 literal-load import stubs and preserve Mach-O entry-leading NOPs without changing ELF
+  resolver-padding handling; owned positive/negative regressions and real installed-image retest.
+- [x] Close the baseline batch with scoped validation and independent review; retain the broader-run timeout
+  limitation and keep machine-local MCP configuration separate. Full-workspace/release acceptance is not claimed.
+
+### Next three execution batches
+
+#### Batch 1 / P0: navigate static data and descriptors without external tools
+
+Question: starting from a named processing block, which record identifies it and which functions does it reference?
+
+- [x] Reproduce the current manual descriptor-table traversal and record the external-tool handoffs and
+  unresolved links. Choose one already-located block and a second block as a transfer check.
+  Repeated two related block traversals with MCP data inspection/decompilation; the table/string inspection
+  handoffs to external tools are no longer required. This is not the second-vendor transfer gate.
+- [x] Add bounded read-only mapped-data inspection to the shared API, CLI and MCP. Reuse existing image
+  identity/address/mapping logic; report image addresses separately from file offsets, and preserve gaps,
+  unavailable backing and declared zero-fill rather than manufacturing bytes.
+- [x] Expose bounded pointer-table inspection with explicit pointer width/data byte order, raw values and
+  available relocation/fixup evidence. Distinguish encoded on-disk words, decoded candidates, declared entries
+  and runtime observations; never call a raw word a resolved pointer solely because it resembles an address.
+  `inspect_data` preserves import library identity, partial-slot refusals and corroborated Thumb address adjustment;
+  only retained Mach-O chained rebases are decoded, not arbitrary relocation families.
+- [x] Connect inspected entries to existing strings, code locations and references where evidence supports it.
+  Unresolved or conflicting entries remain visible; no automatic signatures, renames or annotations.
+- [x] Verify the encountered layout on a small owned optimized/stripped fixture, including malformed backing
+  and pointer/relocation cases, then repeat both real-block traversals entirely through rampage MCP.
+  Owned ARM64/x86-64 Mach-O descriptor fixtures, encoded/partial-slot checks and a native ELF TLS-overlap
+  regression passed. Cold metadata opening skips optional language recovery and Project naming indexes;
+  independent review findings were corrected and re-reviewed. Publication state is tracked in git history;
+  these results do not constitute full-workspace or release acceptance.
+
+Done: name/ID -> descriptor -> initialization, update and processing candidates can be followed in MCP with
+source addresses, evidence and unresolved fields. No Python/otool adapter is needed for the two selected cases.
+This is descriptor navigation, not proof that a live render invokes every candidate.
+
+#### Batch 2 / P0: explain one complete named effect
+
+Question: how does one simple user-visible effect turn its parameters and input buffers into output?
+Choose an accessible EQ/filter/delay-sized effect, not an entire amp suite or a protection wrapper.
+
+- [x] Match the selected catalogue ID and parameter metadata to code/data evidence, keeping resource
+  declarations distinct from binary associations and runtime availability.
+  One simple mono/stereo catalogue pair is corroborated by symbolic indices and native model records.
+  A separately registered matching primitive is located; their composition link remains unproven.
+- [ ] Trace the host/core entry, model creation, parameter-update path, processing schedule and sample kernel.
+  Record buffer shapes, state, coefficient updates, bypass and sample-rate/block-size behavior where supported.
+- [ ] Produce an evidence-linked feature map using existing annotations/workflows where sufficient:
+  feature, module/slice identity, address, role, supporting references, confidence and unresolved links.
+  Keep the actual commercial investigation local; repository examples use owned inputs and generic descriptions.
+- [ ] Fix only the highest-impact blockers on that path. Current candidates are an unresolved bounded ARM64
+  parameter-routing jump table and incorrect/missing recovered signatures or mixed integer/float storage types.
+  Diagnose the specific shape before choosing a recovery change; warnings remain visible until actually resolved.
+  - [x] Bounded fatal-wrapper recognition prevents a real primitive-update function from absorbing adjacent code
+    after its assertion wrapper. Re-tested through MCP; throwing imports, conditional/unknown transfers and
+    resumable/system traps are excluded, and wrapper reads consume shared preparation budgets.
+- [ ] For each fix, show the failing owned case, corrected result and repeated real investigation. Check the
+  important arithmetic/control flow against assembly; use source-known fixtures for independent ground truth.
+
+Done: a reader can follow one named effect from controls to sample processing, locate the relevant code in MCP,
+and see exactly which associations remain uncertain. A primitive alone or a plausible decompilation is not enough.
+
+#### Batch 3 / P0: transfer to another vendor before expanding scope
+
+- [ ] Apply the same catalogue -> descriptor -> code workflow to one normally installed second-vendor plugin.
+  Do not add vendor-name conditions to make the case pass.
+- [ ] Find a meaningful processing or parameter/state path, not just exports or a factory forwarding wrapper.
+  If activation/protection blocks investigation, record the boundary and select another accessible candidate;
+  no license changes, protection bypass, installer execution or security-setting changes.
+- [ ] Compare manual handoffs, critical unresolved links and query cost against the starting investigation.
+  Record regressions as well as gains; an explicit refusal is honest reporting, not transfer success.
+
+Done: the improvements support a second independent implementation and produce another useful code map.
+If they do not transfer, fix the demonstrated general limitation before starting another feature family.
+
+### P1: confirm selected links at runtime (after the first static effect map)
+
+- [ ] Add bounded read-only stack-frame enumeration to the existing stop-token-pinned LLDB protocol and
+  API/CLI/MCP; include thread/frame identity and qualified module/image/load addresses with explicit failures.
+- [ ] Replace the custom stack-walk script in the authorized disposable-host experiment with rampage queries.
+- [ ] Observe one selected processing callback and one parameter/state path when safely reachable, then compare
+  them with the static map. Keep registered, reachable and observed-execution claims separate.
+- [ ] Preserve the stop identity and DATA-order evidence requirements; ARM64 order remains unknown without
+  affirmative stop-bound evidence. No automatic launch/attach/resume/stepping/breakpoints/expressions/writes.
+
+Done: an explicitly operator-stopped disposable host can confirm selected links through rampage alone,
+without audio-device output, DAW/project changes or unsupported capture claims. This is not full flow coverage.
+
+### Parallel track: efficient unknown-firmware/binary investigation
+
+Decoder-provider implementation and static investigations can run independently from the plugin queue.
+Shared API/CLI/MCP edits and builds remain coordinated; each parallel worker owns a disjoint file scope.
+
+- [x] Initial read-only inventory found a raw update header, an updater label, plausible Thumb instructions
+  and readable effect/preset names. Standard executable carving found no validated embedded image; this is
+  partial visibility, not a recovered container, proven architecture or evidence of encryption.
+- [x] Corroborate two compressed component extents and decode both in memory with explicit LZSS parameters:
+  exact declared input consumption/output lengths and matching stored additive checksums; no payload files.
+  Traceable initial-vector/startup evidence supports a local Thumb mapping, not a proven physical device map.
+- [x] Reproduce the actual tool gap: unknown-file inspect/triage/strings and explicit-offset disassembly refuse
+  before useful inspection because they require native executable headers. Zero carve candidates missed the
+  proprietary components; it did not establish that the image was empty or encrypted.
+- [ ] First enabling slice: format-independent byte/ASCII-string triage on explicit file ranges, with offsets,
+  bounded previews, fill/occupied-region summaries and range hashes; no native loader or extraction required.
+- [ ] Second enabling slice: explicit raw-code windows with file range, address base, architecture, code mode
+  and byte order supplied as analyst assertions. Use the existing decoder; no guessed executable layout or seeds.
+- [ ] Use that raw Thumb view to corroborate the initial loader's decode loop, callers and component address
+  fields, then follow one decoded startup/control path. Exact chip, field roles and full memory map remain open.
+- [x] Promote the corroborated codec experiment into an explicit internal decoder-provider interface with
+  a built-in LZSS-4K variant, not a public SDK or triage-plugin ABI change. Shared API/CLI/MCP accept an explicit
+  file range, codec, dictionary parameters and supplied output size, returning transient bytes/receipts only.
+  Source-range/output hashes, consumed/trailing counts and decoded-offset previews remain separate from
+  container authentication, source offsets and load addresses. No file publication or execution is supplied.
+  Both real components reproduced the independent decoded hashes, exact input/output lengths and stored
+  byte sums through the CLI; raw-code loading and the complete loader contract are still open.
+- Static only: no updater/installer execution, flashing, emulator execution or security changes. Do not turn
+  this into an automatic unpacker or a generic firmware framework before the first traced loader path.
+
+### Execution rules for speed
+
+- One active slice per independent track; shared-file edits and the central build queue stay serialized.
+  Each batch ends with a usable investigation result and a short next blocker.
+- Use MCP first. Scripts are for genuinely necessary host/process coordination, not routine JSON consumption.
+- Timebox an unproductive investigation to 60-90 minutes; record the exact missing evidence or failing query,
+  then choose the smallest enabling fix or another accessible target rather than expanding the framework.
+- Run changed-area regressions and a real before/after first; expand validation for the touched consumers
+  before publication. Use shared `target/`, two build jobs and the existing low-debug/non-incremental profiles.
+  Review nontrivial diffs independently; retain timeout/failure limits instead of reporting an unearned pass.
+- Keep commercial binaries, payloads, extracted code, captures and secrets out of git. Commit only generic
+  implementation, owned fixtures and generic documentation. No release tags or CI dispatch for ordinary work.
+- Defer general resource-import frameworks, broad C++ reconstruction, new component-plugin infrastructure,
+  raw-firmware support and UI expansion unless the active investigation demonstrates they are the next blocker.
+
 ## IDA/Ghidra gap-closing wave 2 (done this round)
 
 - [x] Signatures extended to the fixed-width sets: 32-bit ARM (A32 and Thumb), MIPS/MIPS64 and PowerPC/PowerPC64,
@@ -1161,7 +1307,8 @@ arbitrary debugger control and multi-module runtime resolution must not be infer
        Original mapping-descriptor identity guards observable source changes; debugger painting avoids mapped reads.
        This is neither atomic source reading nor equal-byte/current-stop/flow/layout proof.
      - [ ] Broader static-format navigation and SDK/platform acceptance.
-     Query observations remain non-atomic and external-plugin runtime acceptance remains blocked on an authorized host.
+      Query observations remain non-atomic. A disposable-host experiment subsequently exercised live read-only
+      queries; broader external-plugin runtime acceptance remains open (see the active investigation queue above).
 
 Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,
 CLI/API/MCP regressions, malformed-input bounds, native/compiled fixtures, exporter tests, the opt-in live

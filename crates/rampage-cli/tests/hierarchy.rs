@@ -33,6 +33,85 @@ const MISSING: &str = "/nonexistent/rampage-hierarchy-input";
 type Route = (&'static [&'static str], &'static [&'static str], &'static [&'static str]);
 
 #[test]
+fn decode_requires_explicit_codec_and_rejects_native_selectors_before_opening() {
+    let base = ["binary", "decode", MISSING, "--offset", "0", "--length", "4", "--expected-output-size", "3"];
+    let missing_codec = run(&base);
+    assert!(!missing_codec.status.success());
+    assert!(String::from_utf8_lossy(&missing_codec.stderr).contains("--codec"));
+    for selector in [&["--arch", "arm"][..], &["--image-offset", "0"][..]] {
+        for depth in 0..=2 {
+            let mut args = Vec::new();
+            if depth == 0 {
+                args.extend_from_slice(selector);
+            }
+            args.push("binary");
+            if depth == 1 {
+                args.extend_from_slice(selector);
+            }
+            args.extend_from_slice(&base[1..]);
+            args.extend_from_slice(&["--codec", "lzss-4k"]);
+            if depth == 2 {
+                args.extend_from_slice(selector);
+            }
+            let result = run(&args);
+            assert!(!result.status.success());
+            assert!(String::from_utf8_lossy(&result.stderr).contains("does not accept --arch"));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn decode_returns_json_and_text_without_extracting_or_loading_the_result() {
+    let directory = FixtureDirectory::new("decode");
+    let file = directory.0.join("input.bin");
+    std::fs::write(&file, [7, b'A', b'B', b'C']).unwrap();
+    let base = [
+        "binary",
+        "decode",
+        file.to_str().unwrap(),
+        "--codec",
+        "lzss-4k",
+        "--offset",
+        "0x0",
+        "--length",
+        "0x4",
+        "--expected-output-size",
+        "0x3",
+    ];
+    let mut args = vec!["--json"];
+    args.extend_from_slice(&base);
+    let result = run(&args);
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let receipt: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(receipt["preview"]["ascii"], "ABC");
+    assert_eq!(receipt["output_size"], 3);
+    assert_eq!(receipt["input_fully_consumed"], true);
+    let result = run(&base);
+    assert!(result.status.success());
+    assert!(String::from_utf8_lossy(&result.stdout).contains("transient decoded bytes"));
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+}
+
+#[test]
+fn native_data_inspection_has_canonical_json_text_and_range_errors() {
+    let path = fixture("hello-x64.elf");
+    let result = run(&["--json", "binary", "inspect-data", &path, "--at", "main", "--size", "16"]);
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["spans"][0]["status"], "stored");
+    assert_eq!(report["words"].as_array().unwrap().len(), 2);
+    let text = run(&["binary", "inspect-data", &path, "--at", "main", "--size", "16"]);
+    assert!(text.status.success());
+    assert!(String::from_utf8_lossy(&text.stdout).contains("not proven pointers"));
+    let refused = run(&["binary", "inspect-data", &path, "--at", "main", "--size", "1025"]);
+    assert!(!refused.status.success());
+    let capture = run(&["binary", "inspect-data", &snapshot(), "--at", "0x1000"]);
+    assert!(!capture.status.success());
+    assert!(String::from_utf8_lossy(&capture.stderr).contains("native image"));
+}
+
+#[test]
 fn archive_inventory_is_canonical_and_rejects_native_selectors_at_every_command_depth_before_io() {
     let binary_help = run(&["binary", "--help"]);
     assert!(binary_help.status.success());

@@ -330,6 +330,70 @@ pub(crate) struct McpArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct InspectDataArgs {
+    pub(crate) file: PathBuf,
+    /// Image address or existing metadata name, not a runtime address or file offset
+    #[arg(long)]
+    pub(crate) at: String,
+    /// Bytes to inspect (1..=1024); reduce on output-budget errors
+    #[arg(long, default_value_t = 128, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=1024))]
+    pub(crate) size: usize,
+    /// Word width in bytes (4 or 8); otherwise the architecture's pointer width
+    #[arg(long)]
+    pub(crate) word_size: Option<u8>,
+}
+
+#[derive(Args)]
+pub(crate) struct DecodeFileArgs {
+    pub(crate) file: PathBuf,
+    /// Explicit decoder selection: lzss-4k (no format guessing)
+    #[arg(long)]
+    pub(crate) codec: rampage_api::ContentCodec,
+    /// Original-file byte offset, in hex or decimal
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) offset: u64,
+    /// Encoded range length, at most 8 MiB
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) length: u64,
+    /// Analyst-supplied decoded stopping size, at most 16 MiB (not a discovered stream boundary)
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) expected_output_size: u64,
+    /// Initial 4 KiB dictionary write position, default 4078 (0xfee)
+    #[arg(long, default_value_t = 4078)]
+    pub(crate) initial_write_offset: u16,
+    /// Dictionary initialization byte
+    #[arg(long, default_value_t = 0)]
+    pub(crate) dictionary_fill: u8,
+    /// Cooperative decode-phase timeout; file I/O and hashes are not forcibly timed out
+    #[arg(long, default_value_t = 3000)]
+    pub(crate) timeout_ms: u64,
+    /// Byte offset in decoded content, not in the original file
+    #[arg(long, default_value = "0", value_parser = rampage_api::parse_file_offset)]
+    pub(crate) preview_offset: u64,
+    /// Preview bytes, at most 1024; zero returns hashes and metadata only
+    #[arg(long, default_value_t = 256)]
+    pub(crate) preview_size: usize,
+}
+
+impl DecodeFileArgs {
+    pub(crate) fn request(&self) -> anyhow::Result<rampage_api::DecodeFileRequest> {
+        Ok(rampage_api::DecodeFileRequest {
+            codec: self.codec,
+            offset: self.offset,
+            length: usize::try_from(self.length).map_err(|_| anyhow::anyhow!("decode length exceeds host width"))?,
+            expected_output_size: usize::try_from(self.expected_output_size)
+                .map_err(|_| anyhow::anyhow!("decoded length exceeds host width"))?,
+            initial_write_offset: self.initial_write_offset,
+            dictionary_fill: self.dictionary_fill,
+            timeout_ms: self.timeout_ms,
+            preview_offset: usize::try_from(self.preview_offset)
+                .map_err(|_| anyhow::anyhow!("preview offset exceeds host width"))?,
+            preview_size: self.preview_size,
+        })
+    }
+}
+
+#[derive(Args)]
 #[command(group(clap::ArgGroup::new("direction").required(true)))]
 pub(crate) struct XrefsArgs {
     pub(crate) file: PathBuf,

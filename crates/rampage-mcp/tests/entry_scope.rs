@@ -100,6 +100,51 @@ async fn decompile_flag_returns_flattened_exact_context_without_replacing_native
     assert!(omitted.get("context").is_none());
     assert_eq!(omitted, explicit);
     assert_eq!(omitted["recovery_status"], exact["recovery_status"]);
+    let explicit_full =
+        body(&call(&client, "decompile", json!({ "path": path, "at": "0x1000", "view": "full" })).await);
+    assert_eq!(explicit_full, omitted);
+    for exact_entry in [false, true] {
+        let compact = body(
+            &call(
+                &client,
+                "decompile",
+                json!({ "path": path, "at": "0x1000", "exact_entry": exact_entry, "view": "code" }),
+            )
+            .await,
+        );
+        let full = if exact_entry { &exact } else { &omitted };
+        for field in ["address", "name", "code", "language_id", "recovery_status"] {
+            assert_eq!(compact[field], full[field], "code view changed {field}");
+        }
+        assert_eq!(compact["diagnostics"], full["structure"]["diagnostics"]);
+        assert_eq!(compact["context"]["scope"], full["context"]["scope"]);
+        assert_eq!(compact["context"]["omissions"], full["context"]["omissions"]);
+        assert!(compact.get("tokens").is_none());
+        assert!(compact.get("structure").is_none());
+        assert!(!compact["omitted_details"].as_array().unwrap().is_empty());
+    }
+    let invalid = call(&client, "decompile", json!({ "path": path, "at": "0x1000", "view": "unknown" })).await;
+    assert_eq!(invalid.is_error, Some(true));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_data_inspection_returns_whole_json_and_rejects_invalid_ranges() {
+    let client = connect().await;
+    let path = fixture("fixtures/bin/hello-x64.elf");
+    let data = body(&call(&client, "inspect_data", json!({ "path": path, "at": "main", "size": 16 })).await);
+    assert_eq!(data["size"], 16);
+    assert_eq!(data["spans"][0]["status"], "stored");
+    assert_eq!(data["words"].as_array().unwrap().len(), 2);
+    assert!(!data["limitations"].as_array().unwrap().is_empty());
+    for arguments in [
+        json!({ "path": path, "at": "main", "size": 0 }),
+        json!({ "path": path, "at": "main", "size": 1025 }),
+        json!({ "path": path, "at": "main", "word_size": 3 }),
+    ] {
+        let refused = call(&client, "inspect_data", arguments).await;
+        assert_eq!(refused.is_error, Some(true));
+    }
     client.cancel().await.unwrap();
 }
 

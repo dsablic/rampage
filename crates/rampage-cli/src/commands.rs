@@ -22,6 +22,143 @@ pub struct Options {
     pub packs: Arc<Packs>,
 }
 
+pub fn decode_range(
+    out: &mut impl Write,
+    path: &Path,
+    request: &rampage_api::DecodeFileRequest,
+    options: &Options,
+) -> Result<()> {
+    let decoded = rampage_api::decode_file_range(path, request)?;
+    let report = &decoded.receipt;
+    if options.json {
+        return write_json(out, report);
+    }
+    writeln!(
+        out,
+        "{}: {} input bytes -> {} transient decoded bytes",
+        report.codec, report.source_length, report.output_size
+    )?;
+    writeln!(
+        out,
+        "consumed {}; trailing {}; completion {} (supplied size, not an end marker)",
+        report.input_consumed, report.trailing_input_bytes, report.completion
+    )?;
+    writeln!(out, "input range SHA-256: {}", report.source_range_sha256)?;
+    writeln!(out, "decoded SHA-256: {}", report.output_sha256)?;
+    writeln!(out, "decoded preview {:#x} +{}: {}", report.preview.offset, report.preview.size, report.preview.hex)?;
+    writeln!(out, "{}", report.preview.ascii)?;
+    for note in &report.limitations {
+        writeln!(out, "note: {note}")?;
+    }
+    Ok(())
+}
+
+pub fn inspect_data(
+    out: &mut impl Write,
+    path: &Path,
+    at: &str,
+    size: usize,
+    word_size: Option<u8>,
+    options: &Options,
+) -> Result<()> {
+    let binary = rampage_loaders::Binary::open_image_metadata(path, options.image, options.arch)?;
+    let report = rampage_api::inspect_native_data(
+        &binary,
+        &rampage_api::DataQuery { address: rampage_api::resolve_data_address(&binary, at)?, size, word_size },
+    )?;
+    if options.json {
+        return write_json(out, &report);
+    }
+    writeln!(
+        out,
+        "{} image bytes at {:#x}; {}-byte words (candidates, not proven pointers)",
+        size, report.address, report.word_size
+    )?;
+    for span in &report.spans {
+        writeln!(
+            out,
+            "{:#x} +{} {} image-offset={:?} file-offset={:?}",
+            span.address,
+            span.size,
+            label(&span.status),
+            span.image_offset,
+            span.file_offset
+        )?;
+        if let Some(hex) = &span.hex {
+            writeln!(out, "  {hex}")?;
+            writeln!(out, "  {}", span.ascii.as_deref().unwrap_or_default())?;
+        }
+    }
+    write_data_words(out, &report.words)?;
+    for note in &report.limitations {
+        writeln!(out, "note: {note}")?;
+    }
+    Ok(())
+}
+
+fn write_data_words(out: &mut impl Write, words: &[rampage_api::DataWord]) -> Result<()> {
+    for word in words {
+        writeln!(
+            out,
+            "{:#x}: {} {}",
+            word.address,
+            word.raw_value.map(|value| format!("{value:#x}")).unwrap_or_else(|| "unavailable".into()),
+            word.interpretation
+        )?;
+        if let Some(target) = &word.candidate {
+            writeln!(
+                out,
+                "  -> {:#x} code-range={} declared-entry={} {} {}",
+                target.address,
+                target.code_range,
+                target.declared_function_start,
+                target.labels.join(", ").escape_debug(),
+                target.ascii_preview.as_deref().unwrap_or_default()
+            )?;
+        }
+        if let Some(import) = &word.import {
+            writeln!(
+                out,
+                "  import: {} ({})",
+                import.name.escape_debug(),
+                import.library.as_deref().unwrap_or("unknown library").escape_debug()
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod data_text_tests {
+    #[test]
+    fn metadata_controls_cannot_forge_rows_or_reach_the_terminal() {
+        let injected = "line\nforged\r\u{1b}[2J";
+        let word = rampage_api::DataWord {
+            address: 0x1000,
+            raw_value: Some(0x2000),
+            interpretation: "raw_word_candidate",
+            import: Some(rampage_api::DataImport { name: injected.into(), library: Some(injected.into()) }),
+            candidate: Some(rampage_api::DataTarget {
+                address: 0x2000,
+                evidence: "raw_word_candidate",
+                address_adjustment: None,
+                permissions: rampage_loaders::Perms::default(),
+                code_range: true,
+                declared_function_start: false,
+                labels: vec![injected.into()],
+                ascii_preview: None,
+                ascii_terminated: false,
+            }),
+        };
+        let mut output = Vec::new();
+        super::write_data_words(&mut output, &[word]).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(!text.contains('\r') && !text.contains('\u{1b}'));
+        assert_eq!(text.lines().count(), 3);
+        assert!(text.contains("line\\nforged\\r\\u{1b}[2J"), "{text}");
+    }
+}
+
 pub fn audit(
     out: &mut impl Write,
     path: &Path,

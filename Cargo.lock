@@ -4555,6 +4555,7 @@ dependencies = [
  "rampage-arch",
  "rampage-capabilities",
  "rampage-constants",
+ "rampage-decode",
  "rampage-decompiler",
  "rampage-detect",
  "rampage-loaders",
@@ -4624,6 +4625,10 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "rampage-decode"
+version = "0.1.0"
 
 [[package]]
 name = "rampage-decompiler"

@@ -15,6 +15,7 @@ rampage-agent = { path = "crates/rampage-agent" }
 rampage-api = { path = "crates/rampage-api" }
 rampage-mcp = { path = "crates/rampage-mcp" }
 rampage-decompiler = { path = "crates/rampage-decompiler" }
+rampage-decode = { path = "crates/rampage-decode" }
 rampage-signatures = { path = "crates/rampage-signatures" }
 rampage-capabilities = { path = "crates/rampage-capabilities" }
 rampage-detect = { path = "crates/rampage-detect" }

@@ -241,6 +241,74 @@ struct QueryDebuggerArgs {
 pub fn file_tools() -> Vec<FileTool> {
     vec![
         FileTool {
+            group: Group::Core,
+            name: "decode_file_range",
+            description: "Decode an explicit regular-file range with a named built-in decoder, without requiring \
+                an executable header. First provider: lzss-4k, LSB-first flags (1=literal), 12-bit references, \
+                lengths nibble+3; dictionary start/fill are explicit parameters. Expected output size is supplied, \
+                not discovered: no end marker, auto-detection, recursion, extraction, file publication or execution. \
+                Return range/output hashes, consumed/trailing counts and a bounded decoded-offset preview. \
+                Limits: 8 MiB input, 16 MiB output, 128:1 against selected input, cooperative decode deadline. \
+                File I/O/hash phases are not forcibly timed out. Unix regular-file checks only. \
+                Other native-image selectors are rejected; decoded offsets are not source offsets or load addresses.",
+            input_schema: schema::<DecodeFileArgs>(),
+            handler: |_, input| {
+                if input.to_string().len() > 16_384 {
+                    return Err("decode arguments exceed the input budget".into());
+                }
+                let args: DecodeFileArgs = arguments(input)?;
+                let request = crate::DecodeFileRequest {
+                    codec: args.codec,
+                    offset: args.offset.0,
+                    length: usize::try_from(args.length.0).map_err(|_| "decode length exceeds host width")?,
+                    expected_output_size: usize::try_from(args.expected_output_size.0)
+                        .map_err(|_| "decoded length exceeds host width")?,
+                    initial_write_offset: args.initial_write_offset.unwrap_or(4078),
+                    dictionary_fill: args.dictionary_fill.unwrap_or(0),
+                    timeout_ms: args.timeout_ms.unwrap_or(3000),
+                    preview_offset: usize::try_from(args.preview_offset.unwrap_or(crate::FileOffset(0)).0)
+                        .map_err(|_| "preview offset exceeds host width")?,
+                    preview_size: args.preview_size.unwrap_or(256),
+                };
+                let decoded = crate::decode_file_range(&args.path, &request).map_err(|error| error_chain(&error))?;
+                serde_json::to_value(decoded.receipt).map_err(|error| error.to_string())
+            },
+        },
+        FileTool {
+            group: Group::Core,
+            name: "inspect_data",
+            description: "Inspect 1..=1024 native-image bytes and 4/8-byte words without discovery, naming scans or \
+                sidecars. Image VAs, selected-image and outer-file offsets are distinct. Gaps, zero-fill, unreadable \
+                and unavailable bytes stay explicit. Raw words remain candidates; retained Mach-O chained rebases \
+                and import identities are separate. Partial encoded-pointer words are not followed. Metadata links \
+                and bounded ASCII previews are not proven functions, layouts or execution. Other relocations are \
+                not applied. Whole JSON or explicit refusal; reduce size on output-budget errors. No captures.",
+            input_schema: schema::<InspectDataArgs>(),
+            handler: |_, input| {
+                if input.to_string().len() > 16_384 {
+                    return Err("data inspection arguments exceed the input budget".into());
+                }
+                let args: InspectDataArgs = arguments(input)?;
+                let arch = args.arch.map(|arch| arch.parse::<rampage_arch::Arch>()).transpose()?;
+                let image = match (args.image_offset, args.image_length) {
+                    (Some(offset), length) => {
+                        Some(rampage_loaders::ImageAt::new(offset.0, length.map(|length| length.0)))
+                    }
+                    (None, Some(_)) => return Err("image_length requires image_offset".into()),
+                    (None, None) => None,
+                };
+                let binary = rampage_loaders::Binary::open_image_metadata(&args.path, image, arch)
+                    .map_err(|error| error_chain(&ApiError::Load { path: args.path, source: error }))?;
+                let address = crate::resolve_data_address(&binary, &args.at).map_err(|error| error_chain(&error))?;
+                let report = crate::inspect_native_data(
+                    &binary,
+                    &crate::DataQuery { address, size: args.size.unwrap_or(128), word_size: args.word_size },
+                )
+                .map_err(|error| error_chain(&error))?;
+                serde_json::to_value(report).map_err(|error| error.to_string())
+            },
+        },
+        FileTool {
             group: Group::Carve,
             name: "archive_inventory",
             description: "Inventory central-directory metadata in an explicit standalone single-disk ZIP32 file, \
@@ -377,6 +445,63 @@ struct DecompileToolArgs {
     /// Assert this exact entry and use bounded local context, without whole-program discovery.
     #[serde(default)]
     exact_entry: bool,
+    /// Full includes tokens and structured analysis. Code omits those details but keeps native diagnostics,
+    /// recovery status and exact-entry context; the C text is never truncated.
+    #[serde(default)]
+    view: DecompileView,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct InspectDataArgs {
+    /// Explicit native-image file; no annotation sidecar or dependency is opened.
+    path: std::path::PathBuf,
+    /// Architecture slice of a universal Mach-O image.
+    arch: Option<String>,
+    /// Embedded image's file offset; a universal image uses its fat-header offset.
+    image_offset: Option<crate::FileOffset>,
+    /// With image_offset, the embedded image's length in bytes.
+    image_length: Option<crate::FileOffset>,
+    /// Image address or existing name, not a runtime address or file offset.
+    at: String,
+    /// Bytes to inspect (default 128, 1..=1024). Output budgets may require a smaller range.
+    #[schemars(range(min = 1, max = 1024))]
+    size: Option<usize>,
+    /// Word width in bytes, 4 or 8; omitted uses the image architecture's pointer width.
+    word_size: Option<u8>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DecodeFileArgs {
+    /// Explicit regular source file. No executable header, sidecar or dependency is opened.
+    path: std::path::PathBuf,
+    /// Required decoder selection; no codec guessing.
+    codec: crate::ContentCodec,
+    /// Byte offset in the original file, not a native-image or decoded address.
+    offset: crate::FileOffset,
+    /// Encoded range length, 1..=8388608 bytes.
+    length: crate::FileOffset,
+    /// Analyst-supplied stopping size, 1..=16777216 bytes; does not prove a stream boundary.
+    expected_output_size: crate::FileOffset,
+    /// Initial dictionary write position 0..4095; default 4078 (0xfee).
+    initial_write_offset: Option<u16>,
+    /// Dictionary initialization byte; default zero.
+    dictionary_fill: Option<u8>,
+    /// Cooperative decoder-phase timeout, default 3000 ms, at most 10000; excludes I/O/hash phases.
+    timeout_ms: Option<u64>,
+    /// Preview byte offset within decoded output; default zero.
+    preview_offset: Option<crate::FileOffset>,
+    /// Preview bytes, 0..1024; default 256. Zero requests a hash/metadata-only receipt.
+    preview_size: Option<usize>,
+}
+
+#[derive(Default, serde::Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum DecompileView {
+    #[default]
+    Full,
+    Code,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -402,10 +527,30 @@ fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, A
         serde_json::to_value(project.decompile(address)?)
     };
     let value = value.map_err(|error| ApiError::Invalid(format!("decompilation serialization: {error}")))?;
+    decompilation_view(value, args.view)
+}
+
+fn decompilation_view(mut value: Value, view: DecompileView) -> Result<Value, ApiError> {
+    if matches!(view, DecompileView::Code) {
+        let object = value.as_object_mut().ok_or_else(|| ApiError::Invalid("decompilation is not an object".into()))?;
+        object.remove("tokens");
+        let structure = object.remove("structure").ok_or_else(|| ApiError::Invalid("missing structure".into()))?;
+        object.insert("diagnostics".into(), structure["diagnostics"].clone());
+        object.insert("omitted_details".into(), serde_json::json!(["tokens", "structure (except diagnostics)"]));
+    }
     if value.to_string().len() > MAX_RESULT_CHARS {
         return Err(ApiError::Invalid(
-            "decompilation result exceeds the tool JSON byte budget; use the CLI or API for the complete result"
-                .to_owned(),
+            match view {
+                DecompileView::Full => {
+                    "decompilation result exceeds the tool JSON byte budget; retry with view=code to omit tokens and \
+                     structured details while retaining native diagnostics and exact-entry context"
+                }
+                DecompileView::Code => {
+                    "decompilation code view exceeds the tool JSON byte budget; \
+                     use the CLI or API for the complete result"
+                }
+            }
+            .to_owned(),
         ));
     }
     Ok(value)
@@ -1297,8 +1442,9 @@ pub fn tools() -> Vec<Tool> {
             "Decompile C with embedded Ghidra and retain native recovery diagnostics. Default behavior uses the \
              containing function and whole-program context. exact_entry=true treats at as an analyst-asserted \
              exact entry with bounded local context and the full mapped image (little-endian x86/x64/AArch64). \
-             Entry metadata and successful decoding are not boundary or completeness proof; exact output includes \
-             context counts, omissions and preparation timings. No silent whole-program fallback.",
+              Entry metadata and successful decoding are not boundary or completeness proof; exact output includes \
+              context counts, omissions and preparation timings. No silent whole-program fallback. view=code omits \
+              tokens and structured details but retains complete C text, diagnostics and exact-entry context.",
             decompile_tool,
         ),
         tool(
@@ -1844,6 +1990,34 @@ pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_view_fits_large_details_without_truncating_code_or_hiding_recovery_evidence() {
+        let full = serde_json::json!({
+            "code": "return 7;",
+            "tokens": [{ "text": "x".repeat(MAX_RESULT_CHARS) }],
+            "structure": { "diagnostics": { "bad_data": true, "warnings": ["uncertain boundary"] } },
+            "recovery_status": "incomplete",
+            "context": { "omissions": ["bounded local context"] },
+        });
+        let error = decompilation_view(full.clone(), DecompileView::Full).unwrap_err();
+        assert!(error.to_string().contains("view=code"));
+        let compact = decompilation_view(full.clone(), DecompileView::Code).unwrap();
+        assert_eq!(compact["code"], full["code"]);
+        assert_eq!(compact["context"], full["context"]);
+        assert_eq!(compact["recovery_status"], full["recovery_status"]);
+        assert_eq!(compact["diagnostics"], full["structure"]["diagnostics"]);
+        assert!(compact.to_string().len() <= MAX_RESULT_CHARS);
+        for field in ["code", "structure", "context"] {
+            let mut oversized = full.clone();
+            oversized[field] = Value::String("\"".repeat(MAX_RESULT_CHARS));
+            if field == "structure" {
+                oversized[field] = serde_json::json!({ "diagnostics": "\"".repeat(MAX_RESULT_CHARS) });
+            }
+            let error = decompilation_view(oversized, DecompileView::Code).unwrap_err();
+            assert!(error.to_string().contains("byte budget"));
+        }
+    }
 
     #[test]
     fn every_tool_name_belongs_to_exactly_one_listed_group() {

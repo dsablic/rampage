@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use clap::{Arg, ArgMatches, Subcommand};
 
 use crate::args::ArchiveInventoryArgs;
+use crate::args::DecodeFileArgs;
 use crate::args::ImportDebugLayoutsArgs;
+use crate::args::InspectDataArgs;
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
@@ -73,6 +75,8 @@ impl RootCommand {
     pub(crate) fn into_action(self) -> Result<Command, &'static str> {
         Ok(match self {
             Self::Binary(BinaryCommand::Inspect(args)) => Command::Info(args),
+            Self::Binary(BinaryCommand::InspectData(args)) => Command::InspectData(args),
+            Self::Binary(BinaryCommand::Decode(args)) => Command::DecodeFile(args),
             Self::Binary(BinaryCommand::Triage(args)) => Command::Triage(args),
             Self::Binary(BinaryCommand::Analyze(args)) => Command::Analyze(args),
             Self::Binary(BinaryCommand::Detect(args)) => Command::Detect(args),
@@ -137,6 +141,10 @@ impl RootCommand {
 pub(crate) enum BinaryCommand {
     /// Show format, architecture, entry point, segments and sections
     Inspect(FileArgs),
+    /// Inspect bounded image bytes and pointer candidates without discovery or annotation sidecars
+    InspectData(InspectDataArgs),
+    /// Decode an explicitly selected file range into transient bytes; no extraction or native loading
+    Decode(DecodeFileArgs),
     /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
     Triage(FileArgs),
     /// Run bounded workflows and selected decompilations as one multi-architecture analysis report

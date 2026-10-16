@@ -31,8 +31,9 @@ notifications/tools/list_changed. Without `groups` nothing changes.";
 
 const INSTRUCTIONS_INTRO: &str = "\
 rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, \
-RISC-V, SPARC, s390x and m68k. Every tool takes the binary's file path; the first call that needs analysis runs it \
-once and caches the result, so later calls are fast. Addresses are hex strings like \"0x401000\". Wherever a tool \
+RISC-V, SPARC, s390x and m68k. Native-image tools take the binary's file path and reuse cached project analysis \
+when needed. Standalone file inspectors and decoders use explicit sources without that project cache. \
+Addresses are hex strings like \"0x401000\". Wherever a tool \
 takes an address (except comparison slots/ranges and branch observation windows) you may also pass a symbol, \
 export or import name (an import name finds its stub) or a sub_<hex> name.
 
@@ -60,7 +61,11 @@ check_names pre-flights candidate names): they persist beside the binary and eve
 including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch; when \
 another client's edit blocks undoing a step, discard_undo drops it from the undo history (its edits stay) so earlier \
 steps can be undone; it refuses a step undo could still revert unless force is true, since the user's UI may share \
-that history. Memory snapshots and bundle directories use the same tools.
+that history. Memory snapshots and bundle directories use the same tools. inspect_data provides bounded native \
+bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
+decode_file_range instead accepts an explicit regular-file range and codec without an executable header. \
+Its transient decoded preview uses decoded offsets, not source offsets or load addresses; supplied sizes and \
+successful decoding do not authenticate content or prove stream boundaries.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \

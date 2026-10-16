@@ -148,6 +148,8 @@ impl Binary {
     /// metadata, attaching them as `SymbolKind::Function` symbols. Like [`Binary::recover_go_symbols`] this is
     /// additive: an address that already has a symbol keeps it, so real symbols always win.
     pub fn recover_objc_symbols(&mut self) -> ObjcReport {
+        #[cfg(test)]
+        crate::load::note_optional_recovery_entry();
         let report = parse(self);
         let mut taken: HashSet<u64> = self.symbols.iter().map(|symbol| symbol.address).collect();
         let methods = report.classes.iter().flat_map(|class| &class.methods);

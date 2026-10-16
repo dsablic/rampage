@@ -82,6 +82,7 @@ async fn lists_all_tools_with_instructions() {
         "class_evidence",
         "compare_pointer_observations",
         "compare_runtime_bytes",
+        "decode_file_range",
         "decompile",
         "detect_tools",
         "diff_builds",
@@ -99,6 +100,7 @@ async fn lists_all_tools_with_instructions() {
         "import_debug_layouts",
         "import_debug_signatures",
         "import_pdb_names",
+        "inspect_data",
         "inspect_jump_table",
         "language_metadata",
         "list_annotations",
@@ -140,6 +142,12 @@ fn core_tool_names() -> Vec<String> {
         .iter()
         .filter(|tool| tool.group == Group::Core && !tool.interactive)
         .map(|tool| tool.name.to_owned())
+        .chain(
+            rampage_api::tools::file_tools()
+                .into_iter()
+                .filter(|tool| tool.group == Group::Core)
+                .map(|tool| tool.name.to_owned()),
+        )
         .chain(["enable_tools".to_owned()])
         .collect();
     names.sort();

@@ -140,6 +140,12 @@ enum Command {
     /// Inspect an explicit ARM64 absolute64 or signed-relative32 jump table
     #[command(hide = true)]
     JumpTable(JumpTableArgs),
+    /// Inspect native-image bytes and candidate words
+    #[command(hide = true)]
+    InspectData(args::InspectDataArgs),
+    /// Decode an explicit file range into transient bytes
+    #[command(hide = true)]
+    DecodeFile(args::DecodeFileArgs),
     /// Correlate a runtime snapshot address with an explicit UUID-matched original Mach-O
     #[command(hide = true)]
     Correlate(CorrelateArgs),
@@ -225,10 +231,11 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if matches!(&command, Command::ArchiveInventory(..))
+    if matches!(&command, Command::ArchiveInventory(..) | Command::DecodeFile(..))
         && (cli.arch.is_some() || cli.image_offset.is_some() || cli.image_length.is_some())
     {
-        eprintln!("rampage: binary archive-inventory does not accept --arch, --image-offset or --image-length");
+        let name = if matches!(&command, Command::DecodeFile(..)) { "decode" } else { "archive-inventory" };
+        eprintln!("rampage: binary {name} does not accept --arch, --image-offset or --image-length");
         return ExitCode::FAILURE;
     }
     if matches!(
@@ -342,6 +349,12 @@ fn main() -> ExitCode {
         Command::JumpTable(JumpTableArgs { file, at, count, relative_base }) => {
             commands::jump_table(&mut out, &file, &at, count, relative_base.as_deref(), &options)
         }
+        Command::InspectData(args::InspectDataArgs { file, at, size, word_size }) => {
+            commands::inspect_data(&mut out, &file, &at, size, word_size, &options)
+        }
+        Command::DecodeFile(args) => {
+            args.request().and_then(|request| commands::decode_range(&mut out, &args.file, &request, &options))
+        }
         Command::Correlate(CorrelateArgs { file, original, module, at }) => {
             commands::correlate(&mut out, &file, &original, &module, &at, &options)
         }
@@ -435,6 +448,7 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
         Command::Carve(..) => "carve",
         Command::Inventory(..) => "inventory",
         Command::ArchiveInventory(..) => "binary archive-inventory",
+        Command::DecodeFile(..) => "binary decode",
         Command::Packs { .. } => "packs",
         Command::Mcp(..) => "mcp (pass image_offset to each tool call instead)",
         Command::QueryDebugger(..) => "runtime debugger query (does not open an image)",

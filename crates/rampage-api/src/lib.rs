@@ -8,10 +8,12 @@ mod branch_observation;
 mod capabilities;
 mod carve;
 mod correlation;
+mod data;
 mod debug_import;
 mod debug_layout_import;
 mod debugger;
 mod debugger_capture;
+mod decode_content;
 mod decompile;
 pub mod derived_cache;
 mod detect;
@@ -52,6 +54,10 @@ pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use carve::{CarvingPage, MAX_CARVE_PAGE, carve, carve_page};
 pub use correlation::RuntimeCorrelation;
+pub use data::{
+    DataImport, DataInspection, DataQuery, DataSpan, DataStatus, DataTarget, DataWord, MAX_DATA_BYTES,
+    MAX_DATA_RESULT_BYTES, inspect_native_data, resolve_data_address,
+};
 pub use debug_import::DebugImport;
 pub use debug_layout_import::{
     DebugLayoutFunction, DebugLayoutImport, DebugLayoutPreview, DebugLayoutProjection, DebugLayoutReport,
@@ -66,6 +72,10 @@ pub use debugger_capture::{
     DebuggerCapturePreview, DebuggerCapturePublication, DebuggerCapturePublicationStatus, DebuggerCaptureRequest,
     DebuggerCaptureStagingRetention, DebuggerCaptureSummary, prepare_debugger_capture,
     read_debugger_capture_publication,
+};
+pub use decode_content::{
+    ContentCodec, DecodeFileRequest, DecodePreview, DecodeReceipt, DecodedContent, MAX_DECODE_INPUT_BYTES,
+    MAX_DECODE_OUTPUT_BYTES, MAX_DECODE_PREVIEW_BYTES, decode_file_range,
 };
 pub use decompile::{
     Decompilation, DecompileEntryOrigin, DecompileEntryRequest, DecompilerConfigurationRevision, EntryContextCounts,

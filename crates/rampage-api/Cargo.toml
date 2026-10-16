@@ -9,6 +9,7 @@ rampage-analysis.workspace = true
 rampage-arch.workspace = true
 rampage-loaders.workspace = true
 rampage-decompiler.workspace = true
+rampage-decode.workspace = true
 rampage-signatures.workspace = true
 rampage-capabilities.workspace = true
 rampage-detect.workspace = true

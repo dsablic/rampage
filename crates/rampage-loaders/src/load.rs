@@ -221,6 +221,12 @@ impl Deref for Bytes {
 #[cfg(test)]
 thread_local! {
     static NATIVE_PARSE_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static OPTIONAL_RECOVERY_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn note_optional_recovery_entry() {
+    OPTIONAL_RECOVERY_ENTRIES.with(|count| count.set(count.get() + 1));
 }
 
 #[cfg(test)]
@@ -343,20 +349,31 @@ impl Binary {
     }
 
     fn open_mapped(data: MappedSource, wanted: Option<Arch>) -> Result<Self, LoadError> {
+        Self::open_mapped_recovery(data, wanted, true)
+    }
+
+    fn open_mapped_recovery(data: MappedSource, wanted: Option<Arch>, recover: bool) -> Result<Self, LoadError> {
         #[cfg(test)]
         note_native_parse_entry();
-        if data.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') {
+        if recover && data.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') {
             if data.len() > 2 * crate::snapshot::MAX_SNAPSHOT_BYTES + 1024 * 1024 {
                 return Err(LoadError::Malformed("snapshot JSON exceeds size limit".to_owned()));
             }
             return crate::snapshot::load(data.to_vec(), wanted);
         }
-        let (slices, image) = match object::FileKind::parse(&*data)? {
+        let kind = object::FileKind::parse(&*data).map_err(|error| {
+            if recover {
+                LoadError::Parse(error)
+            } else {
+                LoadError::Unsupported("native image required for metadata inspection".into())
+            }
+        })?;
+        let (slices, image) = match kind {
             object::FileKind::MachOFat32 => select_universal::<FatArch32>(&data, wanted)?,
             object::FileKind::MachOFat64 => select_universal::<FatArch64>(&data, wanted)?,
             _ => (Vec::new(), 0..data.len()),
         };
-        Self::load(data, image, slices, wanted)
+        Self::load_recovery(data, image, slices, wanted, recover)
     }
 
     /// Opens the ELF, PE or Mach-O image embedded at `offset` in the file at `path`, such as one `carve` found.
@@ -377,6 +394,20 @@ impl Binary {
         match image.filter(|image| !image.is_whole_file()) {
             Some(image) => Self::open_at_with(path, image.offset, image.length, wanted),
             None => Self::open_with(path, wanted),
+        }
+    }
+
+    /// Opens native format metadata and mappings without optional Go/Objective-C symbol-recovery scans.
+    /// This still parses native headers/symbols and requires stable backing; it is not a raw-file loader.
+    pub fn open_image_metadata(
+        path: impl AsRef<Path>,
+        image: Option<ImageAt>,
+        wanted: Option<Arch>,
+    ) -> Result<Self, LoadError> {
+        let data = map_executable(path.as_ref())?;
+        match image.filter(|image| !image.is_whole_file()) {
+            Some(image) => Self::open_mapped_at_recovery(data, image.offset, image.length, wanted, false),
+            None => Self::open_mapped_recovery(data, wanted, false),
         }
     }
 
@@ -480,6 +511,16 @@ impl Binary {
         length: Option<u64>,
         wanted: Option<Arch>,
     ) -> Result<Self, LoadError> {
+        Self::open_mapped_at_recovery(data, offset, length, wanted, true)
+    }
+
+    fn open_mapped_at_recovery(
+        data: MappedSource,
+        offset: u64,
+        length: Option<u64>,
+        wanted: Option<Arch>,
+        recover: bool,
+    ) -> Result<Self, LoadError> {
         #[cfg(test)]
         note_native_parse_entry();
         let file_size = data.len() as u64;
@@ -499,7 +540,7 @@ impl Binary {
                 _ => None,
             };
             if let Some((size, slices, image)) = selected {
-                let mut binary = Self::load(data, image, slices, Some(wanted))?;
+                let mut binary = Self::load_recovery(data, image, slices, Some(wanted), recover)?;
                 binary.embedded =
                     Some(Embedded { offset, size: size as u64, file_size, trailing: available - size as u64 });
                 binary.warnings.push(
@@ -539,18 +580,19 @@ impl Binary {
             }
             _ => (Vec::new(), image),
         };
-        let mut binary = Self::load(data, image, slices, wanted)?;
+        let mut binary = Self::load_recovery(data, image, slices, wanted, recover)?;
         binary.embedded = Some(Embedded { offset, size, file_size, trailing: available - size });
         Ok(binary)
     }
 
     /// Loads the ELF, PE or Mach-O image at `image` within `data`; `slices` lists a universal binary's
     /// architectures.
-    fn load(
+    fn load_recovery(
         data: MappedSource,
         image: Range<usize>,
         slices: Vec<Arch>,
         wanted: Option<Arch>,
+        recover: bool,
     ) -> Result<Self, LoadError> {
         #[cfg(test)]
         note_native_parse_entry();
@@ -753,10 +795,12 @@ impl Binary {
         function_starts.dedup();
         binary.function_starts = function_starts;
         // Stripped Go binaries keep their function names only in the pclntab; recover them as symbols.
-        let go = binary.recover_go_symbols();
-        binary.warnings.extend(go.warnings);
-        let objc = binary.recover_objc_symbols();
-        binary.warnings.extend(objc.warnings);
+        if recover {
+            let go = binary.recover_go_symbols();
+            binary.warnings.extend(go.warnings);
+            let objc = binary.recover_objc_symbols();
+            binary.warnings.extend(objc.warnings);
+        }
         Ok(binary)
     }
 
@@ -913,6 +957,8 @@ impl Binary {
     /// contributed; its `GoFunction` entries are the source marker distinguishing recovered names from real
     /// ones. An image with no usable table yields an empty report, never an error.
     pub fn recover_go_symbols(&mut self) -> crate::gopclntab::GoReport {
+        #[cfg(test)]
+        note_optional_recovery_entry();
         let report = self.read_gopclntab();
         if report.functions.is_empty() {
             return report;
@@ -1566,6 +1612,22 @@ fn symbol_kind_of(kind: object::SymbolKind) -> SymbolKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cold_metadata_open_skips_optional_recovery_for_whole_and_selected_images() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-go-x64.elf");
+        let length = std::fs::metadata(&path).unwrap().len();
+        for image in [None, Some(ImageAt::new(0, Some(length)))] {
+            OPTIONAL_RECOVERY_ENTRIES.with(|count| count.set(0));
+            let binary = Binary::open_image_metadata(&path, image, None).unwrap();
+            assert!(binary.go_table.is_none());
+            OPTIONAL_RECOVERY_ENTRIES.with(|count| assert_eq!(count.get(), 0));
+        }
+        OPTIONAL_RECOVERY_ENTRIES.with(|count| count.set(0));
+        let ordinary = Binary::open(&path).unwrap();
+        assert!(ordinary.go_table.is_some());
+        OPTIONAL_RECOVERY_ENTRIES.with(|count| assert_eq!(count.get(), 2));
+    }
 
     #[test]
     fn pclntab_section_names_include_the_relro_spelling() {
