@@ -90,11 +90,17 @@ component fuel, execution deadline and worker memory limits; the flag is not a s
 
 ### Source admission
 
-Fresh CLI loading admits conservative little-endian x86-64 ELF and unmanaged AMD64 PE32+ profiles. Mach-O,
-universal binaries, CLR sources and Go recovery candidates remain refused. PE admission excludes COFF symbol
+Fresh CLI loading admits conservative little-endian x86-64 ELF, unmanaged AMD64 PE32+, and thin x86-64 Mach-O
+executable profiles. Universal binaries, CLR sources and Go recovery candidates remain refused. PE excludes COFF symbol
 tables/long section names, delay imports, resources, security/load-config/bound-import directories, and chained
 unwind. RVA/VA backing, import/export/debug/TLS/relocation records and constructor name expansion are bounded
 before native parsing. Some otherwise valid files are refused; general format support does not imply admission.
+
+Mach-O admission accepts a canonical PIE executable layout with restricted format-6 bind-only fixups, bounded
+regular export trees and backed function starts. Classic dyld streams, chained rebases/addends/MULTI starts,
+signatures, language/debug/EH metadata, ARM64/arm64e, dylibs and bundles remain unsupported. Compact unwind is
+opaque backed data, not recovered unwind evidence. Names, chain visits, export prefixes and potential per-byte
+stub names are charged before native construction; renamed files do not supply identity authority.
 
 The API can prepare an already-loaded, admitted native project, including native PE, without going through
 that fresh-load profile. Managed CLR preparation is still refused. The source is limited to 16 MiB and the
@@ -131,6 +137,13 @@ A prepared value retains the exact project, name revision and pack configuration
 serializable report cache or an API accepting arbitrary caller-supplied tool JSON. Cancellation and task-control
 checkpoints apply to cooperative host work; whole-program discovery itself is monolithic and checked before
 and after, not interrupted internally. The separate cancellation flag reaches the worker supervisor.
+
+Plugin admission has a read-only `admission_status()` state: `Idle`, `Running` or `Quarantined`. After supervision
+starts, only parent-owned proof that no child spawned or that both root reap and owned-group cleanup completed
+permits reopening admission. Missing or uncertain proof quarantines this process, including on unwind; the
+current error keeps its primary classification, and later calls return `plugin_quarantined`. Worker packets and
+optional metrics cannot clear this state. There is no in-process reset: inspect unresolved resources before
+restarting the embedding process. `PluginError::Quarantined` is a new variant for experimental Rust API callers.
 
 The WIT package is `rampage:workflow@0.0.1`, world `triage-plugin`, with exactly one exported interface:
 
@@ -172,8 +185,8 @@ The supplied command receives `RAMPAGE_TRIAGE_COMPONENT`, `RAMPAGE_RUNTIME_PROBE
 runtime-probe guest exercises runtime controls; it is not another migrated user workflow. A native guest oracle
 is not evidence of component execution. These local checks are not a general accuracy or performance guarantee.
 
-The example includes compiled-component parity against the unchanged builtin on normal/stripped ELF and native
-PE at section limits 1 and 25, plus fresh PE loading and a renamed owned DLL. The nested PE fixture wrapper needs
+The example includes compiled-component parity against the unchanged builtin on normal/stripped ELF, native PE
+and normal/stripped thin x86-64 Mach-O at section limits 1 and 25, plus a renamed owned DLL. The PE wrapper needs
 Clang and Rust's LLVM linker; it compiles but never executes target binaries. This does not establish full
 format coverage or close the broader security review.
 

@@ -41,11 +41,16 @@ are refused. Parent-directory permissions are not a security policy, and the che
 filesystem snapshot. Hashing and execution use the returned byte snapshot rather than reopening the path.
 
 Fresh target opening caps the actual opened descriptor at 16 MiB before mmap and admits that same mapping before
-native parsing. Conservative little-endian x86-64 ELF and unmanaged AMD64 PE32+ profiles are supported. PE COFF
-tables/long names, delay imports, resources, security/load-config/bound-import directories and chained unwind
-remain unsupported. Constructor thunk/name work includes both code-marked and execute-only sections, matching
-the real name producer. Other native formats, universal images, CLR and Go recovery remain refused. The API's
-already-loaded-project path has separate admission; it does not retroactively bound initial loading costs.
+native parsing. Conservative little-endian x86-64 ELF, unmanaged AMD64 PE32+ and thin x86-64 Mach-O executable
+profiles are supported. PE COFF tables/long names, delay imports, resources, security/load-config/bound-import
+directories and chained unwind remain unsupported. Constructor thunk/name work includes both code-marked and
+execute-only sections, matching the real name producer.
+
+Mach-O admits canonical PIE layout, restricted bind-only chains, bounded regular exports, symbols and starts.
+It refuses ARM64/arm64e, dylibs/bundles, classic dyld streams, chained rebases, signatures and automatic
+language/debug/EH metadata; compact unwind stays opaque. Constructor stub work is budgeted per potential decoded
+byte. Other formats, universal images, CLR and Go recovery remain refused.
+The API's already-loaded-project path has separate admission; it does not retroactively bound initial loading costs.
 
 Source descriptor checks, content hashing and retained name/configuration revisions reject observable changes
 during preparation and around execution. They cannot make memory-mapped reads atomic with concurrent writes
@@ -162,9 +167,10 @@ general component compatibility promise or completed security review of the broa
 
 ## Local acceptance scope
 
-On the ARM64 macOS host, the compiled Rust guest matched the unchanged builtin report body for normal/stripped
-owned network-client ELF and owned MinGW PE fixtures, each at section limits 1 and 25. The PE cases used the
-already-loaded API path, not the restricted fresh CLI loader. Target binaries were never executed.
+On the ARM64 macOS host, ten compiled cases matched the unchanged builtin report body: normal/stripped owned
+network-client ELF, owned MinGW PE and normal/stripped thin x86-64 Mach-O, each at section limits 1 and 25.
+These cases use fresh checked source admission. Native oracles also check multi-page chained slots, decoy
+exclusion, exports, backing, starts and constructor names. Target binaries were never executed.
 
 Separate compiled probes exercised forbidden imports, a wrong interface version, malformed and oversized output,
 fuel exhaustion in both exports, execution epochs, denied memory growth, pre-cancellation and sequential recovery.
@@ -176,8 +182,20 @@ cancelled, and asserted successful reaping/cleanup plus real-permit retention th
 Observer-panic recovery and cancellation from that final callback were also exercised. The activation may be
 canonical allocation rather than the probe's source-language loop. This opt-in v2 diagnostic never resumes;
 ordinary execution remains v1. Parked/observer time is governed by the outer operation budget, not a 500 ms
-hard-return promise; trusted parent callbacks cannot be forcibly interrupted. Failed cleanup does not introduce
-an admission-quarantine policy.
+hard-return promise; trusted parent callbacks cannot be forcibly interrupted. This original checkpoint gate
+established healthy cleanup, not the separate quarantine transition below.
+
+Mandatory parent-owned cleanup proof now controls reopening independently of diagnostic collection. A request
+without a spawned child, or with confirmed direct-root reap and owned-group cleanup, releases admission when
+its real permit drops. Uncertain or missing proof quarantines future plugin requests in that process, including
+unwind paths. Safe cleanup during observer panic still permits ordinary recovery. The proof callback runs after
+guard cleanup and scoped I/O joins; it must not panic. It adds no PID or signaling authority, default RSS sampling,
+resume operation, or application-protocol field. An application error cannot assign this parent-owned state.
+
+Quarantine transitions have local production-state-machine tests; supervisor fault injection separately checks
+uncertain proof with retained cleanup authority. This is composed coverage, not a genuine live-worker ownership
+loss drill. That drill is deliberately unearned: losing authority and then guessing a PID for test cleanup would
+violate the boundary. There is no in-process reset; inspect unresolved resources before restarting.
 
 This does not establish cancellation inside compilation, uninstrumented cancellation latency, every native
 producer's memory bounds, or Linux runtime acceptance. The Linux CI gate is configured but has not been

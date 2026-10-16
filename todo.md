@@ -400,6 +400,34 @@ unsandboxed native code. Three layers instead, in this order:
   804 Python tests and 797 subtests passed, six live opt-ins skipped. Owned scratch is removed; publication
   remains private main only, without tags or CI dispatch.
 
+### Mandatory cleanup admission and thin Mach-O follow-up
+
+- [x] Parent-owned mandatory byte-cleanup proof is independent of optional diagnostics/RSS. No spawn, confirmed
+  owned-group cleanup plus direct-root reap, and uncertainty are distinct. Guarded callbacks run exactly once
+  after cleanup/scoped I/O joins, including unwind. Missing/uncertain proof quarantines future plugin requests;
+  the primary failure remains intact, packets cannot clear quarantine, and there is no in-process reset.
+- [x] Composed proof tests: 105 supervisor and 27 plugin cases passed, including safely reaped uncertainty
+  injection, real permit transitions, missing/duplicate proof and unwind. Healthy real-worker cancellation,
+  observer panic and ordinary recovery still passed. A genuine live-worker ownership-loss drill is unearned:
+  it must not gain guessed-PID cleanup authority merely for acceptance.
+- [x] Conservative fresh thin x86-64 PIE Mach-O admission: canonical mapped layout, format-6 bind-only chains,
+  regular non-replayed export trees, symbols/starts and per-stub-byte constructor-name budgets. ARM64/arm64e,
+  universal/embedded inputs, dylibs/bundles, classic dyld streams, chained rebases/addends/MULTI starts, signatures
+  and language/debug/EH recovery remain refused. Compact unwind remains backed opaque data, not recovery.
+- [x] Native consumer oracles cover unchanged full/stripped hello files, multi-page/skipped-page/nonzero-start
+  chains, decoys, reserved bits, exact slots/imports/exports/starts/backing and constructor names. A test-only
+  observation at real native-open/object-parse entry verifies raw rejection before parsing, without a public hook.
+  Focused source preparation: 55 cases; checked loader: four cases; explicit API/CLI gates: 17 and four passed.
+- [x] Ten compiled report cases—normal/stripped ELF, PE, normal/stripped thin Mach-O at limits 1/25—matched the
+  unchanged builtin body after fresh admission. All component/resource/checkpoint gates and Clippy passed.
+- [x] Combined-tree ordinary suite: 2,404 passes across 181 executable/doctest groups in 240.9 seconds after
+  compilation was cached, with 66 opt-ins skipped; all 50 evaluation tests passed separately. The first pass
+  capped after an 88-second rebuild and 155 completed groups; it was not a suite pass or a startup-stall fix.
+  Clippy, format, healthy real-worker recovery, component/resource and explicit source/CLI gates passed.
+- [x] Protected 1,017-file candidate-source audit, scanner-bypass regressions and committed-tree/history scans;
+  804 Python tests and 797 subtests passed, six live opt-ins skipped. Owned scratch is removed; private main
+  publication only, without release tags or CI dispatch.
+
 
 ## Decompiler: embedded Ghidra (the decompilation path)
 
