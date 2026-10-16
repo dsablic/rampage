@@ -3,8 +3,8 @@
 //! Preparation is cooperative native work, outside component fuel and the worker deadline. Admission is
 //! complete-or-reject relative to the existing primitives, not a claim that the loader recovered every fact.
 //! Original-descriptor checks detect observable changes but cannot make mapped reads atomic with file writes.
-//! Native managed metadata preparation is not admitted. Fresh opening additionally uses a conservative ELF64
-//! preload profile; the larger existing native-loader producer surface is not a 1 MiB allocation contract.
+//! Native managed metadata preparation is not admitted. Fresh opening uses conservative ELF64 and AMD64 PE32+
+//! preload profiles; the larger native-loader producer surface is not a 1 MiB allocation contract.
 
 mod bounds;
 mod component;

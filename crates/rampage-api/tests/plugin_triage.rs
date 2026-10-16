@@ -11,6 +11,10 @@ fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/net-client-x64.elf")
 }
 
+fn pe_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.exe")
+}
+
 fn with_control<T>(work: impl FnOnce(&ProjectWorkspaceTaskControl<'_>) -> T) -> T {
     let cancellation = AtomicBool::new(false);
     let mut observer = |_| {};
@@ -77,6 +81,10 @@ struct SourceCopy(PathBuf);
 
 impl SourceCopy {
     fn new() -> Self {
+        Self::from_fixture(&fixture())
+    }
+
+    fn from_fixture(fixture: &std::path::Path) -> Self {
         use std::io::Write;
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
@@ -86,7 +94,7 @@ impl SourceCopy {
         ));
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
         let source = Self(path);
-        file.write_all(&std::fs::read(fixture()).unwrap()).unwrap();
+        file.write_all(&std::fs::read(fixture).unwrap()).unwrap();
         source
     }
 
@@ -113,6 +121,91 @@ fn checked_plugin_open_is_fresh_and_admits_a_bounded_unmanaged_elf() {
     assert!(!Arc::ptr_eq(&legacy, &checked));
     assert_eq!(checked.analysis_cache_status(), Default::default());
     checked.binary.validate_backing_source().unwrap();
+}
+
+#[test]
+fn checked_plugin_open_admits_fresh_unmanaged_pe_and_retains_names_and_source_identity() {
+    let source = SourceCopy::from_fixture(&pe_fixture());
+    let replacement = SourceCopy::from_fixture(&pe_fixture());
+    let session = Session::default();
+    let legacy = session.open(&source.0, None).unwrap();
+    let checked = rampage_api::open_plugin_triage_source(&session, &source.0, None, None).unwrap();
+    assert!(!Arc::ptr_eq(&legacy, &checked));
+    assert_eq!(checked.binary.format, rampage_loaders::Format::Pe);
+    assert_eq!(checked.analysis_cache_status(), Default::default());
+    assert!(checked.binary.imports.iter().any(|import| import.name == "puts"));
+    assert!(checked.binary.exports.iter().any(|export| export.name == "add"));
+    assert!(!checked.binary.function_starts.is_empty());
+    checked.binary.validate_backing_source().unwrap();
+    with_control(|control| {
+        let prepared =
+            prepare_plugin_triage_with_analysis(Arc::clone(&checked), ReportLimits::default(), control).unwrap();
+        prepared.revalidate(control).unwrap();
+        checked.rename(checked.binary.entry.unwrap(), Some("checked_pe_entry")).unwrap();
+        assert!(prepared.revalidate(control).is_err());
+        let prepared = prepare_plugin_triage(Arc::clone(&checked), ReportLimits::default(), control).unwrap();
+        std::fs::rename(&replacement.0, &source.0).unwrap();
+        assert!(prepared.revalidate(control).is_err());
+    });
+}
+
+#[test]
+fn fresh_pe_open_uses_checked_sidecars_and_refuses_embedded_selection() {
+    let source = SourceCopy::from_fixture(&pe_fixture());
+    let session = Session::default();
+    rampage_api::open_plugin_triage_source(&session, &source.0, None, None).unwrap();
+    std::fs::write(source.sidecar(), b"not-json\n").unwrap();
+    let error = rampage_api::open_plugin_triage_source(&session, &source.0, None, None).err().unwrap();
+    assert!(error.to_string().contains("checked annotation"));
+    std::fs::remove_file(source.sidecar()).unwrap();
+    let image = rampage_loaders::ImageAt::new(0, Some(std::fs::metadata(&source.0).unwrap().len()));
+    let error = rampage_api::open_plugin_triage_source(&session, &source.0, None, Some(image)).err().unwrap();
+    assert!(error.to_string().contains("embedded PE"));
+}
+
+#[test]
+fn fresh_pe_open_rejects_hostile_native_metadata_at_the_raw_admission_gate() {
+    let original = std::fs::read(pe_fixture()).unwrap();
+    let nt = u32::from_le_bytes(original[0x3c..0x40].try_into().unwrap()) as usize;
+    for (offset, value, reason) in [
+        (nt + 12, u32::MAX.to_le_bytes().to_vec(), "COFF symbol/string"),
+        (nt + 6, u16::MAX.to_le_bytes().to_vec(), "section count"),
+        (nt + 24 + 112 + 13 * 8, 0x29000u32.to_le_bytes().to_vec(), "half-present directory"),
+    ] {
+        let source = SourceCopy::from_fixture(&pe_fixture());
+        let mut bytes = original.clone();
+        bytes[offset..offset + value.len()].copy_from_slice(&value);
+        std::fs::write(&source.0, bytes).unwrap();
+        let error = rampage_api::open_plugin_triage_source(&Session::default(), &source.0, None, None).err().unwrap();
+        assert!(error.to_string().contains(reason), "{error}");
+    }
+}
+
+#[test]
+#[ignore = "requires the central owned COFF fixture recipe; binaries are never executed"]
+fn checked_plugin_open_admits_the_owned_provider_independently_of_its_renamed_path() {
+    let root = PathBuf::from(std::env::var_os("RAMPAGE_MODULE_LINKAGE_FIXTURES").expect("owned COFF fixtures"));
+    let session = Session::default();
+    for name in ["consumer.exe", "renamed-provider.bin"] {
+        let project = rampage_api::open_plugin_triage_source(&session, &root.join(name), None, None).unwrap();
+        assert_eq!(project.binary.format, rampage_loaders::Format::Pe);
+        assert_eq!(project.analysis_cache_status(), Default::default());
+        if name == "renamed-provider.bin" {
+            assert!(project.binary.exports.iter().any(|export| export.name == "add"));
+        } else {
+            assert!(
+                project
+                    .binary
+                    .imports
+                    .iter()
+                    .any(|import| { import.name == "add" && import.library.as_deref() == Some("owned-provider.dll") })
+            );
+        }
+        with_control(|control| {
+            let prepared = prepare_plugin_triage_with_analysis(project, ReportLimits::default(), control).unwrap();
+            prepared.revalidate(control).unwrap();
+        });
+    }
 }
 
 #[test]
@@ -212,7 +305,7 @@ fn compiled_component_matches_unchanged_builtin_body_on_admitted_fixtures() {
     ];
     for path in paths {
         for per_section in [1, 25] {
-            let project = Session::default().open(&path, None).unwrap();
+            let project = rampage_api::open_plugin_triage_source(&Session::default(), &path, None, None).unwrap();
             let limits = ReportLimits::new(Some(per_section));
             with_control(|control| {
                 let prepared = prepare_plugin_triage_with_analysis(Arc::clone(&project), limits, control).unwrap();

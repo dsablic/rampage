@@ -8,8 +8,8 @@ use crate::{ApiError, Project, Session};
 
 /// Fresh checked opening for explicitly selected plugin-triage sources, not the legacy Session cache path.
 /// Original source identity is retained, and the actual parser mapping is capped at 16 MiB before mmap and
-/// admitted before native producers. Raw preload admission currently accepts
-/// only the conservative little-endian x86-64 ELF profile; CLR, Go recovery candidates and other native loader
+/// admitted before native producers. Raw preload admission accepts conservative little-endian x86-64 ELF and
+/// whole-file unmanaged PE32+ profiles (see preload/pe.rs); CLR, Go recovery candidates and other native loader
 /// profiles are refused before loading. This is separate from the 1 MiB final fact payload admission limit.
 /// Native parsing/checked sidecar ingestion remain outside component limits, not an atomic source snapshot.
 /// Inputs must remain quiescent during mapped admission and parsing: metadata revalidation detects observable
@@ -222,8 +222,8 @@ mod supported {
         }
 
         #[test]
-        fn swapped_pe_and_go_profiles_are_rejected_on_the_actual_parser_mapping() {
-            for replacement_name in ["hello-x64.exe", "hello-go-x64.elf"] {
+        fn swapped_clr_and_go_profiles_are_rejected_on_the_actual_parser_mapping() {
+            for replacement_name in ["Microsoft.Bcl.HashCode.dll", "hello-go-x64.elf"] {
                 let files = SwapFiles::new();
                 let mut original = HeldSource::open(&files.source).unwrap();
                 preload::admit_before_load(&original.snapshot().unwrap(), None).unwrap();
@@ -243,6 +243,27 @@ mod supported {
                 assert_eq!(result.err().unwrap().to_string(), expected);
                 assert!(original.check().is_err());
             }
+        }
+
+        #[test]
+        fn admitted_pe_replacement_still_cannot_upgrade_the_original_descriptor() {
+            let files = SwapFiles::new();
+            let mut original = HeldSource::open(&files.source).unwrap();
+            preload::admit_before_load(&original.snapshot().unwrap(), None).unwrap();
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.exe");
+            let replacement = std::fs::read(path).unwrap();
+            preload::admit_before_load(&replacement, None).unwrap();
+            files.replace(&replacement);
+            let entered = Cell::new(false);
+            let mut admit = |actual: &[u8]| {
+                entered.set(true);
+                assert_eq!(actual, replacement.as_slice());
+                preload::admit_before_load(actual, None)?;
+                original.check()
+            };
+            let result = Session::default().open_plugin_triage_at(&files.source, None, None, &mut admit);
+            assert!(entered.get());
+            assert!(result.err().unwrap().to_string().contains("modified or replaced"));
         }
 
         #[test]

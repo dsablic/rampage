@@ -3,6 +3,8 @@ use rampage_loaders::{Details, ImageAt};
 use super::{MAX_PLUGIN_TRIAGE_SOURCE_BYTES, invalid};
 use crate::{ApiError, Project};
 
+mod pe;
+
 const MAX_PRELOAD_NAME_WORK: usize = 64 * 1024 * 1024;
 
 pub(super) fn reject_loaded_managed(project: &Project) -> Result<(), ApiError> {
@@ -63,9 +65,15 @@ pub(super) fn admit_before_load(bytes: &[u8], image: Option<ImageAt>) -> Result<
     reject_clr(bytes)?;
     // Other native loaders have not yet acquired a raw metadata amplification admission contract. Refuse
     // rather than invoke them and pretend a later serialized-facts check bounded their allocations.
+    if bytes.get(..2) == Some(b"MZ".as_slice()) {
+        if image.is_some_and(|image| !image.is_whole_file()) {
+            return Err(invalid("embedded PE selection is outside plugin preload admission"));
+        }
+        return pe::admit(bytes);
+    }
     if bytes.get(..6) != Some(b"\x7fELF\x02\x01".as_slice()) || u16_at(bytes, 18)? != 62 {
         return Err(ApiError::Unavailable(
-            "preload metadata admission currently supports only little-endian x86-64 ELF executables".into(),
+            "preload metadata admission supports only conservative little-endian x86-64 ELF and PE profiles".into(),
         ));
     }
     if !matches!(u16_at(bytes, 16)?, 2 | 3) {
@@ -495,7 +503,7 @@ mod tests {
 
     #[test]
     fn unreviewed_native_loader_profiles_and_hidden_go_recovery_are_not_invoked() {
-        assert!(admit_before_load(&fixture("hello-x64.exe"), None).is_err());
+        admit_before_load(&fixture("hello-x64.exe"), None).unwrap();
         assert!(admit_before_load(&fixture("hello-x64.macho"), None).is_err());
         assert!(admit_before_load(&fixture("hello-go-x64.elf"), None).is_err());
     }
