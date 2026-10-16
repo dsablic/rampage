@@ -382,6 +382,56 @@ pub fn run_supervised_measured(
     SupervisedRun { result, metrics: measurement.finish().expect("enabled supervisor measurement") }
 }
 
+/// Runs one explicitly configured binary with opaque application bytes, without decompiler protocol decoding.
+/// Requires config.executable; no ambient worker lookup or in-process fallback is performed. Request/stdout/
+/// stderr limits may only lower the existing hard caps. The original timeout covers the complete operation.
+/// Successful bytes require full input delivery, actual output EOF, accepted process outcome and successful
+/// owned cleanup. The SIGCHLD, exclusive wait ownership, legacy-worker and platform restrictions of
+/// run_supervised apply. This is resource/crash supervision, not a component sandbox or protocol decoder.
+#[doc(hidden)]
+pub fn run_supervised_bytes(
+    bytes: Vec<u8>,
+    config: &WorkerConfig,
+    cancellation: Option<&AtomicBool>,
+) -> Result<Vec<u8>, WorkerError> {
+    let started = std::time::Instant::now();
+    let budget = SupervisorBudget { started, timeout: config.timeout, cancellation };
+    budget.check()?;
+    let executable = config.executable.as_deref().ok_or_else(|| {
+        io_error(
+            "locate executable",
+            io::Error::new(io::ErrorKind::InvalidInput, "byte supervision requires an explicit executable"),
+        )
+    })?;
+    let limit = config.max_request_bytes.min(MAX_REQUEST_BYTES);
+    if bytes.len() > limit {
+        return Err(WorkerError::RequestTooLarge { limit });
+    }
+    let measurement = Measurement::new(started, false);
+    budget.check()?;
+    let process = supervised_process(executable, bytes, config, cancellation, started, &measurement)?;
+    finish_bytes_process(process, budget, &measurement)
+}
+
+fn finish_bytes_process(
+    mut process: ProcessOutput,
+    budget: SupervisorBudget<'_>,
+    measurement: &Measurement,
+) -> Result<Vec<u8>, WorkerError> {
+    check_process_exit(&mut process, budget, measurement)?;
+    if !process.outputs_eof {
+        return Err(WorkerError::Protocol("worker output pipes did not reach EOF".to_owned()));
+    }
+    if !process.input_fully_delivered {
+        return Err(WorkerError::Protocol("worker did not receive the complete request".to_owned()));
+    }
+    if let Some(error) = process.cleanup_error {
+        return Err(error);
+    }
+    budget.check()?;
+    Ok(process.stdout)
+}
+
 fn run_supervised_inner(
     request: &WorkerRequest,
     config: &WorkerConfig,
@@ -414,27 +464,12 @@ fn run_supervised_inner(
 }
 
 fn finish_process(
-    process: ProcessOutput,
+    mut process: ProcessOutput,
     stdout_limit: usize,
     budget: SupervisorBudget<'_>,
     measurement: &Measurement,
 ) -> Result<WorkerOutput, WorkerError> {
-    if let Some(error) = &process.cleanup_error {
-        measurement.record(|data, _| {
-            data.cleanup_succeeded = Some(false);
-            data.cleanup_error = Some(SupervisedCleanupError::from(error));
-        });
-    }
-    budget.check()?;
-    if !process.allows_response_validation() && !(process.control_error.is_some() && process.ended_with_host_stop()) {
-        return Err(WorkerError::Exit {
-            status: process.status.to_string(),
-            stderr: String::from_utf8_lossy(&process.stderr).into_owned(),
-        });
-    }
-    if let Some(error) = process.control_error {
-        return Err(error);
-    }
+    check_process_exit(&mut process, budget, measurement)?;
     measurement.record(|data, elapsed| data.response_decode_started_us = Some(elapsed));
     let response = decode_supervised_response(process.stdout.as_slice(), stdout_limit, budget)?;
     measurement.record(|data, elapsed| data.response_decoded_us = Some(elapsed));
@@ -457,6 +492,30 @@ fn finish_process(
         }
         _ => Err(WorkerError::Protocol("unsupported response version".to_owned())),
     }
+}
+
+fn check_process_exit(
+    process: &mut ProcessOutput,
+    budget: SupervisorBudget<'_>,
+    measurement: &Measurement,
+) -> Result<(), WorkerError> {
+    if let Some(error) = &process.cleanup_error {
+        measurement.record(|data, _| {
+            data.cleanup_succeeded = Some(false);
+            data.cleanup_error = Some(SupervisedCleanupError::from(error));
+        });
+    }
+    budget.check()?;
+    if !process.allows_response_validation() && !(process.control_error.is_some() && process.ended_with_host_stop()) {
+        return Err(WorkerError::Exit {
+            status: process.status.to_string(),
+            stderr: String::from_utf8_lossy(&process.stderr).into_owned(),
+        });
+    }
+    if let Some(error) = process.control_error.take() {
+        return Err(error);
+    }
+    Ok(())
 }
 
 struct BoundedBuffer {
@@ -608,13 +667,23 @@ pub fn serve_stdio() -> Result<(), WorkerError> {
 /// serve_stdio behavior. Library callers should use serve_stdio, which never consumes ambient descriptors.
 /// The control descriptor is duplicated before validation; only the fresh duplicate is owned or closed.
 pub fn serve_worker_stdio() -> Result<(), WorkerError> {
+    serve_binary_stdio(serve_stdio)
+}
+
+/// Binary-only lifecycle wrapper for one trusted handler implementing its own application protocol.
+/// With private control, setup precedes the single handler call; successful handler return is followed by
+/// stdio flush/release, private completion and a live-root hold. Without control, the handler result is returned
+/// directly. The control capability uses only a fresh owned duplicate; the selected original is unchanged.
+/// No decompiler request/response is constructed or decoded. The launching supervisor enforces resource caps;
+/// the handler is responsible for its own bounded application decoding and component/runtime capabilities.
+pub fn serve_binary_stdio(handler: impl FnOnce() -> Result<(), WorkerError>) -> Result<(), WorkerError> {
     #[cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))]
     {
-        unix::serve_worker_stdio()
+        unix::serve_binary_stdio(handler)
     }
     #[cfg(not(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")))]
     {
-        serve_stdio()
+        handler()
     }
 }
 
@@ -1061,14 +1130,14 @@ mod unix {
         Ok(socket)
     }
 
-    pub(super) fn serve_worker_stdio() -> Result<(), WorkerError> {
+    pub(super) fn serve_binary_stdio(handler: impl FnOnce() -> Result<(), WorkerError>) -> Result<(), WorkerError> {
         let Some(value) = std::env::var_os(CONTROL_ENV) else {
-            return serve_stdio();
+            return handler();
         };
         let value =
             value.to_str().ok_or_else(|| WorkerError::Protocol("invalid private control version".to_owned()))?;
         let mut control = claim_worker_control(value)?;
-        serve_stdio()?;
+        handler()?;
         io::stdout().lock().flush().map_err(|error| io_error("flush response", error))?;
         io::stderr().lock().flush().map_err(|error| io_error("flush diagnostics", error))?;
         // SAFETY: flush native C stdio before releasing its original pipe endpoints.
@@ -1118,7 +1187,17 @@ mod unix {
 
     #[cfg(test)]
     fn control_fixture(response: &WorkerResponse, read_request: bool, setup: &str, finish: &str) -> String {
-        let json = serde_json::to_string(response).unwrap().replace('\'', "'\\''");
+        control_bytes_fixture(&serde_json::to_vec(response).unwrap(), read_request, setup, finish)
+    }
+
+    #[cfg(test)]
+    pub(super) fn binary_control_fixture(response: &[u8]) -> String {
+        control_bytes_fixture(response, true, "", "exec >/dev/null 2>&1\nexec /bin/sleep 10")
+    }
+
+    #[cfg(test)]
+    fn control_bytes_fixture(response: &[u8], read_request: bool, setup: &str, finish: &str) -> String {
+        let payload: String = response.iter().map(|byte| format!("\\{byte:03o}")).collect();
         let frame = std::str::from_utf8(&CONTROL_DONE[..CONTROL_DONE.len() - 1]).unwrap();
         let input = if read_request { "/bin/cat >/dev/null" } else { "" };
         // Test-only Bash handles arbitrary inherited descriptor numbers. Live fixtures have a finite fallback;
@@ -1129,7 +1208,7 @@ mod unix {
              eval \"/bin/dd bs=1 count={} <&$control_fd >/dev/null 2>&1\"\n\
              {input}\n\
              {setup}\n\
-             printf '%s' '{json}'\n\
+             printf '{payload}'\n\
              eval \"printf '{frame}\\\\000' >&$control_fd\"\n\
              {finish}\n",
             CONTROL_HELLO.len(),
@@ -2663,6 +2742,77 @@ mod tests {
 
     fn budget(cancellation: Option<&AtomicBool>) -> SupervisorBudget<'_> {
         SupervisorBudget { started: Instant::now(), timeout: Duration::from_secs(5), cancellation }
+    }
+
+    #[test]
+    fn byte_supervision_requires_explicit_executable_and_bounds_requests_before_spawn() {
+        let result = run_supervised_bytes(b"application request".to_vec(), &WorkerConfig::default(), None);
+        assert!(matches!(result, Err(WorkerError::Io { action: "locate executable", source })
+            if source.kind() == io::ErrorKind::InvalidInput));
+        let fixture = Fixture::new("exit 0");
+        let config = WorkerConfig { max_request_bytes: 2, ..fixture.config() };
+        assert!(matches!(
+            run_supervised_bytes(vec![0, 1, 2], &config, None),
+            Err(WorkerError::RequestTooLarge { limit: 2 })
+        ));
+        assert!(!fixture.pid.exists());
+        let config = WorkerConfig { timeout: Duration::ZERO, ..fixture.config() };
+        assert!(matches!(run_supervised_bytes(Vec::new(), &config, None), Err(WorkerError::Timeout)));
+        assert!(matches!(
+            run_supervised_bytes(Vec::new(), &fixture.config(), Some(&AtomicBool::new(true))),
+            Err(WorkerError::Cancelled)
+        ));
+        assert!(!fixture.pid.exists());
+    }
+
+    #[test]
+    fn byte_supervision_returns_opaque_binary_empty_and_application_error_responses_without_p4_decoding() {
+        for payload in
+            [vec![0, 0xff, 0x80, b'\n', b'%'], Vec::new(), br#"{"application":"component","status":"error"}"#.to_vec()]
+        {
+            let fixture = Fixture::new(&unix::binary_control_fixture(&payload));
+            let config = WorkerConfig { max_request_bytes: 3, ..fixture.config() };
+            let output = run_supervised_bytes(vec![0, 0xff, 0x80], &config, None).unwrap();
+            assert_eq!(output, payload);
+            fixture.assert_reaped();
+        }
+    }
+
+    #[test]
+    fn byte_supervision_preserves_output_limits() {
+        let fixture = Fixture::new(&unix::binary_control_fixture(b"application response"));
+        let config = WorkerConfig { max_stdout_bytes: 1, ..fixture.config() };
+        assert!(matches!(
+            run_supervised_bytes(b"request".to_vec(), &config, None),
+            Err(WorkerError::OutputTooLarge { stream: "stdout", limit: 1 })
+        ));
+        fixture.assert_reaped();
+    }
+
+    #[test]
+    fn opaque_success_still_requires_full_input_real_eof_and_successful_cleanup() {
+        use std::os::unix::process::ExitStatusExt;
+
+        for failure in ["input", "eof", "cleanup"] {
+            let process = ProcessOutput {
+                stdout: b"application bytes, not worker JSON".to_vec(),
+                stderr: Vec::new(),
+                status: std::process::ExitStatus::from_raw(0),
+                controlled_stop: false,
+                host_stopped_root: false,
+                input_fully_delivered: failure != "input",
+                outputs_eof: failure != "eof",
+                control_error: None,
+                cleanup_error: (failure == "cleanup")
+                    .then(|| WorkerError::Cleanup { group: io::Error::from_raw_os_error(libc::EPERM), root: None }),
+            };
+            let result = finish_bytes_process(process, budget(None), &Measurement::new(Instant::now(), false));
+            if failure == "cleanup" {
+                assert!(matches!(result, Err(WorkerError::Cleanup { .. })));
+            } else {
+                assert!(matches!(result, Err(WorkerError::Protocol(_))));
+            }
+        }
     }
 
     #[test]
