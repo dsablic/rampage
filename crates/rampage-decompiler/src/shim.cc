@@ -771,8 +771,10 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
             fd = global->addFunction(entry, funcname)->getFunction();
         }
         arch->clearAnalysis(fd);
+        // The entry is not a lower flow bound: cold blocks and tail targets can precede it.
+        Address low(arch->getDefaultCodeSpace(), 0);
         Address high(arch->getDefaultCodeSpace(), arch->getDefaultCodeSpace()->getHighest());
-        fd->followFlow(entry, high);
+        fd->followFlow(low, high);
         arch->allacts.getCurrent()->reset(*fd);
         arch->allacts.getCurrent()->perform(*fd);
         LimitedOutput buffer;

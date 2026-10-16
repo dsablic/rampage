@@ -99,9 +99,16 @@ not atomic with external writes or truncation; keep source files quiescent.
 
 Host preparation retains the entry, actual saved signature targets, bounded referenced exact metadata entries,
 import slots and recognized aliases in declared import-stub sections. It does not discover arbitrary callees.
-The local walk follows bounded direct branch context, not callees, and stops conservatively at independent
+The local walk follows bounded direct branch context, not arbitrary callee bodies, and stops at independent
 entries, data extents, unresolved indirect transfers, invalid instructions and window boundaries. Curated
 name-backed runtime prototypes/noreturn facts may be supplied; whole-program inferred noreturn facts are not.
+
+A separate bounded check can mark referenced exact-metadata wrappers noreturn when straight-line setup ends
+in a direct call/jump to an exact known non-unwinding fatal import stub. At most 32 distinct candidates,
+32 decode operations per candidate and a 128-byte window are inspected, charged to the shared decode budgets
+with cancellation checks. This is not recursive inference or an arbitrary callee walk. Throwing imports,
+conditional/unknown transfers, metadata/data boundaries, ARM64 exception-generation instructions and x86
+software interrupts do not supply wrapper proof. Analyst display names alone never establish this fact.
 
 Actual saved types, globals and signatures are required replay input, including dependencies outside the local
 walk. Checked layout bundles retain their v1/v2 identity/projection rules and source/specification checks.

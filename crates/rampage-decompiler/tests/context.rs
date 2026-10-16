@@ -2,6 +2,23 @@ use rampage_arch::Arch;
 use rampage_decompiler::{Decompiler, Segment};
 
 #[test]
+fn branches_can_reach_mapped_code_before_the_requested_entry() {
+    let cases: &[(Arch, &[u8], &[u8])] = &[
+        (Arch::X86_64, &[0xb8, 7, 0, 0, 0, 0xc3], &[0xe9, 0xfb, 0xef, 0xff, 0xff]),
+        (Arch::Aarch64, &[0xe0, 0x00, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6], &[0x00, 0xfc, 0xff, 0x17]),
+    ];
+    for &(arch, body, branch) in cases {
+        let segments = [
+            Segment { base: 0x1000, bytes: body, writable: false },
+            Segment { base: 0x2000, bytes: branch, writable: false },
+        ];
+        let mut decompiler = Decompiler::open(arch, false, &segments).unwrap();
+        let code = decompiler.decompile(0x2000, "later_entry", false).unwrap();
+        assert!(code.contains("return 7;"), "{arch:?}: {code}");
+    }
+}
+
+#[test]
 fn mixed_arm_thumb_functions_do_not_depend_on_query_order() {
     let thumb = [0x07, 0x20, 0x70, 0x47];
     let arm = [0x05, 0x00, 0xa0, 0xe3, 0x1e, 0xff, 0x2f, 0xe1];

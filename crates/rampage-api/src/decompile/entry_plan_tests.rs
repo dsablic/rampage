@@ -725,6 +725,79 @@ fn aarch64_slot_loads_must_feed_the_actual_stub_branch_register() {
 }
 
 #[test]
+fn aarch64_literal_import_stubs_preserve_the_leading_nop_and_require_a_64_bit_matching_load() {
+    for (load, branch, valid) in
+        [(0x5802_fff0u32, 0xd61f_0200u32, true), (0x1802_fff0, 0xd61f_0200, false), (0x5802_fff0, 0xd61f_0220, false)]
+    {
+        let caller: Vec<_> = [0x9400_0400u32, 0xd65f_03c0].into_iter().flat_map(u32::to_le_bytes).collect();
+        let stub: Vec<_> = [0xd503_201fu32, load, branch].into_iter().flat_map(u32::to_le_bytes).collect();
+        let mut binary = snapshot(input(
+            "aarch64",
+            vec![
+                region("caller", 0x1000, "r-x", &caller),
+                region("__stubs", 0x2000, "r-x", &stub),
+                region("slots", 0x8000, "rw-", &[0; 8]),
+            ],
+        ));
+        binary.format = Format::MachO;
+        binary.function_starts.push(0x1000);
+        binary.import_slots.push(ImportSlot { address: 0x8000, name: "___stack_chk_fail".to_owned(), library: None });
+        let project = Project::new(binary);
+        let mut annotations = Annotations::in_memory();
+        annotations.set(Field::Signature, 0x8000, Some("void failure(void);".to_owned())).unwrap();
+        let result = plan(&project, &annotations, 0x1000);
+        if valid {
+            let selected = result.unwrap();
+            assert_eq!(selected.stub_targets[&0x8000], [0x2000]);
+            assert!(has_noreturn(&selected, 0x2000));
+            assert!(has_runtime(&selected, 0x2000, "___stack_chk_fail"));
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[test]
+fn aarch64_elf_resolver_padding_does_not_shift_the_first_import_entry() {
+    let caller: Vec<_> = [0x9400_0408u32, 0xd65f_03c0].into_iter().flat_map(u32::to_le_bytes).collect();
+    let stubs: Vec<_> = [
+        0xa9bf_7bf0u32,
+        0xd000_0030,
+        0xf940_0a11,
+        0x9100_4210,
+        0xd61f_0220,
+        0xd503_201f,
+        0xd503_201f,
+        0xd503_201f,
+        0xd000_0030,
+        0xf940_0211,
+        0x9100_0210,
+        0xd61f_0220,
+    ]
+    .into_iter()
+    .flat_map(u32::to_le_bytes)
+    .collect();
+    let mut binary = snapshot(input(
+        "aarch64",
+        vec![
+            region("caller", 0x1000, "r-x", &caller),
+            region(".plt", 0x2000, "r-x", &stubs),
+            region("slots", 0x8000, "rw-", &[0; 24]),
+        ],
+    ));
+    binary.format = Format::Elf;
+    binary.function_starts.push(0x1000);
+    binary.import_slots.push(ImportSlot { address: 0x8000, name: "__stack_chk_fail".to_owned(), library: None });
+    let project = Project::new(binary);
+    let mut annotations = Annotations::in_memory();
+    annotations.set(Field::Signature, 0x8000, Some("void failure(void);".to_owned())).unwrap();
+    let selected = plan(&project, &annotations, 0x1000).unwrap();
+    assert_eq!(selected.stub_targets[&0x8000], [0x2020]);
+    assert!(has_noreturn(&selected, 0x2020));
+    assert!(!has_noreturn(&selected, 0x2014));
+}
+
+#[test]
 fn pe_import_signatures_are_refused_instead_of_rescanning_text_or_losing_aliases() {
     let mut binary = code_binary(&[0xc3]);
     binary.format = Format::Pe;
@@ -757,4 +830,356 @@ fn a_stub_scan_cap_is_optional_only_without_required_slot_signatures() {
     assert!(selected.counts.decoded_instructions <= MAX_INSTRUCTIONS);
     annotations.set(Field::Signature, 0x8000, Some("void required(void);".to_owned())).unwrap();
     assert!(plan(&project, &annotations, 0x1000).is_err());
+}
+
+fn aarch64_wrapper_binary(words: &[u32]) -> Binary {
+    let bytes = |words: &[u32]| words.iter().flat_map(|word| word.to_le_bytes()).collect::<Vec<_>>();
+    let mut binary = snapshot(input(
+        "aarch64",
+        vec![
+            region("caller", 0x1000, "r-x", &bytes(&[0x9400_0040, 0x9400_007f, 0xd65f_03c0])),
+            region("wrapper", 0x1100, "r-x", &bytes(words)),
+            region("after_call", 0x1200, "r-x", &bytes(&[0xd65f_03c0])),
+            region("unreferenced_wrapper", 0x1300, "r-x", &bytes(&[0x1400_0340])),
+            region("__stubs", 0x2000, "r-x", &bytes(&[0xd503_201f, 0x5802_fff0, 0xd61f_0200])),
+            region("slots", 0x8000, "rw-", &[0; 8]),
+        ],
+    ));
+    binary.format = Format::MachO;
+    binary.function_starts.extend([0x1000, 0x1100, 0x1200, 0x1300]);
+    binary.import_slots.push(ImportSlot { address: 0x8000, name: "___assert_rtn".to_owned(), library: None });
+    binary
+}
+
+#[test]
+fn referenced_exact_metadata_wrappers_to_noreturn_stubs_stop_caller_fallthrough() {
+    for transfer in [0x9400_03bfu32, 0x1400_03bf] {
+        for evidence in ["function", "export", "format_start", "image_entry"] {
+            let mut binary = aarch64_wrapper_binary(&[0xa9bf_7bfd, transfer, 0xd65f_03c0]);
+            binary.function_starts.retain(|&address| address != 0x1100);
+            match evidence {
+                "function" => function(&mut binary, 0x1100, 12, "failure_wrapper"),
+                "export" => binary.exports.push(Export { address: 0x1100, name: "failure_wrapper".to_owned() }),
+                "format_start" => binary.function_starts.push(0x1100),
+                "image_entry" => binary.entry = Some(0x1100),
+                _ => unreachable!(),
+            }
+            let project = Project::new(binary);
+            let mut annotations = Annotations::in_memory();
+            annotations.set(Field::Name, 0x1100, Some("safe_display_name".to_owned())).unwrap();
+            annotations.set(Field::Name, 0x2000, Some("renamed_stub".to_owned())).unwrap();
+            let selected = plan(&project, &annotations, 0x1000).unwrap();
+            assert!(has_symbol(&selected, 0x1100), "{evidence}: {transfer:x}");
+            assert!(has_noreturn(&selected, 0x1100), "{evidence}: {transfer:x}");
+            assert!(!has_symbol(&selected, 0x1200), "{evidence}: {transfer:x}");
+            assert!(!has_noreturn(&selected, 0x1000));
+            assert!(!has_symbol(&selected, 0x1300));
+            assert!(has_runtime(&selected, 0x2000, "___assert_rtn"));
+            assert!(!has_runtime(&selected, 0x1100, "___assert_rtn"));
+            assert!(!has_runtime(&selected, 0x1100, "safe_display_name"));
+            assert_eq!(selected.counts.decoded_instructions, 6);
+            assert_eq!(selected.counts.decoded_bytes, 24);
+            assert_eq!(selected.counts.references, 1);
+            assert_eq!(annotations.names().len(), 2);
+            assert!(annotations.signatures().is_empty());
+        }
+    }
+}
+
+#[test]
+fn conditional_return_and_unproven_transfers_are_not_noreturn_wrappers() {
+    for (name, words) in [
+        ("conditional_return", vec![0x3400_0040, 0x9400_03bf, 0xd65f_03c0]),
+        ("return_before_stub", vec![0xd65f_03c0, 0x9400_03bf]),
+        ("indirect_jump", vec![0xd61f_0000, 0x9400_03bf]),
+        ("indirect_call", vec![0xd63f_0000, 0x9400_03bf]),
+        ("invalid", vec![0xffff_ffff, 0x9400_03bf]),
+        ("resumable_breakpoint", vec![0xd420_0000, 0x9400_03bf]),
+        ("halt", vec![0xd420_0020, 0x9400_03bf]),
+        ("semihosting_trap", vec![0xd45e_0000, 0x9400_03bf]),
+        ("supervisor_call", vec![0xd400_0001, 0x9400_03bf]),
+        ("unknown_call", vec![0x9400_0100, 0x9400_03bf]),
+        ("unknown_jump", vec![0x1400_0100, 0x9400_03bf]),
+        ("call_to_next", vec![0x9400_0001, 0xaa1e_03e0, 0x9400_03be]),
+        ("unavailable_tail", vec![0xd503_201f]),
+    ] {
+        let binary = aarch64_wrapper_binary(&words);
+        let project = Project::new(binary);
+        let mut annotations = Annotations::in_memory();
+        annotations.set(Field::Name, 0x1100, Some("abort".to_owned())).unwrap();
+        annotations.set(Field::Name, 0x1500, Some("___assert_rtn".to_owned())).unwrap();
+        let selected = plan(&project, &annotations, 0x1000).unwrap();
+        assert!(has_symbol(&selected, 0x1100), "{name}");
+        assert!(!has_noreturn(&selected, 0x1100), "{name}");
+        assert!(has_symbol(&selected, 0x1200), "{name}");
+        assert!(!has_symbol(&selected, 0x1300), "{name}");
+        assert!(!has_symbol(&selected, 0x1500), "{name}");
+        assert!(!has_runtime(&selected, 0x1100, "abort"), "{name}");
+    }
+}
+
+#[test]
+fn throwing_imports_and_fatal_lookalikes_do_not_prove_wrappers_even_with_fatal_stub_context() {
+    for (raw, known_noreturn) in
+        [("__cxa_throw", true), ("objc_exception_throw", true), ("__assert_rtn_catchable", false)]
+    {
+        assert_eq!(is_noreturn_import(raw), known_noreturn, "{raw}");
+        for transfer in [0xe8, 0xe9] {
+            let mut binary = snapshot(input(
+                "x86_64",
+                vec![
+                    region("caller", 0x1000, "r-x", &[0xe8, 0xfb, 0, 0, 0, 0xe8, 0xf6, 1, 0, 0, 0xc3]),
+                    region("wrapper", 0x1100, "r-x", &[0x90, transfer, 0xfa, 0x0e, 0, 0, 0xc3]),
+                    region("after_call", 0x1200, "r-x", &[0xc3]),
+                    region(".plt", 0x2000, "r-x", &[0xff, 0x25, 0xfa, 0x5f, 0, 0, 0xff, 0x25, 0xfc, 0x5f, 0, 0]),
+                    region("slots", 0x8000, "rw-", &[0; 16]),
+                ],
+            ));
+            binary.function_starts.extend([0x1000, 0x1100, 0x1200]);
+            binary.import_slots.extend([
+                ImportSlot { address: 0x8000, name: raw.to_owned(), library: None },
+                ImportSlot { address: 0x8008, name: "abort".to_owned(), library: None },
+            ]);
+            let project = Project::new(binary);
+            let mut annotations = Annotations::in_memory();
+            for address in [0x1100, 0x2000, 0x8000] {
+                annotations.set(Field::Name, address, Some("abort".to_owned())).unwrap();
+            }
+            let selected = plan(&project, &annotations, 0x1000).unwrap();
+            assert!(has_symbol(&selected, 0x1100), "{raw}: {transfer:x}");
+            assert!(!has_noreturn(&selected, 0x1100), "{raw}: {transfer:x}");
+            assert!(has_symbol(&selected, 0x1200), "{raw}: {transfer:x}");
+            assert_eq!(has_noreturn(&selected, 0x2000), known_noreturn, "{raw}: {transfer:x}");
+            assert!(has_noreturn(&selected, 0x2006));
+        }
+    }
+}
+
+#[test]
+fn fatal_termination_import_wrappers_remain_proven_for_calls_and_tail_jumps() {
+    for raw in ["abort", "_abort", "__assert_fail", "___assert_rtn", "__stack_chk_fail", "___stack_chk_fail"] {
+        for transfer in [0x9400_03bf, 0x1400_03bf] {
+            let mut binary = aarch64_wrapper_binary(&[0xd503_201f, transfer]);
+            binary.import_slots[0].name = raw.to_owned();
+            let selected = plan(&Project::new(binary), &Annotations::in_memory(), 0x1000).unwrap();
+            assert!(has_noreturn(&selected, 0x1100), "{raw}: {transfer:x}");
+            assert!(!has_symbol(&selected, 0x1200), "{raw}: {transfer:x}");
+        }
+    }
+}
+
+#[test]
+fn wrapper_proofs_do_not_cross_metadata_data_or_source_boundaries() {
+    for variant in ["next_entry", "symbol_end", "data", "unavailable", "missing_metadata", "returning_import"] {
+        let mut binary = aarch64_wrapper_binary(&[0xd503_201f, 0x9400_03bf]);
+        match variant {
+            "next_entry" => binary.function_starts.push(0x1104),
+            "symbol_end" => function(&mut binary, 0x1100, 4, "small_function"),
+            "data" => binary.symbols.push(Symbol {
+                address: 0x1104,
+                name: "literal".to_owned(),
+                size: 4,
+                kind: SymbolKind::Data,
+            }),
+            "unavailable" => {
+                binary.segments.iter_mut().find(|segment| segment.address == 0x1100).unwrap().file_size = 4;
+            }
+            "missing_metadata" => binary.function_starts.retain(|&address| address != 0x1100),
+            "returning_import" => binary.import_slots[0].name = "puts".to_owned(),
+            _ => unreachable!(),
+        }
+        let project = Project::new(binary);
+        let mut annotations = Annotations::in_memory();
+        annotations.set(Field::Name, 0x1100, Some("abort".to_owned())).unwrap();
+        annotations.set(Field::Name, 0x8000, Some("___assert_rtn".to_owned())).unwrap();
+        let selected = plan(&project, &annotations, 0x1000).unwrap();
+        assert!(!has_noreturn(&selected, 0x1100), "{variant}");
+        assert!(has_symbol(&selected, 0x1200), "{variant}");
+    }
+}
+
+#[test]
+fn wrapper_inference_is_not_recursive_and_does_not_discover_unreferenced_functions() {
+    for name in ["nested_wrapper", "abort"] {
+        let mut binary = aarch64_wrapper_binary(&[0x9400_0080]);
+        function(&mut binary, 0x1300, 4, name);
+        let selected = plan(&Project::new(binary), &Annotations::in_memory(), 0x1000).unwrap();
+        assert!(has_symbol(&selected, 0x1100));
+        assert!(!has_noreturn(&selected, 0x1100), "{name}");
+        assert!(!has_symbol(&selected, 0x1300));
+        assert!(!has_noreturn(&selected, 0x1300));
+        assert!(has_symbol(&selected, 0x1200));
+    }
+}
+
+#[test]
+fn wrapper_decoding_charges_shared_budgets_and_checks_cancellation() {
+    let project = Project::new(aarch64_wrapper_binary(&[0xd503_201f, 0x9400_03bf]));
+    for stopped_stage in ["entry noreturn wrapper", "entry noreturn wrapper instruction"] {
+        let error =
+            prepare(&project, &Annotations::in_memory(), &request(0x1000, EntryValidation::MetadataBacked), &|stage| {
+                if stage == stopped_stage { Err(ApiError::Unavailable("cancelled".to_owned())) } else { Ok(()) }
+            })
+            .unwrap_err();
+        assert!(matches!(error, ApiError::Unavailable(_)), "{stopped_stage}");
+    }
+    let binary = &project.binary;
+    let (metadata, _, _) = metadata(binary, 0x1000, &|_| Ok(())).unwrap();
+    let stubs = BTreeMap::from([(0x2000, Identity { raw: Some("___assert_rtn"), import: true })]);
+    for (instructions, bytes) in [(MAX_INSTRUCTIONS - 1, 0), (0, MAX_BYTES - 4), (0, MAX_BYTES - 2)] {
+        let mut counts =
+            EntryPlanCounts { decoded_instructions: instructions, decoded_bytes: bytes, ..EntryPlanCounts::default() };
+        let mut omissions = Vec::new();
+        assert!(
+            !noreturn_wrapper(binary, 0x1100, &metadata, &stubs, &mut counts, &mut omissions, &|_| Ok(())).unwrap()
+        );
+        assert!(counts.context_budget_exhausted);
+        assert!(counts.decoded_instructions <= MAX_INSTRUCTIONS);
+        assert!(counts.decoded_bytes <= MAX_BYTES);
+        assert!(!omissions.is_empty());
+    }
+}
+
+fn x86_wrapper_binary(wrapper: &[u8]) -> Binary {
+    x86_wrapper_binary_for_arch("x86_64", wrapper)
+}
+
+fn x86_wrapper_binary_for_arch(arch: &str, wrapper: &[u8]) -> Binary {
+    let stub = if arch == "x86" { [0xff, 0x25, 0, 0x80, 0, 0] } else { [0xff, 0x25, 0xfa, 0x5f, 0, 0] };
+    let mut binary = snapshot(input(
+        arch,
+        vec![
+            region("caller", 0x1000, "r-x", &[0xe8, 0xfb, 0, 0, 0, 0xe8, 0xf6, 1, 0, 0, 0xc3]),
+            region("wrapper", 0x1100, "r-x", wrapper),
+            region("after_call", 0x1200, "r-x", &[0xc3]),
+            region(".plt", 0x2000, "r-x", &stub),
+            region("slots", 0x8000, "rw-", &[0; 8]),
+        ],
+    ));
+    binary.function_starts.extend([0x1000, 0x1100, 0x1200]);
+    binary.import_slots.push(ImportSlot { address: 0x8000, name: "abort".to_owned(), library: None });
+    binary
+}
+
+#[test]
+fn x86_wrappers_require_a_direct_known_stub_transfer_without_call_to_next_reclassification() {
+    for (wrapper, expected) in [
+        (vec![0x55, 0x48, 0x89, 0xe5, 0xe8, 0xf7, 0x0e, 0, 0], true),
+        (vec![0x90, 0xe9, 0xfa, 0x0e, 0, 0], true),
+        (vec![0xe8, 0, 0, 0, 0, 0x58, 0xe9, 0xf5, 0x0e, 0, 0], false),
+        (vec![0x74, 1, 0xc3, 0xe9, 0xf8, 0x0e, 0, 0], false),
+    ] {
+        let selected = plan(&Project::new(x86_wrapper_binary(&wrapper)), &Annotations::in_memory(), 0x1000).unwrap();
+        assert_eq!(has_noreturn(&selected, 0x1100), expected, "{wrapper:x?}");
+        assert_eq!(has_symbol(&selected, 0x1200), !expected, "{wrapper:x?}");
+    }
+}
+
+#[test]
+fn x86_interrupts_with_legacy_and_rex_prefixes_do_not_prove_fatal_wrappers() {
+    for arch in ["x86", "x86_64"] {
+        let mut prefixes =
+            vec![vec![], vec![0x66], vec![0x67], vec![0x2e, 0x36, 0x3e, 0x26, 0x64, 0x65], vec![0xf2], vec![0xf3]];
+        if arch == "x86_64" {
+            prefixes.extend([vec![0x40], vec![0x48], vec![0x4f], vec![0x66, 0x48], vec![0x48, 0x66]]);
+        }
+        for opcode in [vec![0xcd, 0x80], vec![0xcc], vec![0xf1], vec![0xce]] {
+            if arch == "x86_64" && opcode == [0xce] {
+                continue;
+            }
+            for prefix in &prefixes {
+                let mut interrupt = prefix.clone();
+                interrupt.extend_from_slice(&opcode);
+                let mut wrapper = vec![0xb8, 173, 0, 0, 0];
+                wrapper.extend_from_slice(&interrupt);
+                let next = 0x1100 + wrapper.len() as i64 + 5;
+                wrapper.push(0xe9);
+                wrapper.extend_from_slice(&i32::try_from(0x2000 - next).unwrap().to_le_bytes());
+                let binary = x86_wrapper_binary_for_arch(arch, &wrapper);
+                let instruction = binary.decoder().unwrap().decode(&interrupt, 0x1105);
+                assert_eq!(instruction.flow, Flow::Next, "{arch}: {interrupt:x?}");
+                assert_eq!(usize::from(instruction.len), interrupt.len(), "{arch}: {interrupt:x?}");
+                let selected = plan(&Project::new(binary), &Annotations::in_memory(), 0x1000).unwrap();
+                assert!(has_noreturn(&selected, 0x2000), "{arch}: {interrupt:x?}");
+                assert!(!has_noreturn(&selected, 0x1100), "{arch}: {interrupt:x?}");
+                assert!(has_symbol(&selected, 0x1200), "{arch}: {interrupt:x?}");
+                assert!(selected.counts.decoded_instructions <= MAX_INSTRUCTIONS);
+                assert!(selected.counts.decoded_bytes <= MAX_BYTES);
+            }
+        }
+    }
+}
+
+#[test]
+fn x86_normal_setup_and_interrupt_shaped_immediates_remain_eligible_for_wrapper_proofs() {
+    for arch in ["x86", "x86_64"] {
+        let wrapper = [0x40, 0xb8, 0xcc, 0xcd, 0xce, 0xf1, 0xe9, 0xf5, 0x0e, 0, 0];
+        let selected =
+            plan(&Project::new(x86_wrapper_binary_for_arch(arch, &wrapper)), &Annotations::in_memory(), 0x1000)
+                .unwrap();
+        assert!(has_noreturn(&selected, 0x1100), "{arch}");
+        assert!(!has_symbol(&selected, 0x1200), "{arch}");
+    }
+}
+
+#[test]
+fn wrapper_instruction_and_byte_caps_never_promote_an_unproven_wrapper() {
+    let mut words = vec![0xd503_201f; MAX_WRAPPER_INSTRUCTIONS];
+    let at = 0x1100 + words.len() as u32 * 4;
+    words.push(0x9400_0000 | ((0x2000 - at) / 4));
+    let selected = plan(&Project::new(aarch64_wrapper_binary(&words)), &Annotations::in_memory(), 0x1000).unwrap();
+    assert!(!has_noreturn(&selected, 0x1100));
+    assert!(has_symbol(&selected, 0x1200));
+    assert!(selected.counts.context_budget_exhausted);
+
+    let long_nop = [0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x0f, 0x1f, 0x84, 0, 0, 0, 0, 0];
+    let mut wrapper = long_nop.repeat(MAX_WRAPPER_BYTES / long_nop.len() + 1);
+    let next = 0x1100 + wrapper.len() as i64 + 5;
+    wrapper.push(0xe9);
+    wrapper.extend_from_slice(&i32::try_from(0x2000 - next).unwrap().to_le_bytes());
+    let selected = plan(&Project::new(x86_wrapper_binary(&wrapper)), &Annotations::in_memory(), 0x1000).unwrap();
+    assert!(!has_noreturn(&selected, 0x1100));
+    assert!(has_symbol(&selected, 0x1200));
+    assert!(selected.counts.context_budget_exhausted);
+    assert!(selected.counts.decoded_bytes <= MAX_BYTES);
+}
+
+#[test]
+fn wrapper_candidate_budget_counts_unique_callees_and_reports_skipped_proofs() {
+    for repeat in [false, true] {
+        let mut caller = Vec::new();
+        let mut regions = vec![
+            region(".plt", 0x2000, "r-x", &[0xff, 0x25, 0xfa, 0x5f, 0, 0]),
+            region("slots", 0x8000, "rw-", &[0; 8]),
+            region("after_call", 0x4000, "r-x", &[0xc3]),
+        ];
+        let last = 0x3000 + MAX_NORETURN_WRAPPERS as u64 * 16;
+        for index in 0..=MAX_NORETURN_WRAPPERS {
+            let address = 0x3000 + index as u64 * 16;
+            let mut wrapper = vec![0xc3];
+            if address == last {
+                wrapper = vec![0xe9];
+                wrapper.extend_from_slice(&i32::try_from(0x2000i64 - address as i64 - 5).unwrap().to_le_bytes());
+            }
+            regions.push(region("wrapper", address, "r-x", &wrapper));
+            let target = if repeat && address != last { 0x3000 } else { address };
+            let next = 0x1000 + caller.len() as u64 + 5;
+            caller.push(0xe8);
+            caller.extend_from_slice(&i32::try_from(target as i64 - next as i64).unwrap().to_le_bytes());
+        }
+        let next = 0x1000 + caller.len() as u64 + 5;
+        caller.push(0xe8);
+        caller.extend_from_slice(&i32::try_from(0x4000 - next).unwrap().to_le_bytes());
+        caller.push(0xc3);
+        regions.push(region("caller", 0x1000, "r-x", &caller));
+        let mut binary = snapshot(input("x86_64", regions));
+        binary.function_starts.extend([0x1000, 0x4000]);
+        binary.function_starts.extend((0..=MAX_NORETURN_WRAPPERS).map(|index| 0x3000 + index as u64 * 16));
+        binary.import_slots.push(ImportSlot { address: 0x8000, name: "abort".to_owned(), library: None });
+        let selected = plan(&Project::new(binary), &Annotations::in_memory(), 0x1000).unwrap();
+        assert!(has_symbol(&selected, last));
+        assert_eq!(has_noreturn(&selected, last), repeat);
+        assert_eq!(has_symbol(&selected, 0x4000), !repeat);
+        assert_eq!(selected.counts.context_budget_exhausted, !repeat);
+    }
 }

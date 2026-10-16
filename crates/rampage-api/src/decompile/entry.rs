@@ -359,8 +359,7 @@ impl Project {
         timings.total_ms = elapsed(started);
         let mut omissions = plan.omissions;
         omissions.extend([
-            concat!("No whole-program containing-function resolution, ",
-                "learned mode context or inferred noreturn facts.").to_owned(),
+            "No whole-program containing-function resolution or learned mode context.".to_owned(),
             "No whole-program Go result/callee inference; only actual declarations and canonical dependencies replayed."
                 .to_owned(),
             concat!("The local context walk is not a complete function, ",

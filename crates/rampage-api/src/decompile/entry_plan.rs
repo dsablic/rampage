@@ -20,6 +20,9 @@ const MAX_BYTES: usize = 64 * 1024;
 const MAX_BLOCKS: usize = 256;
 const MAX_TARGETS: usize = 256;
 const MAX_STUB_INSTRUCTIONS: usize = 1024;
+const MAX_NORETURN_WRAPPERS: usize = 32;
+const MAX_WRAPPER_INSTRUCTIONS: usize = 32;
+const MAX_WRAPPER_BYTES: usize = 128;
 const STUB_SECTIONS: [&str; 6] = ["__stubs", "__auth_stubs", ".plt", ".plt.sec", ".plt.got", ".iplt"];
 
 #[derive(Debug)]
@@ -105,6 +108,32 @@ struct Identity<'a> {
 impl Identity<'_> {
     fn noreturn(self) -> bool {
         self.raw.is_some_and(|name| if self.import { is_noreturn_import(name) } else { is_noreturn_name(name) })
+    }
+
+    fn fatal_termination_import(self) -> bool {
+        // Normal noreturn identities include throws; local exception handlers can return from those wrappers.
+        self.import
+            && matches!(
+                self.raw,
+                Some(
+                    "abort"
+                        | "_abort"
+                        | "__assert_fail"
+                        | "___assert_fail"
+                        | "__assert_perror_fail"
+                        | "___assert_perror_fail"
+                        | "__assert_rtn"
+                        | "___assert_rtn"
+                        | "__stack_chk_fail"
+                        | "___stack_chk_fail"
+                        | "__stack_chk_fail_local"
+                        | "___stack_chk_fail_local"
+                        | "__fortify_fail"
+                        | "___fortify_fail"
+                        | "__chk_fail"
+                        | "___chk_fail"
+                )
+            )
     }
 }
 
@@ -383,7 +412,8 @@ fn loaded_slot(binary: &Binary, bytes: &[u8], instruction: &rampage_arch::Insn) 
     }
     let word = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?);
     let slot = instruction.data_ref.filter(|&slot| binary.import_slot(slot).is_some())?;
-    (word & 0xffc0_0000 == 0xf940_0000).then_some(((word & 31) as u8, slot))
+    let pointer_load = word & 0xffc0_0000 == 0xf940_0000 || word & 0xff00_0000 == 0x5800_0000;
+    (instruction.accesses && pointer_load).then_some(((word & 31) as u8, slot))
 }
 
 fn preserves_loaded(bytes: &[u8], loaded: Option<(u8, u64)>) -> bool {
@@ -413,7 +443,8 @@ fn stub_padding(
             operand_size_nop
                 || decoder.format(bytes, instruction.address).split_ascii_whitespace().next() == Some("nop")
         }
-        Arch::Aarch64 => bytes == 0xd503_201fu32.to_le_bytes(),
+        // Mach-O linker-relaxed stubs can begin with NOP; ELF resolver NOPs are padding instead.
+        Arch::Aarch64 => binary.format != Format::MachO && bytes == 0xd503_201fu32.to_le_bytes(),
         _ => false,
     }
 }
@@ -557,6 +588,7 @@ struct Context<'a> {
     symbols: BTreeMap<u64, Identity<'a>>,
     imports: BTreeSet<u64>,
     references: BTreeSet<u64>,
+    noreturn_wrappers: BTreeSet<u64>,
 }
 
 impl<'a> Context<'a> {
@@ -620,6 +652,120 @@ fn identity_at<'a>(
     })
 }
 
+fn x86_interrupt(arch: Arch, bytes: &[u8]) -> bool {
+    let opcode = bytes.iter().copied().find(|byte| {
+        !matches!(byte, 0xf0 | 0xf2 | 0xf3 | 0x2e | 0x36 | 0x3e | 0x26 | 0x64 | 0x65 | 0x66 | 0x67)
+            && !(arch == Arch::X86_64 && (0x40..=0x4f).contains(byte))
+    });
+    matches!(opcode, Some(0xcd | 0xcc | 0xf1 | 0xce))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn noreturn_wrapper(
+    binary: &Binary,
+    address: u64,
+    metadata: &MetadataIndex<'_>,
+    stubs: &BTreeMap<u64, Identity<'_>>,
+    counts: &mut EntryPlanCounts,
+    omissions: &mut Vec<String>,
+    check: &impl Fn(&'static str) -> Result<(), ApiError>,
+) -> Result<bool, ApiError> {
+    check("entry noreturn wrapper")?;
+    let Some(entry) = metadata.entries.get(&address).filter(|entry| entry.is_entry()) else {
+        return Ok(false);
+    };
+    let next_entry = metadata
+        .entries
+        .range((Excluded(address), Unbounded))
+        .find_map(|(&address, entry)| entry.is_entry().then_some(address));
+    let end = [entry.symbol_end, next_entry]
+        .into_iter()
+        .flatten()
+        .fold(address.saturating_add(MAX_WRAPPER_BYTES as u64), u64::min);
+    let mut decoder = binary.decoder()?;
+    decoder.begin_run();
+    let mut at = address;
+    let initial_instructions = counts.decoded_instructions;
+    while counts.decoded_instructions - initial_instructions < MAX_WRAPPER_INSTRUCTIONS {
+        check("entry noreturn wrapper instruction")?;
+        if at.saturating_sub(address) >= MAX_WRAPPER_BYTES as u64 {
+            exhausted(counts, omissions, "A referenced callee wrapper exceeded its byte budget without proof.");
+            return Ok(false);
+        }
+        if at >= end || metadata.is_data(at) {
+            omit(omissions, "A referenced callee wrapper reached a metadata or byte-window boundary without proof.");
+            return Ok(false);
+        }
+        if counts.decoded_instructions >= MAX_INSTRUCTIONS || counts.decoded_bytes >= MAX_BYTES {
+            exhausted(counts, omissions, "Referenced callee wrappers exceeded the shared decoding budget.");
+            return Ok(false);
+        }
+        let Some(bytes) = code(binary, at) else {
+            omit(omissions, "A referenced callee wrapper includes unavailable or non-executable code.");
+            return Ok(false);
+        };
+        // AArch64 call-to-next must remain a transfer, not lookahead-reclassified setup.
+        let maximum = if binary.arch == Arch::Aarch64 { 4 } else { 15 };
+        let available = bytes.len().min((end - at) as usize).min(MAX_BYTES - counts.decoded_bytes).min(maximum);
+        let mut instruction = decoder.decode(&bytes[..available], at);
+        counts.decoded_instructions += 1;
+        let length = usize::from(instruction.len);
+        if length == 0 || length > available || instruction.flow == Flow::Invalid {
+            if available == MAX_BYTES - counts.decoded_bytes
+                || end == address.saturating_add(MAX_WRAPPER_BYTES as u64) && available as u64 == end - at
+            {
+                exhausted(counts, omissions, "A referenced callee wrapper reached a byte budget without proof.");
+            } else {
+                omit(omissions, "A referenced callee wrapper includes invalid or incomplete instructions.");
+            }
+            return Ok(false);
+        }
+        counts.decoded_bytes += length;
+        // Resumable breakpoints and supervisor calls are Flow::Next, not proven wrapper setup.
+        if binary.arch == Arch::Aarch64
+            && bytes.first_chunk::<4>().is_some_and(|word| u32::from_le_bytes(*word) & 0xff00_0000 == 0xd400_0000)
+        {
+            return Ok(false);
+        }
+        if matches!(binary.arch, Arch::X86 | Arch::X86_64) && x86_interrupt(binary.arch, &bytes[..length]) {
+            return Ok(false);
+        }
+        if binary.arch != Arch::Aarch64 && instruction.flow == Flow::Next && length < available {
+            if counts.decoded_instructions - initial_instructions >= MAX_WRAPPER_INSTRUCTIONS
+                || counts.decoded_instructions >= MAX_INSTRUCTIONS
+                || length > MAX_BYTES - counts.decoded_bytes
+            {
+                exhausted(counts, omissions, "Referenced callee wrapper verification exceeded its decoding budget.");
+                return Ok(false);
+            }
+            // Remove x86 lookahead too: a call-to-next is not permitted wrapper setup.
+            decoder.reset();
+            instruction = decoder.decode(&bytes[..length], at);
+            counts.decoded_instructions += 1;
+            counts.decoded_bytes += length;
+            if usize::from(instruction.len) != length || instruction.flow == Flow::Invalid {
+                return Ok(false);
+            }
+        }
+        let Some(next) = at.checked_add(length as u64).filter(|&next| width_valid(binary, next - 1)) else {
+            return Ok(false);
+        };
+        if instruction.conditional || metadata.data_ends.range((Excluded(at), Excluded(next))).next().is_some() {
+            return Ok(false);
+        }
+        match instruction.flow {
+            Flow::Next => at = next,
+            Flow::Call(target) | Flow::Jump(target) => {
+                return Ok(stubs.get(&target).is_some_and(|identity| identity.fatal_termination_import())
+                    && identity_at(binary, metadata, stubs, target).is_some());
+            }
+            _ => return Ok(false),
+        }
+    }
+    exhausted(counts, omissions, "A referenced callee wrapper exceeded its instruction budget without proof.");
+    Ok(false)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk<'a>(
     binary: &'a Binary,
@@ -636,6 +782,8 @@ fn walk<'a>(
     let mut pending = VecDeque::from([address]);
     let mut queued = BTreeSet::from([address]);
     let mut decoded: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut inspected_wrappers = BTreeSet::new();
+    let has_fatal_stubs = stubs.values().any(|identity| identity.fatal_termination_import());
     while let Some(mut at) = pending.pop_front() {
         check("entry reference block")?;
         if counts.walk_blocks >= MAX_BLOCKS {
@@ -713,6 +861,24 @@ fn walk<'a>(
                 context.references.insert(target);
                 if let Some(identity) = identity_at(binary, metadata, stubs, target) {
                     context.symbol(target, identity, false, counts, omissions)?;
+                    if has_fatal_stubs
+                        && !instruction.conditional
+                        && matches!(instruction.flow, Flow::Call(_) | Flow::Jump(_))
+                        && target != address
+                        && !identity.noreturn()
+                        && !stubs.contains_key(&target)
+                        && context.symbols.contains_key(&target)
+                        && !inspected_wrappers.contains(&target)
+                    {
+                        if inspected_wrappers.len() >= MAX_NORETURN_WRAPPERS {
+                            exhausted(counts, omissions, "Referenced callee wrappers exceeded their candidate budget.");
+                        } else {
+                            inspected_wrappers.insert(target);
+                            if noreturn_wrapper(binary, target, metadata, stubs, counts, omissions, check)? {
+                                context.noreturn_wrappers.insert(target);
+                            }
+                        }
+                    }
                 } else if metadata.is_data(target) {
                     omit(
                         omissions,
@@ -739,7 +905,10 @@ fn walk<'a>(
             match instruction.flow {
                 Flow::Next => at = next,
                 Flow::Call(target) => {
-                    if identity_at(binary, metadata, stubs, target).is_some_and(Identity::noreturn) {
+                    if !instruction.conditional
+                        && (identity_at(binary, metadata, stubs, target).is_some_and(Identity::noreturn)
+                            || context.noreturn_wrappers.contains(&target))
+                    {
                         break;
                     }
                     at = next;
@@ -826,7 +995,12 @@ pub(super) fn prepare(
             stubs.insert(target, Identity { raw: Some(&import.name), import: true });
         }
     }
-    let mut context = Context { symbols: BTreeMap::new(), imports: BTreeSet::new(), references: BTreeSet::new() };
+    let mut context = Context {
+        symbols: BTreeMap::new(),
+        imports: BTreeSet::new(),
+        references: BTreeSet::new(),
+        noreturn_wrappers: BTreeSet::new(),
+    };
     let selected =
         identity_at(binary, &metadata, &stubs, request.address).unwrap_or(Identity { raw: None, import: false });
     context.symbol(request.address, selected, true, &mut counts, &mut omissions)?;
@@ -856,6 +1030,13 @@ pub(super) fn prepare(
         .flatten()
         .fold(request.address.saturating_add(MAX_BYTES as u64), u64::min);
     check("entry local references")?;
+    omit(
+        &mut omissions,
+        concat!(
+            "Noreturn inference is limited to bounded referenced exact-metadata straight-line wrappers ",
+            "to exact non-unwinding fatal import stubs; no recursive or whole-program noreturn inference."
+        ),
+    );
     walk(binary, request.address, end, &metadata, &stubs, &mut context, &mut counts, &mut omissions, check)?;
     for (&address, &identity) in &stubs {
         check("entry optional stub symbol")?;
@@ -870,9 +1051,9 @@ pub(super) fn prepare(
         if let Some(raw) = identity.raw.filter(|name| !name.is_empty()) {
             let name = canonical(raw).to_owned();
             operations.push(WorkerOperation::RuntimePrototype { address, indirect: false, name, optional: true });
-            if identity.noreturn() {
-                operations.push(WorkerOperation::NoReturn { address, indirect: false });
-            }
+        }
+        if identity.noreturn() || context.noreturn_wrappers.contains(&address) {
+            operations.push(WorkerOperation::NoReturn { address, indirect: false });
         }
     }
     for &address in &context.imports {
