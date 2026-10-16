@@ -239,7 +239,8 @@ cargo run --release -p armgen -- <AARCHMRS-directory> A64 crates/rampage-arch/sr
 ```
 
 Test fixtures live in `tests/fixtures`; `tests/fixtures/build.sh` rebuilds them using zig and Apple clang.
-`tools/install.sh [ROOT] [--ui]` builds and installs the CLI and worker together, optionally with the UI.
+`tools/install.sh [ROOT] [--ui] [--plugins]` builds the CLI/native worker, with optional UI and matching plugin worker;
+see [source installation](plugins.md#source-installation) for retention, staging and partial-publication behavior.
 See [extension points](plugins.md): builtin registries remain internal; the explicit experimental triage-component
 host is separate, with no stable public plugin API or automatic discovery.
 The [LLDB query bridge](lldb-query.md) provides bounded read-only queries in an existing authorized stopped
