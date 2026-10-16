@@ -2,6 +2,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use rampage_decompiler::worker::{BinaryCheckpoint, ByteCheckpoint};
 use wasmtime::component::types::{ComponentExtern, ComponentItem, Type};
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, OutOfMemory, Store, StoreLimitsBuilder, Trap, WasmFeatures};
@@ -11,7 +12,13 @@ use crate::{
     MAX_TABLES, MAX_WASM_STACK, PluginError,
 };
 
-pub(crate) fn execute(bytes: &[u8], input: &[u8], fuel: u64, timeout: Duration) -> Result<Vec<u8>, PluginError> {
+pub(crate) fn execute(
+    bytes: &[u8],
+    input: &[u8],
+    fuel: u64,
+    timeout: Duration,
+    checkpoint: Option<BinaryCheckpoint>,
+) -> Result<Vec<u8>, PluginError> {
     let mut config = Config::new();
     config.consume_fuel(true).epoch_interruption(true).max_wasm_stack(MAX_WASM_STACK);
     config.wasm_backtrace_max_frames(None);
@@ -67,6 +74,7 @@ pub(crate) fn execute(bytes: &[u8], input: &[u8], fuel: u64, timeout: Duration) 
             let output = instance
                 .get_typed_func::<(u32,), ((u64, u64, u64, u64),)>(&mut store, &output_index)
                 .map_err(|_| PluginError::Abi)?;
+            arm_checkpoint(&mut store, checkpoint.as_ref(), ByteCheckpoint::Run, started, timeout)?;
             let (length,) = run.call(&mut store, (input,)).map_err(classify_execution)?;
             let length = length as usize;
             if length > MAX_OUTPUT_BYTES {
@@ -76,6 +84,9 @@ pub(crate) fn execute(bytes: &[u8], input: &[u8], fuel: u64, timeout: Duration) 
             bytes.try_reserve_exact(length).map_err(|_| PluginError::Resource)?;
             for offset in (0..length).step_by(32) {
                 check_execution_deadline(started, timeout)?;
+                if offset == 0 {
+                    arm_checkpoint(&mut store, checkpoint.as_ref(), ByteCheckpoint::Output, started, timeout)?;
+                }
                 let ((a, b, c, d),) = output.call(&mut store, (offset as u32,)).map_err(classify_execution)?;
                 for word in [a, b, c, d] {
                     let remaining = (length - bytes.len()).min(8);
@@ -91,11 +102,61 @@ pub(crate) fn execute(bytes: &[u8], input: &[u8], fuel: u64, timeout: Duration) 
     })
 }
 
+fn arm_checkpoint<T: 'static>(
+    store: &mut Store<T>,
+    checkpoint: Option<&BinaryCheckpoint>,
+    call: ByteCheckpoint,
+    started: Instant,
+    timeout: Duration,
+) -> Result<(), PluginError> {
+    let Some(checkpoint) = checkpoint.filter(|checkpoint| checkpoint.selected() == Some(call)) else {
+        return Ok(());
+    };
+    check_execution_deadline(started, timeout)?;
+    let checkpoint = checkpoint.clone();
+    store.epoch_deadline_callback(move |_| {
+        checkpoint_epoch(started, timeout, || {
+            let _ = checkpoint.park(call);
+        })
+    });
+    store.set_epoch_deadline(0);
+    Ok(())
+}
+
+fn checkpoint_epoch(
+    started: Instant,
+    timeout: Duration,
+    park: impl FnOnce(),
+) -> wasmtime::Result<wasmtime::UpdateDeadline> {
+    // Guest entry can be delayed after arming; an expired execution must never publish GuestActive.
+    if check_execution_deadline(started, timeout).is_err() {
+        return Err(Trap::Interrupt.into());
+    }
+    park();
+    // A successful park never returns. Treat even an unexpected successful return as a terminal control
+    // failure, never Continue: the ordinary one-shot timeout tick may have fired while this was parked.
+    Err(CheckpointFailure.into())
+}
+
+#[derive(Debug)]
+struct CheckpointFailure;
+
+impl std::fmt::Display for CheckpointFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("plugin checkpoint control failure")
+    }
+}
+
+impl std::error::Error for CheckpointFailure {}
+
 fn check_execution_deadline(started: Instant, timeout: Duration) -> Result<(), PluginError> {
     if started.elapsed() >= timeout { Err(PluginError::ExecutionDeadline) } else { Ok(()) }
 }
 
 fn classify_execution(error: wasmtime::Error) -> PluginError {
+    if error.is::<CheckpointFailure>() {
+        return PluginError::Protocol;
+    }
     match error.downcast_ref::<Trap>() {
         Some(Trap::OutOfFuel) => PluginError::Fuel,
         Some(Trap::Interrupt) => PluginError::ExecutionDeadline,
@@ -168,6 +229,27 @@ fn plain_export(export: ComponentExtern<'_>) -> Result<ComponentItem, PluginErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_checkpoint_callback_interrupts_without_publishing_progress() {
+        let error = checkpoint_epoch(Instant::now(), Duration::ZERO, || {
+            panic!("expired guest execution must not publish or park a checkpoint");
+        })
+        .err()
+        .expect("expired checkpoint must interrupt");
+        assert_eq!(error.downcast_ref::<Trap>(), Some(&Trap::Interrupt));
+        assert_eq!(classify_execution(error), PluginError::ExecutionDeadline);
+    }
+
+    #[test]
+    fn checkpoint_callback_never_resumes_even_if_parking_unexpectedly_returns() {
+        let parked = std::cell::Cell::new(false);
+        let error = checkpoint_epoch(Instant::now(), Duration::MAX, || parked.set(true))
+            .err()
+            .expect("checkpoint has no resume path");
+        assert!(parked.get());
+        assert_eq!(classify_execution(error), PluginError::Protocol);
+    }
 
     #[test]
     fn actual_compiled_component_types_reject_missing_exports_and_ambient_imports() {

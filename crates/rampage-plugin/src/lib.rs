@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+mod checkpoint;
 mod error;
 mod preflight;
 mod protocol;
@@ -30,9 +31,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use rampage_decompiler::worker::{WorkerConfig, WorkerError, run_supervised_bytes};
+use rampage_decompiler::worker::{BinaryCheckpoint, WorkerConfig, WorkerError, run_supervised_bytes};
 use rampage_plugin_contract::TriageFacts;
 
+pub use checkpoint::{CheckpointedPluginRun, GuestCall, PluginObservation};
 pub use error::PluginError;
 pub use rampage_plugin_contract::{COMPONENT_INTERFACE, MAX_INPUT_BYTES, MAX_OUTPUT_BYTES};
 
@@ -116,6 +118,40 @@ pub fn run_component(
     config: &PluginConfig,
     cancellation: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, PluginError> {
+    run_component_inner(component, input, config, cancellation, None)
+}
+
+/// Opt-in cancellation-only probe over private-control v2; ordinary execution and application protocol v1
+/// are unchanged. The selected call parks at a Wasm epoch callback, not inside compilation. GuestActive
+/// witnesses a Wasm activation within that call boundary, possibly canonical allocation rather than guest
+/// source-language code. The observer must cancel and return promptly: there is no acknowledgment or resume.
+/// SupervisionFinished runs before this execution releases its real admission permit, even on cancellation.
+/// Execution expiry is checked before arming and before publishing the guest-active checkpoint. Time parked
+/// and in trusted observers is opt-in instrumentation under the outer process budget, not a guarantee of
+/// return within the execution timeout (including its 500 ms ceiling). Parent observers run synchronously
+/// and cannot be forcibly interrupted; their time counts toward the outer budget checked after they return.
+/// Cleanup metrics must be checked independently; failed cleanup does not quarantine future admission.
+#[doc(hidden)]
+pub fn run_component_checkpointed(
+    component: &[u8],
+    input: &[u8],
+    config: &PluginConfig,
+    cancellation: &AtomicBool,
+    call: GuestCall,
+    observer: &mut dyn FnMut(PluginObservation<'_>),
+) -> CheckpointedPluginRun {
+    let mut checkpoint = checkpoint::CheckpointObserver { cancellation, call, observer, metrics: None };
+    let result = run_component_inner(component, input, config, Some(cancellation), Some(&mut checkpoint));
+    CheckpointedPluginRun { result, metrics: checkpoint.metrics }
+}
+
+fn run_component_inner(
+    component: &[u8],
+    input: &[u8],
+    config: &PluginConfig,
+    cancellation: Option<&AtomicBool>,
+    checkpoint: Option<&mut checkpoint::CheckpointObserver<'_>>,
+) -> Result<Vec<u8>, PluginError> {
     let budget = Budget { started: Instant::now(), timeout: config.timeout.min(MAX_TIMEOUT), cancellation };
     budget.check()?;
     let _permit = Permit::acquire()?;
@@ -157,7 +193,10 @@ pub fn run_component(
         max_stdout_bytes: protocol::MAX_RESPONSE_BYTES,
         max_stderr_bytes: protocol::MAX_STDERR_BYTES,
     };
-    let result = run_supervised_bytes(bytes, &worker, cancellation).map_err(PluginError::from);
+    let result = match checkpoint {
+        Some(checkpoint) => checkpoint.supervise(bytes, &worker),
+        None => run_supervised_bytes(bytes, &worker, cancellation).map_err(PluginError::from),
+    };
     budget.check()?;
     let response = result?;
     let output = match protocol::decode_response(&response)? {
@@ -187,7 +226,18 @@ fn admit_output(bytes: &[u8], facts: &TriageFacts) -> Result<(), PluginError> {
 /// No paths, commands, or host tools are accepted over this protocol. Worker errors contain static codes.
 #[doc(hidden)]
 pub fn serve_stdio() -> Result<(), WorkerError> {
-    let result = protocol::read_request(io::stdin().lock()).and_then(|bytes| execute_request(&bytes));
+    serve_stdio_inner(None)
+}
+
+/// One-request handler for the binary-only checkpoint-capable lifecycle. A disabled handle retains the
+/// ordinary handler behavior; no ambient descriptor is claimed here and no control capability reaches Wasm.
+#[doc(hidden)]
+pub fn serve_stdio_checkpointed(checkpoint: BinaryCheckpoint) -> Result<(), WorkerError> {
+    serve_stdio_inner(Some(checkpoint))
+}
+
+fn serve_stdio_inner(checkpoint: Option<BinaryCheckpoint>) -> Result<(), WorkerError> {
+    let result = protocol::read_request(io::stdin().lock()).and_then(|bytes| execute_request(&bytes, checkpoint));
     let output_hex;
     let response = match result {
         Ok(output) => {
@@ -205,7 +255,7 @@ fn worker_protocol_error(_: PluginError) -> WorkerError {
     WorkerError::Protocol("plugin response failure".to_owned())
 }
 
-fn execute_request(bytes: &[u8]) -> Result<Vec<u8>, PluginError> {
+fn execute_request(bytes: &[u8], checkpoint: Option<BinaryCheckpoint>) -> Result<Vec<u8>, PluginError> {
     if !cfg!(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")) {
         return Err(PluginError::UnsupportedPlatform);
     }
@@ -221,8 +271,13 @@ fn execute_request(bytes: &[u8]) -> Result<Vec<u8>, PluginError> {
     let input = protocol::decode_hex(request.input_hex, MAX_INPUT_BYTES)?;
     let facts = admit_input(&input)?;
     preflight::admit(&component)?;
-    let output =
-        runtime::execute(&component, &input, request.fuel, Duration::from_millis(request.execution_timeout_ms))?;
+    let output = runtime::execute(
+        &component,
+        &input,
+        request.fuel,
+        Duration::from_millis(request.execution_timeout_ms),
+        checkpoint,
+    )?;
     admit_output(&output, &facts)?;
     Ok(output)
 }
