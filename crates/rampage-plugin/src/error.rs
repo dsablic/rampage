@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum PluginError {
     Busy,
+    Quarantined,
     Cancelled,
     Timeout,
     Configuration,
@@ -34,6 +35,7 @@ impl PluginError {
     pub fn code(self) -> &'static str {
         match self {
             Self::Busy => "plugin_busy",
+            Self::Quarantined => "plugin_quarantined",
             Self::Cancelled => "plugin_cancelled",
             Self::Timeout => "plugin_timeout",
             Self::Configuration => "plugin_configuration",
@@ -58,6 +60,7 @@ impl PluginError {
     }
 
     pub(crate) fn from_wire_name(name: &str) -> Option<Self> {
+        // Quarantine is parent-owned state, not a disposition accepted from an application error packet.
         const ERRORS: &[PluginError] = &[
             PluginError::Busy,
             PluginError::Cancelled,

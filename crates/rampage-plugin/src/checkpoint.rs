@@ -1,6 +1,8 @@
 use std::sync::atomic::AtomicBool;
 
-use rampage_decompiler::worker::{ByteCheckpoint, SupervisedMetrics, WorkerConfig, run_supervised_bytes_checkpointed};
+use rampage_decompiler::worker::{
+    ByteCheckpoint, ByteCleanup, SupervisedMetrics, WorkerConfig, run_supervised_bytes_checkpointed_guarded,
+};
 
 use crate::PluginError;
 
@@ -46,7 +48,7 @@ pub enum PluginObservation<'a> {
 }
 
 /// No metrics means execution failed before entering byte supervision. Existing cleanup failures retain
-/// their primary-error precedence; this probe does not introduce admission quarantine after failed cleanup.
+/// their primary-error precedence; mandatory cleanup disposition independently controls admission quarantine.
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct CheckpointedPluginRun {
@@ -62,12 +64,21 @@ pub(crate) struct CheckpointObserver<'a> {
 }
 
 impl CheckpointObserver<'_> {
-    pub(crate) fn supervise(&mut self, bytes: Vec<u8>, config: &WorkerConfig) -> Result<Vec<u8>, PluginError> {
+    pub(crate) fn supervise(
+        &mut self,
+        bytes: Vec<u8>,
+        config: &WorkerConfig,
+        cleanup: &mut dyn FnMut(ByteCleanup),
+    ) -> Result<Vec<u8>, PluginError> {
         let observer = &mut *self.observer;
-        let run =
-            run_supervised_bytes_checkpointed(bytes, config, self.cancellation, self.call.into(), &mut |checkpoint| {
-                observer(PluginObservation::GuestActive(checkpoint.into()))
-            });
+        let run = run_supervised_bytes_checkpointed_guarded(
+            bytes,
+            config,
+            self.cancellation,
+            self.call.into(),
+            &mut |checkpoint| observer(PluginObservation::GuestActive(checkpoint.into())),
+            cleanup,
+        );
         observer(PluginObservation::SupervisionFinished(&run.metrics));
         self.metrics = Some(run.metrics);
         run.result.map_err(PluginError::from)

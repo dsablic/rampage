@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+mod admission;
 mod checkpoint;
 mod error;
 mod preflight;
@@ -31,9 +32,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use rampage_decompiler::worker::{BinaryCheckpoint, WorkerConfig, WorkerError, run_supervised_bytes};
+use rampage_decompiler::worker::{BinaryCheckpoint, WorkerConfig, WorkerError, run_supervised_bytes_guarded};
 use rampage_plugin_contract::TriageFacts;
 
+use admission::Permit;
+pub use admission::{PluginAdmission, admission_status};
 pub use checkpoint::{CheckpointedPluginRun, GuestCall, PluginObservation};
 pub use error::PluginError;
 pub use rampage_plugin_contract::{COMPONENT_INTERFACE, MAX_INPUT_BYTES, MAX_OUTPUT_BYTES};
@@ -49,8 +52,6 @@ pub const MAX_TABLE_ELEMENTS: usize = 10_000;
 pub const MAX_TABLES: usize = 2;
 pub const MAX_INSTANCES: usize = 8;
 pub const MAX_WASM_STACK: usize = 512 * 1024;
-
-static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Limits may be lowered, never raised above this crate's ceilings. The executable must be explicit and
 /// absolute, selected by the trusted caller, and must implement the plugin worker protocol, not p4.
@@ -72,21 +73,6 @@ impl PluginConfig {
             fuel: MAX_FUEL,
             execution_timeout: MAX_EXECUTION_TIMEOUT,
         }
-    }
-}
-
-struct Permit;
-
-impl Permit {
-    fn acquire() -> Result<Self, PluginError> {
-        ACTIVE.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).map_err(|_| PluginError::Busy)?;
-        Ok(Self)
-    }
-}
-
-impl Drop for Permit {
-    fn drop(&mut self) {
-        ACTIVE.store(false, Ordering::Release);
     }
 }
 
@@ -130,7 +116,7 @@ pub fn run_component(
 /// and in trusted observers is opt-in instrumentation under the outer process budget, not a guarantee of
 /// return within the execution timeout (including its 500 ms ceiling). Parent observers run synchronously
 /// and cannot be forcibly interrupted; their time counts toward the outer budget checked after they return.
-/// Cleanup metrics must be checked independently; failed cleanup does not quarantine future admission.
+/// Cleanup disposition is recorded independently of optional metrics. Uncertain cleanup quarantines admission.
 #[doc(hidden)]
 pub fn run_component_checkpointed(
     component: &[u8],
@@ -154,7 +140,7 @@ fn run_component_inner(
 ) -> Result<Vec<u8>, PluginError> {
     let budget = Budget { started: Instant::now(), timeout: config.timeout.min(MAX_TIMEOUT), cancellation };
     budget.check()?;
-    let _permit = Permit::acquire()?;
+    let mut permit = Permit::acquire()?;
     if !cfg!(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64")) {
         return Err(PluginError::UnsupportedPlatform);
     }
@@ -193,9 +179,13 @@ fn run_component_inner(
         max_stdout_bytes: protocol::MAX_RESPONSE_BYTES,
         max_stderr_bytes: protocol::MAX_STDERR_BYTES,
     };
+    permit.begin_supervision();
     let result = match checkpoint {
-        Some(checkpoint) => checkpoint.supervise(bytes, &worker),
-        None => run_supervised_bytes(bytes, &worker, cancellation).map_err(PluginError::from),
+        Some(checkpoint) => checkpoint.supervise(bytes, &worker, &mut |cleanup| permit.finish_supervision(cleanup)),
+        None => run_supervised_bytes_guarded(bytes, &worker, cancellation, &mut |cleanup| {
+            permit.finish_supervision(cleanup);
+        })
+        .map_err(PluginError::from),
     };
     budget.check()?;
     let response = result?;
@@ -285,6 +275,12 @@ fn execute_request(bytes: &[u8], checkpoint: Option<BinaryCheckpoint>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_error_packet_rejects_parent_only_quarantine_code() {
+        let packet = br#"{"status":"error","version":1,"code":"quarantined"}"#;
+        assert!(matches!(protocol::decode_response(packet), Err(PluginError::Protocol)));
+    }
 
     const FACTS: &str = r#"{
         "schemaVersion":1,"exhaustive":true,"recordTotal":2,"perSection":25,
