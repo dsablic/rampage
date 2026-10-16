@@ -375,8 +375,26 @@ impl Binary {
         image: Option<ImageAt>,
         wanted: Option<Arch>,
     ) -> Result<Self, LoadError> {
-        let data = map_executable_checked(path.as_ref())?;
-        match image.filter(|image| !image.is_whole_file()) {
+        Self::open_image_checked_admitted(path, image, wanted, 128 * 1024 * 1024, |_| Ok(()))
+    }
+
+    /// Checked opening with an additional admission gate on the exact retained mapping, before any native
+    /// image/carving/snapshot parser runs. `max_source_bytes` can lower, never raise, the 128 MiB checked cap
+    /// and is enforced on the opened descriptor before mapping. The callback sees the complete outer source;
+    /// callers admitting an embedded image must validate their selection within these bytes themselves.
+    ///
+    /// Original descriptor/path metadata are revalidated after the callback and before consuming the mapping.
+    /// Neither metadata checks nor callback admission make reads atomic: sources must remain quiescent during
+    /// the callback and subsequent parsing, including against concurrent truncation of the mapped file.
+    pub fn open_image_checked_admitted(
+        path: impl AsRef<Path>,
+        image: Option<ImageAt>,
+        wanted: Option<Arch>,
+        max_source_bytes: usize,
+        admit: impl FnOnce(&[u8]) -> Result<(), LoadError>,
+    ) -> Result<Self, LoadError> {
+        let data = map_executable_checked(path.as_ref(), max_source_bytes.min(128 * 1024 * 1024))?;
+        consume_admitted_source(data, admit, |data| match image.filter(|image| !image.is_whole_file()) {
             Some(image) => Self::open_mapped_at(data, image.offset, image.length, wanted),
             None => {
                 if data.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') {
@@ -384,7 +402,7 @@ impl Binary {
                 }
                 Self::open_mapped(data, wanted)
             }
-        }
+        })
     }
 
     /// Checks the admission limits used by checked opening without reopening or deriving source identity.
@@ -1035,14 +1053,21 @@ fn map_executable(path: &Path) -> Result<MappedSource, LoadError> {
 }
 
 #[cfg(unix)]
-fn map_executable_checked(path: &Path) -> Result<MappedSource, LoadError> {
+fn map_executable_checked(path: &Path, max_source_bytes: usize) -> Result<MappedSource, LoadError> {
     use rustix::fs::{Mode, OFlags, open};
     let io_error = |source| LoadError::Io { path: path.to_owned(), source };
     let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
     let file = File::from(open(path, flags, Mode::empty()).map_err(|error| io_error(error.into()))?);
     let metadata = file.metadata().map_err(io_error)?;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 128 * 1024 * 1024 {
-        return Err(LoadError::Unsupported("checked source must be a nonempty regular file of at most 128 MiB".into()));
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_source_bytes as u64 {
+        if max_source_bytes == 128 * 1024 * 1024 {
+            return Err(LoadError::Unsupported(
+                "checked source must be a nonempty regular file of at most 128 MiB".into(),
+            ));
+        }
+        return Err(LoadError::Unsupported(format!(
+            "checked source must be a nonempty regular file within the {max_source_bytes}-byte limit"
+        )));
     }
     let stamp = BackingStamp::from_metadata(&metadata)
         .ok_or_else(|| LoadError::Unsupported("checked source identity is unavailable".into()))?;
@@ -1057,8 +1082,122 @@ fn map_executable_checked(path: &Path) -> Result<MappedSource, LoadError> {
 }
 
 #[cfg(not(unix))]
-fn map_executable_checked(_: &Path) -> Result<MappedSource, LoadError> {
+fn map_executable_checked(_: &Path, _: usize) -> Result<MappedSource, LoadError> {
     Err(LoadError::Unsupported("checked workspace sources are unsupported on this platform".into()))
+}
+
+fn consume_admitted_source<T>(
+    data: MappedSource,
+    admit: impl FnOnce(&[u8]) -> Result<(), LoadError>,
+    consume: impl FnOnce(MappedSource) -> Result<T, LoadError>,
+) -> Result<T, LoadError> {
+    let admitted = admit(&data);
+    data.validate()?;
+    let pathname =
+        std::fs::symlink_metadata(&data.path).map_err(|source| LoadError::Io { path: data.path.clone(), source })?;
+    if !pathname.is_file() {
+        return Err(LoadError::Unsupported("checked source pathname is no longer a regular file".into()));
+    }
+    admitted?;
+    consume(data)
+}
+
+#[cfg(all(test, unix))]
+mod checked_admission_tests {
+    use std::cell::Cell;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+
+    struct Files {
+        source: PathBuf,
+        replacement: PathBuf,
+    }
+
+    impl Files {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let source = std::env::temp_dir().join(format!(
+                "rampage-admitted-loader-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            let replacement = source.with_extension("replacement");
+            let file = File::options().write(true).create_new(true).open(&source).unwrap();
+            let files = Self { source, replacement };
+            file.set_len(4).unwrap();
+            files
+        }
+    }
+
+    impl Drop for Files {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.source);
+            let _ = std::fs::remove_file(&self.replacement);
+        }
+    }
+
+    #[test]
+    fn replacement_is_admitted_on_actual_mapping_and_rejection_never_enters_producer() {
+        let files = Files::new();
+        let original = map_executable_checked(&files.source, 1024).unwrap();
+        std::fs::write(&files.replacement, b"replacement profile").unwrap();
+        std::fs::rename(&files.replacement, &files.source).unwrap();
+        assert!(original.validate().is_err());
+        let replacement = map_executable_checked(&files.source, 1024).unwrap();
+        let producer_entered = Cell::new(false);
+        let result: Result<(), LoadError> = consume_admitted_source(
+            replacement,
+            |actual| {
+                assert_eq!(actual, b"replacement profile");
+                Err(LoadError::Unsupported("raw replacement rejected".into()))
+            },
+            |_| {
+                producer_entered.set(true);
+                Ok(())
+            },
+        );
+        assert!(result.unwrap_err().to_string().contains("raw replacement rejected"));
+        assert!(!producer_entered.get());
+    }
+
+    #[test]
+    fn lower_limit_applies_to_replacement_descriptor_before_mapping_or_callback() {
+        let files = Files::new();
+        let original = map_executable_checked(&files.source, 1024).unwrap();
+        File::create(&files.replacement).unwrap().set_len(1025).unwrap();
+        std::fs::rename(&files.replacement, &files.source).unwrap();
+        let callback_entered = Cell::new(false);
+        let result = Binary::open_image_checked_admitted(&files.source, None, None, 1024, |_| {
+            callback_entered.set(true);
+            Ok(())
+        });
+        assert!(result.unwrap_err().to_string().contains("1024-byte limit"));
+        assert!(!callback_entered.get());
+        assert!(original.validate().is_err());
+    }
+
+    #[test]
+    fn callback_time_replacement_is_revalidated_before_entering_any_producer() {
+        let files = Files::new();
+        let source = map_executable_checked(&files.source, 1024).unwrap();
+        std::fs::write(&files.replacement, b"other bytes").unwrap();
+        let producer_entered = Cell::new(false);
+        let result: Result<(), LoadError> = consume_admitted_source(
+            source,
+            |_| {
+                std::fs::rename(&files.replacement, &files.source).unwrap();
+                Ok(())
+            },
+            |_| {
+                producer_entered.set(true);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(!producer_entered.get());
+    }
 }
 
 /// Whether a section name is the Go pclntab under any of its spellings. Go's linker names a PIE's relro copy
