@@ -1,0 +1,8 @@
+[package]
+name = "rampage-componentize"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wit-component = "=0.248.0"

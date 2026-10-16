@@ -1,0 +1,13 @@
+package rampage:workflow@0.0.1;
+
+interface triage {
+    // One private instance is exclusively owned from run through the last output chunk. Hosts create a fresh
+    // instance per invocation and allow no imports/reentry. A subsequent run replaces the retained transaction.
+    run: func(input: list<u8>) -> u32;
+    // Four little-endian words, padded with zeros beyond the retained result's end.
+    output: func(offset: u32) -> tuple<u64, u64, u64, u64>;
+}
+
+world triage-plugin {
+    export triage;
+}

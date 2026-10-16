@@ -1,0 +1,18 @@
+[package]
+name = "rampage-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rampage-decompiler.workspace = true
+rampage-plugin-contract = { path = "../rampage-plugin-contract" }
+serde.workspace = true
+serde_json.workspace = true
+wasmparser = "=0.248.0"
+wasmtime = { version = "=49.0.3", default-features = false, features = [
+    "std",
+    "runtime",
+    "cranelift",
+    "component-model",
+] }

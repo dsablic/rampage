@@ -1,0 +1,30 @@
+[package]
+name = "rampage-runtime-probe-guest"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.57.1", default-features = false, features = ["macros", "realloc", "std"] }
+
+[profile.dev]
+debug = 0
+incremental = false
+panic = "abort"
+
+[profile.test]
+debug = 0
+incremental = false
+
+[profile.release]
+debug = 0
+incremental = false
+lto = "thin"
+codegen-units = 1
+panic = "abort"

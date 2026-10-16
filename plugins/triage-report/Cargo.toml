@@ -1,0 +1,29 @@
+[package]
+name = "rampage-triage-report-guest"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rampage-plugin-contract = { path = "../../crates/rampage-plugin-contract" }
+serde_json = "1.0.151"
+wit-bindgen = { version = "=0.57.1", default-features = false, features = ["macros", "realloc", "std"] }
+
+[profile.dev]
+debug = 0
+incremental = false
+panic = "abort"
+
+[profile.test]
+debug = 0
+incremental = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
