@@ -344,6 +344,14 @@ pub(crate) struct InspectDataArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct InspectRawArgs {
+    pub(crate) file: PathBuf,
+    /// Explicit JSON mapping/range request, same fields as MCP inspect_raw_code except path; no defaults for mode/order/base
+    #[arg(long)]
+    pub(crate) request: String,
+}
+
+#[derive(Args)]
 pub(crate) struct DecodeFileArgs {
     pub(crate) file: PathBuf,
     /// Explicit decoder selection: lzss-4k (no format guessing)

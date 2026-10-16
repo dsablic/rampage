@@ -6,6 +6,7 @@ use crate::args::ArchiveInventoryArgs;
 use crate::args::DecodeFileArgs;
 use crate::args::ImportDebugLayoutsArgs;
 use crate::args::InspectDataArgs;
+use crate::args::InspectRawArgs;
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
@@ -76,6 +77,7 @@ impl RootCommand {
         Ok(match self {
             Self::Binary(BinaryCommand::Inspect(args)) => Command::Info(args),
             Self::Binary(BinaryCommand::InspectData(args)) => Command::InspectData(args),
+            Self::Binary(BinaryCommand::InspectRaw(args)) => Command::InspectRaw(args),
             Self::Binary(BinaryCommand::Decode(args)) => Command::DecodeFile(args),
             Self::Binary(BinaryCommand::Triage(args)) => Command::Triage(args),
             Self::Binary(BinaryCommand::Analyze(args)) => Command::Analyze(args),
@@ -143,6 +145,8 @@ pub(crate) enum BinaryCommand {
     Inspect(FileArgs),
     /// Inspect bounded image bytes and pointer candidates without discovery or annotation sidecars
     InspectData(InspectDataArgs),
+    /// Inspect an explicitly mapped raw-code window using a JSON request; no native header is required
+    InspectRaw(InspectRawArgs),
     /// Decode an explicitly selected file range into transient bytes; no extraction or native loading
     Decode(DecodeFileArgs),
     /// Hashes, entropy, format details, overlay and hints of packing or weak hardening

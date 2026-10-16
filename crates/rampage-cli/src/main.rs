@@ -143,6 +143,9 @@ enum Command {
     /// Inspect native-image bytes and candidate words
     #[command(hide = true)]
     InspectData(args::InspectDataArgs),
+    /// Inspect an explicitly mapped raw-code window
+    #[command(hide = true)]
+    InspectRaw(args::InspectRawArgs),
     /// Decode an explicit file range into transient bytes
     #[command(hide = true)]
     DecodeFile(args::DecodeFileArgs),
@@ -231,10 +234,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if matches!(&command, Command::ArchiveInventory(..) | Command::DecodeFile(..))
+    if matches!(&command, Command::ArchiveInventory(..) | Command::DecodeFile(..) | Command::InspectRaw(..))
         && (cli.arch.is_some() || cli.image_offset.is_some() || cli.image_length.is_some())
     {
-        let name = if matches!(&command, Command::DecodeFile(..)) { "decode" } else { "archive-inventory" };
+        let name = match &command {
+            Command::DecodeFile(..) => "decode",
+            Command::InspectRaw(..) => "inspect-raw (put architecture and mapping in --request)",
+            _ => "archive-inventory",
+        };
         eprintln!("rampage: binary {name} does not accept --arch, --image-offset or --image-length");
         return ExitCode::FAILURE;
     }
@@ -352,6 +359,9 @@ fn main() -> ExitCode {
         Command::InspectData(args::InspectDataArgs { file, at, size, word_size }) => {
             commands::inspect_data(&mut out, &file, &at, size, word_size, &options)
         }
+        Command::InspectRaw(args::InspectRawArgs { file, request }) => {
+            commands::inspect_raw(&mut out, &file, &request, &options)
+        }
         Command::DecodeFile(args) => {
             args.request().and_then(|request| commands::decode_range(&mut out, &args.file, &request, &options))
         }
@@ -449,6 +459,7 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
         Command::Inventory(..) => "inventory",
         Command::ArchiveInventory(..) => "binary archive-inventory",
         Command::DecodeFile(..) => "binary decode",
+        Command::InspectRaw(..) => "binary inspect-raw",
         Command::Packs { .. } => "packs",
         Command::Mcp(..) => "mcp (pass image_offset to each tool call instead)",
         Command::QueryDebugger(..) => "runtime debugger query (does not open an image)",

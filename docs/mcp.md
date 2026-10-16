@@ -21,7 +21,8 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
   `function_summary`, `xrefs`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
   `annotate_batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `triage_report`,
-  `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`.
+  `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
+  `decode_file_range`, `inspect_raw_code`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_pdb_names`, `class_evidence`,
@@ -40,10 +41,16 @@ nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a
 
 Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
 without group gating, plus the interactive `show_address`; it does not offer file tools
-`carve`/`archive_inventory`/`list_packs`/`query_debugger`.
+`carve`/`archive_inventory`/`list_packs`/`query_debugger`/`inspect_data`/`decode_file_range`/`inspect_raw_code`.
 `show_address` is not an MCP tool because the server has no interactive listing to navigate.
 
 ## Inputs, paging and decompiler tokens
+
+`inspect_raw_code` reads an explicitly mapped regular-file window with required architecture, mode, instruction
+and data byte orders, and base VA; it returns range hashes, source offsets and bounded linear observations.
+Limits: 4096 bytes, 256 instructions, little endian only; no target following or validated code identity.
+See [raw-code windows](raw-code.md). `decode_file_range` and `inspect_data` have separate source/coordinate
+contracts; see [decoding](decoding.md) and [data inspection](data-inspection.md).
 
 Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_length` to open an embedded view.
 `image_offset` is not the paging `offset`. Native addresses are hexadecimal strings; most queries also accept

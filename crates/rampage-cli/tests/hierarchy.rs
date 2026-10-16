@@ -32,6 +32,35 @@ fn run(args: &[&str]) -> Output {
 const MISSING: &str = "/nonexistent/rampage-hierarchy-input";
 type Route = (&'static [&'static str], &'static [&'static str], &'static [&'static str]);
 
+#[cfg(unix)]
+#[test]
+fn explicit_raw_code_json_request_does_not_open_a_native_image() {
+    let directory = FixtureDirectory::new("raw-code");
+    let file = directory.0.join("input.bin");
+    std::fs::write(&file, [0xaa, 0x00, 0xbf, 0x70, 0x47]).unwrap();
+    let request = serde_json::json!({"offset": 1, "length": 4, "arch": "arm", "mode": "thumb",
+        "code_byte_order": "little", "data_byte_order": "little", "base_address": "0x1000"})
+    .to_string();
+    let result = run(&["--json", "binary", "inspect-raw", file.to_str().unwrap(), "--request", &request]);
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["mapping"]["rows"][1]["flow"]["kind"], "return");
+    let refused = run(&["--arch", "arm", "binary", "inspect-raw", MISSING, "--request", &request]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("put architecture and mapping in --request"));
+    let many = directory.0.join("many.bin");
+    std::fs::write(&many, [0x90; 256]).unwrap();
+    let request = serde_json::json!({"offset": 0, "length": 256, "arch": "x86_64", "mode": "native",
+        "code_byte_order": "little", "data_byte_order": "little", "base_address": "0x1000",
+        "instruction_limit": 256})
+    .to_string();
+    let result = run(&["--json", "binary", "inspect-raw", many.to_str().unwrap(), "--request", &request]);
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(result.stdout.len() <= 60_000, "{} bytes", result.stdout.len());
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["mapping"]["rows"].as_array().unwrap().len(), 256);
+}
+
 #[test]
 fn decode_requires_explicit_codec_and_rejects_native_selectors_before_opening() {
     let base = ["binary", "decode", MISSING, "--offset", "0", "--length", "4", "--expected-output-size", "3"];

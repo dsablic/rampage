@@ -102,6 +102,7 @@ async fn lists_all_tools_with_instructions() {
         "import_pdb_names",
         "inspect_data",
         "inspect_jump_table",
+        "inspect_raw_code",
         "language_metadata",
         "list_annotations",
         "list_exports",
@@ -292,8 +293,11 @@ async fn image_offset_opens_a_carved_executable_with_its_own_annotations() {
     let client = connect().await;
 
     let tools = client.list_all_tools().await.unwrap();
-    let binary_tools: Vec<_> =
-        tools.iter().filter(|tool| tool.input_schema["properties"].get("arch").is_some()).collect();
+    // Raw windows assert architecture without opening a native embedded image.
+    let binary_tools: Vec<_> = tools
+        .iter()
+        .filter(|tool| tool.name != "inspect_raw_code" && tool.input_schema["properties"].get("arch").is_some())
+        .collect();
     assert!(binary_tools.iter().any(|tool| tool.name == "rename"));
     for tool in binary_tools {
         assert!(tool.input_schema["properties"].get("image_offset").is_some(), "{}", tool.name);

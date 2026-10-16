@@ -6,6 +6,12 @@ See the [CLI reference](cli-reference.md) for commands and [MCP reference](mcp.m
 
 ## Formats and instruction decoding
 
+- Bounded [raw-code windows](raw-code.md) accept explicit ranges and asserted architecture/mode/order/base
+  through MCP without a native executable header. Limits: little-endian x86/x64/ARM/AArch64, linear decoding
+  only; no code detection, function discovery or execution.
+- [Native data inspection](data-inspection.md) links bounded stored words to metadata candidates, while
+  [explicit decoding](decoding.md) provides a built-in LZSS-4K provider and transient previews. Limits: pointer
+  links are suppressed on loader warnings; decoding is not extraction, authentication or a load mapping.
 - ELF, PE and Mach-O, including universal Mach-O binaries and explicitly selected embedded executable images.
 - x86 and x86-64 use [iced-x86](https://github.com/icedland/iced).
 - AArch64 and 32-bit ARM decode natively from Arm's

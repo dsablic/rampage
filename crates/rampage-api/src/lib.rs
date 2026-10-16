@@ -31,6 +31,9 @@ mod pointer_compare;
 mod pointer_observation;
 mod project;
 mod project_workspace;
+mod range_source;
+mod raw_code;
+mod raw_file;
 mod rows;
 mod runtime_compare;
 mod session;
@@ -127,6 +130,11 @@ pub use rampage_detect::{Confidence as DetectionConfidence, Detection, Kind as D
 pub use rampage_plugin::PluginConfig as ComponentPluginConfig;
 pub use rampage_signatures::SignatureDb;
 pub use rampage_yara::{MatchedString, YaraMatch};
+pub use raw_code::{
+    MAX_RAW_CODE_BYTES, MAX_RAW_CODE_INSTRUCTIONS, MAX_RAW_CODE_RESULT_BYTES, RawCodeMode, RawCodeReport,
+    RawCodeRequest, RawCodeRow, RawCodeStopReason, inspect_raw_code,
+};
+pub use raw_file::{RawByteOrder, RawContinuation, RawFileReport, RawFileRequest, inspect_raw_file};
 pub use rows::{
     Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page, StringsQuery,
     Summary, label,

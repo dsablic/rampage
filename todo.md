@@ -117,10 +117,13 @@ Shared API/CLI/MCP edits and builds remain coordinated; each parallel worker own
   proprietary components; it did not establish that the image was empty or encrypted.
 - [ ] First enabling slice: format-independent byte/ASCII-string triage on explicit file ranges, with offsets,
   bounded previews, fill/occupied-region summaries and range hashes; no native loader or extraction required.
-- [ ] Second enabling slice: explicit raw-code windows with file range, address base, architecture, code mode
+- [x] Second enabling slice: explicit raw-code windows with file range, address base, architecture, code mode
   and byte order supplied as analyst assertions. Use the existing decoder; no guessed executable layout or seeds.
+  MCP and CLI expose bounded original-file windows; owned compiler/IT/literal/boundary cases and a real loader
+  window passed. Unknown backward literals and prior out-of-window IT context remain explicit limitations.
 - [ ] Use that raw Thumb view to corroborate the initial loader's decode loop, callers and component address
   fields, then follow one decoded startup/control path. Exact chip, field roles and full memory map remain open.
+  - [x] Corroborate the ring start, flags, reference assembly and ring wrapping through MCP raw inspection.
 - [x] Promote the corroborated codec experiment into an explicit internal decoder-provider interface with
   a built-in LZSS-4K variant, not a public SDK or triage-plugin ABI change. Shared API/CLI/MCP accept an explicit
   file range, codec, dictionary parameters and supplied output size, returning transient bytes/receipts only.

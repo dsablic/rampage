@@ -61,7 +61,9 @@ check_names pre-flights candidate names): they persist beside the binary and eve
 including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch; when \
 another client's edit blocks undoing a step, discard_undo drops it from the undo history (its edits stay) so earlier \
 steps can be undone; it refuses a step undo could still revert unless force is true, since the user's UI may share \
-that history. Memory snapshots and bundle directories use the same tools. inspect_data provides bounded native \
+that history. Memory snapshots and bundle directories use the same tools. inspect_raw_code provides bounded \
+linear decoding of original-file windows with an explicitly asserted architecture/mode/orders/base, without \
+native-image admission or target following. inspect_data provides bounded native \
 bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
 decode_file_range instead accepts an explicit regular-file range and codec without an executable header. \
 Its transient decoded preview uses decoded offsets, not source offsets or load addresses; supplied sizes and \

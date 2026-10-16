@@ -22,6 +22,45 @@ pub struct Options {
     pub packs: Arc<Packs>,
 }
 
+pub fn inspect_raw(out: &mut impl Write, path: &Path, request: &str, options: &Options) -> Result<()> {
+    anyhow::ensure!(request.len() <= 16_384, "raw-code request exceeds input budget");
+    let request: rampage_api::RawFileRequest = serde_json::from_str(request)?;
+    let report = rampage_api::inspect_raw_file(path, &request)?;
+    if options.json {
+        let bytes = serde_json::to_vec(&report)?;
+        anyhow::ensure!(bytes.len() < 60_000, "raw-code JSON exceeds output budget; narrow length/count");
+        out.write_all(&bytes)?;
+        return writeln!(out).map_err(Into::into);
+    }
+    writeln!(
+        out,
+        "raw window: file {:#x} +{}, base {:#x} (analyst assertion)",
+        report.source_offset, report.source_length, report.mapping.base_address
+    )?;
+    for row in &report.mapping.rows {
+        writeln!(
+            out,
+            "file {:#x} VA {:#x}  {}  {}",
+            report.source_offset + row.window_byte_offset as u64,
+            row.observation.address,
+            row.bytes,
+            row.text.escape_debug()
+        )?;
+    }
+    writeln!(
+        out,
+        "stop: {}; {} bytes consumed, {} remaining; range SHA-256 {}",
+        label(&report.mapping.stop_reason),
+        report.mapping.consumed_bytes,
+        report.mapping.remaining_bytes,
+        report.source_range_sha256
+    )?;
+    for note in report.limitations.iter().chain(&report.mapping.limitations) {
+        writeln!(out, "note: {note}")?;
+    }
+    Ok(())
+}
+
 pub fn decode_range(
     out: &mut impl Write,
     path: &Path,

@@ -242,6 +242,31 @@ pub fn file_tools() -> Vec<FileTool> {
     vec![
         FileTool {
             group: Group::Core,
+            name: "inspect_raw_code",
+            description: "Linearly disassemble an explicit 1..4096-byte original-file window with analyst-supplied \
+                base VA, architecture, mode and instruction/data byte orders. No executable header or guessing. \
+                x86/x64/ARM/AArch64, little endian only; ARM requires arm/thumb, others native. No target following, \
+                discovery, annotations, sidecars, extraction or execution. Return addressed decoder observations, \
+                selected-range hash, source offsets and explicit stop/remaining information. Invalid/incomplete \
+                instructions stop unconsumed. Mapping assertions and decoding are not execution or boundary proof. \
+                Narrow length/count if output is oversized; repeat using continuation range/base when supplied.",
+            input_schema: raw_file_schema(),
+            handler: |_, mut input| {
+                if input.to_string().len() > 16_384 {
+                    return Err("raw-code arguments exceed input budget".into());
+                }
+                let object = input.as_object_mut().ok_or("raw-code arguments must be an object")?;
+                let path = object
+                    .remove("path")
+                    .and_then(|value| value.as_str().map(std::path::PathBuf::from))
+                    .ok_or("raw-code path must be a string")?;
+                let request: crate::RawFileRequest = arguments(input)?;
+                let report = crate::inspect_raw_file(&path, &request).map_err(|error| error_chain(&error))?;
+                serde_json::to_value(report).map_err(|error| error.to_string())
+            },
+        },
+        FileTool {
+            group: Group::Core,
             name: "decode_file_range",
             description: "Decode an explicit regular-file range with a named built-in decoder, without requiring \
                 an executable header. First provider: lzss-4k, LSB-first flags (1=literal), 12-bit references, \
@@ -426,6 +451,14 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
     ]
+}
+
+fn raw_file_schema() -> Value {
+    let mut value = schema::<crate::RawFileRequest>();
+    value["properties"].as_object_mut().expect("request properties").insert("path".into(),
+        serde_json::json!({ "type": "string", "description": "Explicit regular input file; no native loader is used." }));
+    value["required"].as_array_mut().expect("required raw mapping fields").push(Value::String("path".into()));
+    value
 }
 
 /// No arguments.

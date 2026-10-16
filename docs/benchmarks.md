@@ -6,6 +6,17 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Raw-window workflow acceptance (2026-10-16)
+
+| Workload | Before | Reviewed raw-window slice |
+| --- | --- | --- |
+| Local raw-firmware code range, no bundled input | Native-header refusal | One MCP query: 218 bytes, 84 rows, no unconsumed bytes |
+| Owned Thumb assembly and literal pool | No raw-file MCP route | Compiled source fixture: three instructions, exact literal and source offsets checked |
+
+The firmware query corroborated decoder parameters through static instructions. Its base/mode remain analyst
+assertions; row counts are not instruction-accuracy or execution measurements. No commercial bytes, addresses
+or payloads are included here. Broader parity metrics belong to the Phase 0 scorecard, not this acceptance check.
+
 ## Function discovery vs Ghidra
 
 `tools/benchmark.sh` runs Ghidra headless to list function starts, builds a reference in rampage's format

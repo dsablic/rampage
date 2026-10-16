@@ -6,6 +6,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ApiError;
+use crate::range_source as source;
 
 pub const MAX_DECODE_INPUT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_DECODE_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
@@ -129,7 +130,7 @@ pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<Dec
         return Err(invalid("decode source path exceeds the receipt budget"));
     }
     let source = source::RangeSource::open(path, request.offset, request.length)?;
-    let input = source.read(request.offset, request.length)?;
+    let input = source.read()?;
     source.revalidate()?;
     let started = Instant::now();
     let timeout = Duration::from_millis(request.timeout_ms);
@@ -219,106 +220,6 @@ pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<Dec
     Ok(DecodedContent { receipt, bytes: decoded.bytes })
 }
 
-#[cfg(unix)]
-mod source {
-    use std::fs::{File, Metadata};
-    use std::os::unix::fs::{FileExt, MetadataExt};
-    use std::path::{Path, PathBuf};
-
-    use rustix::fs::{Mode, OFlags};
-
-    use super::{ApiError, invalid};
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct Stamp(u64, u64, u64, i64, i64, i64, i64);
-
-    fn stamp(metadata: &Metadata) -> Result<Stamp, ApiError> {
-        if !metadata.is_file() {
-            return Err(invalid("decode input must be a regular file"));
-        }
-        Ok(Stamp(
-            metadata.dev(),
-            metadata.ino(),
-            metadata.len(),
-            metadata.mtime(),
-            metadata.mtime_nsec(),
-            metadata.ctime(),
-            metadata.ctime_nsec(),
-        ))
-    }
-
-    pub(super) struct RangeSource {
-        file: File,
-        path: PathBuf,
-        stamp: Stamp,
-    }
-
-    impl RangeSource {
-        pub(super) fn open(path: &Path, offset: u64, length: usize) -> Result<Self, ApiError> {
-            let descriptor = rustix::fs::open(
-                path,
-                OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
-                Mode::empty(),
-            )
-            .map_err(|error| ApiError::Unavailable(format!("decode source open: {error}")))?;
-            let file = File::from(descriptor);
-            let metadata = file.metadata().map_err(io_error)?;
-            let stamp = stamp(&metadata)?;
-            if offset.checked_add(length as u64).is_none_or(|end| end > metadata.len()) {
-                return Err(invalid("decode source range is outside the regular file"));
-            }
-            let source = Self { file, path: path.to_owned(), stamp };
-            source.revalidate()?;
-            Ok(source)
-        }
-
-        pub(super) fn read(&self, offset: u64, length: usize) -> Result<Vec<u8>, ApiError> {
-            let mut bytes = Vec::new();
-            bytes.try_reserve_exact(length).map_err(|_| invalid("decode input allocation failed"))?;
-            bytes.resize(length, 0);
-            self.file.read_exact_at(&mut bytes, offset).map_err(io_error)?;
-            Ok(bytes)
-        }
-
-        pub(super) fn revalidate(&self) -> Result<(), ApiError> {
-            let descriptor = stamp(&self.file.metadata().map_err(io_error)?)?;
-            let pathname = stamp(&std::fs::symlink_metadata(&self.path).map_err(io_error)?)?;
-            if descriptor != self.stamp || pathname != self.stamp {
-                return Err(invalid("decode source changed or was replaced during observation"));
-            }
-            Ok(())
-        }
-
-        pub(super) fn size(&self) -> u64 {
-            self.stamp.2
-        }
-    }
-
-    fn io_error(error: std::io::Error) -> ApiError {
-        ApiError::Unavailable(format!("decode source I/O: {error}"))
-    }
-}
-
 #[cfg(all(test, unix))]
 #[path = "decode_content_tests.rs"]
 mod tests;
-
-#[cfg(not(unix))]
-mod source {
-    use super::*;
-    pub(super) struct RangeSource;
-    impl RangeSource {
-        pub(super) fn open(_: &Path, _: u64, _: usize) -> Result<Self, ApiError> {
-            Err(ApiError::Unavailable("decode file ranges require Unix regular-file source checks".into()))
-        }
-        pub(super) fn read(&self, _: u64, _: usize) -> Result<Vec<u8>, ApiError> {
-            unreachable!()
-        }
-        pub(super) fn revalidate(&self) -> Result<(), ApiError> {
-            unreachable!()
-        }
-        pub(super) fn size(&self) -> u64 {
-            unreachable!()
-        }
-    }
-}
