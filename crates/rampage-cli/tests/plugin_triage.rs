@@ -21,7 +21,12 @@ fn error(output: &Output) -> String {
 
 #[test]
 fn ordinary_report_keeps_its_native_json_shape() {
-    for path in [fixture(), native_fixture("hello-x64.exe")] {
+    for path in [
+        fixture(),
+        native_fixture("hello-x64.exe"),
+        native_fixture("hello-x64.macho"),
+        native_fixture("hello-x64-stripped.macho"),
+    ] {
         let output = command().args(["--json", "report", "triage-report"]).arg(path).output().unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -84,7 +89,6 @@ fn explicit_component_route_is_labelled_bounded_and_never_falls_back() {
 
     for (name, reason) in [
         ("Microsoft.Bcl.HashCode.dll", "managed CLR"),
-        ("hello-x64.macho", "preload metadata admission"),
         ("hello-universal.macho", "preload metadata admission"),
         ("hello-go-x64.elf", "Go recovery"),
     ] {

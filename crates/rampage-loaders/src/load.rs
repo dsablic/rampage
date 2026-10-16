@@ -218,6 +218,16 @@ impl Deref for Bytes {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static NATIVE_PARSE_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_native_parse_entry() {
+    NATIVE_PARSE_ENTRIES.with(|count| count.set(count.get() + 1));
+}
+
 impl Binary {
     /// Bounded linkage evidence from this retained image, without opening dependency paths.
     pub fn linkage_metadata(&self, limits: crate::LinkageLimits) -> Result<crate::LinkageMetadata, LoadError> {
@@ -333,6 +343,8 @@ impl Binary {
     }
 
     fn open_mapped(data: MappedSource, wanted: Option<Arch>) -> Result<Self, LoadError> {
+        #[cfg(test)]
+        note_native_parse_entry();
         if data.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') {
             if data.len() > 2 * crate::snapshot::MAX_SNAPSHOT_BYTES + 1024 * 1024 {
                 return Err(LoadError::Malformed("snapshot JSON exceeds size limit".to_owned()));
@@ -468,6 +480,8 @@ impl Binary {
         length: Option<u64>,
         wanted: Option<Arch>,
     ) -> Result<Self, LoadError> {
+        #[cfg(test)]
+        note_native_parse_entry();
         let file_size = data.len() as u64;
         let start = usize::try_from(offset).ok().filter(|&start| start < data.len()).ok_or_else(|| {
             LoadError::Location(format!("offset {offset:#x} is past the end of the file ({file_size:#x} bytes)"))
@@ -538,6 +552,8 @@ impl Binary {
         slices: Vec<Arch>,
         wanted: Option<Arch>,
     ) -> Result<Self, LoadError> {
+        #[cfg(test)]
+        note_native_parse_entry();
         let image_bytes = &data[image.clone()];
         let parsed = object::File::parse(image_bytes)?;
 
@@ -1104,6 +1120,25 @@ fn consume_admitted_source<T>(
 
 #[cfg(all(test, unix))]
 mod checked_admission_tests {
+    #[test]
+    fn rejecting_actual_macho_mapping_never_enters_native_open_or_object_parsing() {
+        use super::*;
+        for name in ["hello-x64.macho", "hello-x64-stripped.macho"] {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name);
+            let before = NATIVE_PARSE_ENTRIES.with(std::cell::Cell::get);
+            let mut called = false;
+            let result = Binary::open_image_checked_admitted(&path, None, None, 16 * 1024 * 1024, |_| {
+                called = true;
+                assert_eq!(NATIVE_PARSE_ENTRIES.with(std::cell::Cell::get), before);
+                Err(LoadError::Unsupported("deliberate mapped admission refusal".into()))
+            });
+            assert!(called && result.is_err());
+            assert_eq!(NATIVE_PARSE_ENTRIES.with(std::cell::Cell::get), before);
+            Binary::open_image_checked_admitted(&path, None, None, 16 * 1024 * 1024, |_| Ok(())).unwrap();
+            assert!(NATIVE_PARSE_ENTRIES.with(std::cell::Cell::get) > before);
+        }
+    }
+
     use std::cell::Cell;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};

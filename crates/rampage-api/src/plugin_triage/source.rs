@@ -8,8 +8,8 @@ use crate::{ApiError, Project, Session};
 
 /// Fresh checked opening for explicitly selected plugin-triage sources, not the legacy Session cache path.
 /// Original source identity is retained, and the actual parser mapping is capped at 16 MiB before mmap and
-/// admitted before native producers. Raw preload admission accepts conservative little-endian x86-64 ELF and
-/// whole-file unmanaged PE32+ profiles (see preload/pe.rs); CLR, Go recovery candidates and other native loader
+/// admitted before native producers. Raw preload admission accepts conservative little-endian x86-64 ELF,
+/// whole-file unmanaged PE32+ and thin x86-64 Mach-O executables; CLR, Go recovery and other native loader
 /// profiles are refused before loading. This is separate from the 1 MiB final fact payload admission limit.
 /// Native parsing/checked sidecar ingestion remain outside component limits, not an atomic source snapshot.
 /// Inputs must remain quiescent during mapped admission and parsing: metadata revalidation detects observable

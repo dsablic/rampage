@@ -182,6 +182,50 @@ fn fresh_pe_open_rejects_hostile_native_metadata_at_the_raw_admission_gate() {
 }
 
 #[test]
+fn fresh_thin_macho_preserves_declared_starts_slots_and_stripped_symbol_limits() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin");
+    for (name, stripped) in [("hello-x64.macho", false), ("hello-x64-stripped.macho", true)] {
+        let source = SourceCopy::from_fixture(&root.join(name));
+        let checked = rampage_api::open_plugin_triage_source(&Session::default(), &source.0, None, None).unwrap();
+        assert_eq!(checked.binary.format, rampage_loaders::Format::MachO);
+        assert_eq!(checked.binary.arch, rampage_arch::Arch::X86_64);
+        assert_eq!(checked.analysis_cache_status(), Default::default());
+        assert!(checked.binary.function_starts.contains(&0x100000470));
+        assert!(checked.binary.function_starts.contains(&0x100000480));
+        assert!(checked.binary.import_slots.iter().any(|slot| slot.name == "_puts" && slot.address == 0x100001000));
+        assert_eq!(checked.binary.exports.iter().any(|export| export.name == "_add"), !stripped);
+        assert_eq!(checked.binary.symbols.iter().any(|symbol| symbol.name == "_main"), !stripped);
+        checked.binary.validate_backing_source().unwrap();
+        with_control(|control| {
+            let prepared =
+                prepare_plugin_triage_with_analysis(Arc::clone(&checked), ReportLimits::default(), control).unwrap();
+            prepared.revalidate(control).unwrap();
+        });
+    }
+}
+
+#[test]
+fn fresh_macho_refuses_unsupported_profiles_and_retains_original_descriptor_identity() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin");
+    for name in
+        ["hello-arm64.macho", "hello-universal.macho", "hello-x64.dylib", "debug-x64.macho", "objc-x64-stripped.macho"]
+    {
+        assert!(
+            rampage_api::open_plugin_triage_source(&Session::default(), &root.join(name), None, None).is_err(),
+            "unsupported native producer profile must remain refused: {name}",
+        );
+    }
+    let source = SourceCopy::from_fixture(&root.join("hello-x64.macho"));
+    let replacement = SourceCopy::from_fixture(&root.join("hello-x64.macho"));
+    let checked = rampage_api::open_plugin_triage_source(&Session::default(), &source.0, None, None).unwrap();
+    with_control(|control| {
+        let prepared = prepare_plugin_triage_with_analysis(checked, ReportLimits::default(), control).unwrap();
+        std::fs::rename(&replacement.0, &source.0).unwrap();
+        assert!(prepared.revalidate(control).is_err());
+    });
+}
+
+#[test]
 #[ignore = "requires the central owned COFF fixture recipe; binaries are never executed"]
 fn checked_plugin_open_admits_the_owned_provider_independently_of_its_renamed_path() {
     let root = PathBuf::from(std::env::var_os("RAMPAGE_MODULE_LINKAGE_FIXTURES").expect("owned COFF fixtures"));
@@ -302,6 +346,8 @@ fn compiled_component_matches_unchanged_builtin_body_on_admitted_fixtures() {
         fixture(),
         fixture().with_file_name("net-client-x64-stripped.elf"),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.exe"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.macho"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64-stripped.macho"),
     ];
     for path in paths {
         for per_section in [1, 25] {
