@@ -55,6 +55,9 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -m unittest tools.test_decompiler_corpus tools.test_entry_measurements -v
+      - name: Installer publication regressions with owned fake roots
+        timeout-minutes: 2
+        run: bash tools/test_install.sh
       - name: Scan with checksum-pinned official Gitleaks release
         timeout-minutes: 10
         run: |
@@ -91,6 +94,9 @@ jobs:
           clang --version
           clang++ --version
           xcrun --sdk macosx --show-sdk-path
+      - name: Installer publication regressions with BSD tools
+        timeout-minutes: 2
+        run: bash tools/test_install.sh
       - name: Require LLVM fixture tools
         timeout-minutes: 3
         run: rustup component add llvm-tools-preview
@@ -135,9 +141,11 @@ jobs:
         run: |
           cargo test --locked --manifest-path plugins/triage-report/Cargo.toml --target-dir target
           bash tools/ci/plugin-triage-oracle.sh --check \
-            cargo test --locked -p rampage-plugin --test component --test resource_controls -- --ignored
+            cargo test --locked -p rampage-plugin \
+              --test component --test resource_controls --test cancellation -- --ignored
           bash tools/ci/plugin-triage-oracle.sh --check \
-            cargo test --locked -p rampage-api -p rampage-cli --test plugin_triage -- --include-ignored
+            bash tools/ci/module-linkage-oracle.sh --check \
+              cargo test --locked -p rampage-api -p rampage-cli --test plugin_triage -- --include-ignored
       - name: Owned DWARF reviewed import surfaces and worker acceptance
         timeout-minutes: 5
         env:
@@ -223,7 +231,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           bash tools/ci/plugin-triage-oracle.sh --check \
-            cargo test --locked -p rampage-plugin --test component --test resource_controls -- --ignored
+            cargo test --locked -p rampage-plugin \
+              --test component --test resource_controls --test cancellation -- --ignored
 
 # Step/job timeouts bound CI execution, not individual analysis time or memory.
 # macOS runs the ordinary debug workspace suite once, plus the selected compiled-fixture and isolated gates above.

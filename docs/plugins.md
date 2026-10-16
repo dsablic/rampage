@@ -22,6 +22,42 @@ roadmap. Read the [plugin security boundaries](plugin-security.md) before select
 Components are not discovered by scanning directories and do not register MCP tools or UI workflows. Other
 workflows and primitive tools remain statically linked. Data packs retain their existing data-only behavior.
 
+## Source installation
+
+From the repository root, `bash tools/install.sh [ROOT] [--ui] [--plugins]` builds the CLI and native
+`rampage-worker` from the current source tree. `ROOT` defaults to `$HOME/.local`; executables go in `ROOT/bin`.
+`--ui` also builds the desktop UI. `--plugins` explicitly opts into building and installing the separate,
+matching `rampage-plugin-worker`:
+
+```sh
+bash tools/install.sh "$HOME/.local" --plugins
+```
+
+An already-installed executable UI is rebuilt even without `--ui`, preserving the existing upgrade behavior.
+An existing regular plugin-worker file is also rebuilt without `--plugins`, so upgrading the CLI does not
+deliberately leave that optional worker on an older source version. Unexpected selected destination symlinks
+or non-regular files are refused, not followed or deleted. A fresh default install does not build the plugin
+worker. Neither option installs guests, discovers components, nor enables component execution by default.
+Selecting a component remains a separate explicit runtime action.
+
+Builds use two Cargo jobs and the existing release profile; they still require the normal Rust/native build
+prerequisites and may use Cargo's usual caches and network access. No prebuilt release is downloaded by the
+installer. All selected builds finish in a new private directory under `ROOT/bin` before publication begins.
+Regular installed executables are explicitly moved into staging backups before exclusive publication of each
+replacement. Pre-existing backup files, directories and symlinks (including dangling ones) are refused before
+moving the installed executable. Private staging must remain exclusive to this invocation.
+A name can temporarily be absent: neither individual replacements nor the multi-file upgrade
+are atomic, and concurrent invocations or hostile writers to the installation directories are not supported.
+Failures report confirmed publications and any uncertain attempted publication, without promising rollback
+or a matching installed set after failure. Inspect the installation before retrying or using it.
+
+The installer does not use or delete shared `*.new` paths. It deliberately retains its private staging
+directory on both success and failure, including Cargo metadata, binary links and previous executables, rather than
+risk deleting an unexpected occupant after namespace replacement. The reported path is the original path;
+if directories were renamed, it may no longer name the retained directory. Retained binaries can consume
+disk space across upgrades; inspect the directory and remove it manually only after confirming ownership and
+contents. This retention is not a claim that Cargo's other temporary build outputs or caches are retained.
+
 ## Selecting a triage component
 
 The CLI accepts an explicit component and a trusted native worker executable:
@@ -54,10 +90,11 @@ component fuel, execution deadline and worker memory limits; the flag is not a s
 
 ### Source admission
 
-Fresh CLI loading admits only a conservative little-endian x86-64 ELF executable/shared-image profile.
-PE, Mach-O, universal binaries, CLR sources and Go recovery candidates are currently refused by this preload
-profile. Some otherwise valid ELF files are also refused, including unsupported metadata layouts or excessive
-metadata expansion. General rampage format support does not imply component-source admission.
+Fresh CLI loading admits conservative little-endian x86-64 ELF and unmanaged AMD64 PE32+ profiles. Mach-O,
+universal binaries, CLR sources and Go recovery candidates remain refused. PE admission excludes COFF symbol
+tables/long section names, delay imports, resources, security/load-config/bound-import directories, and chained
+unwind. RVA/VA backing, import/export/debug/TLS/relocation records and constructor name expansion are bounded
+before native parsing. Some otherwise valid files are refused; general format support does not imply admission.
 
 The API can prepare an already-loaded, admitted native project, including native PE, without going through
 that fresh-load profile. Managed CLR preparation is still refused. The source is limited to 16 MiB and the
@@ -122,7 +159,8 @@ the repository's `rampage-componentize` utility, and runs the supplied command:
 
 ```sh
 bash tools/ci/plugin-triage-oracle.sh --check \
-  cargo test --locked -p rampage-api --test plugin_triage -- --include-ignored --test-threads=1
+  bash tools/ci/module-linkage-oracle.sh --check \
+    cargo test --locked -p rampage-api -p rampage-cli --test plugin_triage -- --include-ignored --test-threads=1
 ```
 
 The Rust `wasm32-unknown-unknown` target must already be installed. The wrapper does not install tools. It uses
@@ -134,10 +172,16 @@ The supplied command receives `RAMPAGE_TRIAGE_COMPONENT`, `RAMPAGE_RUNTIME_PROBE
 runtime-probe guest exercises runtime controls; it is not another migrated user workflow. A native guest oracle
 is not evidence of component execution. These local checks are not a general accuracy or performance guarantee.
 
-The example includes the opt-in compiled-component parity check, comparing report bodies with the unchanged
-builtin on normal/stripped ELF and an already-loaded native PE at section limits 1 and 25. The PE case exercises
-API preparation, not fresh CLI admission. This focused comparison does not establish full format coverage or
-close the broader security review.
+The example includes compiled-component parity against the unchanged builtin on normal/stripped ELF and native
+PE at section limits 1 and 25, plus fresh PE loading and a renamed owned DLL. The nested PE fixture wrapper needs
+Clang and Rust's LLVM linker; it compiles but never executes target binaries. This does not establish full
+format coverage or close the broader security review.
+
+The hidden `run_component_checkpointed` API is a cancellation-only diagnostic. Its v2 private worker channel
+can park an actual Wasm activation at the selected `run`/`output` call boundary, then report cleanup measurements
+while the real admission permit remains held. The observer must cancel; there is no acknowledgment or resume
+path. Canonical allocation may be the active Wasm, not the guest's Rust loop. This is not an inside-compilation
+witness or a latency benchmark, and ordinary execution retains private-control v1 behavior.
 
 ## Builtin workflow registry
 

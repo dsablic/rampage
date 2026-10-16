@@ -366,12 +366,39 @@ unsandboxed native code. Three layers instead, in this order:
   Workspace and host/Wasm guest Clippy passed with warnings denied; targeted compiled API/CLI gates passed.
 - [x] Additional startup reproduction: 54/54 owned native/isolated attempts passed in three fresh cached-harness
   processes without retries. No stall reproduced, no cause identified and no startup-fix claim.
-- [ ] Linux component gate is wired but not locally executed; cancellation during compilation/guest CPU work,
+- [ ] Linux component gate is wired but not locally executed; cancellation inside compilation and uninstrumented
+  guest-cancellation latency,
   broader source loading and component grammar, other workflow migrations, MCP/UI providers and a stable SDK
-  remain unearned. Existing install tooling does not yet install the optional plugin worker automatically.
+  remain unearned. The follow-up below adds opt-in installation and an instrumented activation checkpoint.
 - [x] Protected 1,008-file candidate-source audit, scanner-bypass regressions and committed-tree/history scans;
   controlled Python: 804 tests and 797 subtests passed, six live opt-ins skipped. Owned scratch is removed;
   publication is private main only, without a release tag or CI dispatch.
+
+### Component usability and cancellation follow-up
+
+- [x] Fresh whole-file unmanaged AMD64 PE32+ admission on the actual checked mapping. Regular import/IAT,
+  exports/forwarders, TLS, version-1 unwind, matching raw/RVA debug and DIR64 relocation extents are bounded.
+  COFF tables/long names, delay imports, resources, security/load-config/bound-import directories, chained
+  unwind, CLR/Go and other unsupported profiles remain refused. Code and execute-only sections both fund
+  constructor thunk/name expansion before parsing. Independent review closed the classification bypass.
+- [x] Central PE/source gates: 39 focused API tests; 15 explicit API and four CLI cases, including the unchanged
+  compiler hello fixture, crafted hostile/consumer controls and the renamed owned provider. Target images
+  remain static inputs, never executed.
+- [x] Opt-in private-control v2 cancellation checkpoints retain the actual Wasm activation and permit through
+  owned cleanup. Both call boundaries, panic recovery, uncancelled observers, final-callback cancellation,
+  retained cleanup measurements and ordinary recovery passed through the real worker. This is not a loop-body
+  or inside-compiler witness, resumable instrumentation or a latency benchmark. Default v1/p4 behavior remains.
+  Supervisor library: 97 passed and one isolated helper ignored; fresh ownership/runtime reviews found no blockers.
+- [x] `tools/install.sh --plugins` builds the matching trusted worker, retaining an existing regular optional
+  worker on upgrades. Owned fake-root tests passed on macOS; no actual user installation was performed.
+  Separate exclusive publications preserve unrelated `.new`/backup occupants, retain staging and report partial
+  outcomes without rollback or whole-bundle atomicity. Concurrent/hostile staging writers remain unsupported.
+- [x] Combined-tree ordinary workspace: 2,372 passes across 181 executable/doctest groups in 401.6 seconds,
+  with 66 opt-ins skipped; all 50 evaluation tests passed separately. Clippy/format checks and all three real
+  component/resource/cancellation gates passed. No broad latency, inside-compiler or Linux acceptance claim.
+- [x] Protected 1,014-file candidate-source audit, scanner-bypass regressions and committed-tree/history scans;
+  804 Python tests and 797 subtests passed, six live opt-ins skipped. Owned scratch is removed; publication
+  remains private main only, without tags or CI dispatch.
 
 
 ## Decompiler: embedded Ghidra (the decompilation path)

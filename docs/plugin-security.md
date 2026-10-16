@@ -40,11 +40,12 @@ between reads, and refuses observable replacement, truncation or growth. Final-l
 are refused. Parent-directory permissions are not a security policy, and the checks are not an atomic
 filesystem snapshot. Hashing and execution use the returned byte snapshot rather than reopening the path.
 
-Fresh target opening separately caps the original regular source file at 16 MiB before native parsing and
-uses conservative raw ELF metadata admission. The current profile is little-endian x86-64 ELF only; other
-native formats, universal images, CLR and Go recovery candidates are refused on this fresh-load path. The
-API's already-loaded-project path has separate admission and can accept native PE; it does not retroactively
-bound the cost of loading that project.
+Fresh target opening caps the actual opened descriptor at 16 MiB before mmap and admits that same mapping before
+native parsing. Conservative little-endian x86-64 ELF and unmanaged AMD64 PE32+ profiles are supported. PE COFF
+tables/long names, delay imports, resources, security/load-config/bound-import directories and chained unwind
+remain unsupported. Constructor thunk/name work includes both code-marked and execute-only sections, matching
+the real name producer. Other native formats, universal images, CLR and Go recovery remain refused. The API's
+already-loaded-project path has separate admission; it does not retroactively bound initial loading costs.
 
 Source descriptor checks, content hashing and retained name/configuration revisions reject observable changes
 during preparation and around execution. They cannot make memory-mapped reads atomic with concurrent writes
@@ -170,6 +171,14 @@ fuel exhaustion in both exports, execution epochs, denied memory growth, pre-can
 The genuine guest also composed an empty inventory through its actual exports, and the CLI route retained the
 host provenance envelope. Native guest tests cover additional classification, managed-token and ingestion cases.
 
-These checks do not establish cancellation during compilation or active guest work, every native producer's
-memory bounds, or Linux runtime acceptance. The Linux CI gate is configured but has not been dispatched as part
-of ordinary development. No privileged tracing, target execution or security-policy weakening was used.
+Subsequent cancellation-only checkpoint probes parked an actual Wasm activation at both call boundaries,
+cancelled, and asserted successful reaping/cleanup plus real-permit retention through the post-cleanup callback.
+Observer-panic recovery and cancellation from that final callback were also exercised. The activation may be
+canonical allocation rather than the probe's source-language loop. This opt-in v2 diagnostic never resumes;
+ordinary execution remains v1. Parked/observer time is governed by the outer operation budget, not a 500 ms
+hard-return promise; trusted parent callbacks cannot be forcibly interrupted. Failed cleanup does not introduce
+an admission-quarantine policy.
+
+This does not establish cancellation inside compilation, uninstrumented cancellation latency, every native
+producer's memory bounds, or Linux runtime acceptance. The Linux CI gate is configured but has not been
+dispatched in ordinary development. No privileged tracing or target execution was used.
