@@ -6,6 +6,55 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 1.1 — storage-keyed local and parameter typing
+
+**Run:** 2026-10-17, collector sources committed at `1a75371` (based on `0551311`), with documentation and
+machine-local files still dirty/untracked. The
+[measurement](benchmarks/phase1-1-2026-10-17.json) records fixture/report hashes and measured example executable
+SHA-256 `9700168ede705d14cb7e83f3ae7367710596e1dcf9648f3ca62e4a2a1b5500bf`; this is not a clean-worktree rebuild.
+The collector embeds its source hash and hashes its own running executable. The published source hash matches
+the committed example; later dependency-feature rebuilds can produce different executables.
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| MCP local edit surface | No variable edit tool at the source baseline | Types-group `edit_variable` |
+| Owned stack-pointer C | Offset/index dereferences, zero named field accesses | `state->gain` and `state->bias` |
+| Native storage identity | Whole stack mapping, offset `0xfffffffffffffff0`, 8 bytes | Same canonical storage key |
+| Persistence | No local name/type binding | Both bindings verified in the snapshot-identity log |
+| Live supplied-layout typing task | Not runnable through the missing tool | Native state verified, 4 MCP calls / 4 model turns |
+| Undo/redo/reopen | No local edit path | Native and supervised API/MCP tests pass |
+
+The live model was `github-copilot/gpt-6.1-sol`, variant `default`: 37054 reported input, 451 output and 168
+reasoning tokens, 24.232 s task wall time, no model/tool errors. The evaluator independently checked actual
+local storage/type/name, refreshed C, MCP annotations and the persisted log; the model's summary alone cannot
+pass. This is a paired owned fixture with a user-supplied struct, not blind layout inference or whole-program RE.
+The initial collector used the ordinary-file log suffix for a snapshot; it was corrected to use validated capture
+identity and the complete task rerun. Another successful probe added self-recorded provenance. The final run
+also retains complete compact catalog names before transcript truncation; its snapshots confirm the initially
+disabled Types tools and their presence after enabling. That committed-source run is published; the three
+earlier probes were not regraded or merged into its totals. The 12-turn/20-call execution bounds are retained.
+
+Owned native tests cover x64/AArch64 register parameters, addressable x64 stack locals, register reuse selectors,
+replacement/clearing and refusal without partial renames. Invalid declarations, keywords, stale/ambiguous storage
+and oversized refreshed results leave annotations unchanged. Sequential renames can reuse names vacated by the
+same replay batch; native swaps, fresh-engine replay and final-name collision refusal have regression coverage.
+A real installed ARM64 core revalidation returned
+six variable descriptors (three editable, three explicitly unsupported); no commercial annotations were changed.
+The Phase 0 publication stays frozen; the current local-rename inventory probe now expects the implemented tool.
+Limits: single whole mappings and same-size types; no project type library, cross-call propagation or UI editor.
+Changed-crate API, decompiler, worker, MCP, evaluator and UI suites and scoped all-target Clippy passed;
+existing opt-in tests remain skipped. This is not full-workspace/release acceptance.
+
+To repeat only this supplied-layout task, using existing OpenCode authentication and the pinned model:
+
+```sh
+cargo run --locked -j 2 -p rampage-eval --example local_typing -- tests/data/local-variables-x64.snapshot.json
+```
+
+The runner admits only the checked owned snapshot, copies it into an isolated directory, allows `set_types`
+and `edit_variable` there, verifies real state, emits bounded JSON and removes its copy/context/log on exit.
+Default parity-agent runs remain read-only. This example is not added to the frozen Phase 0 task totals.
+
 ## Parity scorecard — accepted Phase 0 baseline
 
 **Run:** 2026-10-17 07:44:31 UTC. **Collector commit:** `65a7e99`. The

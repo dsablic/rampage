@@ -1,6 +1,6 @@
 # To do
 
-## Parity roadmap: Phase 0 completed
+## Parity roadmap: Phases 0 and 1.1 completed
 
 Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One milestone at a time;
 parallel slices share central builds and undergo fresh-context review before publication.
@@ -23,12 +23,28 @@ Phase 0 is a measured baseline, not parity or full-workspace/release acceptance.
 all-functions health and cross-model comparisons remain future scorecard maintenance. No Ghidra MCP bridge
 was available in the benchmark's configured project context. Optional unscored profiles remain visible.
 
-## Next milestone: Phase 1.1, queued but not started
+## Phase 1.1: local variables and parameters completed
 
-- [ ] Measure missing local-variable/parameter rename and retype behavior on an owned fixture, then implement
-  storage-identity annotations and native overrides through bounded MCP tools with undo/replay acceptance.
-- [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no
-  class rows, and symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
+- [x] Measure an owned addressable pointer local before/after: offset/index accesses become named struct fields.
+- [x] Persist function-plus-storage local names/types; apply actual native scope locks, not C-text substitution.
+- [x] Expose bounded Types-group `edit_variable` with current-name/storage selection and refreshed C in one call.
+- [x] Accept undo/redo, clear/replacement, shared logs, replay, native and supervised paths and exact-entry replay.
+- [x] Verify same-size pointer retypes, x64/AArch64 parameters, stack locals and register-use disambiguation;
+  reject ambiguous/stale/unsupported selectors, keywords and oversized results without partial persistence.
+- [x] Measure a live supplied-layout task with the current OpenCode model through actual MCP, independently verify
+  native state and persisted storage bindings; publish source/executable/fixture hashes and measured totals.
+- [x] Repeat a real ARM64 audio-core decompilation read-only: six descriptors, three editable and three explicit
+  refusals, recovery warnings retained. No commercial annotations or inputs changed.
+
+Limits: one whole register/stack mapping and same-size types. No UI local editor, type library or cross-call
+propagation. The accepted Phase 0 publication is unchanged; the current capability probe now expects this feature.
+Evidence and measurement limits are in `docs/benchmarks.md` and `docs/local-variables.md`.
+
+## Next milestone: Phase 1.2, queued but not started
+
+- [ ] Project-level type library and bounded declaration/layout inspection, following the roadmap.
+- [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no class
+  rows; symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
 
 ## Audio/firmware investigation acceptance workloads
 

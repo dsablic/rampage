@@ -1,0 +1,137 @@
+{
+  "measurement": "phase1-1-local-typing",
+  "design": "paired-owned-fixture-not-blind-whole-program-re",
+  "requested_model": "github-copilot/gpt-6.1-sol",
+  "model_variant": "default",
+  "model_source": "provider",
+  "fixture_sha256": "d0c6d50527619eedcc1d5a1c78e3417362206e526d749e5b4d78a0eb85690648",
+  "entry": "0x4000ae",
+  "initial_local_name": "piStack_10",
+  "initial_storage": {
+    "kind": "spacebase",
+    "space": "stack",
+    "address": "0xfffffffffffffff0",
+    "size": 8,
+    "use_ranges": []
+  },
+  "initial_storage_key": "{\"kind\":\"spacebase\",\"space\":\"stack\",\"address\":\"0xfffffffffffffff0\",\"size\":8,\"use_ranges\":[]}",
+  "agent_summary": {
+    "disposition": "answer",
+    "answer_contract_matches": true
+  },
+  "model_turns": 4,
+  "model_errors": 0,
+  "tool_requests": 4,
+  "tool_calls": 4,
+  "tool_errors": 0,
+  "catalog_requests": 2,
+  "catalog_tool_count": 27,
+  "catalog_inventory": [
+    {
+      "complete": true,
+      "required_tools": [
+        {
+          "name": "decompile",
+          "present": true
+        },
+        {
+          "name": "set_types",
+          "present": false
+        },
+        {
+          "name": "edit_variable",
+          "present": false
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "required_tools": [
+        {
+          "name": "decompile",
+          "present": true
+        },
+        {
+          "name": "set_types",
+          "present": true
+        },
+        {
+          "name": "edit_variable",
+          "present": true
+        }
+      ]
+    }
+  ],
+  "comparison_baseline": {
+    "source": "parent-reported-pre-change-missing-tool-catalog",
+    "before": 0,
+    "remeasured_here": false
+  },
+  "usage": {
+    "input_tokens": 37054,
+    "output_tokens": 451,
+    "reasoning_tokens": 168,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  },
+  "agent_wall_time_ms": 24232,
+  "agent_timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking",
+  "evaluator_tool_calls": 3,
+  "verification_wall_time_ms": 167,
+  "verification_error": null,
+  "native_state_verified": true,
+  "verification": {
+    "native_state_verified": true,
+    "stable_storage_key": true,
+    "editable_local": {
+      "name": "state",
+      "data_type": {
+        "name": "PhaseState *",
+        "size": 8
+      },
+      "kind": "local",
+      "key": "{\"kind\":\"spacebase\",\"space\":\"stack\",\"address\":\"0xfffffffffffffff0\",\"size\":8,\"use_ranges\":[]}",
+      "storage": {
+        "kind": "spacebase",
+        "space": "stack",
+        "address": "0xfffffffffffffff0",
+        "size": 8,
+        "use_ranges": []
+      },
+      "editable": true,
+      "unavailable_reason": null
+    },
+    "annotation_log_persisted": true,
+    "mcp_type_annotation_verified": true,
+    "rendered_c": "\nint4 entry(PhaseState *param_1,int4 param_2)\n\n{\n  PhaseState *state;\n  \n  state = param_1;\n  sub_4000ad(&state);\n  return state->bias + state->gain + param_2;\n}\n"
+  },
+  "limitations": [
+    "Paired owned fixture with user-supplied layout, not blind struct recovery or whole-program parity.",
+    "The initial diagnostic native-state check used a legacy filename; complete reruns check snapshot-identity persistence.",
+    "Three earlier collector probes are distinct: failed legacy-suffix persistence check, successful identity correction, successful provenance instrumentation. This final run additionally retains complete compact catalog evidence; no earlier result was regraded or merged into totals.",
+    "Canonical Phase 0 publication is unchanged; the current local-variable inventory probe now expects the implemented tool."
+  ],
+  "limits": {
+    "max_turns": 12,
+    "max_tool_calls": 20
+  },
+  "owned_output_wall_time_ms": 25347,
+  "provenance": {
+    "evaluator_binary_sha256": "9700168ede705d14cb7e83f3ae7367710596e1dcf9648f3ca62e4a2a1b5500bf",
+    "collector_source_sha256": "b74b3720dc964a52a9690af0a27807a778b1bc657d286796d2f26bb575019fee",
+    "measured_unix_ms": 1792252453996,
+    "source_report_sha256": "69ce2b77fb9da74dc349738f24e11ac1c9c5aa9f9167b25ae558efe318398b95",
+    "source_base_revision": "0551311",
+    "source_revision": "1a753715a2dbe64cd6e01c28d14b59bae2c6d4e0",
+    "collector_sources_match_revision": true,
+    "worktree_measurement": true,
+    "measured_at_utc": "2026-10-17T15:54:13Z",
+    "timestamp_source": "collector system clock"
+  },
+  "owned_output_timing_boundary": "fixture preparation through verification, shutdown and cleanup",
+  "before": {
+    "code": "\nint4 entry(int4 *param_1,int4 param_2)\n\n{\n  int4 *piStack_10;\n  \n  piStack_10 = param_1;\n  sub_4000ad(&piStack_10);\n  return piStack_10[1] + *piStack_10 + param_2;\n}\n",
+    "named_field_accesses": 0,
+    "edit_variable_registered_at_source_base": false
+  }
+}
