@@ -37,6 +37,9 @@ enum Command {
     /// Print the ground truth ({"0x<address>": "<name>"}) taken from a symbolized binary's function symbols.
     Truth {
         symbolized: PathBuf,
+        /// Explicitly use concrete embedded DWARF subprogram ranges, checking every retained range in the twin.
+        #[arg(long, conflicts_with_all = ["library", "program"])]
+        dwarf: bool,
         /// The stripped twin; every truth function's bytes must be identical in it, proving the same layout.
         #[arg(long)]
         stripped: Option<PathBuf>,
@@ -194,9 +197,9 @@ struct RunArgs {
     /// Evaluate every slice of a manifest instead: {"slices": {"<name>": {"family": "libid"|"discovery"|"toolid"
     /// |"types", "refs": [..], "dbs": [..], "target": "..", "truth": "..", "metric": "params"|"return"|"classes",
     /// "min_recall": 0.0, "min_precision": 0.0}}}, paths relative to the manifest; refs and dbs apply to libid
-    /// only, metric to types only, and toolid has no target.
+    /// only, metric to types only, and toolid has no target. Repeat to combine corpora with unique slice names.
     #[arg(long, conflicts_with_all = ["databases", "references"])]
-    manifest: Option<PathBuf>,
+    manifest: Vec<PathBuf>,
     /// Keep at most this many disagreements per slice in the JSON (the counts still cover all of them).
     #[arg(long, default_value_t = 200)]
     max_disagreements: usize,
@@ -213,8 +216,8 @@ fn main() -> ExitCode {
         Command::GraphAgreement { request, rampage_export, ghidra_export } => {
             parity_graph_files::print(&request, &rampage_export, &ghidra_export)
         }
-        Command::Truth { symbolized, stripped, library, program } => {
-            truth(&symbolized, stripped.as_deref(), &library, &program)
+        Command::Truth { symbolized, stripped, library, program, dwarf } => {
+            truth(&symbolized, stripped.as_deref(), &library, &program, dwarf)
         }
         Command::TypeTruth { debug, stripped } => type_truth(&debug, stripped.as_deref()),
         Command::Strip { input, output, keep_symbols } => strip(&input, &output, keep_symbols),
@@ -237,8 +240,15 @@ fn artifact_info(path: &Path) -> Result<ExitCode, String> {
     let binary =
         Binary::open_image_metadata(path, None, None).map_err(|error| format!("{}: {error}", path.display()))?;
     let object = object::File::parse(binary.image_bytes()).map_err(|error| error.to_string())?;
-    let function =
+    let text_definition =
         |symbol: &object::Symbol<'_, '_>| symbol.kind() == object::SymbolKind::Text && symbol.is_definition();
+    let function = |symbol: &object::Symbol<'_, '_>| {
+        text_definition(symbol)
+            && symbol.section_index().and_then(|index| object.section_by_index(index).ok()).is_some_and(|section| {
+                symbol.address() >= section.address()
+                    && symbol.address().checked_sub(section.address()).is_some_and(|offset| offset < section.size())
+            })
+    };
     let mut debug_sections = Vec::new();
     for section in object.sections() {
         let name = section.name().map_err(|error| error.to_string())?;
@@ -247,6 +257,7 @@ fn artifact_info(path: &Path) -> Result<ExitCode, String> {
                 || name.starts_with(".debug")
                 || name.starts_with(".zdebug")
                 || name.starts_with("__debug")
+                || name.starts_with("__zdebug")
                 || matches!(name, ".stab" | ".stabstr"))
         {
             debug_sections.push(name.to_owned());
@@ -259,6 +270,8 @@ fn artifact_info(path: &Path) -> Result<ExitCode, String> {
         "arch": binary.arch,
         "endianness": if binary.big_endian { "big" } else { "little" },
         "static_function_symbols": object.symbols().filter(function).count(),
+        "static_text_symbols_outside_section": object.symbols()
+            .filter(|symbol| text_definition(symbol) && !function(symbol)).count(),
         "dynamic_function_symbols": object.dynamic_symbols().filter(function).count(),
         "debug_sections": debug_sections,
         "thumb_ranges": binary.thumb.len(),
@@ -273,8 +286,32 @@ fn truth(
     stripped: Option<&Path>,
     library: &[PathBuf],
     program: &[PathBuf],
+    dwarf: bool,
 ) -> Result<ExitCode, String> {
     let binary = open(symbolized)?;
+    if dwarf {
+        let twin = stripped.map(open).transpose()?;
+        let report = rampage_eval::dwarf_function_truth(binary.image_bytes(), &binary, twin.as_ref())?;
+        if let Some(reason) = &report.no_truth_reason {
+            return Err(format!("no usable embedded DWARF function truth: {reason}"));
+        }
+        eprintln!(
+            "DWARF: {} function starts, {} exact ranges / {} bytes checked; twin_verified={}",
+            report.truth.0.len(),
+            report.exact_ranges_checked,
+            report.checked_bytes,
+            report.twin_verified
+        );
+        eprintln!(
+            "DWARF: {} subprograms omitted ({} range-list entries), {} aliases; {} notes omitted",
+            report.omitted_subprograms, report.unsupported_range_subprograms, report.aliased_addresses, report.omitted
+        );
+        for note in &report.notes {
+            eprintln!("DWARF: {note}");
+        }
+        print!("{}", report.truth.to_json());
+        return Ok(ExitCode::SUCCESS);
+    }
     if let Some(stripped) = stripped {
         check_twin(&binary, symbolized, stripped)?;
     }
@@ -506,28 +543,43 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
     if args.suite.is_some() {
         return parity::run(args);
     }
-    let slices = match args.manifest {
-        Some(path) => manifest(&path)?,
-        None => {
-            let Some(truth) = args.truth else {
-                return Err("give --manifest, or --truth (and --target unless --family toolid)".to_owned());
-            };
-            let slice = Slice {
-                family: args.family,
-                metric: args.metric,
-                min_recall: args.min_recall,
-                min_precision: args.min_precision,
-                refs: args.references,
-                dbs: args.databases,
-                target: args.target,
-                truth,
-            };
-            vec![(args.slice, slice)]
-        }
+    let slices = if !args.manifest.is_empty() {
+        combined_manifests(&args.manifest)?
+    } else {
+        let Some(truth) = args.truth else {
+            return Err("give --manifest, or --truth (and --target unless --family toolid)".to_owned());
+        };
+        let slice = Slice {
+            family: args.family,
+            metric: args.metric,
+            min_recall: args.min_recall,
+            min_precision: args.min_precision,
+            refs: args.references,
+            dbs: args.databases,
+            target: args.target,
+            truth,
+        };
+        vec![(args.slice, slice)]
     };
     let (evaluation, _health) = evaluate_slices(slices, args.max_disagreements)?;
     println!("{}", serde_json::to_string_pretty(&evaluation).map_err(|error| error.to_string())?);
     Ok(if evaluation.passes_gate() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+fn combined_manifests(paths: &[PathBuf]) -> Result<Vec<(Option<String>, Slice)>, String> {
+    let mut slices = Vec::new();
+    let mut names = BTreeSet::new();
+    for path in paths {
+        for (name, slice) in manifest(path)? {
+            if let Some(name) = &name
+                && !names.insert(name.clone())
+            {
+                return Err(format!("duplicate slice {name:?} across manifests"));
+            }
+            slices.push((name, slice));
+        }
+    }
+    Ok(slices)
 }
 
 fn evaluate_slices(

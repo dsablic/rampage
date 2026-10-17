@@ -399,7 +399,9 @@ pub fn strip(elf: &[u8], keep_symbols: bool) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
+mod dwarf_truth;
 mod strip_mips;
+pub use dwarf_truth::{Report as DwarfTruthReport, dwarf_function_truth};
 
 /// Truncates `entries` to `limit`, dropping the least actionable first, and returns how many were dropped.
 fn keep_most_actionable<T>(

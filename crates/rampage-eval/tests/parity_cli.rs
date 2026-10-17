@@ -60,6 +60,31 @@ fn artifact_info_observes_headers_symbols_and_debug_metadata_in_both_twins() {
 }
 
 #[test]
+fn macho_header_marker_is_not_counted_as_a_function_bearing_analysis_truth() {
+    let output = eval().arg("artifact-info").arg(root().join("tests/fixtures/bin/hello-arm64.macho")).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let info: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(info["static_function_symbols"], 2, "only owned hello.c add and main lie in the text section");
+    assert_eq!(info["static_text_symbols_outside_section"], 1);
+}
+
+#[test]
+fn explicit_dwarf_truth_checks_ranges_instead_of_requiring_sized_function_symbols() {
+    let output = eval()
+        .arg("truth")
+        .arg(root().join("tests/fixtures/bin/eval-types-sym-aarch64.elf"))
+        .arg("--dwarf")
+        .arg("--stripped")
+        .arg(root().join("tests/fixtures/bin/eval-types-aarch64.elf"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let truth: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(truth.as_object().unwrap().values().any(|name| name == "t_i8"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("DWARF"));
+}
+
+#[test]
 fn parity_route_combines_real_static_scores_with_explicitly_unmeasured_tasks() {
     let scratch = Scratch::new();
     let output = eval().args(["run", "--suite", "parity", "--manifest"]).arg(scratch.manifest()).output().unwrap();
@@ -113,6 +138,34 @@ fn empty_type_truth_retains_zero_coverage_without_reporting_measured_health() {
     assert_eq!(report["decompiler_health"]["status"], "not_run");
     assert_eq!(report["decompiler_health"]["attempted"], 0);
     assert_eq!(report["decompiler_health"]["targets"][0]["attempted"], 0);
+}
+
+#[test]
+fn multiple_corpora_share_one_scorecard_without_silently_overwriting_slices() {
+    let scratch = Scratch::new();
+    let first = scratch.manifest();
+    let second = scratch.0.join("second.json");
+    let input = std::fs::read_to_string(&first).unwrap();
+    std::fs::write(&second, input.replace("pilot-discovery", "second-discovery")).unwrap();
+    let run = || {
+        eval()
+            .args(["run", "--suite", "parity", "--manifest"])
+            .arg(&first)
+            .arg("--manifest")
+            .arg(&second)
+            .output()
+            .unwrap()
+    };
+    let output = run();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["static_evaluation"]["slices"].as_object().unwrap().len(), 2);
+    assert_eq!(report["static_manifests"].as_array().unwrap().len(), 2);
+    std::fs::write(&second, input).unwrap();
+    let refused = run();
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(refused.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("duplicate slice"));
 }
 
 #[test]

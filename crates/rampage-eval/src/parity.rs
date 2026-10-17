@@ -8,7 +8,7 @@ use rampage_eval::parity_tasks::{TaskAttempt, TaskKind, TaskOutcome, load_tasks}
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{Family, Metric, RunArgs, evaluate_slices, manifest, read};
+use super::{Family, Metric, RunArgs, combined_manifests, evaluate_slices, read};
 
 pub(super) fn run(args: RunArgs) -> Result<ExitCode, String> {
     let started = Instant::now();
@@ -30,8 +30,16 @@ pub(super) fn run(args: RunArgs) -> Result<ExitCode, String> {
         }
         selected
     };
-    let manifest_path = args.manifest.unwrap_or_else(|| root.join("tests/fixtures/data/eval-manifest.json"));
-    let slices = manifest(&manifest_path)?;
+    let manifest_paths = if args.manifest.is_empty() {
+        vec![root.join("tests/fixtures/data/eval-manifest.json")]
+    } else {
+        args.manifest
+    };
+    let manifest_receipts: Vec<_> = manifest_paths
+        .iter()
+        .map(|path| Ok::<_, String>(json!({"path":path, "sha256": hash_file(path)?})))
+        .collect::<Result<_, _>>()?;
+    let slices = combined_manifests(&manifest_paths)?;
     if slices.is_empty() {
         return Err("parity requires a nonempty static manifest; no vacuous baseline pass".into());
     }
@@ -130,7 +138,7 @@ pub(super) fn run(args: RunArgs) -> Result<ExitCode, String> {
         "evaluator": evaluator_observation(&root),
         "run_unix_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
             .ok().and_then(|duration| u64::try_from(duration.as_millis()).ok()),
-        "static_manifest": {"path": manifest_path, "sha256": hash_file(&manifest_path)?},
+        "static_manifests": manifest_receipts,
         "static_evaluation": evaluation,
         "decompiler_health": decompiler_health,
         "graph_agreement": graph_agreement,
