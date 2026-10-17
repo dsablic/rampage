@@ -1,0 +1,34 @@
+{
+  "format": "rampage-snapshot-v1",
+  "arch": "x86_64",
+  "target": {"platform": "default", "compiler": "gcc"},
+  "provenance": "Owned local-variables.c, GCC 16.2.0 -Os -mpreferred-stack-boundary=3; never executed",
+  "regions": [
+    {
+      "name": "phase_parameter",
+      "address": "0x4000a5",
+      "permissions": "r-x",
+      "bytes": "8b0703470401f0c3"
+    },
+    {
+      "name": "phase_pointer_barrier",
+      "address": "0x4000ad",
+      "permissions": "r-x",
+      "bytes": "c3"
+    },
+    {
+      "name": "phase_update",
+      "address": "0x4000ae",
+      "permissions": "r-x",
+      "bytes": "554889e55048897df8488d7df8e8edffffff488b55f88b42040302c901f0c3"
+    },
+    {
+      "name": "main",
+      "address": "0x400078",
+      "permissions": "r-x",
+      "bytes": "554889e55031c04885f60f95c0897df889fe488d7df88945fce818000000488d7df889c2e804000000c901d0c3"
+    }
+  ],
+  "seeds": ["0x400078", "0x4000a5", "0x4000ad", "0x4000ae"],
+  "entry": "0x4000ae"
+}

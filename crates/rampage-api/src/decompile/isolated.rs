@@ -66,6 +66,7 @@ pub(super) fn decompile(
     let go = go_abi::plan(project, annotations, options);
     operations.extend(types::plan(project, annotations, &go.types)?);
     operations.extend(go.prototypes);
+    operations.extend(crate::variables::plan(project, annotations, None)?);
     let request = WorkerRequest {
         version: PROTOCOL_VERSION,
         arch: binary.arch.to_string(),
@@ -113,6 +114,7 @@ pub(super) fn finish_output(
     } else {
         output.structure.ok_or_else(|| ApiError::Unavailable("worker omitted structured result".to_owned()))?
     };
+    let variables = crate::variables::descriptors(&structure);
     Ok(Decompilation {
         address,
         name,
@@ -121,5 +123,6 @@ pub(super) fn finish_output(
         tokens,
         recovery_status: structure.recovery_status(),
         structure,
+        variables,
     })
 }

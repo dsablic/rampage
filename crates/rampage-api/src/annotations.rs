@@ -15,6 +15,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
+use rampage_decompiler::VariableStorage;
 use serde::{Deserialize, Serialize};
 
 use crate::ApiError;
@@ -27,6 +28,145 @@ pub enum Field {
     Signature,
     Types,
     Global,
+    LocalName,
+    LocalType,
+}
+
+/// Function-local names keyed by complete storage selectors, never by generated names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalNameAnnotation {
+    pub storage: VariableStorage,
+    pub name: String,
+}
+
+/// Function-local abstract type declarations keyed by complete storage selectors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalTypeAnnotation {
+    pub storage: VariableStorage,
+    pub data_type: String,
+}
+
+const LOCAL_ENTRIES: usize = 256;
+
+pub fn parse_local_names(value: &str) -> Result<Vec<LocalNameAnnotation>, String> {
+    let entries: Vec<LocalNameAnnotation> = parse_local_collection(value)?;
+    validate_local_names(&entries)?;
+    Ok(entries)
+}
+
+fn validate_local_names(entries: &[LocalNameAnnotation]) -> Result<(), String> {
+    validate_local_entries(entries, |entry| (&entry.storage, entry.name.as_str()))?;
+    for (index, entry) in entries.iter().enumerate() {
+        if rampage_decompiler::validate_local_name(&entry.name).is_err()
+            || entries[..index].iter().any(|other| other.name == entry.name)
+        {
+            return Err("local names must be unique bounded C identifiers".to_owned());
+        }
+    }
+    Ok(())
+}
+
+pub fn parse_local_types(value: &str) -> Result<Vec<LocalTypeAnnotation>, String> {
+    let entries: Vec<LocalTypeAnnotation> = parse_local_collection(value)?;
+    validate_local_types(&entries)?;
+    Ok(entries)
+}
+
+fn validate_local_types(entries: &[LocalTypeAnnotation]) -> Result<(), String> {
+    validate_local_entries(entries, |entry| (&entry.storage, entry.data_type.as_str()))?;
+    if entries.iter().any(|entry| {
+        entry.data_type.trim().is_empty()
+            || entry.data_type.len() > 4096
+            || entry.data_type.chars().any(char::is_control)
+    }) {
+        return Err("local type requires a bounded abstract declaration without control characters".to_owned());
+    }
+    Ok(())
+}
+
+pub fn encode_local_names(entries: &[LocalNameAnnotation]) -> Result<String, String> {
+    validate_local_names(entries)?;
+    encode_local_collection(entries, |entry| &entry.storage)
+}
+
+pub fn encode_local_types(entries: &[LocalTypeAnnotation]) -> Result<String, String> {
+    validate_local_types(entries)?;
+    encode_local_collection(entries, |entry| &entry.storage)
+}
+
+fn parse_local_collection<T: serde::de::DeserializeOwned>(value: &str) -> Result<Vec<T>, String> {
+    if value.len() > CHECKED_VALUE_BYTES {
+        return Err(CHECKED_ERROR.to_owned());
+    }
+    checked_json_preflight(value.as_bytes(), false)?;
+    let entries: Vec<T> = serde_json::from_str(value).map_err(|error| format!("invalid local annotations: {error}"))?;
+    if entries.is_empty() || entries.len() > LOCAL_ENTRIES {
+        return Err("local annotation collections require 1..=256 entries; clear with None".to_owned());
+    }
+    Ok(entries)
+}
+
+fn validate_local_entries<T>(entries: &[T], parts: impl Fn(&T) -> (&VariableStorage, &str)) -> Result<(), String> {
+    if entries.is_empty() || entries.len() > LOCAL_ENTRIES {
+        return Err("local annotation collections require 1..=256 entries; clear with None".to_owned());
+    }
+    let mut bytes = 0usize;
+    for (index, entry) in entries.iter().enumerate() {
+        let (storage, text) = parts(entry);
+        storage.validate().map_err(|error| error.to_string())?;
+        if entries[..index].iter().any(|other| parts(other).0 == storage) {
+            return Err("duplicate local storage selector".to_owned());
+        }
+        bytes += text.len() + storage.space.len();
+        bytes += storage.use_ranges.iter().map(|range| range.space.len()).sum::<usize>();
+        if bytes > 65536 {
+            return Err("local annotation text exceeds 64 KiB".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn encode_local_collection<T: Serialize>(
+    entries: &[T],
+    storage: impl Fn(&T) -> &VariableStorage,
+) -> Result<String, String> {
+    if entries.is_empty() || entries.len() > LOCAL_ENTRIES {
+        return Err("local annotation collections require 1..=256 entries; clear with None".to_owned());
+    }
+    let mut keyed = entries
+        .iter()
+        .map(|entry| serde_json::to_string(storage(entry)).map(|key| (key, entry)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+    let ordered: Vec<_> = keyed.into_iter().map(|(_, entry)| entry).collect();
+    let mut encoded = CheckedLogBuffer::default();
+    serde_json::to_writer(&mut encoded, &ordered).map_err(|error| error.to_string())?;
+    if encoded.bytes.len() > CHECKED_VALUE_BYTES {
+        return Err(CHECKED_ERROR.to_owned());
+    }
+    checked_json_preflight(&encoded.bytes, false)?;
+    String::from_utf8(encoded.bytes).map_err(|error| error.to_string())
+}
+
+fn canonical_local_value(field: Field, value: Option<&str>) -> Result<Option<String>, String> {
+    value
+        .map(|value| match field {
+            Field::LocalName => encode_local_names(&parse_local_names(value)?),
+            Field::LocalType => encode_local_types(&parse_local_types(value)?),
+            _ => Ok(value.to_owned()),
+        })
+        .transpose()
+}
+
+fn validate_local_value(field: Field, value: &str) -> Result<(), String> {
+    match field {
+        Field::LocalName => parse_local_names(value).map(|_| ()),
+        Field::LocalType => parse_local_types(value).map(|_| ()),
+        _ => Ok(()),
+    }
 }
 
 /// One change: `field` at `address` went from `previous` to `value` (`None` removes it).
@@ -125,6 +265,8 @@ pub struct Annotations {
     signatures: BTreeMap<u64, String>,
     types: BTreeMap<u64, String>,
     globals: BTreeMap<u64, String>,
+    local_names: BTreeMap<u64, String>,
+    local_types: BTreeMap<u64, String>,
     /// Steps applied in this session, for undo; and undone ones, for redo. A step is the edits one call made,
     /// in order: a single edit, or a whole batch, which undoes and redoes together.
     done: Vec<Vec<Edit>>,
@@ -168,12 +310,14 @@ impl CheckedBudget {
                 return Err(CHECKED_ERROR.to_owned());
             }
             self.text(value)?;
+            validate_local_value(edit.field, value)?;
         }
         if let Some(previous) = &edit.previous {
             if edit.field == Field::Name && previous.len() > 128 {
                 return Err(CHECKED_ERROR.to_owned());
             }
             self.text(previous)?;
+            validate_local_value(edit.field, previous)?;
         }
         if self.records > CHECKED_RECORDS {
             return Err(CHECKED_ERROR.to_owned());
@@ -289,6 +433,8 @@ impl Annotations {
             .saturating_add(self.signatures.len())
             .saturating_add(self.types.len())
             .saturating_add(self.globals.len())
+            .saturating_add(self.local_names.len())
+            .saturating_add(self.local_types.len())
             .saturating_add(self.addresses.len())
             .saturating_add(self.name_owners.len());
         if rows > CHECKED_RECORDS {
@@ -305,11 +451,14 @@ impl Annotations {
             .chain(self.signatures.values())
             .chain(self.types.values())
             .chain(self.globals.values())
+            .chain(self.local_names.values())
+            .chain(self.local_types.values())
             .chain(self.addresses.keys())
             .chain(self.name_owners.keys())
         {
             budget.text(text)?;
         }
+        self.validate_local_collections()?;
         for owners in self.name_owners.values() {
             budget.records = budget
                 .records
@@ -397,6 +546,8 @@ impl Annotations {
             signatures: self.signatures.clone(),
             types: self.types.clone(),
             globals: self.globals.clone(),
+            local_names: self.local_names.clone(),
+            local_types: self.local_types.clone(),
             checked_reads: self.checked_reads,
             managed_layouts: self.managed_layouts,
             ..Self::default()
@@ -455,6 +606,8 @@ impl Annotations {
             self.signatures.clear();
             self.types.clear();
             self.globals.clear();
+            self.local_names.clear();
+            self.local_types.clear();
             self.managed_layouts = 0;
         }
         for edit in &edits {
@@ -505,10 +658,12 @@ impl Annotations {
                 Some(value) => drop(self.comments.insert(edit.address, value.clone())),
                 None => drop(self.comments.remove(&edit.address)),
             },
-            Field::Signature | Field::Types | Field::Global => {
+            Field::Signature | Field::Types | Field::Global | Field::LocalName | Field::LocalType => {
                 let values = match edit.field {
                     Field::Signature => &mut self.signatures,
                     Field::Types => &mut self.types,
+                    Field::LocalName => &mut self.local_names,
+                    Field::LocalType => &mut self.local_types,
                     _ => &mut self.globals,
                 };
                 match &edit.value {
@@ -742,6 +897,7 @@ impl Annotations {
         if self.checked_reads && value.as_ref().is_some_and(|value| value.len() > value_limit) {
             return Err(CHECKED_ERROR.to_owned());
         }
+        let value = canonical_local_value(field, value.as_deref())?;
         let previous = self.field_map(field).get(&address).cloned();
         if previous == value {
             return Ok(false);
@@ -752,6 +908,7 @@ impl Annotations {
         let edit = Edit { field, address, value, previous };
         let mut candidate = self.snapshot();
         candidate.apply(&edit);
+        candidate.validate_local_collections()?;
         if self.checked_reads {
             self.preflight_checked_with_history(self, std::slice::from_ref(&edit))?;
             candidate.preflight_checked_with_history(self, std::slice::from_ref(&edit))?;
@@ -792,9 +949,10 @@ impl Annotations {
         let mut edits = Vec::new();
         let mut changed = Vec::with_capacity(changes.len());
         for (field, address, value) in changes {
+            let value = canonical_local_value(*field, value.as_deref())?;
             let previous = candidate.field_map(*field).get(address).cloned();
-            changed.push(previous != *value);
-            if previous != *value {
+            changed.push(previous != value);
+            if previous != value {
                 if *field == Field::Types {
                     crate::debug_layout_import::preserve_bundle(previous.as_deref(), value.as_deref())?;
                 }
@@ -806,6 +964,7 @@ impl Annotations {
         if edits.is_empty() {
             return Ok(changed);
         }
+        candidate.validate_local_collections()?;
         if self.checked_reads {
             self.preflight_checked_with_history(self, &edits)?;
             candidate.preflight_checked_with_history(self, &edits)?;
@@ -928,9 +1087,10 @@ impl Annotations {
         if self.checked_reads {
             candidate.preflight_checked_with_history(self, &[]).map_err(Refusal::Failed)?;
         }
+        candidate.validate_local_collections().map_err(Refusal::Failed)?;
         crate::debug_layout_import::validate_transition(self, &candidate).map_err(Refusal::Failed)?;
         let checked = edits.iter().any(|edit| {
-            matches!(edit.field, Field::Signature | Field::Types | Field::Global)
+            matches!(edit.field, Field::Signature | Field::Types | Field::Global | Field::LocalName | Field::LocalType)
                 || (edit.field == Field::Name && !candidate.globals().is_empty())
         });
         if checked {
@@ -979,6 +1139,8 @@ impl Annotations {
             Field::Signature => &self.signatures,
             Field::Types => &self.types,
             Field::Global => &self.globals,
+            Field::LocalName => &self.local_names,
+            Field::LocalType => &self.local_types,
         }
     }
 
@@ -1013,7 +1175,34 @@ impl Annotations {
     pub fn globals(&self) -> &BTreeMap<u64, String> {
         &self.globals
     }
+
+    pub fn local_names(&self) -> &BTreeMap<u64, String> {
+        &self.local_names
+    }
+
+    pub fn local_types(&self) -> &BTreeMap<u64, String> {
+        &self.local_types
+    }
+
+    fn validate_local_collections(&self) -> Result<(), String> {
+        for address in self.local_names.keys().chain(self.local_types.keys()) {
+            let names =
+                self.local_names.get(address).map(|value| parse_local_names(value)).transpose()?.unwrap_or_default();
+            let types =
+                self.local_types.get(address).map(|value| parse_local_types(value)).transpose()?.unwrap_or_default();
+            let extra_types =
+                types.iter().filter(|entry| !names.iter().any(|name| name.storage == entry.storage)).count();
+            if names.len() + extra_types > LOCAL_ENTRIES {
+                return Err("local override count exceeds 256 per function".to_owned());
+            }
+        }
+        Ok(())
+    }
 }
+
+#[cfg(test)]
+#[path = "annotations_local_tests.rs"]
+mod local_tests;
 
 /// Reads the complete lines appended to `log` since it was last read. Returns their edits, and whether the file
 /// was replaced (it shrank or is another file), in which case they are its whole contents and earlier state must be
@@ -1203,9 +1392,13 @@ fn checked_log_stamp(metadata: &std::fs::Metadata) -> CheckedLogStamp {
 }
 
 fn checked_outer_preflight(bytes: &[u8]) -> Result<(), String> {
+    checked_json_preflight(bytes, true)
+}
+
+fn checked_json_preflight(bytes: &[u8], json_lines: bool) -> Result<(), String> {
     let mut records = 0usize;
     let mut separators = 0usize;
-    for line in bytes.split_inclusive(|&byte| byte == b'\n') {
+    for line in bytes.split_inclusive(|&byte| json_lines && byte == b'\n') {
         records += 1;
         if records > CHECKED_RECORDS || line.len() > CHECKED_LINE_BYTES {
             return Err(CHECKED_ERROR.to_owned());
@@ -1238,7 +1431,7 @@ fn checked_outer_preflight(bytes: &[u8]) -> Result<(), String> {
                 }
             }
         }
-        if line.ends_with(b"\n") && (depth != 0 || string) {
+        if (!json_lines || line.ends_with(b"\n")) && (depth != 0 || string) {
             return Err(CHECKED_ERROR.to_owned());
         }
     }

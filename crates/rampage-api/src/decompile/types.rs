@@ -180,6 +180,19 @@ pub(super) fn validate(text: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+pub(crate) fn validate_local_type(text: &str) -> Result<(), ApiError> {
+    validate(text)?;
+    if text.trim().is_empty()
+        || text.len() > 4096
+        || text.chars().any(char::is_control)
+        || text.contains([';', '{', '}', '=', '(', ')', '[', ']'])
+        || declaration_tokens(text).any(|word| matches!(word, "typedef" | "extern"))
+    {
+        return Err(ApiError::Invalid("local type requires one bounded scalar or pointer declaration".to_owned()));
+    }
+    Ok(())
+}
+
 pub(super) fn declarations(text: &str) -> Result<Vec<&str>, ApiError> {
     let mut depth = 0usize;
     let mut start = 0;

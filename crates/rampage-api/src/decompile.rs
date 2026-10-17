@@ -34,6 +34,7 @@ impl PartialEq for DecompilerConfigurationRevision {
 impl Eq for DecompilerConfigurationRevision {}
 
 pub(crate) use go_abi::GoPrototypes;
+pub(crate) use types::validate_local_type;
 
 #[derive(Debug, Serialize)]
 pub struct Decompilation {
@@ -48,6 +49,7 @@ pub struct Decompilation {
     #[serde(serialize_with = "serialize_structure")]
     pub structure: rampage_decompiler::StructuredResult,
     pub recovery_status: rampage_decompiler::results::RecoveryStatus,
+    pub variables: Vec<crate::VariableDescriptor>,
 }
 
 fn serialize_structure<S: serde::Serializer>(
@@ -98,6 +100,8 @@ pub(crate) struct DecompilerState {
     signatures: std::collections::BTreeMap<u64, String>,
     types: std::collections::BTreeMap<u64, String>,
     globals: std::collections::BTreeMap<u64, String>,
+    local_names: std::collections::BTreeMap<u64, String>,
+    local_types: std::collections::BTreeMap<u64, String>,
     pub(crate) worker: Option<rampage_decompiler::worker::WorkerConfig>,
     configuration_revision: Arc<()>,
 }
@@ -136,7 +140,7 @@ fn go_compiler(binary: &rampage_loaders::Binary) -> Option<String> {
     (register_abi && supported && !binary.big_endian).then(|| "golang".to_owned())
 }
 
-fn validate_cached_layout_source(project: &Project, state: &DecompilerState) -> Result<(), ApiError> {
+pub(crate) fn validate_cached_layout_source(project: &Project, state: &DecompilerState) -> Result<(), ApiError> {
     if state.types.values().chain(state.signatures.values()).any(|text| text.starts_with('!')) {
         crate::debug_layout_import::check_backing(project)?;
     }
@@ -176,6 +180,14 @@ impl Project {
     ) -> Result<(), String> {
         validate_cached_layout_source(self, state).map_err(|error| error.to_string())?;
         crate::debug_layout_import::validate_replay_source(self, candidate).map_err(|error| error.to_string())?;
+        let targets = crate::variables::targets(candidate);
+        if !targets.is_empty() {
+            for address in targets {
+                self.decompile_annotation_candidate(state, options, candidate, address)
+                    .map_err(|error| error.to_string())?;
+            }
+            return Ok(());
+        }
         if candidate.types().is_empty() && candidate.signatures().is_empty() && candidate.globals().is_empty() {
             return Ok(());
         }
@@ -287,7 +299,9 @@ impl Project {
         annotations.locked_staged_checked(|candidate| {
             validate_cached_layout_source(self, &state)?;
             crate::debug_layout_import::validate_replay_source(self, candidate)?;
-            if let Some(config) = &state.worker {
+            if !crate::variables::targets(candidate).is_empty() {
+                self.validate_annotation_snapshot(&state, &selected, candidate).map_err(ApiError::Invalid)?;
+            } else if let Some(config) = &state.worker {
                 isolated::decompile(
                     self,
                     candidate,
@@ -351,6 +365,8 @@ impl Project {
         if slot.signatures != *annotations.signatures()
             || slot.types != *annotations.types()
             || slot.globals != *annotations.globals()
+            || slot.local_names != *annotations.local_names()
+            || slot.local_types != *annotations.local_types()
         {
             slot.engine = None;
         }
@@ -361,6 +377,8 @@ impl Project {
             slot.signatures = annotations.signatures().clone();
             slot.types = annotations.types().clone();
             slot.globals = annotations.globals().clone();
+            slot.local_names = annotations.local_names().clone();
+            slot.local_types = annotations.local_types().clone();
         }
         let decompiler = slot.engine.as_mut().expect("just built");
         let thumb = if self.binary.arch == rampage_arch::Arch::Arm {
@@ -385,6 +403,7 @@ impl Project {
             })
             .collect();
         let structure = decompiler.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        let variables = crate::variables::descriptors(&structure);
         Ok(Decompilation {
             address: start,
             name,
@@ -393,6 +412,7 @@ impl Project {
             tokens,
             recovery_status: structure.recovery_status(),
             structure,
+            variables,
         })
     }
 
@@ -423,9 +443,61 @@ impl Project {
         let go = go_abi::plan(self, annotations, options);
         operations.extend(types::plan(self, annotations, &go.types)?);
         operations.extend(go.prototypes);
+        operations.extend(crate::variables::plan(self, annotations, None)?);
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         symbols::apply(operations, &mut decompiler)?;
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         Ok(decompiler)
+    }
+
+    pub(crate) fn decompile_annotation_candidate(
+        &self,
+        state: &DecompilerState,
+        options: &DecompilerOptions,
+        annotations: &crate::annotations::Annotations,
+        address: u64,
+    ) -> Result<Decompilation, ApiError> {
+        crate::debug_layout_import::validate_replay_source(self, annotations)?;
+        if self.binary.code_from(address).is_none() {
+            return Err(ApiError::Invalid("local overrides require a file-backed function entry".to_owned()));
+        }
+        let name = self.function_name_in(annotations, address);
+        if let Some(config) = &state.worker {
+            return isolated::decompile(
+                self,
+                annotations,
+                options,
+                config,
+                Some((address, name)),
+                &std::sync::atomic::AtomicBool::new(false),
+            );
+        }
+        let mut engine = self.build_decompiler(options, annotations)?;
+        let thumb = self.binary.arch == rampage_arch::Arch::Arm
+            && context::mode_at(&self.binary.target(), &self.analysis()?.program.code_modes, address);
+        let code = engine.decompile(address, &name, thumb).map_err(|error| ApiError::Invalid(error.to_string()))?;
+        let tokens = engine
+            .tokens()
+            .into_iter()
+            .map(|token| DecompiledToken {
+                text: token.text,
+                kind: token.kind,
+                address: token.address,
+                span: token.span,
+            })
+            .collect();
+        let structure = engine.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        let variables = crate::variables::descriptors(&structure);
+        crate::debug_layout_import::validate_replay_source(self, annotations)?;
+        Ok(Decompilation {
+            address,
+            name,
+            code,
+            language_id: engine.language_id().to_owned(),
+            tokens,
+            recovery_status: structure.recovery_status(),
+            structure,
+            variables,
+        })
     }
 }

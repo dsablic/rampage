@@ -40,6 +40,7 @@ mod session;
 mod signatures;
 mod summary;
 pub mod tools;
+mod variables;
 pub mod workflows;
 mod xrefs;
 
@@ -122,6 +123,7 @@ pub use project_workspace::{
 };
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
+pub use rampage_decompiler::VariableStorage;
 pub use rampage_decompiler::results::RecoveryStatus;
 pub use rampage_decompiler::worker::SupervisedMetrics;
 pub use rampage_decompiler::worker::WorkerConfig as DecompilerWorkerConfig;
@@ -143,6 +145,7 @@ pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, Runti
 pub use session::Session;
 pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};
 pub use summary::FunctionSummary;
+pub use variables::{VariableDescriptor, VariableEditRequest, VariableEditResult};
 pub use workflows::{
     Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportLimits, ReportTarget, Section, WorkflowReport,
 };

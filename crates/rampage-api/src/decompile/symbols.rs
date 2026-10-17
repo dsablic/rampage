@@ -81,6 +81,11 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
 pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -> Result<(), ApiError> {
     for operation in operations {
         match operation {
+            WorkerOperation::LocalVariables { address, overrides } => {
+                engine
+                    .set_variable_overrides(address, &overrides)
+                    .map_err(|error| failure(address, "apply variable overrides", error))?;
+            }
             WorkerOperation::Symbol { address, name } => {
                 engine.set_symbol(address, &name).map_err(|error| failure(address, "register symbol", error))?
             }

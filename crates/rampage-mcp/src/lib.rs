@@ -72,7 +72,11 @@ successful decoding do not authenticate content or prove stream boundaries.
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
 yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are \
-loaded with their licence and provenance. Types: set_signature, set_types and set_global persist C declarations; \
+loaded with their licence and provenance. Types: edit_variable renames/retypes a current local or parameter \
+by display name or complete returned native storage, persists storage-keyed annotations, and returns refreshed \
+C and descriptors in the same call. Single whole register/stack mappings and same-size types only; selectors \
+include inclusive definition/use points, not live ranges. Undo/redo/replay preserve edits. \
+set_signature, set_types and set_global persist C declarations; \
 language_metadata exposes demangled names and bounded metadata. import_pdb_names requires an explicit pdb path \
 matching the PE image's RSDS GUID/age; preview is the default, apply=true imports names only as one undo batch. \
 Its detail pages never restrict the whole import; whole_apply_succeeded and exact totals survive byte caps. \

@@ -7,14 +7,14 @@ rename one decompiler-local parameter independently of the function's signature?
 Return available as a boolean. This is an inventory probe; do not substitute a function rename.
 """
 truth_reference = """
-crates/rampage-api/src/annotations.rs: Field has Name/Comment/Signature/Types/Global, not LocalName;
-parity roadmap Phase 1.1 is future work.
+crates/rampage-api/src/annotations.rs persists LocalName/LocalType by function and native storage;
+the Types-group edit_variable tool applies ScopeLocal overrides independently of set_signature.
 """
-required_capabilities = ["rename_variable"]
-capability_status = "unsupported"
+required_capabilities = ["edit_variable"]
+capability_status = "supported"
 capability_evidence = """
-No decompiler-local rename tool is registered in crates/rampage-api/src/tools.rs;
-function rename and set_signature are not equivalent.
+edit_variable is registered in crates/rampage-api/src/tools.rs and handles parameters and locals;
+native and MCP tests verify unchanged parameter storage plus rename/retype, undo and replay.
 """
 
 [fixture]
@@ -27,4 +27,4 @@ build = "tests/fixtures/build.sh"
 [answer]
 kind = "exact"
 [answer.fields]
-available = false
+available = true

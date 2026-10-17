@@ -485,7 +485,12 @@ impl Project {
             .write()
             .expect("annotations lock")
             .undo_validated(|candidate| {
-                if candidate.types().is_empty() && candidate.signatures().is_empty() && candidate.globals().is_empty() {
+                if candidate.types().is_empty()
+                    && candidate.signatures().is_empty()
+                    && candidate.globals().is_empty()
+                    && candidate.local_names().is_empty()
+                    && candidate.local_types().is_empty()
+                {
                     return Ok(());
                 }
                 self.validate_annotation_snapshot(&state, &options, candidate)
@@ -510,7 +515,12 @@ impl Project {
             .write()
             .expect("annotations lock")
             .redo_validated(|candidate| {
-                if candidate.types().is_empty() && candidate.signatures().is_empty() && candidate.globals().is_empty() {
+                if candidate.types().is_empty()
+                    && candidate.signatures().is_empty()
+                    && candidate.globals().is_empty()
+                    && candidate.local_names().is_empty()
+                    && candidate.local_types().is_empty()
+                {
                     return Ok(());
                 }
                 self.validate_annotation_snapshot(&state, &options, candidate)
@@ -531,6 +541,8 @@ impl Project {
             signatures: rows(annotations.signatures()),
             types: rows(annotations.types()),
             globals: rows(annotations.globals()),
+            local_names: rows(annotations.local_names()),
+            local_types: rows(annotations.local_types()),
         }
     }
 

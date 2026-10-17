@@ -7,18 +7,19 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
-## Protocol version 4
+## Protocol version 5
 
-Protocol 4 adds ordered flat-struct layout assertions. It retains explicit `no_return` setup and structured results;
+Protocol 5 adds storage-keyed native local/parameter overrides. It retains flat-struct layout assertions,
+explicit `no_return` setup and structured results;
 incompatible request/response versions are rejected rather than silently mixed. Install callers and workers together.
 
-Requests own all data. Addresses and mapping sizes are JSON integers; `hex_bytes` contains consecutive hexadecimal
-pairs with no prefix. Mapping permissions and zero-fill size are preserved. `options.platform` is `default`,
-`windows`, or `darwin`; an optional compiler ID overrides platform selection.
+Requests own all data. Function/mapping addresses and mapping sizes are JSON integers; `hex_bytes` contains
+consecutive hexadecimal pairs with no prefix. Mapping permissions and zero-fill size are preserved.
+`options.platform` is `default`, `windows`, or `darwin`; an optional compiler ID overrides platform selection.
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "arch": "x86_64",
   "big_endian": false,
   "options": { "platform": "default", "compiler": null },
@@ -49,14 +50,15 @@ The worker installs initial `code_modes`, then replays `operations` in their sup
 | `runtime_prototype` | `address`, `indirect`, canonical runtime `name`, optional `optional` boolean |
 | `mode` | `modes`: objects with `address` and `thumb` |
 | `no_return` | `address`, `indirect`: registered function or import-slot function marked non-returning |
+| `local_variables` | function `address`, replacement `overrides`: exact `storage`, optional `name`/`data_type` |
 
 `runtime_prototype` resolves the declaration using the worker's compiler data model. An unavailable prototype or
 failed setup operation is a structured error identifying the operation index. `optional: true` skips unknown
 runtime identities while preserving other setup errors. Unknown fields and versions are
 rejected.
 
-Responses are `{ "version": 4, "status": "ok", "output": ... }` or
-`{ "version": 4, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
+Responses are `{ "version": 5, "status": "ok", "output": ... }` or
+`{ "version": 5, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
 `data_organization` (`pointer`, `int`, `long` byte widths), and optional semantic `tokens` with `text`, `kind`, and
 optional numeric `address`.
 The CLI uses `rampage function decompile ... --isolated`; flat `decompile` remains accepted. Batch
@@ -64,6 +66,17 @@ The CLI uses `rampage function decompile ... --isolated`; flat `decompile` remai
 
 `validate_only: true` checks mappings, modes and ordered setup operations without requiring any function to
 decompile. It returns empty text; typed annotation transactions use this to validate entryless images.
+
+Local storage keys contain `kind` (`processor` or `spacebase`), `space`, `address`, `size`, and exact inclusive
+`use_ranges` (`space`, `start`, `end`). Addresses/range endpoints accept unsigned JSON integers or hexadecimal
+strings and serialize as hexadecimal strings. Empty use ranges select unrestricted mappings, not wildcard matches.
+Only one whole mapping on the owning symbol is supported; dynamic, internal, join, piece, missing and ambiguous
+selectors are refused. Types are scalar/pointer abstract C declarations, such as `struct PhaseState *`, referencing
+already loaded types and preserving storage size. Batches are limited to 256 overrides, 256 use ranges per selector,
+128 bytes per name/space, 4 KiB per type and 64 KiB cumulative text, in addition to request preflight limits.
+Registration parses types; exact symbol resolution happens when that function decompiles. Validation-only setup
+does not establish that a local selector matches. Native analysis locks apply during decompilation and are restored
+after results are copied. Empty override lists remove registered overrides without retaining prior names or types.
 
 `assert_plain_struct_layout` checks an already parsed complete flat struct against independent layout facts before
 dependent prototypes are installed. It is supported only for `x86:LE:64:default:gcc`; it measures the selected native

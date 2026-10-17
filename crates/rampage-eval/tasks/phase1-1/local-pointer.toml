@@ -1,0 +1,47 @@
+# Fixture provenance, not a canonical ParityTask or a new grading schema.
+schema = "phase1_typing_recipe"
+source = "tests/fixtures/src/local-variables.c"
+source_sha256 = "9b5678e487b099f902c6761f4bc71cee33c0a2f80c6f0a67b3a534d6636602fe"
+license = "Apache-2.0"
+snapshot = "tests/data/local-variables-x64.snapshot.json"
+snapshot_sha256 = "d0c6d50527619eedcc1d5a1c78e3417362206e526d749e5b4d78a0eb85690648"
+execution = "None: compilation, byte inspection and decompilation only."
+type_declaration = "struct PhaseState { int4 gain; int4 bias; };"
+field_offsets = { gain = 0, bias = 4 }
+pointer_bytes = 8
+integer_bytes = 4
+automatic_debug_type_import = false
+live_scope = "Stack local in phase_update; register parameter behavior has separate native/API/MCP coverage."
+
+[[builds]]
+id = "gcc-x64-elf-os"
+compiler = "x86_64-elf-gcc"
+compiler_version = "16.2.0"
+argv = [
+    "-Os", "-mpreferred-stack-boundary=3", "-g", "-nostdlib", "-ffreestanding",
+    "-fno-builtin", "-fno-stack-protector", "-static", "-Wl,-e,phase_update", "-Wl,--build-id=none",
+    "tests/fixtures/src/local-variables.c", "-o", "target/phase1-1/local-variables-x64-os.elf",
+]
+measured_image_sha256 = "d339a0c7609d5f272f42671b581502fc9f56cfc096335fc881ad347a0ba92c9c"
+symbols = { phase_parameter = "0x4000a5", phase_update = "0x4000ae", phase_pointer_barrier = "0x4000ad" }
+snapshot_ranges = [
+    { address = "0x400078", size = 45 },
+    { address = "0x4000a5", size = 8 },
+    { address = "0x4000ad", size = 1 },
+    { address = "0x4000ae", size = 29 },
+]
+snapshot_note = "Regions preserve addresses, bytes and code permissions; no ELF/debug metadata is imported."
+hash_note = "ELF debug paths affect its hash; cross-directory bit reproducibility is not claimed."
+
+[[builds]]
+id = "clang-arm64-elf-os"
+compiler = "clang"
+compiler_version = "23.1.3"
+argv = [
+    "--target=aarch64-none-elf", "-fuse-ld=lld", "-Os", "-g0", "-ffreestanding", "-fno-builtin",
+    "-fno-stack-protector", "-nostdlib", "-static", "-Wl,-e,phase_parameter", "-Wl,--build-id=none",
+    "tests/fixtures/src/local-variables.c", "-o", "target/phase1-1/local-variables-arm64.elf",
+]
+measured_image_sha256 = "f2fdf7bb1e1cecfd9f8f0a554ce77e868432cab7197eb387123192ed3866f5bc"
+native_test_range = { address = "0x21015c", size = 16 }
+native_test_note = "phase_parameter bytes are rebased explicitly to 0x1000 in the AArch64 native regression."

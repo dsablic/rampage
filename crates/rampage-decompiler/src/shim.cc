@@ -10,6 +10,7 @@
 #include "sleigh.hh"
 #include "tokens.hh"
 #include "results.hh"
+#include "local_variables.hh"
 
 #include <cstdlib>
 #include <algorithm>
@@ -194,6 +195,7 @@ struct Handle {
     std::map<uintb, uintb> externalSlots;
     std::vector<rampage::Token> tokens;
     std::string results;
+    std::map<uintb, std::vector<rampage::LocalOverride>> localOverrides;
     bool poisoned = false;
     bool fallbackError = false;
     bool unsafeCleanup = false;
@@ -688,6 +690,19 @@ const char *rampage_decomp_parse_c(void *h, const char *text) noexcept {
     });
 }
 
+const char *rampage_decomp_local_variables(void *h, uint64_t function,
+                                         const rampage::NativeLocalOverride *records, size_t count) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &nativeMutation) {
+        nativeMutation = true; // Parsing can intern types, even if the pending batch is refused.
+        auto overrides = rampage::prepareLocals(handle->arch, records, count);
+        if (count == 0) handle->localOverrides.erase(function);
+        else handle->localOverrides[function] = std::move(overrides);
+        handle->tokens.clear();
+        handle->results.clear();
+    });
+}
+
 // Read-only: do not route assertion failures through the mutation/poisoning path. Publish no partial layout.
 const char *rampage_decomp_inspect_layout(void *h, const char *name, size_t nameLength, PlainLayout *output) noexcept {
     Handle *handle = static_cast<Handle *>(h);
@@ -748,6 +763,7 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
     if (handle->arch == nullptr || handle->poisoned) return nullptr;
     Architecture *arch = handle->arch;
     Funcdata *fd = nullptr;
+    std::vector<rampage::SavedLocal> savedLocals;
     bool nativeMutation = false;
     handle->tokens.clear();
     handle->results.clear();
@@ -777,6 +793,15 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         fd->followFlow(low, high);
         arch->allacts.getCurrent()->reset(*fd);
         arch->allacts.getCurrent()->perform(*fd);
+        auto local = handle->localOverrides.find(addr);
+        if (local != handle->localOverrides.end()) {
+            rampage::applyLocals(fd, local->second, savedLocals);
+            arch->clearAnalysis(fd);
+            fd->followFlow(low, high);
+            arch->allacts.getCurrent()->reset(*fd);
+            arch->allacts.getCurrent()->perform(*fd);
+            rampage::verifyLocals(fd, local->second, savedLocals);
+        }
         LimitedOutput buffer;
         std::ostream out(&buffer);
         out.exceptions(std::ios::badbit | std::ios::failbit);
@@ -794,6 +819,9 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
             auto external = handle->externalSlots.find(token.address);
             if (external != handle->externalSlots.end()) token.address = external->second;
         }
+        nativeMutation = true;
+        rampage::restoreLocals(fd->getScopeLocal(), savedLocals);
+        nativeMutation = false;
         const std::string &text = buffer.str();
         char *result = static_cast<char *>(malloc(text.size() + 1));
         if (result == nullptr) {
@@ -805,6 +833,11 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         handle->fallbackError = false;
         return result;
     } catch (const LowlevelError &err) {
+        try {
+            if (fd != nullptr) rampage::restoreLocals(fd->getScopeLocal(), savedLocals);
+        } catch (...) {
+            handle->unsafeCleanup = true;
+        }
         failDecompilation(handle, fd, err.explain.c_str(), true);
         return nullptr;
     } catch (const DecoderError &error) {

@@ -90,6 +90,7 @@ async fn lists_all_tools_with_instructions() {
         "discard_undo",
         "dotnet_il",
         "dotnet_metadata",
+        "edit_variable",
         "enable_tools",
         "entry_diagnostics",
         "find_crypto",

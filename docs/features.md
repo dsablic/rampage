@@ -88,6 +88,10 @@ and dependency-checked undo/redo. Embedded DWARF scalar/pointer signatures can b
 without replacing analyst signatures. Named Itanium and MSVC vtables provide bounded class evidence, including
 the C++ class name, not inferred object layouts. For stripped binaries, Itanium and MSVC RTTI scanning recovers
 class names and base-class edges. See [debug signature import](debug-signatures.md).
+
+Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage
+identity and returns refreshed C in one call, with undo/replay. Limits: single whole register/stack mappings
+and same-size retypes; unsupported storage is explicit, with no project type library or cross-call propagation.
 The decompiler library can inspect/assert complete flat-struct layouts for x86-64 GCC before using dependent
 prototypes. This read-only bridge compares native field offsets, sizes, alignment and leaf types against independent
 facts; it does not import debug layouts or persist assertions across engine rebuilds. Nested aggregates and inferred

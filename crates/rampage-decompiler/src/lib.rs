@@ -11,6 +11,8 @@ pub mod layout;
 mod layout_wire;
 pub mod results;
 mod specs;
+mod variables;
+pub use variables::{LocalOverride, VariableStorage, validate_local_name};
 pub mod worker;
 pub use results::{StructuredResult, parse_results};
 

@@ -2,13 +2,14 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rampage_agent::Transport;
 use rampage_eval::parity_agent::{AgentConfig, AgentDisposition, AgentRun, ModelSource, ProviderUsage, run_task};
 use rampage_eval::parity_tasks::{ParityTask, TaskAttempt, TaskOutcome};
 use rampage_mcp::RampageServer;
-use rmcp::model::ClientConfig;
+use rmcp::model::{CallToolRequestParams, ClientConfig};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::{ClientHandler, ServiceExt};
 use serde_json::{Value, json};
@@ -56,7 +57,7 @@ fn task() -> ParityTask {
 }
 
 fn missing_capability_task() -> ParityTask {
-    ParityTask::from_toml(include_str!("../tasks/capability-local-variable-rename.toml")).unwrap()
+    ParityTask::from_toml(include_str!("../tasks/capability-patch-export.toml")).unwrap()
 }
 
 fn fixture() -> PathBuf {
@@ -100,6 +101,7 @@ fn without_provider_needs_no_peer_and_preserves_explicit_model_with_null_metrics
         (0, 0, 0, 0, 0, 0),
     );
     assert!(run.turns.is_empty() && run.calls.is_empty() && run.catalogs.is_empty());
+    assert!(run.catalog_tool_names.is_empty());
     let serialized = serde_json::to_value(&run).unwrap();
     assert_eq!(serialized["wall_time_ms"], Value::Null);
     assert_eq!(serialized["usage"]["input_tokens"], Value::Null);
@@ -123,6 +125,14 @@ fn without_provider_rejects_invalid_model_and_limits_without_measuring_anything(
         assert_eq!((run.model_turns, run.tool_calls, run.catalog_requests), (0, 0, 0));
         assert!(run.turns.is_empty() && run.calls.is_empty() && run.catalogs.is_empty());
     }
+}
+
+#[test]
+fn older_agent_runs_default_to_no_compact_catalog_inventory() {
+    let mut serialized = serde_json::to_value(AgentRun::without_provider(&config())).unwrap();
+    serialized.as_object_mut().unwrap().remove("catalog_tool_names");
+    let run: AgentRun = serde_json::from_value(serialized).unwrap();
+    assert!(run.catalog_tool_names.is_empty());
 }
 
 #[tokio::test]
@@ -173,21 +183,42 @@ async fn scripted_transport_uses_actual_mcp_and_keeps_truth_out_of_model_request
 
 #[tokio::test]
 async fn scripted_group_enable_refreshes_real_catalog_before_next_model_turn() {
-    let client = connect().await;
-    let path = fixture();
-    let (script, requests) = Script::new(vec![
-        tool("enable_tools", json!({ "groups": ["types"] })),
-        tool("language_metadata", json!({ "path": path })),
-        final_answer(json!({ "status": "unknown", "reason": "scripted inventory only" })),
-    ]);
-    let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &path, &config()).await;
-    assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
-    assert_eq!(run.catalog_requests, 2);
-    assert_eq!(run.catalogs.len(), 2);
-    assert_eq!(run.tool_calls, 2);
-    let requests = requests.lock().unwrap();
-    assert!(!offered(&requests[0], "language_metadata"));
-    assert!(offered(&requests[1], "language_metadata"));
+    for allow_variable_edits in [false, true] {
+        let client = connect().await;
+        let initial_names: Vec<_> =
+            client.list_all_tools().await.unwrap().into_iter().map(|tool| tool.name.into_owned()).collect();
+        let path = fixture();
+        let (script, requests) = Script::new(vec![
+            tool("enable_tools", json!({ "groups": ["types"] })),
+            tool("language_metadata", json!({ "path": path })),
+            final_answer(json!({ "status": "unknown", "reason": "scripted inventory only" })),
+        ]);
+        let mut bounds = config();
+        bounds.allow_variable_edits = allow_variable_edits;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &path, &bounds).await;
+        assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+        assert_eq!(run.catalog_requests, 2);
+        assert_eq!(run.catalogs.len(), 2);
+        assert_eq!(run.tool_calls, 2);
+        let refreshed_names: Vec<_> =
+            client.list_all_tools().await.unwrap().into_iter().map(|tool| tool.name.into_owned()).collect();
+        assert!(!initial_names.iter().any(|name| name == "edit_variable" || name == "set_types"));
+        for name in ["edit_variable", "set_types", "set_signature"] {
+            assert!(refreshed_names.iter().any(|actual| actual == name));
+        }
+        assert_eq!(run.catalog_tool_names, vec![initial_names, refreshed_names]);
+        {
+            let requests = requests.lock().unwrap();
+            assert!(!offered(&requests[0], "language_metadata"));
+            assert!(offered(&requests[1], "language_metadata"));
+            assert!(!offered(&requests[0], "edit_variable"));
+            assert!(!offered(&requests[0], "set_types"));
+            assert_eq!(offered(&requests[1], "edit_variable"), allow_variable_edits);
+            assert_eq!(offered(&requests[1], "set_types"), allow_variable_edits);
+            assert!(!offered(&requests[1], "set_signature"));
+        }
+        client.cancel().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -351,6 +382,8 @@ async fn scripted_turn_and_tool_bounds_stop_without_inventing_calls() {
 #[tokio::test]
 async fn scripted_retention_is_bounded_and_truncation_is_visible_to_model_and_evaluator() {
     let client = connect().await;
+    let actual_names: Vec<_> =
+        client.list_all_tools().await.unwrap().into_iter().map(|tool| tool.name.into_owned()).collect();
     let mut bounds = config();
     bounds.max_record_bytes = 256;
     bounds.max_retained_bytes = 256;
@@ -361,6 +394,9 @@ async fn scripted_retention_is_bounded_and_truncation_is_visible_to_model_and_ev
     let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &fixture(), &bounds).await;
     assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
     assert!(run.catalogs[0].truncated);
+    assert_eq!(run.catalog_tool_names, vec![actual_names.clone(), actual_names]);
+    assert_eq!(run.catalog_tool_names.len(), run.catalogs.len());
+    assert!(run.catalogs[1].truncated && run.catalogs[1].text.is_empty());
     assert!(run.calls[0].output.truncated);
     assert!(run.calls[0].output.original_bytes > run.calls[0].output.text.len());
     let retained: usize = run.catalogs.iter().map(|entry| entry.text.len()).sum::<usize>()
@@ -425,4 +461,185 @@ async fn scripted_provider_truncation_is_not_an_answer() {
     let (script, _) = Script::new(vec![cut_off]);
     let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &fixture(), &config()).await;
     assert!(matches!(run.disposition, AgentDisposition::Failed { .. }));
+}
+
+struct LocalFixture {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl LocalFixture {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "rampage-eval-local-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let fixture = Self { path: directory.join("fixture.snapshot.json"), directory };
+        std::fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/local-variables-x64.snapshot.json"),
+            &fixture.path,
+        )
+        .unwrap();
+        fixture
+    }
+}
+
+impl Drop for LocalFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+async fn native_decompilation(client: &RunningService<RoleClient, TestClient>, path: &std::path::Path) -> Value {
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("decompile")
+                .with_arguments(json!({"path": path, "at": "0x4000ae"}).as_object().unwrap().clone()),
+        )
+        .await
+        .unwrap();
+    let text = &result.content.first().unwrap().as_text().unwrap().text;
+    assert_ne!(result.is_error, Some(true), "{text}");
+    serde_json::from_str(text).unwrap()
+}
+
+#[tokio::test]
+async fn default_policy_hides_and_blocks_both_variable_annotation_writes() {
+    for (name, edits) in [
+        ("set_types", json!({"text": "struct PhaseState { int4 gain; int4 bias; };"})),
+        ("edit_variable", json!({"variable": "piStack_10", "name": "state"})),
+    ] {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let mut input = edits;
+        input["path"] = json!(owned.path);
+        input["at"] = json!("0x4000ae");
+        let (script, requests) = Script::new(vec![tool("enable_tools", json!({"groups": ["all"]})), tool(name, input)]);
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &config()).await;
+        assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{run:?}");
+        assert_eq!(run.tool_calls, 1);
+        assert!(!run.calls[1].invoked);
+        {
+            let requests = requests.lock().unwrap();
+            assert!(!offered(&requests[1], "set_types"));
+            assert!(!offered(&requests[1], "edit_variable"));
+            assert!(requests[1]["system"].as_str().unwrap().contains("restricted to read-only"));
+        }
+        let binary = rampage_loaders::Binary::open(&owned.path).unwrap();
+        let identity = rampage_analysis::capture_identity::capture_identity(&binary).unwrap();
+        let sidecar = owned.path.parent().unwrap().join(format!(".{}-{}.jsonl", identity.schema, identity.sha256));
+        assert!(!sidecar.exists());
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn opt_in_executes_only_owned_fixture_type_and_variable_edits_with_native_refresh() {
+    for by_storage in [false, true] {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let before = native_decompilation(&client, &owned.path).await;
+        let local = before["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|variable| {
+                variable["editable"] == true
+                    && variable["kind"] == "local"
+                    && variable["storage"]["kind"] == "spacebase"
+                    && variable["storage"]["space"] == "stack"
+                    && variable["storage"]["size"] == 8
+            })
+            .expect("owned fixture stack local");
+        let mut edit = json!({
+            "path": owned.path, "at": "0x4000ae", "name": "state", "data_type": "struct PhaseState *",
+        });
+        if by_storage {
+            edit["storage"] = local["storage"].clone();
+        } else {
+            edit["variable"] = local["name"].clone();
+        }
+        let (script, requests) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["types"]})),
+            tool(
+                "set_types",
+                json!({
+                    "path": owned.path, "at": "0x4000ae", "text": "struct PhaseState { int4 gain; int4 bias; };",
+                }),
+            ),
+            tool("edit_variable", edit),
+            final_answer(json!({"local_name": "state", "local_type": "struct PhaseState *"})),
+        ]);
+        let mut bounds = config();
+        bounds.allow_variable_edits = true;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert!(matches!(run.disposition, AgentDisposition::Answer { .. }), "{run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (3, 0));
+        assert!(run.calls.iter().all(|call| call.invoked && !call.is_error));
+        assert_eq!(run.task_attempt(), TaskAttempt::Unmeasured);
+        {
+            let requests = requests.lock().unwrap();
+            assert!(offered(&requests[1], "set_types"));
+            assert!(offered(&requests[1], "edit_variable"));
+            assert!(!offered(&requests[1], "set_signature"));
+            assert!(!offered(&requests[1], "set_global"));
+            assert!(requests[1]["system"].as_str().unwrap().contains("same owned fixture"));
+        }
+        let after = native_decompilation(&client, &owned.path).await;
+        let updated =
+            after["variables"].as_array().unwrap().iter().find(|variable| variable["name"] == "state").unwrap();
+        assert_eq!(updated["kind"], "local");
+        assert_eq!(updated["editable"], true);
+        assert_eq!(updated["storage"], local["storage"]);
+        assert_eq!(updated["key"], local["key"]);
+        let code = after["code"].as_str().unwrap();
+        assert!(code.contains("state->gain") && code.contains("state->bias"), "{code}");
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn opt_in_does_not_admit_other_writes_secondary_paths_or_unchecked_nested_inputs() {
+    for (name, input) in [
+        ("set_signature", json!({"at": "0x4000ae", "text": "int changed(void)"})),
+        ("set_global", json!({"at": "0x4000ae", "text": "int changed"})),
+        ("rename", json!({"at": "0x4000ae", "name": "changed"})),
+        ("set_comment", json!({"at": "0x4000ae", "text": "changed"})),
+        ("undo", json!({})),
+        ("patch", json!({"at": "0x4000ae", "bytes": "90"})),
+        ("query_debugger", json!({"socket": "/outside/socket"})),
+        ("set_types", json!({"path": "/outside/fixture", "at": "0x4000ae", "text": "struct X {};"})),
+        ("edit_variable", json!({"path": "/outside/fixture", "at": "0x4000ae", "name": "state"})),
+        ("set_types", json!({"at": "0x4000ae", "text": "struct X {};", "image_offset": "0x10"})),
+        ("edit_variable", json!({"at": "0x4000ae", "storage": {"command": "injected"}, "name": "state"})),
+        ("edit_variable", json!({"at": "0x4000ae", "variable": {"name": "injected"}, "name": "state"})),
+        (
+            "edit_variable",
+            json!({"at": "0x4000ae", "storage": {
+            "kind": "spacebase", "space": "stack", "address": "0xfffffffffffffff0", "size": 8,
+            "use_ranges": [{"space": "ram", "start": "0x4000ae", "end": "0x4000b0",
+                "other": "/outside/fixture"}],
+        }, "name": "state"}),
+        ),
+        ("binary_info", json!({"path": "/outside/fixture"})),
+        ("import_debug_layouts", json!({"apply": true})),
+    ] {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let mut input = input;
+        if input.get("path").is_none() {
+            input["path"] = json!(owned.path);
+        }
+        let (script, _) = Script::new(vec![tool("enable_tools", json!({"groups": ["all"]})), tool(name, input)]);
+        let mut bounds = config();
+        bounds.allow_variable_edits = true;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{name}: {run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (1, 1), "{name}: {run:?}");
+        assert!(!run.calls[1].invoked, "{name}: {run:?}");
+        client.cancel().await.unwrap();
+    }
 }

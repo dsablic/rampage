@@ -230,10 +230,12 @@ impl Project {
         report_phase(EntryPreparationPhase::Replay)?;
         let generated = go_abi::entry_types(self, &annotations, &options)?;
         let replay = types::plan_entry(self, &annotations, &generated, &plan.stub_targets)?;
-        let replay_operations = replay.len();
+        let local_replay = crate::variables::plan(self, &annotations, Some(plan.address))?;
+        let replay_operations = replay.len() + local_replay.len();
         let generated_dependency_types = generated.len();
         let mut operations = plan.operations;
         operations.extend(replay);
+        operations.extend(local_replay);
         check("declaration replay preparation")?;
         debug_layout_import::validate_entry_replay_source(self, &annotations)?;
         timings.replay_ms = elapsed(stage);
@@ -339,6 +341,7 @@ impl Project {
                 })
                 .collect();
             let structure = engine.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
+            let variables = crate::variables::descriptors(&structure);
             let result = Decompilation {
                 address: plan.address,
                 name: plan.name,
@@ -347,6 +350,7 @@ impl Project {
                 tokens,
                 recovery_status: structure.recovery_status(),
                 structure,
+                variables,
             };
             (result, "in_process_native")
         };

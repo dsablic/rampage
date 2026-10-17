@@ -33,7 +33,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -119,6 +119,10 @@ pub struct WorkerCodeMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerOperation {
+    LocalVariables {
+        address: u64,
+        overrides: Vec<crate::LocalOverride>,
+    },
     Symbol {
         address: u64,
         name: String,
@@ -382,7 +386,7 @@ impl SupervisorBudget<'_> {
 /// Failed child/response outcomes also retain their primary category; the measured API records secondary
 /// cleanup failure. A successful response never waives a cleanup failure.
 /// Legacy workers without private completion must exit, permit anchored group cleanup, and produce actual
-/// pipe EOF. On Darwin even a valid exit-zero p4 response may fail with zombie-group EPERM; this is a restricted
+/// pipe EOF. On Darwin even a valid exit-zero response may fail with zombie-group EPERM; this is a restricted
 /// compatibility contract, not proof that the group is empty. All custom SIGCHLD handlers are rejected,
 /// including handlers that do not reap; callers must retain SIG_DFL and exclusive child-wait ownership.
 pub fn run_supervised(
@@ -395,7 +399,7 @@ pub fn run_supervised(
     run_supervised_inner(request, config, cancellation, started, &measurement)
 }
 
-/// Opt-in host-only observations, retained even when supervision fails. This does not change protocol v4.
+/// Opt-in host-only observations, retained even when supervision fails. This does not change the wire protocol.
 /// Offsets share this call's start, overlap, and do not expose worker-internal initialization phases.
 /// The ownership and cleanup requirements of [`run_supervised`] apply. Sampling is synchronous; neither
 /// OS queries nor spawn are forcibly interruptible, and observation overhead counts toward the budget.
@@ -879,6 +883,10 @@ fn validate_layout_operations(
                 return Err(WorkerError::Protocol("invalid checked context identity".to_owned()));
             }
         }
+        if let WorkerOperation::LocalVariables { overrides, .. } = operation {
+            crate::variables::validate_overrides(overrides)
+                .map_err(|error| WorkerError::Protocol(format!("operation {index}: {error}")))?;
+        }
     }
     Ok(())
 }
@@ -944,6 +952,9 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
     engine.set_code_modes(&modes).map_err(|error| error.to_string())?;
     for (index, operation) in request.operations.into_iter().enumerate() {
         let result = match operation {
+            WorkerOperation::LocalVariables { address, overrides } => {
+                engine.set_variable_overrides(address, &overrides)
+            }
             WorkerOperation::Symbol { address, name } => engine.set_symbol(address, &name),
             WorkerOperation::Import { slot, target, name } => engine.add_import(slot, target, &name),
             WorkerOperation::Prototype { address, indirect, declaration } => {

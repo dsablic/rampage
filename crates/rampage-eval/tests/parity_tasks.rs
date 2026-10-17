@@ -7,7 +7,7 @@ use serde_json::json;
 
 const ARITHMETIC: &str = include_str!("../tasks/arithmetic-arm64-elf.toml");
 const CLASSES: &str = include_str!("../tasks/cpp-class-names-arm64-macho.toml");
-const UNSUPPORTED: &str = include_str!("../tasks/capability-local-variable-rename.toml");
+const UNSUPPORTED: &str = include_str!("../tasks/capability-patch-export.toml");
 
 #[test]
 fn malformed_toml_is_an_error_with_its_origin() {
@@ -211,7 +211,7 @@ fn owned_suite_parses_atomically_and_sorts_without_marking_any_task_measured() {
         ("go-package-functions-x64-elf.toml", include_str!("../tasks/go-package-functions-x64-elf.toml")),
         ("objc-superclasses-arm64-macho.toml", include_str!("../tasks/objc-superclasses-arm64-macho.toml")),
         ("capability-decompile.toml", include_str!("../tasks/capability-decompile.toml")),
-        ("capability-local-variable-rename.toml", UNSUPPORTED),
+        ("capability-local-variable-rename.toml", include_str!("../tasks/capability-local-variable-rename.toml")),
         ("capability-patch-export.toml", include_str!("../tasks/capability-patch-export.toml")),
     ];
     let tasks = parse_task_documents(documents).unwrap();

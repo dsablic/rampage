@@ -129,6 +129,7 @@ pub struct Parameter {
 pub struct Storage {
     pub kind: StorageKind,
     pub space: Option<String>,
+    #[serde(with = "crate::variables::optional_hex_address")]
     pub address: Option<u64>,
     pub size: u32,
     /// Inclusive Ghidra definition/use-point selector ranges, not live ranges or instruction availability.
@@ -153,7 +154,9 @@ pub struct Storage {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct StorageUseRange {
     pub space: String,
+    #[serde(with = "crate::variables::hex_address")]
     pub start: u64,
+    #[serde(with = "crate::variables::hex_address")]
     pub end: u64,
 }
 
@@ -162,6 +165,7 @@ pub struct StorageUseRange {
 pub struct StoragePiece {
     pub kind: StorageKind,
     pub space: String,
+    #[serde(with = "crate::variables::hex_address")]
     pub address: u64,
     pub size: u32,
     pub logical_offset: u32,

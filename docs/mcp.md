@@ -26,7 +26,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_pdb_names`, `class_evidence`,
-  `language_metadata`.
+  `language_metadata`, `edit_variable`.
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `inspect_jump_table`.
@@ -52,6 +52,11 @@ The local stripped Lua workload was also inspected through `triage_report`: stat
 does not imply target execution, and bundled signature results are distinct from matched-twin evaluator scores.
 
 ## Inputs, paging and decompiler tokens
+
+`edit_variable` accepts one current display name or complete native storage object, with name/type changes or
+clear flags. It atomically persists the changes and returns complete refreshed C, diagnostics and variable
+descriptors within the tool budget. Limits: one whole register/stack mapping and same-size types; invalid or
+oversized results do not persist. See [local variables](local-variables.md) for selectors and undo/replay.
 
 `inspect_raw_code` reads an explicitly mapped regular-file window with required architecture, mode, instruction
 and data byte orders, and base VA; it returns range hashes, source offsets and bounded linear observations.

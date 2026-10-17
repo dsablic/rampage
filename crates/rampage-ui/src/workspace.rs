@@ -531,6 +531,9 @@ impl Workspace {
             Field::Signature => self.project.set_signature(editing.address, value),
             Field::Types => self.project.set_types(editing.address, value),
             Field::Global => self.project.set_global(editing.address, value),
+            Field::LocalName | Field::LocalType => Err(rampage_api::ApiError::Invalid(
+                "local variable edits require a native storage selector through MCP".to_owned(),
+            )),
         };
         match result {
             Ok(edit) => {

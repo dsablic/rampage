@@ -538,6 +538,90 @@ enum DecompileView {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum VariableStorageKindInput {
+    Processor,
+    Spacebase,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VariableUseRangeInput {
+    space: String,
+    /// Inclusive definition/use selector offset in this space, not a variable live range.
+    start: crate::FileOffset,
+    end: crate::FileOffset,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct VariableStorageInput {
+    kind: VariableStorageKindInput,
+    space: String,
+    /// Address-space offset, not file offset or necessarily a VA; copy returned stack offsets exactly.
+    address: crate::FileOffset,
+    /// Whole mapping size in bytes. Retypes must have this same native size.
+    size: crate::FileOffset,
+    use_ranges: Vec<VariableUseRangeInput>,
+}
+
+impl VariableStorageInput {
+    fn native(self) -> Result<rampage_decompiler::VariableStorage, ApiError> {
+        Ok(rampage_decompiler::VariableStorage {
+            kind: match self.kind {
+                VariableStorageKindInput::Processor => rampage_decompiler::results::StorageKind::Processor,
+                VariableStorageKindInput::Spacebase => rampage_decompiler::results::StorageKind::Spacebase,
+            },
+            space: self.space,
+            address: self.address.0,
+            size: u32::try_from(self.size.0).map_err(|_| ApiError::Invalid("storage size exceeds 32 bits".into()))?,
+            use_ranges: self
+                .use_ranges
+                .into_iter()
+                .map(|range| rampage_decompiler::results::StorageUseRange {
+                    space: range.space,
+                    start: range.start.0,
+                    end: range.end.0,
+                })
+                .collect(),
+        })
+    }
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EditVariableArgs {
+    /// Function address or name. Select exactly one current display name or complete returned storage object.
+    at: String,
+    variable: Option<String>,
+    storage: Option<VariableStorageInput>,
+    /// New local/parameter identifier; changes are persisted by storage, not by generated display name.
+    name: Option<String>,
+    /// Abstract sized scalar/pointer type, for example struct PhaseState *. Declare named types with set_types.
+    data_type: Option<String>,
+    #[serde(default)]
+    clear_name: bool,
+    #[serde(default)]
+    clear_type: bool,
+}
+
+fn variable_edit_view(result: &crate::VariableEditResult) -> Result<Value, ApiError> {
+    let decompilation =
+        serde_json::to_value(&result.decompilation).map_err(|error| ApiError::Invalid(error.to_string()))?;
+    let value = serde_json::json!({
+        "address":format!("{:#x}",result.address), "storage":result.storage,
+        "edits":result.edits.iter().map(|edit| serde_json::json!({"field":edit.field,"changed":edit.changed}))
+            .collect::<Vec<_>>(),
+        "decompilation":decompilation_view(decompilation,DecompileView::Code)?,
+        "omitted_details":["per-function annotation collection values; inspect the annotation log for replay history"],
+    });
+    if value.to_string().len() > MAX_RESULT_CHARS {
+        return Err(ApiError::Invalid("variable edit result exceeds the JSON budget; no edit was persisted".into()));
+    }
+    Ok(value)
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct EntryDiagnosticsArgs {
     /// One exact address/name; omitted samples at most 64 metadata-declared addresses.
@@ -1864,6 +1948,31 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: RenameArgs| {
                 let name = edit_value(arguments.name, arguments.clear, "name")?;
                 project.rename(project.resolve(&arguments.at)?, name.as_deref())
+            },
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "edit_variable",
+            "Rename/retype one decompiler local or parameter by its current display name OR complete returned \
+             storage identity, including inclusive definition/use ranges. Returns refreshed complete C, diagnostics \
+             and variable descriptors in this call. Persists storage-keyed annotations with atomic undo/redo/replay. \
+             Named structs use existing set_types declarations. Initially supports single whole processor/stack \
+             mappings and same-size scalar/pointer types; dynamic/join/piece/ambiguous selectors are refused. \
+             Set name/data_type or clear_name/clear_type. Invalid or oversized refreshed results do not persist.",
+            |project, args: EditVariableArgs| {
+                let request = crate::VariableEditRequest {
+                    variable: args.variable,
+                    storage: args.storage.map(VariableStorageInput::native).transpose()?,
+                    name: args.name,
+                    data_type: args.data_type,
+                    clear_name: args.clear_name,
+                    clear_type: args.clear_type,
+                };
+                let result = project.edit_variable_with_preflight(project.resolve(&args.at)?, &request, |result| {
+                    variable_edit_view(result).map(|_| ())
+                })?;
+                variable_edit_view(&result)
             },
         )
         .annotates(),

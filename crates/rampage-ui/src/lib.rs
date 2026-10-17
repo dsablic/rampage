@@ -375,6 +375,7 @@ impl App {
             Field::Signature => format!("Signature {:#x}", editing.address),
             Field::Types => format!("Types {:#x}", editing.address),
             Field::Global => format!("Global {:#x}", editing.address),
+            Field::LocalName | Field::LocalType => format!("Local variable {:#x}", editing.address),
         };
         let mut done = false;
         let mut cancel = false;
