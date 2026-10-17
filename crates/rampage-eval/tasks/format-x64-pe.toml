@@ -1,0 +1,26 @@
+version = 1
+id = "format-x64-pe"
+kind = "analysis"
+question = """
+Identify the container, CPU family, bit width and byte order. Use fields format, arch, bits, endian;
+normalize to ELF/PE/Mach-O, x86_64/aarch64/arm/mips, and little/big.
+"""
+truth_reference = "tests/fixtures/build.sh:22; committed PE header (file: PE32+ x86-64)."
+required_capabilities = ["binary_info"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: binary_info is registered in core."
+
+[fixture]
+id = "hello-x64-pe"
+path = "tests/fixtures/bin/hello-x64.exe"
+sha256 = "3b6a01cc33e6b3c55702d69cf24c44f001dd09fe4ff7bdc7a0432de59d64c9c4"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+format = "PE"
+arch = "x86_64"
+bits = 64
+endian = "little"

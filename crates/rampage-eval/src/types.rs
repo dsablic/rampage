@@ -392,15 +392,65 @@ pub fn decompiled_signatures(
     target: Binary,
     addresses: impl IntoIterator<Item = u64>,
 ) -> BTreeMap<u64, Result<ProposedSignature, String>> {
+    decompiled_signature_batch(target, addresses).signatures
+}
+
+#[derive(Debug, Serialize)]
+pub struct DecompileObservation {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub requested_address: u64,
+    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
+    pub returned_address: Option<u64>,
+    pub status: &'static str,
+    pub elapsed_us: u64,
+    pub c_bytes: usize,
+    pub recovery_status: Option<rampage_decompiler::results::RecoveryStatus>,
+    pub warning_count: Option<usize>,
+    pub bad_data: Option<bool>,
+    pub unimplemented: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SignatureRecoveryBatch {
+    pub signatures: BTreeMap<u64, Result<ProposedSignature, String>>,
+    pub observations: Vec<DecompileObservation>,
+    pub timing_boundary: &'static str,
+}
+
+pub fn decompiled_signature_batch(target: Binary, addresses: impl IntoIterator<Item = u64>) -> SignatureRecoveryBatch {
     let project = rampage_api::Project::new(target);
-    addresses
-        .into_iter()
-        .map(|address| {
-            let signature = match project.decompile(address) {
-                Ok(result) if result.address != address => {
-                    Err(format!("decompiled the function at {:#x} instead", result.address))
+    let mut observations = Vec::new();
+    let mut signatures = BTreeMap::new();
+    for address in addresses {
+        let started = std::time::Instant::now();
+        let result = project.decompile(address);
+        let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let mut observation = DecompileObservation {
+            requested_address: address,
+            returned_address: None,
+            status: "error",
+            elapsed_us,
+            c_bytes: 0,
+            recovery_status: None,
+            warning_count: None,
+            bad_data: None,
+            unimplemented: None,
+        };
+        let signature = match result {
+            Ok(result) => {
+                observation.returned_address = Some(result.address);
+                observation.c_bytes = result.code.len();
+                observation.recovery_status = Some(result.recovery_status);
+                if let Some(diagnostics) = &result.structure.diagnostics {
+                    observation.warning_count = Some(diagnostics.warnings.len());
+                    observation.bad_data = Some(diagnostics.bad_data);
+                    observation.unimplemented = Some(diagnostics.unimplemented);
                 }
-                Ok(result) => {
+                if result.address != address {
+                    observation.status = "address_mismatch";
+                    Err(format!("decompiled the function at {:#x} instead", result.address))
+                } else {
+                    observation.status = "returned";
                     let signature = &result.structure.signature;
                     let ty = |info: &rampage_decompiler::results::TypeInfo| {
                         ProposedType::from_decompiler(&info.name, info.size)
@@ -411,11 +461,19 @@ pub fn decompiled_signatures(
                         variadic: signature.variadic,
                     })
                 }
-                Err(error) => Err(error.to_string()),
-            };
-            (address, signature)
-        })
-        .collect()
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        observations.push(observation);
+        signatures.insert(address, signature);
+    }
+    SignatureRecoveryBatch {
+        signatures,
+        observations,
+        timing_boundary: "Around each Project::decompile call; Project construction excluded. \
+            First call may include discovery/native initialization; subsequent calls share target caches. \
+            In-process calls are not forcibly interruptible.",
+    }
 }
 
 /// Which part of a signature a slice scores.

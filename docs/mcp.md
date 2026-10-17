@@ -44,6 +44,9 @@ without group gating, plus the interactive `show_address`; it does not offer fil
 `carve`/`archive_inventory`/`list_packs`/`query_debugger`/`inspect_data`/`decode_file_range`/`inspect_raw_code`.
 `show_address` is not an MCP tool because the server has no interactive listing to navigate.
 
+The [parity scorecard pilot](parity-scorecard.md) records static metrics and task definitions separately from
+live MCP/model results. Limits: contract checks and scripted transport tests are not AI task-success measurements.
+
 ## Inputs, paging and decompiler tokens
 
 `inspect_raw_code` reads an explicitly mapped regular-file window with required architecture, mode, instruction

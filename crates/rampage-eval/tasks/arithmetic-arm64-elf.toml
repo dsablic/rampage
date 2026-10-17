@@ -1,0 +1,23 @@
+version = 1
+id = "arithmetic-arm64-elf"
+kind = "analysis"
+question = """
+For the function beginning at 0x1010518, determine the integer result when its first two arguments
+are 7 and 11. Return return_value as an integer; infer it from code without executing the binary.
+"""
+truth_reference = "tests/fixtures/src/hello.c:8; original add at 0x1010518 is add w0,w1,w0 followed by ret."
+required_capabilities = ["disassemble"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: disassemble is registered in core."
+
+[fixture]
+id = "hello-arm64-elf"
+path = "tests/fixtures/bin/hello-arm64.elf"
+sha256 = "b47331c6dc05c7eee4e90021a3433e36a3b7d3c212823677cbb8522b3fd07725"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+return_value = 18

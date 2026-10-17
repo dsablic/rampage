@@ -1,0 +1,27 @@
+version = 1
+id = "capability-patch-export"
+kind = "capability"
+question = """
+Inspect the server's registered MCP tool definitions, including enableable groups. Can it patch native
+instruction bytes and export a patched executable? Return available as a boolean.
+This is an inventory probe; annotation changes and raw-byte inspection do not constitute patching.
+"""
+truth_reference = """
+crates/rampage-api/src/tools.rs has no byte-patch/export tool; parity roadmap Phase 3.2 is future work;
+tests/fixtures/src/hello.c is the owned patch target.
+"""
+required_capabilities = ["patch_bytes", "export_patched"]
+capability_status = "unsupported"
+capability_evidence = "Neither patch_bytes nor export_patched is registered in crates/rampage-api/src/tools.rs."
+
+[fixture]
+id = "hello-x64-elf"
+path = "tests/fixtures/bin/hello-x64.elf"
+sha256 = "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+available = false

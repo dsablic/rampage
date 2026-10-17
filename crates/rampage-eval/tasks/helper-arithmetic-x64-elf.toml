@@ -1,0 +1,23 @@
+version = 1
+id = "helper-arithmetic-x64-elf"
+kind = "analysis"
+question = """
+For the exported function beginning at 0x1340, determine the integer result when its first argument is 7.
+Return return_value as an integer; infer it from code without executing the binary.
+"""
+truth_reference = "tests/fixtures/src/helper.c:2; original helper at 0x1340 uses lea eax,[rdi+rdi*2]."
+required_capabilities = ["disassemble"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: disassemble is registered in core."
+
+[fixture]
+id = "libhelper-x64-elf"
+path = "tests/fixtures/bin/libhelper-x64.so"
+sha256 = "5621359882a4bedff4c1301e7493e43c74c076590cef1cf7ff7572d7de62af90"
+source = "tests/fixtures/src/helper.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+return_value = 21

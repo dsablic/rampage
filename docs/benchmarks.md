@@ -17,6 +17,35 @@ The firmware query corroborated decoder parameters through static instructions. 
 assertions; row counts are not instruction-accuracy or execution measurements. No commercial bytes, addresses
 or payloads are included here. Broader parity metrics belong to the Phase 0 scorecard, not this acceptance check.
 
+## Parity scorecard pilot (2026-10-17)
+
+Local working-tree baseline based on `6fcdae2`; generated artifacts and the evaluator digest/dirty state are
+recorded in `target/parity/phase0-20261017-matrix/scorecard.json`, not bundled binaries. These are pilot measurements,
+not completed Phase 0 acceptance or a comparison with an IDA/Ghidra agent.
+
+| Metric | Pilot result |
+| --- | --- |
+| AArch64 ELF `-O2` function starts | 39 correct, 0 missed, 0 spurious |
+| Thumb ELF `-O2` function starts | 4 correct, 0 missed, 0 spurious |
+| MIPS32 big-endian ELF `-O2` function starts | 4 correct, 0 missed, 0 spurious |
+| AArch64 parameter counts | 38 correct, 1 wrong; precision/recall 0.9744 |
+| AArch64 parameter type classes | 42 correct, 26 wrong, 1 missed; precision 0.6176, recall 0.6087 |
+| AArch64 eligible void/value returns | 34 correct; precision/recall 1.0 on that eligible set |
+| Agent task definitions | 17 analysis questions and 3 capability probes; all 10 fixture digests matched |
+| Fixed-model MCP tasks and usage | Not run; no success, call or token numbers inferred |
+| Type-selected AArch64 decompiler health | 39 exact-entry returns, 0 API errors or diagnostic warnings |
+| Owned Thumb graph reference | Ghidra 12.1.4: 4 common functions, 12 shared raw CFG edges (13/14 totals) |
+| Thumb chain-normalized CFG / calls | 13/13 edges and 3/3 source-instruction call pairs match |
+
+The initial `--suite parity` command failed with unsupported `--suite`; the pilot now emits combined JSON.
+Selected failed runs retain evidence: local clang lacked the requested linker; a bad Zig Thumb CPU spelling
+was corrected; the original strip path rejected MIPS section type `0x7000002a`, now handled with mapped-byte
+refusal checks. The nine-profile matrix records three available, three unavailable and three failed selections;
+missing GCC/strip/linker support and a PE linker argument remain visible rather than counting as coverage.
+Cross-program library ID, broad graph/health coverage and model comparisons remain unmeasured in this pilot.
+The health sample's 39 calls totalled about 275 ms on one local run; initialization/cache state is not controlled,
+so this is not a warm/cold or per-function performance baseline. Per-entry timings remain in the local report.
+
 ## Function discovery vs Ghidra
 
 `tools/benchmark.sh` runs Ghidra headless to list function starts, builds a reference in rampage's format

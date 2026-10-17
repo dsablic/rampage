@@ -1,0 +1,26 @@
+version = 1
+id = "format-arm64-macho"
+kind = "analysis"
+question = """
+Identify the container, CPU family, bit width and byte order. Use fields format, arch, bits, endian;
+normalize to ELF/PE/Mach-O, x86_64/aarch64/arm/mips, and little/big.
+"""
+truth_reference = "tests/fixtures/build.sh:27; committed Mach-O header (file: Mach-O 64-bit arm64)."
+required_capabilities = ["binary_info"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: binary_info is registered in core."
+
+[fixture]
+id = "hello-arm64-macho"
+path = "tests/fixtures/bin/hello-arm64.macho"
+sha256 = "d13dbc8113fd99bb5a6bfa8413892b6937232ba25e1ef06c41d55a2126b0b987"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+format = "Mach-O"
+arch = "aarch64"
+bits = 64
+endian = "little"

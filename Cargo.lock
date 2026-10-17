@@ -4659,15 +4659,21 @@ dependencies = [
  "clap",
  "gimli 0.34.0",
  "object 0.40.0",
+ "rampage-agent",
  "rampage-analysis",
  "rampage-api",
  "rampage-arch",
  "rampage-decompiler",
  "rampage-detect",
  "rampage-loaders",
+ "rampage-mcp",
  "rampage-signatures",
+ "rmcp",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

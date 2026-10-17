@@ -9,6 +9,8 @@ clap.workspace = true
 gimli = { version = "=0.34.0", default-features = false, features = ["read", "std"] }
 object = { workspace = true, features = ["build"] }
 rampage-analysis.workspace = true
+rampage-agent.workspace = true
+rampage-mcp.workspace = true
 rampage-api.workspace = true
 rampage-arch.workspace = true
 rampage-decompiler.workspace = true
@@ -17,6 +19,10 @@ rampage-loaders.workspace = true
 rampage-signatures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+toml.workspace = true
+rmcp = { workspace = true, features = ["client"] }
+tokio = { workspace = true, features = ["io-util"] }
 
 [dev-dependencies]
 assert_cmd.workspace = true

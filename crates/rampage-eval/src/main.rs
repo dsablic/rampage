@@ -3,10 +3,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use rampage_eval::{Evaluation, Gate, ProposedSignature, Report, ToolTruth, Truth, TypeMetric, TypeTruth};
+use object::{Object, ObjectSection, ObjectSymbol};
+use rampage_eval::{Evaluation, Gate, Report, ToolTruth, Truth, TypeMetric, TypeTruth};
 use rampage_loaders::Binary;
 use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
+
+mod parity;
+mod parity_graph_files;
+mod parity_live;
 
 /// Self-supervised evaluation of rampage heuristics against strip-and-compare ground truth.
 #[derive(Parser)]
@@ -18,6 +23,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect actual artifact headers, static/dynamic symbols and debug sections for corpus verification.
+    ArtifactInfo { input: PathBuf },
+    /// Compare actual Rampage and Ghidra graph exports bound to one explicit image/address context.
+    GraphAgreement {
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        rampage_export: PathBuf,
+        #[arg(long)]
+        ghidra_export: PathBuf,
+    },
     /// Print the ground truth ({"0x<address>": "<name>"}) taken from a symbolized binary's function symbols.
     Truth {
         symbolized: PathBuf,
@@ -41,7 +57,7 @@ enum Command {
         #[arg(long)]
         stripped: Option<PathBuf>,
     },
-    /// Write a copy of an ELF without debug sections and symbols, every loaded byte left at its address.
+    /// Write an ELF copy without debug sections and symbols; preserve code layout for twin verification.
     Strip {
         input: PathBuf,
         output: PathBuf,
@@ -54,7 +70,7 @@ enum Command {
     /// when any slice fails its gate (any wrong answer; for libid any spurious name; recall or precision below
     /// --min-recall or --min-precision). A toolid slice takes no --target: its truth names the binaries. A types
     /// slice decompiles every function of its type truth in the stripped target and scores one --metric.
-    Run(RunArgs),
+    Run(Box<RunArgs>),
 }
 
 /// The heuristic family a slice evaluates.
@@ -122,6 +138,35 @@ impl From<Metric> for TypeMetric {
 
 #[derive(clap::Args)]
 struct RunArgs {
+    /// Produce the Phase 0 parity scorecard; unrun metrics remain explicit rather than inferred.
+    #[arg(long, value_enum, conflicts_with_all = ["target", "truth", "slice", "family", "metric",
+        "min_recall", "min_precision", "databases", "references"])]
+    suite: Option<ParitySuite>,
+    /// Task manifest directory for --suite parity; defaults to the owned evaluator task set.
+    #[arg(long, requires = "suite")]
+    tasks: Option<PathBuf>,
+    /// Repository root used by repository-relative task fixture paths.
+    #[arg(long, requires = "suite")]
+    repository_root: Option<PathBuf>,
+    /// Optional generated corpus inventory; unavailable/failed profiles remain visible in the scorecard.
+    #[arg(long, requires = "suite")]
+    corpus_inventory: Option<PathBuf>,
+    /// Graph provenance/binding request; compare actual exports as a separate scorecard workload.
+    #[arg(long, requires_all = ["suite", "rampage_graph", "ghidra_graph"])]
+    graph_request: Option<PathBuf>,
+    #[arg(long, requires = "graph_request")]
+    rampage_graph: Option<PathBuf>,
+    #[arg(long, requires = "graph_request")]
+    ghidra_graph: Option<PathBuf>,
+    /// Explicit model for opt-in MCP agent tasks (existing Anthropic transport); no model fallback.
+    #[arg(long, requires = "suite")]
+    agent_model: Option<String>,
+    /// Task IDs to attempt with --agent-model; repeatable. Default selects the first bounded task subset.
+    #[arg(long, requires = "agent_model")]
+    agent_task: Vec<String>,
+    /// Maximum live tasks attempted, default 1, at most 20. No model runs without --agent-model.
+    #[arg(long, requires = "agent_model", default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..=20))]
+    agent_max_tasks: u64,
     /// A signature database (JSON) to identify with; repeatable, later ones win on a shared hash.
     #[arg(long = "db")]
     databases: Vec<PathBuf>,
@@ -157,14 +202,23 @@ struct RunArgs {
     max_disagreements: usize,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum ParitySuite {
+    Parity,
+}
+
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
+        Command::ArtifactInfo { input } => artifact_info(&input),
+        Command::GraphAgreement { request, rampage_export, ghidra_export } => {
+            parity_graph_files::print(&request, &rampage_export, &ghidra_export)
+        }
         Command::Truth { symbolized, stripped, library, program } => {
             truth(&symbolized, stripped.as_deref(), &library, &program)
         }
         Command::TypeTruth { debug, stripped } => type_truth(&debug, stripped.as_deref()),
         Command::Strip { input, output, keep_symbols } => strip(&input, &output, keep_symbols),
-        Command::Run(args) => run(args),
+        Command::Run(args) => run(*args),
     };
     match result {
         Ok(code) => code,
@@ -177,6 +231,41 @@ fn main() -> ExitCode {
 
 fn open(path: &Path) -> Result<Binary, String> {
     Binary::open(path).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn artifact_info(path: &Path) -> Result<ExitCode, String> {
+    let binary =
+        Binary::open_image_metadata(path, None, None).map_err(|error| format!("{}: {error}", path.display()))?;
+    let object = object::File::parse(binary.image_bytes()).map_err(|error| error.to_string())?;
+    let function =
+        |symbol: &object::Symbol<'_, '_>| symbol.kind() == object::SymbolKind::Text && symbol.is_definition();
+    let mut debug_sections = Vec::new();
+    for section in object.sections() {
+        let name = section.name().map_err(|error| error.to_string())?;
+        if section.size() != 0
+            && (section.kind() == object::SectionKind::Debug
+                || name.starts_with(".debug")
+                || name.starts_with(".zdebug")
+                || name.starts_with("__debug")
+                || matches!(name, ".stab" | ".stabstr"))
+        {
+            debug_sections.push(name.to_owned());
+        }
+    }
+    debug_sections.sort();
+    debug_sections.dedup();
+    let info = serde_json::json!({
+        "format": binary.format,
+        "arch": binary.arch,
+        "endianness": if binary.big_endian { "big" } else { "little" },
+        "static_function_symbols": object.symbols().filter(function).count(),
+        "dynamic_function_symbols": object.dynamic_symbols().filter(function).count(),
+        "debug_sections": debug_sections,
+        "thumb_ranges": binary.thumb.len(),
+        "loader_warnings": binary.warnings,
+    });
+    println!("{}", serde_json::to_string(&info).map_err(|error| error.to_string())?);
+    Ok(ExitCode::SUCCESS)
 }
 
 fn truth(
@@ -275,7 +364,7 @@ struct Slice {
 }
 
 /// Each types target's decompiled signatures, so the slices scoring other metrics of it decompile it once.
-type Decompiled = BTreeMap<PathBuf, BTreeMap<u64, Result<ProposedSignature, String>>>;
+type Decompiled = BTreeMap<PathBuf, rampage_eval::SignatureRecoveryBatch>;
 
 #[derive(Deserialize)]
 struct Manifest {
@@ -363,10 +452,10 @@ impl Slice {
         let target = open(target_path)?;
         let name = format!("types-{}-{}", TypeMetric::from(self.metric).tag(), target.arch);
         if !decompiled.contains_key(target_path) {
-            let signatures = rampage_eval::decompiled_signatures(target, truth.0.keys().copied());
+            let signatures = rampage_eval::decompiled_signature_batch(target, truth.0.keys().copied());
             decompiled.insert(target_path.to_owned(), signatures);
         }
-        let signatures = &decompiled[target_path];
+        let signatures = &decompiled[target_path].signatures;
         // A second truth for the same target names functions the cached run never decompiled.
         let missing = truth.0.keys().filter(|address| !signatures.contains_key(address)).count();
         if missing > 0 {
@@ -414,6 +503,9 @@ fn manifest(path: &Path) -> Result<Vec<(Option<String>, Slice)>, String> {
 }
 
 fn run(args: RunArgs) -> Result<ExitCode, String> {
+    if args.suite.is_some() {
+        return parity::run(args);
+    }
     let slices = match args.manifest {
         Some(path) => manifest(&path)?,
         None => {
@@ -433,20 +525,49 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
             vec![(args.slice, slice)]
         }
     };
+    let (evaluation, _health) = evaluate_slices(slices, args.max_disagreements)?;
+    println!("{}", serde_json::to_string_pretty(&evaluation).map_err(|error| error.to_string())?);
+    Ok(if evaluation.passes_gate() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+fn evaluate_slices(
+    slices: Vec<(Option<String>, Slice)>,
+    max_disagreements: usize,
+) -> Result<(Evaluation, serde_json::Value), String> {
     let mut evaluation = Evaluation::default();
     let mut decompiled = Decompiled::new();
     for (name, slice) in slices {
         let (mut report, default_name) = slice.evaluate(&mut decompiled)?;
         let name = name.unwrap_or(default_name);
         eprintln!("{name}: {}", report.summary());
-        report.truncate_disagreements(args.max_disagreements);
+        report.truncate_disagreements(max_disagreements);
         evaluation.insert(name, report, slice.family.gate(slice.min_recall, slice.min_precision));
     }
     for (name, failures) in evaluation.failures() {
         eprintln!("{name}: FAIL {}", failures.join(", "));
     }
-    println!("{}", serde_json::to_string_pretty(&evaluation).map_err(|error| error.to_string())?);
-    Ok(if evaluation.passes_gate() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+    let targets: Vec<_> = decompiled.iter().map(|(path, batch)| {
+        let returned = batch.observations.iter().filter(|entry| entry.status == "returned").count();
+        let with_warnings = batch.observations.iter()
+            .filter(|entry| entry.warning_count.is_some_and(|n| n > 0)).count();
+        serde_json::json!({
+            "target": path, "attempted": batch.observations.len(), "returned_exact_entry": returned,
+            "errors": batch.observations.iter().filter(|entry| entry.status == "error").count(),
+            "address_mismatches": batch.observations.iter().filter(|entry| entry.status == "address_mismatch").count(),
+            "with_warnings": with_warnings,
+            "diagnostics_unavailable": batch.observations.iter().filter(|entry| entry.warning_count.is_none()).count(),
+            "bad_data": batch.observations.iter().filter(|entry| entry.bad_data == Some(true)).count(),
+            "unimplemented": batch.observations.iter().filter(|entry| entry.unimplemented == Some(true)).count(),
+            "timing_boundary": batch.timing_boundary, "functions": batch.observations,
+        })
+    }).collect();
+    let attempts: usize = decompiled.values().map(|batch| batch.observations.len()).sum();
+    let health = serde_json::json!({
+        "status": if attempts == 0 { "not_run" } else { "measured" }, "attempted": attempts, "targets": targets,
+        "limits": "Only type-truth-selected entries are timed. \
+                   Returned C and no error do not establish correct recovery."
+    });
+    Ok((evaluation, health))
 }
 
 #[cfg(test)]

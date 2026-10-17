@@ -1,0 +1,28 @@
+version = 1
+id = "cpp-multiple-inheritance-arm64-macho"
+kind = "analysis"
+question = """
+Find the user-defined C++ class with multiple direct bases.
+Return exactly the unqualified names of its direct bases in an array named bases.
+"""
+truth_reference = """
+tests/fixtures/src/classes.cpp:18; stripped RTTI relationships checked in
+crates/rampage-analysis/tests/rtti_fixture.rs:30-33.
+"""
+required_capabilities = ["class_evidence"]
+capability_status = "supported"
+capability_evidence = """
+crates/rampage-api/src/tools.rs: class_evidence is registered in types and includes direct RTTI base edges.
+"""
+
+[fixture]
+id = "classes-arm64-macho"
+path = "tests/fixtures/bin/classes-arm64.macho"
+sha256 = "324ad3e78daab362bc9c202e360c126780971dc6b19fee0325f9b31f8ff8bdc7"
+source = "tests/fixtures/src/classes.cpp"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "string_set"
+field = "bases"
+values = ["Shape", "Printable"]

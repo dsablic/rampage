@@ -1,0 +1,25 @@
+version = 1
+id = "main-return-arm64-macho"
+kind = "analysis"
+question = """
+Find the program's own main routine. What integer does it return on normal completion?
+Return return_value as an integer.
+"""
+truth_reference = "tests/fixtures/src/hello.c:8,10-12; original _main at 0x100000468 sets w0=5 before ret."
+required_capabilities = ["find_main", "disassemble"]
+capability_status = "supported"
+capability_evidence = """
+crates/rampage-api/src/workflows/find_main.rs and src/tools.rs register find_main and disassemble in core.
+"""
+
+[fixture]
+id = "hello-arm64-macho"
+path = "tests/fixtures/bin/hello-arm64.macho"
+sha256 = "d13dbc8113fd99bb5a6bfa8413892b6937232ba25e1ef06c41d55a2126b0b987"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+return_value = 5

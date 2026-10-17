@@ -4,6 +4,10 @@ rampage provides static binary analysis through a CLI, MCP server and desktop UI
 investigation, not proof of behavior, recovered original source or parity with another reverse engineering tool.
 See the [CLI reference](cli-reference.md) for commands and [MCP reference](mcp.md) for tool names.
 
+The [parity scorecard pilot](parity-scorecard.md) combines existing static evaluations with checkable owned
+task definitions, with an explicit-model MCP runner for opt-in measurements. Limits: the recorded baseline
+contains no live-model task scores and does not establish IDA/Ghidra parity.
+
 ## Formats and instruction decoding
 
 - Bounded [raw-code windows](raw-code.md) accept explicit ranges and asserted architecture/mode/order/base

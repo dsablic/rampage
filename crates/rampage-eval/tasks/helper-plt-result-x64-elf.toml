@@ -1,0 +1,26 @@
+version = 1
+id = "helper-plt-result-x64-elf"
+kind = "analysis"
+question = """
+Follow the call from the exported function at 0x1350 through its linkage stub. Assuming the linked helper
+is not interposed, what integer does this function return for first argument 7?
+Return return_value as an integer.
+"""
+truth_reference = """
+tests/fixtures/src/helper.c:2-3; original entry_point at 0x1350 calls helper@plt at 0x1370 and adds 1.
+"""
+required_capabilities = ["disassemble", "xrefs"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: disassemble and xrefs are registered in core."
+
+[fixture]
+id = "libhelper-x64-elf"
+path = "tests/fixtures/bin/libhelper-x64.so"
+sha256 = "5621359882a4bedff4c1301e7493e43c74c076590cef1cf7ff7572d7de62af90"
+source = "tests/fixtures/src/helper.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+return_value = 22

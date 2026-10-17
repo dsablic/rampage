@@ -1,0 +1,27 @@
+version = 1
+id = "capability-decompile"
+kind = "capability"
+question = """
+Inspect the server's registered MCP tool definitions, including enableable groups.
+Is there a decompile tool for this native image? Return available as a boolean.
+This is an inventory probe, not a completed decompilation task.
+"""
+truth_reference = """
+crates/rampage-api/src/tools.rs: decompile is registered in core;
+tests/fixtures/build.sh:27 supplies the owned native image.
+"""
+required_capabilities = ["decompile"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: decompile is registered in core."
+
+[fixture]
+id = "hello-arm64-macho"
+path = "tests/fixtures/bin/hello-arm64.macho"
+sha256 = "d13dbc8113fd99bb5a6bfa8413892b6937232ba25e1ef06c41d55a2126b0b987"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+available = true

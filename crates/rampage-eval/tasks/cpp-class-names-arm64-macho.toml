@@ -1,0 +1,28 @@
+version = 1
+id = "cpp-class-names-arm64-macho"
+kind = "analysis"
+question = """
+Recover all user-defined C++ class names from the stripped image's RTTI, excluding ABI runtime classes.
+Return an array of unqualified names in classes.
+"""
+truth_reference = """
+tests/fixtures/src/classes.cpp:3-23; committed strings 6Circle/5Shape/6Square/9Printable;
+crates/rampage-analysis/tests/rtti_fixture.rs.
+"""
+required_capabilities = ["class_evidence"]
+capability_status = "supported"
+capability_evidence = """
+crates/rampage-api/src/tools.rs: class_evidence is registered in types and includes stripped RTTI recovery.
+"""
+
+[fixture]
+id = "classes-arm64-macho"
+path = "tests/fixtures/bin/classes-arm64.macho"
+sha256 = "324ad3e78daab362bc9c202e360c126780971dc6b19fee0325f9b31f8ff8bdc7"
+source = "tests/fixtures/src/classes.cpp"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "string_set"
+field = "classes"
+values = ["Circle", "Printable", "Shape", "Square"]

@@ -1,0 +1,28 @@
+version = 1
+id = "main-return-x64-elf"
+kind = "analysis"
+question = """
+Find the program's own main routine. What integer does it return on normal completion?
+Return return_value as an integer.
+"""
+truth_reference = """
+tests/fixtures/src/hello.c:8,10-12; original main at 0x1001910 sets eax=5 before ret;
+add was optimized away in this artifact.
+"""
+required_capabilities = ["find_main", "disassemble"]
+capability_status = "supported"
+capability_evidence = """
+crates/rampage-api/src/workflows/find_main.rs and src/tools.rs register find_main and disassemble in core.
+"""
+
+[fixture]
+id = "hello-x64-elf"
+path = "tests/fixtures/bin/hello-x64.elf"
+sha256 = "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+return_value = 5

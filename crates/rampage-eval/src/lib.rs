@@ -16,6 +16,9 @@
 //!
 //! Whether a report is acceptable depends on the family, so the pass/fail rule is a separate [`Gate`].
 
+pub mod parity_agent;
+pub mod parity_graph;
+pub mod parity_tasks;
 mod toolid;
 mod types;
 
@@ -31,8 +34,8 @@ pub use toolid::{
     kind_tag, score_tools,
 };
 pub use types::{
-    ProposedSignature, ProposedType, SignatureTruth, TypeClass, TypeMetric, TypeTruth, decompiled_signatures,
-    score_types,
+    DecompileObservation, ProposedSignature, ProposedType, SignatureRecoveryBatch, SignatureTruth, TypeClass,
+    TypeMetric, TypeTruth, decompiled_signature_batch, decompiled_signatures, score_types,
 };
 
 /// Known function names by address, taken from a symbolized twin of the evaluated binary.
@@ -366,12 +369,17 @@ pub fn evaluate(db: &SignatureDb, target: &Binary, truth: &Truth) -> Result<Repo
     Ok(score(proposals(db, target)?, truth))
 }
 
-/// Rewrites an ELF without its debug sections and, unless `keep_symbols`, without its symbol table, leaving
-/// every loaded byte at its original address. Linking a second time with `--strip-all` is not equivalent: zig
-/// then builds libc without debug info and the code shifts, so the symbolized twin would no longer describe it.
+/// Rewrites an ELF without debug sections and, unless `keep_symbols`, without its symbol table.
+/// The MIPS ABI adapter checks program headers and file-backed loads, except mapped section-table bookkeeping
+/// (`e_shoff`, `e_shnum`, `e_shstrndx`), and refuses other changes. Generic builder stripping has no such guard.
+/// Re-linking with `--strip-all` can shift code, so callers verify truth-function byte identity separately.
 pub fn strip(elf: &[u8], keep_symbols: bool) -> Result<Vec<u8>, String> {
-    let mut builder = object::build::elf::Builder::read(elf).map_err(|error| error.to_string())?;
-    for section in builder.sections.iter_mut() {
+    let (input, abiflags_index) = strip_mips::prepare(elf)?;
+    let mut builder = object::build::elf::Builder::read(input.as_ref()).map_err(|error| error.to_string())?;
+    for (index, section) in builder.sections.iter_mut().enumerate() {
+        if Some(index) == abiflags_index {
+            section.sh_type = strip_mips::SHT_MIPS_ABIFLAGS;
+        }
         let name: &[u8] = &section.name;
         let symbols = matches!(name, b".symtab" | b".strtab" | b".symtab_shndx");
         if name.starts_with(b".debug") || (symbols && !keep_symbols) {
@@ -385,8 +393,13 @@ pub fn strip(elf: &[u8], keep_symbols: bool) -> Result<Vec<u8>, String> {
     }
     let mut output = Vec::new();
     builder.write(&mut output).map_err(|error| error.to_string())?;
+    if abiflags_index.is_some() {
+        strip_mips::verify_loaded_bytes(elf, &output)?;
+    }
     Ok(output)
 }
+
+mod strip_mips;
 
 /// Truncates `entries` to `limit`, dropping the least actionable first, and returns how many were dropped.
 fn keep_most_actionable<T>(

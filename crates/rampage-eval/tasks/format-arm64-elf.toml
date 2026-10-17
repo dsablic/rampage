@@ -1,0 +1,26 @@
+version = 1
+id = "format-arm64-elf"
+kind = "analysis"
+question = """
+Identify the container, CPU family, bit width and byte order. Use fields format, arch, bits, endian;
+normalize to ELF/PE/Mach-O, x86_64/aarch64/arm/mips, and little/big.
+"""
+truth_reference = "tests/fixtures/build.sh:8; committed ELF header (file: ELF64 LSB ARM aarch64)."
+required_capabilities = ["binary_info"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: binary_info is registered in core."
+
+[fixture]
+id = "hello-arm64-elf"
+path = "tests/fixtures/bin/hello-arm64.elf"
+sha256 = "b47331c6dc05c7eee4e90021a3433e36a3b7d3c212823677cbb8522b3fd07725"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+format = "ELF"
+arch = "aarch64"
+bits = 64
+endian = "little"

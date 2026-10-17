@@ -1,0 +1,26 @@
+version = 1
+id = "format-mips-be-elf"
+kind = "analysis"
+question = """
+Identify the container, CPU family, bit width and byte order. Use fields format, arch, bits, endian;
+normalize to ELF/PE/Mach-O, x86_64/aarch64/arm/mips, and little/big.
+"""
+truth_reference = "tests/fixtures/build.sh:12; committed ELF header (file: ELF32 MSB MIPS32 rel2)."
+required_capabilities = ["binary_info"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: binary_info is registered in core."
+
+[fixture]
+id = "hello-mips-elf"
+path = "tests/fixtures/bin/hello-mips.elf"
+sha256 = "fc976232cd1ca1740ff301864e50b0cc7c8d2b97d683e61e9c58549a54401c1b"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+format = "ELF"
+arch = "mips"
+bits = 32
+endian = "big"

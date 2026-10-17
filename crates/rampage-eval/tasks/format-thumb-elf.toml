@@ -1,0 +1,27 @@
+version = 1
+id = "format-thumb-elf"
+kind = "analysis"
+question = """
+Identify the container, CPU family, bit width and byte order. Use fields format, arch, bits, endian;
+normalize to ELF/PE/Mach-O, x86_64/aarch64/arm/mips, and little/big.
+Report the CPU family, not its instruction mode.
+"""
+truth_reference = "tests/fixtures/build.sh:11; committed ELF header (file: ELF32 LSB ARM EABI5)."
+required_capabilities = ["binary_info"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: binary_info is registered in core."
+
+[fixture]
+id = "hello-thumb-elf"
+path = "tests/fixtures/bin/hello-thumb.elf"
+sha256 = "fff28f21dba2a9bdae489a11f4b88b0fcd47f793dbe27f3bfde46d4720daa156"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+format = "ELF"
+arch = "arm"
+bits = 32
+endian = "little"

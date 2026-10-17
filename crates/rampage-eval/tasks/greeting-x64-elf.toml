@@ -1,0 +1,26 @@
+version = 1
+id = "greeting-x64-elf"
+kind = "analysis"
+question = """
+What literal text does the program's own main routine pass to its line-printing routine?
+Return the exact text without the newline in a greeting field.
+"""
+truth_reference = """
+tests/fixtures/src/hello.c:3,10-12; original main at 0x1001910 loads 0x100019a and calls puts;
+strings confirms the literal.
+"""
+required_capabilities = ["list_strings", "disassemble", "xrefs"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: list_strings, disassemble and xrefs are registered in core."
+
+[fixture]
+id = "hello-x64-elf"
+path = "tests/fixtures/bin/hello-x64.elf"
+sha256 = "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+greeting = "rampage fixture greeting"

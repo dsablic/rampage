@@ -1,8 +1,36 @@
 # To do
 
-## Active priority: understand real audio plugins through MCP
+## Active priority: parity roadmap Phase 0 scorecard
 
-This is the execution queue. The older sections below remain the historical backlog, not parallel work.
+Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One active milestone;
+independent slices inside Phase 0 may run in parallel, with shared integration/builds and fresh-context review.
+
+- [x] Corpus pilot: source/toolchain/licence provenance and symbolized/stripped twin build recipes; record
+  unavailable toolchains/coverage rather than inventing artifacts or measurements.
+  Selected AArch64/Thumb pairs built and passed observed-header, stripping and function-byte checks; this
+  does not close the full architecture/compiler/realistic-program matrix. MIPS stripping now passes with
+  mapped-byte/refusal checks; the original failure remains recorded. Nine-profile run: 3 available/3 unavailable/3 failed.
+- [x] Checkable task pilot: 20 owned-fixture questions/contracts, separate from agent-facing prompts; inventory
+  never overrides observed answer correctness. This is not a live agent runner.
+- [x] Extend existing `rampage-eval` CLI/reporting into `run --suite parity`; preserve existing slice runners.
+  The pilot emits actual static metrics and explicit unrun task/usage fields, not Phase 0 completion.
+- [ ] Run and record static/agent baselines, tool calls/tokens/wall time and missing capabilities in the scorecard.
+  Initial measurement: the current `run --suite parity` route exits 2 because `--suite` is unsupported.
+  Scripted MCP transport checks are not AI task-success measurements. No Phase 0 acceptance claimed yet.
+  - [x] Record selected AArch64/Thumb static baselines and actual evaluator/fixture identities.
+  - [x] Add explicit-model opt-in MCP task loop, readonly fixture scope, actual usage/error accounting and
+    scripted-model protocol regressions; scripted answers cannot count as AI task success.
+  - [ ] Run live fixed-model task baselines; existing Anthropic transport is not configured locally and no
+    model was selected. No live model calls or model usage measurements have been made.
+  - [ ] Complete compiler/architecture/program coverage, CFG/call graphs, health/timing and Ghidra comparisons.
+    - [x] Add hash-bound graph agreement and actual owned Thumb/Ghidra reference measurement; preserve raw
+      discrepancies separately from chain-normalized equality. Broader reference coverage remains open.
+    - [x] Record health/timing for 39 type-truth-selected AArch64 entries, with nullable diagnostics and zero-attempt
+      handling; returned C is not correctness, and cache/initialization boundaries limit timing interpretation.
+
+## Audio/firmware investigation acceptance workloads
+
+The batches below track investigation outcomes and remaining blockers, not a competing feature queue.
 The goal is to answer: what features exist, where their code lives, how parameters reach processing, and
 which links are static candidates versus observed execution. Ship reusable improvements driven by actual
 investigation obstacles, not a plugin-specific analyzer or another extension framework.

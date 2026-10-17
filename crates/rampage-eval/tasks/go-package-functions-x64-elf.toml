@@ -1,0 +1,28 @@
+version = 1
+id = "go-package-functions-x64-elf"
+kind = "analysis"
+question = """
+Recover all function names belonging to the executable's own main package, excluding the Go runtime
+and other packages. Return the fully package-qualified names in an array named functions.
+"""
+truth_reference = """
+tests/fixtures/src/hello.go:10,15,19; committed strings list exactly main.greet, main.shout, main.main;
+crates/rampage-loaders/tests/gopclntab.rs.
+"""
+required_capabilities = ["list_functions"]
+capability_status = "supported"
+capability_evidence = """
+crates/rampage-api/src/tools.rs: list_functions is registered in core; Go pclntab names are attached at load.
+"""
+
+[fixture]
+id = "hello-go-x64-elf"
+path = "tests/fixtures/bin/hello-go-x64.elf"
+sha256 = "1e01aee62b8fc287c165a8a771f6f04abd363ace042df972f0bbf014e5db0f96"
+source = "tests/fixtures/src/hello.go"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "string_set"
+field = "functions"
+values = ["main.greet", "main.shout", "main.main"]

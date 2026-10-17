@@ -1,0 +1,29 @@
+version = 1
+id = "objc-superclasses-arm64-macho"
+kind = "analysis"
+question = """
+Find the Objective-C class that declares a double-valued weight property. Return the names of all its
+superclasses, including the imported root, in an array named superclasses.
+"""
+truth_reference = """
+tests/fixtures/src/objc.m:9,30-31; superclass chain Dog -> Animal -> NSObject;
+crates/rampage-loaders/tests/objc.rs.
+"""
+required_capabilities = ["language_metadata"]
+capability_status = "supported"
+capability_evidence = """
+crates/rampage-api/src/tools.rs: language_metadata is registered in types with Objective-C properties
+and superclass chains.
+"""
+
+[fixture]
+id = "objc-arm64-stripped-macho"
+path = "tests/fixtures/bin/objc-arm64-stripped.macho"
+sha256 = "8e6221248f4933d70976dbbb6f3b919cdfb1571f06334dab45510496c830a665"
+source = "tests/fixtures/src/objc.m"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "string_set"
+field = "superclasses"
+values = ["Animal", "NSObject"]

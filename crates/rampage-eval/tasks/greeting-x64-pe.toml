@@ -1,0 +1,26 @@
+version = 1
+id = "greeting-x64-pe"
+kind = "analysis"
+question = """
+What literal text is passed to the printing routine by the function at 0x140001010?
+Return the exact text without the newline in a greeting field.
+"""
+truth_reference = """
+tests/fixtures/src/hello.c:3,10-12; original code at 0x14000101f loads 0x140029000;
+strings confirms the literal.
+"""
+required_capabilities = ["list_strings", "disassemble"]
+capability_status = "supported"
+capability_evidence = "crates/rampage-api/src/tools.rs: list_strings and disassemble are registered in core."
+
+[fixture]
+id = "hello-x64-pe"
+path = "tests/fixtures/bin/hello-x64.exe"
+sha256 = "3b6a01cc33e6b3c55702d69cf24c44f001dd09fe4ff7bdc7a0432de59d64c9c4"
+source = "tests/fixtures/src/hello.c"
+build = "tests/fixtures/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+greeting = "rampage fixture greeting"
