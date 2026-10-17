@@ -6,6 +6,48 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 1.4 — native and tracked function-frame evidence
+
+**Run:** 2026-10-17, committed source `8fdfb2b`. The
+[measurement](benchmarks/phase1-4-2026-10-17.json) retains exact source/executable/fixture/report identities.
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Per-function frame MCP surface | No `function_frame` | Paged native variables and separate tracker evidence |
+| Native stack offsets | Raw offsets without address-space widths | Actual native widths and lossless signed-offset interpretation |
+| Register preservation | Separate stack accesses only | Entry stores, proven matches or conditional reload candidates |
+| Seeded read-only live task | Missing query | **Passed: 1 MCP query / 2 turns** |
+| Frame coordinates | Separate underlying APIs | Explicit native-spacebase versus tracker entry-SP origins; no merger |
+
+The first `github-copilot/gpt-6.1-sol` run, variant `default`, passed in **19.577 s** task wall time with
+18770 reported input / 207 output / 46 reasoning tokens and no model/tool/transport errors. Seven preparation
+calls seed user annotations and baseline evidence; eight verifier calls are separate from the single agent
+query. Current native names/types, exact storage, actual address-space widths, five source-known stack offsets,
+conditional x19 reload evidence and coordinate separation passed both initial and fresh-server checks.
+The fixture bytes and identity-scoped annotation log remained unchanged. No retry/regrading was used.
+
+The owned Clang AArch64 fixture subtracts 48 from SP and stores at entry-SP offsets -48/-40/-32/-24/-16.
+Its intervening call prevents original-value proof for the reloads: matching addresses alone do not establish
+callee-save preservation. Native spacebase offsets are independently reported even when numerically equal.
+The selected native local is not asserted to be an original source variable. Its retained type is the
+post-seeding baseline; a parameter retype may legitimately alter local inference during preparation.
+
+Native context comes directly from Ghidra address spaces and configured spacebase registers. AArch64 SSA uses
+bounded entry-value provenance and reaching stores, with linear recovered-load mapping rather than repeated
+quadratic searches. Header metadata has independent text/count bounds so large warnings/signatures do not
+make every page unusable; omissions are explicit. Tracker IR collection skips typed annotation rendering,
+and infrastructure errors are not silently downgraded to unsupported tracking.
+
+All seven changed-crate suites, scoped all-target Clippy, frame/worker/MCP tests and six collector regressions
+passed, with independent reviews. An installed ARM64 core query returned six native variables, six tracker
+slots and six register-evidence rows, preserving its recovery warnings and making no annotation changes.
+Limits: recovered inventory and static candidates, not a complete frame-size bound, ABI proof or runtime capture.
+Earlier publications, including the failed Phase 1.2 summary contract, remain unchanged.
+
+```sh
+cargo run --locked -j 2 -p rampage-eval --example function_frame -- tests/data/function-frame-arm64.snapshot.json
+```
+
 ## Phase 1.3 — typed data ranges and instruction operands
 
 **Run:** 2026-10-17, committed collector/implementation `24ba0dd`. The

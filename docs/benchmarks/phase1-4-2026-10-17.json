@@ -1,0 +1,71 @@
+{
+  "measurement": "phase1-4-function-frame",
+  "design": "seeded-read-only-owned-fixture-not-blind-re",
+  "requested_model": "github-copilot/gpt-6.1-sol",
+  "model_variant": "default",
+  "fixture_sha256": "feebee327ef0394323e81b00dd7cbc7ab68fa022ad38c29a9ceb1316fb8d5204",
+  "entry": "0x210124",
+  "agent_summary": {
+    "disposition": "answer", "answer_contract_matches": true, "model_source": "provider",
+    "model_turns": 2, "model_errors": 0, "tool_requests": 1, "tool_calls": 1, "tool_errors": 0,
+    "catalog_requests": 1, "catalog_tool_count": 29,
+    "catalog_inventory": [{"complete": true, "tool_count": 47, "function_frame_present": true}],
+    "usage": {"input_tokens": 18770, "output_tokens": 207, "reasoning_tokens": 46,
+      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+    "agent_wall_time_ms": 19577,
+    "agent_timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+  },
+  "seed_metrics": {"tool_calls": 7, "tool_errors": 0, "transport_errors": 0},
+  "preparation_wall_time_ms": 836,
+  "verifier_metrics": {"tool_calls": 8, "tool_errors": 0, "transport_errors": 0},
+  "verification_wall_time_ms": 187,
+  "selected_parameter_storage": {
+    "kind": "processor", "space": "register", "address": "0x4000", "size": 8,
+    "use_ranges": [{"space": "ram", "start": "0x210123", "end": "0x210123"}]
+  },
+  "selected_local_storage": {
+    "kind": "spacebase", "space": "stack", "address": "0xffffffffffffffd0", "size": 8, "use_ranges": []
+  },
+  "selected_local_native_signed_offset": "-48",
+  "selected_local_native_type_unchanged": {"name": "uint8", "size": 8},
+  "selected_local_coordinate_id": "native:stack",
+  "tracker_coordinate_id": "tracker:entry_sp",
+  "source_variable_association_asserted": false,
+  "seed_annotation_log_sha256": "726bc7f0c97f3231fc82c9a50d981a96ed30fe54377e52751aa3b2bc9c16a481",
+  "native_state_verified": true, "model_tool_workflow_verified": true, "task_verified": true,
+  "initial_verification": {
+    "native_state_verified": true, "complete_native_frame_verified": true,
+    "current_native_descriptors_verified": true, "exact_seed_annotations_verified": true,
+    "read_only_identity_log_unchanged": true, "fixture_bytes_and_sha256_unchanged": true,
+    "annotation_log_sha256": "726bc7f0c97f3231fc82c9a50d981a96ed30fe54377e52751aa3b2bc9c16a481"
+  },
+  "fresh_server_verification": {
+    "native_state_verified": true, "complete_native_frame_verified": true,
+    "current_native_descriptors_verified": true, "exact_seed_annotations_verified": true,
+    "read_only_identity_log_unchanged": true, "fixture_bytes_and_sha256_unchanged": true,
+    "annotation_log_sha256": "726bc7f0c97f3231fc82c9a50d981a96ed30fe54377e52751aa3b2bc9c16a481"
+  },
+  "stable_annotation_log": true,
+  "limits": {"max_turns": 12, "max_tool_calls": 20, "max_record_bytes": 65536,
+    "max_retained_bytes": 512000, "max_conversation_bytes": 1000000, "frame_limit": 128},
+  "owned_output_wall_time_ms": 21380,
+  "owned_output_timing_boundary": "fixture preparation through verification, shutdown and cleanup",
+  "provenance": {
+    "evaluator_binary_sha256": "aa01257f16dafc07264bb3e21bac61aeeb818912f4f29904ab77ddb5bbc3f1be",
+    "collector_source_sha256": "a85ce62b5af5c0793c5c1b368590af5bc81a8ff65810d8a19b2ec658726ed2c4",
+    "measured_unix_ms": 1792269222393,
+    "source_revision": "8fdfb2b9ac0cc47e7a9900ca50e9cf8ca383b01b",
+    "source_report_sha256": "75c14bfe63ea60b0ce6ad2e4f050646d0ff87e533134d7941096954ae0157391",
+    "collector_sources_match_revision": true, "worktree_measurement": true
+  },
+  "before": {"source_revision": "668d7ff", "function_frame_available": false},
+  "fixture_recipe": "crates/rampage-eval/tasks/phase1-4/function-frame.toml",
+  "limitations": [
+    "First live run, with no retry/regrading. The agent reads a fixture seeded by evaluator edits, not a blind frame reconstruction task.",
+    "The local's unchanged type refers to the post-seeding baseline. Retyping the parameter can legitimately change inferred local types during preparation.",
+    "Native stack-space and tracker entry-SP coordinates remain separate even when their numeric offsets coincide.",
+    "The fixture call prevents proof of original-value restoration: x19 reload remains conditional, not an ABI callee-save claim.",
+    "Selected storage is not asserted to be the original source variable; no full-frame size or complete recovery is claimed.",
+    "Preparation and verifier calls are counted separately from the single model MCP call. Earlier publications remain unchanged."
+  ]
+}

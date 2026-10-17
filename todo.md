@@ -1,6 +1,6 @@
 # To do
 
-## Parity roadmap: Phases 0 and 1.1–1.3 completed
+## Parity roadmap: Phases 0 and 1.1–1.4 completed
 
 Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One milestone at a time;
 parallel slices share central builds and undergo fresh-context review before publication.
@@ -65,19 +65,32 @@ Clippy passed. C/header limits and the failed strict-summary result are recorded
 Implementation `24ba0dd`; audited evidence is in `docs/benchmarks.md`. All seven changed-crate suites, scoped
 Clippy and grader regressions passed. Instruction operands are supported; arbitrary C constant-token edits are not.
 
-## Active milestone: Phase 1.4, stack-frame inspection
+## Phase 1.4: stack-frame inspection completed
 
-- [ ] Measure missing per-function frame inventory against source-known native storage and stack tracking.
-- [ ] Expose bounded locals, parameters and retained saved-register evidence with 1.1 names/types through MCP.
-- [ ] Validate frame coordinate systems, ambiguity/unknowns, native/worker parity and a measured workflow.
+- [x] Measure missing per-function frame inventory against source-known native storage and stack tracking.
+- [x] Expose bounded locals, parameters and register-preservation candidates with current 1.1 names/types through MCP.
+- [x] Native address-space widths and configured base context are direct evidence; tracker coordinates stay separate.
+- [x] Bound repeated metadata, preserve complete paged rows and propagate infrastructure failures.
+- [x] Native/worker/MCP and first live read-only workflow passed: one query / two turns; fresh-server/log/byte checks.
+- [x] Revalidate an installed ARM64 core frame without annotations or warning suppression.
+
+Implementation `8fdfb2b`; audited metrics and limits are in `docs/benchmarks.md`. All seven changed-crate suites
+and scoped Clippy passed. No complete frame-size or ABI callee-save claim is made.
+
+## Active milestone: Phase 1.5, type propagation
+
+- [ ] Measure caller/callee/return/global propagation on owned fixtures with explicit analyst types taking priority.
+- [ ] Derive bounded candidate types across proven calls and expose provenance, conflicts and unknowns through MCP.
+- [ ] Apply candidates at lower priority than analyst annotations; add target-model import prototypes.
+- [ ] Validate native/worker replay, deterministic conflicts, measured task use and independent review.
 - [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no class
   rows; symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
 
 ### Authorized remaining Phase 1 milestones (start one at a time)
 
 - [x] 1.3 Apply types to data and operands.
-- [ ] 1.4 Stack-frame inspection (active).
-- [ ] 1.5 Type propagation with analyst edits taking priority.
+- [x] 1.4 Stack-frame inspection.
+- [ ] 1.5 Type propagation with analyst edits taking priority (active).
 - [ ] 1.6 PDB/DWARF type import with identity and layout checks.
 
 ## Audio/firmware investigation acceptance workloads
