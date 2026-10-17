@@ -6,6 +6,51 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Parity scorecard — accepted Phase 0 baseline
+
+**Run:** 2026-10-17 07:44:31 UTC. **Collector commit:** `65a7e99`. The
+[machine-readable publication](benchmarks/phase0-2026-10-17.json) binds the private full report and evaluator
+SHA-256 `7248d6e31c3394fb44ffcafc1181a67114822637247ce82c793866ee99deacc4`. The report retains
+`worktree_dirty=true`: collector sources were committed; documentation and local untracked files were present.
+
+| Metric | Baseline |
+| --- | --- |
+| Required corpus | 12 verified compiler/target profiles plus pinned Lua; 13 scored artifacts, 29 metric slices |
+| Function starts vs retained symbol/DWARF truth | 5346 matched, 0 missed, 234 extra candidates |
+| Lua CFG agreement vs Ghidra 12.1.4 | 890 common functions; raw edge precision 0.9834, recall 0.9849 |
+| Lua chain-normalized CFG | 17183 shared edges; precision 0.9974, recall 1.0 |
+| Lua call graph / call-site pairs | 2890 / 4373 shared; one Rampage-only item in each metric |
+| Matched-twin library naming, Lua plus linked runtime | 849/892 names, 0 wrong/spurious; recall 0.9518 |
+| Argument counts across five compiler builds | 180 correct, 15 wrong out of 195 functions |
+| Eligible void/value-return agreement | 164 correct, 6 missed; precision 1.0, recall 0.9647 |
+| Parameter type classes | 224 correct, 108 wrong, 13 missed, 13 extra; precision/recall 0.6493 |
+| Decompiler health | 247/247 exact-entry C returns across 13 targets; 14 warning-bearing, 0 API errors |
+| Decompiler timing | 9.45 s summed call timings; individual measurements retained in JSON |
+| Fixed-model analysis contracts | 17/17 matched on the canonical owned task set |
+| Three capability probes, reported separately | 1 match, 1 unknown, 1 control-format failure |
+| Actual MCP/model activity | 38 MCP tool calls, 49 model turns; 0 tool errors or model-transport errors |
+| Reported provider usage | 286183 input, 4347 output, 1555 reasoning tokens; cache read/write both 0 |
+| Task / end-to-end wall time | 208.045 s / 224.913 s |
+| Ghidra MCP task comparison | Unavailable in configured project; Rampage-only task baseline |
+| Phase 0 evidence completeness | 22/22 checks met; `phase0_complete=true` |
+
+The fixed model was `github-copilot/gpt-6.1-sol`, variant `default`, through the explicitly labeled OpenCode
+JSON-intent adapter. Host tools were disabled; actual analysis used MCP against copied fixtures. Contract
+matches are not claims of general reverse-engineering parity. The unknown capability probe reflects limited
+visibility of write-tool definitions; the other failed probe mixed answer and unsupported-control fields.
+
+The corpus includes genuine GCC 16.2.0 `-O0/-O2` freestanding x64 ELF, Clang x64 ELF, AArch64 ELF/Mach-O,
+x64 PE, Thumb ELF, MIPS32 BE ELF, C++ virtuals/exceptions, Go, Rust and Lua. C++/Rust debug-file UUIDs and
+retained code ranges match their twins. Extra candidates are relative to partial metadata truth, not confirmed
+false functions. Go runtime metadata remains present; matched-twin naming is not cross-build recognition.
+Health sampling is address-sorted, not random, and timings mix initialization and cache states.
+
+An initial collection exposed a SIGCHLD interaction in the CLI wait helper. The committed collector removes
+that handler dependency and passes a CLI-wait-to-MCP-decompile regression. This table uses the full rerun with
+unchanged task definitions and fixtures, not selective retries or regrading. Totals exclude setup probes.
+No analyzed target was executed. The raw-firmware acceptance window also revalidated through MCP: 218 bytes,
+84 instruction rows, no unconsumed bytes; its mapping remains an analyst assertion, with no new memory-map claim.
+
 ## Raw-window workflow acceptance (2026-10-16)
 
 | Workload | Before | Reviewed raw-window slice |

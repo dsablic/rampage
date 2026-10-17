@@ -1,4 +1,4 @@
-# Parity scorecard pilot
+# Parity scorecard
 
 `rampage-eval run --suite parity` wraps the existing static slice evaluator and the owned checkable task set
 in one JSON report. Supply `--manifest` for a generated static corpus and `--corpus-inventory` to retain its
@@ -15,12 +15,15 @@ target/debug/rampage-eval run --suite parity --manifest target/parity/RUN/manife
 The report records actual static scores, selected metric status, independent task-fixture hashes, evaluator
 digest/revision/dirty state and unmeasured categories. Task contracts and implementation inventory are separate
 from observed answer correctness. Without an explicit model, task outcomes remain unmeasured and usage fields
-null. `phase0_complete` is false, and a successful static gate is not parity acceptance.
+null. `acceptance.checks` records the Phase 0 completion criteria and `phase0_complete` is true only when
+the required corpus, metrics and canonical fixed-model task run have measured evidence. `--require-complete`
+exits nonzero for missing evidence; wrong task answers are baseline results, with accuracy gates reported separately.
 
 Type-recovery slices also record each actual decompile call's requested/returned entry, C byte count, nullable
 diagnostics and elapsed microseconds. Timing excludes project construction; the first call can include analysis
 and native initialization, while later calls share caches. Zero attempts are not measured health. Returned C,
-including warning-bearing output, is not a correctness verdict; the sample is limited to type-truth entries.
+including warning-bearing output, is not a correctness verdict. `--health-sample N` adds the first N sorted truth
+entries for other targets (1..64); aliases share a canonical target and original paths remain in the receipt.
 
 Graph agreement accepts `--graph-request`, `--rampage-graph` and `--ghidra-graph` together. The request binds
 both exact export hashes to a common image digest, architecture and address context, and records exporter
@@ -36,7 +39,21 @@ environment, never from a command-line argument or report. No provider means unr
 exit for the requested live measurement. The runner uses actual MCP JSON-RPC discovery/calls against an
 in-memory server, isolates fixture copies and restricts read-only inspection. Requested/returned models,
 provider usage, errors and truncation are retained. Limits: scripted-model tests are plumbing checks, not AI
-success; no live-model baseline has been recorded, and provider I/O retains the existing transport timeouts.
+success. Anthropic retains its existing transport; OpenCode uses the metered route below.
+
+`--agent-provider opencode --agent-model github-copilot/gpt-6.1-sol` reuses the local authenticated OpenCode API,
+with the explicit `default` variant. A temporary, one-step agent has host tools disabled; generated JSON intents
+are executed only by the benchmark's real MCP client. Actual returned model, reported input/output/reasoning/cache
+tokens and timing are retained. CLI operations and capture output are bounded, and owned sessions are deleted.
+Limits: this is a JSON-intent adapter, not native provider function calling; informational schema annotations,
+opaque provider state and repeated prompt/page bodies are omitted explicitly. No credentials enter the report.
+
+A complete live run selects the full canonical task set with `--agent-max-tasks 20`, adds corpus and graph
+receipts, enables health samples, and uses `--require-complete`. Custom `--tasks` runs remain valid measurements
+but cannot substitute a different question set for the required task-definition hashes.
+The accepted result and its collector revision are recorded in [benchmarks](benchmarks.md). A publication view
+can be generated with `jq --arg source_sha256 HASH -f tools/parity-scorecard-summary.jq REPORT.json`; it omits
+model answers, arbitrary reason text, transcripts and absolute paths while preserving outcomes and error counts.
 
 Corpus recipes compile once, strip a copy, check observed headers and stripped symbol/debug metadata, and
 verify truth-function byte identity before scoring. Failed commands retain exit codes; missing prerequisites
@@ -54,7 +71,10 @@ Go runtime metadata may retain function boundaries/names, so its discovery resul
 Profiles can explicitly select `truth_source: embedded_dwarf`. `truth --dwarf` checks retained concrete
 subprogram code ranges in both images at identical VAs, rather than inventing sizes for zero-sized symbols.
 Limits: only embedded, contiguous `low_pc`/`high_pc` truth is supported; range-list functions and unavailable
-names are omitted with counts/notes. Empty truth cannot produce a scored profile, and no external dSYM is inferred.
+names are omitted with counts/notes. Empty truth cannot produce a scored profile.
+`truth --dwarf-file FILE` accepts an explicit standalone thin Mach-O debug file with the same nonzero UUID,
+exact CPU type/subtype and byte order as the executable and twin; complete UUID command evidence is checked.
+Limits: identity equality is not authentication; no debug file is discovered or applied automatically.
 
 `tools/parity-lua.sh OUT_DIR ARCHIVE` builds the pinned MIT Lua 5.4.8 interpreter from a caller-supplied archive
 whose checksum is verified, without downloading or running it. Its generated manifest measures discovery and

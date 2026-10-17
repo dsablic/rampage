@@ -44,8 +44,10 @@ without group gating, plus the interactive `show_address`; it does not offer fil
 `carve`/`archive_inventory`/`list_packs`/`query_debugger`/`inspect_data`/`decode_file_range`/`inspect_raw_code`.
 `show_address` is not an MCP tool because the server has no interactive listing to navigate.
 
-The [parity scorecard pilot](parity-scorecard.md) records static metrics and task definitions separately from
+The [parity scorecard](parity-scorecard.md) records static metrics and task definitions separately from
 live MCP/model results. Limits: contract checks and scripted transport tests are not AI task-success measurements.
+The optional OpenCode transport emits one-turn JSON intents; the benchmark executes them through actual MCP
+discovery/calls, with host tools disabled and fixture paths restricted. It does not execute analyzed programs.
 The local stripped Lua workload was also inspected through `triage_report`: static toolchain/string evidence
 does not imply target execution, and bundled signature results are distinct from matched-twin evaluator scores.
 

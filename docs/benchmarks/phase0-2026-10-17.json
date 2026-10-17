@@ -1,0 +1,4566 @@
+{
+  "schema_version": 1,
+  "measured_at_utc": "2026-10-17T07:44:31Z",
+  "source_report_sha256": "28fdbdcc2077b906db0f4676550b08a4752a7b3498945923a5276d7f81a4ce90",
+  "evaluator": {
+    "sha256": "7248d6e31c3394fb44ffcafc1181a67114822637247ce82c793866ee99deacc4",
+    "repository_revision": "65a7e99c8b40a51dbf6059f424142d843e1ee8a7",
+    "worktree_dirty": true
+  },
+  "phase0_complete": true,
+  "acceptance": {
+    "complete": true,
+    "checks": [
+      {
+        "criterion": "gcc_x64_elf_o0",
+        "met": true
+      },
+      {
+        "criterion": "gcc_x64_elf_o2",
+        "met": true
+      },
+      {
+        "criterion": "clang_x64_elf_o2",
+        "met": true
+      },
+      {
+        "criterion": "aarch64_elf",
+        "met": true
+      },
+      {
+        "criterion": "aarch64_macho",
+        "met": true
+      },
+      {
+        "criterion": "x64_pe",
+        "met": true
+      },
+      {
+        "criterion": "thumb_elf",
+        "met": true
+      },
+      {
+        "criterion": "mips32_big_endian_elf",
+        "met": true
+      },
+      {
+        "criterion": "cpp_virtuals_and_exceptions",
+        "met": true
+      },
+      {
+        "criterion": "go_program",
+        "met": true
+      },
+      {
+        "criterion": "rust_program",
+        "met": true
+      },
+      {
+        "criterion": "realistic_open_source_program",
+        "met": true
+      },
+      {
+        "criterion": "function_starts",
+        "met": true
+      },
+      {
+        "criterion": "library_names",
+        "met": true
+      },
+      {
+        "criterion": "parameter_counts",
+        "met": true
+      },
+      {
+        "criterion": "return_classes",
+        "met": true
+      },
+      {
+        "criterion": "parameter_classes",
+        "met": true
+      },
+      {
+        "criterion": "cfg_and_call_graph_reference",
+        "met": true
+      },
+      {
+        "criterion": "decompiler_health",
+        "met": true
+      },
+      {
+        "criterion": "health_coverage_for_scored_workloads",
+        "met": true
+      },
+      {
+        "criterion": "complete_fixed_model_mcp_task_run",
+        "met": true
+      },
+      {
+        "criterion": "provider_usage_and_timing",
+        "met": true
+      }
+    ],
+    "meaning": "Baseline evidence completeness, not parity accuracy or a requirement that every task succeeds.",
+    "limits": "Corpus receipts are operator-supplied provenance bound to observed target hashes, not authentication. Optional unscored profiles and absent Ghidra MCP comparison remain explicit limitations."
+  },
+  "requested_model": "github-copilot/gpt-6.1-sol",
+  "requested_provider": "opencode",
+  "observed_models": [
+    "github-copilot/gpt-6.1-sol"
+  ],
+  "observed_variants": [
+    "default"
+  ],
+  "required_task_definitions": {
+    "arithmetic-arm64-elf": "f8efd46506cfa12650044890768ab777d99e2b5251ca119ad05de1fca3be52ce",
+    "capability-decompile": "182ecaed6a44fc8ac866242dc04cbb73fec80acbf9d4894f363bdda47ade3977",
+    "capability-local-variable-rename": "dadd6723367852d98b8322cc7438ff1bcdabade9ae00c109dfd7ea98cf7f225c",
+    "capability-patch-export": "1117da5782b608760edfc682e33569e002009e6360ec87e65ec0ab5fb64f551f",
+    "cpp-class-names-arm64-macho": "bfe9d17fb3204e5a2c1b98062655822dd05a60968d48f12e60e629fe52310ff0",
+    "cpp-multiple-inheritance-arm64-macho": "64bd626465740422725dfe3f7821d84601888170b6500f834ab8a15650dbac06",
+    "format-arm64-elf": "739b0e6e98a827c223fe61f3e1303217b82b1ea708044ce50bede851bba402af",
+    "format-arm64-macho": "bf6965c20793c488f6e4f328caf34f0dc9ba20de3c50cf370b57bba2d7a59470",
+    "format-mips-be-elf": "861295e16e06af27acf675b70fae14b690a603011998dd44abcff7be1cada5e0",
+    "format-thumb-elf": "612c3c041131f3bf44e308006afd4568c12ef56e14d5c632a17cea37d9aebd92",
+    "format-x64-elf": "66d670368aafddb24a1f4bf46ac24b1123ecad179723fd4d5ff89ea489e6a066",
+    "format-x64-pe": "dbe0eec78439fe48eed064d2adc613e08b5c684d61672790c99b9a20fdfc43da",
+    "go-package-functions-x64-elf": "431c8735b080223cc63c6c362e6fb6acd5f3108e7fbc64ffd17e4d4d873703a3",
+    "greeting-x64-elf": "85043f963c4eebff39bb06005b06b93c82fb0bf7f6bcd0918c8f1973795fb50d",
+    "greeting-x64-pe": "908ff83e24672173124c9e54625f5ff353bcd0431215427ab79051cf4f5d9297",
+    "helper-arithmetic-x64-elf": "f0e24e7b55a6a66a66d7d33c61a11569df7ada16dd48524402733b1e7529ee08",
+    "helper-plt-result-x64-elf": "d8f2d1405336fbd5671391965688b17bd5c57b9f56e3090a8b0080142c78eec2",
+    "main-return-arm64-macho": "7344ffae2b85de24710890544526deaccd3960ab386b43980011f6c3adc04d23",
+    "main-return-x64-elf": "9ab20febc88b8a93db6ca6744200a6d972a31db9042b102d7079bb78de348f43",
+    "objc-superclasses-arm64-macho": "6b07f3f2f831c03bc036ddfaae8404a706a284e1a94cae9642c95f5e9a50977d"
+  },
+  "static_evaluation": {
+    "slices": {
+      "discovery-core-mips32be-elf-zig-o2": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "correct": 4,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 0,
+        "publication_disagreements_omitted": 0
+      },
+      "discovery-core-thumb-elf-zig-o2": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "correct": 4,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 0,
+        "publication_disagreements_omitted": 0
+      },
+      "discovery-core-x64-pe-zig-o2": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "correct": 4,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 0,
+        "publication_disagreements_omitted": 0
+      },
+      "discovery-lua-aarch64": {
+        "precision": 0.9933184855233853,
+        "recall": 1.0,
+        "correct": 892,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 6,
+        "publication_disagreements_omitted": 6
+      },
+      "discovery-parity-classes-a64-macho-clang-o1": {
+        "precision": 0.775,
+        "recall": 1.0,
+        "correct": 31,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 9,
+        "publication_disagreements_omitted": 9
+      },
+      "discovery-parity-go-a64-macho-noinline": {
+        "precision": 0.9773429454170958,
+        "recall": 1.0,
+        "correct": 1898,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 44,
+        "publication_disagreements_omitted": 44
+      },
+      "discovery-parity-go-x64-elf-noinline": {
+        "precision": 0.9994493392070485,
+        "recall": 1.0,
+        "correct": 1815,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 1,
+        "publication_disagreements_omitted": 1
+      },
+      "discovery-parity-rust-a64-macho-o1": {
+        "precision": 0.7429837518463811,
+        "recall": 1.0,
+        "correct": 503,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 174,
+        "publication_disagreements_omitted": 174
+      },
+      "discovery-types-a64-elf-zig-o2": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "correct": 39,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 0,
+        "publication_disagreements_omitted": 0
+      },
+      "discovery-types-x64-elf-clang-o2": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "correct": 39,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 0,
+        "publication_disagreements_omitted": 0
+      },
+      "discovery-types-x64-elf-gcc-o0": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "correct": 39,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 0,
+        "publication_disagreements_omitted": 0
+      },
+      "discovery-types-x64-elf-gcc-o2": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "correct": 39,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 0,
+        "publication_disagreements_omitted": 0
+      },
+      "discovery-types-x64-elf-zig-o2": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "correct": 39,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 0,
+        "publication_disagreements_omitted": 0
+      },
+      "libid-twin-lua-aarch64": {
+        "precision": 1.0,
+        "recall": 0.9517937219730942,
+        "correct": 849,
+        "wrong": 0,
+        "missed": 43,
+        "spurious": 0,
+        "publication_disagreements_omitted": 43
+      },
+      "types-classes-types-a64-elf-zig-o2": {
+        "precision": 0.6176470588235294,
+        "recall": 0.6086956521739131,
+        "correct": 42,
+        "wrong": 26,
+        "missed": 1,
+        "spurious": 0,
+        "disagreement_classes": {
+          "float64->int32": 1,
+          "float64->pointer": 1,
+          "float_wide->other": 1,
+          "int16->int32": 3,
+          "int32->float64": 1,
+          "int32->int64": 1,
+          "int32->int8": 1,
+          "int32->none": 1,
+          "int8->int32": 4,
+          "pointer->float64": 1,
+          "pointer->int64": 6,
+          "struct->int64": 1,
+          "struct->pointer": 1,
+          "struct_pointer->pointer": 4
+        },
+        "publication_disagreements_omitted": 27
+      },
+      "types-classes-types-x64-elf-clang-o2": {
+        "precision": 0.6515151515151515,
+        "recall": 0.6231884057971014,
+        "correct": 43,
+        "wrong": 23,
+        "missed": 3,
+        "spurious": 0,
+        "disagreement_classes": {
+          "float64->int32": 1,
+          "float64->pointer": 1,
+          "float_wide->none": 1,
+          "int16->int32": 4,
+          "int32->float64": 1,
+          "int32->int8": 2,
+          "int32->none": 1,
+          "int8->int32": 3,
+          "pointer->float64": 1,
+          "pointer->int64": 5,
+          "struct->int64": 1,
+          "struct->none": 1,
+          "struct_pointer->pointer": 4
+        },
+        "publication_disagreements_omitted": 26
+      },
+      "types-classes-types-x64-elf-gcc-o0": {
+        "precision": 0.7727272727272727,
+        "recall": 0.7391304347826086,
+        "correct": 51,
+        "wrong": 15,
+        "missed": 3,
+        "spurious": 0,
+        "disagreement_classes": {
+          "float64->int32": 1,
+          "float64->pointer": 1,
+          "float_wide->none": 1,
+          "int32->float64": 1,
+          "int32->int8": 2,
+          "int32->none": 1,
+          "pointer->float64": 1,
+          "pointer->int64": 4,
+          "struct->int64": 1,
+          "struct->none": 1,
+          "struct_pointer->pointer": 4
+        },
+        "publication_disagreements_omitted": 18
+      },
+      "types-classes-types-x64-elf-gcc-o2": {
+        "precision": 0.569620253164557,
+        "recall": 0.6521739130434783,
+        "correct": 45,
+        "wrong": 21,
+        "missed": 3,
+        "spurious": 13,
+        "disagreement_classes": {
+          "float64->int32": 1,
+          "float64->pointer": 1,
+          "float_wide->none": 1,
+          "int16->int32": 3,
+          "int32->float64": 1,
+          "int32->int64": 1,
+          "int32->int8": 2,
+          "int32->none": 1,
+          "int8->int32": 3,
+          "none->int32": 1,
+          "none->int64": 12,
+          "pointer->float64": 1,
+          "pointer->int64": 3,
+          "struct->int64": 1,
+          "struct->none": 1,
+          "struct_pointer->pointer": 4
+        },
+        "publication_disagreements_omitted": 37
+      },
+      "types-classes-types-x64-elf-zig-o2": {
+        "precision": 0.6515151515151515,
+        "recall": 0.6231884057971014,
+        "correct": 43,
+        "wrong": 23,
+        "missed": 3,
+        "spurious": 0,
+        "disagreement_classes": {
+          "float64->int32": 1,
+          "float64->pointer": 1,
+          "float_wide->none": 1,
+          "int16->int32": 4,
+          "int32->float64": 1,
+          "int32->int8": 2,
+          "int32->none": 1,
+          "int8->int32": 3,
+          "pointer->float64": 1,
+          "pointer->int64": 5,
+          "struct->int64": 1,
+          "struct->none": 1,
+          "struct_pointer->pointer": 4
+        },
+        "publication_disagreements_omitted": 26
+      },
+      "types-params-types-a64-elf-zig-o2": {
+        "precision": 0.9743589743589743,
+        "recall": 0.9743589743589743,
+        "correct": 38,
+        "wrong": 1,
+        "missed": 0,
+        "spurious": 0,
+        "disagreement_classes": {
+          "fewer": 1
+        },
+        "publication_disagreements_omitted": 1
+      },
+      "types-params-types-x64-elf-clang-o2": {
+        "precision": 0.9230769230769231,
+        "recall": 0.9230769230769231,
+        "correct": 36,
+        "wrong": 3,
+        "missed": 0,
+        "spurious": 0,
+        "disagreement_classes": {
+          "fewer": 3
+        },
+        "publication_disagreements_omitted": 3
+      },
+      "types-params-types-x64-elf-gcc-o0": {
+        "precision": 0.9230769230769231,
+        "recall": 0.9230769230769231,
+        "correct": 36,
+        "wrong": 3,
+        "missed": 0,
+        "spurious": 0,
+        "disagreement_classes": {
+          "fewer": 3
+        },
+        "publication_disagreements_omitted": 3
+      },
+      "types-params-types-x64-elf-gcc-o2": {
+        "precision": 0.8717948717948718,
+        "recall": 0.8717948717948718,
+        "correct": 34,
+        "wrong": 5,
+        "missed": 0,
+        "spurious": 0,
+        "disagreement_classes": {
+          "fewer": 3,
+          "variadic_more": 2
+        },
+        "publication_disagreements_omitted": 5
+      },
+      "types-params-types-x64-elf-zig-o2": {
+        "precision": 0.9230769230769231,
+        "recall": 0.9230769230769231,
+        "correct": 36,
+        "wrong": 3,
+        "missed": 0,
+        "spurious": 0,
+        "disagreement_classes": {
+          "fewer": 3
+        },
+        "publication_disagreements_omitted": 3
+      },
+      "types-return-types-a64-elf-zig-o2": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "correct": 34,
+        "wrong": 0,
+        "missed": 0,
+        "spurious": 0,
+        "publication_disagreements_omitted": 0
+      },
+      "types-return-types-x64-elf-clang-o2": {
+        "precision": 1.0,
+        "recall": 0.9411764705882353,
+        "correct": 32,
+        "wrong": 0,
+        "missed": 2,
+        "spurious": 0,
+        "disagreement_classes": {
+          "value->void": 2
+        },
+        "publication_disagreements_omitted": 2
+      },
+      "types-return-types-x64-elf-gcc-o0": {
+        "precision": 1.0,
+        "recall": 0.9705882352941176,
+        "correct": 33,
+        "wrong": 0,
+        "missed": 1,
+        "spurious": 0,
+        "disagreement_classes": {
+          "value->void": 1
+        },
+        "publication_disagreements_omitted": 1
+      },
+      "types-return-types-x64-elf-gcc-o2": {
+        "precision": 1.0,
+        "recall": 0.9705882352941176,
+        "correct": 33,
+        "wrong": 0,
+        "missed": 1,
+        "spurious": 0,
+        "disagreement_classes": {
+          "value->void": 1
+        },
+        "publication_disagreements_omitted": 1
+      },
+      "types-return-types-x64-elf-zig-o2": {
+        "precision": 1.0,
+        "recall": 0.9411764705882353,
+        "correct": 32,
+        "wrong": 0,
+        "missed": 2,
+        "spurious": 0,
+        "disagreement_classes": {
+          "value->void": 2
+        },
+        "publication_disagreements_omitted": 2
+      }
+    },
+    "gates": {
+      "discovery-core-mips32be-elf-zig-o2": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-core-thumb-elf-zig-o2": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-core-x64-pe-zig-o2": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-lua-aarch64": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-parity-classes-a64-macho-clang-o1": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-parity-go-a64-macho-noinline": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-parity-go-x64-elf-noinline": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-parity-rust-a64-macho-o1": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-types-a64-elf-zig-o2": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-types-x64-elf-clang-o2": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-types-x64-elf-gcc-o0": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-types-x64-elf-gcc-o2": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "discovery-types-x64-elf-zig-o2": {
+        "allow_spurious": true,
+        "min_recall": 0.0
+      },
+      "libid-twin-lua-aarch64": {
+        "allow_spurious": false,
+        "min_recall": 0.0
+      },
+      "types-classes-types-a64-elf-zig-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-classes-types-x64-elf-clang-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-classes-types-x64-elf-gcc-o0": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-classes-types-x64-elf-gcc-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-classes-types-x64-elf-zig-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-params-types-a64-elf-zig-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-params-types-x64-elf-clang-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-params-types-x64-elf-gcc-o0": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-params-types-x64-elf-gcc-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-params-types-x64-elf-zig-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-return-types-a64-elf-zig-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-return-types-x64-elf-clang-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-return-types-x64-elf-gcc-o0": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-return-types-x64-elf-gcc-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      },
+      "types-return-types-x64-elf-zig-o2": {
+        "allow_spurious": true,
+        "allow_wrong": true,
+        "min_recall": 0.0
+      }
+    }
+  },
+  "workloads": [
+    {
+      "id": "lua-20261017-02",
+      "sha256": "77574f856853941caf2f6d16a61b1b11c2319e05b92fbd18cafb463aea0d0edd",
+      "metadata": {
+        "format": "elf",
+        "arch": "aarch64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-lua-aarch64",
+        "libid-twin-lua-aarch64"
+      ]
+    },
+    {
+      "id": "core-mips32be-elf-zig-o2",
+      "sha256": "2cd8158248b1c0ee0578142d8be8901768e3706f56da1d21c046a3eb5b649203",
+      "metadata": {
+        "format": "elf",
+        "arch": "mips",
+        "endianness": "big",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-core-mips32be-elf-zig-o2"
+      ]
+    },
+    {
+      "id": "core-thumb-elf-zig-o2",
+      "sha256": "6673428400582bc36aa69ea7bcfa95b070dae3be84365af258cdc7ed7f9a85b4",
+      "metadata": {
+        "format": "elf",
+        "arch": "arm",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 1,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-core-thumb-elf-zig-o2"
+      ]
+    },
+    {
+      "id": "core-x64-pe-zig-o2",
+      "sha256": "33846183479b60186f5c7a64b9cec54273e5b8e2fc1157dc53ef46c9dd520138",
+      "metadata": {
+        "format": "pe",
+        "arch": "x86_64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-core-x64-pe-zig-o2"
+      ]
+    },
+    {
+      "id": "parity-classes-a64-macho-clang-o1",
+      "sha256": "e8cb605b167e8d84acac824e5a565fe74ffa38a8a6cc4bee82ee7f46b6b98571",
+      "metadata": {
+        "format": "macho",
+        "arch": "aarch64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 1,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-parity-classes-a64-macho-clang-o1"
+      ]
+    },
+    {
+      "id": "parity-go-a64-macho-noinline",
+      "sha256": "8d87ffa1228b7869b4c725b6085d04f149463a2b059ba74fcd4604fd91fb54a3",
+      "metadata": {
+        "format": "macho",
+        "arch": "aarch64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": [
+          "export table unreadable: Invalid exports trie terminal size"
+        ]
+      },
+      "nonempty_metric_slices": [
+        "discovery-parity-go-a64-macho-noinline"
+      ]
+    },
+    {
+      "id": "parity-go-x64-elf-noinline",
+      "sha256": "54c36d73da472955d2524cc532d2fa17a79899054582568a705defe6bebccca6",
+      "metadata": {
+        "format": "elf",
+        "arch": "x86_64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-parity-go-x64-elf-noinline"
+      ]
+    },
+    {
+      "id": "parity-rust-a64-macho-o1",
+      "sha256": "e20df5b26729d19baae74fb33ef324adf223f4664386781ff8e84c96b93ca5df",
+      "metadata": {
+        "format": "macho",
+        "arch": "aarch64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 1,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-parity-rust-a64-macho-o1"
+      ]
+    },
+    {
+      "id": "types-a64-elf-zig-o2",
+      "sha256": "d04720768a42b4c05336e811a689370c9d111337b31dbbbd73b8058cae83e4cb",
+      "metadata": {
+        "format": "elf",
+        "arch": "aarch64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-types-a64-elf-zig-o2",
+        "types-classes-types-a64-elf-zig-o2",
+        "types-params-types-a64-elf-zig-o2",
+        "types-return-types-a64-elf-zig-o2"
+      ]
+    },
+    {
+      "id": "types-x64-elf-clang-o2",
+      "sha256": "e2baffd5c0722342378225499c7c7e15c87d6e5540056e16c63cd3728d2d0016",
+      "metadata": {
+        "format": "elf",
+        "arch": "x86_64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-types-x64-elf-clang-o2",
+        "types-classes-types-x64-elf-clang-o2",
+        "types-params-types-x64-elf-clang-o2",
+        "types-return-types-x64-elf-clang-o2"
+      ]
+    },
+    {
+      "id": "types-x64-elf-gcc-o0",
+      "sha256": "7cc0e4e12af1a3bad89276bf42c50fa211bb9ebd37c15bb063c2b2d6ce9ae0e6",
+      "metadata": {
+        "format": "elf",
+        "arch": "x86_64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-types-x64-elf-gcc-o0",
+        "types-classes-types-x64-elf-gcc-o0",
+        "types-params-types-x64-elf-gcc-o0",
+        "types-return-types-x64-elf-gcc-o0"
+      ]
+    },
+    {
+      "id": "types-x64-elf-gcc-o2",
+      "sha256": "a0ad6f8dfbf4352ede4c672ab3d460b70fec8fc0d71a9ffbeac5a4e12feb271a",
+      "metadata": {
+        "format": "elf",
+        "arch": "x86_64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-types-x64-elf-gcc-o2",
+        "types-classes-types-x64-elf-gcc-o2",
+        "types-params-types-x64-elf-gcc-o2",
+        "types-return-types-x64-elf-gcc-o2"
+      ]
+    },
+    {
+      "id": "types-x64-elf-zig-o2",
+      "sha256": "1db3d97676881351f96a42e85b1844c508e239d6becc4420f3e6ca9e176faec0",
+      "metadata": {
+        "format": "elf",
+        "arch": "x86_64",
+        "endianness": "little",
+        "static_function_symbols": 0,
+        "static_text_symbols_outside_section": 0,
+        "dynamic_function_symbols": 0,
+        "debug_sections": [],
+        "thumb_ranges": 0,
+        "loader_warnings": []
+      },
+      "nonempty_metric_slices": [
+        "discovery-types-x64-elf-zig-o2",
+        "types-classes-types-x64-elf-zig-o2",
+        "types-params-types-x64-elf-zig-o2",
+        "types-return-types-x64-elf-zig-o2"
+      ]
+    }
+  ],
+  "graph_agreement": {
+    "semantics": "cfg-benchmark-v1/exact-address-owned-sets",
+    "reference_is_truth": false,
+    "functions": {
+      "rampage": 898,
+      "ghidra": 890,
+      "common": 890,
+      "only_rampage": 8,
+      "only_ghidra": 0,
+      "unmatched": {
+        "total": 8,
+        "omitted": 0,
+        "items": [
+          {
+            "side": "rampage",
+            "function": "0x10284f8"
+          },
+          {
+            "side": "rampage",
+            "function": "0x1056068"
+          },
+          {
+            "side": "rampage",
+            "function": "0x1056960"
+          },
+          {
+            "side": "rampage",
+            "function": "0x1057a98"
+          },
+          {
+            "side": "rampage",
+            "function": "0x1058918"
+          },
+          {
+            "side": "rampage",
+            "function": "0x10589f8"
+          },
+          {
+            "side": "rampage",
+            "function": "0x105d9f8"
+          },
+          {
+            "side": "rampage",
+            "function": "0x105da24"
+          }
+        ]
+      }
+    },
+    "blocks": {
+      "rampage": 12210,
+      "ghidra": 12229,
+      "matched": 12210,
+      "only_rampage": 0,
+      "only_ghidra": 19,
+      "union": 12229,
+      "precision": 1.0,
+      "recall": 0.9984463161337803,
+      "jaccard": 0.9984463161337803
+    },
+    "edges": {
+      "rampage": 17233,
+      "ghidra": 17207,
+      "matched": 16947,
+      "only_rampage": 286,
+      "only_ghidra": 260,
+      "union": 17493,
+      "precision": 0.9834039343120756,
+      "recall": 0.9848898704015807,
+      "jaccard": 0.9687875150060024
+    },
+    "chains": {
+      "rampage": 12205,
+      "ghidra": 12205,
+      "matched": 12205,
+      "only_rampage": 0,
+      "only_ghidra": 0,
+      "union": 12205,
+      "precision": 1.0,
+      "recall": 1.0,
+      "jaccard": 1.0
+    },
+    "chain_edges": {
+      "rampage": 17228,
+      "ghidra": 17183,
+      "matched": 17183,
+      "only_rampage": 45,
+      "only_ghidra": 0,
+      "union": 17228,
+      "precision": 0.9973879730671,
+      "recall": 1.0,
+      "jaccard": 0.9973879730671
+    },
+    "calls": {
+      "rampage": 4374,
+      "ghidra": 4373,
+      "matched": 4373,
+      "only_rampage": 1,
+      "only_ghidra": 0,
+      "union": 4374,
+      "precision": 0.9997713763145862,
+      "recall": 1.0,
+      "jaccard": 0.9997713763145862
+    },
+    "call_graph": {
+      "rampage": 2891,
+      "ghidra": 2890,
+      "matched": 2890,
+      "only_rampage": 1,
+      "only_ghidra": 0,
+      "union": 2891,
+      "precision": 0.9996540989277066,
+      "recall": 1.0,
+      "jaccard": 0.9996540989277066
+    },
+    "identical_block_functions": 873,
+    "disagreeing_functions": 43,
+    "disagreements": {
+      "total": 612,
+      "omitted": 548,
+      "publication_details_omitted": 64
+    },
+    "ghidra_computed_calls": {
+      "total": 3,
+      "omitted": 0,
+      "publication_details_omitted": 3
+    },
+    "raw_call_disagreements": {
+      "only_rampage": 1,
+      "only_ghidra": 3,
+      "detail_count": 4
+    },
+    "image_sha256": "77574f856853941caf2f6d16a61b1b11c2319e05b92fbd18cafb463aea0d0edd",
+    "rampage_export_sha256": "fe1c0e140992d53a88c6ca21cd476cce8b0839fe6f75ef9e87202bcc4b42106c",
+    "ghidra_export_sha256": "8b3a154502bcd2c44c939ec950fc95ae3ec1e179f4047586948ef04848978d8e",
+    "ghidra_version": "12.1.4"
+  },
+  "decompiler_health": {
+    "status": "measured",
+    "attempted": 247,
+    "limits": "Type-truth entries and explicitly requested sorted-entry samples are timed. Returned C and no error do not establish correct recovery.",
+    "targets": [
+      {
+        "id": "lua-20261017-02",
+        "sample_kind": "address_sorted_function_truth",
+        "attempted": 8,
+        "returned_exact_entry": 8,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 0,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x1024e94",
+            "returned_address": "0x1024e94",
+            "status": "returned",
+            "elapsed_us": 712927,
+            "c_bytes": 961,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1024ebc",
+            "returned_address": "0x1024ebc",
+            "status": "returned",
+            "elapsed_us": 4127,
+            "c_bytes": 561,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1024f24",
+            "returned_address": "0x1024f24",
+            "status": "returned",
+            "elapsed_us": 4248,
+            "c_bytes": 692,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1024f80",
+            "returned_address": "0x1024f80",
+            "status": "returned",
+            "elapsed_us": 588,
+            "c_bytes": 222,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1024f90",
+            "returned_address": "0x1024f90",
+            "status": "returned",
+            "elapsed_us": 391,
+            "c_bytes": 78,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1024fa0",
+            "returned_address": "0x1024fa0",
+            "status": "returned",
+            "elapsed_us": 1628,
+            "c_bytes": 225,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1024fd0",
+            "returned_address": "0x1024fd0",
+            "status": "returned",
+            "elapsed_us": 619,
+            "c_bytes": 119,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1024fec",
+            "returned_address": "0x1024fec",
+            "status": "returned",
+            "elapsed_us": 6012,
+            "c_bytes": 859,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "core-mips32be-elf-zig-o2",
+        "sample_kind": "address_sorted_function_truth",
+        "attempted": 4,
+        "returned_exact_entry": 4,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 0,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x20240",
+            "returned_address": "0x20240",
+            "status": "returned",
+            "elapsed_us": 106869,
+            "c_bytes": 79,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2026c",
+            "returned_address": "0x2026c",
+            "status": "returned",
+            "elapsed_us": 7543,
+            "c_bytes": 433,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x202f0",
+            "returned_address": "0x202f0",
+            "status": "returned",
+            "elapsed_us": 6227,
+            "c_bytes": 384,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x20374",
+            "returned_address": "0x20374",
+            "status": "returned",
+            "elapsed_us": 3793,
+            "c_bytes": 422,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "core-thumb-elf-zig-o2",
+        "sample_kind": "address_sorted_function_truth",
+        "attempted": 4,
+        "returned_exact_entry": 4,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 0,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x20134",
+            "returned_address": "0x20134",
+            "status": "returned",
+            "elapsed_us": 143524,
+            "c_bytes": 79,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x20140",
+            "returned_address": "0x20140",
+            "status": "returned",
+            "elapsed_us": 3617,
+            "c_bytes": 388,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2017c",
+            "returned_address": "0x2017c",
+            "status": "returned",
+            "elapsed_us": 3443,
+            "c_bytes": 410,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201ac",
+            "returned_address": "0x201ac",
+            "status": "returned",
+            "elapsed_us": 3649,
+            "c_bytes": 392,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "core-x64-pe-zig-o2",
+        "sample_kind": "address_sorted_function_truth",
+        "attempted": 4,
+        "returned_exact_entry": 4,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 0,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x140001000",
+            "returned_address": "0x140001000",
+            "status": "returned",
+            "elapsed_us": 222482,
+            "c_bytes": 83,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x140001010",
+            "returned_address": "0x140001010",
+            "status": "returned",
+            "elapsed_us": 9840,
+            "c_bytes": 442,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x140001050",
+            "returned_address": "0x140001050",
+            "status": "returned",
+            "elapsed_us": 5411,
+            "c_bytes": 382,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1400010b0",
+            "returned_address": "0x1400010b0",
+            "status": "returned",
+            "elapsed_us": 3326,
+            "c_bytes": 414,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "parity-classes-a64-macho-clang-o1",
+        "sample_kind": "address_sorted_function_truth",
+        "attempted": 8,
+        "returned_exact_entry": 8,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 1,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x100000620",
+            "returned_address": "0x100000620",
+            "status": "returned",
+            "elapsed_us": 263140,
+            "c_bytes": 308,
+            "recovery_status": "warnings",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1000006b0",
+            "returned_address": "0x1000006b0",
+            "status": "returned",
+            "elapsed_us": 2892,
+            "c_bytes": 267,
+            "recovery_status": "warnings",
+            "warning_count": 2,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1000006bc",
+            "returned_address": "0x1000006bc",
+            "status": "returned",
+            "elapsed_us": 4432,
+            "c_bytes": 384,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100000738",
+            "returned_address": "0x100000738",
+            "status": "returned",
+            "elapsed_us": 9735,
+            "c_bytes": 402,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10000073c",
+            "returned_address": "0x10000073c",
+            "status": "returned",
+            "elapsed_us": 2299,
+            "c_bytes": 87,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100000740",
+            "returned_address": "0x100000740",
+            "status": "returned",
+            "elapsed_us": 3201,
+            "c_bytes": 402,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10000079c",
+            "returned_address": "0x10000079c",
+            "status": "returned",
+            "elapsed_us": 561,
+            "c_bytes": 81,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1000007b0",
+            "returned_address": "0x1000007b0",
+            "status": "returned",
+            "elapsed_us": 537,
+            "c_bytes": 81,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "parity-go-a64-macho-noinline",
+        "sample_kind": "address_sorted_function_truth",
+        "attempted": 8,
+        "returned_exact_entry": 8,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 5,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x100001000",
+            "returned_address": "0x100001000",
+            "status": "returned",
+            "elapsed_us": 2200806,
+            "c_bytes": 1026,
+            "recovery_status": "warnings",
+            "warning_count": 1,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1000010e0",
+            "returned_address": "0x1000010e0",
+            "status": "returned",
+            "elapsed_us": 271,
+            "c_bytes": 62,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1000010f0",
+            "returned_address": "0x1000010f0",
+            "status": "returned",
+            "elapsed_us": 4099,
+            "c_bytes": 382,
+            "recovery_status": "warnings",
+            "warning_count": 1,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100001170",
+            "returned_address": "0x100001170",
+            "status": "returned",
+            "elapsed_us": 506,
+            "c_bytes": 91,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100001180",
+            "returned_address": "0x100001180",
+            "status": "returned",
+            "elapsed_us": 21011,
+            "c_bytes": 1093,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100001240",
+            "returned_address": "0x100001240",
+            "status": "returned",
+            "elapsed_us": 6067,
+            "c_bytes": 860,
+            "recovery_status": "warnings",
+            "warning_count": 1,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100001300",
+            "returned_address": "0x100001300",
+            "status": "returned",
+            "elapsed_us": 13760,
+            "c_bytes": 1115,
+            "recovery_status": "warnings",
+            "warning_count": 3,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1000013d0",
+            "returned_address": "0x1000013d0",
+            "status": "returned",
+            "elapsed_us": 18765,
+            "c_bytes": 1566,
+            "recovery_status": "warnings",
+            "warning_count": 4,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "parity-go-x64-elf-noinline",
+        "sample_kind": "address_sorted_function_truth",
+        "attempted": 8,
+        "returned_exact_entry": 8,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 5,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x401000",
+            "returned_address": "0x401000",
+            "status": "returned",
+            "elapsed_us": 2106464,
+            "c_bytes": 1231,
+            "recovery_status": "warnings",
+            "warning_count": 1,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4010e0",
+            "returned_address": "0x4010e0",
+            "status": "returned",
+            "elapsed_us": 298,
+            "c_bytes": 62,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x401100",
+            "returned_address": "0x401100",
+            "status": "returned",
+            "elapsed_us": 2478,
+            "c_bytes": 258,
+            "recovery_status": "warnings",
+            "warning_count": 1,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x401140",
+            "returned_address": "0x401140",
+            "status": "returned",
+            "elapsed_us": 526,
+            "c_bytes": 91,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x401160",
+            "returned_address": "0x401160",
+            "status": "returned",
+            "elapsed_us": 10794,
+            "c_bytes": 1123,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x401200",
+            "returned_address": "0x401200",
+            "status": "returned",
+            "elapsed_us": 6802,
+            "c_bytes": 721,
+            "recovery_status": "warnings",
+            "warning_count": 1,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x401280",
+            "returned_address": "0x401280",
+            "status": "returned",
+            "elapsed_us": 9032,
+            "c_bytes": 1079,
+            "recovery_status": "warnings",
+            "warning_count": 3,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x401320",
+            "returned_address": "0x401320",
+            "status": "returned",
+            "elapsed_us": 15933,
+            "c_bytes": 1541,
+            "recovery_status": "warnings",
+            "warning_count": 4,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "parity-rust-a64-macho-o1",
+        "sample_kind": "address_sorted_function_truth",
+        "attempted": 8,
+        "returned_exact_entry": 8,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 3,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x1000008f8",
+            "returned_address": "0x1000008f8",
+            "status": "returned",
+            "elapsed_us": 1188263,
+            "c_bytes": 1061,
+            "recovery_status": "warnings",
+            "warning_count": 3,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1000009b4",
+            "returned_address": "0x1000009b4",
+            "status": "returned",
+            "elapsed_us": 5340,
+            "c_bytes": 644,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100000aa8",
+            "returned_address": "0x100000aa8",
+            "status": "returned",
+            "elapsed_us": 7584,
+            "c_bytes": 751,
+            "recovery_status": "warnings",
+            "warning_count": 3,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100000ae4",
+            "returned_address": "0x100000ae4",
+            "status": "returned",
+            "elapsed_us": 7253,
+            "c_bytes": 751,
+            "recovery_status": "warnings",
+            "warning_count": 3,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100000b20",
+            "returned_address": "0x100000b20",
+            "status": "returned",
+            "elapsed_us": 2375,
+            "c_bytes": 66,
+            "recovery_status": "warnings",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100000b34",
+            "returned_address": "0x100000b34",
+            "status": "returned",
+            "elapsed_us": 2548,
+            "c_bytes": 89,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100000b50",
+            "returned_address": "0x100000b50",
+            "status": "returned",
+            "elapsed_us": 2380,
+            "c_bytes": 89,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x100000b6c",
+            "returned_address": "0x100000b6c",
+            "status": "returned",
+            "elapsed_us": 19535,
+            "c_bytes": 2071,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "types-a64-elf-zig-o2",
+        "sample_kind": "type_truth",
+        "attempted": 39,
+        "returned_exact_entry": 39,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 0,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x1010664",
+            "returned_address": "0x1010664",
+            "status": "returned",
+            "elapsed_us": 194563,
+            "c_bytes": 64,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010670",
+            "returned_address": "0x1010670",
+            "status": "returned",
+            "elapsed_us": 525,
+            "c_bytes": 85,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010678",
+            "returned_address": "0x1010678",
+            "status": "returned",
+            "elapsed_us": 866,
+            "c_bytes": 65,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010690",
+            "returned_address": "0x1010690",
+            "status": "returned",
+            "elapsed_us": 583,
+            "c_bytes": 82,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x101069c",
+            "returned_address": "0x101069c",
+            "status": "returned",
+            "elapsed_us": 638,
+            "c_bytes": 101,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10106a8",
+            "returned_address": "0x10106a8",
+            "status": "returned",
+            "elapsed_us": 516,
+            "c_bytes": 80,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10106b0",
+            "returned_address": "0x10106b0",
+            "status": "returned",
+            "elapsed_us": 671,
+            "c_bytes": 172,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10106bc",
+            "returned_address": "0x10106bc",
+            "status": "returned",
+            "elapsed_us": 394,
+            "c_bytes": 91,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10106c4",
+            "returned_address": "0x10106c4",
+            "status": "returned",
+            "elapsed_us": 649,
+            "c_bytes": 78,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10106d0",
+            "returned_address": "0x10106d0",
+            "status": "returned",
+            "elapsed_us": 1567,
+            "c_bytes": 227,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10106e8",
+            "returned_address": "0x10106e8",
+            "status": "returned",
+            "elapsed_us": 985,
+            "c_bytes": 237,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010700",
+            "returned_address": "0x1010700",
+            "status": "returned",
+            "elapsed_us": 678,
+            "c_bytes": 63,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x101070c",
+            "returned_address": "0x101070c",
+            "status": "returned",
+            "elapsed_us": 955,
+            "c_bytes": 67,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x101072c",
+            "returned_address": "0x101072c",
+            "status": "returned",
+            "elapsed_us": 803,
+            "c_bytes": 70,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010738",
+            "returned_address": "0x1010738",
+            "status": "returned",
+            "elapsed_us": 555,
+            "c_bytes": 103,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010744",
+            "returned_address": "0x1010744",
+            "status": "returned",
+            "elapsed_us": 2065,
+            "c_bytes": 338,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010768",
+            "returned_address": "0x1010768",
+            "status": "returned",
+            "elapsed_us": 1388,
+            "c_bytes": 194,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010780",
+            "returned_address": "0x1010780",
+            "status": "returned",
+            "elapsed_us": 2736,
+            "c_bytes": 145,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x101078c",
+            "returned_address": "0x101078c",
+            "status": "returned",
+            "elapsed_us": 3477,
+            "c_bytes": 124,
+            "recovery_status": "warnings",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10107ac",
+            "returned_address": "0x10107ac",
+            "status": "returned",
+            "elapsed_us": 1730,
+            "c_bytes": 59,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10107b4",
+            "returned_address": "0x10107b4",
+            "status": "returned",
+            "elapsed_us": 4682,
+            "c_bytes": 70,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10107c0",
+            "returned_address": "0x10107c0",
+            "status": "returned",
+            "elapsed_us": 703,
+            "c_bytes": 135,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10107c8",
+            "returned_address": "0x10107c8",
+            "status": "returned",
+            "elapsed_us": 604,
+            "c_bytes": 162,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10107d4",
+            "returned_address": "0x10107d4",
+            "status": "returned",
+            "elapsed_us": 1604,
+            "c_bytes": 198,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10107f0",
+            "returned_address": "0x10107f0",
+            "status": "returned",
+            "elapsed_us": 634,
+            "c_bytes": 90,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10107fc",
+            "returned_address": "0x10107fc",
+            "status": "returned",
+            "elapsed_us": 636,
+            "c_bytes": 197,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010808",
+            "returned_address": "0x1010808",
+            "status": "returned",
+            "elapsed_us": 725,
+            "c_bytes": 184,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010824",
+            "returned_address": "0x1010824",
+            "status": "returned",
+            "elapsed_us": 562,
+            "c_bytes": 71,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010834",
+            "returned_address": "0x1010834",
+            "status": "returned",
+            "elapsed_us": 498,
+            "c_bytes": 71,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010844",
+            "returned_address": "0x1010844",
+            "status": "returned",
+            "elapsed_us": 428,
+            "c_bytes": 97,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010850",
+            "returned_address": "0x1010850",
+            "status": "returned",
+            "elapsed_us": 1269,
+            "c_bytes": 215,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010868",
+            "returned_address": "0x1010868",
+            "status": "returned",
+            "elapsed_us": 8767,
+            "c_bytes": 688,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010924",
+            "returned_address": "0x1010924",
+            "status": "returned",
+            "elapsed_us": 16024,
+            "c_bytes": 920,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10109ec",
+            "returned_address": "0x10109ec",
+            "status": "returned",
+            "elapsed_us": 13432,
+            "c_bytes": 823,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010a48",
+            "returned_address": "0x1010a48",
+            "status": "returned",
+            "elapsed_us": 1253,
+            "c_bytes": 69,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010a54",
+            "returned_address": "0x1010a54",
+            "status": "returned",
+            "elapsed_us": 2214,
+            "c_bytes": 91,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010a60",
+            "returned_address": "0x1010a60",
+            "status": "returned",
+            "elapsed_us": 3816,
+            "c_bytes": 100,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010a70",
+            "returned_address": "0x1010a70",
+            "status": "returned",
+            "elapsed_us": 1075,
+            "c_bytes": 96,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1010a84",
+            "returned_address": "0x1010a84",
+            "status": "returned",
+            "elapsed_us": 142538,
+            "c_bytes": 4849,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "types-x64-elf-clang-o2",
+        "sample_kind": "type_truth",
+        "attempted": 39,
+        "returned_exact_entry": 39,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 0,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x2011a0",
+            "returned_address": "0x2011a0",
+            "status": "returned",
+            "elapsed_us": 205297,
+            "c_bytes": 123,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2011a8",
+            "returned_address": "0x2011a8",
+            "status": "returned",
+            "elapsed_us": 879,
+            "c_bytes": 143,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2011b0",
+            "returned_address": "0x2011b0",
+            "status": "returned",
+            "elapsed_us": 2186,
+            "c_bytes": 102,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2011c8",
+            "returned_address": "0x2011c8",
+            "status": "returned",
+            "elapsed_us": 736,
+            "c_bytes": 81,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2011d0",
+            "returned_address": "0x2011d0",
+            "status": "returned",
+            "elapsed_us": 963,
+            "c_bytes": 100,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2011d8",
+            "returned_address": "0x2011d8",
+            "status": "returned",
+            "elapsed_us": 861,
+            "c_bytes": 79,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2011e0",
+            "returned_address": "0x2011e0",
+            "status": "returned",
+            "elapsed_us": 2178,
+            "c_bytes": 208,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201200",
+            "returned_address": "0x201200",
+            "status": "returned",
+            "elapsed_us": 991,
+            "c_bytes": 90,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201210",
+            "returned_address": "0x201210",
+            "status": "returned",
+            "elapsed_us": 531,
+            "c_bytes": 77,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201220",
+            "returned_address": "0x201220",
+            "status": "returned",
+            "elapsed_us": 1965,
+            "c_bytes": 145,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201230",
+            "returned_address": "0x201230",
+            "status": "returned",
+            "elapsed_us": 1624,
+            "c_bytes": 235,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201250",
+            "returned_address": "0x201250",
+            "status": "returned",
+            "elapsed_us": 755,
+            "c_bytes": 62,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201260",
+            "returned_address": "0x201260",
+            "status": "returned",
+            "elapsed_us": 1563,
+            "c_bytes": 66,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201278",
+            "returned_address": "0x201278",
+            "status": "returned",
+            "elapsed_us": 866,
+            "c_bytes": 69,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201280",
+            "returned_address": "0x201280",
+            "status": "returned",
+            "elapsed_us": 494,
+            "c_bytes": 102,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201290",
+            "returned_address": "0x201290",
+            "status": "returned",
+            "elapsed_us": 3428,
+            "c_bytes": 270,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2012c0",
+            "returned_address": "0x2012c0",
+            "status": "returned",
+            "elapsed_us": 1077,
+            "c_bytes": 196,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2012e0",
+            "returned_address": "0x2012e0",
+            "status": "returned",
+            "elapsed_us": 728,
+            "c_bytes": 144,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2012f0",
+            "returned_address": "0x2012f0",
+            "status": "returned",
+            "elapsed_us": 1206,
+            "c_bytes": 123,
+            "recovery_status": "warnings",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2012fc",
+            "returned_address": "0x2012fc",
+            "status": "returned",
+            "elapsed_us": 475,
+            "c_bytes": 58,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201300",
+            "returned_address": "0x201300",
+            "status": "returned",
+            "elapsed_us": 867,
+            "c_bytes": 69,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201308",
+            "returned_address": "0x201308",
+            "status": "returned",
+            "elapsed_us": 561,
+            "c_bytes": 134,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201310",
+            "returned_address": "0x201310",
+            "status": "returned",
+            "elapsed_us": 826,
+            "c_bytes": 121,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201320",
+            "returned_address": "0x201320",
+            "status": "returned",
+            "elapsed_us": 1974,
+            "c_bytes": 197,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201340",
+            "returned_address": "0x201340",
+            "status": "returned",
+            "elapsed_us": 439,
+            "c_bytes": 106,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201350",
+            "returned_address": "0x201350",
+            "status": "returned",
+            "elapsed_us": 444,
+            "c_bytes": 114,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201360",
+            "returned_address": "0x201360",
+            "status": "returned",
+            "elapsed_us": 590,
+            "c_bytes": 170,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201390",
+            "returned_address": "0x201390",
+            "status": "returned",
+            "elapsed_us": 367,
+            "c_bytes": 87,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2013a0",
+            "returned_address": "0x2013a0",
+            "status": "returned",
+            "elapsed_us": 476,
+            "c_bytes": 87,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2013b0",
+            "returned_address": "0x2013b0",
+            "status": "returned",
+            "elapsed_us": 378,
+            "c_bytes": 96,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2013c0",
+            "returned_address": "0x2013c0",
+            "status": "returned",
+            "elapsed_us": 398,
+            "c_bytes": 38,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2013d0",
+            "returned_address": "0x2013d0",
+            "status": "returned",
+            "elapsed_us": 14977,
+            "c_bytes": 1148,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2014f0",
+            "returned_address": "0x2014f0",
+            "status": "returned",
+            "elapsed_us": 13684,
+            "c_bytes": 1346,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x201640",
+            "returned_address": "0x201640",
+            "status": "returned",
+            "elapsed_us": 8666,
+            "c_bytes": 753,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2016a0",
+            "returned_address": "0x2016a0",
+            "status": "returned",
+            "elapsed_us": 328,
+            "c_bytes": 68,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2016b0",
+            "returned_address": "0x2016b0",
+            "status": "returned",
+            "elapsed_us": 1210,
+            "c_bytes": 98,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2016c0",
+            "returned_address": "0x2016c0",
+            "status": "returned",
+            "elapsed_us": 1324,
+            "c_bytes": 98,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2016d0",
+            "returned_address": "0x2016d0",
+            "status": "returned",
+            "elapsed_us": 2313,
+            "c_bytes": 223,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x2016f0",
+            "returned_address": "0x2016f0",
+            "status": "returned",
+            "elapsed_us": 132416,
+            "c_bytes": 5022,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "types-x64-elf-gcc-o0",
+        "sample_kind": "type_truth",
+        "attempted": 39,
+        "returned_exact_entry": 39,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 0,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x4000b0",
+            "returned_address": "0x4000b0",
+            "status": "returned",
+            "elapsed_us": 234853,
+            "c_bytes": 88,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4000c7",
+            "returned_address": "0x4000c7",
+            "status": "returned",
+            "elapsed_us": 1337,
+            "c_bytes": 111,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4000e2",
+            "returned_address": "0x4000e2",
+            "status": "returned",
+            "elapsed_us": 3038,
+            "c_bytes": 126,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400109",
+            "returned_address": "0x400109",
+            "status": "returned",
+            "elapsed_us": 1252,
+            "c_bytes": 90,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400123",
+            "returned_address": "0x400123",
+            "status": "returned",
+            "elapsed_us": 1465,
+            "c_bytes": 100,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40013c",
+            "returned_address": "0x40013c",
+            "status": "returned",
+            "elapsed_us": 1134,
+            "c_bytes": 79,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40014b",
+            "returned_address": "0x40014b",
+            "status": "returned",
+            "elapsed_us": 1115,
+            "c_bytes": 90,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40016d",
+            "returned_address": "0x40016d",
+            "status": "returned",
+            "elapsed_us": 1729,
+            "c_bytes": 90,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40018c",
+            "returned_address": "0x40018c",
+            "status": "returned",
+            "elapsed_us": 1107,
+            "c_bytes": 77,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4001a1",
+            "returned_address": "0x4001a1",
+            "status": "returned",
+            "elapsed_us": 3378,
+            "c_bytes": 150,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4001d9",
+            "returned_address": "0x4001d9",
+            "status": "returned",
+            "elapsed_us": 2581,
+            "c_bytes": 239,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400225",
+            "returned_address": "0x400225",
+            "status": "returned",
+            "elapsed_us": 2010,
+            "c_bytes": 62,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40023e",
+            "returned_address": "0x40023e",
+            "status": "returned",
+            "elapsed_us": 2883,
+            "c_bytes": 66,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40026c",
+            "returned_address": "0x40026c",
+            "status": "returned",
+            "elapsed_us": 1380,
+            "c_bytes": 69,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400288",
+            "returned_address": "0x400288",
+            "status": "returned",
+            "elapsed_us": 3708,
+            "c_bytes": 102,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4002b0",
+            "returned_address": "0x4002b0",
+            "status": "returned",
+            "elapsed_us": 3392,
+            "c_bytes": 280,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4002f3",
+            "returned_address": "0x4002f3",
+            "status": "returned",
+            "elapsed_us": 2109,
+            "c_bytes": 188,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40031f",
+            "returned_address": "0x40031f",
+            "status": "returned",
+            "elapsed_us": 1389,
+            "c_bytes": 144,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400340",
+            "returned_address": "0x400340",
+            "status": "returned",
+            "elapsed_us": 1726,
+            "c_bytes": 123,
+            "recovery_status": "warnings",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40035f",
+            "returned_address": "0x40035f",
+            "status": "returned",
+            "elapsed_us": 3130,
+            "c_bytes": 58,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40036e",
+            "returned_address": "0x40036e",
+            "status": "returned",
+            "elapsed_us": 4257,
+            "c_bytes": 69,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400387",
+            "returned_address": "0x400387",
+            "status": "returned",
+            "elapsed_us": 4204,
+            "c_bytes": 134,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4003ab",
+            "returned_address": "0x4003ab",
+            "status": "returned",
+            "elapsed_us": 1023,
+            "c_bytes": 176,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4003ca",
+            "returned_address": "0x4003ca",
+            "status": "returned",
+            "elapsed_us": 4903,
+            "c_bytes": 276,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400400",
+            "returned_address": "0x400400",
+            "status": "returned",
+            "elapsed_us": 2370,
+            "c_bytes": 106,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400429",
+            "returned_address": "0x400429",
+            "status": "returned",
+            "elapsed_us": 1233,
+            "c_bytes": 114,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40044f",
+            "returned_address": "0x40044f",
+            "status": "returned",
+            "elapsed_us": 1034,
+            "c_bytes": 160,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40048d",
+            "returned_address": "0x40048d",
+            "status": "returned",
+            "elapsed_us": 968,
+            "c_bytes": 200,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4004ab",
+            "returned_address": "0x4004ab",
+            "status": "returned",
+            "elapsed_us": 802,
+            "c_bytes": 87,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4004cb",
+            "returned_address": "0x4004cb",
+            "status": "returned",
+            "elapsed_us": 820,
+            "c_bytes": 96,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4004ec",
+            "returned_address": "0x4004ec",
+            "status": "returned",
+            "elapsed_us": 8315,
+            "c_bytes": 38,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40050b",
+            "returned_address": "0x40050b",
+            "status": "returned",
+            "elapsed_us": 8212,
+            "c_bytes": 606,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400608",
+            "returned_address": "0x400608",
+            "status": "returned",
+            "elapsed_us": 8936,
+            "c_bytes": 733,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40073a",
+            "returned_address": "0x40073a",
+            "status": "returned",
+            "elapsed_us": 2401,
+            "c_bytes": 210,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400778",
+            "returned_address": "0x400778",
+            "status": "returned",
+            "elapsed_us": 620,
+            "c_bytes": 68,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40078d",
+            "returned_address": "0x40078d",
+            "status": "returned",
+            "elapsed_us": 1194,
+            "c_bytes": 194,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x40079f",
+            "returned_address": "0x40079f",
+            "status": "returned",
+            "elapsed_us": 2024,
+            "c_bytes": 98,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4007c3",
+            "returned_address": "0x4007c3",
+            "status": "returned",
+            "elapsed_us": 1208,
+            "c_bytes": 223,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4007e2",
+            "returned_address": "0x4007e2",
+            "status": "returned",
+            "elapsed_us": 141975,
+            "c_bytes": 4771,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "types-x64-elf-gcc-o2",
+        "sample_kind": "type_truth",
+        "attempted": 39,
+        "returned_exact_entry": 39,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 0,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x4000c0",
+            "returned_address": "0x4000c0",
+            "status": "returned",
+            "elapsed_us": 339407,
+            "c_bytes": 5272,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400540",
+            "returned_address": "0x400540",
+            "status": "returned",
+            "elapsed_us": 592,
+            "c_bytes": 58,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400550",
+            "returned_address": "0x400550",
+            "status": "returned",
+            "elapsed_us": 586,
+            "c_bytes": 63,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400560",
+            "returned_address": "0x400560",
+            "status": "returned",
+            "elapsed_us": 752,
+            "c_bytes": 83,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400570",
+            "returned_address": "0x400570",
+            "status": "returned",
+            "elapsed_us": 2328,
+            "c_bytes": 200,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400590",
+            "returned_address": "0x400590",
+            "status": "returned",
+            "elapsed_us": 710,
+            "c_bytes": 81,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4005a0",
+            "returned_address": "0x4005a0",
+            "status": "returned",
+            "elapsed_us": 968,
+            "c_bytes": 100,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4005b0",
+            "returned_address": "0x4005b0",
+            "status": "returned",
+            "elapsed_us": 849,
+            "c_bytes": 79,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4005c0",
+            "returned_address": "0x4005c0",
+            "status": "returned",
+            "elapsed_us": 679,
+            "c_bytes": 90,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4005d0",
+            "returned_address": "0x4005d0",
+            "status": "returned",
+            "elapsed_us": 3063,
+            "c_bytes": 90,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4005e0",
+            "returned_address": "0x4005e0",
+            "status": "returned",
+            "elapsed_us": 1872,
+            "c_bytes": 77,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4005f0",
+            "returned_address": "0x4005f0",
+            "status": "returned",
+            "elapsed_us": 7020,
+            "c_bytes": 150,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400610",
+            "returned_address": "0x400610",
+            "status": "returned",
+            "elapsed_us": 6756,
+            "c_bytes": 239,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400630",
+            "returned_address": "0x400630",
+            "status": "returned",
+            "elapsed_us": 8049,
+            "c_bytes": 62,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400640",
+            "returned_address": "0x400640",
+            "status": "returned",
+            "elapsed_us": 16383,
+            "c_bytes": 86,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400660",
+            "returned_address": "0x400660",
+            "status": "returned",
+            "elapsed_us": 992,
+            "c_bytes": 69,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400670",
+            "returned_address": "0x400670",
+            "status": "returned",
+            "elapsed_us": 526,
+            "c_bytes": 102,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400680",
+            "returned_address": "0x400680",
+            "status": "returned",
+            "elapsed_us": 2812,
+            "c_bytes": 270,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4006c0",
+            "returned_address": "0x4006c0",
+            "status": "returned",
+            "elapsed_us": 1960,
+            "c_bytes": 220,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4006f0",
+            "returned_address": "0x4006f0",
+            "status": "returned",
+            "elapsed_us": 734,
+            "c_bytes": 144,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400700",
+            "returned_address": "0x400700",
+            "status": "returned",
+            "elapsed_us": 1240,
+            "c_bytes": 123,
+            "recovery_status": "warnings",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400710",
+            "returned_address": "0x400710",
+            "status": "returned",
+            "elapsed_us": 861,
+            "c_bytes": 69,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400720",
+            "returned_address": "0x400720",
+            "status": "returned",
+            "elapsed_us": 2970,
+            "c_bytes": 134,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400730",
+            "returned_address": "0x400730",
+            "status": "returned",
+            "elapsed_us": 2964,
+            "c_bytes": 121,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400750",
+            "returned_address": "0x400750",
+            "status": "returned",
+            "elapsed_us": 5768,
+            "c_bytes": 240,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400780",
+            "returned_address": "0x400780",
+            "status": "returned",
+            "elapsed_us": 1170,
+            "c_bytes": 106,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400790",
+            "returned_address": "0x400790",
+            "status": "returned",
+            "elapsed_us": 765,
+            "c_bytes": 114,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4007b0",
+            "returned_address": "0x4007b0",
+            "status": "returned",
+            "elapsed_us": 658,
+            "c_bytes": 160,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4007e0",
+            "returned_address": "0x4007e0",
+            "status": "returned",
+            "elapsed_us": 603,
+            "c_bytes": 200,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400800",
+            "returned_address": "0x400800",
+            "status": "returned",
+            "elapsed_us": 483,
+            "c_bytes": 87,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400810",
+            "returned_address": "0x400810",
+            "status": "returned",
+            "elapsed_us": 382,
+            "c_bytes": 96,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400820",
+            "returned_address": "0x400820",
+            "status": "returned",
+            "elapsed_us": 555,
+            "c_bytes": 38,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400830",
+            "returned_address": "0x400830",
+            "status": "returned",
+            "elapsed_us": 8785,
+            "c_bytes": 950,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4008c0",
+            "returned_address": "0x4008c0",
+            "status": "returned",
+            "elapsed_us": 9459,
+            "c_bytes": 1376,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400990",
+            "returned_address": "0x400990",
+            "status": "returned",
+            "elapsed_us": 2927,
+            "c_bytes": 455,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4009e0",
+            "returned_address": "0x4009e0",
+            "status": "returned",
+            "elapsed_us": 320,
+            "c_bytes": 68,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x4009f0",
+            "returned_address": "0x4009f0",
+            "status": "returned",
+            "elapsed_us": 1203,
+            "c_bytes": 98,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400a00",
+            "returned_address": "0x400a00",
+            "status": "returned",
+            "elapsed_us": 1322,
+            "c_bytes": 98,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x400a10",
+            "returned_address": "0x400a10",
+            "status": "returned",
+            "elapsed_us": 1309,
+            "c_bytes": 223,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      },
+      {
+        "id": "types-x64-elf-zig-o2",
+        "sample_kind": "type_truth",
+        "attempted": 39,
+        "returned_exact_entry": 39,
+        "errors": 0,
+        "address_mismatches": 0,
+        "with_warnings": 0,
+        "diagnostics_unavailable": 0,
+        "bad_data": 0,
+        "unimplemented": 0,
+        "timing_boundary": "Around each Project::decompile call; Project construction excluded. First call may include discovery/native initialization; subsequent calls share target caches. In-process calls are not forcibly interruptible.",
+        "functions": [
+          {
+            "requested_address": "0x1001830",
+            "returned_address": "0x1001830",
+            "status": "returned",
+            "elapsed_us": 218626,
+            "c_bytes": 124,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001840",
+            "returned_address": "0x1001840",
+            "status": "returned",
+            "elapsed_us": 992,
+            "c_bytes": 144,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001850",
+            "returned_address": "0x1001850",
+            "status": "returned",
+            "elapsed_us": 2296,
+            "c_bytes": 103,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001870",
+            "returned_address": "0x1001870",
+            "status": "returned",
+            "elapsed_us": 860,
+            "c_bytes": 82,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001880",
+            "returned_address": "0x1001880",
+            "status": "returned",
+            "elapsed_us": 1092,
+            "c_bytes": 101,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001890",
+            "returned_address": "0x1001890",
+            "status": "returned",
+            "elapsed_us": 999,
+            "c_bytes": 80,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10018a0",
+            "returned_address": "0x10018a0",
+            "status": "returned",
+            "elapsed_us": 2351,
+            "c_bytes": 209,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10018d0",
+            "returned_address": "0x10018d0",
+            "status": "returned",
+            "elapsed_us": 1130,
+            "c_bytes": 91,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10018e0",
+            "returned_address": "0x10018e0",
+            "status": "returned",
+            "elapsed_us": 655,
+            "c_bytes": 78,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10018f0",
+            "returned_address": "0x10018f0",
+            "status": "returned",
+            "elapsed_us": 2096,
+            "c_bytes": 146,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001910",
+            "returned_address": "0x1001910",
+            "status": "returned",
+            "elapsed_us": 1738,
+            "c_bytes": 237,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001930",
+            "returned_address": "0x1001930",
+            "status": "returned",
+            "elapsed_us": 907,
+            "c_bytes": 63,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001940",
+            "returned_address": "0x1001940",
+            "status": "returned",
+            "elapsed_us": 1698,
+            "c_bytes": 67,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001960",
+            "returned_address": "0x1001960",
+            "status": "returned",
+            "elapsed_us": 1008,
+            "c_bytes": 70,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001970",
+            "returned_address": "0x1001970",
+            "status": "returned",
+            "elapsed_us": 620,
+            "c_bytes": 103,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001980",
+            "returned_address": "0x1001980",
+            "status": "returned",
+            "elapsed_us": 3347,
+            "c_bytes": 304,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10019c0",
+            "returned_address": "0x10019c0",
+            "status": "returned",
+            "elapsed_us": 1210,
+            "c_bytes": 197,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10019e0",
+            "returned_address": "0x10019e0",
+            "status": "returned",
+            "elapsed_us": 861,
+            "c_bytes": 145,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x10019f0",
+            "returned_address": "0x10019f0",
+            "status": "returned",
+            "elapsed_us": 1224,
+            "c_bytes": 124,
+            "recovery_status": "warnings",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001a00",
+            "returned_address": "0x1001a00",
+            "status": "returned",
+            "elapsed_us": 612,
+            "c_bytes": 59,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001a10",
+            "returned_address": "0x1001a10",
+            "status": "returned",
+            "elapsed_us": 999,
+            "c_bytes": 70,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001a20",
+            "returned_address": "0x1001a20",
+            "status": "returned",
+            "elapsed_us": 686,
+            "c_bytes": 135,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001a30",
+            "returned_address": "0x1001a30",
+            "status": "returned",
+            "elapsed_us": 996,
+            "c_bytes": 122,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001a50",
+            "returned_address": "0x1001a50",
+            "status": "returned",
+            "elapsed_us": 2059,
+            "c_bytes": 251,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001a80",
+            "returned_address": "0x1001a80",
+            "status": "returned",
+            "elapsed_us": 568,
+            "c_bytes": 107,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001aa0",
+            "returned_address": "0x1001aa0",
+            "status": "returned",
+            "elapsed_us": 576,
+            "c_bytes": 115,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001ac0",
+            "returned_address": "0x1001ac0",
+            "status": "returned",
+            "elapsed_us": 731,
+            "c_bytes": 171,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001af0",
+            "returned_address": "0x1001af0",
+            "status": "returned",
+            "elapsed_us": 499,
+            "c_bytes": 88,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001b10",
+            "returned_address": "0x1001b10",
+            "status": "returned",
+            "elapsed_us": 601,
+            "c_bytes": 88,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001b30",
+            "returned_address": "0x1001b30",
+            "status": "returned",
+            "elapsed_us": 507,
+            "c_bytes": 97,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001b40",
+            "returned_address": "0x1001b40",
+            "status": "returned",
+            "elapsed_us": 532,
+            "c_bytes": 39,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001b50",
+            "returned_address": "0x1001b50",
+            "status": "returned",
+            "elapsed_us": 22754,
+            "c_bytes": 1252,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001c70",
+            "returned_address": "0x1001c70",
+            "status": "returned",
+            "elapsed_us": 19500,
+            "c_bytes": 1347,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001dd0",
+            "returned_address": "0x1001dd0",
+            "status": "returned",
+            "elapsed_us": 13809,
+            "c_bytes": 754,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001e40",
+            "returned_address": "0x1001e40",
+            "status": "returned",
+            "elapsed_us": 524,
+            "c_bytes": 69,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001e50",
+            "returned_address": "0x1001e50",
+            "status": "returned",
+            "elapsed_us": 1372,
+            "c_bytes": 99,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001e60",
+            "returned_address": "0x1001e60",
+            "status": "returned",
+            "elapsed_us": 5317,
+            "c_bytes": 99,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001e80",
+            "returned_address": "0x1001e80",
+            "status": "returned",
+            "elapsed_us": 2516,
+            "c_bytes": 224,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          },
+          {
+            "requested_address": "0x1001ea0",
+            "returned_address": "0x1001ea0",
+            "status": "returned",
+            "elapsed_us": 200280,
+            "c_bytes": 5067,
+            "recovery_status": "no_reported_issues",
+            "warning_count": 0,
+            "bad_data": false,
+            "unimplemented": false
+          }
+        ]
+      }
+    ]
+  },
+  "agent_tasks": {
+    "measured_analysis_tasks": 17,
+    "analysis_answer_matches": 17,
+    "provider_tasks_started": 20,
+    "totals": {
+      "input_tokens": 286183,
+      "output_tokens": 4347,
+      "reasoning_tokens": 1555,
+      "mcp_tool_calls": 38,
+      "tool_errors": 0,
+      "model_errors": 0,
+      "task_wall_time_ms": 208045
+    },
+    "tasks": [
+      {
+        "task_id": "arithmetic-arm64-elf",
+        "kind": "analysis",
+        "fixture_id": "hello-arm64-elf",
+        "expected_sha256": "b47331c6dc05c7eee4e90021a3433e36a3b7d3c212823677cbb8522b3fd07725",
+        "actual_sha256": "b47331c6dc05c7eee4e90021a3433e36a3b7d3c212823677cbb8522b3fd07725",
+        "definition_sha256": "f8efd46506cfa12650044890768ab777d99e2b5251ca119ad05de1fca3be52ce",
+        "check": {
+          "task_id": "arithmetic-arm64-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 10689,
+        "output_tokens": 155,
+        "reasoning_tokens": 40,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 10692,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "capability-decompile",
+        "kind": "capability",
+        "fixture_id": "hello-arm64-macho",
+        "expected_sha256": "d13dbc8113fd99bb5a6bfa8413892b6937232ba25e1ef06c41d55a2126b0b987",
+        "actual_sha256": "d13dbc8113fd99bb5a6bfa8413892b6937232ba25e1ef06c41d55a2126b0b987",
+        "definition_sha256": "182ecaed6a44fc8ac866242dc04cbb73fec80acbf9d4894f363bdda47ade3977",
+        "check": {
+          "task_id": "capability-decompile",
+          "kind": "capability",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 10858,
+        "output_tokens": 157,
+        "reasoning_tokens": 63,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 2,
+        "wall_time_ms": 8763,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "capability-local-variable-rename",
+        "kind": "capability",
+        "fixture_id": "hello-arm64-elf",
+        "expected_sha256": "b47331c6dc05c7eee4e90021a3433e36a3b7d3c212823677cbb8522b3fd07725",
+        "actual_sha256": "b47331c6dc05c7eee4e90021a3433e36a3b7d3c212823677cbb8522b3fd07725",
+        "definition_sha256": "dadd6723367852d98b8322cc7438ff1bcdabade9ae00c109dfd7ea98cf7f225c",
+        "check": {
+          "task_id": "capability-local-variable-rename",
+          "kind": "capability",
+          "outcome": "unknown"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 13272,
+        "output_tokens": 171,
+        "reasoning_tokens": 221,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 13945,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "capability-patch-export",
+        "kind": "capability",
+        "fixture_id": "hello-x64-elf",
+        "expected_sha256": "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742",
+        "actual_sha256": "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742",
+        "definition_sha256": "1117da5782b608760edfc682e33569e002009e6360ec87e65ec0ab5fb64f551f",
+        "check": {
+          "task_id": "capability-patch-export",
+          "kind": "capability",
+          "outcome": "failed"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 13270,
+        "output_tokens": 148,
+        "reasoning_tokens": 109,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 9380,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "cpp-class-names-arm64-macho",
+        "kind": "analysis",
+        "fixture_id": "classes-arm64-macho",
+        "expected_sha256": "324ad3e78daab362bc9c202e360c126780971dc6b19fee0325f9b31f8ff8bdc7",
+        "actual_sha256": "324ad3e78daab362bc9c202e360c126780971dc6b19fee0325f9b31f8ff8bdc7",
+        "definition_sha256": "bfe9d17fb3204e5a2c1b98062655822dd05a60968d48f12e60e629fe52310ff0",
+        "check": {
+          "task_id": "cpp-class-names-arm64-macho",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 25060,
+        "output_tokens": 421,
+        "reasoning_tokens": 111,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 5,
+        "wall_time_ms": 15348,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "cpp-multiple-inheritance-arm64-macho",
+        "kind": "analysis",
+        "fixture_id": "classes-arm64-macho",
+        "expected_sha256": "324ad3e78daab362bc9c202e360c126780971dc6b19fee0325f9b31f8ff8bdc7",
+        "actual_sha256": "324ad3e78daab362bc9c202e360c126780971dc6b19fee0325f9b31f8ff8bdc7",
+        "definition_sha256": "64bd626465740422725dfe3f7821d84601888170b6500f834ab8a15650dbac06",
+        "check": {
+          "task_id": "cpp-multiple-inheritance-arm64-macho",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 20039,
+        "output_tokens": 324,
+        "reasoning_tokens": 67,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 4,
+        "wall_time_ms": 11902,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "format-arm64-elf",
+        "kind": "analysis",
+        "fixture_id": "hello-arm64-elf",
+        "expected_sha256": "b47331c6dc05c7eee4e90021a3433e36a3b7d3c212823677cbb8522b3fd07725",
+        "actual_sha256": "b47331c6dc05c7eee4e90021a3433e36a3b7d3c212823677cbb8522b3fd07725",
+        "definition_sha256": "739b0e6e98a827c223fe61f3e1303217b82b1ea708044ce50bede851bba402af",
+        "check": {
+          "task_id": "format-arm64-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 18417,
+        "output_tokens": 264,
+        "reasoning_tokens": 82,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 2,
+        "wall_time_ms": 10545,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "format-arm64-macho",
+        "kind": "analysis",
+        "fixture_id": "hello-arm64-macho",
+        "expected_sha256": "d13dbc8113fd99bb5a6bfa8413892b6937232ba25e1ef06c41d55a2126b0b987",
+        "actual_sha256": "d13dbc8113fd99bb5a6bfa8413892b6937232ba25e1ef06c41d55a2126b0b987",
+        "definition_sha256": "bf6965c20793c488f6e4f328caf34f0dc9ba20de3c50cf370b57bba2d7a59470",
+        "check": {
+          "task_id": "format-arm64-macho",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 16325,
+        "output_tokens": 264,
+        "reasoning_tokens": 109,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 2,
+        "wall_time_ms": 13216,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "format-mips-be-elf",
+        "kind": "analysis",
+        "fixture_id": "hello-mips-elf",
+        "expected_sha256": "fc976232cd1ca1740ff301864e50b0cc7c8d2b97d683e61e9c58549a54401c1b",
+        "actual_sha256": "fc976232cd1ca1740ff301864e50b0cc7c8d2b97d683e61e9c58549a54401c1b",
+        "definition_sha256": "861295e16e06af27acf675b70fae14b690a603011998dd44abcff7be1cada5e0",
+        "check": {
+          "task_id": "format-mips-be-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 18016,
+        "output_tokens": 262,
+        "reasoning_tokens": 91,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 2,
+        "wall_time_ms": 14428,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "format-thumb-elf",
+        "kind": "analysis",
+        "fixture_id": "hello-thumb-elf",
+        "expected_sha256": "fff28f21dba2a9bdae489a11f4b88b0fcd47f793dbe27f3bfde46d4720daa156",
+        "actual_sha256": "fff28f21dba2a9bdae489a11f4b88b0fcd47f793dbe27f3bfde46d4720daa156",
+        "definition_sha256": "612c3c041131f3bf44e308006afd4568c12ef56e14d5c632a17cea37d9aebd92",
+        "check": {
+          "task_id": "format-thumb-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 16904,
+        "output_tokens": 260,
+        "reasoning_tokens": 77,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 2,
+        "wall_time_ms": 12312,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "format-x64-elf",
+        "kind": "analysis",
+        "fixture_id": "hello-x64-elf",
+        "expected_sha256": "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742",
+        "actual_sha256": "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742",
+        "definition_sha256": "66d670368aafddb24a1f4bf46ac24b1123ecad179723fd4d5ff89ea489e6a066",
+        "check": {
+          "task_id": "format-x64-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 10677,
+        "output_tokens": 153,
+        "reasoning_tokens": 48,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 7371,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "format-x64-pe",
+        "kind": "analysis",
+        "fixture_id": "hello-x64-pe",
+        "expected_sha256": "3b6a01cc33e6b3c55702d69cf24c44f001dd09fe4ff7bdc7a0432de59d64c9c4",
+        "actual_sha256": "3b6a01cc33e6b3c55702d69cf24c44f001dd09fe4ff7bdc7a0432de59d64c9c4",
+        "definition_sha256": "dbe0eec78439fe48eed064d2adc613e08b5c684d61672790c99b9a20fdfc43da",
+        "check": {
+          "task_id": "format-x64-pe",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 10280,
+        "output_tokens": 153,
+        "reasoning_tokens": 41,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 7743,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "go-package-functions-x64-elf",
+        "kind": "analysis",
+        "fixture_id": "hello-go-x64-elf",
+        "expected_sha256": "1e01aee62b8fc287c165a8a771f6f04abd363ace042df972f0bbf014e5db0f96",
+        "actual_sha256": "1e01aee62b8fc287c165a8a771f6f04abd363ace042df972f0bbf014e5db0f96",
+        "definition_sha256": "431c8735b080223cc63c6c362e6fb6acd5f3108e7fbc64ffd17e4d4d873703a3",
+        "check": {
+          "task_id": "go-package-functions-x64-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 10387,
+        "output_tokens": 187,
+        "reasoning_tokens": 59,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 2,
+        "wall_time_ms": 9440,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "greeting-x64-elf",
+        "kind": "analysis",
+        "fixture_id": "hello-x64-elf",
+        "expected_sha256": "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742",
+        "actual_sha256": "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742",
+        "definition_sha256": "85043f963c4eebff39bb06005b06b93c82fb0bf7f6bcd0918c8f1973795fb50d",
+        "check": {
+          "task_id": "greeting-x64-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 10064,
+        "output_tokens": 146,
+        "reasoning_tokens": 41,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 7755,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "greeting-x64-pe",
+        "kind": "analysis",
+        "fixture_id": "hello-x64-pe",
+        "expected_sha256": "3b6a01cc33e6b3c55702d69cf24c44f001dd09fe4ff7bdc7a0432de59d64c9c4",
+        "actual_sha256": "3b6a01cc33e6b3c55702d69cf24c44f001dd09fe4ff7bdc7a0432de59d64c9c4",
+        "definition_sha256": "908ff83e24672173124c9e54625f5ff353bcd0431215427ab79051cf4f5d9297",
+        "check": {
+          "task_id": "greeting-x64-pe",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 9377,
+        "output_tokens": 155,
+        "reasoning_tokens": 44,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 7272,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "helper-arithmetic-x64-elf",
+        "kind": "analysis",
+        "fixture_id": "libhelper-x64-elf",
+        "expected_sha256": "5621359882a4bedff4c1301e7493e43c74c076590cef1cf7ff7572d7de62af90",
+        "actual_sha256": "5621359882a4bedff4c1301e7493e43c74c076590cef1cf7ff7572d7de62af90",
+        "definition_sha256": "f0e24e7b55a6a66a66d7d33c61a11569df7ada16dd48524402733b1e7529ee08",
+        "check": {
+          "task_id": "helper-arithmetic-x64-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 9363,
+        "output_tokens": 148,
+        "reasoning_tokens": 60,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 7113,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "helper-plt-result-x64-elf",
+        "kind": "analysis",
+        "fixture_id": "libhelper-x64-elf",
+        "expected_sha256": "5621359882a4bedff4c1301e7493e43c74c076590cef1cf7ff7572d7de62af90",
+        "actual_sha256": "5621359882a4bedff4c1301e7493e43c74c076590cef1cf7ff7572d7de62af90",
+        "definition_sha256": "d8f2d1405336fbd5671391965688b17bd5c57b9f56e3090a8b0080142c78eec2",
+        "check": {
+          "task_id": "helper-plt-result-x64-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 23904,
+        "output_tokens": 500,
+        "reasoning_tokens": 92,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 5,
+        "wall_time_ms": 16541,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "main-return-arm64-macho",
+        "kind": "analysis",
+        "fixture_id": "hello-arm64-macho",
+        "expected_sha256": "d13dbc8113fd99bb5a6bfa8413892b6937232ba25e1ef06c41d55a2126b0b987",
+        "actual_sha256": "d13dbc8113fd99bb5a6bfa8413892b6937232ba25e1ef06c41d55a2126b0b987",
+        "definition_sha256": "7344ffae2b85de24710890544526deaccd3960ab386b43980011f6c3adc04d23",
+        "check": {
+          "task_id": "main-return-arm64-macho",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 10059,
+        "output_tokens": 141,
+        "reasoning_tokens": 53,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 6953,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "main-return-x64-elf",
+        "kind": "analysis",
+        "fixture_id": "hello-x64-elf",
+        "expected_sha256": "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742",
+        "actual_sha256": "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742",
+        "definition_sha256": "9ab20febc88b8a93db6ca6744200a6d972a31db9042b102d7079bb78de348f43",
+        "check": {
+          "task_id": "main-return-x64-elf",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 10052,
+        "output_tokens": 141,
+        "reasoning_tokens": 56,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 1,
+        "wall_time_ms": 6986,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      },
+      {
+        "task_id": "objc-superclasses-arm64-macho",
+        "kind": "analysis",
+        "fixture_id": "objc-arm64-stripped-macho",
+        "expected_sha256": "8e6221248f4933d70976dbbb6f3b919cdfb1571f06334dab45510496c830a665",
+        "actual_sha256": "8e6221248f4933d70976dbbb6f3b919cdfb1571f06334dab45510496c830a665",
+        "definition_sha256": "6b07f3f2f831c03bc036ddfaae8404a706a284e1a94cae9642c95f5e9a50977d",
+        "check": {
+          "task_id": "objc-superclasses-arm64-macho",
+          "kind": "analysis",
+          "outcome": "answer_matches"
+        },
+        "returned_models": [
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol",
+          "github-copilot/gpt-6.1-sol"
+        ],
+        "input_tokens": 19170,
+        "output_tokens": 197,
+        "reasoning_tokens": 91,
+        "cache_tokens": {
+          "read": 0,
+          "creation": 0
+        },
+        "mcp_tool_calls": 2,
+        "wall_time_ms": 10340,
+        "tool_errors": 0,
+        "model_errors": 0,
+        "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+      }
+    ]
+  },
+  "unmeasured": [
+    "whole-corpus CFG/call-graph coverage",
+    "all-functions decompiler health",
+    "future expanded-task and cross-model comparisons",
+    "Ghidra MCP comparison"
+  ],
+  "scorecard_wall_time_ms": 224913,
+  "limits": [
+    "Static gates are existing slice gates, not overall parity acceptance.",
+    "Unavailable or failed corpus selections are not successes; optional inventory is retained verbatim.",
+    "Type-recovery scores do not substitute for decompiler health or agent-task results.",
+    "Publication view omits detailed disagreements, model answers and transcripts; the private source report is hash-bound. Usage totals cover this run, not setup probes."
+  ]
+}

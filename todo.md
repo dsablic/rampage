@@ -1,44 +1,34 @@
 # To do
 
-## Active priority: parity roadmap Phase 0 scorecard
+## Parity roadmap: Phase 0 completed
 
-Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One active milestone;
-independent slices inside Phase 0 may run in parallel, with shared integration/builds and fresh-context review.
+Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One milestone at a time;
+parallel slices share central builds and undergo fresh-context review before publication.
 
-- [x] Corpus pilot: source/toolchain/licence provenance and symbolized/stripped twin build recipes; record
-  unavailable toolchains/coverage rather than inventing artifacts or measurements.
-  Selected AArch64/Thumb pairs built and passed observed-header, stripping and function-byte checks; this
-  does not close the full architecture/compiler/realistic-program matrix. MIPS stripping now passes with
-  mapped-byte/refusal checks; the original failure remains recorded. Nine-profile run: 3 available/3 unavailable/3 failed.
-- [x] Checkable task pilot: 20 owned-fixture questions/contracts, separate from agent-facing prompts; inventory
-  never overrides observed answer correctness. This is not a live agent runner.
-- [x] Extend existing `rampage-eval` CLI/reporting into `run --suite parity`; preserve existing slice runners.
-  The pilot emits actual static metrics and explicit unrun task/usage fields, not Phase 0 completion.
-- [ ] Run and record static/agent baselines, tool calls/tokens/wall time and missing capabilities in the scorecard.
-  Initial measurement: before the pilot, `run --suite parity` exited 2 because `--suite` was unsupported.
-  Scripted MCP transport checks are not AI task-success measurements. No Phase 0 acceptance claimed yet.
-  - [x] Record selected AArch64/Thumb static baselines and actual evaluator/fixture identities.
-  - [x] Add explicit-model opt-in MCP task loop, readonly fixture scope, actual usage/error accounting and
-    scripted-model protocol regressions; scripted answers cannot count as AI task success.
-  - [ ] Run live fixed-model task baselines; existing Anthropic transport is not configured locally and no
-    model was selected. No live model calls or model usage measurements have been made.
-  - [ ] Complete compiler/architecture/program coverage, CFG/call graphs, health/timing and Ghidra comparisons.
-    - [x] Build pinned MIT Lua interpreter without target execution; record matched-twin name recall and a
-      broader Ghidra graph comparison. Matched-twin scores are not cross-build recognition.
-    - [x] Add owned C++/exceptions, Go and Rust workload recipes; builds/strip/header checks succeeded locally.
-      Go ELF has sized truth; PE and compressed Go Mach-O now have explicit checked contiguous DWARF truth.
-      C++/Rust and the basic Mach-O profile remain unscored without supported truth. Matrix: 8 scored/5 unavailable/1 failed.
-    - [x] Combine independent corpora through repeated `--manifest`, with per-manifest digests and duplicate-name
-      refusal; one expanded JSON report now retains 19 static slices and the realistic Lua graph reference.
-    - [x] Recover system-Clang x64 ELF coverage using an explicit local linker override; Zig/embedded Clang
-      remains a separate compiler profile, never substitute GCC coverage. Genuine GCC remains unavailable.
-    - [ ] C++ class recovery acceptance: the new stripped native exceptions workload currently returns no
-      `class_evidence`; its symbolized vtables are skipped as not mapped read-only. Retain this observed limit
-      for the typing/class-recovery phases rather than relaxing metadata rules to inflate the baseline.
-    - [x] Add hash-bound graph agreement and actual owned Thumb/Ghidra reference measurement; preserve raw
-      discrepancies separately from chain-normalized equality. Broader reference coverage remains open.
-    - [x] Record health/timing for 39 type-truth-selected AArch64 entries, with nullable diagnostics and zero-attempt
-      handling; returned C is not correctness, and cache/initialization boundaries limit timing interpretation.
+- [x] Required source-built corpus: genuine GCC `-O0/-O2`, Clang, x64/AArch64 ELF, AArch64 Mach-O, x64 PE,
+  Thumb and MIPS32 BE, plus C++/exceptions, Go, Rust and pinned MIT Lua. Twelve verified profiles plus Lua.
+- [x] Check native headers, stripping, source/twin hashes and nonempty symbol or explicit checked DWARF truth;
+  external C++/Rust debug files require matching UUIDs, exact CPU identities and retained code bytes.
+- [x] Record 29 static slices, Lua/Ghidra graph agreement and 247 decompiler observations across 13 targets.
+- [x] Run the canonical 20 tasks through actual MCP using `github-copilot/gpt-6.1-sol`, variant `default`:
+  17/17 analysis contracts matched; three capability probes remain one match, one unknown and one format failure.
+  Actual usage: 38 MCP calls, 286183 input / 4347 output / 1555 reasoning tokens; no tool/model errors.
+- [x] Emit one combined JSON report, pass all 22 evidence-completeness checks, publish the scorecard and its
+  path/transcript-free data view. Collector `65a7e99`; baseline evidence is in `docs/benchmarks.md`.
+- [x] Fix the measured SIGCHLD interaction between CLI deadlines and MCP workers, pass the interoperability
+  regression, and rerun the full unchanged task set; preserve the initial run as diagnostic evidence.
+- [x] Revalidate the raw-firmware acceptance window through MCP without execution or payload publication.
+
+Phase 0 is a measured baseline, not parity or full-workspace/release acceptance. Broader corpus, graph,
+all-functions health and cross-model comparisons remain future scorecard maintenance. No Ghidra MCP bridge
+was available in the benchmark's configured project context. Optional unscored profiles remain visible.
+
+## Next milestone: Phase 1.1, queued but not started
+
+- [ ] Measure missing local-variable/parameter rename and retype behavior on an owned fixture, then implement
+  storage-identity annotations and native overrides through bounded MCP tools with undo/replay acceptance.
+- [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no
+  class rows, and symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
 
 ## Audio/firmware investigation acceptance workloads
 
