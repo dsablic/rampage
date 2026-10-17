@@ -6,6 +6,48 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 1.3 — typed data ranges and instruction operands
+
+**Run:** 2026-10-17, committed collector/implementation `24ba0dd`. The
+[measurement](benchmarks/phase1-3-2026-10-17.json) binds the source, executable, fixture and original raw report.
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Typed range/operand MCP surface | 0/4 required tools | `apply_data_type`, `read_data`, `apply_enum`, `apply_offset` |
+| Owned struct-array data | Raw words only | Native paths, signed values and exact enum labels |
+| Compare immediate / memory offset | Numeric `7` / `+4` | `TypedMode::MODE_READY` / `TypedRecord.value` |
+| Raw instructions and fixture | Original bytes/text | Independently verified unchanged |
+| Explicit Unicode and exact scalars | Raw byte inspection | Strict UTF-8/UTF-16; exact integers, NaN/Inf raw bits |
+| Live task and fresh-server persistence | Missing tools | **Passed**, exact final annotations and native state |
+
+The first live `github-copilot/gpt-6.1-sol` run (variant `default`) passed in **7 MCP calls / 3 model turns**,
+24.223 s task wall time, with 28454 reported input / 709 output / 92 reasoning tokens. There were no model,
+tool or transport errors and no retries/regrading. Six preparation calls seeded the supplied type library and
+captured baseline evidence; ten independent verifier calls checked native state and a fresh server. These
+calls and their timings are recorded separately rather than folded into the agent-call headline.
+
+The task binds two source-known records and an explicit seven-byte UTF-8 string, then annotates native-decoded
+enum and struct-offset operands. The grader checks actual fields and negative enum labels, original string
+bytes, raw instruction text/bytes, exact identity-scoped logs, unchanged fixture/library and relevant ordered
+MCP receipts. A matching model summary alone cannot pass. Out-of-task selectors fail permanently, even if
+subsequent calls erase the extra annotation.
+
+Clang-built x64/AArch64 fixtures and the source recipe distinguish explicit operand indices, semantic immediate
+widths and memory displacements. Native/worker/MCP tests cover arrays of structs in real decompiled C, ordinary
+and exact-entry replay, UTF-16 surrogate pairs, invalid encodings, integers beyond JSON float precision, NaNs,
+partial/zero-fill bytes, and shared-client rename conflicts. The first typed-log transition checks the complete
+legacy prefix before append; malformed old logs are refused without rewriting them. An installed ARM64 image
+revalidation returned stored bytes and explicit zero-fill without creating commercial annotations or assigning
+unproved layouts.
+
+All seven changed-crate suites, scoped all-target Clippy, 11 grader regressions and fresh-context reviews passed.
+Limits: supported decoder-native instruction operands, bounded data windows, no arbitrary decompiler-token
+rewriting, pointer traversal or producer-layout inference. Earlier accepted measurements remain unchanged.
+
+```sh
+cargo run --locked -j 2 -p rampage-eval --example typed_data -- tests/data/typed-data-x64.snapshot.json
+```
+
 ## Phase 1.2 — project type library and native layout inspection
 
 **Run:** 2026-10-17, collector sources committed at `e01d0bd`, with documentation and machine-local files still
