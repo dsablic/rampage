@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use object::{Object, ObjectSection};
-use rampage_eval::dwarf_function_truth;
+use rampage_eval::{dwarf_file_truth, dwarf_function_truth};
 use rampage_loaders::Binary;
 
 fn fixture(name: &str) -> PathBuf {
@@ -353,4 +353,329 @@ fn opt_in_owned_go_macho_reads_compressed_embedded_dwarf() {
     assert!(report.twin_verified && report.exact_ranges_checked > 0, "{report:?}");
     assert!(report.truth.0.values().any(|name| name == "main.main"));
     reject_changed_code(&original_path, &stripped_path);
+}
+
+// A thin MH_DSYM with only UUID and debug sections: deliberately no executable code bytes.
+fn external_macho(original: &Binary, uuid: Option<[u8; 16]>, info: &[u8]) -> Vec<u8> {
+    let section_command_size = 72 + 2 * 80;
+    let commands_size = section_command_size + if uuid.is_some() { 24 } else { 0 };
+    let payload_offset = 32 + commands_size;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&0xfeed_facf_u32.to_le_bytes());
+    bytes.extend_from_slice(&original.image_bytes()[4..12]);
+    for value in [10_u32, if uuid.is_some() { 2 } else { 1 }, commands_size as u32, 0, 0] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    if let Some(uuid) = uuid {
+        bytes.extend_from_slice(&0x1b_u32.to_le_bytes());
+        bytes.extend_from_slice(&24_u32.to_le_bytes());
+        bytes.extend_from_slice(&uuid);
+    }
+    bytes.extend_from_slice(&0x19_u32.to_le_bytes());
+    bytes.extend_from_slice(&(section_command_size as u32).to_le_bytes());
+    bytes.extend_from_slice(b"__DWARF\0\0\0\0\0\0\0\0\0");
+    for value in [0_u64, 0, payload_offset as u64, (info.len() + SYNTHETIC_ABBREV.len()) as u64] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in [0_u32, 0, 2, 0] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    let mut offset = payload_offset;
+    for (name, size) in [("__debug_info", info.len()), ("__debug_abbrev", SYNTHETIC_ABBREV.len())] {
+        let mut section_name = [0; 16];
+        section_name[..name.len()].copy_from_slice(name.as_bytes());
+        bytes.extend_from_slice(&section_name);
+        bytes.extend_from_slice(b"__DWARF\0\0\0\0\0\0\0\0\0");
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&(size as u64).to_le_bytes());
+        for value in [offset as u32, 0, 0, 0, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        offset += size;
+    }
+    assert_eq!(bytes.len(), payload_offset);
+    bytes.extend_from_slice(info);
+    bytes.extend_from_slice(SYNTHETIC_ABBREV);
+    bytes
+}
+
+fn external_case(abbrev: u8) -> (Binary, Vec<u8>, u64) {
+    let original = Binary::open(fixture("hello-x64.macho")).unwrap();
+    let (low, uuid) = {
+        let object = object::File::parse(original.image_bytes()).unwrap();
+        (object.section_by_name("__text").unwrap().address(), object.mach_uuid().unwrap().unwrap())
+    };
+    let mut body = vec![abbrev, b'f', 0];
+    body.extend_from_slice(&low.to_le_bytes());
+    body.extend_from_slice(&8_u32.to_le_bytes());
+    if abbrev == 3 {
+        body.extend_from_slice(&0_u32.to_le_bytes());
+    }
+    let data = external_macho(&original, Some(uuid), &synthetic_unit(8, 0, &body));
+    (original, data, low)
+}
+
+#[test]
+fn uuid_matched_external_dwarf_uses_original_code_not_debug_object_code() {
+    let (mut original, data, low) = external_case(2);
+    original.symbols.clear();
+    original.function_starts.clear();
+    let report = dwarf_file_truth(&data, &original, Some(&original)).unwrap();
+    assert_eq!(report.originating_metadata, "uuid_matched_external_dwarf");
+    let receipt = report.uuid_comparison.as_ref().unwrap();
+    assert_ne!(receipt.original_uuid, [0; 16]);
+    assert_eq!(receipt.original_uuid, receipt.dwarf_uuid);
+    assert_eq!(receipt.twin_uuid, Some(receipt.original_uuid));
+    assert_eq!(report.truth.0.get(&low).map(String::as_str), Some("f"));
+    assert_eq!(report.exact_ranges_checked, 1);
+    assert_eq!(report.checked_bytes, 8);
+    assert!(report.twin_verified && report.no_truth_reason.is_none());
+    let original_only = dwarf_file_truth(&data, &original, None).unwrap();
+    assert!(!original_only.twin_verified);
+    assert_eq!(original_only.uuid_comparison.as_ref().unwrap().twin_uuid, None);
+    assert_eq!(original_only.truth, report.truth);
+    let embedded = dwarf_function_truth(original.image_bytes(), &original, Some(&original)).unwrap();
+    assert!(embedded.uuid_comparison.is_none());
+    assert!(dwarf_function_truth(&data, &original, None).unwrap_err().contains("do not match"));
+}
+
+#[test]
+fn external_dwarf_rejects_wrong_missing_and_zero_uuids() {
+    let (original, data, _) = external_case(2);
+    let mut wrong = data.clone();
+    // The synthetic file's first command is LC_UUID, with its payload at byte 40.
+    wrong[40] ^= 1;
+    assert!(dwarf_file_truth(&wrong, &original, None).unwrap_err().contains("LC_UUID does not match"));
+    for uuid in [None, Some([0; 16])] {
+        let missing = external_macho(&original, uuid, &[]);
+        let error = dwarf_file_truth(&missing, &original, None).unwrap_err();
+        assert!(error.contains("missing or zero LC_UUID"), "{error}");
+    }
+    let mut missing_original = original.image_bytes().to_vec();
+    let command_count = u32::from_le_bytes(missing_original[16..20].try_into().unwrap());
+    let mut offset = 32;
+    let mut cleared = false;
+    for _ in 0..command_count {
+        let command = u32::from_le_bytes(missing_original[offset..offset + 4].try_into().unwrap());
+        let size = u32::from_le_bytes(missing_original[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        if command == 0x1b {
+            missing_original[offset + 8..offset + 24].fill(0);
+            cleared = true;
+        }
+        offset += size;
+    }
+    assert!(cleared);
+    let scratch = Scratch::write(&missing_original);
+    let original = Binary::open(&scratch.0).unwrap();
+    let error = dwarf_file_truth(&data, &original, None).unwrap_err();
+    assert!(error.contains("original: missing or zero LC_UUID"), "{error}");
+}
+
+#[test]
+fn external_dwarf_rejects_wrong_architecture_and_universal_images() {
+    let (original, mut data, _) = external_case(2);
+    data[4..8].copy_from_slice(&0x0100_000c_u32.to_le_bytes());
+    let error = dwarf_file_truth(&data, &original, None).unwrap_err();
+    assert!(error.contains("architecture or endianness differs"), "{error}");
+    let fat = std::fs::read(fixture("hello-universal.macho")).unwrap();
+    assert!(dwarf_file_truth(&fat, &original, None).unwrap_err().contains("thin Mach-O"));
+    let fat_original = Binary::open(fixture("hello-universal.macho")).unwrap();
+    assert!(dwarf_file_truth(&data, &fat_original, None).unwrap_err().contains("thin Mach-O"));
+}
+
+#[test]
+fn external_dwarf_rejects_opposite_endianness_even_with_matching_uuid() {
+    let (original, _, _) = external_case(2);
+    let object = object::File::parse(original.image_bytes()).unwrap();
+    let mut data = Vec::new();
+    for value in [0xfeed_facf_u32, 0x0100_0007, 3, 10, 1, 24, 0, 0, 0x1b, 24] {
+        data.extend_from_slice(&value.to_be_bytes());
+    }
+    data.extend_from_slice(&object.mach_uuid().unwrap().unwrap());
+    let error = dwarf_file_truth(&data, &original, None).unwrap_err();
+    assert!(error.contains("architecture or endianness differs"), "{error}");
+}
+
+#[test]
+fn external_dwarf_requires_exact_raw_cpu_subtypes_in_all_three_images() {
+    let (original, data, _) = external_case(2);
+    assert_eq!(&original.image_bytes()[8..12], &3_u32.to_le_bytes());
+    for subtype in [8_u32, 0x8000_0003] {
+        let mut changed_debug = data.clone();
+        changed_debug[8..12].copy_from_slice(&subtype.to_le_bytes());
+        let error = dwarf_file_truth(&changed_debug, &original, None).unwrap_err();
+        assert!(error.contains("architecture or endianness differs"), "{error}");
+
+        let mut changed_image = original.image_bytes().to_vec();
+        changed_image[8..12].copy_from_slice(&subtype.to_le_bytes());
+        let scratch = Scratch::write(&changed_image);
+        let changed = Binary::open(&scratch.0).unwrap();
+        let error = dwarf_file_truth(&data, &changed, None).unwrap_err();
+        assert!(error.contains("architecture or endianness differs"), "{error}");
+        let error = dwarf_file_truth(&data, &original, Some(&changed)).unwrap_err();
+        assert!(error.contains("not a twin") && error.contains("architecture or endianness differs"), "{error}");
+    }
+}
+
+fn uuid_command_offset(bytes: &[u8]) -> usize {
+    let count = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+    let mut offset = 32;
+    for _ in 0..count {
+        if u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) == 0x1b {
+            return offset;
+        }
+        offset += u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+    }
+    panic!("fixture must have an LC_UUID");
+}
+
+fn trailing_command(bytes: &[u8], command: &[u8]) -> Vec<u8> {
+    let mut output = bytes.to_vec();
+    let count = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+    let size = u32::from_le_bytes(bytes[20..24].try_into().unwrap());
+    let offset = 32 + size as usize;
+    output.resize(output.len().max(offset + command.len()), 0);
+    output[offset..offset + command.len()].copy_from_slice(command);
+    output[16..20].copy_from_slice(&(count + 1).to_le_bytes());
+    output[20..24].copy_from_slice(&(size + command.len() as u32).to_le_bytes());
+    output
+}
+
+fn identity_corruptions(bytes: &[u8]) -> Vec<(&'static str, Vec<u8>, &'static str)> {
+    let offset = uuid_command_offset(bytes);
+    let uuid_command = &bytes[offset..offset + 24];
+    let duplicate = trailing_command(bytes, uuid_command);
+    let mut conflicting = duplicate.clone();
+    let table_size = u32::from_le_bytes(conflicting[20..24].try_into().unwrap()) as usize;
+    conflicting[32 + table_size - 16] ^= 1;
+    let mut missing = bytes.to_vec();
+    missing[offset..offset + 4].copy_from_slice(&0_u32.to_le_bytes());
+    let mut zero = bytes.to_vec();
+    zero[offset + 8..offset + 24].fill(0);
+    let mut oversized_uuid = bytes.to_vec();
+    oversized_uuid[offset + 4..offset + 8].copy_from_slice(&32_u32.to_le_bytes());
+    let mut undersized_uuid = bytes.to_vec();
+    undersized_uuid[offset + 4..offset + 8].copy_from_slice(&16_u32.to_le_bytes());
+    let mut short_command = vec![0; 8];
+    short_command[4..8].copy_from_slice(&4_u32.to_le_bytes());
+    let malformed_trailing = trailing_command(bytes, &short_command);
+    let mut unaligned_command = vec![0; 12];
+    unaligned_command[4..8].copy_from_slice(&12_u32.to_le_bytes());
+    let unaligned_trailing = trailing_command(bytes, &unaligned_command);
+    let mut long_command = vec![0; 8];
+    long_command[4..8].copy_from_slice(&16_u32.to_le_bytes());
+    let truncated_command = trailing_command(bytes, &long_command);
+    let mut missing_command = bytes.to_vec();
+    let count = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+    missing_command[16..20].copy_from_slice(&(count + 1).to_le_bytes());
+    let mut unconsumed_table = bytes.to_vec();
+    let size = u32::from_le_bytes(bytes[20..24].try_into().unwrap());
+    unconsumed_table[20..24].copy_from_slice(&(size + 8).to_le_bytes());
+    vec![
+        ("duplicate", duplicate, "duplicate LC_UUID"),
+        ("conflicting", conflicting, "duplicate LC_UUID"),
+        ("missing", missing, "missing or zero LC_UUID"),
+        ("zero", zero, "missing or zero LC_UUID"),
+        ("oversized_uuid", oversized_uuid, "malformed LC_UUID"),
+        ("undersized_uuid", undersized_uuid, "malformed LC_UUID"),
+        ("malformed_trailing", malformed_trailing, "malformed Mach-O load-command"),
+        ("unaligned_trailing", unaligned_trailing, "malformed Mach-O load-command"),
+        ("truncated_command", truncated_command, "malformed Mach-O load-command"),
+        ("missing_command", missing_command, "malformed Mach-O load-command"),
+        ("unconsumed_table", unconsumed_table, "malformed Mach-O load-command"),
+    ]
+}
+
+#[test]
+fn external_dwarf_checks_the_entire_debug_load_command_table_and_unique_uuid() {
+    let (original, data, _) = external_case(2);
+    for (name, changed, expected) in identity_corruptions(&data) {
+        let error = dwarf_file_truth(&changed, &original, Some(&original)).unwrap_err();
+        assert!(error.contains("external DWARF") && error.contains(expected), "{name}: {error}");
+    }
+    let table_size = u32::from_le_bytes(data[20..24].try_into().unwrap()) as usize;
+    let truncated_table = &data[..32 + table_size - 1];
+    let error = dwarf_file_truth(truncated_table, &original, None).unwrap_err();
+    assert!(error.contains("malformed Mach-O load-command"), "{error}");
+}
+
+#[test]
+fn external_dwarf_checks_original_and_twin_load_command_tables_too() {
+    let (original, data, _) = external_case(2);
+    for (name, changed, expected) in identity_corruptions(original.image_bytes()) {
+        let scratch = Scratch::write(&changed);
+        let changed = Binary::open(&scratch.0).unwrap();
+        let error = dwarf_file_truth(&data, &changed, None).unwrap_err();
+        assert!(error.starts_with("original:") && error.contains(expected), "{name}: {error}");
+        let error = dwarf_file_truth(&data, &original, Some(&changed)).unwrap_err();
+        assert!(error.starts_with("not a twin:") && error.contains(expected), "{name}: {error}");
+    }
+}
+
+#[test]
+fn external_dwarf_rejects_a_twin_uuid_change_even_when_code_is_identical() {
+    let (original, data, _) = external_case(2);
+    let mut changed = original.image_bytes().to_vec();
+    let offset = uuid_command_offset(&changed);
+    changed[offset + 8] ^= 1;
+    let scratch = Scratch::write(&changed);
+    let changed = Binary::open(&scratch.0).unwrap();
+    let error = dwarf_file_truth(&data, &original, Some(&changed)).unwrap_err();
+    assert!(error.contains("not a twin: LC_UUID does not match"), "{error}");
+}
+
+#[test]
+fn external_dwarf_checks_the_last_range_byte_in_the_twin() {
+    let (original, data, low) = external_case(2);
+    let segment = original.segment_containing(low).unwrap();
+    let offset = usize::try_from(segment.file_offset + low + 7 - segment.address).unwrap();
+    let mut bytes = original.image_bytes().to_vec();
+    bytes[offset] ^= 1;
+    let scratch = Scratch::write(&bytes);
+    let changed = Binary::open(&scratch.0).unwrap();
+    let error = dwarf_file_truth(&data, &original, Some(&changed)).unwrap_err();
+    assert!(error.contains("not a twin") && error.contains("code differs"), "{error}");
+}
+
+#[test]
+fn external_dwarf_missing_units_and_unsupported_ranges_are_not_verified_truth() {
+    let (original, data, _) = external_case(3);
+    let report = dwarf_file_truth(&data, &original, Some(&original)).unwrap();
+    assert_eq!(report.unsupported_range_subprograms, 1);
+    assert!(report.notes.iter().any(|note| note.contains("DW_AT_ranges") && note.contains("unsupported")));
+    assert!(report.truth.0.is_empty() && report.no_truth_reason.is_some() && !report.twin_verified);
+    assert_eq!(report.checked_bytes, 0);
+    let object = object::File::parse(original.image_bytes()).unwrap();
+    let empty = external_macho(&original, object.mach_uuid().unwrap(), &[]);
+    let report = dwarf_file_truth(&empty, &original, Some(&original)).unwrap();
+    assert!(report.no_truth_reason.as_deref().unwrap().contains("no external DWARF compilation units"));
+    assert!(report.uuid_comparison.is_some());
+    assert!(report.truth.0.is_empty() && !report.twin_verified);
+}
+
+#[test]
+fn opt_in_owned_cpp_and_rust_macho_use_explicit_uuid_matched_dsym_files() {
+    let Some(root) = owned_root() else { return };
+    for (name, source_function) in
+        [("parity-classes-a64-macho-clang-o1", "dispatch_commands"), ("parity-rust-a64-macho-o1", "parse_config")]
+    {
+        let directory = root.join(name);
+        let mut original = Binary::open(directory.join("symbolized.macho")).unwrap();
+        let mut stripped = Binary::open(directory.join("stripped.macho")).unwrap();
+        original.symbols.clear();
+        original.function_starts.clear();
+        stripped.symbols.clear();
+        stripped.function_starts.clear();
+        let dwarf_path = directory.join("symbolized.macho.dSYM/Contents/Resources/DWARF/symbolized.macho");
+        let data = std::fs::read(dwarf_path).unwrap();
+        let report = dwarf_file_truth(&data, &original, Some(&stripped)).unwrap();
+        assert!(report.no_truth_reason.is_none(), "{name}: {report:?}");
+        assert!(report.twin_verified && report.exact_ranges_checked > 0, "{name}: {report:?}");
+        assert!(report.checked_bytes > 0 && !report.truth.0.is_empty());
+        assert!(report.truth.0.values().any(|name| name.contains(source_function)), "{name}: {report:?}");
+        assert_eq!(report.originating_metadata, "uuid_matched_external_dwarf");
+        let receipt = report.uuid_comparison.unwrap();
+        assert_eq!(receipt.original_uuid, receipt.dwarf_uuid);
+        assert_eq!(receipt.twin_uuid, Some(receipt.original_uuid));
+    }
 }

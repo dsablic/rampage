@@ -118,6 +118,26 @@ fn empty_static_baselines_are_not_vacuous_passes() {
 }
 
 #[test]
+fn completion_gate_rejects_a_valid_but_partial_static_run() {
+    let scratch = Scratch::new();
+    let output = eval()
+        .args(["run", "--suite", "parity", "--require-complete", "--manifest"])
+        .arg(scratch.manifest())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["phase0_complete"], false);
+    assert!(
+        report["acceptance"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| { check["criterion"] == "complete_fixed_model_mcp_task_run" && check["met"] == false })
+    );
+}
+
+#[test]
 fn empty_type_truth_retains_zero_coverage_without_reporting_measured_health() {
     let scratch = Scratch::new();
     let truth = scratch.0.join("truth.json");
@@ -138,6 +158,52 @@ fn empty_type_truth_retains_zero_coverage_without_reporting_measured_health() {
     assert_eq!(report["decompiler_health"]["status"], "not_run");
     assert_eq!(report["decompiler_health"]["attempted"], 0);
     assert_eq!(report["decompiler_health"]["targets"][0]["attempted"], 0);
+}
+
+#[test]
+fn health_sampling_measures_discovery_only_targets_with_a_bounded_explicit_sample() {
+    let scratch = Scratch::new();
+    let output = eval()
+        .args(["run", "--suite", "parity", "--manifest"])
+        .arg(scratch.manifest())
+        .args(["--health-sample", "2"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["decompiler_health"]["status"], "measured");
+    assert_eq!(report["decompiler_health"]["attempted"], 2);
+    assert_eq!(report["decompiler_health"]["targets"][0]["sample_kind"], "address_sorted_function_truth");
+    assert_eq!(report["decompiler_health"]["targets"][0]["functions"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn health_sample_is_shared_across_path_aliases_without_losing_source_paths() {
+    let scratch = Scratch::new();
+    let truth = root().join("tests/fixtures/data/eval-truth-twin-x86_64.json");
+    let manifest = scratch.0.join("aliases.json");
+    std::fs::write(
+        &manifest,
+        json!({"slices":{
+            "direct":{"family":"discovery","target":root().join("tests/fixtures/bin/eval-twin-x86_64.elf"),
+                "truth":truth},
+            "alias":{"family":"discovery","target":root().join("tests/fixtures/data/../bin/eval-twin-x86_64.elf"),
+                "truth":truth}
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let output = eval()
+        .args(["run", "--suite", "parity", "--manifest"])
+        .arg(manifest)
+        .args(["--health-sample", "2"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["decompiler_health"]["attempted"], 2);
+    assert_eq!(report["decompiler_health"]["targets"].as_array().unwrap().len(), 1);
+    assert_eq!(report["decompiler_health"]["targets"][0]["source_paths"].as_array().unwrap().len(), 2);
 }
 
 #[test]

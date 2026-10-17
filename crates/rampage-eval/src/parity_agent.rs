@@ -103,6 +103,7 @@ pub enum AgentDisposition {
 pub struct ProviderUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    pub reasoning_tokens: Option<u64>,
     pub cache_read_input_tokens: Option<u64>,
     pub cache_creation_input_tokens: Option<u64>,
 }
@@ -113,6 +114,7 @@ impl ProviderUsage {
         Self {
             input_tokens: usage["input_tokens"].as_u64(),
             output_tokens: usage["output_tokens"].as_u64(),
+            reasoning_tokens: usage["reasoning_tokens"].as_u64(),
             cache_read_input_tokens: usage["cache_read_input_tokens"].as_u64(),
             cache_creation_input_tokens: usage["cache_creation_input_tokens"].as_u64(),
         }
@@ -122,6 +124,7 @@ impl ProviderUsage {
         let sum = |left: Option<u64>, right: Option<u64>| left?.checked_add(right?);
         self.input_tokens = sum(self.input_tokens, next.input_tokens);
         self.output_tokens = sum(self.output_tokens, next.output_tokens);
+        self.reasoning_tokens = sum(self.reasoning_tokens, next.reasoning_tokens);
         self.cache_read_input_tokens = sum(self.cache_read_input_tokens, next.cache_read_input_tokens);
         self.cache_creation_input_tokens = sum(self.cache_creation_input_tokens, next.cache_creation_input_tokens);
     }
@@ -167,6 +170,7 @@ pub struct AgentRun {
     pub tool_calls: usize,
     pub tool_errors: usize,
     pub catalog_requests: usize,
+    pub catalog_tool_count: usize,
     /// One snapshot per discovery/refresh, serialized actual MCP tool definitions.
     pub catalogs: Vec<RetainedText>,
     pub turns: Vec<ModelTurn>,
@@ -194,6 +198,7 @@ impl AgentRun {
             tool_calls: 0,
             tool_errors: 0,
             catalog_requests: 0,
+            catalog_tool_count: 0,
             catalogs: Vec::new(),
             turns: Vec::new(),
             calls: Vec::new(),
@@ -332,6 +337,7 @@ async fn answer<T: Transport + 'static>(
                 |tool| json!({ "name": tool.name, "description": tool.description, "input_schema": tool.input_schema }),
             )
             .collect();
+        run.catalog_tool_count = definitions.len();
         let request = json!({
             "model": config.model, "max_tokens": config.max_tokens,
             "system": SYSTEM, "messages": messages, "tools": definitions,

@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rampage_agent::Anthropic;
+use rampage_agent::{Anthropic, Transport};
 use rampage_eval::parity_agent::{AgentConfig, AgentRun, ModelSource, run_task};
+use rampage_eval::parity_opencode::{MODEL, OpenCodeTransport};
 use rampage_eval::parity_tasks::ParityTask;
 use rmcp::model::ClientConfig;
 use rmcp::{ClientHandler, ServiceExt};
@@ -44,13 +45,40 @@ impl Drop for FixtureCopy {
     }
 }
 
-pub(super) fn run(task: &ParityTask, original: &Path, model: &str) -> Result<AgentRun, String> {
+pub(super) fn run(
+    task: &ParityTask,
+    original: &Path,
+    model: &str,
+    provider: super::AgentProvider,
+) -> Result<AgentRun, String> {
     let config = AgentConfig::new(model);
-    let Some(transport) = Anthropic::from_environment() else {
-        return Ok(AgentRun::without_provider(&config));
-    };
-    let copied = FixtureCopy::new(original, &task.fixture.sha256)?;
-    let path = copied.path.as_path();
+    match provider {
+        super::AgentProvider::Anthropic => {
+            let Some(transport) = Anthropic::from_environment() else {
+                return Ok(AgentRun::without_provider(&config));
+            };
+            let copied = FixtureCopy::new(original, &task.fixture.sha256)?;
+            run_prepared(task, &copied.path, transport, &config)
+        }
+        super::AgentProvider::Opencode => {
+            if model != MODEL {
+                return Err(format!("OpenCode benchmark model must be {MODEL}"));
+            }
+            let copied = FixtureCopy::new(original, &task.fixture.sha256)?;
+            let directory = copied.directory.join("model-context");
+            std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
+            let transport = OpenCodeTransport::new(&directory)?;
+            run_prepared(task, &copied.path, transport, &config)
+        }
+    }
+}
+
+fn run_prepared<T: Transport + 'static>(
+    task: &ParityTask,
+    path: &Path,
+    transport: T,
+    config: &AgentConfig,
+) -> Result<AgentRun, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -68,7 +96,7 @@ pub(super) fn run(task: &ParityTask, original: &Path, model: &str) -> Result<Age
                 .map_err(|error| error.to_string())
         });
         let client = BenchClient.serve(client).await.map_err(|error| error.to_string())?;
-        let result = run_task(&client, Some(transport), ModelSource::Provider, task, path, &config).await;
+        let result = run_task(&client, Some(transport), ModelSource::Provider, task, path, config).await;
         client.cancel().await.map_err(|error| error.to_string())?;
         server.await.map_err(|error| error.to_string())??;
         Ok(result)

@@ -10,6 +10,7 @@ use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
 
 mod parity;
+mod parity_completion;
 mod parity_graph_files;
 mod parity_live;
 
@@ -40,6 +41,9 @@ enum Command {
         /// Explicitly use concrete embedded DWARF subprogram ranges, checking every retained range in the twin.
         #[arg(long, conflicts_with_all = ["library", "program"])]
         dwarf: bool,
+        /// Explicit standalone thin Mach-O DWARF file; requires a matching nonzero UUID and architecture.
+        #[arg(long, conflicts_with_all = ["dwarf", "library", "program"])]
+        dwarf_file: Option<PathBuf>,
         /// The stripped twin; every truth function's bytes must be identical in it, proving the same layout.
         #[arg(long)]
         stripped: Option<PathBuf>,
@@ -145,6 +149,9 @@ struct RunArgs {
     #[arg(long, value_enum, conflicts_with_all = ["target", "truth", "slice", "family", "metric",
         "min_recall", "min_precision", "databases", "references"])]
     suite: Option<ParitySuite>,
+    /// Require all Phase 0 baseline evidence; wrong task answers remain measured baseline results.
+    #[arg(long, requires = "suite")]
+    require_complete: bool,
     /// Task manifest directory for --suite parity; defaults to the owned evaluator task set.
     #[arg(long, requires = "suite")]
     tasks: Option<PathBuf>,
@@ -154,6 +161,9 @@ struct RunArgs {
     /// Optional generated corpus inventory; unavailable/failed profiles remain visible in the scorecard.
     #[arg(long, requires = "suite")]
     corpus_inventory: Option<PathBuf>,
+    /// Additional non-type targets: decompile the first N sorted truth entries, 1..64; not a random sample.
+    #[arg(long, requires = "suite", value_parser = clap::value_parser!(u64).range(1..=64))]
+    health_sample: Option<u64>,
     /// Graph provenance/binding request; compare actual exports as a separate scorecard workload.
     #[arg(long, requires_all = ["suite", "rampage_graph", "ghidra_graph"])]
     graph_request: Option<PathBuf>,
@@ -164,6 +174,9 @@ struct RunArgs {
     /// Explicit model for opt-in MCP agent tasks (existing Anthropic transport); no model fallback.
     #[arg(long, requires = "suite")]
     agent_model: Option<String>,
+    /// Explicit benchmark provider. OpenCode reuses local authenticated API discovery with a pinned model.
+    #[arg(long, requires = "agent_model", value_enum, default_value_t = AgentProvider::Anthropic)]
+    agent_provider: AgentProvider,
     /// Task IDs to attempt with --agent-model; repeatable. Default selects the first bounded task subset.
     #[arg(long, requires = "agent_model")]
     agent_task: Vec<String>,
@@ -210,14 +223,29 @@ enum ParitySuite {
     Parity,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum AgentProvider {
+    Anthropic,
+    Opencode,
+}
+
+impl AgentProvider {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Opencode => "opencode",
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::ArtifactInfo { input } => artifact_info(&input),
         Command::GraphAgreement { request, rampage_export, ghidra_export } => {
             parity_graph_files::print(&request, &rampage_export, &ghidra_export)
         }
-        Command::Truth { symbolized, stripped, library, program, dwarf } => {
-            truth(&symbolized, stripped.as_deref(), &library, &program, dwarf)
+        Command::Truth { symbolized, stripped, library, program, dwarf, dwarf_file } => {
+            truth(&symbolized, stripped.as_deref(), &library, &program, dwarf, dwarf_file.as_deref())
         }
         Command::TypeTruth { debug, stripped } => type_truth(&debug, stripped.as_deref()),
         Command::Strip { input, output, keep_symbols } => strip(&input, &output, keep_symbols),
@@ -237,6 +265,12 @@ fn open(path: &Path) -> Result<Binary, String> {
 }
 
 fn artifact_info(path: &Path) -> Result<ExitCode, String> {
+    let info = artifact_metadata(path)?;
+    println!("{}", serde_json::to_string(&info).map_err(|error| error.to_string())?);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn artifact_metadata(path: &Path) -> Result<serde_json::Value, String> {
     let binary =
         Binary::open_image_metadata(path, None, None).map_err(|error| format!("{}: {error}", path.display()))?;
     let object = object::File::parse(binary.image_bytes()).map_err(|error| error.to_string())?;
@@ -277,8 +311,7 @@ fn artifact_info(path: &Path) -> Result<ExitCode, String> {
         "thumb_ranges": binary.thumb.len(),
         "loader_warnings": binary.warnings,
     });
-    println!("{}", serde_json::to_string(&info).map_err(|error| error.to_string())?);
-    Ok(ExitCode::SUCCESS)
+    Ok(info)
 }
 
 fn truth(
@@ -287,11 +320,24 @@ fn truth(
     library: &[PathBuf],
     program: &[PathBuf],
     dwarf: bool,
+    dwarf_file: Option<&Path>,
 ) -> Result<ExitCode, String> {
     let binary = open(symbolized)?;
-    if dwarf {
+    if dwarf || dwarf_file.is_some() {
         let twin = stripped.map(open).transpose()?;
-        let report = rampage_eval::dwarf_function_truth(binary.image_bytes(), &binary, twin.as_ref())?;
+        let report = if let Some(path) = dwarf_file {
+            let data = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            rampage_eval::dwarf_file_truth(&data, &binary, twin.as_ref())?
+        } else {
+            rampage_eval::dwarf_function_truth(binary.image_bytes(), &binary, twin.as_ref())?
+        };
+        if let Some(identity) = &report.uuid_comparison {
+            eprintln!(
+                "DWARF: UUID comparison {} == {} (identity evidence, not authentication)",
+                rampage_arch::hex::bytes(&identity.original_uuid),
+                rampage_arch::hex::bytes(&identity.dwarf_uuid)
+            );
+        }
         if let Some(reason) = &report.no_truth_reason {
             return Err(format!("no usable embedded DWARF function truth: {reason}"));
         }
@@ -561,7 +607,7 @@ fn run(args: RunArgs) -> Result<ExitCode, String> {
         };
         vec![(args.slice, slice)]
     };
-    let (evaluation, _health) = evaluate_slices(slices, args.max_disagreements)?;
+    let (evaluation, _health) = evaluate_slices(slices, args.max_disagreements, None)?;
     println!("{}", serde_json::to_string_pretty(&evaluation).map_err(|error| error.to_string())?);
     Ok(if evaluation.passes_gate() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
@@ -585,10 +631,32 @@ fn combined_manifests(paths: &[PathBuf]) -> Result<Vec<(Option<String>, Slice)>,
 fn evaluate_slices(
     slices: Vec<(Option<String>, Slice)>,
     max_disagreements: usize,
+    health_sample: Option<usize>,
 ) -> Result<(Evaluation, serde_json::Value), String> {
     let mut evaluation = Evaluation::default();
     let mut decompiled = Decompiled::new();
-    for (name, slice) in slices {
+    let mut health_addresses: BTreeMap<PathBuf, BTreeSet<u64>> = BTreeMap::new();
+    let mut sampled = BTreeSet::new();
+    let mut source_paths: BTreeMap<PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
+    for (name, mut slice) in slices {
+        if !matches!(slice.family, Family::Toolid)
+            && let Some(path) = &slice.target
+        {
+            let canonical = std::fs::canonicalize(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            source_paths.entry(canonical.clone()).or_default().insert(path.clone());
+            slice.target = Some(canonical);
+        }
+        if let Some(limit) = health_sample
+            && matches!(slice.family, Family::Discovery | Family::Libid)
+            && let Some(path) = &slice.target
+        {
+            let truth = Truth::from_json(&read(&slice.truth)?).map_err(|error| error.to_string())?;
+            let addresses = health_addresses.entry(path.clone()).or_default();
+            addresses.extend(truth.0.keys().copied());
+            while addresses.len() > limit {
+                addresses.pop_last();
+            }
+        }
         let (mut report, default_name) = slice.evaluate(&mut decompiled)?;
         let name = name.unwrap_or(default_name);
         eprintln!("{name}: {}", report.summary());
@@ -598,12 +666,22 @@ fn evaluate_slices(
     for (name, failures) in evaluation.failures() {
         eprintln!("{name}: FAIL {}", failures.join(", "));
     }
+    for (path, addresses) in health_addresses {
+        if addresses.is_empty() || decompiled.get(&path).is_some_and(|batch| !batch.observations.is_empty()) {
+            continue;
+        }
+        let batch = rampage_eval::decompiled_signature_batch(open(&path)?, addresses);
+        sampled.insert(path.clone());
+        decompiled.insert(path, batch);
+    }
     let targets: Vec<_> = decompiled.iter().map(|(path, batch)| {
         let returned = batch.observations.iter().filter(|entry| entry.status == "returned").count();
         let with_warnings = batch.observations.iter()
             .filter(|entry| entry.warning_count.is_some_and(|n| n > 0)).count();
         serde_json::json!({
             "target": path, "attempted": batch.observations.len(), "returned_exact_entry": returned,
+            "source_paths": source_paths.get(path),
+            "sample_kind": if sampled.contains(path) { "address_sorted_function_truth" } else { "type_truth" },
             "errors": batch.observations.iter().filter(|entry| entry.status == "error").count(),
             "address_mismatches": batch.observations.iter().filter(|entry| entry.status == "address_mismatch").count(),
             "with_warnings": with_warnings,
@@ -616,7 +694,7 @@ fn evaluate_slices(
     let attempts: usize = decompiled.values().map(|batch| batch.observations.len()).sum();
     let health = serde_json::json!({
         "status": if attempts == 0 { "not_run" } else { "measured" }, "attempted": attempts, "targets": targets,
-        "limits": "Only type-truth-selected entries are timed. \
+        "limits": "Type-truth entries and explicitly requested sorted-entry samples are timed. \
                    Returned C and no error do not establish correct recovery."
     });
     Ok((evaluation, health))

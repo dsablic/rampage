@@ -6,6 +6,28 @@
   "scope": "Owned reference-corpus pilot only; not the complete Phase 0 corpus or scorecard.",
   "existing_eval_manifest": "tests/fixtures/data/eval-manifest.json",
   "existing_eval_recipe": "tools/eval-corpus.sh",
+  "tool_requirements": {
+    "gcc": {
+      "driver": "GCC override or recipe compiler_driver (x86_64-elf-gcc)",
+      "identity": "Genuine GNU GCC; -dumpmachine must exactly match requested x86_64-elf",
+      "target": "Bare-metal x86_64 ELF freestanding fixtures, not Linux ABI or Linux runtime coverage",
+      "provisioning": "Explicit operator install only; the recipe never downloads or installs tools",
+      "verified_provisioning": {
+        "provider": "homebrew/core",
+        "formula_check_argv": ["brew", "info", "--json=v2", "x86_64-elf-gcc", "x86_64-elf-binutils"],
+        "install_argv": ["env", "HOMEBREW_NO_AUTO_UPDATE=1", "HOMEBREW_NO_INSTALL_CLEANUP=1",
+                         "brew", "install", "x86_64-elf-gcc", "x86_64-elf-binutils"],
+        "gcc_version": "x86_64-elf-gcc (GCC) 16.2.0",
+        "gcc_dumpmachine": "x86_64-elf",
+        "binutils_formula_version": "2.47",
+        "linker_version": "GNU ld (GNU Binutils) 2.47.20260726",
+        "additional_installed_dependencies": {"mpfr": "4.2.2", "libmpc": "1.4.1"},
+        "bottle_platform": "arm64_golden_gate",
+        "tap_git_head": "864c6eaf425301513ab117ef6ed0234ebed118c7",
+        "limits": "Provisioning evidence, not pinned tool versions; each run records actual compiler version and target"
+      }
+    }
+  },
   "output": {
     "root": "Caller-selected target/parity directory (or a child), initially empty",
     "inventory": "corpus.json",
@@ -72,13 +94,14 @@
       "arch": "x86_64",
       "format": "elf",
       "endianness": "little",
-      "target": "x86_64-linux-gnu",
+      "target": "x86_64-elf",
+      "compiler_driver": "x86_64-elf-gcc",
       "extension": "elf",
       "flags": ["-m64", "-O0", "-g", "-gdwarf-4", "-nostdlib", "-ffreestanding", "-fno-builtin",
                 "-static", "-no-pie", "-Wl,-e,main", "-Wl,--build-id=none"],
       "type_truth": true,
       "source_license": "Apache-2.0",
-      "provenance": "Existing owned signature/type fixture; no libc linked"
+      "provenance": "Existing owned signature/type fixture; bare-metal ELF, no libc linked or Linux ABI claim"
     },
     {
       "id": "types-x64-elf-gcc-o2",
@@ -88,13 +111,14 @@
       "arch": "x86_64",
       "format": "elf",
       "endianness": "little",
-      "target": "x86_64-linux-gnu",
+      "target": "x86_64-elf",
+      "compiler_driver": "x86_64-elf-gcc",
       "extension": "elf",
       "flags": ["-m64", "-O2", "-g", "-gdwarf-4", "-nostdlib", "-ffreestanding", "-fno-builtin",
                 "-static", "-no-pie", "-Wl,-e,main", "-Wl,--build-id=none"],
       "type_truth": true,
       "source_license": "Apache-2.0",
-      "provenance": "Existing owned signature/type fixture; no libc linked"
+      "provenance": "Existing owned signature/type fixture; bare-metal ELF, no libc linked or Linux ABI claim"
     },
     {
       "id": "types-x64-elf-clang-o2",
@@ -232,6 +256,8 @@
     },
     {
       "id": "parity-classes-a64-macho-clang-o1",
+      "truth_source": "uuid_matched_dsym",
+      "dwarf_file": "parity-classes-a64-macho-clang-o1/symbolized.macho.dSYM/Contents/Resources/DWARF/symbolized.macho",
       "program": "parity-classes",
       "source": "tests/fixtures/src/parity-classes.cpp",
       "compiler": "clang++",
@@ -285,6 +311,8 @@
     },
     {
       "id": "parity-rust-a64-macho-o1",
+      "truth_source": "uuid_matched_dsym",
+      "dwarf_file": "parity-rust-a64-macho-o1/symbolized.macho.dSYM/Contents/Resources/DWARF/symbolized.macho",
       "program": "parity-rust-runtime",
       "source": "tests/fixtures/src/parity-runtime.rs",
       "compiler": "rustc",

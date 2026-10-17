@@ -5,6 +5,7 @@
 #        bash tools/parity-corpus.sh target/parity/RUN --all
 # Requires jq, a SHA-256 tool and an existing rampage-eval; never builds the evaluator or runs target binaries.
 # GCC, CLANG, CXX, ZIG, GO, RUSTC, LLVM_STRIP, LLVM_OBJCOPY and RAMPAGE_EVAL name single executables.
+# GCC defaults to each recipe's compiler_driver; its -dumpmachine must exactly match the requested target.
 # LLVM_OBJCOPY explicitly selects objcopy instead of llvm-strip for non-ELF outputs; no automatic fallback.
 # Requires rampage-eval artifact-info; headers and removed metadata are checked before emitting slices.
 # corpus.json inventories requested/observed metadata and command outcomes; manifest.json holds verified slices.
@@ -195,7 +196,7 @@ while IFS= read -r entry; do
     esac
     build_env=("LC_ALL=$LC_ALL" "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH")
     case "$compiler" in
-        gcc) driver=${GCC:-gcc} ;;
+        gcc) driver=${GCC:-$(jq -r '.compiler_driver' <<<"$entry")} ;;
         clang) driver=${CLANG:-clang} ;;
         clang++) driver=${CXX:-clang++} ;;
         zig) driver=${ZIG:-zig} ;;
@@ -270,9 +271,15 @@ while IFS= read -r entry; do
             continue
         fi
         update_entry "$(jq -cn --arg machine "$machine" '{compiler_machine: $machine}')"
-        if ! grep -Eiq 'gcc|Free Software Foundation' "$dir/compiler-version.txt" ||
-            [[ "$machine" != x86_64*linux* ]]; then
-            record_status unavailable "GCC x86_64 Linux driver required (Apple gcc alias is not GCC)"
+        if ! grep -Fq 'Free Software Foundation' "$dir/compiler-version.txt" ||
+            grep -Eiq 'clang' "$dir/compiler-version.txt"; then
+            record_status unavailable "genuine GNU GCC required (Clang and Apple gcc aliases are not GCC)"
+            incomplete=1
+            continue
+        fi
+        if [[ "$target/$arch/$format/$(jq -r '.endianness' <<<"$entry")" != \
+            x86_64-elf/x86_64/elf/little || "$machine" != "$target" ]]; then
+            record_status unavailable "GCC -dumpmachine must match the explicit x86_64-elf freestanding recipe"
             incomplete=1
             continue
         fi
@@ -363,6 +370,17 @@ while IFS= read -r entry; do
                 continue
             fi
             truth_argv+=(--dwarf)
+            ;;
+        uuid_matched_dsym)
+            debug_file=$(jq -r '.dwarf_file // empty' <<<"$entry")
+            if [[ -z "$debug_file" || ! -f "$out/$debug_file" ]]; then
+                record_status unavailable "explicit standalone dSYM file is missing"
+                incomplete=1
+                continue
+            fi
+            truth_argv+=(--dwarf-file "$out/$debug_file")
+            update_entry "$(jq -cn --arg path "$debug_file" --arg hash "$(sha256 "$out/$debug_file")" \
+                '{debug_file: {path: $path, sha256: $hash}}')"
             ;;
         *) record_status failed "unsupported truth source: $truth_source"; incomplete=1; continue ;;
     esac

@@ -1,4 +1,4 @@
-//! Function-start truth from checked embedded DWARF low/high PCs, without function discovery.
+//! Function-start truth from checked DWARF low/high PCs, without function discovery.
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -18,16 +18,28 @@ const MAX_NAME_BYTES: usize = 4096;
 const MAX_OUTPUT_NAME_BYTES: usize = 64 * 1024 * 1024;
 const MAX_NOTES: usize = 128;
 const MAX_REFERENCE_DEPTH: usize = 16;
+const MAX_MACHO_LOAD_COMMANDS: u32 = 65_536;
+const MAX_MACHO_LOAD_COMMAND_BYTES: usize = 16 * 1024 * 1024;
 
 type Reader<'a> = EndianSlice<'a, RunTimeEndian>;
 type Unit<'a> = gimli::Unit<Reader<'a>>;
 type Entry<'a> = gimli::DebuggingInformationEntry<Reader<'a>>;
+
+/// Equal LC_UUID values from completely checked command tables, not authentication of the files or producer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UuidComparisonReceipt {
+    pub original_uuid: [u8; 16],
+    pub dwarf_uuid: [u8; 16],
+    pub twin_uuid: Option<[u8; 16]>,
+}
 
 /// A nonempty truth is evidence only for the retained concrete subprograms, not full code coverage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
     pub truth: crate::Truth,
     pub originating_metadata: &'static str,
+    /// Present only for explicit external Mach-O DWARF after nonzero UUID equality was checked.
+    pub uuid_comparison: Option<UuidComparisonReceipt>,
     /// Nonempty ranges checked in the original and, when supplied, at the same VAs in the twin.
     /// One checked low/high-PC range per retained DIE, including aliases; never inferred symbol extents.
     pub exact_ranges_checked: usize,
@@ -49,6 +61,7 @@ impl Report {
         Self {
             truth: crate::Truth::default(),
             originating_metadata: "embedded_dwarf",
+            uuid_comparison: None,
             exact_ranges_checked: 0,
             checked_bytes: 0,
             twin_verified: false,
@@ -92,22 +105,165 @@ pub fn dwarf_function_truth(data: &[u8], original: &Binary, stripped: Option<&Bi
     if data != original.image_bytes() {
         return Err("DWARF bytes do not match the original loaded image".to_owned());
     }
+    check_twin(original, stripped)?;
+    let object = object::File::parse(data).map_err(|error| format!("DWARF image: {error}"))?;
+    if !matches!(object.kind(), object::ObjectKind::Executable | object::ObjectKind::Dynamic) {
+        return Err("DWARF function truth requires a linked executable image".to_owned());
+    }
+    read_truth(&object, original, stripped, Report::new())
+}
+
+/// Read an explicitly supplied thin Mach-O DWARF file whose nonzero LC_UUID matches `original`.
+///
+/// No paths are searched or files opened. Both original and optional twin must be standalone thin
+/// images, not implicitly selected universal slices. Raw CPU type/subtype (including capability bits),
+/// address width, and endianness must match exactly. Every complete declared load-command table must
+/// contain exactly one nonzero LC_UUID of size 24, and a supplied twin's UUID must also match original.
+/// UUID equality is a comparison receipt, not authentication.
+/// The debug file need not contain code: every retained range is checked against executable-backed
+/// bytes in `original` and, when supplied, identical bytes at the same VAs in `stripped`.
+/// All embedded-reader range, naming, omission, and NoTruth rules also apply here.
+pub fn dwarf_file_truth(data: &[u8], original: &Binary, stripped: Option<&Binary>) -> Result<Report, String> {
+    check_twin(original, stripped)?;
+    if original.file_bytes() != original.image_bytes() {
+        return Err("external DWARF requires a standalone thin Mach-O original, not a selected slice".to_owned());
+    }
+    let original_identity = macho_identity(original.image_bytes(), "original")?;
+    let original_object = thin_macho(original.image_bytes(), "original")?;
+    if !matches!(original_object.kind(), object::ObjectKind::Executable | object::ObjectKind::Dynamic) {
+        return Err("DWARF function truth requires a linked executable image".to_owned());
+    }
+    let dwarf_identity = macho_identity(data, "external DWARF")?;
+    check_macho_architecture(&original_identity, &dwarf_identity, "external DWARF")?;
+    let dwarf_object = thin_macho(data, "external DWARF")?;
+    let twin_uuid = if let Some(twin) = stripped {
+        if twin.file_bytes() != twin.image_bytes() {
+            return Err("not a twin: external DWARF requires a standalone thin Mach-O twin".to_owned());
+        }
+        let identity = macho_identity(twin.image_bytes(), "not a twin")?;
+        check_macho_architecture(&original_identity, &identity, "not a twin")?;
+        if identity.uuid != original_identity.uuid {
+            return Err("not a twin: LC_UUID does not match the original LC_UUID".to_owned());
+        }
+        Some(identity.uuid)
+    } else {
+        None
+    };
+    let original_uuid = original_identity.uuid;
+    let dwarf_uuid = dwarf_identity.uuid;
+    if original_uuid != dwarf_uuid {
+        return Err("external DWARF LC_UUID does not match the original LC_UUID".to_owned());
+    }
+    let mut report = Report::new();
+    report.originating_metadata = "uuid_matched_external_dwarf";
+    report.uuid_comparison = Some(UuidComparisonReceipt { original_uuid, dwarf_uuid, twin_uuid });
+    read_truth(&dwarf_object, original, stripped, report)
+}
+
+fn check_twin(original: &Binary, stripped: Option<&Binary>) -> Result<(), String> {
     if let Some(twin) = stripped
         && (original.format != twin.format || original.arch != twin.arch || original.big_endian != twin.big_endian)
     {
         return Err("not a twin: format, architecture, or endianness differs".to_owned());
     }
-    let object = object::File::parse(data).map_err(|error| format!("DWARF image: {error}"))?;
-    if !matches!(object.kind(), object::ObjectKind::Executable | object::ObjectKind::Dynamic) {
-        return Err("DWARF function truth requires a linked executable image".to_owned());
+    Ok(())
+}
+
+fn thin_macho<'a>(data: &'a [u8], label: &str) -> Result<object::File<'a>, String> {
+    let object = object::File::parse(data).map_err(|error| format!("{label}: expected thin Mach-O: {error}"))?;
+    if !matches!(object, object::File::MachO32(_) | object::File::MachO64(_)) {
+        return Err(format!("{label}: expected thin Mach-O"));
     }
+    Ok(object)
+}
+
+struct MachoIdentity {
+    cpu_type: u32,
+    cpu_subtype: u32,
+    is_64: bool,
+    big_endian: bool,
+    uuid: [u8; 16],
+}
+
+fn check_macho_architecture(original: &MachoIdentity, other: &MachoIdentity, label: &str) -> Result<(), String> {
+    if original.cpu_type != other.cpu_type
+        || original.cpu_subtype != other.cpu_subtype
+        || original.is_64 != other.is_64
+        || original.big_endian != other.big_endian
+    {
+        return Err(format!("{label}: Mach-O architecture or endianness differs from original"));
+    }
+    Ok(())
+}
+
+fn macho_identity(data: &[u8], label: &str) -> Result<MachoIdentity, String> {
+    let (is_64, big_endian) = match data.get(..4) {
+        Some([0xce, 0xfa, 0xed, 0xfe]) => (false, false),
+        Some([0xcf, 0xfa, 0xed, 0xfe]) => (true, false),
+        Some([0xfe, 0xed, 0xfa, 0xce]) => (false, true),
+        Some([0xfe, 0xed, 0xfa, 0xcf]) => (true, true),
+        _ => return Err(format!("{label}: expected thin Mach-O")),
+    };
+    let malformed = || format!("{label}: malformed Mach-O load-command table");
+    let word = |offset: usize| -> Result<u32, String> {
+        let end = offset.checked_add(4).ok_or_else(malformed)?;
+        let bytes: [u8; 4] = data.get(offset..end).ok_or_else(malformed)?.try_into().map_err(|_| malformed())?;
+        Ok(if big_endian { u32::from_be_bytes(bytes) } else { u32::from_le_bytes(bytes) })
+    };
+    let header_size: usize = if is_64 { 32 } else { 28 };
+    let alignment = if is_64 { 8 } else { 4 };
+    let count = word(16)?;
+    let size = usize::try_from(word(20)?).map_err(|_| malformed())?;
+    if count > MAX_MACHO_LOAD_COMMANDS || size > MAX_MACHO_LOAD_COMMAND_BYTES {
+        return Err(format!("{label}: Mach-O load-command identity limit exceeded"));
+    }
+    let end = header_size.checked_add(size).ok_or_else(malformed)?;
+    data.get(..end).ok_or_else(malformed)?;
+    let mut offset = header_size;
+    let mut uuid: Option<[u8; 16]> = None;
+    for _ in 0..count {
+        if offset.checked_add(8).is_none_or(|next| next > end) {
+            return Err(malformed());
+        }
+        let command = word(offset)?;
+        let command_size = usize::try_from(word(offset + 4)?).map_err(|_| malformed())?;
+        let next = offset.checked_add(command_size).ok_or_else(malformed)?;
+        if command_size < 8 || command_size % alignment != 0 || next > end {
+            return Err(malformed());
+        }
+        if command == 0x1b {
+            if command_size != 24 {
+                return Err(format!("{label}: malformed LC_UUID command size; expected 24"));
+            }
+            if uuid.is_some() {
+                return Err(format!("{label}: duplicate LC_UUID commands"));
+            }
+            uuid = Some(data[offset + 8..next].try_into().map_err(|_| malformed())?);
+        }
+        offset = next;
+    }
+    if offset != end {
+        return Err(malformed());
+    }
+    let uuid = uuid.filter(|value| *value != [0; 16]).ok_or_else(|| format!("{label}: missing or zero LC_UUID"))?;
+    Ok(MachoIdentity { cpu_type: word(4)?, cpu_subtype: word(8)?, is_64, big_endian, uuid })
+}
+
+fn read_truth(
+    object: &object::File<'_>,
+    original: &Binary,
+    stripped: Option<&Binary>,
+    mut report: Report,
+) -> Result<Report, String> {
     let endian = if object.is_little_endian() { RunTimeEndian::Little } else { RunTimeEndian::Big };
     let mut metadata_bytes = 0_u64;
     let sections = DwarfSections::load(|id| -> Result<Cow<'_, [u8]>, String> {
         let macho_name = format!("__{}", id.name().trim_start_matches('.'));
         let compressed_name = id.name().replacen(".debug_", ".zdebug_", 1);
         let macho_compressed_name = format!("__{}", compressed_name.trim_start_matches('.'));
-        let section = object.section_by_name(id.name()).or_else(|| object.section_by_name(&macho_name))
+        let section = object
+            .section_by_name(id.name())
+            .or_else(|| object.section_by_name(&macho_name))
             .or_else(|| object.section_by_name(&compressed_name))
             .or_else(|| object.section_by_name(&macho_compressed_name));
         let Some(section) = section else { return Ok(Cow::Borrowed(&[])) };
@@ -115,7 +271,7 @@ pub fn dwarf_function_truth(data: &[u8], original: &Binary, stripped: Option<&Bi
         metadata_bytes = metadata_bytes
             .checked_add(compressed.uncompressed_size)
             .filter(|size| *size <= MAX_METADATA_BYTES)
-            .ok_or_else(|| format!("embedded DWARF exceeds {MAX_METADATA_BYTES} uncompressed bytes"))?;
+            .ok_or_else(|| format!("DWARF exceeds {MAX_METADATA_BYTES} uncompressed bytes"))?;
         let bytes = compressed.decompress().map_err(|error| format!("{}: {error}", id.name()))?;
         if bytes.len() as u64 != compressed.uncompressed_size {
             return Err(format!("{}: uncompressed metadata size differs from its header", id.name()));
@@ -123,7 +279,6 @@ pub fn dwarf_function_truth(data: &[u8], original: &Binary, stripped: Option<&Bi
         Ok(bytes)
     })?;
     let dwarf = sections.borrow(|bytes| EndianSlice::new(bytes, endian));
-    let mut report = Report::new();
     let mut aliases = BTreeSet::new();
     let mut units = dwarf.units();
     let (mut unit_count, mut dies, mut functions, mut name_bytes) = (0, 0, 0, 0);
@@ -213,7 +368,8 @@ pub fn dwarf_function_truth(data: &[u8], original: &Binary, stripped: Option<&Bi
     }
     if report.truth.0.is_empty() {
         report.no_truth_reason = Some(if unit_count == 0 {
-            "no embedded DWARF compilation units; no function truth".to_owned()
+            let source = if report.uuid_comparison.is_some() { "external" } else { "embedded" };
+            format!("no {source} DWARF compilation units; no function truth")
         } else {
             "no named concrete DWARF subprograms with usable code ranges; no function truth".to_owned()
         });
@@ -225,7 +381,7 @@ pub fn dwarf_function_truth(data: &[u8], original: &Binary, stripped: Option<&Bi
 }
 
 fn dwarf_error(error: gimli::Error) -> String {
-    format!("embedded DWARF: {error}")
+    format!("DWARF: {error}")
 }
 
 fn is_declaration(entry: &Entry<'_>) -> bool {

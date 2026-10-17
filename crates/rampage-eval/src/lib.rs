@@ -18,6 +18,7 @@
 
 pub mod parity_agent;
 pub mod parity_graph;
+pub mod parity_opencode;
 pub mod parity_tasks;
 mod toolid;
 mod types;
@@ -401,7 +402,7 @@ pub fn strip(elf: &[u8], keep_symbols: bool) -> Result<Vec<u8>, String> {
 
 mod dwarf_truth;
 mod strip_mips;
-pub use dwarf_truth::{Report as DwarfTruthReport, dwarf_function_truth};
+pub use dwarf_truth::{Report as DwarfTruthReport, UuidComparisonReceipt, dwarf_file_truth, dwarf_function_truth};
 
 /// Truncates `entries` to `limit`, dropping the least actionable first, and returns how many were dropped.
 fn keep_most_actionable<T>(
