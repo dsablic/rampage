@@ -1,0 +1,100 @@
+{
+  "measurement": "phase1-2-type-library",
+  "design": "paired-owned-fixture-not-blind-whole-program-re",
+  "requested_model": "github-copilot/gpt-6.1-sol",
+  "model_variant": "default",
+  "fixture_sha256": "d0c6d50527619eedcc1d5a1c78e3417362206e526d749e5b4d78a0eb85690648",
+  "agent_summary": {
+    "disposition": "answer",
+    "answer_contract_matches": false,
+    "model_source": "provider",
+    "model_turns": 6,
+    "model_errors": 0,
+    "tool_requests": 10,
+    "tool_calls": 10,
+    "tool_errors": 0,
+    "catalog_requests": 2,
+    "catalog_tool_count": 29,
+    "catalog_inventory": [
+      {"complete": true, "required_tools": [
+        {"name": "declare_types", "present": false}, {"name": "delete_type", "present": false},
+        {"name": "list_types", "present": false}, {"name": "get_type", "present": false}
+      ]},
+      {"complete": true, "required_tools": [
+        {"name": "declare_types", "present": true}, {"name": "delete_type", "present": true},
+        {"name": "list_types", "present": true}, {"name": "get_type", "present": true}
+      ]}
+    ],
+    "usage": {
+      "input_tokens": 56878, "output_tokens": 935, "reasoning_tokens": 211,
+      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0
+    },
+    "agent_wall_time_ms": 55442,
+    "agent_timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+  },
+  "evaluator_tool_calls": 12,
+  "evaluator_tool_errors": 2,
+  "evaluator_transport_errors": 0,
+  "expected_missing_type_errors": 2,
+  "verification_wall_time_ms": 1577,
+  "native_state_verified": true,
+  "task_verified": false,
+  "model_tool_workflow_verified": true,
+  "initial_verification": {
+    "native_state_verified": true, "state_layout_verified": true, "alias_layout_verified": true,
+    "enum_verified": true, "native_list_query_succeeded": true, "scratch_missing_mcp_is_error": true,
+    "annotation_log_persisted": true,
+    "annotation_library_sha256": "6ace4cc32dd6f9ecb3bae98e7fc60d3840b2243f51a08ebe083ff9fb207164fd"
+  },
+  "fresh_server_verification": {
+    "native_state_verified": true, "state_layout_verified": true, "alias_layout_verified": true,
+    "enum_verified": true, "native_list_query_succeeded": true, "scratch_missing_mcp_is_error": true,
+    "annotation_log_persisted": true,
+    "annotation_library_sha256": "6ace4cc32dd6f9ecb3bae98e7fc60d3840b2243f51a08ebe083ff9fb207164fd"
+  },
+  "stable_annotation_log": true,
+  "limits": {"max_turns": 12, "max_tool_calls": 24},
+  "owned_output_wall_time_ms": 57813,
+  "owned_output_timing_boundary": "fixture preparation through verification, shutdown and cleanup",
+  "provenance": {
+    "evaluator_binary_sha256": "0d57a7ff733fd55e68c53ad3291474b4c7eae501f14b457d7a033dde491e9540",
+    "collector_source_sha256": "40cdb7066c0b64bc752af2478835e027aff80fb7b79cde05383d1d98eff8ab71",
+    "measured_unix_ms": 1792261001773,
+    "source_report_sha256": "37b5c0cf0c3536cb52e93b33df3757ee1c60eb65da26eaa1ca3fb8b418c80af8",
+    "source_revision": "e01d0bd909080f9e5f34774cc0cfb3470f10316f",
+    "worktree_measurement": true,
+    "collector_sources_match_revision": true
+  },
+  "before": {
+    "source_revision": "81f0ebc",
+    "source": "Actual MCP enable_tools(types) inventory before implementation",
+    "available_required_library_tools": 0,
+    "required_library_tools": ["declare_types", "list_types", "get_type", "delete_type"]
+  },
+  "source_layout_evidence": {
+    "recipe": "crates/rampage-eval/tasks/phase1-2/type-library.toml",
+    "compiler": "Clang 23.1.3 with LLD",
+    "executed": false,
+    "x64_values": [32, 0, 4, 8, 16, 24, 7, 1, 5, 6, 2, 5, 1, 8, 4],
+    "x86_values": [24, 0, 4, 8, 16, 20, 7, 1, 5, 6, 2, 5, 1, 8, 4],
+    "native_x64_layout_checks": 15,
+    "native_x64_layout_checks_matched": 15,
+    "callback_checks": "Declared aggregate return/argument types and names, not hidden or indirect ABI parameters"
+  },
+  "post_measurement_fixes": [
+    {
+      "revision": "67b5f03",
+      "change": "Bounded detached read snapshots do not create writer lock files beside protected inputs.",
+      "real_check": "Installed ARM64 input: native int4 size 4, alignment 4; no annotation or lock files created.",
+      "live_model_task_retried": false
+    }
+  ],
+  "limitations": [
+    "This is the first live run of the final task. Its strict answer contract failed; no retry or task regrading was used.",
+    "Correct native state and tool workflow do not turn a failed final summary into a successful task score.",
+    "Two evaluator errors are expected missing-scratch checks, one per server; they are not transport failures.",
+    "Owned supplied declarations and compiler-layout fixtures are not blind struct recovery or full-workspace/release acceptance.",
+    "The real installed-image read-only check subsequently required removing writer-lock creation from detached read queries; the measured run remains bound to its original source revision.",
+    "Phase 0 and Phase 1.1 publications are unchanged."
+  ]
+}

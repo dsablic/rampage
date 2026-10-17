@@ -1,6 +1,6 @@
 # To do
 
-## Parity roadmap: Phases 0 and 1.1 completed
+## Parity roadmap: Phases 0, 1.1 and 1.2 completed
 
 Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One milestone at a time;
 parallel slices share central builds and undergo fresh-context review before publication.
@@ -40,11 +40,33 @@ Limits: one whole register/stack mapping and same-size types. No UI local editor
 propagation. The accepted Phase 0 publication is unchanged; the current capability probe now expects this feature.
 Evidence and measurement limits are in `docs/benchmarks.md` and `docs/local-variables.md`.
 
-## Next milestone: Phase 1.2, queued but not started
+## Phase 1.2: project type library completed
 
-- [ ] Project-level type library and bounded declaration/layout inspection, following the roadmap.
+- [x] Project-level named declarations, bounded native layout inventory/inspection and dependency-checked deletion.
+- [x] Bounded C header import and permissively licensed minimal C/POSIX/Win32 type profiles.
+- [x] Native/API/MCP undo/replay acceptance, compiler-matched layouts, measured owned workload and independent review.
+- [x] Preserve ordinary legacy undo refresh, oversized-comment/long-history compatibility and empty-history no-op.
+- [x] Read queries use bounded detached snapshots; real protected-image inspection creates no annotation/lock files.
+- [x] Publish the first live run without retry/regrading: correct native state, workflow and fresh-server persistence,
+  10 MCP calls / 6 model turns; strict final-summary contract failed and remains `task_verified=false`.
+
+Implementation `e01d0bd`; protected-input read fix `67b5f03`. All six changed-crate suites and scoped all-target
+Clippy passed. C/header limits and the failed strict-summary result are recorded in `docs/benchmarks.md`.
+
+## Active milestone: Phase 1.3, data and operand typing
+
+- [ ] Measure typed arrays/struct data, enum/offset operands and typed range display on an owned fixture.
+- [ ] Apply native named types to data without changing binary bytes; preserve annotation undo/replay.
+- [ ] Bounded typed data and disassembly views, MCP acceptance and measured workflow with independent review.
 - [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no class
   rows; symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
+
+### Authorized remaining Phase 1 milestones (start one at a time)
+
+- [ ] 1.3 Apply types to data and operands (active).
+- [ ] 1.4 Stack-frame inspection.
+- [ ] 1.5 Type propagation with analyst edits taking priority.
+- [ ] 1.6 PDB/DWARF type import with identity and layout checks.
 
 ## Audio/firmware investigation acceptance workloads
 

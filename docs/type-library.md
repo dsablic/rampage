@@ -36,6 +36,7 @@ Packing options apply to user declarations; bundled profiles retain their stated
 
 Declarations, replacements and deletions validate the complete prospective library and its consumers before
 appending an annotation edit. `undo`, `redo`, shared-log refresh and reopening restore the same declarations.
+Read queries use bounded detached snapshots and do not create annotation or writer-lock files beside inputs.
 Deletion does not cascade silently. A multi-name declaration requires explicit `definition_group=true`;
 its receipt names every removed type, and references from outside that group still refuse deletion.
 Invalid declarations, broken dependencies and oversized receipts do not

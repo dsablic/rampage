@@ -6,6 +6,49 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 1.2 — project type library and native layout inspection
+
+**Run:** 2026-10-17, collector sources committed at `e01d0bd`, with documentation and machine-local files still
+dirty/untracked. The [measurement](benchmarks/phase1-2-2026-10-17.json) retains exact source, executable, fixture
+and raw-report hashes, numeric execution bounds and complete compact catalog evidence.
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Project-library MCP surface | 0/4 required tools | `declare_types`, `list_types`, `get_type`, `delete_type` |
+| Owned x64 native layouts | No project inspection surface | 15/15 size/offset facts match compiler data |
+| Packing and target widths | Address-bound declarations only | Explicit packing; C/POSIX and 32-/64-bit Windows profiles |
+| Callback metadata | No query surface | Declared types/names and calling model, not hidden ABI storage parameters |
+| Live MCP workflow | Not runnable through the missing tools | Correct exact retained types, scratch deletion and persistence |
+| Strict live final-answer contract | Unmeasured | **Failed**; not counted as task success |
+
+The first live run used `github-copilot/gpt-6.1-sol`, variant `default`: **10 MCP calls, 6 model turns**, 56878
+reported input / 935 output / 211 reasoning tokens, 55.442 s task wall time, no model/tool errors. Native checks
+and a fresh server verified the exact retained struct, pointer alias and enum, deletion of the independent
+scratch declaration, and an unchanged persisted library. The model's final summary failed the strict answer
+contract, so `task_verified=false` remains published. No live retry or regrading was used to improve that result.
+The two evaluator tool errors are deliberate missing-scratch checks, not transport failures.
+
+Source-built Clang 23.1.3 x64/x86 fixtures provide `sizeof`/`offsetof` tables inspected through MCP without target
+execution. They distinguish 32-/64-bit record sizes, nested packing and restored natural alignment. Additional
+compiler IR shows hidden return storage and Windows indirect aggregate arguments; native/worker/MCP tests ensure
+callback inspection reports the declared C signature instead. New enum construction uses the selected C `int`
+width rather than the earlier 8-byte default exposed during implementation.
+
+API, decompiler, worker, MCP, evaluator and UI suites, scoped all-target Clippy, grader regressions and independent
+reviews passed. Ordinary oversized comments/long histories remain undoable; blocked legacy undo still displays
+other clients' refreshed edits. A real installed ARM64 query found that read-only inspection incorrectly tried
+to create a writer lock beside a protected image. A subsequent detached-read fix preserved bounds and returned
+the native 4-byte integer layout without creating commercial annotations or lock files; the live measurement
+remains bound to its original source revision.
+
+Limits: bounded type-only C/header preparation and explicit minimal ABI profiles, not arbitrary preprocessing,
+a full SDK or blind producer-layout recovery. Bitfields and widened/unsigned C enums outside signed target `int`
+remain unsupported. Phase 0 and Phase 1.1 evidence stays frozen; Phase 1 acceptance still needs its later milestones.
+
+```sh
+cargo run --locked -j 2 -p rampage-eval --example type_library -- tests/data/local-variables-x64.snapshot.json
+```
+
 ## Phase 1.1 — storage-keyed local and parameter typing
 
 **Run:** 2026-10-17, collector sources committed at `1a75371` (based on `0551311`), with documentation and
