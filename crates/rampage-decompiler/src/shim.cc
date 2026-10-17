@@ -11,6 +11,7 @@
 #include "tokens.hh"
 #include "results.hh"
 #include "local_variables.hh"
+#include "type_hints.hh"
 #include "type_library.hh"
 
 #include <cstdlib>
@@ -89,6 +90,10 @@ public:
     void attachToSpace(AddrSpace *id) { spaceid = id; }
 
     bool mapped(uintb address) const { return segmentAt(address) != nullptr; }
+    bool backedCode(uintb address) const {
+        const Segment *segment = segmentAt(address);
+        return segment != nullptr && segment->executable && address - segment->base < segment->bytes.size();
+    }
     bool dataRange(uintb address, uintb size) const {
         if (size == 0 || size - 1 > UINT64_MAX - address) return false;
         uintb copied = 0;
@@ -177,6 +182,7 @@ public:
 
     bool mapped(uintb address) const { return image->mapped(address); }
     bool dataRange(uintb address, uintb size) const { return image->dataRange(address, size); }
+    bool backedCode(uintb address) const { return image->backedCode(address); }
 
     // Until buildLoader hands the image to `loader` (which the base destructor frees), we still own it. This
     // keeps ownership correct when init fails partway, so the error path neither leaks nor double-frees.
@@ -199,6 +205,9 @@ struct Handle {
     std::string typeResult;
     std::map<Datatype *, int4> typePacking;
     std::map<uintb, std::vector<rampage::LocalOverride>> localOverrides;
+    std::map<uintb, std::vector<rampage::TypeHint>> typeHints;
+    std::map<uintb, rampage::CalleeTypeShape> calleeTypeShapes;
+    bool preparingTypeHintContext = false;
     bool poisoned = false;
     bool fallbackError = false;
     bool unsafeCleanup = false;
@@ -749,6 +758,59 @@ const char *rampage_decomp_local_variables(void *h, uint64_t function,
     });
 }
 
+const char *rampage_decomp_type_hints(void *h, uint64_t function,
+                                    const rampage::NativeTypeHint *records, size_t count) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &nativeMutation) {
+        nativeMutation = true;
+        auto hints = rampage::prepareTypeHints(handle->arch, records, count);
+        if (count != 0 && handle->typeHints.count(function) == 0 && handle->typeHints.size() >= 32)
+            throw LowlevelError("Native type hint functions exceed 32");
+        if (count == 0) handle->typeHints.erase(function);
+        else handle->typeHints[function] = std::move(hints);
+        handle->calleeTypeShapes.clear();
+        handle->tokens.clear();
+        handle->results.clear();
+    });
+}
+
+// Internal native regression bridge: no public Rust API or worker operation exposes this helper.
+const char *rampage_decomp_test_hint_input_identity(void *h, uint64_t function) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &nativeMutation) {
+        nativeMutation = true;
+        Funcdata *fd = handle->arch->symboltab->getGlobalScope()->queryFunction(
+            Address(handle->arch->getDefaultCodeSpace(), function));
+        if (fd == nullptr || !fd->isProcComplete() || fd->getFuncProto().numParams() == 0)
+            throw LowlevelError("Native hint identity regression requires a recovered input");
+        const auto *parameter = fd->getFuncProto().getParam(0);
+        Varnode *input = fd->findVarnodeInput(parameter->getSize(), parameter->getAddress());
+        Datatype *hint = handle->arch->types->findByName("HintState");
+        if (input == nullptr || hint == nullptr)
+            throw LowlevelError("Native hint identity regression setup is incomplete");
+        hint = handle->arch->types->getTypePointer(input->getSize(), hint,
+            handle->arch->getDefaultDataSpace()->getWordSize());
+        try {
+            // The selector intentionally has unrestricted use ranges. The later RDI definition has
+            // the same storage and width but no symbol mapping: it must not inherit an input hint.
+            rampage::TypeHintContext context{{}, nullptr};
+            context.own.push_back({{input->getAddr(), input->getSize(), {}, "", hint}, false, true});
+            fd->setInferenceHint(rampage::nativeInferenceHint, &context);
+            bool identityPreserved = InferenceHintIdentityProbe::check(*fd, input, hint);
+            fd->setInferenceHint(nullptr, nullptr);
+            if (!identityPreserved)
+                throw LowlevelError("Unmapped register reuse acquired an unrelated parameter hint");
+        } catch (...) {
+            fd->setInferenceHint(nullptr, nullptr);
+            handle->arch->clearAnalysis(fd);
+            throw;
+        }
+        handle->arch->clearAnalysis(fd);
+        handle->tokens.clear();
+        handle->results.clear();
+    });
+}
+
 // Read-only: do not route assertion failures through the mutation/poisoning path. Publish no partial layout.
 const char *rampage_decomp_inspect_layout(void *h, const char *name, size_t nameLength, PlainLayout *output) noexcept {
     Handle *handle = static_cast<Handle *>(h);
@@ -810,6 +872,8 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
     Architecture *arch = handle->arch;
     Funcdata *fd = nullptr;
     std::vector<rampage::SavedLocal> savedLocals;
+    rampage::TypeHintContext hintContext{{}, nullptr};
+    hintContext.locals = &savedLocals;
     bool nativeMutation = false;
     handle->tokens.clear();
     handle->results.clear();
@@ -832,22 +896,106 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
             if (funcname.empty()) arch->nameFunction(entry, funcname);
             fd = global->addFunction(entry, funcname)->getFunction();
         }
+        fd->setInferenceHint(rampage::nativeInferenceHint, &hintContext);
+        fd->setCallInferenceHint(rampage::nativeCallInferenceHint, &hintContext);
         arch->clearAnalysis(fd);
         // The entry is not a lower flow bound: cold blocks and tail targets can precede it.
         Address low(arch->getDefaultCodeSpace(), 0);
         Address high(arch->getDefaultCodeSpace(), arch->getDefaultCodeSpace()->getHighest());
         fd->followFlow(low, high);
+        if (!handle->preparingTypeHintContext) {
+            handle->calleeTypeShapes.clear();
+            std::set<uintb> needed;
+            size_t edges = 0;
+            // Follow native directed CALL edges before applying any hint context or local overrides.
+            for (int4 i = 0; i < fd->numCalls(); ++i) {
+                const auto *call = fd->getCallSpecs(i);
+                const auto *op = call->getOp();
+                const auto &target = call->getEntryAddress();
+                if (op == nullptr || op->code() != CPUI_CALL || target.isInvalid()
+                    || target.getOffset() == addr) continue;
+                bool hinted = handle->typeHints.count(target.getOffset()) != 0;
+                const auto *callee = global->queryFunction(target);
+                bool knownOutput = callee != nullptr && callee->getFuncProto().isOutputLocked();
+                bool returnContext = !knownOutput && handle->arch->backedCode(target.getOffset())
+                    && rampage::boundedRawReturnSuffix(fd, call);
+                if (!hinted && !returnContext) continue;
+                if (++edges > 256) throw LowlevelError("Native callee hint call edges exceed 256");
+                needed.insert(target.getOffset());
+                if (needed.size() > 32) throw LowlevelError("Native callee return context functions exceed 32");
+            }
+            if (!needed.empty()) {
+                arch->clearAnalysis(fd);
+                handle->preparingTypeHintContext = true;
+                try {
+                    for (uintb target : needed) {
+                        uint8_t contextThumb = 0;
+                        if (arch->context != nullptr) {
+                            try {
+                                contextThumb = arch->context->getVariable("TMode",
+                                    Address(arch->getDefaultCodeSpace(), target)) != 0;
+                            } catch (const LowlevelError &) {}
+                        }
+                        // This analyzes source bytes; it never executes the function being inspected.
+                        char *contextText = rampage_decomp_function(h, target, nullptr, contextThumb);
+                        if (contextText == nullptr) {
+                            if (handle->typeHints.count(target) == 0 && !handle->poisoned && !handle->unsafeCleanup)
+                                continue;
+                            throw LowlevelError("Unsupported native callee hint context: " + handle->error);
+                        }
+                        free(contextText);
+                    }
+                } catch (...) {
+                    handle->preparingTypeHintContext = false;
+                    throw;
+                }
+                handle->preparingTypeHintContext = false;
+                handle->tokens.clear();
+                handle->results.clear();
+                fd->followFlow(low, high);
+            }
+            hintContext.callees = &handle->calleeTypeShapes;
+        }
         arch->allacts.getCurrent()->reset(*fd);
         arch->allacts.getCurrent()->perform(*fd);
         auto local = handle->localOverrides.find(addr);
         if (local != handle->localOverrides.end()) {
             rampage::applyLocals(fd, local->second, savedLocals);
             arch->clearAnalysis(fd);
+            hintContext.edges = 0;
             fd->followFlow(low, high);
             arch->allacts.getCurrent()->reset(*fd);
             arch->allacts.getCurrent()->perform(*fd);
             rampage::verifyLocals(fd, local->second, savedLocals);
         }
+        auto hints = handle->typeHints.find(addr);
+        if (hints != handle->typeHints.end()) {
+            hintContext.own = rampage::resolveTypeHints(fd, hints->second, savedLocals);
+            if (!hintContext.own.empty()) {
+                arch->clearAnalysis(fd);
+                hintContext.edges = 0;
+                fd->followFlow(low, high);
+                arch->allacts.getCurrent()->reset(*fd);
+                arch->allacts.getCurrent()->perform(*fd);
+                rampage::verifyTypeHints(fd, hintContext.own, savedLocals);
+                if (local != handle->localOverrides.end())
+                    rampage::verifyLocals(fd, local->second, savedLocals);
+            }
+        }
+        if (handle->preparingTypeHintContext) {
+            const std::vector<rampage::TypeHint> empty;
+            try {
+                handle->calleeTypeShapes[addr] = rampage::collectCalleeTypeShape(fd,
+                    hints == handle->typeHints.end() ? empty : hints->second, savedLocals);
+            } catch (const LowlevelError &) {
+                // Optional wrapper discovery is not a new admission rule for ordinary decompilation.
+                // Explicitly requested hint contexts still refuse unsupported native shapes.
+                if (hints != handle->typeHints.end()) throw;
+            }
+        }
+        rampage::verifyCalleeTypeHints(fd, hintContext);
+        fd->setInferenceHint(nullptr, nullptr);
+        fd->setCallInferenceHint(nullptr, nullptr);
         LimitedOutput buffer;
         std::ostream out(&buffer);
         out.exceptions(std::ios::badbit | std::ios::failbit);
@@ -858,7 +1006,7 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         nativeMutation = false;
         rampage::collectFlow(fd, handle->tokens);
         nativeMutation = true;
-        handle->results = rampage::collectResults(fd, handle->externalSlots);
+        handle->results = rampage::collectResults(fd, handle->externalSlots, &savedLocals);
         nativeMutation = false;
         for (auto &token : handle->tokens) {
             if (!token.hasAddress || (token.kind != "call" && token.kind != "function")) continue;
@@ -879,6 +1027,8 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         handle->fallbackError = false;
         return result;
     } catch (const LowlevelError &err) {
+        if (fd != nullptr) fd->setInferenceHint(nullptr, nullptr);
+        if (fd != nullptr) fd->setCallInferenceHint(nullptr, nullptr);
         try {
             if (fd != nullptr) rampage::restoreLocals(fd->getScopeLocal(), savedLocals);
         } catch (...) {
@@ -887,14 +1037,20 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         failDecompilation(handle, fd, err.explain.c_str(), true);
         return nullptr;
     } catch (const DecoderError &error) {
+        if (fd != nullptr) fd->setInferenceHint(nullptr, nullptr);
+        if (fd != nullptr) fd->setCallInferenceHint(nullptr, nullptr);
         handle->unsafeCleanup |= nativeMutation;
         failDecompilation(handle, fd, error.explain.c_str(), false);
         return nullptr;
     } catch (const std::exception &error) {
+        if (fd != nullptr) fd->setInferenceHint(nullptr, nullptr);
+        if (fd != nullptr) fd->setCallInferenceHint(nullptr, nullptr);
         handle->unsafeCleanup |= nativeMutation;
         failDecompilation(handle, fd, error.what(), false);
         return nullptr;
     } catch (...) {
+        if (fd != nullptr) fd->setInferenceHint(nullptr, nullptr);
+        if (fd != nullptr) fd->setCallInferenceHint(nullptr, nullptr);
         handle->unsafeCleanup |= nativeMutation;
         failDecompilation(handle, fd, "Unexpected native decompiler exception", false);
         return nullptr;

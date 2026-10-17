@@ -34,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -129,6 +129,10 @@ pub struct WorkerCodeMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerOperation {
+    TypeHints {
+        address: u64,
+        hints: Vec<crate::TypeHint>,
+    },
     LocalVariables {
         address: u64,
         overrides: Vec<crate::LocalOverride>,
@@ -914,6 +918,10 @@ fn validate_layout_operations(
             crate::variables::validate_overrides(overrides)
                 .map_err(|error| WorkerError::Protocol(format!("operation {index}: {error}")))?;
         }
+        if let WorkerOperation::TypeHints { hints, .. } = operation {
+            crate::type_hints::validate_hints(hints)
+                .map_err(|error| WorkerError::Protocol(format!("operation {index}: {error}")))?;
+        }
     }
     Ok(())
 }
@@ -988,9 +996,11 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
                 | WorkerOperation::Global { .. }
                 | WorkerOperation::Prototype { .. }
                 | WorkerOperation::LocalVariables { .. }
+                | WorkerOperation::TypeHints { .. }
                 | WorkerOperation::RuntimePrototype { .. }
         );
         let result = match operation {
+            WorkerOperation::TypeHints { address, hints } => engine.set_type_hints(address, &hints),
             WorkerOperation::LocalVariables { address, overrides } => {
                 engine.set_variable_overrides(address, &overrides)
             }

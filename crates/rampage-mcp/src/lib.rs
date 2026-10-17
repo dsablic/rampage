@@ -72,7 +72,10 @@ successful decoding do not authenticate content or prove stream boundaries.
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
 yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are \
-loaded with their licence and provenance. Types: function_frame pages native locals/parameters with current \
+loaded with their licence and provenance. Types: propagate_types previews bounded direct-call candidates and \
+optionally stores source-fingerprinted unlocked hints; analyst types win and conflicts/unsupported mappings \
+remain explicit. Ordinary decompilation may derive ephemeral context without changing the hint log. \
+function_frame pages native locals/parameters with current \
 names/types, raw storage and address-space widths, plus available static stack/register candidates. Native \
 stack-space coordinates and tracker entry-SP offsets remain separate; conditional reloads are not ABI proof. \
 apply_data_type binds a complete element type/array or explicit \

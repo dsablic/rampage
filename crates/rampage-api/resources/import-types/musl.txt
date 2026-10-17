@@ -1,0 +1,44 @@
+Project: musl v1.2.5
+Scope: Declaration facts only; no implementation code. Portable C memcpy and explicitly asserted POSIX recv.
+
+Sources and retained declaration excerpts:
+https://git.musl-libc.org/cgit/musl/plain/include/string.h?h=v1.2.5
+    void *memcpy (void *__restrict, const void *__restrict, size_t);
+https://git.musl-libc.org/cgit/musl/plain/include/sys/socket.h?h=v1.2.5
+    ssize_t recv (int, void *, size_t, int);
+https://git.musl-libc.org/cgit/musl/plain/include/alltypes.h.in?h=v1.2.5
+    TYPEDEF unsigned _Addr size_t;
+    TYPEDEF _Addr ssize_t;
+
+Adaptations: Reuse rampage's native runtime catalog for these two declarations only. Its legacy public
+renderer is LP64; rescale its pointer-sized uint8/int8 slots to the selected DataOrganization.pointer.
+The helper accepts ILP32/LP64, or Windows LLP64 for portable memcpy, with 4-byte int. Keep pointer returns
+as void *; omit const/restrict as in the existing native catalog. Win32 x86 C memcpy uses explicit cdecl.
+The musl source is provenance for declaration facts, not evidence that a target uses musl or Linux.
+POSIX recv requires explicit target assertion, analyst assertion or a compatible posix-linux profile.
+Neither ELF nor Platform::Default establishes POSIX/Linux. No off_t or socket structure layout is used.
+
+License: MIT
+License source: https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5
+Notice retained from the existing resources/type-headers/LICENSE.musl:
+
+Copyright © 2005-2020 Rich Felker, et al.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

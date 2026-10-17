@@ -528,6 +528,36 @@ fn call_payload(run: &AgentRun, index: usize) -> Value {
     serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+struct PropagationFixture {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl PropagationFixture {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "rampage-eval-propagation-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let fixture = Self { path: directory.join("fixture.snapshot.json"), directory };
+        std::fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/type-propagation-x64.snapshot.json"),
+            &fixture.path,
+        )
+        .unwrap();
+        fixture
+    }
+}
+
+impl Drop for PropagationFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
 async fn native_decompilation(client: &RunningService<RoleClient, TestClient>, path: &std::path::Path) -> Value {
     let result = client
         .call_tool(
@@ -1114,5 +1144,276 @@ async fn data_opt_in_rejects_other_writes_second_paths_and_non_scalar_or_unknown
         assert!(!run.calls[1].invoked, "{name}: {run:?}");
         assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
         client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn default_policy_admits_propagation_preview_without_creating_annotation_files() {
+    for options in [
+        json!({}),
+        json!({"apply": false}),
+        json!({"apply": false, "max_functions": 1, "max_candidates": 1}),
+        json!({"max_functions": 32, "max_candidates": 256}),
+    ] {
+        let owned = PropagationFixture::new();
+        let original = std::fs::read(&owned.path).unwrap();
+        let client = connect().await;
+        let mut input = options;
+        input["path"] = json!(owned.path);
+        input["at"] = json!("0x201170");
+        let (script, requests) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["types"]})),
+            tool("propagate_types", input),
+            final_answer(json!({"summary": "scripted propagation preview plumbing only"})),
+        ]);
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &config()).await;
+        assert!(matches!(run.disposition, AgentDisposition::Answer { .. }), "{run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (2, 0));
+        assert!(run.calls.iter().all(|call| call.invoked && !call.is_error));
+        assert_eq!(call_payload(&run, 1)["counts"]["applied"], 0);
+        assert_eq!(run.task_attempt(), TaskAttempt::Unmeasured);
+        {
+            let requests = requests.lock().unwrap();
+            assert!(offered(&requests[1], "propagate_types"));
+            assert!(requests[1]["system"].as_str().unwrap().contains("restricted to read-only"));
+        }
+        assert_eq!(std::fs::read(&owned.path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn propagation_apply_requires_its_own_flag_regardless_of_all_prior_edit_flags() {
+    for variable in [false, true] {
+        for library in [false, true] {
+            for data in [false, true] {
+                let owned = PropagationFixture::new();
+                let client = connect().await;
+                let (script, requests) = Script::new(vec![
+                    tool("enable_tools", json!({"groups": ["types"]})),
+                    tool("propagate_types", json!({"path": owned.path, "at": "0x201170", "apply": true})),
+                ]);
+                let mut bounds = config();
+                bounds.allow_variable_edits = variable;
+                bounds.allow_type_library_edits = library;
+                bounds.allow_data_type_edits = data;
+                let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+                assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{run:?}");
+                assert_eq!((run.tool_requests, run.tool_calls, run.tool_errors), (2, 1, 1));
+                assert!(!run.calls[1].invoked);
+                assert!(run.calls[1].output.text.contains("application is prohibited"));
+                assert!(offered(&requests.lock().unwrap()[1], "propagate_types"));
+                assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+                client.cancel().await.unwrap();
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn propagation_flag_composes_only_explicit_prior_permissions_without_read_only_contradictions() {
+    for variable in [false, true] {
+        for library in [false, true] {
+            for data in [false, true] {
+                let owned = PropagationFixture::new();
+                let client = connect().await;
+                let (script, requests) = Script::new(vec![
+                    tool("enable_tools", json!({"groups": ["all"]})),
+                    final_answer(json!({"status": "unknown", "reason": "scripted permissions inspection"})),
+                ]);
+                let mut bounds = config();
+                bounds.allow_type_propagation = true;
+                bounds.allow_variable_edits = variable;
+                bounds.allow_type_library_edits = library;
+                bounds.allow_data_type_edits = data;
+                let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+                assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+                {
+                    let requests = requests.lock().unwrap();
+                    let request = &requests[1];
+                    let system = request["system"].as_str().unwrap();
+                    let permissions = system.split("fixture: ").nth(1).unwrap().split('.').next().unwrap();
+                    assert!(offered(request, "propagate_types"));
+                    assert!(permissions.contains("propagate_types with apply:true (type propagation only)"));
+                    assert!(system.contains("same owned isolated fixture"));
+                    assert!(!system.contains("restricted to read-only") && !system.contains("No other writes"));
+                    for (name, enabled) in [
+                        ("set_types", variable),
+                        ("edit_variable", variable),
+                        ("declare_types", library),
+                        ("delete_type", library),
+                        ("apply_data_type", data),
+                        ("apply_enum", data),
+                        ("apply_offset", data),
+                    ] {
+                        assert_eq!(offered(request, name), enabled);
+                        assert_eq!(permissions.split(", ").any(|allowed| allowed == name), enabled);
+                    }
+                    for name in ["set_signature", "set_global", "patch", "undo", "rename", "import_pdb_names"] {
+                        assert!(!offered(request, name));
+                    }
+                    assert_eq!(system.contains("inline bounded C"), library);
+                    assert_eq!(system.contains("whole-storage selectors"), variable);
+                }
+                client.cancel().await.unwrap();
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn propagation_opt_in_applies_real_hints_from_trusted_owned_fixture_sources_through_mcp() {
+    let owned = PropagationFixture::new();
+    let original = std::fs::read(&owned.path).unwrap();
+    let client = connect().await;
+    for (name, input) in [
+        ("enable_tools", json!({"groups": ["types"]})),
+        (
+            "set_types",
+            json!({"path": owned.path, "at": "0x201160",
+            "text": "struct PropState { int4 gain; int4 bias; };"}),
+        ),
+        (
+            "set_signature",
+            json!({"path": owned.path, "at": "0x201190",
+                "text": "PropState *return_caller(PropState *opaque);"}),
+        ),
+    ] {
+        let result = client
+            .call_tool(CallToolRequestParams::new(name).with_arguments(input.as_object().unwrap().clone()))
+            .await
+            .unwrap();
+        assert_ne!(result.is_error, Some(true), "{name}: {result:?}");
+    }
+    let (script, requests) = Script::new(vec![
+        tool("propagate_types", json!({"path": owned.path, "at": "0x201190", "apply": false})),
+        tool(
+            "propagate_types",
+            json!({"path": owned.path, "at": "0x201190", "apply": true,
+            "max_functions": 32, "max_candidates": 256}),
+        ),
+        tool("decompile", json!({"path": owned.path, "at": "0x20118c"})),
+        final_answer(json!({"summary": "scripted native propagation plumbing only"})),
+    ]);
+    let mut bounds = config();
+    bounds.allow_type_propagation = true;
+    let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+    assert!(matches!(run.disposition, AgentDisposition::Answer { .. }), "{run:?}");
+    assert_eq!(
+        (run.tool_calls, run.tool_errors),
+        (3, 0),
+        "{:?}",
+        run.calls.iter().map(|call| (&call.name, &call.output.text)).collect::<Vec<_>>()
+    );
+    assert!(run.calls.iter().all(|call| call.invoked && !call.is_error));
+    assert_eq!(run.task_attempt(), TaskAttempt::Unmeasured);
+    let preview = call_payload(&run, 0);
+    let applied = call_payload(&run, 1);
+    assert_eq!(preview["counts"]["applied"], 0);
+    assert!(preview["counts"]["candidates"].as_u64().unwrap() > 0, "{preview}");
+    assert!(applied["counts"]["applied"].as_u64().unwrap() > 0, "{applied}");
+    assert_eq!(applied["source_fingerprint"], preview["source_fingerprint"]);
+    assert!(call_payload(&run, 2)["code"].as_str().unwrap().contains("PropState"));
+    assert!(!offered(&requests.lock().unwrap()[0], "set_signature"));
+    assert_eq!(std::fs::read(&owned.path).unwrap(), original);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn propagation_flag_does_not_authorize_other_writes_or_debug_and_pdb_application() {
+    for (name, edits) in [
+        ("set_types", json!({"at": "0x201170", "text": "struct X { int4 n; };"})),
+        ("edit_variable", json!({"at": "0x201170", "variable": "x", "name": "changed"})),
+        ("declare_types", json!({"header": "struct X { int4 n; };"})),
+        ("delete_type", json!({"name": "PropState"})),
+        ("apply_data_type", json!({"at": "0x2021b4", "type_name": "PropState"})),
+        ("apply_enum", json!({"at": "0x201170", "operand": 1, "clear": true})),
+        ("apply_offset", json!({"at": "0x201170", "operand": 1, "clear": true})),
+        ("set_signature", json!({"at": "0x201170", "text": "int changed(void);"})),
+        ("set_global", json!({"at": "0x2021b4", "text": "int changed;"})),
+        ("rename", json!({"at": "0x201170", "name": "changed"})),
+        ("patch", json!({"at": "0x201170", "bytes": "90"})),
+        ("undo", json!({})),
+        ("query_debugger", json!({"socket": "/outside/socket"})),
+        ("identify_functions", json!({"apply": true})),
+        ("import_debug_signatures", json!({"apply": true})),
+        ("import_debug_layouts", json!({"apply": true})),
+        ("import_pdb_names", json!({"apply": true, "pdb": "/outside/symbols.pdb"})),
+    ] {
+        let owned = PropagationFixture::new();
+        let client = connect().await;
+        let mut input = edits;
+        input["path"] = json!(owned.path);
+        let (script, _) = Script::new(vec![tool("enable_tools", json!({"groups": ["all"]})), tool(name, input)]);
+        let mut bounds = config();
+        bounds.allow_type_propagation = true;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{name}: {run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (1, 1), "{name}: {run:?}");
+        assert!(!run.calls[1].invoked, "{name}: {run:?}");
+        assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn propagation_rejects_extra_fields_paths_image_selections_and_non_scalar_or_unbounded_options() {
+    for edits in [
+        json!({"path": "/outside/fixture"}),
+        json!({"path": null}),
+        json!({"at": null}),
+        json!({"at": 0x201170}),
+        json!({"at": ""}),
+        json!({"at": "x".repeat(257)}),
+        json!({"at": {"path": "/outside/fixture"}}),
+        json!({"at": ["0x201170"]}),
+        json!({"apply": "true"}),
+        json!({"apply": 1}),
+        json!({"apply": null}),
+        json!({"apply": {"value": true}}),
+        json!({"max_functions": 0}),
+        json!({"max_functions": 33}),
+        json!({"max_functions": -1}),
+        json!({"max_functions": 1.5}),
+        json!({"max_functions": "1"}),
+        json!({"max_functions": null}),
+        json!({"max_functions": [1]}),
+        json!({"max_candidates": 0}),
+        json!({"max_candidates": 257}),
+        json!({"max_candidates": -1}),
+        json!({"max_candidates": 1.5}),
+        json!({"max_candidates": "1"}),
+        json!({"max_candidates": null}),
+        json!({"max_candidates": {"value": 1}}),
+        json!({"arch": "x86_64"}),
+        json!({"image_offset": "0x10"}),
+        json!({"image_length": 32}),
+        json!({"image_offset": null}),
+        json!({"other": "/outside/fixture"}),
+        json!({"original": "/outside/fixture"}),
+        json!({"header_path": "/outside/header.h"}),
+        json!({"output": "/outside/output"}),
+        json!({"options": {"apply": true}}),
+        json!({"unknown": null}),
+    ] {
+        for allow_type_propagation in [false, true] {
+            let owned = PropagationFixture::new();
+            let client = connect().await;
+            let mut input = json!({"path": owned.path, "at": "0x201170"});
+            input.as_object_mut().unwrap().extend(edits.as_object().unwrap().clone());
+            let (script, _) = Script::new(vec![
+                tool("enable_tools", json!({"groups": ["types"]})),
+                tool("propagate_types", input.clone()),
+            ]);
+            let mut bounds = config();
+            bounds.allow_type_propagation = allow_type_propagation;
+            let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+            assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{input}: {run:?}");
+            assert_eq!((run.tool_calls, run.tool_errors), (1, 1), "{input}: {run:?}");
+            assert!(!run.calls[1].invoked, "{input}: {run:?}");
+            assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+            client.cancel().await.unwrap();
+        }
     }
 }

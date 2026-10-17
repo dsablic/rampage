@@ -105,6 +105,11 @@ supported x86/x64/AArch64 operands, no automatic object-type inference or pointe
 [`function_frame`](function-frame.md) exposes current native local/parameter names, types and complete storage
 with actual address-space widths, plus available AArch64 stack-access/register candidates. Limits: bounded
 paging and recovery evidence, separate coordinate origins, no guessed full-frame size or ABI preservation claim.
+
+[Type propagation](type-propagation.md) derives explicit-source candidates across supported direct calls and
+persists them separately from analyst types. Native inference uses unlocked hints; conflicts and unsupported
+mappings remain visible. Limits: bounded scalar/pointer contexts, no forced analyst replacement or general
+alias proof.
 The decompiler library can inspect/assert complete flat-struct layouts for x86-64 GCC before using dependent
 prototypes. This read-only bridge compares native field offsets, sizes, alignment and leaf types against independent
 facts; it does not import debug layouts or persist assertions across engine rebuilds. Nested aggregates and inferred

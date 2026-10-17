@@ -379,6 +379,7 @@ impl App {
             Field::TypeLibrary => "Project type library".to_owned(),
             Field::DataType => format!("Data type {:#x}", editing.address),
             Field::OperandType => format!("Operand type {:#x}", editing.address),
+            Field::TypeHint => format!("Derived type hints {:#x}", editing.address),
         };
         let mut done = false;
         let mut cancel = false;

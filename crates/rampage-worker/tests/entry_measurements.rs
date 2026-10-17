@@ -232,6 +232,7 @@ fn failure_category(error: &ApiError) -> Failure {
         ApiError::NotFound(_) => "api_not_found",
         ApiError::Invalid(_) => "api_invalid",
         ApiError::Unavailable(_) => "api_unavailable",
+        ApiError::NativeTypeHintUnsupported(_) => "api_native_type_hint_unsupported",
         ApiError::DebuggerCaptureStagingRetained(_) => "api_staging_retained",
     }
 }
@@ -519,6 +520,7 @@ fn failure_records_never_publish_api_message_or_private_path_text() {
         ApiError::NotFound(private.into()),
         ApiError::Invalid(private.into()),
         ApiError::Unavailable(private.into()),
+        ApiError::NativeTypeHintUnsupported(private.into()),
     ];
     let mut bytes = Vec::new();
     let mut total = 0;
@@ -538,7 +540,10 @@ fn failure_records_never_publish_api_message_or_private_path_text() {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap()["failure_category"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(categories, ["api_load", "api_not_found", "api_invalid", "api_unavailable"]);
+    assert_eq!(
+        categories,
+        ["api_load", "api_not_found", "api_invalid", "api_unavailable", "api_native_type_hint_unsupported"]
+    );
 }
 
 #[derive(Default)]

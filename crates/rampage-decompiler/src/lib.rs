@@ -15,7 +15,9 @@ pub mod type_library;
 pub use type_library::{
     NamedEnumValue, NamedFunctionType, NamedType, NamedTypeField, NamedTypeKind, NamedTypeParameter,
 };
+mod type_hints;
 mod variables;
+pub use type_hints::TypeHint;
 pub use variables::{LocalOverride, VariableStorage, validate_local_name};
 pub mod worker;
 pub use results::{StructuredResult, parse_results};

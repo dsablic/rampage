@@ -70,6 +70,12 @@ public:
     void tagType(const std::string &text, syntax_highlight color, const ghidra::Datatype *type) override {
         record({text, "type", 0, false}, [&] { EmitNoMarkup::tagType(text, color, type); });
     }
+    void tagField(const std::string &text, syntax_highlight color, const ghidra::Datatype *type,
+                  ghidra::int4 offset, const ghidra::PcodeOp *op) override {
+        record({text, "field", op == nullptr ? 0 : op->getAddr().getOffset(), op != nullptr}, [&] {
+            EmitNoMarkup::tagField(text, color, type, offset, op);
+        });
+    }
 };
 
 inline void collectFlow(ghidra::Funcdata *function, std::vector<Token> &tokens) {

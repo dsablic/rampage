@@ -258,6 +258,60 @@ pub struct Call {
     pub target: Option<u64>,
     pub name: Option<String>,
     pub indirect: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Vec<CallArgument>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<CallResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_unavailable: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CallArgument {
+    /// Exact native CALL input slot (slot zero is the call destination).
+    pub input_index: u32,
+    /// Declared destination parameter, only for an unambiguous native scalar/pointer layout.
+    pub parameter_index: Option<u32>,
+    pub value: CallValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CallResult {
+    pub value: CallValue,
+    /// Every normal return carries this output through at most 16 same-width COPY/CAST operations.
+    pub direct_return: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CallValue {
+    pub status: CallValueStatus,
+    pub data_type: Option<TypeInfo>,
+    /// Owning symbol's native type, separate from a same-width CAST at the call input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_type: Option<TypeInfo>,
+    /// Present only for one complete owning local/parameter symbol mapping.
+    pub storage: Option<crate::VariableStorage>,
+    pub raw_storage: Option<Storage>,
+    pub display_name: Option<String>,
+    pub type_locked: bool,
+    pub global_address: Option<u64>,
+    /// Object type at global_address. For GlobalAddress this is not the argument's owning symbol type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_object_type: Option<TypeInfo>,
+    #[serde(default)]
+    pub global_type_locked: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallValueStatus {
+    Unknown,
+    Constant,
+    Computed,
+    Variable,
+    Global,
+    /// Address of a global object: data_type is the native pointer type; symbol_type is absent.
+    GlobalAddress,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

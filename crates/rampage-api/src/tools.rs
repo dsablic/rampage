@@ -703,6 +703,17 @@ struct FunctionFrameArgs {
     include_tracker: Option<bool>,
 }
 
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PropagateTypesArgs {
+    at: String,
+    /// Preview by default. Applying stores separate lower-priority hints, never analyst type overrides.
+    #[serde(default)]
+    apply: bool,
+    max_functions: Option<usize>,
+    max_candidates: Option<usize>,
+}
+
 pub(crate) fn data_typing_view(result: &impl Serialize) -> Result<Value, ApiError> {
     let value = serde_json::to_value(result).map_err(|error| ApiError::Invalid(error.to_string()))?;
     if value.to_string().len() > MAX_RESULT_CHARS {
@@ -2073,6 +2084,26 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: RenameArgs| {
                 let name = edit_value(arguments.name, arguments.clear, "name")?;
                 project.rename(project.resolve(&arguments.at)?, name.as_deref())
+            },
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "propagate_types",
+            "Preview or apply bounded provenance-bearing type candidates across proven direct calls. Explicit \
+             analyst signatures/variables/globals take priority; incompatible candidates and unsupported ABI \
+             shapes remain conflicts or unknowns. Applied hints are separate lower-priority annotations, with \
+             source fingerprints, checked undo/replay and no binary patching. Preview is read-only.",
+            |project, args: PropagateTypesArgs| {
+                let request = crate::PropagationRequest {
+                    address: project.resolve(&args.at)?,
+                    apply: args.apply,
+                    max_functions: args.max_functions.unwrap_or(16),
+                    max_candidates: args.max_candidates.unwrap_or(128),
+                };
+                let result =
+                    project.propagate_types_with_preflight(&request, |result| data_typing_view(result).map(|_| ()))?;
+                data_typing_view(&result)
             },
         )
         .annotates(),

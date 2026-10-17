@@ -41,4 +41,4 @@ Limits: initially one whole processor/register or stack mapping; dynamic, intern
 or stale selectors are refused. Retypes preserve native mapping size; inline array/function-pointer declarators
 are unsupported. Analyst types change interpretation, not producer-layout truth. Named types can come from the
 [project type library](type-library.md); automatic cross-call propagation is separate.
-Rebuild CLI and worker together for worker protocol 6.
+Rebuild CLI and worker together for worker protocol 7.

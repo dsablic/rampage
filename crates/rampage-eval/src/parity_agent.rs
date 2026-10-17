@@ -74,6 +74,8 @@ pub struct AgentConfig {
     pub allow_type_library_edits: bool,
     /// Independent opt-in for apply_data_type, apply_enum and apply_offset on the same owned isolated fixture.
     pub allow_data_type_edits: bool,
+    /// Independent opt-in for propagate_types with apply:true on the same owned isolated fixture.
+    pub allow_type_propagation: bool,
     pub max_turns: usize,
     pub max_tool_calls: usize,
     pub max_tokens: u32,
@@ -89,6 +91,7 @@ impl AgentConfig {
             allow_variable_edits: false,
             allow_type_library_edits: false,
             allow_data_type_edits: false,
+            allow_type_propagation: false,
             max_turns: 20,
             max_tool_calls: 60,
             max_tokens: 4096,
@@ -99,9 +102,20 @@ impl AgentConfig {
     }
 
     fn system_prompt(&self) -> String {
-        if self.allow_data_type_edits {
-            let mut permissions = vec!["apply_data_type", "apply_enum", "apply_offset"];
+        if self.allow_data_type_edits || self.allow_type_propagation {
+            let mut permissions = Vec::new();
             let mut guidance = String::new();
+            if self.allow_data_type_edits {
+                permissions.extend(["apply_data_type", "apply_enum", "apply_offset"]);
+            }
+            if self.allow_type_propagation {
+                permissions.push("propagate_types with apply:true (type propagation only)");
+                guidance.push_str(
+                    "Use propagate_types only on that same owned isolated fixture, with required string at \
+                     and only optional boolean apply, max_functions (1..32) and max_candidates (1..256). \
+                     Preview with apply:false or omitted before applying lower-priority type hints. ",
+                );
+            }
             if self.allow_variable_edits {
                 permissions.extend(["set_types", "edit_variable"]);
                 guidance.push_str(
@@ -649,6 +663,7 @@ fn allowed_name(name: &str, config: &AgentConfig) -> bool {
                 | "list_annotations"
                 | "list_types"
                 | "get_type"
+                | "propagate_types"
                 | "language_metadata"
                 | "class_evidence"
                 | "capabilities"
@@ -682,8 +697,14 @@ fn validate_call(
     }
     let tool = catalog.iter().find(|tool| tool.name == name).ok_or("tool is not in the actual MCP catalog")?;
     let arguments = input.as_object().ok_or("tool input must be an object")?;
+    if name == "propagate_types" && !arguments.get("at").is_some_and(Value::is_string) {
+        return Err("type propagation requires an explicit string address".into());
+    }
     let schema = tool.input_schema.get("properties").and_then(Value::as_object);
     for (key, value) in arguments {
+        if name == "propagate_types" {
+            validate_propagation_argument(key, value)?;
+        }
         if matches!(name, "apply_data_type" | "apply_enum" | "apply_offset" | "read_data") {
             validate_data_argument(name, key, value)?;
         }
@@ -721,7 +742,10 @@ fn validate_call(
         if !schema.is_some_and(|schema| schema.contains_key(key)) {
             return Err(format!("argument {key:?} is not in the discovered MCP schema"));
         }
-        if key == "apply" && value != &Value::Bool(false) {
+        if key == "apply"
+            && value != &Value::Bool(false)
+            && !(name == "propagate_types" && config.allow_type_propagation && value == &Value::Bool(true))
+        {
             return Err("annotation application is prohibited in this benchmark".into());
         }
         if matches!(
@@ -771,6 +795,23 @@ fn validate_call(
         return Err("tool path must exactly match the caller's opened fixture path".into());
     }
     Ok(arguments.clone())
+}
+
+fn validate_propagation_argument(key: &str, value: &Value) -> Result<(), String> {
+    let valid = match key {
+        "path" => value.is_string(),
+        "at" => value.as_str().is_some_and(|text| !text.is_empty() && text.len() <= 256 && !text.contains('\0')),
+        "apply" => value.is_boolean(),
+        "max_functions" => value.as_u64().is_some_and(|number| (1..=32).contains(&number)),
+        "max_candidates" => value.as_u64().is_some_and(|number| (1..=256).contains(&number)),
+        _ => false,
+    };
+    if !valid {
+        return Err(
+            "type propagation accepts only the fixture, string address, boolean apply and bounded scalar limits".into(),
+        );
+    }
+    Ok(())
 }
 
 fn validate_data_argument(name: &str, key: &str, value: &Value) -> Result<(), String> {

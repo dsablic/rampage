@@ -1,10 +1,11 @@
+use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::sync::TryLockError;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use rampage_decompiler::worker::{
-    PROTOCOL_VERSION, WorkerFunction, WorkerMapping, WorkerOptions, WorkerRequest, run_supervised,
+    PROTOCOL_VERSION, WorkerFunction, WorkerMapping, WorkerOperation, WorkerOptions, WorkerRequest, run_supervised,
 };
 use rampage_decompiler::{Decompiler, Platform};
 use serde::Serialize;
@@ -52,6 +53,8 @@ pub struct EntryDecompilationContext {
     pub counts: EntryContextCounts,
     pub generated_dependency_types: usize,
     pub replay_operations: usize,
+    /// Fresh-hint callees conservatively decompiled and checked within the admitted context, not proven caller edges.
+    pub validated_hint_callees: usize,
     pub sample: rampage_analysis::entry_audit::EntryAudit,
     pub omissions: Vec<String>,
     pub execution: &'static str,
@@ -129,7 +132,8 @@ impl Project {
         self.decompile_entry_observed(request, cancellation, progress, None)
     }
 
-    /// Opt-in supervisor observations, delivered even when the worker fails. Native-inline calls emit none.
+    /// Opt-in supervisor observations for every child query/decompilation, even on failure. Inline calls emit none.
+    /// Observer work is charged to the original request deadline and checked before consuming each child result.
     /// Supervisor offsets exclude these observers and are not child-internal native initialization timings.
     pub fn decompile_entry_measured(
         &self,
@@ -230,12 +234,45 @@ impl Project {
         report_phase(EntryPreparationPhase::Replay)?;
         let generated = go_abi::entry_types(self, &annotations, &options)?;
         let replay = types::plan_entry(self, &annotations, &generated, &plan.stub_targets)?;
-        let local_replay = crate::variables::plan(self, &annotations, Some(plan.address))?;
-        let replay_operations = replay.len() + local_replay.len();
+        let mut hint_context: BTreeSet<_> = plan
+            .operations
+            .iter()
+            .filter_map(|operation| match operation {
+                WorkerOperation::Symbol { address, .. } => Some(*address),
+                _ => None,
+            })
+            .collect();
+        hint_context.insert(plan.address);
+        let mut local_replay = Vec::new();
+        for address in crate::variables::targets(&annotations).intersection(&hint_context) {
+            check("bounded local override replay")?;
+            local_replay.extend(crate::variables::plan(self, &annotations, Some(*address))?);
+        }
+        let hints = crate::propagation::hint_operations_in_context(self, &options, &annotations, &hint_context)?;
+        let (replayed_hints, mut hint_limitations) =
+            crate::propagation::replay_hints(self, &options, &annotations, None)?;
+        let hinted_callees: Vec<_> = plan
+            .operations
+            .iter()
+            .filter_map(|operation| match operation {
+                WorkerOperation::Symbol { address, name }
+                    if *address != plan.address && replayed_hints.contains_key(address) =>
+                {
+                    Some((*address, name.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for address in annotations.type_hints().keys().filter(|address| !hint_context.contains(*address)) {
+            hint_limitations
+                .push(format!("derived type hints at {address:#x} omitted; outside bounded exact-entry context"));
+        }
+        let replay_operations = replay.len() + local_replay.len() + hints.len();
         let generated_dependency_types = generated.len();
         let mut operations = plan.operations;
         operations.extend(replay);
         operations.extend(local_replay);
+        operations.extend(hints);
         check("declaration replay preparation")?;
         debug_layout_import::validate_entry_replay_source(self, &annotations)?;
         timings.replay_ms = elapsed(stage);
@@ -259,7 +296,7 @@ impl Project {
         timings.mapping_ms = elapsed(stage);
 
         let stage = Instant::now();
-        let (decompilation, execution) = if let Some(config) = worker.as_ref() {
+        let (mut decompilation, execution) = if let Some(config) = worker.as_ref() {
             report_phase(EntryPreparationPhase::WorkerSerialization)?;
             let mut mappings = Vec::with_capacity(regions.len());
             for region in &regions {
@@ -302,17 +339,52 @@ impl Project {
                 type_query: None,
             };
             report_phase(EntryPreparationPhase::WorkerExecution)?;
+            let mut run_worker = |request: &WorkerRequest, stage: &'static str| {
+                check(stage)?;
+                source(self)?;
+                let mut remaining = config.clone();
+                remaining.timeout = remaining.timeout.saturating_sub(started.elapsed());
+                let output = if let Some(observer) = &mut supervisor {
+                    let observed =
+                        rampage_decompiler::worker::run_supervised_measured(request, &remaining, Some(cancellation));
+                    observer(observed.metrics);
+                    observed.result
+                } else {
+                    run_supervised(request, &remaining, Some(cancellation))
+                };
+                check("supervisor observer")?;
+                source(self)?;
+                output.map_err(|error| ApiError::Unavailable(format!("{stage}: {error}")))
+            };
+            if symbols::requires_import_context(&request.operations) {
+                let mut operations = std::mem::take(&mut request.operations);
+                request.validate_only = true;
+                request.tokens = false;
+                request.type_query = Some(rampage_decompiler::worker::TypeQuery::Inventory);
+                let metadata = run_worker(&request, "exact-entry import model query")?;
+                symbols::specialize_imports(
+                    &annotations,
+                    &options,
+                    &metadata.language_id,
+                    rampage_decompiler::DataOrganization {
+                        pointer: metadata.data_organization.pointer,
+                        int: metadata.data_organization.int,
+                        long: metadata.data_organization.long,
+                    },
+                    &mut operations,
+                )?;
+                request.operations = operations;
+                request.validate_only = false;
+                request.tokens = true;
+                request.type_query = None;
+            }
             if !annotations.data_types().is_empty() {
                 let mut metadata = Vec::new();
                 request.validate_only = true;
                 request.tokens = false;
                 for name in crate::typed_data::binding_names(&annotations)? {
-                    check("exact-entry data footprint query")?;
                     request.type_query = Some(rampage_decompiler::worker::TypeQuery::Get { name: name.clone() });
-                    let mut limits = config.clone();
-                    limits.timeout = limits.timeout.saturating_sub(started.elapsed());
-                    let output = run_supervised(&request, &limits, Some(cancellation))
-                        .map_err(|error| ApiError::Unavailable(format!("exact-entry type query: {error}")))?;
+                    let output = run_worker(&request, "exact-entry type query")?;
                     let ty = output
                         .type_inventory
                         .and_then(|types| types.into_iter().find(|ty| ty.name == name))
@@ -324,20 +396,19 @@ impl Project {
                 request.tokens = true;
                 request.type_query = None;
             }
-            check("worker dispatch")?;
-            let mut remaining = config.clone();
-            remaining.timeout = remaining.timeout.saturating_sub(started.elapsed());
-            let output = if let Some(observer) = &mut supervisor {
-                let observed =
-                    rampage_decompiler::worker::run_supervised_measured(&request, &remaining, Some(cancellation));
-                observer(observed.metrics);
-                observed.result
-            } else {
-                run_supervised(&request, &remaining, Some(cancellation))
+            for (address, name) in &hinted_callees {
+                request.decompile = WorkerFunction { address: *address, name: name.clone(), thumb: false };
+                request.tokens = false;
+                let output = run_worker(&request, "exact-entry hinted callee validation")?;
+                let structure = output.structure.ok_or_else(|| {
+                    ApiError::Unavailable("worker omitted exact-entry hinted callee structured result".into())
+                })?;
+                crate::propagation::validate_replayed_targets(self, &options, &annotations, *address, &structure)?;
+                check("hinted callee result validation")?;
             }
-            .map_err(|error| ApiError::Unavailable(format!("exact-entry worker: {error}")))?;
-            check("supervisor observer")?;
-            source(self)?;
+            request.decompile = WorkerFunction { address: plan.address, name: plan.name.clone(), thumb: false };
+            request.tokens = true;
+            let output = run_worker(&request, "exact-entry worker")?;
             crate::type_library::validate_profile_replay(
                 &annotations,
                 &options,
@@ -363,6 +434,13 @@ impl Project {
             )?;
             report_phase(EntryPreparationPhase::NativeReplay)?;
             check("native declaration replay")?;
+            symbols::specialize_imports(
+                &annotations,
+                &options,
+                engine.language_id(),
+                engine.data_organization(),
+                &mut operations,
+            )?;
             symbols::apply(operations, &mut engine)?;
             let metadata = crate::typed_data::binding_names(&annotations)?
                 .into_iter()
@@ -370,6 +448,16 @@ impl Project {
                 .collect::<Result<Vec<_>, _>>()?;
             crate::typed_data::validate_bindings(self, &annotations, &metadata)?;
             report_phase(EntryPreparationPhase::NativeExecution)?;
+            for (address, name) in &hinted_callees {
+                check("native hinted callee validation")?;
+                source(self)?;
+                engine.decompile(*address, name, false).map_err(|error| {
+                    ApiError::Unavailable(format!("exact-entry native hinted callee {address:#x}: {error}"))
+                })?;
+                let structure = engine.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
+                crate::propagation::validate_replayed_targets(self, &options, &annotations, *address, &structure)?;
+                check("hinted callee result validation")?;
+            }
             check("native execution")?;
             let code = engine
                 .decompile(plan.address, &plan.name, false)
@@ -400,12 +488,31 @@ impl Project {
         };
         report_phase(EntryPreparationPhase::ResultValidation)?;
         check("result validation")?;
+        crate::propagation::validate_replayed_targets(
+            self,
+            &options,
+            &annotations,
+            plan.address,
+            &decompilation.structure,
+        )?;
+        crate::propagation::append_limitations(&mut decompilation.structure, hint_limitations.clone());
+        decompilation.recovery_status = decompilation.structure.recovery_status();
         debug_layout_import::validate_entry_replay_source(self, &annotations)?;
         source(self)?;
         check("completed result validation")?;
         timings.execution_ms = elapsed(stage);
         timings.total_ms = elapsed(started);
         let mut omissions = plan.omissions;
+        omissions.extend(hint_limitations);
+        if !hinted_callees.is_empty() {
+            omissions.push(
+                concat!(
+                    "Retained soft hints were conservatively validated on every admitted hinted callee; ",
+                    "admission is not proof of an actual caller edge."
+                )
+                .to_owned(),
+            );
+        }
         omissions.extend([
             "No whole-program containing-function resolution or learned mode context.".to_owned(),
             "No whole-program Go result/callee inference; only actual declarations and canonical dependencies replayed."
@@ -429,6 +536,7 @@ impl Project {
                 counts: plan.counts,
                 generated_dependency_types,
                 replay_operations,
+                validated_hint_callees: hinted_callees.len(),
                 sample,
                 omissions,
                 execution,

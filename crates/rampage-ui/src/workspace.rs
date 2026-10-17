@@ -540,6 +540,9 @@ impl Workspace {
             Field::DataType | Field::OperandType => Err(rampage_api::ApiError::Invalid(
                 "data and operand type edits require the selector-aware MCP typing tools".to_owned(),
             )),
+            Field::TypeHint => Err(rampage_api::ApiError::Invalid(
+                "derived type hints require the provenance-aware propagate_types MCP tool".to_owned(),
+            )),
         };
         match result {
             Ok(edit) => {

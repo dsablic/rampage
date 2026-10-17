@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 // Modified for rampage: keep function display names synchronized with symbol renames.
+// Also exposes bounded, unlocked native type-hint inference hooks.
 #ifndef __FUNCDATA_HH__
 #define __FUNCDATA_HH__
 
@@ -85,6 +86,10 @@ class Funcdata {
   Address baseaddr;		///< Starting code address of binary data
   FuncProto funcp;		///< Prototype of this function
   ScopeLocal *localmap;		///< Local variables (symbols in the function scope)
+  Datatype *(*inferenceHint)(const Funcdata &,const Varnode *,void *) = nullptr;
+  void *inferenceHintContext = nullptr;
+  bool (*callInferenceHint)(Funcdata &,FuncCallSpecs *,bool,void *) = nullptr;
+  void *callInferenceHintContext = nullptr;
 
   vector<FuncCallSpecs *> qlst;	///< List of calls this function makes
   vector<JumpTable *> jumpvec;	///< List of jump-tables for this function
@@ -136,6 +141,22 @@ class Funcdata {
   static PcodeOp *findPrimaryBranch(PcodeOpTree::const_iterator iter,PcodeOpTree::const_iterator enditer,
 				    bool findbranch,bool findcall,bool findreturn);
 public:
+  /// Ephemeral, unlocked evidence seed. The owner clears this callback before its context expires.
+  void setInferenceHint(Datatype *(*hint)(const Funcdata &,const Varnode *,void *),void *context) {
+    inferenceHint = hint;
+    inferenceHintContext = context;
+  }
+  Datatype *getInferenceHint(const Varnode *vn) const {
+    return inferenceHint == nullptr ? nullptr : inferenceHint(*this,vn,inferenceHintContext);
+  }
+  bool hasDirectCallReturnEvidence(const PcodeOp *ret,int4 slot) const;
+  void setCallInferenceHint(bool (*hint)(Funcdata &,FuncCallSpecs *,bool,void *),void *context) {
+    callInferenceHint = hint;
+    callInferenceHintContext = context;
+  }
+  bool applyCallInferenceHint(FuncCallSpecs *call,bool output) {
+    return callInferenceHint != nullptr && callInferenceHint(*this,call,output,callInferenceHintContext);
+  }
   Funcdata(const string &nm,const string &disp,Scope *conf,const Address &addr,FunctionSymbol *sym,int4 sz=0);	///< Constructor
   ~Funcdata(void);							///< Destructor
   const string &getName(void) const { return name; }			///< Get the function's local symbol name

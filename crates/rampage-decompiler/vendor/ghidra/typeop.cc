@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: retain unlocked call-result type hints during token/cast inference.
 #include "typeop.hh"
 #include "funcdata.hh"
 
@@ -731,7 +732,17 @@ Datatype *TypeOpCall::getOutputLocal(const PcodeOp *op) const
     return TypeOp::getOutputLocal(op);
 
   fc = FuncCallSpecs::getFspecFromConst(vn->getAddr());
-  if (!fc->isOutputLocked()) return TypeOp::getOutputLocal(op);
+  if (!fc->isOutputLocked()) {
+    ct = TypeOp::getOutputLocal(op);
+    // Native output-token/cast inference must see the same unlocked evidence as type propagation.
+    // Otherwise cast insertion replaces the hinted CALL output with an unknown-typed temporary.
+    if (op->getOut() != (Varnode *)0 && op->getParent() != (BlockBasic *)0) {
+      Datatype *hint = op->getParent()->getFuncdata()->getInferenceHint(op->getOut());
+      if (hint != (Datatype *)0 && hint->getSize() == op->getOut()->getSize() && hint->typeOrder(*ct) < 0)
+        ct = hint;
+    }
+    return ct;
+  }
   ct = fc->getOutputType();
   if (ct->getMetatype() == TYPE_VOID) return TypeOp::getOutputLocal(op);
   return ct;

@@ -7,6 +7,8 @@
 #include "type.hh"
 #include "translate.hh"
 #include "comment.hh"
+#include "variable.hh"
+#include "local_variables.hh"
 
 #include <cstddef>
 #include <cstdint>
@@ -242,8 +244,233 @@ inline void emitVariable(Json &json, const ghidra::Symbol *symbol, size_t &count
 }
 
 inline bool isVariable(const ghidra::Symbol *symbol) {
-    return symbol->getCategory() == ghidra::Symbol::no_category
-        || symbol->getCategory() == ghidra::Symbol::function_parameter;
+    return (symbol->getCategory() == ghidra::Symbol::no_category
+        || symbol->getCategory() == ghidra::Symbol::function_parameter)
+        && !symbol->isHiddenReturn() && !symbol->isIndirectStorage();
+}
+
+inline const ghidra::Varnode *copySource(const ghidra::Varnode *value) {
+    for (size_t depth = 0; value != nullptr && depth <= 16; ++depth) {
+        const auto *op = value->getDef();
+        if (op == nullptr || (op->code() != ghidra::CPUI_COPY && op->code() != ghidra::CPUI_CAST))
+            return value;
+        if (depth == 16 || op->numInput() != 1 || op->getIn(0)->getSize() != value->getSize()) return nullptr;
+        value = op->getIn(0);
+    }
+    return nullptr;
+}
+
+inline bool directReturn(const ghidra::Funcdata *function, const ghidra::Varnode *output) {
+    if (output == nullptr) return false;
+    bool found = false;
+    size_t visited = 0;
+    for (auto iter = function->beginOp(ghidra::CPUI_RETURN);
+         iter != function->endOp(ghidra::CPUI_RETURN); ++iter) {
+        if (++visited > 256) return false;
+        const auto *op = *iter;
+        if (op->isDead() || op->getHaltType() != 0) continue;
+        if (op->numInput() != 2) return false;
+        const auto *value = op->getIn(1);
+        bool matches = false;
+        for (size_t depth = 0; depth <= 16; ++depth) {
+            if (value == output) { matches = true; break; }
+            const auto *definition = value->getDef();
+            if (depth == 16 || definition == nullptr || definition->numInput() != 1
+                || (definition->code() != ghidra::CPUI_COPY && definition->code() != ghidra::CPUI_CAST)
+                || definition->getIn(0)->getSize() != value->getSize()) break;
+            value = definition->getIn(0);
+        }
+        if (!matches) return false;
+        found = true;
+    }
+    return found;
+}
+
+inline bool wholeMapping(const ghidra::Symbol *symbol, const ghidra::SymbolEntry *entry) {
+    if (symbol == nullptr || entry == nullptr || symbol->numEntries() != 1 || entry->isDynamic()
+        || entry->getAddr().isInvalid() || entry->isPiece() || entry->getOffset() != 0
+        || entry->getSize() != symbol->getType()->getSize()
+        || entry->getSize() <= 0 || entry->getSize() > 1048576 || entry->getUseLimit().numRanges() > 256
+        || entry->getAddr().getSpace()->getName().empty() || entry->getAddr().getSpace()->getName().size() > 128
+        || symbol->isIndirectStorage() || symbol->isHiddenReturn()) return false;
+    auto kind = entry->getAddr().getSpace()->getType();
+    return kind == ghidra::IPTR_PROCESSOR || kind == ghidra::IPTR_SPACEBASE;
+}
+
+inline void emitCallValue(Json &json, ghidra::Funcdata *function, const ghidra::Varnode *value, size_t &count,
+                           const std::vector<SavedLocal> *saved) {
+    const ghidra::Symbol *symbol = nullptr;
+    const ghidra::SymbolEntry *entry = nullptr;
+    const ghidra::Varnode *source = value == nullptr ? nullptr : copySource(value);
+    bool complete = false;
+    bool computed = source != nullptr && source->isWritten()
+        && source->getDef()->code() != ghidra::CPUI_CALL && source->getDef()->code() != ghidra::CPUI_CALLIND;
+    // Computed expressions and partial/split aliases never acquire a storage identity through spelling.
+    if (source != nullptr && !source->isConstant()) {
+        const auto *high = source->getHigh();
+        if (high != nullptr) {
+            symbol = high->getSymbol();
+            entry = high->getSymbolEntry();
+            complete = !computed && wholeMapping(symbol, entry) && high->getSymbolOffset() == -1
+                && source->getSize() == entry->getSize();
+        }
+    }
+    const ghidra::Datatype *valueType = value == nullptr ? nullptr : value->isConstant() ? value->getType()
+        : value->getHigh()->getType();
+    ghidra::Address referred;
+    if (source != nullptr && source->isConstant() && valueType != nullptr
+        && valueType->getMetatype() == ghidra::TYPE_PTR) {
+        const auto *pointer = static_cast<const ghidra::TypePointer *>(valueType);
+        auto *space = pointer->getSpace();
+        if (space == nullptr) space = function->getArch()->getDefaultDataSpace();
+        if (space != nullptr && source->getOffset() <= space->getHighest() / space->getWordSize()) {
+            auto offset = ghidra::AddrSpace::addressToByte(source->getOffset(), space->getWordSize());
+            referred = ghidra::Address(space, offset);
+        }
+    } else if (source != nullptr && source->isWritten()) {
+        const auto *definition = source->getDef();
+        if (definition->code() == ghidra::CPUI_PTRSUB && definition->numInput() == 2
+            && definition->getIn(1)->isConstant()) {
+            const auto *baseType = definition->getIn(0)->getType();
+            if (baseType->getMetatype() == ghidra::TYPE_PTR) {
+                const auto *base = static_cast<const ghidra::TypePointer *>(baseType)->getPtrTo();
+                if (base->getMetatype() == ghidra::TYPE_SPACEBASE)
+                    referred = static_cast<const ghidra::TypeSpacebase *>(base)->getAddress(
+                        definition->getIn(1)->getOffset(), definition->getIn(1)->getSize(), definition->getAddr());
+            }
+        }
+    }
+    bool globalReference = false;
+    if (!referred.isInvalid() && valueType != nullptr && valueType->getMetatype() == ghidra::TYPE_PTR) {
+        const auto *globalScope = function->getArch()->symboltab->getGlobalScope();
+        const auto *mapping = globalScope->queryByAddr(referred, ghidra::Address());
+        const auto *owner = mapping == nullptr ? nullptr : mapping->getSymbol();
+        if (wholeMapping(owner, mapping) && owner->getScope()->isGlobal() && owner->isTypeLocked()) {
+            symbol = owner;
+            entry = mapping;
+            complete = false;
+            globalReference = true;
+            // The source is the object's address, not a load of its value. Use native target widths/units.
+            valueType = function->getArch()->types->getTypePointer(value->getSize(), owner->getType(),
+                mapping->getAddr().getSpace()->getWordSize());
+        }
+    }
+    bool global = globalReference || (complete && symbol->getScope()->isGlobal());
+    json.append("{\"status\":");
+    json.quote(value == nullptr || source == nullptr ? "unknown"
+        : globalReference ? "global_address" : global ? "global"
+        : source->isConstant() ? "constant" : computed ? "computed" : complete ? "variable" : "unknown");
+    json.append(",\"data_type\":");
+    if (value == nullptr) json.append("null");
+    else emitType(json, valueType);
+    json.append(",\"symbol_type\":");
+    if (symbol == nullptr || globalReference) json.append("null");
+    else emitType(json, symbol->getType());
+    json.append(",\"storage\":");
+    if (!complete || global || !isVariable(symbol)) json.append("null");
+    else {
+        json.append("{\"kind\":");
+        json.quote(storageKind(entry->getAddr(), false));
+        json.append(",\"space\":");
+        json.quote(entry->getAddr().getSpace()->getName());
+        json.append(",\"address\":");
+        json.number(entry->getAddr().getOffset());
+        json.append(",\"size\":");
+        json.number(entry->getSize());
+        json.append(",\"use_ranges\":[");
+        const auto &ranges = entry->getUseLimit();
+        for (auto range = ranges.begin(); range != ranges.end(); ++range) {
+            countItem(count);
+            if (range != ranges.begin()) json.append(",");
+            json.append("{\"space\":");
+            json.quote(range->getSpace()->getName());
+            json.append(",\"start\":");
+            json.number(range->getFirst());
+            json.append(",\"end\":");
+            json.number(range->getLast());
+            json.append("}");
+        }
+        json.append("]}");
+    }
+    json.append(",\"raw_storage\":");
+    if (entry != nullptr) emitStorage(json, entry->getAddr(), entry->getSize(), count, entry);
+    else if (value != nullptr) emitStorage(json, value->getAddr(), value->getSize(), count);
+    else json.append("null");
+    json.append(",\"display_name\":");
+    if (symbol == nullptr) json.append("null");
+    else json.quote(symbol->getDisplayName());
+    json.append(",\"type_locked\":");
+    json.boolean(!globalReference && analystTypeLocked(symbol, saved));
+    json.append(",\"global_address\":");
+    if (global) json.number(entry->getAddr().getOffset());
+    else json.append("null");
+    json.append(",\"global_object_type\":");
+    if (global) emitType(json, symbol->getType());
+    else json.append("null");
+    json.append(",\"global_type_locked\":");
+    json.boolean(global && analystTypeLocked(symbol, saved));
+    json.append("}");
+}
+
+inline std::string callEvidenceUnavailable(const ghidra::FuncCallSpecs *call) {
+    const auto *op = call->getOp();
+    const char *reason = nullptr;
+    if (op == nullptr) reason = "missing native call operation";
+    else if (op->code() != ghidra::CPUI_CALL) reason = "indirect call";
+    else if (call->isDotdotdot()) reason = "variadic prototype";
+    else if (call->hasInputErrors()) reason = "native input prototype errors";
+    else if (call->hasOutputErrors()) reason = "native output prototype errors";
+    const auto *actual = op == nullptr ? nullptr : op->getOut();
+    if (reason == nullptr && actual != nullptr) {
+        const auto &address = actual->getAddr();
+        auto meta = actual->getHigh()->getType()->getMetatype();
+        if (address.isInvalid()) reason = "actual output has no address";
+        else if (address.getSpace()->getType() != ghidra::IPTR_PROCESSOR)
+            reason = "actual output is not one processor register (join/internal/indirect storage)";
+        else if (actual->getSize() <= 0 || actual->getSize() > 1048576) reason = "actual output width unsupported";
+        else if (actual->isProtoPartial()) reason = "actual output is a native precision piece";
+        else if (meta == ghidra::TYPE_STRUCT || meta == ghidra::TYPE_UNION || meta == ghidra::TYPE_ARRAY)
+            reason = "actual output is aggregate";
+        else if (op->getParent()->getFuncdata()->getArch()->translate->getRegisterName(address.getSpace(),
+            address.getOffset(), actual->getSize()).empty()) reason = "actual output has no single register name";
+    }
+    const auto *output = call->getOutput();
+    auto outputMeta = output->getType()->getMetatype();
+    if (reason == nullptr && (output->isIndirectStorage() || output->isHiddenReturn()
+        || (!output->getAddress().isInvalid() && output->getAddress().isJoin())
+        || outputMeta == ghidra::TYPE_STRUCT || outputMeta == ghidra::TYPE_UNION
+        || outputMeta == ghidra::TYPE_ARRAY)) reason = "prototype return uses aggregate/hidden/indirect/join storage";
+    for (ghidra::int4 i = 0; reason == nullptr && i < call->numParams(); ++i) {
+        const auto *parameter = call->getParam(i);
+        auto meta = parameter->getType()->getMetatype();
+        if (parameter->isHiddenReturn() || parameter->isIndirectStorage()
+            || meta == ghidra::TYPE_STRUCT || meta == ghidra::TYPE_UNION
+            || meta == ghidra::TYPE_ARRAY || parameter->getAddress().isInvalid()
+            || parameter->getAddress().isJoin()) reason = "parameter uses aggregate/hidden/indirect/join storage";
+    }
+    if (reason == nullptr) return {};
+    std::ostringstream detail;
+    detail << "unsupported native call evidence: " << reason
+        << "; inputs=" << (op == nullptr ? 0 : op->numInput())
+        << "; prototype_parameters=" << call->numParams()
+        << "; prototype_return_width=" << output->getSize()
+        << "; prototype_return_meta=" << int(outputMeta)
+        << "; prototype_return_locked=" << output->isTypeLocked();
+    if (!output->getAddress().isInvalid())
+        detail << "; prototype_return_space=" << output->getAddress().getSpace()->getName()
+            << "; prototype_return_offset=" << output->getAddress().getOffset();
+    if (actual != nullptr) {
+        detail << "; actual_width=" << actual->getSize()
+            << "; actual_meta=" << int(actual->getHigh()->getType()->getMetatype())
+            << "; actual_piece=" << actual->isProtoPartial();
+        if (!actual->getAddr().isInvalid())
+            detail << "; actual_space=" << actual->getSpace()->getName()
+                << "; actual_offset=" << actual->getOffset();
+        if (!actual->getAddr().isInvalid() && actual->getSpace()->getType() == ghidra::IPTR_PROCESSOR)
+            detail << "; actual_register=" << op->getParent()->getFuncdata()->getArch()->translate->getRegisterName(
+                actual->getSpace(), actual->getOffset(), actual->getSize());
+    } else detail << "; actual_output=none";
+    return detail.str();
 }
 
 inline void emitFrameContext(Json &json, const ghidra::AddrSpace *stack) {
@@ -274,7 +501,8 @@ inline void emitFrameContext(Json &json, const ghidra::AddrSpace *stack) {
 } // namespace results_detail
 
 inline std::string collectResults(ghidra::Funcdata *function,
-                                  const std::map<ghidra::uintb, ghidra::uintb> &externalSlots = {}) {
+                                  const std::map<ghidra::uintb, ghidra::uintb> &externalSlots = {},
+                                  const std::vector<SavedLocal> *saved = nullptr) {
     using namespace results_detail;
     if (function == nullptr) throw ghidra::LowlevelError("Missing function for structured result");
     Json json;
@@ -289,10 +517,13 @@ inline std::string collectResults(ghidra::Funcdata *function,
     json.append(",\"variadic\":");
     json.boolean(prototype.isDotdotdot());
     json.append(",\"parameters\":[");
+    bool firstParameter = true;
     for (ghidra::int4 i = 0; i < prototype.numParams(); ++i) {
-        countItem(count);
-        if (i != 0) json.append(",");
         const auto *parameter = prototype.getParam(i);
+        if (parameter->isHiddenReturn() || parameter->isIndirectStorage()) continue;
+        countItem(count);
+        if (!firstParameter) json.append(",");
+        firstParameter = false;
         json.append("{\"name\":");
         json.quote(parameter->getName());
         json.append(",\"data_type\":");
@@ -347,6 +578,8 @@ inline std::string collectResults(ghidra::Funcdata *function,
         json.append("]}");
     }
     json.append("],\"calls\":[");
+    size_t argumentCount = 0;
+    bool argumentBudgetExceeded = false;
     for (ghidra::int4 i = 0; i < function->numCalls(); ++i) {
         countItem(count);
         if (i != 0) json.append(",");
@@ -364,6 +597,40 @@ inline std::string collectResults(ghidra::Funcdata *function,
         else json.quote(call->getName());
         json.append(",\"indirect\":");
         json.boolean(op != nullptr && op->code() == ghidra::CPUI_CALLIND);
+        const auto unavailable = callEvidenceUnavailable(call);
+        if (!unavailable.empty()) {
+            json.append(",\"evidence_unavailable\":");
+            json.quote(unavailable);
+        } else if (argumentBudgetExceeded || size_t(op->numInput() - 1) > 256 - argumentCount) {
+            argumentBudgetExceeded = true;
+            json.append(",\"evidence_unavailable\":");
+            json.quote("native call argument evidence budget exceeded (256 per function)");
+        } else {
+            argumentCount += size_t(op->numInput() - 1);
+            json.append(",\"arguments\":[");
+            bool mapped = call->numParams() == op->numInput() - 1;
+            for (ghidra::int4 slot = 1; slot < op->numInput(); ++slot) {
+                countItem(count);
+                if (slot != 1) json.append(",");
+                json.append("{\"input_index\":");
+                json.number(slot);
+                json.append(",\"parameter_index\":");
+                if (mapped && call->getParam(slot - 1)->getSize() == op->getIn(slot)->getSize())
+                    json.number(slot - 1);
+                else json.append("null");
+                json.append(",\"value\":");
+                emitCallValue(json, function, op->getIn(slot), count, saved);
+                json.append("}");
+            }
+            json.append("]");
+            if (op->getOut() != nullptr) {
+                json.append(",\"result\":{\"value\":");
+                emitCallValue(json, function, op->getOut(), count, saved);
+                json.append(",\"direct_return\":");
+                json.boolean(directReturn(function, op->getOut()));
+                json.append("}");
+            }
+        }
         json.append("}");
     }
     json.append("],\"jump_tables\":[");

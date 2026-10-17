@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: preserve unlocked type-hint inference without analyst locks.
 #include "coreaction.hh"
 #include "condexe.hh"
 #include "double.hh"
@@ -1537,6 +1538,8 @@ void ActionFuncLink::funcLinkInput(FuncCallSpecs *fc,Funcdata &data)
       data.opInsertInput(op,data.newVarnode(param->getSize(),param->getAddress()),op->numInput());
     }
   }
+  if (!inputlocked && !varargs)
+    data.applyCallInferenceHint(fc,false);
   if (spacebase != (AddrSpace *)0)	// If we need it, create the stackplaceholder
     fc->createPlaceholder(data, spacebase);
 }
@@ -1597,7 +1600,7 @@ void ActionFuncLink::funcLinkOutput(FuncCallSpecs *fc,Funcdata &data)
       }
     }
   }
-  else
+  else if (!data.applyCallInferenceHint(fc,true))
     fc->initActiveOutput();
 }
 
@@ -1939,6 +1942,32 @@ int4 ActionReturnRecovery::apply(Funcdata &data)
 {
   ParamActive *active = data.getActiveOutput();
   if (active != (ParamActive *)0) {
+    // Adjacent register writes (for example POP RCX beside a CALL's RAX result) can leave temporary
+    // PIECE/SUBPIECE heritage plumbing. Give ordinary SSA simplification one pass before judging
+    // a known scalar call output; only the later COPY/CAST proof can make its return trial active.
+    if (active->getNumPasses() == 0 && data.numCalls() <= 256) {
+      for(int4 index=0;index<data.numCalls();++index) {
+        const FuncCallSpecs *call = data.getCallSpecs(index);
+        const ProtoParameter *output = call->getOutput();
+        const Address &address = output->getAddress();
+        const PcodeOp *callOp = call->getOp();
+        Datatype *type = call->isOutputLocked() ? output->getType()
+            : callOp == nullptr || callOp->getOut() == nullptr ? nullptr : data.getInferenceHint(callOp->getOut());
+        if (type == nullptr) continue;
+        type_metatype meta = type->getMetatype();
+        if (callOp == nullptr || callOp->code() != CPUI_CALL || type->getSize() != output->getSize()
+            || call->isNoReturn() || call->isDotdotdot() || call->hasInputErrors() || call->hasOutputErrors()
+            || output->isHiddenReturn() || output->isIndirectStorage() || address.isInvalid()
+            || address.getSpace()->getType() != IPTR_PROCESSOR
+            || (meta != TYPE_PTR && meta != TYPE_INT && meta != TYPE_UINT && meta != TYPE_BOOL && meta != TYPE_FLOAT)
+            || data.getArch()->translate->getRegisterName(address.getSpace(),address.getOffset(),
+                output->getSize()).empty()) continue;
+        if (active->getMaxPass() < 1) active->setMaxPass(1);
+        active->finishPass();
+        count += 1;
+        return 0;
+      }
+    }
     PcodeOp *op;
     Varnode *vn;
     list<PcodeOp *>::const_iterator iter,iterend;
@@ -1956,7 +1985,9 @@ int4 ActionReturnRecovery::apply(Funcdata &data)
 	if (trial.isChecked()) continue; // Already checked
 	int4 slot = trial.getSlot();
 	vn = op->getIn(slot);
-	if (ancestorReal.execute(op,slot,&trial,false))
+	if (data.hasDirectCallReturnEvidence(op,slot))
+	  trial.markActive();
+	else if (ancestorReal.execute(op,slot,&trial,false))
 	  if (data.ancestorOpUse(maxancestor,vn,op,trial,0,0))
 	    trial.markActive(); // This varnode sees active use as a parameter
 	count += 1;
@@ -5070,7 +5101,8 @@ void ActionInferTypes::buildLocaltypes(Funcdata &data)
     if ((!vn->isWritten())&&(vn->hasNoDescend())) continue;
     bool needsBlock = false;
     SymbolEntry *entry = vn->getSymbolEntry();
-    if (entry != (SymbolEntry *)0 && !vn->isTypeLock() && entry->getSymbol()->isTypeLocked()) {
+    if (entry != (SymbolEntry *)0 && !vn->isTypeLock() && entry->getSymbol()->isTypeLocked()
+        && !entry->getSymbol()->isSizeTypeLocked()) {
       int4 curOff = (vn->getAddr().getOffset() - entry->getAddr().getOffset()) + entry->getOffset();
       ct = typegrp->getExactPiece(entry->getSymbol()->getType(), curOff, vn->getSize());
       if (ct == (Datatype *)0 || ct->getMetatype() == TYPE_UNKNOWN)	// If we can't resolve, or resolve to UNKNOWN
@@ -5078,6 +5110,13 @@ void ActionInferTypes::buildLocaltypes(Funcdata &data)
     }
     else
       ct = vn->getLocalType(needsBlock);
+    // A seed participates in the ordinary native specificity order; it never creates a lock.
+    if (!vn->isTypeLock() && (entry == nullptr || !entry->getSymbol()->isTypeLocked()
+        || entry->getSymbol()->isSizeTypeLocked())) {
+      Datatype *hint = data.getInferenceHint(vn);
+      if (hint != nullptr && hint->getSize() == vn->getSize() && hint->typeOrder(*ct) < 0)
+        ct = hint;
+    }
     if (needsBlock)
       vn->setStopUpPropagation();
 #ifdef TYPEPROP_DEBUG

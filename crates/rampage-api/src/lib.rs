@@ -22,6 +22,7 @@ mod dotnet;
 mod files;
 mod frame;
 mod graph;
+mod import_types;
 mod jumptable;
 mod listing;
 mod module_references;
@@ -33,6 +34,7 @@ mod pointer_compare;
 mod pointer_observation;
 mod project;
 mod project_workspace;
+mod propagation;
 mod range_source;
 mod raw_code;
 mod raw_file;
@@ -54,7 +56,7 @@ use std::path::PathBuf;
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::LoadError;
 
-pub use annotations::DataTypeAnnotation;
+pub use annotations::{DataTypeAnnotation, DerivedTypeHint, TypeHintAnnotation, TypeHintEvidence, TypeHintTarget};
 pub use archive::{
     ArchiveMember, ArchiveMemberRef, ArchivePage, ArchiveQuery, ArchiveRef, MAX_ARCHIVE_PAGE, MAX_ARCHIVE_RESULT_BYTES,
     archive_inventory,
@@ -103,6 +105,7 @@ pub use frame::{
     FunctionFrameReport, MAX_FRAME_PAGE, MAX_FRAME_WORK, NativeFrameEvidence, TrackerFrameEvidence,
 };
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
+pub use import_types::{ImportPrototype, PosixContext, import_prototype};
 pub use jumptable::{JumpTable, JumpTableEntry};
 pub use listing::{DisassemblyLine, FunctionListing};
 pub use module_references::{
@@ -131,6 +134,11 @@ pub use project_workspace::{
     QualifiedProjectAddress, capture_project_workspace, capture_project_workspace_controlled,
     capture_project_workspace_with_session, preview_project_workspace, preview_project_workspace_controlled,
     publish_project_workspace, publish_project_workspace_controlled,
+};
+pub use propagation::{
+    MAX_PROPAGATION_CANDIDATES, MAX_PROPAGATION_EDGES, MAX_PROPAGATION_FUNCTIONS, PropagationCandidate,
+    PropagationConflict, PropagationCounts, PropagationHintEdit, PropagationRequest, PropagationResult,
+    PropagationSkip,
 };
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
@@ -188,6 +196,9 @@ pub enum ApiError {
     /// available in this environment.
     #[error("{0}")]
     Unavailable(String),
+    /// A recognized native weak-hint context refusal, not a worker transport or hard-annotation error.
+    #[error("decompiler: {0}")]
+    NativeTypeHintUnsupported(String),
     #[error(transparent)]
     DebuggerCaptureStagingRetained(#[from] DebuggerCaptureStagingRetention),
 }

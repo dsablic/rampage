@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: allow the bounded inference-hint ownership regression probe.
 /// \file varnode.hh
 /// \brief The Varnode and VarnodeBank classes
 #ifndef __VARNODE_HH__
@@ -157,6 +158,7 @@ private:
   friend class VarnodeBank;
   friend class Merge;
   friend class Funcdata;
+  friend class InferenceHintIdentityProbe;
   friend class CloneBlockOps;
   void updateCover(void) const;	///< Internal function for update coverage information
   void calcCover(void) const;	///< Turn on the Cover object for this Varnode

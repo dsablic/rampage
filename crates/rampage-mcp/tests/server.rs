@@ -123,6 +123,7 @@ async fn lists_all_tools_with_instructions() {
         "observe_indirect_branch",
         "observe_pointer",
         "persistence_surface",
+        "propagate_types",
         "query_debugger",
         "read_data",
         "redo",

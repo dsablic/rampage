@@ -295,7 +295,7 @@ DAMAGE.
 musl minimal C and Linux/POSIX type declarations
 License: MIT
 Source: https://git.musl-libc.org/cgit/musl/tree/?h=v1.2.5
-Selected header declarations adapted into the bundled type-library profiles; no libc implementation.
+Selected type/import declarations adapted into bundled profiles; no libc implementation.
 
 ------------------------------------------------------------------------------
 crates/rampage-api/resources/type-headers/LICENSE.musl
@@ -521,7 +521,7 @@ obstacle to adoption, that text has been removed.
 mingw-w64 minimal Windows type declarations
 License: ZPL-2.1 AND LicenseRef-Public-Domain
 Source: https://github.com/mingw-w64/mingw-w64/tree/v12.0.0/mingw-w64-headers
-Selected header declarations adapted into the bundled win32 type-library profile; not a Windows SDK.
+Selected type/import declarations adapted into bundled Windows profiles; not a Windows SDK.
 
 ------------------------------------------------------------------------------
 crates/rampage-api/resources/type-headers/LICENSE.mingw-w64

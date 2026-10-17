@@ -35,8 +35,41 @@ impl Eq for DecompilerConfigurationRevision {}
 
 pub(crate) use go_abi::GoPrototypes;
 pub(crate) use isolated::query_types as isolated_type_query;
+pub(crate) use symbols::posix_context;
+pub(crate) use symbols::stub_targets as import_stub_targets;
 pub(crate) use types::declaration_tokens as type_tokens;
 pub(crate) use types::validate_local_type;
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct NativeDecompileContext<'a> {
+    pub operations: &'a [rampage_decompiler::worker::WorkerOperation],
+    pub admitted: Option<&'a std::collections::BTreeSet<u64>>,
+    pub cancellation: Option<&'a std::sync::atomic::AtomicBool>,
+}
+
+pub(crate) fn hint_context_error(message: &str) -> Option<ApiError> {
+    let message = message.strip_prefix("decompiler: ").unwrap_or(message);
+    let retention_refusal = "Unsupported native soft hint: unlocked type was not retained by analysis";
+    if message == retention_refusal {
+        return Some(ApiError::NativeTypeHintUnsupported(message.to_owned()));
+    }
+    let reason = message.strip_prefix("Unsupported native callee hint context: ")?;
+    let known_refusal = matches!(
+        reason,
+        "Unsupported native hint: whole symbol mapping did not survive"
+            | "Local variable storage selector did not match a recovered symbol"
+    );
+    (known_refusal || reason == retention_refusal).then(|| ApiError::NativeTypeHintUnsupported(message.to_owned()))
+}
+
+fn native_decompile_error(error: rampage_decompiler::Error) -> ApiError {
+    if let rampage_decompiler::Error::Ghidra(message) = &error
+        && let Some(refusal) = hint_context_error(message)
+    {
+        return refusal;
+    }
+    ApiError::Unavailable(error.to_string())
+}
 
 #[derive(Debug, Serialize)]
 pub struct Decompilation {
@@ -61,7 +94,10 @@ fn serialize_structure<S: serde::Serializer>(
     fn addresses(value: &mut serde_json::Value, key: Option<&str>) {
         match value {
             serde_json::Value::Number(number)
-                if matches!(key, Some("address" | "start" | "end" | "source" | "target" | "switch_address")) =>
+                if matches!(
+                    key,
+                    Some("address" | "start" | "end" | "source" | "target" | "switch_address" | "global_address")
+                ) =>
             {
                 if let Some(address) = number.as_u64() {
                     *value = serde_json::Value::String(format!("{address:#x}"));
@@ -106,6 +142,9 @@ pub(crate) struct DecompilerState {
     data_types: std::collections::BTreeMap<u64, String>,
     local_names: std::collections::BTreeMap<u64, String>,
     local_types: std::collections::BTreeMap<u64, String>,
+    type_hints: std::collections::BTreeMap<u64, String>,
+    hint_address: Option<u64>,
+    pub(crate) propagation_cache: Option<crate::propagation::LazyContext>,
     pub(crate) worker: Option<rampage_decompiler::worker::WorkerConfig>,
     configuration_revision: Arc<()>,
 }
@@ -152,6 +191,37 @@ pub(crate) fn validate_cached_layout_source(project: &Project, state: &Decompile
 }
 
 impl Project {
+    pub(crate) fn native_type_context(
+        &self,
+        state: &DecompilerState,
+        options: &DecompilerOptions,
+        annotations: &crate::annotations::Annotations,
+        cancellation: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<(String, rampage_decompiler::DataOrganization), ApiError> {
+        if let Some(config) = &state.worker {
+            let never_cancelled = std::sync::atomic::AtomicBool::new(false);
+            let output = isolated::query_types_cancellable(
+                self,
+                annotations,
+                options,
+                config,
+                rampage_decompiler::worker::TypeQuery::Inventory,
+                &[],
+                cancellation.unwrap_or(&never_cancelled),
+            )?;
+            Ok((
+                output.language_id,
+                rampage_decompiler::DataOrganization {
+                    pointer: output.data_organization.pointer,
+                    int: output.data_organization.int,
+                    long: output.data_organization.long,
+                },
+            ))
+        } else {
+            let engine = self.build_decompiler(options, annotations)?;
+            Ok((engine.language_id().to_owned(), engine.data_organization()))
+        }
+    }
     /// Reads configured overrides without constructing an engine, deriving defaults or reading mapped bytes.
     pub fn configured_decompiler_options(&self) -> Result<Option<DecompilerOptions>, ApiError> {
         let state = match self.decompiler.try_lock() {
@@ -195,11 +265,18 @@ impl Project {
             crate::operand_types::validate_operand_annotations(self, candidate, &types)
                 .map_err(|error| error.to_string())?;
         }
-        let targets = crate::variables::targets(candidate);
+        let mut targets = crate::variables::targets(candidate);
+        targets.extend(
+            crate::propagation::replay_hints(self, options, candidate, None)
+                .map_err(|error| error.to_string())?
+                .0
+                .keys()
+                .copied(),
+        );
         if !targets.is_empty() {
             for address in targets {
                 self.decompile_annotation_candidate(state, options, candidate, address)
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| format!("validate native annotation target {address:#x}: {error}"))?;
             }
             return Ok(());
         }
@@ -231,6 +308,7 @@ impl Project {
         let mut state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         state.engine = None;
         state.worker = config;
+        state.propagation_cache = None;
         state.configuration_revision = Arc::new(());
     }
     /// Stores one address-bound C signature, including an optional calling convention such as __cdecl.
@@ -302,6 +380,7 @@ impl Project {
         let mut state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         state.engine = None;
         state.options = options;
+        state.propagation_cache = None;
         state.configuration_revision = Arc::new(());
     }
 
@@ -337,12 +416,16 @@ impl Project {
             crate::debug_layout_import::validate_replay_source(self, candidate)?;
             state.engine = None;
             state.options = options;
+            state.propagation_cache = None;
             state.configuration_revision = Arc::new(());
             Ok(())
         })
     }
 
     /// Decompiles the function containing `address` to C using bundled processor specifications.
+    /// Explicit typing inputs trigger read-only lazy derivation over at most eight context functions;
+    /// unsupported native directions are reported rather than converted into hard user overrides.
+    /// `propagate_types` with `apply=true` is the separate durable annotation operation.
     pub fn decompile(&self, address: u64) -> Result<Decompilation, ApiError> {
         self.decompile_cancellable(address, &std::sync::atomic::AtomicBool::new(false))
     }
@@ -371,6 +454,9 @@ impl Project {
         if self.binary.code_from(start).is_none() {
             return Err(ApiError::Invalid("decompilation requires a file-backed code address".to_owned()));
         }
+        let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
+        let (annotations, automatic_limitations) =
+            crate::propagation::lazy_context(self, &mut slot, &options, &annotations, start, cancellation)?;
         let name = self.function_name_in(&annotations, start);
         if let Some(config) = slot.worker.clone() {
             let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
@@ -380,7 +466,11 @@ impl Project {
                 crate::typed_data::validate_bindings(self, &annotations, &types)?;
             }
             drop(slot);
-            return isolated::decompile(self, &annotations, &options, &config, Some((start, name)), cancellation);
+            let mut result =
+                isolated::decompile(self, &annotations, &options, &config, Some((start, name)), cancellation)?;
+            crate::propagation::append_limitations(&mut result.structure, automatic_limitations);
+            result.recovery_status = result.structure.recovery_status();
+            return Ok(result);
         }
         if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(ApiError::Unavailable("decompilation cancelled".to_owned()));
@@ -395,12 +485,20 @@ impl Project {
             || slot.data_types != *annotations.data_types()
             || slot.local_names != *annotations.local_names()
             || slot.local_types != *annotations.local_types()
+            || slot.type_hints != *annotations.type_hints()
+        {
+            slot.engine = None;
+        }
+        if slot.hint_address != Some(start)
+            && (!annotations.local_types().is_empty() || !annotations.type_hints().is_empty())
         {
             slot.engine = None;
         }
         if slot.engine.is_none() {
             let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
-            slot.engine = Some(self.build_decompiler(&options, &annotations)?);
+            slot.engine =
+                Some(self.build_decompiler_with_operations(&options, &annotations, &[], Some(start), None)?);
+            slot.hint_address = Some(start);
             slot.names = annotations.names().clone();
             slot.signatures = annotations.signatures().clone();
             slot.types = annotations.types().clone();
@@ -409,7 +507,9 @@ impl Project {
             slot.data_types = annotations.data_types().clone();
             slot.local_names = annotations.local_names().clone();
             slot.local_types = annotations.local_types().clone();
+            slot.type_hints = annotations.type_hints().clone();
         }
+        let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
         let decompiler = slot.engine.as_mut().expect("just built");
         let thumb = if self.binary.arch == rampage_arch::Arch::Arm {
             context::mode_at(&self.binary.target(), &self.analysis()?.program.code_modes, start)
@@ -419,8 +519,7 @@ impl Project {
         if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(ApiError::Unavailable("decompilation cancelled".to_owned()));
         }
-        let code =
-            decompiler.decompile(start, &name, thumb).map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        let code = decompiler.decompile(start, &name, thumb).map_err(native_decompile_error)?;
         crate::debug_layout_import::validate_replay_source(self, &annotations)?;
         let tokens = decompiler
             .tokens()
@@ -432,7 +531,11 @@ impl Project {
                 span: token.span,
             })
             .collect();
-        let structure = decompiler.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        let mut structure = decompiler.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        crate::propagation::validate_replayed_targets(self, &options, &annotations, start, &structure)?;
+        let (_, limitations) = crate::propagation::replay_hints(self, &options, &annotations, Some(start))?;
+        crate::propagation::append_limitations(&mut structure, limitations);
+        crate::propagation::append_limitations(&mut structure, automatic_limitations);
         let variables = crate::variables::descriptors(&structure);
         Ok(Decompilation {
             address: start,
@@ -452,6 +555,17 @@ impl Project {
         &self,
         options: &DecompilerOptions,
         annotations: &crate::annotations::Annotations,
+    ) -> Result<Decompiler, ApiError> {
+        self.build_decompiler_with_operations(options, annotations, &[], None, None)
+    }
+
+    pub(crate) fn build_decompiler_with_operations(
+        &self,
+        options: &DecompilerOptions,
+        annotations: &crate::annotations::Annotations,
+        extra_operations: &[rampage_decompiler::worker::WorkerOperation],
+        hint_function: Option<u64>,
+        hint_context: Option<&std::collections::BTreeSet<u64>>,
     ) -> Result<Decompiler, ApiError> {
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         let binary = &self.binary;
@@ -476,10 +590,23 @@ impl Project {
         }
 
         let mut operations = symbols::plan(self, annotations)?;
+        symbols::specialize_imports(
+            annotations,
+            options,
+            decompiler.language_id(),
+            decompiler.data_organization(),
+            &mut operations,
+        )?;
         let go = go_abi::plan(self, annotations, options);
         operations.extend(types::plan(self, annotations, &go.types)?);
         operations.extend(go.prototypes);
         operations.extend(crate::variables::plan(self, annotations, None)?);
+        operations.extend(if let Some(context) = hint_context {
+            crate::propagation::hint_operations_in_context(self, options, annotations, context)?
+        } else {
+            crate::propagation::hint_operations(self, options, annotations, hint_function)?
+        });
+        operations.extend_from_slice(extra_operations);
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         symbols::apply(operations, &mut decompiler)?;
         let data_types = crate::typed_data::binding_names(annotations)?
@@ -578,25 +705,56 @@ impl Project {
         annotations: &crate::annotations::Annotations,
         address: u64,
     ) -> Result<Decompilation, ApiError> {
+        self.decompile_annotation_candidate_with_operations(
+            state,
+            options,
+            annotations,
+            address,
+            NativeDecompileContext::default(),
+        )
+    }
+
+    pub(crate) fn decompile_annotation_candidate_with_operations(
+        &self,
+        state: &DecompilerState,
+        options: &DecompilerOptions,
+        annotations: &crate::annotations::Annotations,
+        address: u64,
+        context: NativeDecompileContext<'_>,
+    ) -> Result<Decompilation, ApiError> {
+        let never_cancelled = std::sync::atomic::AtomicBool::new(false);
+        let cancellation = context.cancellation.unwrap_or(&never_cancelled);
+        if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(ApiError::Unavailable("decompilation cancelled".into()));
+        }
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         if self.binary.code_from(address).is_none() {
             return Err(ApiError::Invalid("local overrides require a file-backed function entry".to_owned()));
         }
         let name = self.function_name_in(annotations, address);
         if let Some(config) = &state.worker {
-            return isolated::decompile(
+            return isolated::decompile_with_operations(
                 self,
                 annotations,
                 options,
                 config,
                 Some((address, name)),
-                &std::sync::atomic::AtomicBool::new(false),
+                context,
             );
         }
-        let mut engine = self.build_decompiler(options, annotations)?;
+        let mut engine = self.build_decompiler_with_operations(
+            options,
+            annotations,
+            context.operations,
+            Some(address),
+            context.admitted,
+        )?;
         let thumb = self.binary.arch == rampage_arch::Arch::Arm
             && context::mode_at(&self.binary.target(), &self.analysis()?.program.code_modes, address);
-        let code = engine.decompile(address, &name, thumb).map_err(|error| ApiError::Invalid(error.to_string()))?;
+        let code = engine.decompile(address, &name, thumb).map_err(native_decompile_error)?;
+        if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(ApiError::Unavailable("decompilation cancelled".into()));
+        }
         let tokens = engine
             .tokens()
             .into_iter()
@@ -607,7 +765,10 @@ impl Project {
                 span: token.span,
             })
             .collect();
-        let structure = engine.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        let mut structure = engine.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        crate::propagation::validate_replayed_targets(self, options, annotations, address, &structure)?;
+        let (_, limitations) = crate::propagation::replay_hints(self, options, annotations, Some(address))?;
+        crate::propagation::append_limitations(&mut structure, limitations);
         let variables = crate::variables::descriptors(&structure);
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         Ok(Decompilation {

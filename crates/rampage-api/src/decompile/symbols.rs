@@ -11,6 +11,64 @@ fn canonical(name: &str) -> &str {
     name.strip_suffix("@plt").or_else(|| name.strip_suffix("@got")).unwrap_or(name)
 }
 
+pub(super) fn requires_import_context(operations: &[WorkerOperation]) -> bool {
+    operations.iter().any(|operation| {
+        matches!(operation,
+        WorkerOperation::RuntimePrototype { name, .. }
+            if matches!(name.trim_start_matches('_'), "memcpy" | "recv" | "CreateFileW")
+                || name.starts_with("_recv@") || name.starts_with("_CreateFileW@"))
+    })
+}
+
+pub(super) fn specialize_imports(
+    annotations: &Annotations,
+    options: &rampage_decompiler::DecompilerOptions,
+    language_id: &str,
+    organization: rampage_decompiler::DataOrganization,
+    operations: &mut Vec<WorkerOperation>,
+) -> Result<(), ApiError> {
+    let posix = posix_context(annotations, options, language_id)?;
+    let mut specialized = Vec::with_capacity(operations.len());
+    for operation in operations.drain(..) {
+        if let WorkerOperation::RuntimePrototype { address, indirect, name, optional } = operation {
+            let declaration =
+                crate::import_types::import_prototype(&name, options.platform, language_id, organization, posix);
+            if let Some(prototype) = declaration {
+                specialized.push(WorkerOperation::Prototype { address, indirect, declaration: prototype.declaration });
+            } else if !matches!(name.trim_start_matches('_'), "recv" | "CreateFileW")
+                && !name.starts_with("_recv@")
+                && !name.starts_with("_CreateFileW@")
+            {
+                specialized.push(WorkerOperation::RuntimePrototype { address, indirect, name, optional });
+            }
+        } else {
+            specialized.push(operation);
+        }
+    }
+    *operations = specialized;
+    Ok(())
+}
+
+pub(crate) fn posix_context(
+    annotations: &Annotations,
+    options: &rampage_decompiler::DecompilerOptions,
+    language_id: &str,
+) -> Result<Option<crate::import_types::PosixContext>, ApiError> {
+    let explicit_posix = crate::type_library::stored_declarations(annotations)?.iter().any(|unit| {
+        unit.source.as_ref().is_some_and(|source| source.kind == "profile" && source.identity == "posix-linux")
+    });
+    Ok(if explicit_posix {
+        Some(crate::import_types::PosixContext::PosixLinuxProfile)
+    } else if !matches!(language_id.rsplit(':').next(), Some("windows" | "clangwindows"))
+        && (options.platform == rampage_decompiler::Platform::Darwin
+            || matches!(language_id.rsplit(':').next(), Some("apple" | "macosx")))
+    {
+        Some(crate::import_types::PosixContext::TargetAssertion)
+    } else {
+        None
+    })
+}
+
 fn failure(address: u64, operation: &str, error: impl std::fmt::Display) -> ApiError {
     ApiError::Unavailable(format!("{operation} at {address:#x}: {error}"))
 }
@@ -88,8 +146,14 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
                 | WorkerOperation::Global { .. }
                 | WorkerOperation::Prototype { .. }
                 | WorkerOperation::LocalVariables { .. }
+                | WorkerOperation::TypeHints { .. }
         );
         match operation {
+            WorkerOperation::TypeHints { address, hints } => {
+                engine
+                    .set_type_hints(address, &hints)
+                    .map_err(|error| failure(address, "apply soft type hints", error))?;
+            }
             WorkerOperation::LocalVariables { address, overrides } => {
                 engine
                     .set_variable_overrides(address, &overrides)
@@ -168,7 +232,7 @@ fn verify_library_types(
     Ok(())
 }
 
-pub(super) fn stub_targets(project: &Project, slot: u64) -> Vec<u64> {
+pub(crate) fn stub_targets(project: &Project, slot: u64) -> Vec<u64> {
     let binary = &project.binary;
     let mut result = Vec::new();
     for (start, _) in stub_names(binary).into_iter().chain(thunk_names(binary)) {
@@ -197,4 +261,64 @@ pub(super) fn stub_targets(project: &Project, slot: u64) -> Vec<u64> {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rampage_decompiler::{DataOrganization, DecompilerOptions, Platform};
+
+    #[test]
+    fn selected_windows_recv_replaces_generic_catalog_before_the_analyst_signature() {
+        let mut operations = vec![
+            WorkerOperation::RuntimePrototype { address: 0x1000, indirect: false, name: "recv".into(), optional: true },
+            WorkerOperation::RuntimePrototype { address: 0x2000, indirect: true, name: "recv".into(), optional: true },
+            WorkerOperation::Prototype {
+                address: 0x1000,
+                indirect: false,
+                declaration: "int4 analyst_recv(void *socket);".into(),
+            },
+        ];
+        specialize_imports(
+            &Annotations::in_memory(),
+            &DecompilerOptions { platform: Platform::Windows, ..Default::default() },
+            "x86:LE:64:default:windows",
+            DataOrganization { pointer: 8, int: 4, long: 4 },
+            &mut operations,
+        )
+        .unwrap();
+        assert_eq!(operations.len(), 3);
+        for operation in &operations[..2] {
+            let WorkerOperation::Prototype { declaration, .. } = operation else { panic!("target-bound prototype") };
+            assert!(declaration.contains("int4 recv(uint8 s, char *buf, int4 len, int4 flags)"), "{declaration}");
+        }
+        assert!(matches!(&operations[2], WorkerOperation::Prototype { declaration, .. }
+            if declaration == "int4 analyst_recv(void *socket);"));
+    }
+
+    #[test]
+    fn default_model_does_not_promote_recv_to_a_posix_source_but_keeps_portable_memcpy() {
+        let mut operations = vec![
+            WorkerOperation::RuntimePrototype { address: 0x1000, indirect: false, name: "recv".into(), optional: true },
+            WorkerOperation::RuntimePrototype {
+                address: 0x2000,
+                indirect: false,
+                name: "memcpy".into(),
+                optional: true,
+            },
+        ];
+        specialize_imports(
+            &Annotations::in_memory(),
+            &DecompilerOptions::default(),
+            "x86:LE:64:default:gcc",
+            DataOrganization { pointer: 8, int: 4, long: 8 },
+            &mut operations,
+        )
+        .unwrap();
+        let [WorkerOperation::Prototype { address, declaration, .. }] = operations.as_slice() else {
+            panic!("only the portable source is admitted")
+        };
+        assert_eq!(*address, 0x2000);
+        assert!(declaration.contains("memcpy"));
+    }
 }

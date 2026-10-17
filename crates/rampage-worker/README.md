@@ -7,7 +7,57 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
-## Protocol version 6
+## Protocol version 7
+
+`type_hints` replaces the pending unlocked native evidence for one function:
+
+```json
+{"op":"type_hints","address":4096,"hints":[{"kind":"parameter","index":0,"data_type":"struct State *"}]}
+```
+
+Hint kinds are `parameter` (zero-based `index`), `return`, and `local` (the existing complete
+`VariableStorage` selector). All carry an abstract `data_type` declaration resolved with the worker's named
+type library and selected data organization. An empty hint array clears the batch. A maximum of 256 hints
+and 64 KiB of hint text is accepted per batch. Hints never set analyst name/type locks or replace the ABI,
+other prototype components, or unknown types. Analyst types win. Native whole-mapping resolution, width
+checks and retention checks occur during decompilation; unsupported aggregate/variadic/indirect shapes or
+unlocked types that do not survive analysis fail explicitly rather than hard-locking a type.
+
+Structured calls optionally include `arguments`, `result`, and `evidence_unavailable`. Argument
+`input_index` is the native CALL input slot (1 is the first argument); `parameter_index` is present only
+when the declared destination parameter mapping is unambiguous. Values contain native `data_type`,
+`raw_storage`, `display_name`, `type_locked`, optional `global_address` and a canonical `storage` only
+for one whole owning local/parameter symbol. `status` distinguishes `unknown`, `constant`, `computed`,
+`variable`, `global` (loaded value), and `global_address` (address of an object). For `global_address`,
+`data_type` is the native pointer-to-object type, `symbol_type` is absent, and `type_locked` is false.
+The optional `global_object_type` and defaulted `global_type_locked` describe the addressed object's
+analyst type without pretending that object owns the pointer argument. For `global` loads, owning
+`symbol_type`/`type_locked` still describe the actual argument value. Temporary parameter-preservation
+or rename-only size locks do not count as analyst types. Result `direct_return` requires every normal native
+return to use the call
+output through at most 16 same-width COPY/CAST nodes (at most 256 return operations are inspected).
+There is a limit of 256 exported call argument records per function. Evidence is complete per call:
+the first call that cannot fit, and subsequent calls, omit both `arguments` and `result` and report
+an explicit budget reason in `evidence_unavailable`. Earlier complete call evidence, basic call records,
+and ordinary C output remain available. The existing complete structured output budgets still apply.
+No rendered C is parsed or replaced.
+
+For caller bootstrap, registering hints on a callee also supplies native context when decompiling another
+function. The worker follows the requested function's native direct CALL edges and analyzes only relevant
+registered hinted targets (at most 32), checks their actual whole-register
+parameter mappings and native return width/storage, then seeds CALL recovery trials and the unlocked type
+lattice. It does not manufacture or lock a full prototype. Unknown/unhinted components remain native
+inference; existing explicit caller/callee prototypes take precedence. Stack, join, hidden, aggregate,
+variadic and incompatible calling-convention shapes refuse explicitly. Contexts are direct-call evidence,
+not an automatic recursive/fixed-point propagation framework; the API owns bounded graph iteration.
+
+Return-only wrappers also use native evidence without requiring an initial return hint. A known scalar/pointer
+callee output can keep a caller return-recovery trial alive only when every normal return carries that same
+CALL output through at most 16 same-width COPY/CAST nodes. For an explicitly typed caller, a single-block
+post-call P-code suffix can request the mapped callee's actual storage context; final exported return flow
+still requires SSA proof. This does not lock a caller signature or assign a type to the callee prototype.
+Register overwrites, joined/aggregate outputs, hidden storage and unsupported control flow do not establish
+the edge. Refusal messages include the specific guard and raw output/prototype widths, spaces and metadata.
 
 Protocol 6 adds native named-type inspection and bounded type-library batches. It retains local/parameter overrides,
 flat-struct layout assertions,
@@ -20,7 +70,7 @@ consecutive hexadecimal pairs with no prefix. Mapping permissions and zero-fill 
 
 ```json
 {
-  "version": 6,
+   "version": 7,
   "arch": "x86_64",
   "big_endian": false,
   "options": { "platform": "default", "compiler": null },
@@ -59,10 +109,11 @@ failed setup operation is a structured error identifying the operation index. `o
 runtime identities while preserving other setup errors. Unknown fields and versions are
 rejected.
 
-Responses are `{ "version": 6, "status": "ok", "output": ... }` or
-`{ "version": 6, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
+Responses are `{ "version": 7, "status": "ok", "output": ... }` or
+`{ "version": 7, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
 `data_organization` (`pointer`, `int`, `long` byte widths), and optional semantic `tokens` with `text`, `kind`, and
-optional numeric `address`.
+optional numeric `address` and byte `span`. Native struct/union field identifiers use kind `field`; their
+spans match the current C text and their addresses identify the originating P-code operation when available.
 The CLI uses `rampage function decompile ... --isolated`; flat `decompile` remains accepted. Batch
 `rampage binary analyze` also requires supervision for explicit decompilations and workflow previews.
 

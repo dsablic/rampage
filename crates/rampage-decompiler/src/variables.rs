@@ -183,22 +183,22 @@ pub(crate) fn validate_overrides(overrides: &[LocalOverride]) -> Result<(), Erro
 }
 
 #[repr(C)]
-struct NativeRange {
-    space: *const c_char,
-    start: u64,
-    end: u64,
+pub(crate) struct NativeRange {
+    pub(crate) space: *const c_char,
+    pub(crate) start: u64,
+    pub(crate) end: u64,
 }
 
 #[repr(C)]
-struct NativeOverride {
-    kind: u32,
-    space: *const c_char,
-    address: u64,
-    size: u32,
-    ranges: *const NativeRange,
-    range_count: usize,
-    name: *const c_char,
-    data_type: *const c_char,
+pub(crate) struct NativeOverride {
+    pub(crate) kind: u32,
+    pub(crate) space: *const c_char,
+    pub(crate) address: u64,
+    pub(crate) size: u32,
+    pub(crate) ranges: *const NativeRange,
+    pub(crate) range_count: usize,
+    pub(crate) name: *const c_char,
+    pub(crate) data_type: *const c_char,
 }
 
 unsafe extern "C" {

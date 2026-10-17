@@ -27,7 +27,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_pdb_names`, `class_evidence`,
   `language_metadata`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`,
-  `apply_data_type`, `read_data`, `apply_enum`, `apply_offset`, `function_frame`.
+  `apply_data_type`, `read_data`, `apply_enum`, `apply_offset`, `function_frame`, `propagate_types`.
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `inspect_jump_table`.
@@ -53,6 +53,11 @@ The local stripped Lua workload was also inspected through `triage_report`: stat
 does not imply target execution, and bundled signature results are distinct from matched-twin evaluator scores.
 
 ## Inputs, paging and decompiler tokens
+
+`propagate_types` previews direct-call type candidates; `apply=true` persists separate unlocked hints with
+source fingerprints. Analyst annotations take priority, conflicts remain explicit and unsupported mappings
+are not guessed. Ordinary decompilation may derive ephemeral hints without writing them; undo affects durable
+hint state, not all automatic inference. See [type propagation](type-propagation.md) for bounds and replay limits.
 
 `function_frame` pages current native variables/storage and available static stack-register evidence. Actual
 native address-space widths and entry-SP tracker coordinates remain separate. Header metadata is independently

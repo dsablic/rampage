@@ -31,6 +31,7 @@ pub enum Field {
     Global,
     LocalName,
     LocalType,
+    TypeHint,
     DataType,
     OperandType,
 }
@@ -170,7 +171,7 @@ fn canonical_operand_types(entries: &mut [OperandTypeAnnotation]) {
 }
 
 fn checked_annotation_field(field: Field) -> bool {
-    matches!(field, Field::TypeLibrary | Field::DataType | Field::OperandType)
+    matches!(field, Field::TypeLibrary | Field::DataType | Field::OperandType | Field::TypeHint)
 }
 
 /// Function-local names keyed by complete storage selectors, never by generated names.
@@ -187,6 +188,203 @@ pub struct LocalNameAnnotation {
 pub struct LocalTypeAnnotation {
     pub storage: VariableStorage,
     pub data_type: String,
+}
+
+/// Derived evidence is persisted independently of analyst-authored type overrides.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeHintAnnotation {
+    pub source_fingerprint: String,
+    pub hints: Vec<DerivedTypeHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DerivedTypeHint {
+    pub target: TypeHintTarget,
+    pub data_type: String,
+    pub evidence: Vec<TypeHintEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TypeHintTarget {
+    Local { storage: VariableStorage },
+    Parameter { index: u32, storage: VariableStorage },
+    Return,
+}
+
+impl<'de> Deserialize<'de> for TypeHintTarget {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum Target {
+            Local { storage: VariableStorage },
+            Parameter { index: u32, storage: VariableStorage },
+            Return {},
+        }
+        Ok(match Target::deserialize(deserializer)? {
+            Target::Local { storage } => Self::Local { storage },
+            Target::Parameter { index, storage } => Self::Parameter { index, storage },
+            Target::Return {} => Self::Return,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeHintEvidence {
+    #[serde(serialize_with = "rampage_arch::hex::address", deserialize_with = "deserialize_type_hint_address")]
+    pub function: u64,
+    #[serde(serialize_with = "rampage_arch::hex::address", deserialize_with = "deserialize_type_hint_address")]
+    pub at: u64,
+    pub reason: String,
+}
+
+fn deserialize_type_hint_address<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    struct Address;
+
+    impl serde::de::Visitor<'_> for Address {
+        type Value = u64;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an unsigned 64-bit number or 0x-prefixed hexadecimal address")
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<u64, E> {
+            Ok(value)
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<u64, E> {
+            rampage_arch::hex::deserialize_address(serde::de::value::StrDeserializer::<E>::new(value))
+        }
+    }
+
+    deserializer.deserialize_any(Address)
+}
+
+pub fn parse_type_hints(value: &str) -> Result<TypeHintAnnotation, String> {
+    preflight_typed_value(value)?;
+    let mut entry: TypeHintAnnotation =
+        serde_json::from_str(value).map_err(|error| format!("invalid type hint annotation: {error}"))?;
+    validate_type_hints(&entry)?;
+    canonical_type_hints(&mut entry)?;
+    Ok(entry)
+}
+
+pub fn encode_type_hints(entry: &TypeHintAnnotation) -> Result<String, String> {
+    validate_type_hints(entry)?;
+    let mut entry = entry.clone();
+    canonical_type_hints(&mut entry)?;
+    let mut encoded = CheckedLogBuffer::default();
+    serde_json::to_writer(&mut encoded, &entry).map_err(|error| error.to_string())?;
+    if encoded.bytes.len() > CHECKED_VALUE_BYTES {
+        return Err(CHECKED_ERROR.to_owned());
+    }
+    checked_json_preflight(&encoded.bytes, false)?;
+    String::from_utf8(encoded.bytes).map_err(|error| error.to_string())
+}
+
+fn type_hint_target_key(target: &TypeHintTarget) -> Result<String, String> {
+    let mut target = target.clone();
+    canonical_type_hint_target(&mut target);
+    serde_json::to_string(&target).map_err(|error| error.to_string())
+}
+
+fn canonical_type_hint_target(target: &mut TypeHintTarget) {
+    let storage = match target {
+        TypeHintTarget::Local { storage } | TypeHintTarget::Parameter { storage, .. } => storage,
+        TypeHintTarget::Return => return,
+    };
+    canonical_type_hint_storage(storage);
+}
+
+fn canonical_type_hint_storage(storage: &mut VariableStorage) {
+    storage
+        .use_ranges
+        .sort_by(|left, right| (&left.space, left.start, left.end).cmp(&(&right.space, right.start, right.end)));
+}
+
+fn validate_type_hint_storage(storage: &VariableStorage) -> Result<(), String> {
+    if storage.space.len() > 128
+        || storage.use_ranges.len() > 256
+        || storage.use_ranges.iter().any(|range| range.space.len() > 128)
+    {
+        return Err("unsupported or incomplete variable storage selector".to_owned());
+    }
+    let mut storage = storage.clone();
+    canonical_type_hint_storage(&mut storage);
+    storage.validate().map_err(|error| error.to_string())
+}
+
+fn validate_type_hints(entry: &TypeHintAnnotation) -> Result<(), String> {
+    if entry.source_fingerprint.len() != 64 || !entry.source_fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("type hint source fingerprint requires exactly 64 ASCII hexadecimal digits".to_owned());
+    }
+    if entry.hints.is_empty() || entry.hints.len() > 256 {
+        return Err("type hint collections require 1..=256 entries; clear with None".to_owned());
+    }
+    let mut targets = std::collections::BTreeSet::new();
+    let mut parameters = std::collections::BTreeSet::new();
+    let mut bytes = entry.source_fingerprint.len();
+    for hint in &entry.hints {
+        let storage = match &hint.target {
+            TypeHintTarget::Local { storage } => Some(storage),
+            TypeHintTarget::Parameter { index, storage } => {
+                if !parameters.insert(*index) {
+                    return Err("duplicate type hint parameter index".to_owned());
+                }
+                Some(storage)
+            }
+            TypeHintTarget::Return => None,
+        };
+        if let Some(storage) = storage {
+            validate_type_hint_storage(storage)?;
+            bytes += storage.space.len();
+            bytes += storage.use_ranges.iter().map(|range| range.space.len()).sum::<usize>();
+        }
+        if hint.data_type.trim().is_empty()
+            || hint.data_type.len() > 4096
+            || hint.data_type.chars().any(char::is_control)
+        {
+            return Err("type hint requires a bounded abstract declaration without control characters".to_owned());
+        }
+        if hint.evidence.len() > 16 {
+            return Err("type hints allow at most 16 evidence entries".to_owned());
+        }
+        bytes += hint.data_type.len();
+        for evidence in &hint.evidence {
+            if evidence.reason.trim().is_empty() || evidence.reason.chars().any(char::is_control) {
+                return Err("type hint evidence requires nonempty reason text without control characters".to_owned());
+            }
+            bytes = bytes.checked_add(evidence.reason.len()).ok_or(CHECKED_ERROR)?;
+        }
+        if bytes > 65536 {
+            return Err("type hint annotation text exceeds 64 KiB".to_owned());
+        }
+        if !targets.insert(type_hint_target_key(&hint.target)?) {
+            return Err("duplicate type hint target".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn canonical_type_hints(entry: &mut TypeHintAnnotation) -> Result<(), String> {
+    entry.source_fingerprint.make_ascii_lowercase();
+    for hint in &mut entry.hints {
+        canonical_type_hint_target(&mut hint.target);
+        hint.evidence.sort_by(|left, right| {
+            (left.function, left.at, &left.reason).cmp(&(right.function, right.at, &right.reason))
+        });
+    }
+    let mut keyed = entry
+        .hints
+        .drain(..)
+        .map(|hint| type_hint_target_key(&hint.target).map(|key| (key, hint)))
+        .collect::<Result<Vec<_>, _>>()?;
+    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+    entry.hints = keyed.into_iter().map(|(_, hint)| hint).collect();
+    Ok(())
 }
 
 const LOCAL_ENTRIES: usize = 256;
@@ -393,6 +591,7 @@ fn canonical_local_value(field: Field, value: Option<&str>) -> Result<Option<Str
         .map(|value| match field {
             Field::LocalName => encode_local_names(&parse_local_names(value)?),
             Field::LocalType => encode_local_types(&parse_local_types(value)?),
+            Field::TypeHint => encode_type_hints(&parse_type_hints(value)?),
             Field::TypeLibrary => encode_type_library(&parse_type_library(value)?),
             Field::DataType => encode_data_type(&parse_data_type(value)?),
             Field::OperandType => encode_operand_types(&parse_operand_types(value)?),
@@ -405,6 +604,7 @@ fn validate_local_value(field: Field, value: &str) -> Result<(), String> {
     match field {
         Field::LocalName => parse_local_names(value).map(|_| ()),
         Field::LocalType => parse_local_types(value).map(|_| ()),
+        Field::TypeHint => parse_type_hints(value).map(|_| ()),
         Field::TypeLibrary => parse_type_library(value).map(|_| ()),
         Field::DataType => parse_data_type(value).map(|_| ()),
         Field::OperandType => parse_operand_types(value).map(|_| ()),
@@ -511,6 +711,7 @@ pub struct Annotations {
     globals: BTreeMap<u64, String>,
     local_names: BTreeMap<u64, String>,
     local_types: BTreeMap<u64, String>,
+    type_hints: BTreeMap<u64, String>,
     data_types: BTreeMap<u64, String>,
     operand_types: BTreeMap<u64, String>,
     /// Steps applied in this session, for undo; and undone ones, for redo. A step is the edits one call made,
@@ -672,7 +873,10 @@ impl Annotations {
     }
 
     fn has_checked_annotations(&self) -> bool {
-        !self.type_library.is_empty() || !self.data_types.is_empty() || !self.operand_types.is_empty()
+        !self.type_library.is_empty()
+            || !self.data_types.is_empty()
+            || !self.operand_types.is_empty()
+            || !self.type_hints.is_empty()
     }
 
     fn introduces_checked_state(&self, field: Field, value: Option<&str>) -> bool {
@@ -703,6 +907,7 @@ impl Annotations {
             .saturating_add(self.globals.len())
             .saturating_add(self.local_names.len())
             .saturating_add(self.local_types.len())
+            .saturating_add(self.type_hints.len())
             .saturating_add(self.data_types.len())
             .saturating_add(self.operand_types.len())
             .saturating_add(self.addresses.len())
@@ -724,6 +929,7 @@ impl Annotations {
             .chain(self.globals.values())
             .chain(self.local_names.values())
             .chain(self.local_types.values())
+            .chain(self.type_hints.values())
             .chain(self.data_types.values())
             .chain(self.operand_types.values())
             .chain(self.addresses.keys())
@@ -822,6 +1028,7 @@ impl Annotations {
             globals: self.globals.clone(),
             local_names: self.local_names.clone(),
             local_types: self.local_types.clone(),
+            type_hints: self.type_hints.clone(),
             data_types: self.data_types.clone(),
             operand_types: self.operand_types.clone(),
             checked_reads: self.checked_reads,
@@ -875,7 +1082,12 @@ impl Annotations {
         let Some(log) = &mut self.log else { return Ok(false) };
         let mut next_log = log.clone();
         let (restart, edits) = read_new_edits(&mut next_log, checked)?;
-        if !checked && edits.iter().any(|edit| matches!(edit.field, Field::DataType | Field::OperandType)) {
+        let introduces_checked_state =
+            edits.iter().any(|edit| self.introduces_checked_state(edit.field, edit.value.as_deref()));
+        if introduces_checked_state {
+            checked_full_log(&next_log, &[])?;
+        }
+        if !checked && (introduces_checked_state || edits.iter().any(|edit| checked_annotation_field(edit.field))) {
             self.preflight_checked()?;
             let mut staged = Self {
                 done: self.done.clone(),
@@ -919,6 +1131,7 @@ impl Annotations {
             self.globals.clear();
             self.local_names.clear();
             self.local_types.clear();
+            self.type_hints.clear();
             self.data_types.clear();
             self.operand_types.clear();
             self.managed_layouts = 0;
@@ -977,6 +1190,7 @@ impl Annotations {
             | Field::Global
             | Field::LocalName
             | Field::LocalType
+            | Field::TypeHint
             | Field::DataType
             | Field::OperandType => {
                 let values = match edit.field {
@@ -985,6 +1199,7 @@ impl Annotations {
                     Field::TypeLibrary => &mut self.type_library,
                     Field::LocalName => &mut self.local_names,
                     Field::LocalType => &mut self.local_types,
+                    Field::TypeHint => &mut self.type_hints,
                     Field::DataType => &mut self.data_types,
                     Field::OperandType => &mut self.operand_types,
                     _ => &mut self.globals,
@@ -1520,6 +1735,7 @@ impl Annotations {
                     | Field::Global
                     | Field::LocalName
                     | Field::LocalType
+                    | Field::TypeHint
                     | Field::DataType
                     | Field::OperandType
             ) || (edit.field == Field::Name && (!candidate.globals().is_empty() || !candidate.data_types().is_empty()))
@@ -1573,6 +1789,7 @@ impl Annotations {
             Field::Global => &self.globals,
             Field::LocalName => &self.local_names,
             Field::LocalType => &self.local_types,
+            Field::TypeHint => &self.type_hints,
             Field::DataType => &self.data_types,
             Field::OperandType => &self.operand_types,
         }
@@ -1622,6 +1839,10 @@ impl Annotations {
         &self.local_types
     }
 
+    pub fn type_hints(&self) -> &BTreeMap<u64, String> {
+        &self.type_hints
+    }
+
     pub fn data_types(&self) -> &BTreeMap<u64, String> {
         &self.data_types
     }
@@ -1631,6 +1852,9 @@ impl Annotations {
     }
 
     fn validate_local_collections(&self) -> Result<(), String> {
+        for value in self.type_hints.values() {
+            parse_type_hints(value)?;
+        }
         for value in self.data_types.values() {
             parse_data_type(value)?;
         }
@@ -1668,7 +1892,11 @@ mod type_library_tests;
 #[path = "annotations_data_types_tests.rs"]
 mod data_types_tests;
 
-/// A first checked write must remain readable from the beginning, not just from a legacy cursor that skipped lines.
+#[cfg(test)]
+#[path = "annotations_type_hint_tests.rs"]
+mod type_hint_tests;
+
+/// A first checked transition must be readable from the beginning, not just from a legacy cursor that skipped lines.
 fn checked_full_log(log: &Log, extra: &[Edit]) -> Result<(), String> {
     let mut full =
         Log { read: 0, identity: None, logged_image: None, unattributed: false, other_image: None, ..log.clone() };

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: separate size-preservation recommendations from analyst type locks.
 #include "database.hh"
 #include "funcdata.hh"
 #include "crc32.hh"
@@ -137,8 +138,15 @@ bool SymbolEntry::updateType(Varnode *vn) const
 {
   if ((symbol->getFlags()&Varnode::typelock)!=0) { // Type will just get replaced if not locked
     Datatype *dt = getSizedType(vn->getAddr(),vn->getSize());
-    if (dt != (Datatype *)0)
+    if (dt != (Datatype *)0) {
+      // A preserved size is not an analyst type assertion, even after inference refines the symbol.
+      if (symbol->isSizeTypeLocked()) {
+        if (dt->getMetatype() == TYPE_UNKNOWN || dt->typeOrder(*vn->getType()) >= 0)
+          return false;
+        return vn->updateType(dt);
+      }
       return vn->updateType(dt,true,true);
+    }
   }
   return false;
 }
@@ -2053,9 +2061,10 @@ void ScopeInternal::clearUnlocked(void)
 	  renameSymbol(sym,buildUndefinedName());
 	}
       }
-      clearAttribute(sym, Varnode::nolocalalias);	// Clear any calculated attributes
       if (sym->isSizeTypeLocked())
 	resetSizeLockType(sym);
+      // Attribute updates recheck locks: reset first so an inferred type never becomes authoritative.
+      clearAttribute(sym, Varnode::nolocalalias);	// Clear any calculated attributes
     }
     else if (sym->getCategory() == Symbol::equate) {
       // Note we treat EquateSymbols as locked for purposes of this method

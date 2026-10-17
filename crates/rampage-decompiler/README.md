@@ -164,9 +164,11 @@ Storage offsets are qualified by address-space kind and must not be treated as p
 Storage use ranges select Ghidra definition/use points, not value liveness; entry inputs commonly select entry-1.
 Single-piece joins may represent floating-point precision extension, not a bytewise copy into the logical type.
 The UI pseudocode panel loads in the background and coalesces navigation while a request runs. Semantic tokens
-carry byte spans in the rendered C, enabling inline navigation; flow-only records remain spanless. Jump tables
-include recovered raw case-value bit patterns, with null for absent labels. Engine output is evidence, not a
-guarantee of recovered source types or original source structure.
+carry byte spans in the rendered C, enabling inline navigation; flow-only records remain spanless.
+Native field identifiers are emitted as `field` tokens with exact byte spans and the originating P-code operation
+address when available, using Ghidra's field-emission hook rather than scanning the rendered text.
+Jump tables include recovered raw case-value bit patterns, with null for absent labels. Engine output is evidence,
+not a guarantee of recovered source types or original source structure.
 
 Recovery diagnostics export the engine's warning database, current-pass bad-data/unimplemented flags and counts
 of unresolved calls, indirect jumps and partial jump tables. `recovery_status` distinguishes `incomplete`,
@@ -182,8 +184,8 @@ Text output is bounded to four MiB and tokens to 262,144; the engine also retain
 Sessions select a sibling worker automatically when installed beside the application; `tools/install.sh`
 installs the worker and CLI together, optionally with the UI. Direct `Project` construction remains explicitly
 opt-in; `Session::open` also selects a sibling worker when present.
-Worker protocol version 6 carries ordered symbol/type/prototype/global/mode, `no_return`, local-variable and
-layout-assertion operations; mismatched request or response versions are rejected. Install the CLI and worker
+Worker protocol version 7 carries ordered symbol/type/prototype/global/mode, `no_return`, local-variable,
+soft-type-hint and layout-assertion operations; mismatched request or response versions are rejected. Install CLI and worker
 together rather than mixing builds.
 The protocol bounds input/output, drains pipes concurrently, cancels/times out and reaps failed children without
 native fallback. Hard wire limits are 128 MiB requests, 16 MiB stdout and 64 KiB stderr. Defaults are 30 seconds

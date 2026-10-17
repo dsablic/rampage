@@ -150,7 +150,16 @@ struct SavedLocal {
     std::string name;
     ghidra::uint4 locks;
     bool isolated;
+    bool analystType;
 };
+
+inline bool analystTypeLocked(const ghidra::Symbol *symbol, const std::vector<SavedLocal> *saved = nullptr) {
+    if (symbol == nullptr) return false;
+    if (saved != nullptr)
+        for (const auto &original : *saved)
+            if (original.symbol == symbol) return original.analystType;
+    return symbol->isTypeLocked() && !symbol->isSizeTypeLocked();
+}
 
 inline void restoreLocals(ghidra::Scope *scope, std::vector<SavedLocal> &saved) {
     using namespace ghidra;
@@ -219,7 +228,8 @@ inline void applyLocals(ghidra::Funcdata *function, const std::vector<LocalOverr
         const auto &item = overrides[i];
         parameterSelected |= symbol->getCategory() == Symbol::function_parameter;
         saved.push_back({symbol, symbol->getType(), symbol->getName(),
-                         symbol->getFlags() & (Varnode::typelock | Varnode::namelock), symbol->isIsolated()});
+                         symbol->getFlags() & (Varnode::typelock | Varnode::namelock), symbol->isIsolated(),
+                         item.type != nullptr || analystTypeLocked(symbol)});
         Datatype *type = item.type;
         if (type == nullptr) type = symbol->isTypeLocked() ? symbol->getType()
             : function->getArch()->types->getBase(item.size, TYPE_UNKNOWN);
@@ -239,7 +249,12 @@ inline void applyLocals(ghidra::Funcdata *function, const std::vector<LocalOverr
             Symbol *symbol = scope->getCategorySymbol(Symbol::function_parameter, i);
             if (symbol == nullptr || selected.count(symbol) != 0) continue;
             saved.push_back({symbol, symbol->getType(), symbol->getName(),
-                             symbol->getFlags() & (Varnode::typelock | Varnode::namelock), symbol->isIsolated()});
+                             symbol->getFlags() & (Varnode::typelock | Varnode::namelock), symbol->isIsolated(),
+                             analystTypeLocked(symbol)});
+            if (!saved.back().analystType) {
+                Datatype *unknown = function->getArch()->types->getBase(symbol->getType()->getSize(), TYPE_UNKNOWN);
+                scope->retypeSymbol(symbol, unknown);
+            }
             scope->setAttribute(symbol, Varnode::typelock | Varnode::namelock);
         }
     }

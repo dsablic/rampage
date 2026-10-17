@@ -1,0 +1,117 @@
+Project: mingw-w64 v12.0.0
+Scope: Declaration and ABI facts only; no implementation code or proprietary SDK material.
+Modified 2026-10-17: minimal excerpts and sized-core-type substitutions for rampage's native C parser.
+
+Sources and retained declaration excerpts (all paths relative to this versioned upstream base):
+https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/
+mingw-w64-headers/include/winsock2.h:
+    #define WSAAPI WINAPI
+    WINSOCK_API_LINKAGE int WSAAPI recv(SOCKET s,char *buf,int len,int flags);
+mingw-w64-headers/include/psdk_inc/_socket_types.h:
+    typedef UINT_PTR SOCKET;
+mingw-w64-headers/include/fileapi.h:
+    WINBASEAPI HANDLE WINAPI CreateFileW (LPCWSTR lpFileName, DWORD dwDesiredAccess,
+        DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+        DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile);
+mingw-w64-headers/include/minwindef.h:
+    #define WINAPI __stdcall
+    typedef unsigned __LONG32 DWORD;
+mingw-w64-headers/include/basetsd.h:
+    #ifdef _WIN64
+      __MINGW_EXTENSION typedef unsigned __int64 UINT_PTR,*PUINT_PTR;
+    #else
+      typedef unsigned int UINT_PTR,*PUINT_PTR;
+    #endif
+mingw-w64-headers/include/winnt.h:
+    typedef wchar_t WCHAR;
+    typedef CONST WCHAR *LPCWSTR,*PCWSTR;
+    typedef void *HANDLE;
+mingw-w64-headers/crt/stddef.h:
+    #ifndef __WCHAR_TYPE__
+    /* wchar_t is unsigned short for compatibility with MS runtime */
+    #define __WCHAR_TYPE__ unsigned short
+    #endif
+mingw-w64-headers/crt/_mingw.h.in:
+    /* Target specific macro replacement for type "long". In the Windows API,
+       the type long is always 32 bit, even if the target is 64 bit (LLP64). */
+
+Additional type/convention sources (same versioned upstream base):
+mingw-w64-headers/include/basetsd.h (UINT_PTR is pointer-width unsigned)
+mingw-w64-headers/include/winnt.h (HANDLE pointer, WCHAR and LPCWSTR)
+mingw-w64-headers/crt/_mingw.h.in (target definitions and Windows LLP64 __LONG32 rationale)
+mingw-w64-headers/crt/stddef.h (16-bit Windows wchar_t, independently of host wchar_t)
+mingw-w64-headers/crt/_mingw_mac.h (size/wchar defaults and x86 vs x64 symbol-prefix context)
+The existing resources/type-headers/provenance.json retains these Windows type substitutions too.
+
+Adaptations: Accept selected windows/clangwindows compiler context with int=4, long=4 and pointer=4/8.
+The WinAPI subset is bounded to x86/x64. On x86, emit __stdcall for recv/CreateFileW; memcpy is C cdecl.
+On x64, use the selected Windows compiler's unified model, not an x86 __stdcall model.
+recv returns int4, takes uint{pointer} SOCKET, char *buffer, int4 length and int4 flags. This corrects
+the generic runtime catalog's POSIX recv shape, including on Win64 (LLP64, not LP64).
+CreateFileW returns void * HANDLE, takes uint2 * filename, uint4 access/share/disposition/flags,
+void * security attributes and void * template handle. Omit const/attributes/macros/includes;
+security attributes remain opaque: no structure layout is imported or inferred.
+Only exact names and exact _recv@16 / _CreateFileW@28 x86 stdcall decoration are accepted.
+Header provenance and an import spelling do not prove an implementation, runtime OS or producer.
+
+License: ZPL-2.1 for unmarked headers; public domain for winsock2.h, _socket_types.h and the CRT headers.
+License source: https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/COPYING
+Notices retained from existing resources/type-headers/LICENSE.mingw-w64 and DISCLAIMER.PD.mingw-w64:
+
+With exception of certain parts that are prominently marked as being
+in the Public Domain, BSD, or LGPL this Software is provided under the
+Zope Public License (ZPL) Version 2.1.
+
+Copyright (c) 2009 - 2013 by the mingw-w64 project
+
+See the AUTHORS file for the list of contributors to the mingw-w64 project.
+
+This license has been certified as open source. It has also been designated
+as GPL compatible by the Free Software Foundation (FSF).
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+    1. Redistributions in source code must retain the accompanying copyright
+       notice, this list of conditions, and the following disclaimer.
+    2. Redistributions in binary form must reproduce the accompanying
+       copyright notice, this list of conditions, and the following disclaimer
+       in the documentation and/or other materials provided with the
+       distribution.
+    3. Names of the copyright holders must not be used to endorse or promote
+       products derived from this software without prior written permission
+       from the copyright holders.
+    4. The right to distribute this software or to use it for any purpose does
+       not give you the right to use Servicemarks (sm) or Trademarks (tm) of
+       the copyright holders. Use of them is covered by separate agreement
+       with the copyright holders.
+    5. If any files are modified, you must cause the modified files to carry
+       prominent notices stating that you changed the files and the date of
+       any change.
+
+Disclaimer
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY EXPRESSED
+OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Public-domain disclaimer source:
+https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/DISCLAIMER.PD
+
+/**
+ * DISCLAIMER
+ * This file has no copyright assigned and is placed in the Public Domain.
+ * This file is part of the mingw-w64 runtime package.
+ *
+ * The mingw-w64 runtime package and its code is distributed in the hope that it
+ * will be useful but WITHOUT ANY WARRANTY. ALL WARRANTIES, EXPRESSED OR
+ * IMPLIED ARE HEREBY DISCLAIMED. This includes but is not limited to
+ * warranties of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ */

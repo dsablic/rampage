@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 // Modified for rampage: recovery flags describe the current analysis, not earlier decoding passes.
+// Also retains native return-trial evidence for bounded direct-call type propagation.
 #include "funcdata.hh"
 
 namespace ghidra {
@@ -25,6 +26,53 @@ ElementId ELEM_FUNCTION = ElementId("function",116);
 ElementId ELEM_HIGHLIST = ElementId("highlist",117);
 ElementId ELEM_JUMPTABLELIST = ElementId("jumptablelist",118);
 ElementId ELEM_VARNODES = ElementId("varnodes",119);
+
+/// Recognize only a same-width native CALL -> COPY/CAST -> normal RETURN value shared by all returns.
+bool Funcdata::hasDirectCallReturnEvidence(const PcodeOp *ret,int4 slot) const
+
+{
+  if (ret == nullptr || ret->code() != CPUI_RETURN || ret->isDead() || ret->getHaltType() != 0
+      || slot < 1 || slot >= ret->numInput()) return false;
+  const Varnode *root = ret->getIn(slot);
+  int4 width = root->getSize();
+  int4 depth = 0;
+  while(root->isWritten() && (root->getDef()->code() == CPUI_COPY || root->getDef()->code() == CPUI_CAST)) {
+    const PcodeOp *def = root->getDef();
+    if (++depth > 16 || def->numInput() != 1 || def->getIn(0)->getSize() != width) return false;
+    root = def->getIn(0);
+  }
+  if (!root->isWritten() || root->getDef()->code() != CPUI_CALL || root->isProtoPartial()
+      || root->getAddr().isInvalid() || root->getSpace()->getType() != IPTR_PROCESSOR
+      || glb->translate->getRegisterName(root->getSpace(),root->getOffset(),width).empty()) return false;
+  const FuncCallSpecs *call = getCallSpecs(root->getDef());
+  if (call == nullptr || call->isNoReturn() || call->isDotdotdot() || call->hasInputErrors() || call->hasOutputErrors()
+      || call->numParams() > 256 || call->getOutput()->isIndirectStorage()
+      || call->getOutput()->isHiddenReturn()) return false;
+  for(int4 i=0;i<call->numParams();++i)
+    if (call->getParam(i)->isHiddenReturn() || call->getParam(i)->isIndirectStorage()) return false;
+  Datatype *type = call->isOutputLocked() ? call->getOutputType() : getInferenceHint(root);
+  if (type == nullptr || type->getSize() != width) return false;
+  type_metatype meta = type->getMetatype();
+  if (meta != TYPE_PTR && meta != TYPE_INT && meta != TYPE_UINT && meta != TYPE_BOOL && meta != TYPE_FLOAT)
+    return false;
+  int4 visited = 0;
+  for(auto iter=beginOp(CPUI_RETURN);iter!=endOp(CPUI_RETURN);++iter) {
+    const PcodeOp *op = *iter;
+    if (++visited > 256) return false;
+    if (op->isDead() || op->getHaltType() != 0) continue;
+    if (slot >= op->numInput()) return false;
+    const Varnode *value = op->getIn(slot);
+    depth = 0;
+    while(value != root) {
+      const PcodeOp *def = value->getDef();
+      if (++depth > 16 || def == nullptr || def->numInput() != 1
+          || (def->code() != CPUI_COPY && def->code() != CPUI_CAST)
+          || value->getSize() != width || def->getIn(0)->getSize() != width) return false;
+      value = def->getIn(0);
+    }
+  }
+  return true;
+}
 
 /// \param nm is the (base) name of the function, as a formal symbol
 /// \param disp is the name used when displaying the function name in output

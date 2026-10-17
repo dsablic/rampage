@@ -495,6 +495,7 @@ impl Project {
                         && candidate.local_types().is_empty()
                         && candidate.data_types().is_empty()
                         && candidate.operand_types().is_empty()
+                        && candidate.type_hints().is_empty()
                     {
                         return Ok(());
                     }
@@ -531,6 +532,7 @@ impl Project {
                         && candidate.local_types().is_empty()
                         && candidate.data_types().is_empty()
                         && candidate.operand_types().is_empty()
+                        && candidate.type_hints().is_empty()
                     {
                         return Ok(());
                     }
@@ -555,6 +557,7 @@ impl Project {
             globals: rows(annotations.globals()),
             local_names: rows(annotations.local_names()),
             local_types: rows(annotations.local_types()),
+            type_hints: rows(annotations.type_hints()),
             type_library: rows(annotations.type_library()),
             data_types: rows(annotations.data_types()),
             operand_types: rows(annotations.operand_types()),

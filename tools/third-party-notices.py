@@ -50,7 +50,7 @@ VENDORED = [
         "musl minimal C and Linux/POSIX type declarations",
         "MIT",
         "https://git.musl-libc.org/cgit/musl/tree/?h=v1.2.5",
-        "Selected header declarations adapted into the bundled type-library profiles; no libc implementation.",
+        "Selected type/import declarations adapted into bundled profiles; no libc implementation.",
         [
             "crates/rampage-api/resources/type-headers/LICENSE.musl",
             "crates/rampage-api/resources/type-headers/COPYRIGHT.musl",
@@ -60,7 +60,7 @@ VENDORED = [
         "mingw-w64 minimal Windows type declarations",
         "ZPL-2.1 AND LicenseRef-Public-Domain",
         "https://github.com/mingw-w64/mingw-w64/tree/v12.0.0/mingw-w64-headers",
-        "Selected header declarations adapted into the bundled win32 type-library profile; not a Windows SDK.",
+        "Selected type/import declarations adapted into bundled Windows profiles; not a Windows SDK.",
         [
             "crates/rampage-api/resources/type-headers/LICENSE.mingw-w64",
             "crates/rampage-api/resources/type-headers/DISCLAIMER.PD.mingw-w64",
