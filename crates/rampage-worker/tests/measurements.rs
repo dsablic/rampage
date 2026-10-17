@@ -41,6 +41,7 @@ fn request() -> WorkerRequest {
         decompile: WorkerFunction { address: BASE, name: "owned_return_five".to_owned(), thumb: false },
         tokens: true,
         validate_only: false,
+        type_query: None,
     }
 }
 
@@ -63,6 +64,8 @@ fn native() -> Result<WorkerOutput, rampage_decompiler::Error> {
         .collect();
     let organization = engine.data_organization();
     Ok(WorkerOutput {
+        type_declarations: None,
+        type_inventory: None,
         text,
         language_id: engine.language_id().to_owned(),
         data_organization: WorkerDataOrganization {

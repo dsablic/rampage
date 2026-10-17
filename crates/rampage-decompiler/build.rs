@@ -27,6 +27,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/tokens.hh");
     println!("cargo:rerun-if-changed=src/results.hh");
     println!("cargo:rerun-if-changed=src/local_variables.hh");
+    println!("cargo:rerun-if-changed=src/type_library.hh");
     println!("cargo:rerun-if-changed=vendor/ghidra");
 }
 

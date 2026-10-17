@@ -481,21 +481,25 @@ impl Project {
     pub fn undo(&self) -> Result<Vec<Edit>, ApiError> {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
-        self.annotations
-            .write()
-            .expect("annotations lock")
-            .undo_validated(|candidate| {
-                if candidate.types().is_empty()
-                    && candidate.signatures().is_empty()
-                    && candidate.globals().is_empty()
-                    && candidate.local_names().is_empty()
-                    && candidate.local_types().is_empty()
-                {
-                    return Ok(());
-                }
-                self.validate_annotation_snapshot(&state, &options, candidate)
-            })
-            .map_err(ApiError::Invalid)
+        self.annotations.write().expect("annotations lock").locked_staged_history(false, |annotations| {
+            let previous = crate::type_library::stored_declarations(annotations)?;
+            annotations
+                .undo_validated(|candidate| {
+                    self.validate_type_library_transition(&state, &options, &previous, candidate)
+                        .map_err(|error| error.to_string())?;
+                    if candidate.types().is_empty()
+                        && candidate.type_library().is_empty()
+                        && candidate.signatures().is_empty()
+                        && candidate.globals().is_empty()
+                        && candidate.local_names().is_empty()
+                        && candidate.local_types().is_empty()
+                    {
+                        return Ok(());
+                    }
+                    self.validate_annotation_snapshot(&state, &options, candidate)
+                })
+                .map_err(ApiError::Invalid)
+        })
     }
 
     /// Drops the last edit or batch from this project's undo history without reverting it: the way past a step
@@ -511,21 +515,25 @@ impl Project {
     pub fn redo(&self) -> Result<Vec<Edit>, ApiError> {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
-        self.annotations
-            .write()
-            .expect("annotations lock")
-            .redo_validated(|candidate| {
-                if candidate.types().is_empty()
-                    && candidate.signatures().is_empty()
-                    && candidate.globals().is_empty()
-                    && candidate.local_names().is_empty()
-                    && candidate.local_types().is_empty()
-                {
-                    return Ok(());
-                }
-                self.validate_annotation_snapshot(&state, &options, candidate)
-            })
-            .map_err(ApiError::Invalid)
+        self.annotations.write().expect("annotations lock").locked_staged_history(true, |annotations| {
+            let previous = crate::type_library::stored_declarations(annotations)?;
+            annotations
+                .redo_validated(|candidate| {
+                    self.validate_type_library_transition(&state, &options, &previous, candidate)
+                        .map_err(|error| error.to_string())?;
+                    if candidate.types().is_empty()
+                        && candidate.type_library().is_empty()
+                        && candidate.signatures().is_empty()
+                        && candidate.globals().is_empty()
+                        && candidate.local_names().is_empty()
+                        && candidate.local_types().is_empty()
+                    {
+                        return Ok(());
+                    }
+                    self.validate_annotation_snapshot(&state, &options, candidate)
+                })
+                .map_err(ApiError::Invalid)
+        })
     }
 
     /// Every user name and comment, by address.
@@ -543,6 +551,7 @@ impl Project {
             globals: rows(annotations.globals()),
             local_names: rows(annotations.local_names()),
             local_types: rows(annotations.local_types()),
+            type_library: rows(annotations.type_library()),
         }
     }
 

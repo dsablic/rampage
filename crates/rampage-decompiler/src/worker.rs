@@ -6,6 +6,7 @@
 //! It is a crash/resource
 //! isolation boundary, not a sandbox for running untrusted executables.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -33,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -79,6 +80,15 @@ pub struct WorkerRequest {
     pub tokens: bool,
     #[serde(default)]
     pub validate_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_query: Option<TypeQuery>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "query", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TypeQuery {
+    Inventory,
+    Get { name: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +149,10 @@ pub enum WorkerOperation {
     },
     ParseTypes {
         declarations: String,
+    },
+    TypeLibrary {
+        declarations: String,
+        packing: Option<u32>,
     },
     /// Read-only, ephemeral check of an already parsed flat struct, before dependent prototypes.
     /// Reassert in every worker/session/compiler rebuild; this operation supplies no persistence.
@@ -228,6 +242,12 @@ pub enum WorkerResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerOutput {
+    /// Final top-level roots for each TypeLibrary setup operation, in request order.
+    /// Present even for validation-only setup; absent when no TypeLibrary operation ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_declarations: Option<Vec<Vec<crate::NamedType>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_inventory: Option<Vec<crate::NamedType>>,
     pub text: String,
     pub language_id: String,
     pub data_organization: WorkerDataOrganization,
@@ -873,7 +893,14 @@ fn validate_layout_operations(
     if request.version != PROTOCOL_VERSION {
         return Err(WorkerError::Protocol(format!("unsupported worker protocol version {}", request.version)));
     }
+    if let Some(TypeQuery::Get { name }) = &request.type_query {
+        crate::type_library::validate_type_name(name).map_err(|error| WorkerError::Protocol(error.to_string()))?;
+    }
     for (index, operation) in request.operations.iter().enumerate() {
+        if let WorkerOperation::TypeLibrary { declarations, packing } = operation {
+            crate::type_library::validate_library_input(declarations, *packing)
+                .map_err(|error| WorkerError::Protocol(format!("operation {index}: {error}")))?;
+        }
         if let Some(budget) = budget {
             budget.check()?;
         }
@@ -950,7 +977,19 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
         .map_err(|error| error.to_string())?;
     let modes: Vec<_> = request.code_modes.iter().map(|mode| (mode.address, mode.thumb)).collect();
     engine.set_code_modes(&modes).map_err(|error| error.to_string())?;
+    let mut protected_types = BTreeMap::new();
+    let mut type_declarations = Vec::new();
+    let mut declaration_bytes = 2usize;
     for (index, operation) in request.operations.into_iter().enumerate() {
+        let checks_types = matches!(
+            &operation,
+            WorkerOperation::TypeLibrary { .. }
+                | WorkerOperation::ParseTypes { .. }
+                | WorkerOperation::Global { .. }
+                | WorkerOperation::Prototype { .. }
+                | WorkerOperation::LocalVariables { .. }
+                | WorkerOperation::RuntimePrototype { .. }
+        );
         let result = match operation {
             WorkerOperation::LocalVariables { address, overrides } => {
                 engine.set_variable_overrides(address, &overrides)
@@ -961,6 +1000,24 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
                 engine.apply_prototype(address, indirect, &declaration)
             }
             WorkerOperation::ParseTypes { declarations } => engine.parse_c(&declarations),
+            WorkerOperation::TypeLibrary { declarations, packing } => (|| {
+                let before = engine.type_inventory()?;
+                let declared = engine.parse_type_library(&declarations, packing)?;
+                verify_library_types(&engine, &protected_types)?;
+                let bytes = serialize_bounded(&declared, MAX_STDOUT_BYTES.saturating_sub(declaration_bytes))
+                    .map_err(|_| crate::Error::Ghidra("type declaration output exceeds worker limit".to_owned()))?;
+                declaration_bytes = declaration_bytes.saturating_add(bytes.len()).saturating_add(1);
+                for ty in &declared {
+                    protected_types.insert(ty.name.clone(), ty.clone());
+                }
+                for ty in engine.type_inventory()? {
+                    if !before.iter().any(|prior| prior.name == ty.name) {
+                        protected_types.insert(ty.name.clone(), ty);
+                    }
+                }
+                type_declarations.push(declared);
+                Ok(())
+            })(),
             WorkerOperation::AssertPlainStructLayout { layout, expected_context } => {
                 if expected_context.is_some() {
                     engine.verify_bundled_plain_struct_counterpart(&layout)
@@ -983,6 +1040,9 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
             WorkerOperation::NoReturn { address, indirect } => engine.set_noreturn(address, indirect),
         };
         result.map_err(|error| format!("operation {index}: {error}"))?;
+        if checks_types {
+            verify_library_types(&engine, &protected_types).map_err(|error| format!("operation {index}: {error}"))?;
+        }
     }
     if request.decompile.name.contains('\0') {
         return Err("function name contains NUL".to_owned());
@@ -990,7 +1050,13 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
     if arch.pointer_size() == 4 && request.decompile.address > u64::from(u32::MAX) {
         return Err("function address exceeds target width".to_owned());
     }
-    let text = if request.validate_only {
+    let query_only = request.type_query.is_some();
+    let type_inventory = match request.type_query {
+        Some(TypeQuery::Inventory) => Some(engine.type_inventory().map_err(|error| error.to_string())?),
+        Some(TypeQuery::Get { name }) => Some(vec![engine.get_type(&name).map_err(|error| error.to_string())?]),
+        None => None,
+    };
+    let text = if request.validate_only || query_only {
         String::new()
     } else {
         engine
@@ -1005,9 +1071,14 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
             .collect()
     });
     let organization = engine.data_organization();
-    let structure =
-        if request.validate_only { None } else { Some(engine.structured_result().map_err(|error| error.to_string())?) };
+    let structure = if request.validate_only || query_only {
+        None
+    } else {
+        Some(engine.structured_result().map_err(|error| error.to_string())?)
+    };
     Ok(WorkerOutput {
+        type_declarations: (!type_declarations.is_empty()).then_some(type_declarations),
+        type_inventory,
         text,
         language_id: engine.language_id().to_owned(),
         data_organization: WorkerDataOrganization {
@@ -1018,6 +1089,18 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
         tokens,
         structure,
     })
+}
+
+fn verify_library_types(
+    engine: &Decompiler,
+    protected: &BTreeMap<String, crate::NamedType>,
+) -> Result<(), crate::Error> {
+    for (name, expected) in protected {
+        if engine.get_type(name)? != *expected {
+            return Err(crate::Error::Ghidra(format!("annotation replay redefines library type {name:?}")));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))]
@@ -3412,6 +3495,7 @@ mod tests {
             decompile: WorkerFunction { address: 0x1000, name: "fixture".to_owned(), thumb: false },
             tokens: false,
             validate_only: false,
+            type_query: None,
         }
     }
 
@@ -3709,6 +3793,8 @@ mod tests {
         use std::os::unix::process::ExitStatusExt;
 
         let output = WorkerOutput {
+            type_declarations: None,
+            type_inventory: None,
             text: "return 0;".to_owned(),
             language_id: "x86:LE:64:default:gcc".to_owned(),
             data_organization: WorkerDataOrganization { pointer: 8, int: 4, long: 8 },
@@ -3898,6 +3984,8 @@ mod tests {
         WorkerResponse::Ok {
             version: PROTOCOL_VERSION,
             output: Box::new(WorkerOutput {
+                type_declarations: None,
+                type_inventory: None,
                 text: "return 0;".to_owned(),
                 language_id: "x86:LE:64:default:gcc".to_owned(),
                 data_organization: WorkerDataOrganization { pointer: 8, int: 4, long: 8 },
@@ -4125,6 +4213,8 @@ mod tests {
         let response = WorkerResponse::Ok {
             version: PROTOCOL_VERSION,
             output: Box::new(WorkerOutput {
+                type_declarations: None,
+                type_inventory: None,
                 text: "return 0;".to_owned(),
                 language_id: "fixture".to_owned(),
                 structure: None,

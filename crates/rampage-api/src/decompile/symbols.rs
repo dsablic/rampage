@@ -79,7 +79,16 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
 }
 
 pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -> Result<(), ApiError> {
+    let mut protected = BTreeMap::new();
     for operation in operations {
+        let checks_types = matches!(
+            &operation,
+            WorkerOperation::TypeLibrary { .. }
+                | WorkerOperation::ParseTypes { .. }
+                | WorkerOperation::Global { .. }
+                | WorkerOperation::Prototype { .. }
+                | WorkerOperation::LocalVariables { .. }
+        );
         match operation {
             WorkerOperation::LocalVariables { address, overrides } => {
                 engine
@@ -102,6 +111,21 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::ParseTypes { declarations } => {
                 engine.parse_c(&declarations).map_err(|error| ApiError::Invalid(error.to_string()))?
             }
+            WorkerOperation::TypeLibrary { declarations, packing } => {
+                let before = engine.type_inventory().map_err(|error| ApiError::Invalid(error.to_string()))?;
+                let declared = engine
+                    .parse_type_library(&declarations, packing)
+                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
+                verify_library_types(engine, &protected)?;
+                for ty in declared {
+                    protected.insert(ty.name.clone(), ty);
+                }
+                for ty in engine.type_inventory().map_err(|error| ApiError::Invalid(error.to_string()))? {
+                    if !before.iter().any(|prior| prior.name == ty.name) {
+                        protected.insert(ty.name.clone(), ty);
+                    }
+                }
+            }
             WorkerOperation::AssertPlainStructLayout { layout, expected_context } => {
                 let current = crate::debug_layout_import::current_specification_digest()?;
                 if expected_context.as_deref() != Some(current.as_str()) {
@@ -123,6 +147,22 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
                 engine.set_noreturn(address, indirect).map_err(|error| failure(address, "mark noreturn", error))?
             }
             WorkerOperation::Mode { .. } => unreachable!(),
+        }
+        if checks_types {
+            verify_library_types(engine, &protected)?;
+        }
+    }
+    Ok(())
+}
+
+fn verify_library_types(
+    engine: &Decompiler,
+    protected: &BTreeMap<String, rampage_decompiler::NamedType>,
+) -> Result<(), ApiError> {
+    for (name, expected) in protected {
+        let actual = engine.get_type(name).map_err(|error| ApiError::Invalid(error.to_string()))?;
+        if actual != *expected {
+            return Err(ApiError::Invalid(format!("annotation replay redefines library type {name:?}")));
         }
     }
     Ok(())

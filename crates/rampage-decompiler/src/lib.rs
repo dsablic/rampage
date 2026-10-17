@@ -11,6 +11,10 @@ pub mod layout;
 mod layout_wire;
 pub mod results;
 mod specs;
+pub mod type_library;
+pub use type_library::{
+    NamedEnumValue, NamedFunctionType, NamedType, NamedTypeField, NamedTypeKind, NamedTypeParameter,
+};
 mod variables;
 pub use variables::{LocalOverride, VariableStorage, validate_local_name};
 pub mod worker;

@@ -10,6 +10,11 @@ use rampage_decompiler::worker::{
 use super::{Decompilation, DecompiledToken, context, go_abi, image, symbols, types};
 use crate::{ApiError, Project, annotations::Annotations};
 
+struct TypeInspection<'a> {
+    query: Option<rampage_decompiler::worker::TypeQuery>,
+    declarations: &'a [(String, Option<u32>)],
+}
+
 pub(super) fn decompile(
     project: &Project,
     annotations: &Annotations,
@@ -18,6 +23,49 @@ pub(super) fn decompile(
     function: Option<(u64, String)>,
     cancellation: &AtomicBool,
 ) -> Result<Decompilation, ApiError> {
+    let validate_only = function.is_none();
+    let (address, name) = function.clone().unwrap_or_default();
+    let output = run(
+        project,
+        annotations,
+        options,
+        config,
+        function,
+        cancellation,
+        TypeInspection { query: None, declarations: &[] },
+    )?;
+    finish_output(output, address, name, validate_only)
+}
+
+pub(crate) fn query_types(
+    project: &Project,
+    annotations: &Annotations,
+    options: &DecompilerOptions,
+    config: &WorkerConfig,
+    query: rampage_decompiler::worker::TypeQuery,
+    declarations: &[(String, Option<u32>)],
+) -> Result<rampage_decompiler::worker::WorkerOutput, ApiError> {
+    run(
+        project,
+        annotations,
+        options,
+        config,
+        None,
+        &AtomicBool::new(false),
+        TypeInspection { query: Some(query), declarations },
+    )
+}
+
+fn run(
+    project: &Project,
+    annotations: &Annotations,
+    options: &DecompilerOptions,
+    config: &WorkerConfig,
+    function: Option<(u64, String)>,
+    cancellation: &AtomicBool,
+    inspection: TypeInspection<'_>,
+) -> Result<rampage_decompiler::worker::WorkerOutput, ApiError> {
+    let TypeInspection { query: type_query, declarations } = inspection;
     crate::debug_layout_import::validate_replay_source(project, annotations)?;
     let validate_only = function.is_none();
     let (address, name) = function.unwrap_or_default();
@@ -67,6 +115,13 @@ pub(super) fn decompile(
     operations.extend(types::plan(project, annotations, &go.types)?);
     operations.extend(go.prototypes);
     operations.extend(crate::variables::plan(project, annotations, None)?);
+    operations.extend(declarations.iter().map(|(declarations, packing)| {
+        rampage_decompiler::worker::WorkerOperation::TypeLibrary {
+            declarations: declarations.clone(),
+            packing: *packing,
+        }
+    }));
+    let querying_types = type_query.is_some();
     let request = WorkerRequest {
         version: PROTOCOL_VERSION,
         arch: binary.arch.to_string(),
@@ -87,14 +142,27 @@ pub(super) fn decompile(
         decompile: WorkerFunction { address, name: name.clone(), thumb },
         tokens: true,
         validate_only,
+        type_query,
     };
     check()?;
     let mut remaining = config.clone();
     remaining.timeout = config.timeout.saturating_sub(started.elapsed());
-    let output = run_supervised(&request, &remaining, Some(cancellation))
-        .map_err(|error| ApiError::Unavailable(error.to_string()))?;
+    let output = run_supervised(&request, &remaining, Some(cancellation)).map_err(|error| match error {
+        rampage_decompiler::worker::WorkerError::Decompile(message) if querying_types => ApiError::Invalid(message),
+        error => ApiError::Unavailable(error.to_string()),
+    })?;
+    crate::type_library::validate_profile_replay(
+        annotations,
+        options,
+        rampage_decompiler::DataOrganization {
+            pointer: output.data_organization.pointer,
+            int: output.data_organization.int,
+            long: output.data_organization.long,
+        },
+        &output.language_id,
+    )?;
     crate::debug_layout_import::validate_replay_source(project, annotations)?;
-    finish_output(output, address, name, validate_only)
+    Ok(output)
 }
 
 pub(super) fn finish_output(

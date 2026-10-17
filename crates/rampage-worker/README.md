@@ -7,9 +7,10 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
-## Protocol version 5
+## Protocol version 6
 
-Protocol 5 adds storage-keyed native local/parameter overrides. It retains flat-struct layout assertions,
+Protocol 6 adds native named-type inspection and bounded type-library batches. It retains local/parameter overrides,
+flat-struct layout assertions,
 explicit `no_return` setup and structured results;
 incompatible request/response versions are rejected rather than silently mixed. Install callers and workers together.
 
@@ -19,7 +20,7 @@ consecutive hexadecimal pairs with no prefix. Mapping permissions and zero-fill 
 
 ```json
 {
-  "version": 5,
+  "version": 6,
   "arch": "x86_64",
   "big_endian": false,
   "options": { "platform": "default", "compiler": null },
@@ -45,6 +46,7 @@ The worker installs initial `code_modes`, then replays `operations` in their sup
 | `symbol` | `address`, `name` |
 | `import` | `slot`, optional `target`, `name` |
 | `parse_types` | `declarations` |
+| `type_library` | type-only `declarations`, optional `packing` (1, 2, 4, 8, or 16) |
 | `assert_plain_struct_layout` | `layout`: complete bounded descriptor; optional `expected_context` manifest SHA-256 |
 | `prototype` | `address`, `indirect`, `declaration` |
 | `runtime_prototype` | `address`, `indirect`, canonical runtime `name`, optional `optional` boolean |
@@ -57,8 +59,8 @@ failed setup operation is a structured error identifying the operation index. `o
 runtime identities while preserving other setup errors. Unknown fields and versions are
 rejected.
 
-Responses are `{ "version": 5, "status": "ok", "output": ... }` or
-`{ "version": 5, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
+Responses are `{ "version": 6, "status": "ok", "output": ... }` or
+`{ "version": 6, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
 `data_organization` (`pointer`, `int`, `long` byte widths), and optional semantic `tokens` with `text`, `kind`, and
 optional numeric `address`.
 The CLI uses `rampage function decompile ... --isolated`; flat `decompile` remains accepted. Batch
@@ -66,6 +68,66 @@ The CLI uses `rampage function decompile ... --isolated`; flat `decompile` remai
 
 `validate_only: true` checks mappings, modes and ordered setup operations without requiring any function to
 decompile. It returns empty text; typed annotation transactions use this to validate entryless images.
+
+`type_query: {"query":"inventory"}` returns non-core named types;
+`type_query: {"query":"get","name":"Record"}` inspects exactly one name, including a builtin.
+Queries run after setup even with `validate_only`, return empty `text` and no `structure`, and never decompile.
+`output.type_inventory` contains the resulting `NamedType` array; the field is absent on ordinary requests.
+The required `decompile` placeholder remains in the request for compatibility with existing request construction.
+
+`output.type_declarations` is present whenever setup includes `type_library` operations, even without a query or
+with `validate_only`. It contains one array of named top-level roots per such operation, in request order. Each
+array describes the final native types after that whole batch, so a forward declaration completed later in the
+same batch is returned complete. Incidental forwards in callback signatures and nested aggregate names are not
+roots; they remain discoverable through `type_inventory`. Aggregate response size remains subject to the worker's
+16 MiB output budget; oversized root collections fail rather than truncate.
+
+After a type-library operation, its roots and newly introduced native names are protected against later setup
+mutations. Type parsing, globals, prototypes, local-variable overrides, further type-library batches and runtime
+prototypes are followed by exact native metadata checks. Completing a protected forward in a later operation is
+rejected; frontends must coalesce its forward and definition into one batch. Completed names cannot be overwritten
+through legacy anonymous-struct typedef renaming, including equivalent-looking definitions.
+
+Native metadata includes kind, optional size/alignment, incomplete status, explicit packing, ordered fields
+(`name`, byte `offset`, `type_name`, optional `size`), enumerators (decimal-string values), typedef/pointer/array
+`target`, array length, and callback return/parameter types. `dependencies` are sorted direct named references,
+excluding core builtins; `by_value_dependencies` excludes pointer/callback edges. Self-pointer edges remain in
+`dependencies` and do not imply illegal by-value cycles. Void, function, and incomplete sizes are null, not zero.
+`identity` on named types and fields is a bounded structural native JSON value. Named references terminate with
+their native name; anonymous pointers, arrays, aggregates and functions retain their structure, including nested
+callback signatures and calling-convention models. Equality checks therefore do not rely on display text such
+as `function *`. `NamedFunctionType.calling_convention` is the native model name, or null when unavailable.
+Callback return/argument types and names come from retained native declaration pieces before ABI lowering,
+not hidden-return parameters or indirect storage parameters. Native types without retained declaration evidence
+have null `callback` and explicit `signature_known: false` in their structural function identity.
+For those unknown declarations only, `abi_signature` records observed native lowered parameter types/flags;
+it is not presented as a recovered C signature. Parameter names follow Ghidra's canonical type interning, so
+equivalent previously interned signatures may retain the first native declaration's names.
+
+Type-library batches accept preprocessed C typedefs, structs, unions, enums, arrays and function-pointer typedefs;
+extern function signatures, object declarations, bitfields, preprocessing directives, and unsupported grammar are
+errors, not partial successes. Comments/pragmas should be removed by the header frontend; packing is an explicit
+batch option. Ghidra computes native layout with capped field alignment before constructing dependents, including
+nested anonymous aggregates. No host-layout estimates or plain-struct assertion shortcuts are used. C `int`/`long`
+widths come from the selected compiler data organization. Native enum duplicate values remain unsupported.
+C enum creation uses that compiler's `int` size/alignment, not Ghidra's architecture-default enum width. The
+supported enum subset requires every explicit and implicit value to fit signed target `int`; larger unsigned
+or widened enums are rejected rather than truncated or assigned a guessed representation. Negative enum values
+are retained as signed decimal strings. Integer literal overflow and unsupported literal suffixes are errors.
+
+Limits are 64 KiB declarations per batch; 256 returned names, fields, enumerators, dependencies or parameters;
+32 levels of braces/reference traversal; 256 bytes per token/query name; 1 MiB per registered type/field and
+native JSON. Ghidra's existing array bound limit is 65,536 elements per dimension;
+overflowing/incomplete arrays are rejected. Limits fail closed,
+without truncation. Batch results contain named top-level declarations, including new tags and typedef aliases,
+not every internal type created by parsing. Nested named types can be queried separately. Failed native parsing
+may poison the engine: persistent transactions must replay into a fresh engine and commit only after success.
+The one-MiB type bound also applies to pointed-to, nested and anonymous aggregate/array types, not just root
+declarators. The retained non-core inventory is limited to 256 named types; reachable type graphs and individual
+structural identities are bounded to 4,096 nodes and 32 reference levels. Arrays require object element types;
+function and void arrays are rejected. C integer-specifier sequences allow interleaved qualifiers but reject
+contradictory signs and duplicate/incompatible ranks. Native parsing accepts known aggregate tags in prototypes
+and globals, and typedef names reused as member/parameter identifiers.
 
 Local storage keys contain `kind` (`processor` or `spacebase`), `space`, `address`, `size`, and exact inclusive
 `use_ranges` (`space`, `start`, `end`). Addresses/range endpoints accept unsigned JSON integers or hexadecimal

@@ -299,6 +299,7 @@ impl Project {
                 decompile: WorkerFunction { address: plan.address, name: plan.name.clone(), thumb: false },
                 tokens: true,
                 validate_only: false,
+                type_query: None,
             };
             report_phase(EntryPreparationPhase::WorkerExecution)?;
             check("worker dispatch")?;
@@ -315,6 +316,16 @@ impl Project {
             .map_err(|error| ApiError::Unavailable(format!("exact-entry worker: {error}")))?;
             check("supervisor observer")?;
             source(self)?;
+            crate::type_library::validate_profile_replay(
+                &annotations,
+                &options,
+                rampage_decompiler::DataOrganization {
+                    pointer: output.data_organization.pointer,
+                    int: output.data_organization.int,
+                    long: output.data_organization.long,
+                },
+                &output.language_id,
+            )?;
             (isolated::finish_output(output, plan.address, plan.name, false)?, "supervised_worker")
         } else {
             report_phase(EntryPreparationPhase::NativeInitialization)?;
@@ -322,6 +333,12 @@ impl Project {
             let mut engine =
                 Decompiler::open_with_options(self.binary.arch, self.binary.big_endian, &regions, &options)
                     .map_err(|error| ApiError::Unavailable(format!("exact-entry native initialization: {error}")))?;
+            crate::type_library::validate_profile_replay(
+                &annotations,
+                &options,
+                engine.data_organization(),
+                engine.language_id(),
+            )?;
             report_phase(EntryPreparationPhase::NativeReplay)?;
             check("native declaration replay")?;
             symbols::apply(operations, &mut engine)?;

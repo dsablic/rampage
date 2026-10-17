@@ -40,6 +40,8 @@ mod session;
 mod signatures;
 mod summary;
 pub mod tools;
+mod type_headers;
+mod type_library;
 mod variables;
 pub mod workflows;
 mod xrefs;
@@ -127,7 +129,10 @@ pub use rampage_decompiler::VariableStorage;
 pub use rampage_decompiler::results::RecoveryStatus;
 pub use rampage_decompiler::worker::SupervisedMetrics;
 pub use rampage_decompiler::worker::WorkerConfig as DecompilerWorkerConfig;
-pub use rampage_decompiler::{DecompilerOptions, Platform as DecompilerPlatform};
+pub use rampage_decompiler::{
+    DecompilerOptions, NamedEnumValue, NamedFunctionType, NamedType, NamedTypeField, NamedTypeKind, NamedTypeParameter,
+    Platform as DecompilerPlatform,
+};
 pub use rampage_detect::{Confidence as DetectionConfidence, Detection, Kind as DetectionKind};
 pub use rampage_plugin::PluginConfig as ComponentPluginConfig;
 pub use rampage_signatures::SignatureDb;
@@ -145,6 +150,8 @@ pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, Runti
 pub use session::Session;
 pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};
 pub use summary::FunctionSummary;
+pub use type_headers::{HeaderBundle, HeaderDeclaration, HeaderProvenance, PreparedHeader};
+pub use type_library::{DeclareTypesRequest, TypeLibraryEdit, TypeLibraryEntry, TypeLibraryPage};
 pub use variables::{VariableDescriptor, VariableEditRequest, VariableEditResult};
 pub use workflows::{
     Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportLimits, ReportTarget, Section, WorkflowReport,

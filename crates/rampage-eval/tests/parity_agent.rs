@@ -643,3 +643,178 @@ async fn opt_in_does_not_admit_other_writes_secondary_paths_or_unchecked_nested_
         client.cancel().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn type_library_writes_require_their_own_opt_in_even_when_variable_edits_are_enabled() {
+    for allow_variable_edits in [false, true] {
+        for (name, edits) in [
+            ("declare_types", json!({"declarations": "struct LibraryState { int4 gain; int4 bias; };"})),
+            ("delete_type", json!({"name": "LibraryScratch"})),
+        ] {
+            let owned = LocalFixture::new();
+            let client = connect().await;
+            let mut input = edits;
+            input["path"] = json!(owned.path);
+            let (script, requests) =
+                Script::new(vec![tool("enable_tools", json!({"groups": ["types"]})), tool(name, input)]);
+            let mut bounds = config();
+            bounds.allow_variable_edits = allow_variable_edits;
+            let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+            assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{run:?}");
+            assert_eq!((run.tool_calls, run.tool_errors), (1, 1));
+            assert!(!run.calls[1].invoked);
+            {
+                let requests = requests.lock().unwrap();
+                assert!(!offered(&requests[1], "declare_types"));
+                assert!(!offered(&requests[1], "delete_type"));
+                assert!(offered(&requests[1], "list_types"));
+                assert!(offered(&requests[1], "get_type"));
+            }
+            client.cancel().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn independent_edit_flags_offer_only_their_own_tools_and_matching_system_permissions() {
+    for (variable, library) in [(false, false), (true, false), (false, true), (true, true)] {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let (script, requests) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["types"]})),
+            final_answer(json!({"status": "unknown", "reason": "scripted permissions inspection"})),
+        ]);
+        let mut bounds = config();
+        bounds.allow_variable_edits = variable;
+        bounds.allow_type_library_edits = library;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+        {
+            let requests = requests.lock().unwrap();
+            for name in ["set_types", "edit_variable"] {
+                assert_eq!(offered(&requests[1], name), variable);
+            }
+            for name in ["declare_types", "delete_type"] {
+                assert_eq!(offered(&requests[1], name), library);
+            }
+            let system = requests[1]["system"].as_str().unwrap();
+            assert_eq!(system.contains("you may use set_types and edit_variable"), variable);
+            assert_eq!(system.contains("declare_types and delete_type"), library);
+            if variable && library {
+                assert!(!system.contains("No other writes, variable edits"));
+                assert!(system.contains("external filesystem access is prohibited"));
+            }
+        }
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn read_only_policy_allows_native_type_library_queries_and_missing_type_error_feedback() {
+    let owned = LocalFixture::new();
+    let client = connect().await;
+    let (script, requests) = Script::new(vec![
+        tool("enable_tools", json!({"groups": ["types"]})),
+        tool("list_types", json!({"path": owned.path, "contains": "Library", "offset": 0, "limit": 10})),
+        tool("get_type", json!({"path": owned.path, "name": "LibraryMissing"})),
+        final_answer(json!({"status": "unknown", "reason": "scripted read-only inspection"})),
+    ]);
+    let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &config()).await;
+    assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+    assert_eq!((run.tool_calls, run.tool_errors), (3, 1));
+    assert!(run.calls.iter().all(|call| call.invoked));
+    assert!(run.calls[2].is_error);
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests[3]["messages"][6]["content"][0]["is_error"], true);
+        assert!(requests[1]["system"].as_str().unwrap().contains("restricted to read-only"));
+    }
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn library_opt_in_declares_queries_and_deletes_without_enabling_variable_edits() {
+    let owned = LocalFixture::new();
+    let client = connect().await;
+    let (script, requests) = Script::new(vec![
+        tool("enable_tools", json!({"groups": ["types"]})),
+        tool(
+            "declare_types",
+            json!({"path": owned.path,
+            "declarations": "struct LibraryState { int4 gain; int4 bias; };"}),
+        ),
+        tool(
+            "declare_types",
+            json!({"path": owned.path,
+            "header": "/* inline only */ struct LibraryScratch { int4 spare; };",
+            "profiles": [], "packing": 4, "replace": false}),
+        ),
+        tool("get_type", json!({"path": owned.path, "name": "LibraryState"})),
+        tool("list_types", json!({"path": owned.path, "contains": "Library", "limit": 10})),
+        tool("delete_type", json!({"path": owned.path, "name": "LibraryScratch"})),
+        final_answer(json!({"summary": "scripted plumbing only"})),
+    ]);
+    let mut bounds = config();
+    bounds.allow_type_library_edits = true;
+    let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+    assert!(matches!(run.disposition, AgentDisposition::Answer { .. }), "{run:?}");
+    assert_eq!((run.tool_calls, run.tool_errors), (6, 0));
+    assert!(run.calls.iter().all(|call| call.invoked && !call.is_error));
+    assert_eq!(run.task_attempt(), TaskAttempt::Unmeasured);
+    {
+        let requests = requests.lock().unwrap();
+        for name in ["declare_types", "delete_type", "list_types", "get_type"] {
+            assert!(offered(&requests[1], name));
+        }
+        for name in ["set_types", "edit_variable", "set_signature", "set_global", "patch", "query_debugger"] {
+            assert!(!offered(&requests[1], name));
+        }
+        let system = requests[1]["system"].as_str().unwrap();
+        assert!(system.contains("same owned fixture") && system.contains("inline bounded C"));
+    }
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("get_type")
+                .with_arguments(json!({"path": owned.path, "name": "LibraryScratch"}).as_object().unwrap().clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(true));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn library_opt_in_blocks_other_writes_secondary_paths_and_unbounded_inline_inputs() {
+    for (name, input) in [
+        ("set_types", json!({"at": "0x4000ae", "text": "struct X { int4 n; };"})),
+        ("edit_variable", json!({"at": "0x4000ae", "variable": "piStack_10", "name": "state"})),
+        ("set_signature", json!({"at": "0x4000ae", "text": "int changed(void)"})),
+        ("patch", json!({"at": "0x4000ae", "bytes": "90"})),
+        ("query_debugger", json!({"socket": "/outside/socket"})),
+        ("declare_types", json!({"path": "/outside/fixture", "declarations": "struct X {};"})),
+        ("delete_type", json!({"path": "/outside/fixture", "name": "LibraryState"})),
+        ("get_type", json!({"path": "/outside/fixture", "name": "LibraryState"})),
+        ("list_types", json!({"path": "/outside/fixture"})),
+        ("declare_types", json!({"header_path": "/outside/header.h"})),
+        ("declare_types", json!({"header": {"path": "/outside/header.h"}})),
+        ("declare_types", json!({"declarations": "x".repeat(65_537)})),
+        ("declare_types", json!({"profiles": ["/outside/header.h"]})),
+        ("declare_types", json!({"packing": 3})),
+        ("delete_type", json!({"name": "LibraryState", "force": true})),
+    ] {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let mut input = input;
+        if input.get("path").is_none() {
+            input["path"] = json!(owned.path);
+        }
+        let (script, _) = Script::new(vec![tool("enable_tools", json!({"groups": ["all"]})), tool(name, input)]);
+        let mut bounds = config();
+        bounds.allow_type_library_edits = true;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{name}: {run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (1, 1), "{name}: {run:?}");
+        assert!(!run.calls[1].invoked, "{name}: {run:?}");
+        client.cancel().await.unwrap();
+    }
+}

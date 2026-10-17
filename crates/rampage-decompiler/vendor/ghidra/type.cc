@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 // Modified for rampage: bound array layout multiplication before constructing a TypeArray.
+// Modified for rampage: native packed C layouts and retained pre-ABI callback declaration types.
 #include "type.hh"
 #include "funcdata.hh"
 
@@ -2368,7 +2369,7 @@ void TypeStruct::assignContiguousBitfields(vector<TypeBitField> &bitlist,int4 &p
 /// \param newSize passes back the calculated size of the structure
 /// \param newAlign passes back the calculated alignment
 /// \param flags passes back any additional flags that should be set on the structure
-void TypeStruct::assignFieldOffsets(vector<TypeField> &list,vector<TypeBitField> &bitlist,int4 &newSize,int4 &newAlign,uint4 &flags)
+void TypeStruct::assignFieldOffsets(vector<TypeField> &list,vector<TypeBitField> &bitlist,int4 &newSize,int4 &newAlign,uint4 &flags,int4 packing)
 
 {
   int4 nextBitPos = -1;
@@ -2393,6 +2394,10 @@ void TypeStruct::assignFieldOffsets(vector<TypeField> &list,vector<TypeBitField>
     if (curField.offset != -1) continue;
     int4 cursize = curField.type->getAlignSize();
     int4 align = curField.type->getAlignment();
+    if (packing != 0) {
+      align = std::min(align,packing);
+      cursize = curField.type->getSize();
+    }
     if (align > newAlign)
       newAlign = align;
     align -= 1;
@@ -3156,6 +3161,8 @@ Datatype *TypePointerRel::getPtrToFromParent(Datatype *base,int4 off,TypeFactory
 void TypeCode::setPrototype(TypeFactory *tfact,const PrototypePieces &sig,Datatype *voidtype)
 
 {
+  delete declaration;
+  declaration = new PrototypePieces(sig);
   factory = tfact;
   flags |= variable_length;
   if (proto != (FuncProto *)0)
@@ -3174,6 +3181,8 @@ void TypeCode::setPrototype(TypeFactory *tfact,const PrototypePieces &sig,Dataty
 void TypeCode::setPrototype(TypeFactory *typegrp,const FuncProto *fp)
 
 {
+  delete declaration;
+  declaration = nullptr;
   if (proto != (FuncProto *)0) {
     delete proto;
     proto = (FuncProto *)0;
@@ -3189,6 +3198,7 @@ void TypeCode::setPrototype(TypeFactory *typegrp,const FuncProto *fp)
 TypeCode::TypeCode(const TypeCode &op) : Datatype(op)
 
 {
+  if (op.declaration != nullptr) declaration = new PrototypePieces(*op.declaration);
   proto = (FuncProto *)0;
   factory = op.factory;
   if (op.proto != (FuncProto *)0) {
@@ -3208,6 +3218,7 @@ TypeCode::TypeCode(void) : Datatype(1,1,TYPE_CODE)
 TypeCode::~TypeCode(void)
 
 {
+  delete declaration;
   if (proto != (FuncProto *)0)
     delete proto;
 }
@@ -3231,6 +3242,11 @@ void TypeCode::printRaw(ostream &s) const
 int4 TypeCode::compareBasic(const TypeCode *op) const
 
 {
+  if ((declaration == nullptr) != (op->declaration == nullptr)) return declaration == nullptr ? 1 : -1;
+  if (declaration != nullptr) {
+    if (declaration->intypes.size() != op->declaration->intypes.size())
+      return declaration->intypes.size() < op->declaration->intypes.size() ? -1 : 1;
+  }
   if (proto == (FuncProto *)0) {
     if (op->proto == (FuncProto *)0) return 0;
     return 1;
@@ -3282,16 +3298,16 @@ int4 TypeCode::compare(const Datatype &op,int4 level) const
     if (id == op.getId()) return 0;
     return (id < op.getId()) ? -1 : 1;
   }
-  int4 nump = proto->numParams();
+  int4 nump = declaration == nullptr ? proto->numParams() : declaration->intypes.size();
   for(int4 i=0;i<nump;++i) {
-    Datatype *param = proto->getParam(i)->getType();
-    Datatype *opparam = tc->proto->getParam(i)->getType();
+    Datatype *param = declaration == nullptr ? proto->getParam(i)->getType() : declaration->intypes[i];
+    Datatype *opparam = tc->declaration == nullptr ? tc->proto->getParam(i)->getType() : tc->declaration->intypes[i];
     int4 c = param->compare(*opparam,level);
     if (c != 0)
       return c;
   }
-  Datatype *otype = proto->getOutputType();
-  Datatype *opotype = tc->proto->getOutputType();
+  Datatype *otype = declaration == nullptr ? proto->getOutputType() : declaration->outtype;
+  Datatype *opotype = tc->declaration == nullptr ? tc->proto->getOutputType() : tc->declaration->outtype;
   if (otype == (Datatype *)0) {
     if (opotype == (Datatype *)0) return 0;
     return 1;
@@ -3309,15 +3325,15 @@ int4 TypeCode::compareDependency(const Datatype &op) const
   res = compareBasic(tc);
   if (res != 2) return res;
 
-  int4 nump = proto->numParams();
+  int4 nump = declaration == nullptr ? proto->numParams() : declaration->intypes.size();
   for(int4 i=0;i<nump;++i) {
-    Datatype *param = proto->getParam(i)->getType();
-    Datatype *opparam = tc->proto->getParam(i)->getType();
+    Datatype *param = declaration == nullptr ? proto->getParam(i)->getType() : declaration->intypes[i];
+    Datatype *opparam = tc->declaration == nullptr ? tc->proto->getParam(i)->getType() : tc->declaration->intypes[i];
     if (param != opparam)
       return (param < opparam) ? -1 : 1; // Compare pointers directly
   }
-  Datatype *otype = proto->getOutputType();
-  Datatype *opotype = tc->proto->getOutputType();
+  Datatype *otype = declaration == nullptr ? proto->getOutputType() : declaration->outtype;
+  Datatype *opotype = tc->declaration == nullptr ? tc->proto->getOutputType() : tc->declaration->outtype;
   if (otype == (Datatype *)0) {
     if (opotype == (Datatype *)0) return 0;
     return 1;
@@ -3883,6 +3899,9 @@ Datatype *TypeFactory::findAdd(Datatype &ct)
 Datatype *TypeFactory::setName(Datatype *ct,const string &n)
 
 {
+  Datatype *existing = findByName(n);
+  if (existing != (Datatype *)0 && existing != ct)
+    throw LowlevelError("Cannot rename a type over an existing name: " + n);
   if (ct->id != 0)
     nametree.erase( ct );	// Erase any name reference
   tree.erase(ct);		// Remove new type completely from trees
@@ -4412,6 +4431,16 @@ TypeEnum *TypeFactory::getTypeEnum(const string &n)
   return (TypeEnum *) findAdd(tmp);
 }
 
+TypeEnum *TypeFactory::getTypeCEnum(const string &n)
+
+{
+  if (sizeOfInt <= 0 || sizeOfInt > sizeof(uintb))
+    throw LowlevelError("Unsupported C enum integer size");
+  TypeEnum tmp(sizeOfInt,TYPE_ENUM_INT,n);
+  tmp.id = Datatype::hashName(n);
+  return (TypeEnum *) findAdd(tmp);
+}
+
 /// Create a data-type representing storage of part of an \e enumeration.
 /// \param contain is the parent \e enumeration data-type that we are taking a part of.
 /// \param off is the offset (in bytes) within the parent that the partial data-type starts at
@@ -4578,14 +4607,16 @@ Datatype *TypeFactory::getExactPiece(Datatype *ct,int4 offset,int4 size)
 /// \param ct is the struct data-type
 /// \param fd is the list of fields
 /// \param bit is the list of bitfields
-void TypeFactory::assignRawFields(TypeStruct *ct,vector<TypeField> &fd,vector<TypeBitField> &bit)
+void TypeFactory::assignRawFields(TypeStruct *ct,vector<TypeField> &fd,vector<TypeBitField> &bit,int4 packing)
 
 {
   int4 newSize;
   int4 newAlign;
   uint4 flags;
-  TypeStruct::assignFieldOffsets(fd,bit,newSize,newAlign,flags);
+  if (packing != 0 && !bit.empty()) throw LowlevelError("Packed bitfields are not supported");
+  TypeStruct::assignFieldOffsets(fd,bit,newSize,newAlign,flags,packing);
   glb->types->setFields(fd,bit,ct,newSize,newAlign,flags);
+  resolveIncompleteTypedefs();
 }
 
 /// \brief Assign fields to a union data-type, establishing the size and alignment
@@ -4593,13 +4624,20 @@ void TypeFactory::assignRawFields(TypeStruct *ct,vector<TypeField> &fd,vector<Ty
 /// Field offsets are assigned.  Size and alignment are calculated.
 /// \param ct is the union data-type
 /// \param fd is the list of fields
-void TypeFactory::assignRawFields(TypeUnion *ct,vector<TypeField> &fd)
+void TypeFactory::assignRawFields(TypeUnion *ct,vector<TypeField> &fd,int4 packing)
 
 {
   int4 newSize;
   int4 newAlign;
   TypeUnion::assignFieldOffsets(fd,newSize,newAlign,ct);
+  if (packing != 0) {
+    newAlign = std::min(newAlign,packing);
+  }
+  uintb roundedSize = (uintb(newSize) + newAlign - 1) / newAlign * newAlign;
+  if (roundedSize > 0x7fffffff) throw LowlevelError("Union size exceeds native type size bounds");
+  newSize = int4(roundedSize);
   glb->types->setFields(fd,ct,newSize,newAlign,0);
+  resolveIncompleteTypedefs();
 }
 
 /// The indicated Datatype object is removed from this container.

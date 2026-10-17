@@ -27,6 +27,7 @@ pub enum Field {
     Comment,
     Signature,
     Types,
+    TypeLibrary,
     Global,
     LocalName,
     LocalType,
@@ -49,6 +50,102 @@ pub struct LocalTypeAnnotation {
 }
 
 const LOCAL_ENTRIES: usize = 256;
+
+/// One declaration unit, kept in dependency order in the project-wide type library.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryDeclaration {
+    pub names: Vec<String>,
+    pub declarations: String,
+    pub packing: Option<u32>,
+    pub source: Option<TypeLibrarySource>,
+}
+
+/// Textual provenance; no source file is needed to restore a persisted library.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypeLibrarySource {
+    pub kind: String,
+    pub identity: String,
+}
+
+pub fn parse_type_library(value: &str) -> Result<Vec<LibraryDeclaration>, String> {
+    if value.len() > CHECKED_VALUE_BYTES {
+        return Err(CHECKED_ERROR.to_owned());
+    }
+    checked_json_preflight(value.as_bytes(), false)?;
+    let mut entries: Vec<LibraryDeclaration> =
+        serde_json::from_str(value).map_err(|error| format!("invalid type library: {error}"))?;
+    validate_type_library(&entries)?;
+    for entry in &mut entries {
+        entry.names.sort();
+    }
+    Ok(entries)
+}
+
+pub fn encode_type_library(entries: &[LibraryDeclaration]) -> Result<String, String> {
+    validate_type_library(entries)?;
+    let mut entries = entries.to_vec();
+    for entry in &mut entries {
+        entry.names.sort();
+    }
+    let mut encoded = CheckedLogBuffer::default();
+    serde_json::to_writer(&mut encoded, &entries).map_err(|error| error.to_string())?;
+    if encoded.bytes.len() > CHECKED_VALUE_BYTES {
+        return Err(CHECKED_ERROR.to_owned());
+    }
+    checked_json_preflight(&encoded.bytes, false)?;
+    String::from_utf8(encoded.bytes).map_err(|error| error.to_string())
+}
+
+fn validate_type_library(entries: &[LibraryDeclaration]) -> Result<(), String> {
+    if entries.is_empty() || entries.len() > 256 {
+        return Err("type libraries require 1..=256 declaration units; clear with None".to_owned());
+    }
+    let mut names = std::collections::BTreeSet::new();
+    let mut bytes = 0usize;
+    for entry in entries {
+        if entry.names.is_empty()
+            || entry.declarations.trim().is_empty()
+            || entry.declarations.len() > 65536
+            || entry.declarations.contains('\0')
+        {
+            return Err(
+                "type library units require names and nonempty declarations of at most 64 KiB without NUL".into()
+            );
+        }
+        if !matches!(entry.packing, None | Some(1 | 2 | 4 | 8 | 16)) {
+            return Err("type library packing must be 1, 2, 4, 8 or 16".to_owned());
+        }
+        bytes = bytes.checked_add(entry.declarations.len()).ok_or(CHECKED_ERROR)?;
+        for name in &entry.names {
+            rampage_decompiler::validate_local_name(name).map_err(|error| error.to_string())?;
+            bytes = bytes.checked_add(name.len()).ok_or(CHECKED_ERROR)?;
+            if bytes > CHECKED_VALUE_BYTES || !names.insert(name) {
+                return Err("type library names must be unique within the bounded library".to_owned());
+            }
+        }
+        if let Some(source) = &entry.source {
+            for text in [&source.kind, &source.identity] {
+                if text.trim().is_empty() || text.len() > 4096 || text.chars().any(char::is_control) {
+                    return Err("type library provenance requires bounded nonempty text without controls".to_owned());
+                }
+                bytes = bytes.checked_add(text.len()).ok_or(CHECKED_ERROR)?;
+            }
+        }
+        if bytes > CHECKED_VALUE_BYTES {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn validate_project_address(field: Field, address: u64) -> Result<(), String> {
+    if field == Field::TypeLibrary && address != 0 {
+        return Err("the project-wide type library requires address 0".to_owned());
+    }
+    Ok(())
+}
 
 pub fn parse_local_names(value: &str) -> Result<Vec<LocalNameAnnotation>, String> {
     let entries: Vec<LocalNameAnnotation> = parse_local_collection(value)?;
@@ -156,6 +253,7 @@ fn canonical_local_value(field: Field, value: Option<&str>) -> Result<Option<Str
         .map(|value| match field {
             Field::LocalName => encode_local_names(&parse_local_names(value)?),
             Field::LocalType => encode_local_types(&parse_local_types(value)?),
+            Field::TypeLibrary => encode_type_library(&parse_type_library(value)?),
             _ => Ok(value.to_owned()),
         })
         .transpose()
@@ -165,6 +263,7 @@ fn validate_local_value(field: Field, value: &str) -> Result<(), String> {
     match field {
         Field::LocalName => parse_local_names(value).map(|_| ()),
         Field::LocalType => parse_local_types(value).map(|_| ()),
+        Field::TypeLibrary => parse_type_library(value).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -264,6 +363,7 @@ pub struct Annotations {
     comments: BTreeMap<u64, String>,
     signatures: BTreeMap<u64, String>,
     types: BTreeMap<u64, String>,
+    type_library: BTreeMap<u64, String>,
     globals: BTreeMap<u64, String>,
     local_names: BTreeMap<u64, String>,
     local_types: BTreeMap<u64, String>,
@@ -304,6 +404,7 @@ impl CheckedBudget {
         Ok(())
     }
     fn edit(&mut self, edit: &Edit) -> Result<(), String> {
+        validate_project_address(edit.field, edit.address)?;
         self.records += 1;
         if let Some(value) = &edit.value {
             if edit.field == Field::Name && value.len() > 128 {
@@ -432,6 +533,7 @@ impl Annotations {
             .saturating_add(self.comments.len())
             .saturating_add(self.signatures.len())
             .saturating_add(self.types.len())
+            .saturating_add(self.type_library.len())
             .saturating_add(self.globals.len())
             .saturating_add(self.local_names.len())
             .saturating_add(self.local_types.len())
@@ -450,6 +552,7 @@ impl Annotations {
             .chain(self.comments.values())
             .chain(self.signatures.values())
             .chain(self.types.values())
+            .chain(self.type_library.values())
             .chain(self.globals.values())
             .chain(self.local_names.values())
             .chain(self.local_types.values())
@@ -545,6 +648,7 @@ impl Annotations {
             comments: self.comments.clone(),
             signatures: self.signatures.clone(),
             types: self.types.clone(),
+            type_library: self.type_library.clone(),
             globals: self.globals.clone(),
             local_names: self.local_names.clone(),
             local_types: self.local_types.clone(),
@@ -567,7 +671,7 @@ impl Annotations {
 
     /// Applies edits other processes have appended to the log since it was last read. Returns whether any were.
     pub fn refresh(&mut self) -> Result<bool, String> {
-        if self.checked_reads || self.has_checked_layouts() {
+        if self.checked_reads || self.has_checked_layouts() || !self.type_library.is_empty() {
             self.preflight_checked()?;
             let mut staged = Self {
                 done: self.done.clone(),
@@ -587,13 +691,21 @@ impl Annotations {
 
     fn refresh_inner(&mut self, checked: bool) -> Result<bool, String> {
         let Some(log) = &mut self.log else { return Ok(false) };
-        let (restart, edits) = read_new_edits(log, checked)?;
+        let mut next_log = log.clone();
+        let (restart, edits) = read_new_edits(&mut next_log, checked)?;
+        for edit in edits.iter().filter(|edit| edit.field == Field::TypeLibrary) {
+            validate_project_address(edit.field, edit.address)?;
+            for value in [&edit.value, &edit.previous].into_iter().flatten() {
+                parse_type_library(value)?;
+            }
+        }
         if checked {
             let mut budget = CheckedBudget::default();
             for edit in &edits {
                 budget.edit(edit)?;
             }
         }
+        self.log = Some(next_log);
         if restart {
             self.revision = std::sync::Arc::new(());
             if !self.names.is_empty() {
@@ -605,6 +717,7 @@ impl Annotations {
             self.comments.clear();
             self.signatures.clear();
             self.types.clear();
+            self.type_library.clear();
             self.globals.clear();
             self.local_names.clear();
             self.local_types.clear();
@@ -658,10 +771,16 @@ impl Annotations {
                 Some(value) => drop(self.comments.insert(edit.address, value.clone())),
                 None => drop(self.comments.remove(&edit.address)),
             },
-            Field::Signature | Field::Types | Field::Global | Field::LocalName | Field::LocalType => {
+            Field::Signature
+            | Field::Types
+            | Field::TypeLibrary
+            | Field::Global
+            | Field::LocalName
+            | Field::LocalType => {
                 let values = match edit.field {
                     Field::Signature => &mut self.signatures,
                     Field::Types => &mut self.types,
+                    Field::TypeLibrary => &mut self.type_library,
                     Field::LocalName => &mut self.local_names,
                     Field::LocalType => &mut self.local_types,
                     _ => &mut self.globals,
@@ -683,7 +802,10 @@ impl Annotations {
     /// the next `refresh`. A file left ending mid-line (by an interrupted write) gets a newline first, so the
     /// fragment becomes a line of its own, which reading skips.
     fn record(&mut self, edits: &[Edit]) -> Result<(), String> {
-        if self.checked_reads {
+        if self.checked_reads
+            || !self.type_library.is_empty()
+            || edits.iter().any(|edit| edit.field == Field::TypeLibrary)
+        {
             return self.record_checked(edits);
         }
         let Some(log) = &mut self.log else { return Ok(()) };
@@ -821,6 +943,53 @@ impl Annotations {
         Ok(result)
     }
 
+    /// Checked history publishes only on success; ordinary legacy history keeps shared refresh on refusal.
+    pub(crate) fn locked_staged_history<T>(
+        &mut self,
+        redo: bool,
+        work: impl FnOnce(&mut Self) -> Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
+        let history = if redo { &self.undone } else { &self.done };
+        if history.is_empty() {
+            return work(self);
+        }
+        let library_target =
+            history.last().is_some_and(|step| step.iter().any(|edit| edit.field == Field::TypeLibrary));
+        if self.checked_reads || self.has_checked_layouts() || !self.type_library.is_empty() || library_target {
+            return self.locked_staged_checked(work);
+        }
+
+        let _lock = self.log_lock().map_err(ApiError::Invalid)?;
+        // Legacy discovery retains legacy deserialization semantics. Parsed library edits require a checked
+        // reread from the original cursor, including batches that introduce and then clear the library.
+        let shared_library = if let Some(mut log) = self.log.clone() {
+            let (_, edits) = read_new_edits(&mut log, false).map_err(ApiError::Invalid)?;
+            edits.iter().any(|edit| edit.field == Field::TypeLibrary)
+        } else {
+            false
+        };
+        if shared_library {
+            self.preflight_checked().map_err(ApiError::Invalid)?;
+        }
+        let mut staged = Self {
+            done: self.done.clone(),
+            undone: self.undone.clone(),
+            log: self.log.clone(),
+            held: true,
+            checked_reads: shared_library,
+            ..self.snapshot()
+        };
+        staged.refresh().map_err(ApiError::Invalid)?;
+        let result = work(&mut staged);
+        if shared_library && result.is_err() {
+            return result;
+        }
+        staged.checked_reads = self.checked_reads || staged.has_checked_layouts() || !staged.type_library.is_empty();
+        staged.held = self.held;
+        *self = staged;
+        result
+    }
+
     /// Checked import/option publication: preflight the already constructed object BEFORE cloning, and
     /// ingest shared edits with bounded outer JSON before publishing cache, history or cursor.
     pub(crate) fn locked_staged_checked<T>(
@@ -839,7 +1008,7 @@ impl Annotations {
         };
         staged.refresh().map_err(ApiError::Invalid)?;
         let result = work(&mut staged)?;
-        staged.checked_reads = self.checked_reads || staged.has_checked_layouts();
+        staged.checked_reads = self.checked_reads || staged.has_checked_layouts() || !staged.type_library.is_empty();
         staged.held = self.held;
         *self = staged;
         Ok(result)
@@ -891,6 +1060,7 @@ impl Annotations {
         value: Option<String>,
         validate: impl FnOnce(&Self) -> Result<(), String>,
     ) -> Result<bool, String> {
+        validate_project_address(field, address)?;
         let _lock = self.log_lock()?;
         self.refresh()?;
         let value_limit = if field == Field::Name { 128 } else { CHECKED_VALUE_BYTES };
@@ -909,7 +1079,7 @@ impl Annotations {
         let mut candidate = self.snapshot();
         candidate.apply(&edit);
         candidate.validate_local_collections()?;
-        if self.checked_reads {
+        if self.checked_reads || field == Field::TypeLibrary || !self.type_library.is_empty() {
             self.preflight_checked_with_history(self, std::slice::from_ref(&edit))?;
             candidate.preflight_checked_with_history(self, std::slice::from_ref(&edit))?;
         }
@@ -928,9 +1098,15 @@ impl Annotations {
         changes: &[(Field, u64, Option<String>)],
         validate: impl FnOnce(&Self) -> Result<(), String>,
     ) -> Result<Vec<bool>, String> {
+        for (field, address, _) in changes {
+            validate_project_address(*field, *address)?;
+        }
         let _lock = self.log_lock()?;
         self.refresh()?;
-        if self.checked_reads {
+        if self.checked_reads
+            || !self.type_library.is_empty()
+            || changes.iter().any(|change| change.0 == Field::TypeLibrary)
+        {
             let mut budget = CheckedBudget::default();
             for (field, _, value) in changes {
                 budget.records += 1;
@@ -965,7 +1141,10 @@ impl Annotations {
             return Ok(changed);
         }
         candidate.validate_local_collections()?;
-        if self.checked_reads {
+        if self.checked_reads
+            || !self.type_library.is_empty()
+            || edits.iter().any(|edit| edit.field == Field::TypeLibrary)
+        {
             self.preflight_checked_with_history(self, &edits)?;
             candidate.preflight_checked_with_history(self, &edits)?;
         }
@@ -1084,14 +1263,27 @@ impl Annotations {
         if let Some(message) = candidate.blocked(edits) {
             return Err(Refusal::Blocked(message));
         }
-        if self.checked_reads {
+        if self.checked_reads
+            || !self.type_library.is_empty()
+            || edits.iter().any(|edit| edit.field == Field::TypeLibrary)
+        {
+            for edit in edits {
+                CheckedBudget::default().edit(edit).map_err(Refusal::Failed)?;
+            }
             candidate.preflight_checked_with_history(self, &[]).map_err(Refusal::Failed)?;
         }
         candidate.validate_local_collections().map_err(Refusal::Failed)?;
         crate::debug_layout_import::validate_transition(self, &candidate).map_err(Refusal::Failed)?;
         let checked = edits.iter().any(|edit| {
-            matches!(edit.field, Field::Signature | Field::Types | Field::Global | Field::LocalName | Field::LocalType)
-                || (edit.field == Field::Name && !candidate.globals().is_empty())
+            matches!(
+                edit.field,
+                Field::Signature
+                    | Field::Types
+                    | Field::TypeLibrary
+                    | Field::Global
+                    | Field::LocalName
+                    | Field::LocalType
+            ) || (edit.field == Field::Name && !candidate.globals().is_empty())
         });
         if checked {
             validate(&candidate).map_err(Refusal::Failed)?;
@@ -1138,6 +1330,7 @@ impl Annotations {
             Field::Comment => &self.comments,
             Field::Signature => &self.signatures,
             Field::Types => &self.types,
+            Field::TypeLibrary => &self.type_library,
             Field::Global => &self.globals,
             Field::LocalName => &self.local_names,
             Field::LocalType => &self.local_types,
@@ -1172,6 +1365,10 @@ impl Annotations {
         &self.types
     }
 
+    pub fn type_library(&self) -> &BTreeMap<u64, String> {
+        &self.type_library
+    }
+
     pub fn globals(&self) -> &BTreeMap<u64, String> {
         &self.globals
     }
@@ -1185,6 +1382,10 @@ impl Annotations {
     }
 
     fn validate_local_collections(&self) -> Result<(), String> {
+        for (&address, value) in &self.type_library {
+            validate_project_address(Field::TypeLibrary, address)?;
+            parse_type_library(value)?;
+        }
         for address in self.local_names.keys().chain(self.local_types.keys()) {
             let names =
                 self.local_names.get(address).map(|value| parse_local_names(value)).transpose()?.unwrap_or_default();
@@ -1203,6 +1404,10 @@ impl Annotations {
 #[cfg(test)]
 #[path = "annotations_local_tests.rs"]
 mod local_tests;
+
+#[cfg(test)]
+#[path = "annotations_type_library_tests.rs"]
+mod type_library_tests;
 
 /// Reads the complete lines appended to `log` since it was last read. Returns their edits, and whether the file
 /// was replaced (it shrank or is another file), in which case they are its whole contents and earlier state must be

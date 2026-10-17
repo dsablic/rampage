@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 // Modified for rampage: reject array bounds that cannot be represented without narrowing.
+// Modified for rampage: bounded type-library declarations, native C layout and contextual C identifiers.
 /* A Bison parser, made by GNU Bison 3.7.4.  */
 
 /* Bison implementation for Yacc-like parsers in C
@@ -1210,6 +1211,29 @@ yybackup:
       YYDPRINTF ((stderr, "Reading a token\n"));
       yychar = yylex ();
     }
+  if (yychar == TYPE_NAME) {
+    bool hasBase = false;
+    for (yy_state_t *frame = yyssp; frame > yyss; --frame) {
+      yysymbol_kind_t symbol = YY_ACCESSING_SYMBOL(*frame);
+      if (symbol == YYSYMBOL_type_specifier) { hasBase = true; break; }
+      if (symbol == YYSYMBOL_declaration_specifiers || symbol == YYSYMBOL_specifier_qualifier_list) {
+        hasBase = yyvsp[frame - yyssp].spec->type_specifier != nullptr;
+        break;
+      }
+      if (symbol != YYSYMBOL_TYPE_QUALIFIER && symbol != YYSYMBOL_FUNCTION_SPECIFIER
+          && symbol != YYSYMBOL_STORAGE_CLASS_SPECIFIER) break;
+    }
+    int identifierAction = yyn + YYSYMBOL_IDENTIFIER;
+    int typeAction = yyn + YYSYMBOL_TYPE_NAME;
+    bool acceptsIdentifier = identifierAction >= 0 && identifierAction <= YYLAST
+        && yycheck[identifierAction] == YYSYMBOL_IDENTIFIER && yytable[identifierAction] != 0;
+    bool acceptsType = typeAction >= 0 && typeAction <= YYLAST
+        && yycheck[typeAction] == YYSYMBOL_TYPE_NAME && yytable[typeAction] != 0;
+    if (hasBase || (acceptsIdentifier && !acceptsType)) {
+      yylval.str = parse->typeIdentifier(yylval.type);
+      yychar = IDENTIFIER;
+    }
+  }
 
   if (yychar <= GRAMMAREOF)
     {
@@ -1801,6 +1825,9 @@ void GrammarToken::set(uint4 tp,char *ptr,int4 len)
       s.unsetf(ios::dec | ios::hex | ios::oct);
       intb val;
       s >> val;
+      if (!s) throw ParseError("Integer literal is outside the supported signed 64-bit range");
+      s >> ws;
+      if (!s.eof()) throw ParseError("Unsupported integer literal suffix or syntax");
       value.integer = (uintb)val;
     }
     break;
@@ -2254,6 +2281,12 @@ Datatype *PointerModifier::modType(Datatype *base,const TypeDeclarator *decl,Arc
 Datatype *ArrayModifier::modType(Datatype *base,const TypeDeclarator *decl,Architecture *glb) const
 
 {
+  if (arraysize <= 0 || base->isIncomplete() || base->getMetatype() == TYPE_CODE
+      || base->getMetatype() == TYPE_VOID || base->getAlignSize() <= 0
+      || uintb(arraysize) * uintb(base->getAlignSize()) > 0x7fffffff)
+    throw ParseError("Array requires a complete element type and a bounded positive size");
+  if (boundedLibrary && uintb(arraysize) * uintb(base->getAlignSize()) > 1048576)
+    throw ParseError("Array type size limit exceeded (1 MiB)");
   Datatype *restype = glb->types->getTypeArray(arraysize,base);
   return restype;
 }
@@ -2315,13 +2348,10 @@ Datatype *FunctionModifier::modType(Datatype *base,const TypeDeclarator *decl,Ar
     proto.outtype = glb->types->getTypeVoid();
   else
     proto.outtype = base;
-  // Varargs is encoded as extra null pointer in paramlist
-  proto.firstVarArgSlot = -1;
-  if ((!paramlist.empty())&&(paramlist.back() == (TypeDeclarator *)0)) {
-    proto.firstVarArgSlot = paramlist.size() - 1;
-  }
+  proto.firstVarArgSlot = dotdotdot ? paramlist.size() : -1;
 
   getInTypes(proto.intypes,glb);
+  getInNames(proto.innames);
 
   proto.model = decl->getModel(glb);
   return glb->types->getTypeCode(proto);
@@ -2463,6 +2493,7 @@ void CParse::clear(void)
   lastdecls = (vector<TypeDeclarator *> *)0;
   lexer.clear();
   firsttoken = -1;
+  tagExpected = false;
 }
 
 TypeDeclarator *CParse::mergeSpecDec(TypeSpecifiers *spec,TypeDeclarator *dec)
@@ -2517,6 +2548,12 @@ uint4 CParse::convertFlag(string *str)
 TypeSpecifiers *CParse::addSpecifier(TypeSpecifiers *spec,string *str)
 
 {
+  if (glb->hasModel(*str)) {
+    if (!spec->function_specifier.empty() && spec->function_specifier != *str)
+      setError("Multiple parameter models");
+    spec->function_specifier = *str;
+    return spec;
+  }
   uint4 flag = convertFlag(str);
   spec->flags |= flag;
   return spec;
@@ -2602,7 +2639,7 @@ TypeDeclarator *CParse::newArray(TypeDeclarator *dec,uint4 flags,uintb *num)
 {
   if (*num > 65536 || *num == 0)
     throw ParseError("Array bound must be in 1..65536");
-  ArrayModifier *newmod = new ArrayModifier(flags,(int4)*num);
+  ArrayModifier *newmod = new ArrayModifier(flags,(int4)*num,libraryMode);
   dec->mods.push_back(newmod);
   return dec;
 }
@@ -2625,13 +2662,21 @@ TypeDeclarator *CParse::newFunc(TypeDeclarator *dec,vector<TypeDeclarator *> *de
 Datatype *CParse::newStruct(const string &ident,vector<TypeDeclarator *> *declist)
 
 { // Build a new structure
+  if (libraryMode && declist->size() > 256) throw ParseError("Type library field limit exceeded (256)");
+  Datatype *prior = glb->types->findByName(ident);
+  if (libraryMode && prior != (Datatype *)0 && (!prior->isIncomplete() || prior->getTypedef() != (Datatype *)0))
+    throw ParseError("Duplicate type name: " + ident);
   TypeStruct *res = glb->types->getTypeStruct(ident); // Create stub (for recursion)
   vector<TypeField> sublist;
   vector<TypeBitField> bitlist;
+  set<string> libraryFieldNames;
   bool isBigEndian = glb->getDefaultDataSpace()->isBigEndian();
 
   for(uint4 i=0;i<declist->size();++i) {
     TypeDeclarator *decl = (*declist)[i];
+    if (libraryMode && decl->getNumBits() != 0) throw ParseError("Type libraries do not support bitfields");
+    if (libraryMode && (decl->getIdentifier().empty() || !libraryFieldNames.insert(decl->getIdentifier()).second))
+      throw ParseError("Aggregate fields require distinct names");
     if (!decl->isValid()) {
       setError("Invalid structure declarator");
       glb->types->destroyType(res);
@@ -2644,7 +2689,16 @@ Datatype *CParse::newStruct(const string &ident,vector<TypeDeclarator *> *declis
   }
 
   try {
-    glb->types->assignRawFields(res,sublist,bitlist);
+    if (libraryMode) {
+      for (const TypeField &field : sublist) {
+        if (field.type->isIncomplete() || field.type->getSize() <= 0 || field.type->getSize() > 1048576
+            || field.type->getMetatype() == TYPE_CODE)
+          throw ParseError("Aggregate fields require complete sized data types");
+      }
+    }
+    glb->types->assignRawFields(res,sublist,bitlist,libraryPacking);
+    if (libraryMode && res->getSize() > 1048576) throw ParseError("Aggregate type size limit exceeded (1 MiB)");
+    if (libraryMode) libraryAggregates.push_back(res);
   }
   catch (LowlevelError &err) {
     setError(err.explain);
@@ -2658,6 +2712,9 @@ Datatype *CParse::oldStruct(const string &ident)
 
 {
   Datatype *res = glb->types->findByName(ident);
+  if (libraryMode && res == (Datatype *)0) res = glb->types->getTypeStruct(ident);
+  if (libraryMode && res != (Datatype *)0 && res->getTypedef() != (Datatype *)0)
+    throw ParseError("A typedef alias cannot be used as a struct tag: " + ident);
   if ((res==(Datatype *)0)||(res->getMetatype() != TYPE_STRUCT))
     setError("Identifier does not represent a struct as required");
   return res;
@@ -2666,21 +2723,38 @@ Datatype *CParse::oldStruct(const string &ident)
 Datatype *CParse::newUnion(const string &ident,vector<TypeDeclarator *> *declist)
 
 {
+  if (libraryMode && declist->size() > 256) throw ParseError("Type library field limit exceeded (256)");
+  Datatype *prior = glb->types->findByName(ident);
+  if (libraryMode && prior != (Datatype *)0 && (!prior->isIncomplete() || prior->getTypedef() != (Datatype *)0))
+    throw ParseError("Duplicate type name: " + ident);
   TypeUnion *res = glb->types->getTypeUnion(ident); // Create stub (for recursion)
   vector<TypeField> sublist;
+  set<string> libraryFieldNames;
   
   for(uint4 i=0;i<declist->size();++i) {
     TypeDeclarator *decl = (*declist)[i];
+    if (libraryMode && decl->getNumBits() != 0) throw ParseError("Type libraries do not support bitfields");
     if (!decl->isValid()) {
       setError("Invalid union declarator");
       glb->types->destroyType(res);
       return (Datatype *)0;
     }
+    if (libraryMode && (decl->getIdentifier().empty() || !libraryFieldNames.insert(decl->getIdentifier()).second))
+      throw ParseError("Aggregate fields require distinct names");
     sublist.emplace_back(i,0,decl->getIdentifier(),decl->buildType(glb));
   }
 
   try {
-    glb->types->assignRawFields(res,sublist);
+    if (libraryMode) {
+      for (const TypeField &field : sublist) {
+        if (field.type->isIncomplete() || field.type->getSize() <= 0 || field.type->getSize() > 1048576
+            || field.type->getMetatype() == TYPE_CODE)
+          throw ParseError("Aggregate fields require complete sized data types");
+      }
+    }
+    glb->types->assignRawFields(res,sublist,libraryPacking);
+    if (libraryMode && res->getSize() > 1048576) throw ParseError("Aggregate type size limit exceeded (1 MiB)");
+    if (libraryMode) libraryAggregates.push_back(res);
   }
   catch (LowlevelError &err) {
     setError(err.explain);
@@ -2694,6 +2768,9 @@ Datatype *CParse::oldUnion(const string &ident)
 
 {
   Datatype *res = glb->types->findByName(ident);
+  if (libraryMode && res == (Datatype *)0) res = glb->types->getTypeUnion(ident);
+  if (libraryMode && res != (Datatype *)0 && res->getTypedef() != (Datatype *)0)
+    throw ParseError("A typedef alias cannot be used as a union tag: " + ident);
   if ((res==(Datatype *)0)||(res->getMetatype() != TYPE_UNION))
     setError("Identifier does not represent a union as required");
   return res;
@@ -2726,15 +2803,34 @@ vector<Enumerator *> *CParse::newVecEnumerator(void)
 Datatype *CParse::newEnum(const string &ident,vector<Enumerator *> *vecenum)
 
 {
-  TypeEnum *res = glb->types->getTypeEnum(ident);
+  if (libraryMode && vecenum->size() > 256) throw ParseError("Type library enum limit exceeded (256)");
+  if (libraryMode && !ident.empty() && glb->types->findByName(ident) != (Datatype *)0)
+    throw ParseError("Duplicate type name: " + ident);
+  TypeEnum *res = libraryMode ? glb->types->getTypeCEnum(ident) : glb->types->getTypeEnum(ident);
   vector<string> namelist;
   vector<uintb> vallist;
   vector<bool> assignlist;
+  uintb nextLibraryValue = 0;
+  set<string> libraryEnumeratorNames;
   for(uint4 i=0;i<vecenum->size();++i) {
     Enumerator *enumer = (*vecenum)[i];
+    if (libraryMode && !libraryEnumeratorNames.insert(enumer->enumconstant).second)
+      throw ParseError("Enum entries require distinct names");
     namelist.push_back(enumer->enumconstant);
-    vallist.push_back(enumer->value);
-    assignlist.push_back(enumer->constantassigned);
+    if (libraryMode) {
+      if (enumer->constantassigned) nextLibraryValue = enumer->value;
+      int4 enumBits = res->getSize() * 8;
+      uintb positiveMax = enumBits == 64 ? (~uintb(0) >> 1) : (uintb(1) << (enumBits - 1)) - 1;
+      uintb negativeMin = ~positiveMax;
+      if (nextLibraryValue > positiveMax && nextLibraryValue < negativeMin)
+        throw ParseError("C enum value is outside the selected compiler's signed int range");
+      vallist.push_back(nextLibraryValue++);
+      assignlist.push_back(true);
+    }
+    else {
+      vallist.push_back(enumer->value);
+      assignlist.push_back(enumer->constantassigned);
+    }
   }
   try {
     map<uintb,string> namemap;
@@ -2753,6 +2849,8 @@ Datatype *CParse::oldEnum(const string &ident)
 
 {
   Datatype *res = glb->types->findByName(ident);
+  if (libraryMode && res != (Datatype *)0 && res->getTypedef() != (Datatype *)0)
+    throw ParseError("A typedef alias cannot be used as an enum tag: " + ident);
   if ((res==(Datatype *)0)||(!res->isEnumType()))
     setError("Identifier does not represent an enum as required");
   return res;
@@ -2837,7 +2935,7 @@ int4 CParse::lookupIdentifier(const string &nm)
     return TYPE_NAME;
   }
   if (glb->hasModel(nm))
-    return FUNCTION_SPECIFIER;
+    return TYPE_QUALIFIER;
   return IDENTIFIER;		// Unknown identifier
 }
 
@@ -2854,6 +2952,8 @@ int4 CParse::lex(void)
   if (lasterror.size()!=0)
     return BADTOKEN;
   lexer.getNextToken(tok);
+  bool wasTagExpected = tagExpected;
+  tagExpected = false;
   lineno = tok.getLineNo();
   colno = tok.getColNo();
   filenum = tok.getFileNum();
@@ -2866,7 +2966,12 @@ int4 CParse::lex(void)
   case GrammarToken::identifier:
     yylval.str = tok.getString();
     string_alloc.push_back(yylval.str);
-    return lookupIdentifier(*yylval.str);
+    if (wasTagExpected) return IDENTIFIER;
+    {
+      int4 result = lookupIdentifier(*yylval.str);
+      tagExpected = (result == STRUCT || result == UNION || result == ENUM);
+      return result;
+    }
   case GrammarToken::stringval:
     delete tok.getString();
     setError("Illegal string constant");

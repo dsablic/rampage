@@ -534,6 +534,9 @@ impl Workspace {
             Field::LocalName | Field::LocalType => Err(rampage_api::ApiError::Invalid(
                 "local variable edits require a native storage selector through MCP".to_owned(),
             )),
+            Field::TypeLibrary => Err(rampage_api::ApiError::Invalid(
+                "project type-library edits require the declare_types/delete_type MCP tools".to_owned(),
+            )),
         };
         match result {
             Ok(edit) => {

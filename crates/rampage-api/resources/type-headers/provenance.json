@@ -1,0 +1,38 @@
+{
+  "scope": "Minimal declaration subsets, not complete system headers or an SDK. No upstream implementation code.",
+  "profiles": {
+    "c": {
+      "project": "musl",
+      "version": "v1.2.5",
+      "sources": ["https://git.musl-libc.org/cgit/musl/plain/include/alltypes.h.in?h=v1.2.5"],
+      "license": "MIT",
+      "license_source": "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5",
+      "adaptations": "Keep the eight int8_t..int64_t/uint8_t..uint64_t aliases and typedef struct _IO_FILE FILE; resolve scalar spellings to native int1/int2/int4/int8 and uint1/uint2/uint4/uint8. Omit even musl's placeholder struct definition. FILE is incomplete; no libc layout is claimed. stddef.h relies on the native library's existing target-sized size_t builtin; do not redefine it. No int_least/int_fast/intmax aliases, macros or runtime function declarations are supplied."
+    },
+    "posix-linux": {
+      "project": "musl",
+      "version": "v1.2.5",
+      "sources": [
+        "https://git.musl-libc.org/cgit/musl/plain/include/sys/socket.h?h=v1.2.5",
+        "https://git.musl-libc.org/cgit/musl/plain/include/alltypes.h.in?h=v1.2.5"
+      ],
+      "license": "MIT",
+      "license_source": "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5",
+      "adaptations": "Retain only sa_family_t and sockaddr; resolve unsigned short to native uint2. This explicitly selected profile asserts the Linux socket ABI (2-byte family, 14-byte data, 16-byte total); never infer Linux from ELF/default compiler. Not Darwin/BSD."
+    },
+    "win32": {
+      "project": "mingw-w64",
+      "version": "v12.0.0",
+      "sources": [
+        "https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/mingw-w64-headers/include/minwindef.h",
+        "https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/mingw-w64-headers/include/winnt.h",
+        "https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/mingw-w64-headers/crt/_mingw.h.in",
+        "https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/mingw-w64-headers/crt/stddef.h"
+      ],
+      "license": "ZPL-2.1 (unmarked headers); public-domain CRT type substitutions",
+      "license_source": "https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/COPYING",
+      "public_domain_disclaimer_source": "https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/DISCLAIMER.PD",
+      "adaptations": "Modified 2026-10-17. Keep HANDLE, DWORD, BOOL, WCHAR, LONG, LONGLONG, LARGE_INTEGER only. Resolve __LONG32/int/wchar_t/__int64 to native uint4/int4/uint2/int8; preserve signed QuadPart and signed HighPart. Retain named u low/high overlay, omit duplicate anonymous overlay and pointer aliases. Remove macros, attributes, conditional compilation and includes. Requires Windows platform and windows/clangwindows compiler, int=4, long=4, pointer=4 or 8; no host wchar_t/long assumptions."
+    }
+  }
+}

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: bounded type-library parsing and parser-context identifier disambiguation.
 #ifndef __GRAMMAR_HH__
 #define __GRAMMAR_HH__
 
@@ -145,8 +146,9 @@ public:
 class ArrayModifier : public TypeModifier {
   uint4 flags;
   int4 arraysize;
+  bool boundedLibrary;
 public:
-  ArrayModifier(uint4 fl,int4 as) { flags=fl; arraysize = as; }
+  ArrayModifier(uint4 fl,int4 as,bool bounded = false) { flags=fl; arraysize = as; boundedLibrary = bounded; }
   virtual uint4 getType(void) const { return array_mod; }
   virtual bool isValid(void) const { return (arraysize>0); }
   virtual Datatype *modType(Datatype *base,const TypeDeclarator *decl,Architecture *glb) const;
@@ -241,11 +243,17 @@ private:
   vector<TypeDeclarator *> *lastdecls;
   int4 firsttoken;		// Message to parser indicating desired object
   string lasterror;
+  int4 libraryPacking = 0;
+  bool libraryMode = false;
+  bool tagExpected = false;
+  vector<Datatype *> libraryAggregates;
   void setError(const string &msg);
   int4 lookupIdentifier(const string &nm);
   bool runParse(uint4 doctype);
 public:
   CParse(Architecture *g,int4 maxbuf);
+  void setTypeLibrary(int4 packing) { libraryMode = true; libraryPacking = packing; }
+  const vector<Datatype *> &getLibraryAggregates(void) const { return libraryAggregates; }
   ~CParse(void);
   void clear(void);
   vector<TypeDeclarator *> *mergeSpecDecVec(TypeSpecifiers *spec);
@@ -283,6 +291,11 @@ public:
   const string &getError(void) const { return lasterror; }
   void setResultDeclarations(vector<TypeDeclarator *> *val) { lastdecls = val; }
   vector<TypeDeclarator *> *getResultDeclarations(void) { return lastdecls; }
+  string *typeIdentifier(Datatype *type) {
+    string *name = new string(type->getName());
+    string_alloc.push_back(name);
+    return name;
+  }
 };
 
 extern Datatype *parse_type(istream &s,string &name,Architecture *glb);

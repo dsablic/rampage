@@ -11,6 +11,7 @@
 #include "tokens.hh"
 #include "results.hh"
 #include "local_variables.hh"
+#include "type_library.hh"
 
 #include <cstdlib>
 #include <algorithm>
@@ -195,6 +196,8 @@ struct Handle {
     std::map<uintb, uintb> externalSlots;
     std::vector<rampage::Token> tokens;
     std::string results;
+    std::string typeResult;
+    std::map<Datatype *, int4> typePacking;
     std::map<uintb, std::vector<rampage::LocalOverride>> localOverrides;
     bool poisoned = false;
     bool fallbackError = false;
@@ -688,6 +691,49 @@ const char *rampage_decomp_parse_c(void *h, const char *text) noexcept {
         nativeMutation = true;
         parse_C(handle->arch, in);
     });
+}
+
+const char *rampage_decomp_parse_type_library(void *h, const char *text, uint32_t packing,
+                                            const char **json, size_t *length) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    if (json == nullptr || length == nullptr || text == nullptr) return "Invalid type library input";
+    *json = nullptr;
+    *length = 0;
+    const char *error = mutate(handle, [&](bool &nativeMutation) {
+        nativeMutation = true;
+        auto names = rampage::type_library::parse(handle->arch, text, packing, handle->typePacking);
+        handle->typeResult = rampage::type_library::inventory(handle->arch, &names, handle->typePacking);
+    });
+    if (error != nullptr) {
+        handle->poisoned = true;
+        handle->tokens.clear();
+        handle->results.clear();
+        return error;
+    }
+    *json = handle->typeResult.c_str();
+    *length = handle->typeResult.size();
+    return nullptr;
+}
+
+const char *rampage_decomp_type_inventory(void *h, const char *name, const char **json, size_t *length) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    if (json == nullptr || length == nullptr) return "Invalid type query output";
+    *json = nullptr;
+    *length = 0;
+    if (handle == nullptr || handle->arch == nullptr || handle->poisoned) return "Decompiler handle is unavailable";
+    try {
+        std::vector<std::string> names;
+        if (name != nullptr) names.emplace_back(name);
+        handle->typeResult = rampage::type_library::inventory(handle->arch,
+            name == nullptr ? nullptr : &names, handle->typePacking);
+        *json = handle->typeResult.c_str();
+        *length = handle->typeResult.size();
+        return nullptr;
+    } catch (const LowlevelError &error) {
+        return setError(handle, error.explain.c_str());
+    } catch (...) {
+        return setError(handle, "Type inventory inspection failed");
+    }
 }
 
 const char *rampage_decomp_local_variables(void *h, uint64_t function,

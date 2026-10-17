@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: bounded native type-library layout and retained pre-ABI C function declarations.
 /// \file type.hh
 /// \brief Classes for describing and printing data-types
 
@@ -597,7 +598,7 @@ public:
   virtual Datatype *resolveInFlow(PcodeOp *op,int4 slot);
   virtual Datatype* findResolve(const PcodeOp *op,int4 slot);
   virtual int4 findCompatibleResolve(Datatype *ct) const;
-  static void assignFieldOffsets(vector<TypeField> &list,vector<TypeBitField> &bitlist,int4 &newSize,int4 &newAlign,uint4 &flags);
+  static void assignFieldOffsets(vector<TypeField> &list,vector<TypeBitField> &bitlist,int4 &newSize,int4 &newAlign,uint4 &flags,int4 packing = 0);
   static int4 scoreSingleComponent(Datatype *parent,PcodeOp *op,int4 slot);	///< Determine best type fit for given PcodeOp use
 };
 
@@ -760,6 +761,7 @@ class TypeCode : public Datatype {
 protected:
   friend class TypeFactory;
   FuncProto *proto;		///< If non-null, this describes the prototype of the underlying function
+  PrototypePieces *declaration = nullptr;
   TypeFactory *factory;		///< Factory owning \b this
   void setPrototype(TypeFactory *tfact,const PrototypePieces &sig,Datatype *voidtype);	///< Establish a function pointer
   void setPrototype(TypeFactory *typegrp,const FuncProto *fp);	///< Set a particular function prototype on \b this
@@ -770,6 +772,7 @@ public:
   TypeCode(void);			///< Construct an incomplete TypeCode
   int4 compareBasic(const TypeCode *op) const;	///< Compare surface characteristics of two TypeCodes
   const FuncProto *getPrototype(void) const { return proto; }	///< Get the function prototype
+  const PrototypePieces *getDeclaration(void) const { return declaration; }
   virtual ~TypeCode(void);
   virtual void printRaw(ostream &s) const;
   virtual Datatype *getSubType(int8 off,int8 *newoff) const;
@@ -907,6 +910,7 @@ public:
   TypeUnion *getTypeUnion(const string &n);			///< Create an (empty) union
   TypePartialUnion *getTypePartialUnion(TypeUnion *contain,int4 off,int4 sz);	///< Create a partial union
   TypeEnum *getTypeEnum(const string &n);			///< Create an (empty) enumeration
+  TypeEnum *getTypeCEnum(const string &n); ///< Create a C enum with the selected compiler's signed int layout
   TypePartialEnum *getTypePartialEnum(TypeEnum *contain,int4 off,int4 sz);	///< Create a partial enumeration
   TypeSpacebase *getTypeSpacebase(AddrSpace *id,const Address &addr);	///< Create a "spacebase" type
   TypeCode *getTypeCode(const PrototypePieces &proto);			///< Create a "function" datatype
@@ -917,8 +921,9 @@ public:
   TypePointer *resizePointer(TypePointer *ptr,int4 newSize);	///< Build a resized pointer based on the given pointer
   Datatype *resizeInteger(Datatype *ct,int4 newSize);		///< Build a resized integer based on the given integer
   Datatype *getExactPiece(Datatype *ct,int4 offset,int4 size);	///< Get the data-type associated with piece of a structured data-type
-  void assignRawFields(TypeStruct *ct,vector<TypeField> &fd,vector<TypeBitField> &bit);
-  void assignRawFields(TypeUnion *ct,vector<TypeField> &fd);
+  void assignRawFields(TypeStruct *ct,vector<TypeField> &fd,vector<TypeBitField> &bit,int4 packing = 0);
+  void assignRawFields(TypeUnion *ct,vector<TypeField> &fd,int4 packing = 0);
+  const DatatypeNameSet &namedTypes(void) const { return nametree; }
   void destroyType(Datatype *ct);				///< Remove a data-type from \b this
   Datatype *concretize(Datatype *ct);				///< Convert given data-type to concrete form
   void dependentOrder(vector<Datatype *> &deporder) const;	///< Place all data-types in dependency order

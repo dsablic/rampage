@@ -26,7 +26,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_pdb_names`, `class_evidence`,
-  `language_metadata`, `edit_variable`.
+  `language_metadata`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`.
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `inspect_jump_table`.
@@ -52,6 +52,11 @@ The local stripped Lua workload was also inspected through `triage_report`: stat
 does not imply target execution, and bundled signature results are distinct from matched-twin evaluator scores.
 
 ## Inputs, paging and decompiler tokens
+
+`declare_types`, `list_types`, `get_type` and `delete_type` manage project-wide named declarations with native
+target layout inspection and checked undo/replay. Inline headers and minimal bundled profiles do not read
+system files or invoke a host preprocessor. Deletion is dependency checked; multi-name groups require an explicit
+flag. See the [type-library reference](type-library.md) for input limits and packing behavior.
 
 `edit_variable` accepts one current display name or complete native storage object, with name/type changes or
 clear flags. It atomically persists the changes and returns complete refreshed C, diagnostics and variable

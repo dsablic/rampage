@@ -1,0 +1,44 @@
+# Source-built layout evidence, not part of the frozen Phase 0 task inventory.
+schema = "phase1_type_library_recipe"
+source = "tests/fixtures/src/type-library.c"
+source_sha256 = "36959329f13a1be06117477b876ff9f12d869a5401ecb99f9e854fabf2500574"
+header = "tests/fixtures/src/type-library.h"
+header_sha256 = "3a75f8d1449b88bb6dfa6528e3ab24c0f1ebb3daf497f384882caf3676f14b35"
+license = "Apache-2.0"
+compiler = "Clang 23.1.3 with LLD"
+execution = "None: sizeof/offsetof facts read from compiler-produced data through MCP inspect_data."
+common_argv = [
+    "-fuse-ld=lld", "-O1", "-g0", "-ffreestanding", "-fno-builtin", "-fno-stack-protector",
+    "-nostdlib", "-static", "-Wl,-e,type_library_dispatch", "-Wl,--build-id=none",
+    "tests/fixtures/src/type-library.c",
+]
+table_symbol = "type_library_layout"
+table_order = [
+    "Record.size", "Record.kind", "Record.mode", "Record.payload", "Record.callback", "Record.next",
+    "Packed.size", "Packed.identifier", "Packed.flags", "PackTwo.size", "PackTwo.value",
+    "RestoredPackOne.size", "RestoredPackOne.value", "Natural.size", "Natural.value",
+]
+
+[[builds]]
+target_argv = "--target=x86_64-unknown-linux-gnu"
+output_argv = ["-o", "target/phase1-2/type-library-x64.elf"]
+image_sha256 = "f0e67ddbb79b354cf3c4352ee53797e6f9b6a2992d4330047d0deb730fc13f44"
+table_address = "0x200120"
+table_word_bytes = 8
+table_values = [32, 0, 4, 8, 16, 24, 7, 1, 5, 6, 2, 5, 1, 8, 4]
+
+[[builds]]
+target_argv = "--target=i386-unknown-linux-gnu"
+output_argv = ["-o", "target/phase1-2/type-library-x86.elf"]
+image_sha256 = "2aceffa559798fab17adbdd0ce3f5cd77f7c53af52888ec8582170409947bad2"
+table_address = "0x4000b4"
+table_word_bytes = 4
+table_values = [24, 0, 4, 8, 16, 20, 7, 1, 5, 6, 2, 5, 1, 8, 4]
+
+[callback_truth]
+factory = "TypeLibraryRecord (int count): one declared parameter; no hidden return-storage parameter."
+by_value = "int (TypeLibraryRecord record): declared aggregate value, not an ABI-lowered pointer."
+compiler_evidence = "Clang 23.1.3 emits sret storage for make on SysV/Windows and an indirect take argument on Windows."
+ir_argv = ["-O1", "-g0", "-ffreestanding", "-fno-builtin", "-S", "-emit-llvm", "tests/fixtures/src/type-library.c"]
+ir_targets = ["--target=x86_64-unknown-linux-gnu", "--target=x86_64-pc-windows-msvc"]
+ir_outputs = ["target/phase1-2/type-library-abi-x64.ll", "target/phase1-2/type-library-abi-windows.ll"]

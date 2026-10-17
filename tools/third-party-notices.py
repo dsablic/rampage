@@ -41,7 +41,30 @@ VENDORED = [
         "BSD-3-Clause",
         "https://developer.arm.com/Architectures/A-Profile%20Architecture",
         "AArch64 and AArch32 decoder tables in crates/rampage-arch are generated from this specification.",
-        ["crates/rampage-arch/src/a64/LICENSE-ARM", "crates/rampage-arch/src/aarch32/LICENSE-ARM"],
+        [
+            "crates/rampage-arch/src/a64/LICENSE-ARM",
+            "crates/rampage-arch/src/aarch32/LICENSE-ARM",
+        ],
+    ),
+    (
+        "musl minimal C and Linux/POSIX type declarations",
+        "MIT",
+        "https://git.musl-libc.org/cgit/musl/tree/?h=v1.2.5",
+        "Selected header declarations adapted into the bundled type-library profiles; no libc implementation.",
+        [
+            "crates/rampage-api/resources/type-headers/LICENSE.musl",
+            "crates/rampage-api/resources/type-headers/COPYRIGHT.musl",
+        ],
+    ),
+    (
+        "mingw-w64 minimal Windows type declarations",
+        "ZPL-2.1 AND LicenseRef-Public-Domain",
+        "https://github.com/mingw-w64/mingw-w64/tree/v12.0.0/mingw-w64-headers",
+        "Selected header declarations adapted into the bundled win32 type-library profile; not a Windows SDK.",
+        [
+            "crates/rampage-api/resources/type-headers/LICENSE.mingw-w64",
+            "crates/rampage-api/resources/type-headers/DISCLAIMER.PD.mingw-w64",
+        ],
     ),
 ]
 COPYLEFT = re.compile(r"\b(A?GPL|LGPL|MPL|EPL|CDDL|EUPL|OSL|CECILL)", re.IGNORECASE)
@@ -360,7 +383,7 @@ def main():
     licenses = Counter(p.get("license") or "(none)" for p in crates)
     report = ["shipped crates: " + str(len(crates)), "distinct license texts: " + str(len(ordered)),
               "license distribution:"]
-    report += ["  %4d  %s" % (count, spdx) for spdx, count in sorted(licenses.items(), key=lambda i: (-i[1], i[0]))]
+    report += [f"  {count:4d}  {spdx}" for spdx, count in sorted(licenses.items(), key=lambda i: (-i[1], i[0]))]
     report.append("crates covered by a fallback text: " + str(len(fallbacks)))
     report.append("crates with no license text at all: " + (", ".join(
         p["name"] + " " + p["version"] for p in no_files) or "none"))

@@ -17,6 +17,11 @@ It includes third-party components under their own terms:
   generated from this specification. See crates/rampage-arch/src/a64/LICENSE-ARM
   and crates/rampage-arch/src/aarch32/LICENSE-ARM.
 
+- Minimal C/POSIX type profiles adapted from musl headers (MIT), and Windows
+  type declarations adapted from mingw-w64 headers (ZPL-2.1 and public domain).
+  Exact sources, adaptations and complete notices are retained under
+  crates/rampage-api/resources/type-headers and in THIRD-PARTY-NOTICES.
+
 Dependencies obtained through Cargo are distributed under their own licenses,
 retained in their respective packages; all are permissive (MIT, Apache-2.0,
 BSD, ISC, Zlib, Unicode, and similar).

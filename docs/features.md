@@ -91,7 +91,11 @@ class names and base-class edges. See [debug signature import](debug-signatures.
 
 Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage
 identity and returns refreshed C in one call, with undo/replay. Limits: single whole register/stack mappings
-and same-size retypes; unsupported storage is explicit, with no project type library or cross-call propagation.
+and same-size retypes; unsupported storage is explicit, with no automatic cross-call propagation.
+
+The [project type library](type-library.md) provides named declaration/header import, paged inventory, native
+size/alignment/packing/field inspection and dependency-checked deletion. Existing address-bound `set_types`
+annotations remain compatible. Limits: bounded type-only C, minimal explicit ABI profiles, no full preprocessor/SDK.
 The decompiler library can inspect/assert complete flat-struct layouts for x86-64 GCC before using dependent
 prototypes. This read-only bridge compares native field offsets, sizes, alignment and leaf types against independent
 facts; it does not import debug layouts or persist assertions across engine rebuilds. Nested aggregates and inferred

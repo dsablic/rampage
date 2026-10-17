@@ -28,6 +28,7 @@ fn request() -> WorkerRequest {
         decompile: WorkerFunction { address: 0x1000, name: "fixture".to_owned(), thumb: false },
         tokens: true,
         validate_only: false,
+        type_query: None,
     }
 }
 

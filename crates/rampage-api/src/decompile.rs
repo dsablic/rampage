@@ -34,6 +34,8 @@ impl PartialEq for DecompilerConfigurationRevision {
 impl Eq for DecompilerConfigurationRevision {}
 
 pub(crate) use go_abi::GoPrototypes;
+pub(crate) use isolated::query_types as isolated_type_query;
+pub(crate) use types::declaration_tokens as type_tokens;
 pub(crate) use types::validate_local_type;
 
 #[derive(Debug, Serialize)]
@@ -99,6 +101,7 @@ pub(crate) struct DecompilerState {
     names: std::collections::BTreeMap<u64, String>,
     signatures: std::collections::BTreeMap<u64, String>,
     types: std::collections::BTreeMap<u64, String>,
+    type_library: std::collections::BTreeMap<u64, String>,
     globals: std::collections::BTreeMap<u64, String>,
     local_names: std::collections::BTreeMap<u64, String>,
     local_types: std::collections::BTreeMap<u64, String>,
@@ -180,6 +183,7 @@ impl Project {
     ) -> Result<(), String> {
         validate_cached_layout_source(self, state).map_err(|error| error.to_string())?;
         crate::debug_layout_import::validate_replay_source(self, candidate).map_err(|error| error.to_string())?;
+        self.validate_type_library_snapshot(state, options, candidate).map_err(|error| error.to_string())?;
         let targets = crate::variables::targets(candidate);
         if !targets.is_empty() {
             for address in targets {
@@ -188,7 +192,11 @@ impl Project {
             }
             return Ok(());
         }
-        if candidate.types().is_empty() && candidate.signatures().is_empty() && candidate.globals().is_empty() {
+        if candidate.types().is_empty()
+            && candidate.type_library().is_empty()
+            && candidate.signatures().is_empty()
+            && candidate.globals().is_empty()
+        {
             return Ok(());
         }
         if let Some(config) = &state.worker {
@@ -364,6 +372,7 @@ impl Project {
         }
         if slot.signatures != *annotations.signatures()
             || slot.types != *annotations.types()
+            || slot.type_library != *annotations.type_library()
             || slot.globals != *annotations.globals()
             || slot.local_names != *annotations.local_names()
             || slot.local_types != *annotations.local_types()
@@ -376,6 +385,7 @@ impl Project {
             slot.names = annotations.names().clone();
             slot.signatures = annotations.signatures().clone();
             slot.types = annotations.types().clone();
+            slot.type_library = annotations.type_library().clone();
             slot.globals = annotations.globals().clone();
             slot.local_names = annotations.local_names().clone();
             slot.local_types = annotations.local_types().clone();
@@ -434,6 +444,12 @@ impl Project {
         }
         let mut decompiler = Decompiler::open_with_options(binary.arch, binary.big_endian, &regions, options)
             .map_err(|error| ApiError::Unavailable(error.to_string()))?;
+        crate::type_library::validate_profile_replay(
+            annotations,
+            options,
+            decompiler.data_organization(),
+            decompiler.language_id(),
+        )?;
         if binary.arch == rampage_arch::Arch::Arm {
             let modes = context::arm_points(binary, &self.analysis()?.program.code_modes);
             decompiler.set_code_modes(&modes).map_err(|error| ApiError::Unavailable(error.to_string()))?;

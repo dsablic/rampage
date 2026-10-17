@@ -72,7 +72,11 @@ successful decoding do not authenticate content or prove stream boundaries.
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
 yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are \
-loaded with their licence and provenance. Types: edit_variable renames/retypes a current local or parameter \
+loaded with their licence and provenance. Types: declare_types imports bounded C declarations/inline headers \
+into a project library; list_types pages names, get_type inspects native target layouts and dependencies, and \
+delete_type refuses outside dependencies. Multi-name definition groups require explicit definition_group=true. \
+Bundled c/posix-linux/win32 profiles retain provenance and assert their ABI, not host layout or OS detection. \
+No filesystem includes or host preprocessor. edit_variable renames/retypes a current local or parameter \
 by display name or complete returned native storage, persists storage-keyed annotations, and returns refreshed \
 C and descriptors in the same call. Single whole register/stack mappings and same-size types only; selectors \
 include inclusive definition/use points, not live ranges. Undo/redo/replay preserve edits. \

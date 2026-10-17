@@ -25,6 +25,7 @@ fn request() -> WorkerRequest {
         decompile: WorkerFunction { address: 0x1000, name: "fields".to_owned(), thumb: false },
         tokens: true,
         validate_only: false,
+        type_query: None,
     }
 }
 

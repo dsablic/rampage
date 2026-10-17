@@ -38,6 +38,13 @@ fn plan_with(
         ReplaySource::Entry(_) => debug_layout_import::validate_entry_replay_source(project, annotations)?,
     }
     let layouts = debug_layout_import::stored_layouts(annotations)?;
+    if crate::type_library::stored_declarations(annotations)?
+        .iter()
+        .flat_map(|unit| &unit.names)
+        .any(|name| layouts.contains_key(name))
+    {
+        return Err(ApiError::Invalid("library types conflict with an assertion-backed type".to_owned()));
+    }
     let image = if layouts.is_empty() {
         None
     } else {
@@ -45,10 +52,13 @@ fn plan_with(
     };
     let specifications =
         if layouts.is_empty() { None } else { Some(debug_layout_import::current_specification_digest()?) };
-    let mut operations: Vec<_> = generated_types
-        .iter()
-        .map(|declaration| WorkerOperation::ParseTypes { declarations: declaration.clone() })
+    let mut operations: Vec<_> = crate::type_library::stored_declarations(annotations)?
+        .into_iter()
+        .map(|unit| WorkerOperation::TypeLibrary { declarations: unit.declarations, packing: unit.packing })
         .collect();
+    operations.extend(
+        generated_types.iter().map(|declaration| WorkerOperation::ParseTypes { declarations: declaration.clone() }),
+    );
     let mut assertions = Vec::new();
     let mut name_work = 0usize;
     for text in annotations.types().values() {
@@ -125,7 +135,7 @@ fn plan_with(
     Ok(operations)
 }
 
-pub(super) fn declaration_tokens(mut text: &str) -> impl Iterator<Item = &str> {
+pub(crate) fn declaration_tokens(mut text: &str) -> impl Iterator<Item = &str> {
     std::iter::from_fn(move || {
         text = text.trim_start();
         let first = text.chars().next()?;

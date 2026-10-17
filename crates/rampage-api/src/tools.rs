@@ -59,7 +59,8 @@ impl Group {
                  build), capability tags, YARA and capa rules, and the find_crypto workflow."
             }
             Group::Types => {
-                "C signatures, type declarations and globals, reviewed checked DWARF layout/signature import, \
+                "Project type libraries, C headers, signatures, type declarations and globals, \
+                 reviewed checked DWARF layout/signature import, \
                  demangled names and Itanium vtable/RTTI evidence, and explicit identity-matched PDB name import."
             }
             Group::Runtime => {
@@ -603,6 +604,56 @@ struct EditVariableArgs {
     clear_name: bool,
     #[serde(default)]
     clear_type: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DeclareTypesArgs {
+    /// Bounded C type declarations. No function bodies, object definitions or external preprocessor execution.
+    declarations: Option<String>,
+    /// Inline C header text; comments and supported bundled includes/pack pragmas are handled without file access.
+    header: Option<String>,
+    /// Bundled minimal header profiles: c, posix-linux, win32. Profiles are explicit ABI assertions, not discovery.
+    #[serde(default)]
+    profiles: Vec<String>,
+    /// Packing cap for user declarations/header units: 1, 2, 4, 8 or 16. Bundled profiles retain their fixed ABI.
+    packing: Option<u32>,
+    /// Replace existing project declaration units. Dependent types, signatures and locals must remain valid.
+    #[serde(default)]
+    replace: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TypeNameArgs {
+    /// Exact named type or alias. Named type inspection uses the target's native data organization.
+    name: String,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DeleteTypeArgs {
+    name: String,
+    /// Explicitly remove every name in the inspected declaration group; outside dependencies still refuse.
+    #[serde(default)]
+    definition_group: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ListTypesArgs {
+    /// Case-sensitive substring of the native type name.
+    contains: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+fn type_library_view(result: &impl Serialize) -> Result<Value, ApiError> {
+    let value = serde_json::to_value(result).map_err(|error| ApiError::Invalid(error.to_string()))?;
+    if value.to_string().len() > MAX_RESULT_CHARS {
+        return Err(ApiError::Invalid("type-library result exceeds the JSON budget; no edit was persisted".into()));
+    }
+    Ok(value)
 }
 
 fn variable_edit_view(result: &crate::VariableEditResult) -> Result<Value, ApiError> {
@@ -1948,6 +1999,67 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: RenameArgs| {
                 let name = edit_value(arguments.name, arguments.clear, "name")?;
                 project.rename(project.resolve(&arguments.at)?, name.as_deref())
+            },
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "declare_types",
+            "Declare named project struct/union/enum/typedef/function-pointer types, or import a bounded inline C \
+             header with bundled profiles. Reports native target layouts and persists dependency-ordered units \
+             with undo/redo/replay. Optional packing is explicit; profiles assert an ABI rather than detect one. \
+             No filesystem includes, host preprocessor, function bodies or binary patches. Invalid dependencies \
+             and oversized edit receipts do not persist. Existing set_types annotations remain compatible.",
+            |project, args: DeclareTypesArgs| {
+                let request = crate::DeclareTypesRequest {
+                    declarations: args.declarations,
+                    header: args.header,
+                    profiles: args.profiles,
+                    packing: args.packing,
+                    replace: args.replace,
+                };
+                let result =
+                    project.declare_types_with_preflight(&request, |result| type_library_view(result).map(|_| ()))?;
+                type_library_view(&result)
+            },
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "list_types",
+            "List the selected project's named type library with bounded paging. Use get_type for native field \
+             offsets and alias/enum/callback detail. This does not infer producer layout from analyst declarations.",
+            |project, args: ListTypesArgs| {
+                type_library_view(&project.list_types(
+                    args.contains.as_deref(),
+                    args.offset.unwrap_or(0),
+                    page_limit(args.limit).unwrap_or(DEFAULT_PAGE),
+                )?)
+            },
+        ),
+        tool(
+            Group::Types,
+            "get_type",
+            "Inspect one native named type: target size/alignment, packing, fields and offsets, aliases, enum \
+             values and function-pointer detail where present. Incomplete types remain explicitly incomplete; \
+             declarations are analyst interpretation, not evidence of the original producer's ABI.",
+            |project, args: TypeNameArgs| type_library_view(&project.get_type(&args.name)?),
+        ),
+        tool(
+            Group::Types,
+            "delete_type",
+            "Delete a project type declaration without cascading. Refuses deletion when retained declarations, \
+             globals, signatures or locals depend on it. Native checked undo/redo and replay preserve the library; \
+             builtin and legacy address-bound types are not silently removed. Multi-name groups require \
+             definition_group=true and report every removed name.",
+            |project, args: DeleteTypeArgs| {
+                let check = |result: &crate::TypeLibraryEdit| type_library_view(result).map(|_| ());
+                let result = if args.definition_group {
+                    project.delete_type_group_with_preflight(&args.name, check)?
+                } else {
+                    project.delete_type_with_preflight(&args.name, check)?
+                };
+                type_library_view(&result)
             },
         )
         .annotates(),
