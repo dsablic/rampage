@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "Lua interpreter",
+  "version": "5.4.8",
+  "license": "MIT",
+  "license_file_in_archive": "lua-5.4.8/doc/readme.html",
+  "archive_url": "https://www.lua.org/ftp/lua-5.4.8.tar.gz",
+  "archive_sha256": "4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae",
+  "checksum_source": "https://www.lua.org/ftp/",
+  "recipe": "tools/parity-lua.sh",
+  "target": "aarch64-linux-musl",
+  "compiler": "zig cc",
+  "optimization": "-O2",
+  "source_policy": "Caller supplies the pinned archive; sources/binaries stay under target/parity, not committed.",
+  "target_execution": false,
+  "metrics": ["function discovery", "matched-twin library naming"],
+  "limits": "Includes the linked static runtime; not cross-build or Lua-only library recognition."
+}
