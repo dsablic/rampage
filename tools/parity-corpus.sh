@@ -3,8 +3,9 @@
 # Usage: bash tools/parity-corpus.sh --list
 #        bash tools/parity-corpus.sh target/parity/RUN --only ID [--only ID ...]
 #        bash tools/parity-corpus.sh target/parity/RUN --all
-# Requires jq, a SHA-256 tool and an existing rampage-eval; never builds Rust or runs target binaries.
-# Overrides GCC, CLANG, CXX, ZIG, LLVM_STRIP and RAMPAGE_EVAL name single executables, not shell commands.
+# Requires jq, a SHA-256 tool and an existing rampage-eval; never builds the evaluator or runs target binaries.
+# GCC, CLANG, CXX, ZIG, GO, RUSTC, LLVM_STRIP, LLVM_OBJCOPY and RAMPAGE_EVAL name single executables.
+# LLVM_OBJCOPY explicitly selects objcopy instead of llvm-strip for non-ELF outputs; no automatic fallback.
 # Requires rampage-eval artifact-info; headers and removed metadata are checked before emitting slices.
 # corpus.json inventories requested/observed metadata and command outcomes; manifest.json holds verified slices.
 # Run separately: rampage-eval run --manifest target/parity/RUN/manifest.json > score.json
@@ -186,11 +187,39 @@ while IFS= read -r entry; do
     format=$(jq -r '.format' <<<"$entry")
     extension=$(jq -r '.extension' <<<"$entry")
     compiler=$(jq -r '.compiler' <<<"$entry")
+    arch=$(jq -r '.arch' <<<"$entry")
+    target=$(jq -r '.target' <<<"$entry")
+    case "$arch" in
+        x86_64|aarch64|thumb|mips) ;;
+        *) record_status failed "unknown architecture recipe: $arch"; incomplete=1; continue ;;
+    esac
+    build_env=("LC_ALL=$LC_ALL" "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH")
     case "$compiler" in
         gcc) driver=${GCC:-gcc} ;;
         clang) driver=${CLANG:-clang} ;;
         clang++) driver=${CXX:-clang++} ;;
         zig) driver=${ZIG:-zig} ;;
+        go)
+            driver=${GO:-go}
+            case "$target/$arch/$format/$(jq -r '.endianness' <<<"$entry")" in
+                linux/amd64/x86_64/elf/little) goos=linux; goarch=amd64 ;;
+                darwin/arm64/aarch64/macho/little) goos=darwin; goarch=arm64 ;;
+                *) record_status failed "unsupported Go target/header recipe"; incomplete=1; continue ;;
+            esac
+            build_env+=("GOOS=$goos" "GOARCH=$goarch" "CGO_ENABLED=0" "GO111MODULE=off"
+                "GOTOOLCHAIN=local" "GOPROXY=off" "GOSUMDB=off" "GOENV=off" "GOWORK=off"
+                "GOFLAGS=" "GOEXPERIMENT=" "GOROOT=" "GOTELEMETRY=off" "GOAMD64=v1" "GOARM64=v8.0"
+                "GOCACHE=$out/.go-cache" "GOPATH=$out/.go-path" "GOTMPDIR=$out/.go-tmp")
+            mkdir -p "$out/.go-tmp"
+            ;;
+        rustc)
+            driver=${RUSTC:-rustc}
+            build_env+=("RUSTUP_AUTO_INSTALL=0")
+            if [[ "$target/$arch/$format/$(jq -r '.endianness' <<<"$entry")" != \
+                aarch64-apple-darwin/aarch64/macho/little ]]; then
+                record_status failed "unsupported Rust target/header recipe"; incomplete=1; continue
+            fi
+            ;;
         *) record_status failed "unknown compiler recipe"; incomplete=1; continue ;;
     esac
     symbolized="$id/symbolized.$extension"
@@ -210,9 +239,19 @@ while IFS= read -r entry; do
         incomplete=1
         continue
     fi
+    if [[ "$compiler" == rustc ]]; then
+        sibling_rustup="$(dirname "$driver_path")/rustup"
+        rustup_path=$(command -v rustup || true)
+        if [[ "$driver_path" -ef "$sibling_rustup" ||
+            ( -n "$rustup_path" && "$driver_path" -ef "$rustup_path" ) ]]; then
+            record_status unavailable "direct rustc required: set RUSTC or PATH; rustup proxy refused"
+            incomplete=1
+            continue
+        fi
+    fi
     version_arg=$(jq -r '.version_arg' <<<"$entry")
     if run_stage compiler-version "$id/compiler-version.txt" "$id/compiler-version.log" \
-        "$driver_path" "$version_arg"; then
+        env "${build_env[@]}" "$driver_path" "$version_arg"; then
         :
     else
         record_status failed "compiler version probe failed; see compiler-version.log and stages exit_code"
@@ -240,9 +279,21 @@ while IFS= read -r entry; do
     fi
     flags=()
     while IFS= read -r flag; do flags+=("$flag"); done < <(jq -r '.flags[]' <<<"$entry")
-    command_argv=("$driver_path" "${flags[@]}" "-fdebug-prefix-map=$repo=." "-ffile-prefix-map=$repo=."
-        -o "$out/$symbolized" "$source")
-    update_entry "$(jq -cn --argjson argv "$(json_argv "${command_argv[@]}")" '{build_argv: $argv}')"
+    case "$compiler" in
+        go) command_argv=("$driver_path" build "${flags[@]}" -o "$out/$symbolized" "$source") ;;
+        rustc)
+            command_argv=("$driver_path" "${flags[@]}" --remap-path-prefix "$repo=."
+                -o "$out/$symbolized" "$source")
+            ;;
+        *)
+            command_argv=("$driver_path" "${flags[@]}" "-fdebug-prefix-map=$repo=." "-ffile-prefix-map=$repo=."
+                -o "$out/$symbolized" "$source")
+            ;;
+    esac
+    command_argv=(env "${build_env[@]}" "${command_argv[@]}")
+    update_entry "$(jq -cn --argjson argv "$(json_argv "${command_argv[@]}")" \
+        --argjson environment "$(json_argv "${build_env[@]}")" \
+        '{build_argv: $argv, build_environment_argv: $environment}')"
     if run_stage build "$id/build.stdout" "$id/build.log" "${command_argv[@]}"; then
         update_entry "$(jq -cn --arg hash "$(sha256 "$out/$symbolized")" \
             '{build_status: "built", build_exit_code: 0, pair: {symbolized_sha256: $hash}}')"
@@ -260,9 +311,15 @@ while IFS= read -r entry; do
     if [[ "$format" == elf ]]; then
         strip_argv=("$eval_bin" strip "$out/$symbolized" "$out/$stripped")
     else
-        strip_driver=${LLVM_STRIP:-llvm-strip}
+        if [[ -n "${LLVM_OBJCOPY:-}" ]]; then
+            strip_driver=$LLVM_OBJCOPY
+            strip_kind=objcopy
+        else
+            strip_driver=${LLVM_STRIP:-llvm-strip}
+            strip_kind=strip
+        fi
         if ! strip_path=$(command -v "$strip_driver"); then
-            record_status unavailable "symbolized build exists but llvm-strip is missing for $format"
+            record_status unavailable "symbolized build exists; missing $format strip tool: $strip_driver"
             incomplete=1
             continue
         fi
@@ -273,7 +330,11 @@ while IFS= read -r entry; do
             incomplete=1
             continue
         fi
-        strip_argv=("$strip_path" --strip-all -o "$out/$stripped" "$out/$symbolized")
+        if [[ "$strip_kind" == objcopy ]]; then
+            strip_argv=("$strip_path" --strip-all "$out/$symbolized" "$out/$stripped")
+        else
+            strip_argv=("$strip_path" --strip-all -o "$out/$stripped" "$out/$symbolized")
+        fi
     fi
     update_entry "$(jq -cn --argjson argv "$(json_argv "${strip_argv[@]}")" '{strip_argv: $argv}')"
     if run_stage strip "$id/strip.stdout" "$id/strip.log" "${strip_argv[@]}"; then
@@ -290,6 +351,22 @@ while IFS= read -r entry; do
     fi
     update_entry '{"pair":{"stripping_verification":"no_static_function_symbols_or_debug_sections"}}'
     truth_argv=("$eval_bin" truth "$out/$symbolized" --stripped "$out/$stripped")
+    truth_source=$(jq -r '.truth_source // "sized_symbols"' <<<"$entry")
+    case "$truth_source" in
+        sized_symbols) ;;
+        embedded_dwarf)
+            if ! jq -e '.debug_sections | any(.==".debug_info" or .=="__debug_info" or
+                .==".zdebug_info" or .=="__zdebug_info")' \
+                "$dir/symbolized-info.json" >/dev/null; then
+                record_status unavailable "explicit embedded DWARF truth requested, but no debug_info section"
+                incomplete=1
+                continue
+            fi
+            truth_argv+=(--dwarf)
+            ;;
+        *) record_status failed "unsupported truth source: $truth_source"; incomplete=1; continue ;;
+    esac
+    update_entry "$(jq -cn --arg source "$truth_source" '{truth_source: $source}')"
     update_entry "$(jq -cn --argjson argv "$(json_argv "${truth_argv[@]}")" '{truth_argv: $argv}')"
     if run_stage truth "$truth" "$id/truth.log" "${truth_argv[@]}"; then
         :

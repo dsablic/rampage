@@ -46,6 +46,8 @@ without group gating, plus the interactive `show_address`; it does not offer fil
 
 The [parity scorecard pilot](parity-scorecard.md) records static metrics and task definitions separately from
 live MCP/model results. Limits: contract checks and scripted transport tests are not AI task-success measurements.
+The local stripped Lua workload was also inspected through `triage_report`: static toolchain/string evidence
+does not imply target execution, and bundled signature results are distinct from matched-twin evaluator scores.
 
 ## Inputs, paging and decompiler tokens
 

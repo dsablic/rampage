@@ -3,6 +3,8 @@
 `rampage-eval run --suite parity` wraps the existing static slice evaluator and the owned checkable task set
 in one JSON report. Supply `--manifest` for a generated static corpus and `--corpus-inventory` to retain its
 build/availability evidence. Defaults use the existing committed evaluation manifest and task definitions.
+Repeat `--manifest` to combine corpora in one report; duplicate slice names are refused before evaluation,
+and `static_manifests` records every manifest's path and digest.
 
 ```sh
 bash tools/parity-corpus.sh target/parity/RUN --only types-a64-elf-zig-o2 --only core-thumb-elf-zig-o2
@@ -42,3 +44,19 @@ and successful-but-empty applicable truth remain unavailable. No target binaries
 `artifact-info` is the evaluator's metadata check for this recipe, not an agent-task measurement.
 MIPS ABIFlags support additionally refuses changed program headers or mapped bytes outside the explicit
 ELF section-table bookkeeping fields. Generic stripping still relies on separate function-byte twin checks.
+
+The corpus also has C++/exceptions, Go and Rust source workloads. Go compilation is offline (`GOTOOLCHAIN=local`,
+proxy disabled); Rust requires a direct local compiler and disables rustup automatic installation. Explicit
+`LLVM_OBJCOPY` selects `--strip-all` without fallback. Mach-O header markers outside their declared text section
+are reported separately from function symbols. Limits: successful builds with no usable truth remain unscored;
+Go runtime metadata may retain function boundaries/names, so its discovery result is not a metadata-blind test.
+
+Profiles can explicitly select `truth_source: embedded_dwarf`. `truth --dwarf` checks retained concrete
+subprogram code ranges in both images at identical VAs, rather than inventing sizes for zero-sized symbols.
+Limits: only embedded, contiguous `low_pc`/`high_pc` truth is supported; range-list functions and unavailable
+names are omitted with counts/notes. Empty truth cannot produce a scored profile, and no external dSYM is inferred.
+
+`tools/parity-lua.sh OUT_DIR ARCHIVE` builds the pinned MIT Lua 5.4.8 interpreter from a caller-supplied archive
+whose checksum is verified, without downloading or running it. Its generated manifest measures discovery and
+same-build stripped-twin naming, including the linked runtime. Limits: this best-case name recall is not
+cross-program or cross-build recognition; source and binary artifacts remain local.

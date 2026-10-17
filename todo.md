@@ -15,7 +15,7 @@ independent slices inside Phase 0 may run in parallel, with shared integration/b
 - [x] Extend existing `rampage-eval` CLI/reporting into `run --suite parity`; preserve existing slice runners.
   The pilot emits actual static metrics and explicit unrun task/usage fields, not Phase 0 completion.
 - [ ] Run and record static/agent baselines, tool calls/tokens/wall time and missing capabilities in the scorecard.
-  Initial measurement: the current `run --suite parity` route exits 2 because `--suite` is unsupported.
+  Initial measurement: before the pilot, `run --suite parity` exited 2 because `--suite` was unsupported.
   Scripted MCP transport checks are not AI task-success measurements. No Phase 0 acceptance claimed yet.
   - [x] Record selected AArch64/Thumb static baselines and actual evaluator/fixture identities.
   - [x] Add explicit-model opt-in MCP task loop, readonly fixture scope, actual usage/error accounting and
@@ -23,6 +23,18 @@ independent slices inside Phase 0 may run in parallel, with shared integration/b
   - [ ] Run live fixed-model task baselines; existing Anthropic transport is not configured locally and no
     model was selected. No live model calls or model usage measurements have been made.
   - [ ] Complete compiler/architecture/program coverage, CFG/call graphs, health/timing and Ghidra comparisons.
+    - [x] Build pinned MIT Lua interpreter without target execution; record matched-twin name recall and a
+      broader Ghidra graph comparison. Matched-twin scores are not cross-build recognition.
+    - [x] Add owned C++/exceptions, Go and Rust workload recipes; builds/strip/header checks succeeded locally.
+      Go ELF has sized truth; PE and compressed Go Mach-O now have explicit checked contiguous DWARF truth.
+      C++/Rust and the basic Mach-O profile remain unscored without supported truth. Matrix: 8 scored/5 unavailable/1 failed.
+    - [x] Combine independent corpora through repeated `--manifest`, with per-manifest digests and duplicate-name
+      refusal; one expanded JSON report now retains 19 static slices and the realistic Lua graph reference.
+    - [x] Recover system-Clang x64 ELF coverage using an explicit local linker override; Zig/embedded Clang
+      remains a separate compiler profile, never substitute GCC coverage. Genuine GCC remains unavailable.
+    - [ ] C++ class recovery acceptance: the new stripped native exceptions workload currently returns no
+      `class_evidence`; its symbolized vtables are skipped as not mapped read-only. Retain this observed limit
+      for the typing/class-recovery phases rather than relaxing metadata rules to inflate the baseline.
     - [x] Add hash-bound graph agreement and actual owned Thumb/Ghidra reference measurement; preserve raw
       discrepancies separately from chain-normalized equality. Broader reference coverage remains open.
     - [x] Record health/timing for 39 type-truth-selected AArch64 entries, with nullable diagnostics and zero-attempt

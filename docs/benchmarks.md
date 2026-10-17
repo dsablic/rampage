@@ -46,6 +46,37 @@ Cross-program library ID, broad graph/health coverage and model comparisons rema
 The health sample's 39 calls totalled about 275 ms on one local run; initialization/cache state is not controlled,
 so this is not a warm/cold or per-function performance baseline. Per-entry timings remain in the local report.
 
+### Broader source-built baseline
+
+Working-tree measurements based on `950bac2`; receipts retain executable/source hashes and actual tool versions.
+The Lua 5.4.8 MIT archive is pinned to the upstream published checksum; no downloaded sources or binaries are
+committed. Full reports are local `target/parity/lua-20261017-01`, `coverage-20261017-02` and
+`coverage-languages-20261017-03` outputs. No target programs were executed.
+The expanded combined receipt is `target/parity/expanded-20261017/scorecard.json`: 19 metric slices across
+the verified profiles and Lua, with both manifest digests and the Lua graph binding retained.
+
+| Workload / metric | Measured result |
+| --- | --- |
+| System-Clang x64 ELF function starts | 39 correct, no misses or extra starts |
+| System-Clang x64 parameter counts / classes | 36 correct, 3 wrong / 43 correct, 23 wrong, 3 missed |
+| Zig/embedded-Clang x64 ELF | Same counts on this fixture; a separate profile, not GCC coverage |
+| Owned Go x64 ELF function starts | 1815 correct, no misses, 1 extra; runtime metadata retained |
+| Owned compressed Go arm64 Mach-O starts | 1898 DWARF starts found, no misses, 44 extra candidates |
+| Owned x64 PE starts | 4 DWARF starts found, no misses or extra candidates |
+| Lua AArch64 ELF function starts | 892 correct, no misses, 6 extra; precision 0.9933 |
+| Lua matched-twin naming, including static runtime | 849 correct, 43 missed, no wrong/spurious names; recall 0.9518 |
+| Lua/Ghidra 12.1.4 function coverage | 890 common, 8 Rampage-only, none Ghidra-only |
+| Lua raw CFG edges | 16947 shared; totals 17233 / 17207 (Rampage / Ghidra) |
+| Lua chain-normalized CFG edges | 17183 shared; totals 17228 / 17183 |
+| Lua call-site pairs / call-graph edges | 4373 / 2890 shared; one Rampage-only item in each metric |
+
+Matched-twin naming is best-case same-build evaluation. Graph agreement is limited to common functions and
+does not establish correctness. Explicit contiguous DWARF truth now checks all retained ranges in both PE
+and compressed Go Mach-O twins; unsupported range-list functions and unavailable names remain omitted.
+The 14-profile matrix has 8 scored, 5 unavailable and 1 failed profile. Native C++/exceptions, Rust and the
+basic Mach-O build still lack supported truth; Linux C++ lacks a local target runtime; genuine GCC is absent.
+Extra candidates are relative to the retained truth, not independently confirmed false function starts.
+
 ## Function discovery vs Ghidra
 
 `tools/benchmark.sh` runs Ghidra headless to list function starts, builds a reference in rampage's format

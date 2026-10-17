@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "kind": "parity_owned_program_catalog",
+  "path_base": "repository_root",
+  "integration": "tools/parity-corpus.sh uses manifest.json profiles; this catalog holds source-known questions.",
+  "status": "Recipe integration only; availability and observed evidence belong to each generated run inventory",
+  "provenance": {
+    "origin": "Original Rampage-owned workloads authored for Phase 0.1; no third-party source copied or fetched",
+    "source_license": "Apache-2.0",
+    "spdx": "Each source contains SPDX-License-Identifier: Apache-2.0",
+    "license_file": "LICENSE",
+    "runtime_licenses": "Compiler runtimes, standard libraries and SDKs have separate licenses; outputs stay local"
+  },
+  "recipe_conventions": {
+    "recipe": "tools/parity-corpus.sh",
+    "manifest": "tests/fixtures/corpus/manifest.json",
+    "out": "Fresh caller-owned directory under target/parity; script creates profile subdirectories",
+    "eval": "RAMPAGE_EVAL selects an existing rampage-eval executable; never built by the recipe",
+    "execution": "Compiler invocations only; never execute the resulting programs",
+    "environment": "Script supplies the offline Go environment; flags are argv arrays, never shell-evaluated",
+    "reproducibility": "Run inventory records argv, explicit environment overrides, versions and source/output hashes",
+    "pairing": "Compile once, strip a copy without relinking, then inspect both headers and verify byte pairing",
+    "expected": "Architecture, format and output paths are requested intent, never observed success or function truth"
+  },
+  "verification": {
+    "recipe_reference": "tests/fixtures/corpus/manifest.json#/pairing",
+    "limits": [
+      "Only a generated run may establish availability after builds, matching headers, stripping and nonempty truth",
+      "ELF stripping uses rampage-eval strip; Go pclntab may remain as intentional runtime metadata",
+      "Mach-O stripping requires an explicit working tool selected by parent; no strip success claimed",
+      "Zero-sized Mach-O function symbols are not sized-symbol truth; keep metric slices unavailable if empty",
+      "Debug data or sibling dSYM presence does not establish that the current evaluator can extract truth",
+      "No CFG, call-graph, virtual dispatch, exception-edge or decompiler coverage has been measured"
+    ]
+  },
+  "programs": [
+    {
+      "id": "parity-classes",
+      "source": "tests/fixtures/src/parity-classes.cpp",
+      "language": "c++17",
+      "source_license": "Apache-2.0",
+      "workload": "In-memory scaled ledger with virtual calls through two bases and RAII rollback on two throws",
+      "bounds": "Five fixed commands, units at most 20, factor 2 or 3, limit 40; no target I/O",
+      "source_known_questions": [
+        {
+          "question": "Which two bases does Ledger inherit and which helper dispatches through each?",
+          "answer": {
+            "bases": ["Processor", "Summary"],
+            "helpers": ["dispatch_commands -> Processor::apply", "read_summary -> Summary::checksum"]
+          }
+        },
+        {
+          "question": "With argc=1, what state survives both exception paths and what reaches the sinks?",
+          "answer": {
+            "total": 12,
+            "accepted": 3,
+            "rollbacks": 2,
+            "parity_cpp_failures": 3,
+            "parity_cpp_checksum": 395
+          }
+        },
+        {
+          "question": "What restores total after capacity and insufficient-unit throws?",
+          "answer": "Transaction::~Transaction restores saved_ and increments rollbacks_ unless committed_"
+        }
+      ]
+    },
+    {
+      "id": "parity-go-runtime",
+      "source": "tests/fixtures/src/parity-runtime.go",
+      "language": "go",
+      "source_license": "Apache-2.0",
+      "workload": "Config parsing, command decoding, bounded state transitions, checkpoint/restore and error wrapping",
+      "bounds": "Config and each command at most 96 bytes; at most 16 commands; units 0..10000; no target I/O",
+      "source_known_questions": [
+        {
+          "question": "Which commands are accepted and which fields are required in config?",
+          "answer": {
+            "commands": ["add:UNITS", "remove:UNITS", "checkpoint", "restore"],
+            "config": ["limit", "factor"],
+            "config_values": "1..10000, no duplicates or unknown fields"
+          }
+        },
+        {
+          "question": "What state reaches parityGoState with no extra command-line arguments?",
+          "answer": {
+            "total": 12,
+            "checkpoint": 15,
+            "hasCheckpoint": true,
+            "applied": 5,
+            "rejected": 2,
+            "parityGoFailed": false
+          }
+        },
+        {
+          "question": "Does a rejected over-limit add mutate total or applied?",
+          "answer": "No; applyCommand validates next before assigning total or incrementing applied"
+        }
+      ]
+    },
+    {
+      "id": "parity-rust-runtime",
+      "source": "tests/fixtures/src/parity-runtime.rs",
+      "language": "rust2021",
+      "source_license": "Apache-2.0",
+      "workload": "Result pipeline, Option checkpoint, two Operation trait implementations and rejected commands",
+      "bounds": "Config and each command at most 96 bytes; at most 16 commands; units 0..10000; no target I/O",
+      "source_known_questions": [
+        {
+          "question": "Which implementations dispatch through Operation and how do their candidates differ?",
+          "answer": "Add computes total + units * factor; Remove computes total - units * factor"
+        },
+        {
+          "question": "What state reaches black_box on the no-argument success path?",
+          "answer": {"total": 12, "checkpoint": 15, "applied": 5, "rejected": 2}
+        },
+        {
+          "question": "What does restore before checkpoint return and how does the pipeline handle it?",
+          "answer": "MissingCheckpoint; run_pipeline increments rejected and continues without mutating total/applied"
+        }
+      ]
+    }
+  ],
+  "recipe_manifest": "tests/fixtures/corpus/manifest.json",
+  "profiles": [
+    {"id": "parity-classes-a64-macho-clang-o1", "program": "parity-classes"},
+    {"id": "parity-go-x64-elf-noinline", "program": "parity-go-runtime"},
+    {"id": "parity-go-a64-macho-noinline", "program": "parity-go-runtime"},
+    {"id": "parity-rust-a64-macho-o1", "program": "parity-rust-runtime"}
+  ]
+}

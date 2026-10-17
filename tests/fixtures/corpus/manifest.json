@@ -20,17 +20,22 @@
     ],
     "unavailable": "Absent prerequisite or successful extraction with no applicable truth; never command failure",
     "failed": "Attempted command failure/crash, invalid evidence, metadata mismatch or retained stripping metadata",
-    "commands": "Inventory stages preserve exact argv, stdout/stderr paths, status and exit_code, including failures"
+    "commands": "Inventory stages preserve exact argv, stdout/stderr paths, status and exit_code, including failures",
+    "environment": "build_argv includes env assignments; build_environment_argv lists explicit overrides"
   },
   "reproducibility": {
     "source_date_epoch": "0 unless SOURCE_DATE_EPOCH is explicitly supplied",
-    "source_paths": "-fdebug-prefix-map and -ffile-prefix-map map the repository root to .",
+    "source_paths": "C/C++ prefix maps, Go -trimpath and Rust --remap-path-prefix map source paths",
     "toolchains": "Local tools only; actual versions, argv, source and output SHA-256 recorded at build time",
     "limits": "Same source/toolchain/SDK required; no cross-toolchain bit-identical claim or target execution",
-    "manifest_execution": "Flags are argv arrays; recipes are data, never shell-evaluated"
+    "pe_timestamp": "Uses the local Zig linker default; no zero-timestamp or repeated-build identity claim",
+    "manifest_execution": "Flags are argv arrays; recipes are data, never shell-evaluated",
+    "go": "GO override or local go; bounded target env, downloads/modules/telemetry disabled, caches under output",
+    "rust": "RUSTC override or direct rustc on PATH; detected rustup proxy refused; no target installation",
+    "environment": "Other environment, including SDK selection, is inherited; no machine-specific SDK pinned"
   },
   "provenance": {
-    "origin": "Owned Rampage fixture sources already in this repository, plus parity-core.c",
+    "origin": "Owned Rampage fixture sources; workload questions and provenance in tests/fixtures/corpus/programs.json",
     "source_license": "Apache-2.0",
     "license_file": "LICENSE",
     "redistribution": "Generated outputs stay local; compiler runtime/SDK licenses are not source licenses"
@@ -41,22 +46,22 @@
     "truth": "<id>/truth.json",
     "method": "Compile once, strip a copy, never relink the stripped twin",
     "elf_strip": "rampage-eval strip",
-    "other_strip": "llvm-strip --strip-all -o OUTPUT INPUT, if available",
+    "other_strip": "LLVM_STRIP (default llvm-strip) --strip-all -o OUTPUT INPUT, if available",
+    "objcopy_override": "Explicit LLVM_OBJCOPY selects TOOL --strip-all INPUT OUTPUT instead; no automatic fallback",
     "artifact_info": "rampage-eval artifact-info FILE, for both outputs, stored as observed metadata",
     "requested": "Recipe arch/format/endianness/target are intent, not observations; target triple is not a header",
     "gcc_machine": "Actual GCC -dumpmachine output is recorded separately as compiler_machine",
     "thumb": "Both outputs must report arm; symbolized output must also report thumb_ranges > 0",
     "stripping": "Stripped static_function_symbols must be 0 and debug_sections empty; dynamic exports are distinct",
-    "verification": "rampage-eval truth SYMBOLIZED --stripped STRIPPED, requiring nonempty truth",
-    "limits": "Sized function symbols required; empty PE/Mach-O truth is unavailable, extraction errors are failed"
+    "verification": "rampage-eval truth SYMBOLIZED --stripped STRIPPED; explicit embedded_dwarf profiles add --dwarf",
+    "limits": "Nonempty sized-symbol or explicit contiguous DWARF truth required; no inferred extents or external dSYM"
   },
   "missing_coverage": [
-    "Realistic third-party sqlite, zlib and lua programs (no sources fetched by this recipe)",
-    "Owned Go and Rust pilot builds and C++ exception-handling coverage",
+    "Third-party programs use separate recipes (see lua.json); sqlite and zlib builds are not included",
+    "Go/Rust runtime and C++ exception-edge metrics beyond verified discovery truth for the owned pilot profiles",
     "Library-ID cross-program accuracy: continue using tools/eval-corpus.sh, not pilot self-matches",
-    "CFG/call-graph agreement, decompiler health, Ghidra reference results and agent task metrics",
-    "PE/Mach-O metric coverage until sized-symbol truth and twin checks succeed on local tools",
-    "One combined parity JSON scorecard and rampage-eval run --suite parity integration"
+    "Graph reference acquisition and model tasks run separately from this build-only recipe",
+    "Profiles without sized symbols or supported embedded DWARF remain unscored"
   ],
   "entries": [
     {
@@ -109,6 +114,23 @@
       "provenance": "Existing owned signature/type fixture; requires local lld, no libc linked"
     },
     {
+      "id": "types-x64-elf-zig-o2",
+      "source": "tools/types-corpus.c",
+      "compiler": "zig",
+      "compiler_identity": "Zig / embedded Clang; not system Clang or GCC coverage",
+      "version_arg": "version",
+      "arch": "x86_64",
+      "format": "elf",
+      "endianness": "little",
+      "target": "x86_64-linux-musl",
+      "extension": "elf",
+      "flags": ["cc", "-target", "x86_64-linux-musl", "-O2", "-g", "-gdwarf-4", "-nostdlib",
+                "-ffreestanding", "-fno-builtin", "-static", "-Wl,-e,main", "-Wl,--build-id=none"],
+      "type_truth": true,
+      "source_license": "Apache-2.0",
+      "provenance": "Existing owned signature/type fixture; separate Zig recipe, no libc linked"
+    },
+    {
       "id": "types-a64-elf-zig-o2",
       "source": "tools/types-corpus.c",
       "compiler": "zig",
@@ -142,6 +164,7 @@
     },
     {
       "id": "core-x64-pe-zig-o2",
+      "truth_source": "embedded_dwarf",
       "source": "tests/fixtures/src/parity-core.c",
       "compiler": "zig",
       "version_arg": "version",
@@ -151,11 +174,11 @@
       "target": "x86_64-windows-gnu",
       "extension": "exe",
       "flags": ["cc", "-target", "x86_64-windows-gnu", "-O2", "-g", "-gdwarf-4", "-nostdlib",
-                "-ffreestanding", "-fno-builtin", "-Wl,--entry,main", "-Wl,--subsystem,console",
-                "-Wl,--no-insert-timestamp"],
+                 "-ffreestanding", "-fno-builtin", "-Dmain=parity_entry", "-Wl,--entry,parity_entry",
+                 "-Wl,--subsystem,console"],
       "type_truth": false,
       "source_license": "Apache-2.0",
-      "provenance": "Owned freestanding pilot; no CRT; sized COFF symbol truth may be unavailable"
+      "provenance": "Owned pilot; parity_entry avoids MinGW main/CRT hooks; sized COFF truth may be unavailable"
     },
     {
       "id": "core-thumb-elf-zig-o2",
@@ -206,6 +229,78 @@
       "source_license": "Apache-2.0",
       "provenance": "Existing owned RTTI/polymorphic-class fixture; requires local target C++ runtime",
       "limits": "Does not exercise exceptions; linked runtime licensing is separate from fixture source"
+    },
+    {
+      "id": "parity-classes-a64-macho-clang-o1",
+      "program": "parity-classes",
+      "source": "tests/fixtures/src/parity-classes.cpp",
+      "compiler": "clang++",
+      "version_arg": "--version",
+      "arch": "aarch64",
+      "format": "macho",
+      "endianness": "little",
+      "target": "arm64-apple-macos",
+      "extension": "macho",
+      "flags": ["-arch", "arm64", "-std=c++17", "-O1", "-g", "-gdwarf-4", "-fno-inline",
+                "-fexceptions", "-frtti"],
+      "type_truth": false,
+      "source_license": "Apache-2.0",
+      "provenance": "Owned multiple-inheritance, virtual-dispatch and exception/RAII workload; native SDK/runtime",
+      "limits": "Requires local libc++/ABI/unwinder and SDK; no measured exception-edge or dispatch accuracy"
+    },
+    {
+      "id": "parity-go-x64-elf-noinline",
+      "program": "parity-go-runtime",
+      "source": "tests/fixtures/src/parity-runtime.go",
+      "compiler": "go",
+      "version_arg": "version",
+      "arch": "x86_64",
+      "format": "elf",
+      "endianness": "little",
+      "target": "linux/amd64",
+      "extension": "elf",
+      "flags": ["-trimpath", "-buildvcs=false", "-gcflags=-l", "-ldflags=-buildid= -compressdwarf=false"],
+      "type_truth": false,
+      "source_license": "Apache-2.0",
+      "provenance": "Owned bounded parsing/state/error workload; pure Go with locally installed runtime",
+      "limits": "Go default optimization, main-package inlining disabled; not C-style -O1; runtime licenses separate"
+    },
+    {
+      "id": "parity-go-a64-macho-noinline",
+      "truth_source": "embedded_dwarf",
+      "program": "parity-go-runtime",
+      "source": "tests/fixtures/src/parity-runtime.go",
+      "compiler": "go",
+      "version_arg": "version",
+      "arch": "aarch64",
+      "format": "macho",
+      "endianness": "little",
+      "target": "darwin/arm64",
+      "extension": "macho",
+      "flags": ["-trimpath", "-buildvcs=false", "-gcflags=-l", "-ldflags=-buildid= -compressdwarf=true"],
+      "type_truth": false,
+      "source_license": "Apache-2.0",
+      "provenance": "Owned bounded parsing/state/error workload; pure Go with locally installed runtime",
+      "limits": "Default Go optimization, main-package inlining disabled; pclntab alone is not sized-symbol truth"
+    },
+    {
+      "id": "parity-rust-a64-macho-o1",
+      "program": "parity-rust-runtime",
+      "source": "tests/fixtures/src/parity-runtime.rs",
+      "compiler": "rustc",
+      "version_arg": "--version",
+      "arch": "aarch64",
+      "format": "macho",
+      "endianness": "little",
+      "target": "aarch64-apple-darwin",
+      "extension": "macho",
+      "flags": ["--edition=2021", "--crate-name", "parity_runtime", "--target", "aarch64-apple-darwin",
+                "-C", "opt-level=1", "-C", "debuginfo=2", "-C", "strip=none", "-C", "panic=unwind",
+                "-C", "codegen-units=1", "-C", "lto=off"],
+      "type_truth": false,
+      "source_license": "Apache-2.0",
+      "provenance": "Owned Result/Option/trait-dispatch workload; directly installed compiler and target stdlib",
+      "limits": "Missing tools/targets may fail; no installation; runtime licenses and dispatch metrics separate"
     }
   ]
 }

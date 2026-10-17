@@ -7,6 +7,8 @@ See the [CLI reference](cli-reference.md) for commands and [MCP reference](mcp.m
 The [parity scorecard pilot](parity-scorecard.md) combines existing static evaluations with checkable owned
 task definitions, with an explicit-model MCP runner for opt-in measurements. Limits: the recorded baseline
 contains no live-model task scores and does not establish IDA/Ghidra parity.
+Its source-built workloads include a pinned Lua interpreter and owned C++/exceptions, Go and Rust programs;
+format builds without verified function truth remain unscored rather than counting as coverage.
 
 ## Formats and instruction decoding
 
