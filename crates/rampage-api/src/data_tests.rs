@@ -477,3 +477,23 @@ fn native_elf_tls_nobits_overlap_does_not_hide_stored_initializers() {
     let expected = rampage_arch::hex::bytes(binary.read(init.address, 8).unwrap());
     assert_eq!(report.spans[0].hex.as_deref(), Some(expected.as_str()));
 }
+#[test]
+fn typed_snapshot_bytes_do_not_claim_native_file_offsets_or_pointer_targets() {
+    let binary = rampage_loaders::Binary::from_snapshot_bytes(
+        serde_json::to_vec(&serde_json::json!({
+            "format":"rampage-snapshot-v1","arch":"x86_64","provenance":"owned immutable data",
+            "regions":[{"name":"owned-data","address":"0x2000","permissions":"r--",
+                "bytes":"0020000000000000"}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let query = DataQuery { address: 0x2000, size: 8, word_size: Some(8) };
+    assert!(inspect_native_data(&binary, &query).is_err());
+    let data = inspect_static_data(&binary, &query).unwrap();
+    assert!(data.selected_image_file_offset.is_none());
+    assert!(data.pointer_targets_suppressed);
+    assert!(data.spans.iter().all(|span| span.file_offset.is_none() && span.image_offset.is_none()));
+    assert!(data.words.iter().all(|word| word.candidate.is_none()));
+    assert_eq!(data.words[0].raw_value, Some(0x2000));
+}

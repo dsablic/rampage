@@ -25,6 +25,7 @@ mod jumptable;
 mod listing;
 mod module_references;
 mod offset;
+mod operand_types;
 pub mod packs;
 mod plugin_triage;
 mod pointer_compare;
@@ -42,6 +43,7 @@ mod summary;
 pub mod tools;
 mod type_headers;
 mod type_library;
+mod typed_data;
 mod variables;
 pub mod workflows;
 mod xrefs;
@@ -51,6 +53,7 @@ use std::path::PathBuf;
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::LoadError;
 
+pub use annotations::DataTypeAnnotation;
 pub use archive::{
     ArchiveMember, ArchiveMemberRef, ArchivePage, ArchiveQuery, ArchiveRef, MAX_ARCHIVE_PAGE, MAX_ARCHIVE_RESULT_BYTES,
     archive_inventory,
@@ -105,6 +108,7 @@ pub use module_references::{
     validate_module_reference_inputs,
 };
 pub use offset::{FileOffset, parse_file_offset};
+pub use operand_types::{ApplyOperandTypeRequest, OperandAnnotationDisplay, OperandTypeEdit};
 pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
 pub use plugin_triage::{
     MAX_PLUGIN_TRIAGE_REPORT_BYTES, MAX_PLUGIN_TRIAGE_SOURCE_BYTES, PluginTriageProvenance, PluginTriageReport,
@@ -152,6 +156,10 @@ pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};
 pub use summary::FunctionSummary;
 pub use type_headers::{HeaderBundle, HeaderDeclaration, HeaderProvenance, PreparedHeader};
 pub use type_library::{DeclareTypesRequest, TypeLibraryEdit, TypeLibraryEntry, TypeLibraryPage};
+pub use typed_data::{
+    ApplyDataTypeRequest, DataStringEncoding, DataTypeEdit, MAX_TYPED_DATA_RESULT_BYTES, TypedDataField,
+    TypedDataObject, TypedDataQuery, TypedDataReport,
+};
 pub use variables::{VariableDescriptor, VariableEditRequest, VariableEditResult};
 pub use workflows::{
     Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportLimits, ReportTarget, Section, WorkflowReport,

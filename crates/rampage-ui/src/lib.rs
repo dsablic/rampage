@@ -377,6 +377,8 @@ impl App {
             Field::Global => format!("Global {:#x}", editing.address),
             Field::LocalName | Field::LocalType => format!("Local variable {:#x}", editing.address),
             Field::TypeLibrary => "Project type library".to_owned(),
+            Field::DataType => format!("Data type {:#x}", editing.address),
+            Field::OperandType => format!("Operand type {:#x}", editing.address),
         };
         let mut done = false;
         let mut cancel = false;

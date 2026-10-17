@@ -173,6 +173,8 @@ pub struct AnnotationList {
     pub local_names: Vec<Annotation>,
     pub local_types: Vec<Annotation>,
     pub type_library: Vec<Annotation>,
+    pub data_types: Vec<Annotation>,
+    pub operand_types: Vec<Annotation>,
 }
 
 /// The outcome of a rename or comment.

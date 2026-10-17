@@ -26,7 +26,8 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_pdb_names`, `class_evidence`,
-  `language_metadata`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`.
+  `language_metadata`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`,
+  `apply_data_type`, `read_data`, `apply_enum`, `apply_offset`.
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `inspect_jump_table`.
@@ -52,6 +53,12 @@ The local stripped Lua workload was also inspected through `triage_report`: stat
 does not imply target execution, and bundled signature results are distinct from matched-twin evaluator scores.
 
 ## Inputs, paging and decompiler tokens
+
+`apply_data_type` binds native element types/arrays or explicit encoded strings to data ranges. `read_data`
+retains raw backing status alongside typed fields. `apply_enum` and `apply_offset` use decoder-native operand
+indices and complete instruction bytes; disassembly retains raw text with separate symbolic annotations.
+Limits: bounded data windows and supported x86/x64/AArch64 operand forms, not runtime object proof or pointer
+traversal. See [data and operand typing](data-types.md).
 
 `declare_types`, `list_types`, `get_type` and `delete_type` manage project-wide named declarations with native
 target layout inspection and checked undo/replay. Inline headers and minimal bundled profiles do not read

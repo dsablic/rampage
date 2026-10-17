@@ -12,6 +12,63 @@ fn engine(arch: Arch, platform: Platform) -> Decompiler {
 }
 
 #[test]
+fn anonymous_enum_struct_and_union_typedefs_remain_distinct_across_batches() {
+    let mut engine = engine(Arch::X86_64, Platform::Default);
+    let original = engine
+        .parse_type_library(
+            "typedef enum { READY = 7, BAD = -3 } Mode;
+         typedef struct { int4 prefix; int4 bias; } State;
+         typedef union { int4 number; uint1 bytes[4]; } Payload;",
+            None,
+        )
+        .unwrap();
+    assert_eq!(original.iter().map(|ty| ty.name.as_str()).collect::<Vec<_>>(), ["Mode", "State", "Payload"]);
+    assert!(original.iter().all(|ty| ty.kind == NamedTypeKind::Typedef));
+    let mode = engine.get_type("Mode").unwrap();
+    assert_eq!(mode.size, Some(4));
+    assert_eq!(mode.enum_values.iter().find(|value| value.name == "READY").unwrap().value, "7");
+    assert_eq!(mode.enum_values.iter().find(|value| value.name == "BAD").unwrap().value, "-3");
+    let state = engine.get_type("State").unwrap();
+    assert_eq!(state.size, Some(8));
+    assert_eq!(state.fields[1].name, "bias");
+    assert_eq!(state.fields[1].offset, 4);
+    let payload = engine.get_type("Payload").unwrap();
+    assert_eq!(payload.size, Some(4));
+    assert_eq!(payload.fields.len(), 2);
+    assert!(payload.fields.iter().all(|field| field.offset == 0));
+    for (declarations, name) in [
+        ("typedef enum { STOP = 9 } OtherMode;", "OtherMode"),
+        ("typedef struct { int8 value; } OtherState;", "OtherState"),
+        ("typedef union { int8 value; uint1 bytes[8]; } OtherPayload;", "OtherPayload"),
+        ("typedef struct { uint1 tag; int4 value; } ThirdState;", "ThirdState"),
+    ] {
+        let roots = engine.parse_type_library(declarations, None).unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].name, name);
+        for expected in &original {
+            assert_eq!(engine.get_type(&expected.name).unwrap(), *expected);
+        }
+    }
+    assert!(engine.type_inventory().unwrap().iter().all(|ty| !ty.name.is_empty()));
+}
+
+#[test]
+fn anonymous_typedef_construction_does_not_allow_named_type_overwrites() {
+    for replacement in [
+        "typedef struct { int8 replacement; } State;",
+        "typedef enum { REPLACEMENT = 9 } State;",
+        "typedef union { int8 replacement; } State;",
+    ] {
+        let mut engine = engine(Arch::X86_64, Platform::Default);
+        engine.parse_type_library("typedef struct { int4 prefix; int4 bias; } State;", None).unwrap();
+        assert!(engine.parse_type_library(replacement, None).is_err(), "accepted {replacement}");
+    }
+    let mut engine = engine(Arch::X86_64, Platform::Default);
+    engine.parse_type_library("struct State { int4 prefix; int4 bias; };", None).unwrap();
+    assert!(engine.parse_c("typedef struct { int8 replacement; } State;").is_err());
+}
+
+#[test]
 fn native_inventory_preserves_alias_enum_union_callback_and_dependency_evidence() {
     let mut engine = engine(Arch::X86_64, Platform::Default);
     let roots = engine

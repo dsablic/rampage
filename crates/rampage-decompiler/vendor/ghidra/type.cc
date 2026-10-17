@@ -3899,7 +3899,7 @@ Datatype *TypeFactory::findAdd(Datatype &ct)
 Datatype *TypeFactory::setName(Datatype *ct,const string &n)
 
 {
-  Datatype *existing = findByName(n);
+  Datatype *existing = n.empty() ? (Datatype *)0 : findByName(n);
   if (existing != (Datatype *)0 && existing != ct)
     throw LowlevelError("Cannot rename a type over an existing name: " + n);
   if (ct->id != 0)

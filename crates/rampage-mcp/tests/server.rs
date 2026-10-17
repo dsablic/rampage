@@ -72,6 +72,9 @@ async fn lists_all_tools_with_instructions() {
     let expected = [
         "analysis_diagnostics",
         "annotate_batch",
+        "apply_data_type",
+        "apply_enum",
+        "apply_offset",
         "archive_inventory",
         "binary_info",
         "build_signatures",
@@ -120,6 +123,7 @@ async fn lists_all_tools_with_instructions() {
         "observe_pointer",
         "persistence_surface",
         "query_debugger",
+        "read_data",
         "redo",
         "rename",
         "set_comment",

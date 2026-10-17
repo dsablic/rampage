@@ -3,8 +3,9 @@ use iced_x86::{
     OpKind, Register,
 };
 
-use crate::{Disassembler, Facts, Flow, Insn, JumpTable, RegisterFacts};
+use crate::{Disassembler, Facts, Flow, Insn, JumpTable, OperandEvidence, RegisterFacts};
 
+mod operands;
 pub(crate) mod switch;
 
 /// Immediates below this are almost never addresses (small constants, flags, sizes).
@@ -72,6 +73,22 @@ impl X86Disassembler {
 }
 
 impl Disassembler for X86Disassembler {
+    fn operands(&self, bytes: &[u8], address: u64) -> Option<Vec<OperandEvidence>> {
+        let instruction = self.decode_raw(bytes, address);
+        if instruction.is_invalid() || instruction.len() != bytes.len() {
+            return None;
+        }
+        let mut formatter = new_formatter();
+        if formatter.operand_count(&instruction) != instruction.op_count()
+            || (0..instruction.op_count())
+                .any(|index| formatter.get_instruction_operand(&instruction, index).ok() != Some(Some(index)))
+        {
+            // Pseudo-ops and hidden implicit operands must not change selector numbering.
+            return None;
+        }
+        Some(operands::evidence(&instruction))
+    }
+
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
         self.decode_reading(bytes, address, None)
     }

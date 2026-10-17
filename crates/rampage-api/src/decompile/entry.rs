@@ -279,7 +279,7 @@ impl Project {
                     executable: region.executable,
                 });
             }
-            let request = WorkerRequest {
+            let mut request = WorkerRequest {
                 version: PROTOCOL_VERSION,
                 arch: self.binary.arch.to_string(),
                 big_endian: self.binary.big_endian,
@@ -302,6 +302,28 @@ impl Project {
                 type_query: None,
             };
             report_phase(EntryPreparationPhase::WorkerExecution)?;
+            if !annotations.data_types().is_empty() {
+                let mut metadata = Vec::new();
+                request.validate_only = true;
+                request.tokens = false;
+                for name in crate::typed_data::binding_names(&annotations)? {
+                    check("exact-entry data footprint query")?;
+                    request.type_query = Some(rampage_decompiler::worker::TypeQuery::Get { name: name.clone() });
+                    let mut limits = config.clone();
+                    limits.timeout = limits.timeout.saturating_sub(started.elapsed());
+                    let output = run_supervised(&request, &limits, Some(cancellation))
+                        .map_err(|error| ApiError::Unavailable(format!("exact-entry type query: {error}")))?;
+                    let ty = output
+                        .type_inventory
+                        .and_then(|types| types.into_iter().find(|ty| ty.name == name))
+                        .ok_or_else(|| ApiError::Unavailable("worker omitted exact-entry data type".into()))?;
+                    metadata.push(ty);
+                }
+                crate::typed_data::validate_bindings(self, &annotations, &metadata)?;
+                request.validate_only = false;
+                request.tokens = true;
+                request.type_query = None;
+            }
             check("worker dispatch")?;
             let mut remaining = config.clone();
             remaining.timeout = remaining.timeout.saturating_sub(started.elapsed());
@@ -342,6 +364,11 @@ impl Project {
             report_phase(EntryPreparationPhase::NativeReplay)?;
             check("native declaration replay")?;
             symbols::apply(operations, &mut engine)?;
+            let metadata = crate::typed_data::binding_names(&annotations)?
+                .into_iter()
+                .map(|name| engine.get_type(&name).map_err(|error| ApiError::Invalid(error.to_string())))
+                .collect::<Result<Vec<_>, _>>()?;
+            crate::typed_data::validate_bindings(self, &annotations, &metadata)?;
             report_phase(EntryPreparationPhase::NativeExecution)?;
             check("native execution")?;
             let code = engine

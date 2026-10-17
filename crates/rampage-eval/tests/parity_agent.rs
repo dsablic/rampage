@@ -493,6 +493,41 @@ impl Drop for LocalFixture {
     }
 }
 
+struct TypedFixture {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl TypedFixture {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "rampage-eval-typed-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let fixture = Self { path: directory.join("fixture.snapshot.json"), directory };
+        std::fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/typed-data-x64.snapshot.json"),
+            &fixture.path,
+        )
+        .unwrap();
+        fixture
+    }
+}
+
+impl Drop for TypedFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+fn call_payload(run: &AgentRun, index: usize) -> Value {
+    let result: Value = serde_json::from_str(&run.calls[index].output.text).unwrap();
+    serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
+}
+
 async fn native_decompilation(client: &RunningService<RoleClient, TestClient>, path: &std::path::Path) -> Value {
     let result = client
         .call_tool(
@@ -815,6 +850,269 @@ async fn library_opt_in_blocks_other_writes_secondary_paths_and_unbounded_inline
         assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{name}: {run:?}");
         assert_eq!((run.tool_calls, run.tool_errors), (1, 1), "{name}: {run:?}");
         assert!(!run.calls[1].invoked, "{name}: {run:?}");
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn data_writes_require_their_own_flag_regardless_of_older_edit_permissions() {
+    for (variable, library) in [(false, false), (true, false), (false, true), (true, true)] {
+        for (name, edits) in [
+            ("apply_data_type", json!({"at": "0x200140", "encoding": "utf8", "byte_length": 8})),
+            ("apply_enum", json!({"at": "0x201182", "operand": 1, "type_name": "TypedMode"})),
+            ("apply_offset", json!({"at": "0x201187", "operand": 1, "type_name": "TypedRecord"})),
+        ] {
+            let owned = TypedFixture::new();
+            let client = connect().await;
+            let mut input = edits;
+            input["path"] = json!(owned.path);
+            let (script, requests) =
+                Script::new(vec![tool("enable_tools", json!({"groups": ["types"]})), tool(name, input)]);
+            let mut bounds = config();
+            bounds.allow_variable_edits = variable;
+            bounds.allow_type_library_edits = library;
+            let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+            assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{run:?}");
+            assert_eq!((run.tool_calls, run.tool_errors), (1, 1));
+            assert!(!run.calls[1].invoked);
+            {
+                let requests = requests.lock().unwrap();
+                for name in ["apply_data_type", "apply_enum", "apply_offset"] {
+                    assert!(!offered(&requests[1], name));
+                }
+                assert!(offered(&requests[1], "read_data"));
+            }
+            assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+            client.cancel().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn read_data_is_read_only_and_available_without_any_edit_opt_in() {
+    let owned = TypedFixture::new();
+    let original = std::fs::read(&owned.path).unwrap();
+    let client = connect().await;
+    let (script, requests) = Script::new(vec![
+        tool("enable_tools", json!({"groups": ["types"]})),
+        tool("read_data", json!({"path": owned.path, "at": "0x200120", "size": 32})),
+        final_answer(json!({"summary": "scripted raw inspection only"})),
+    ]);
+    let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &config()).await;
+    assert!(matches!(run.disposition, AgentDisposition::Answer { .. }), "{run:?}");
+    assert_eq!((run.tool_calls, run.tool_errors), (2, 0));
+    let report = call_payload(&run, 1);
+    assert_eq!(report["objects"], json!([]));
+    let source: Value = serde_json::from_slice(&original).unwrap();
+    let raw_hex = source["regions"][0]["bytes"].as_str().unwrap();
+    assert_eq!(report["raw"]["spans"][0]["hex"], &raw_hex[..64]);
+    assert!(requests.lock().unwrap()[1]["system"].as_str().unwrap().contains("restricted to read-only"));
+    assert_eq!(std::fs::read(&owned.path).unwrap(), original);
+    assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn data_opt_in_composes_explicit_permissions_without_enabling_older_writes() {
+    for (variable, library) in [(false, false), (true, false), (false, true), (true, true)] {
+        let owned = TypedFixture::new();
+        let client = connect().await;
+        let (script, requests) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["all"]})),
+            final_answer(json!({"status": "unknown", "reason": "scripted permissions inspection"})),
+        ]);
+        let mut bounds = config();
+        bounds.allow_data_type_edits = true;
+        bounds.allow_variable_edits = variable;
+        bounds.allow_type_library_edits = library;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+        {
+            let requests = requests.lock().unwrap();
+            let request = &requests[1];
+            let system = request["system"].as_str().unwrap();
+            let permissions = system.split("fixture: ").nth(1).unwrap().split('.').next().unwrap();
+            for name in ["apply_data_type", "apply_enum", "apply_offset"] {
+                assert!(offered(request, name));
+                assert!(permissions.split(", ").any(|allowed| allowed == name));
+            }
+            for (names, enabled) in
+                [(["set_types", "edit_variable"], variable), (["declare_types", "delete_type"], library)]
+            {
+                for name in names {
+                    assert_eq!(offered(request, name), enabled);
+                    assert_eq!(permissions.split(", ").any(|allowed| allowed == name), enabled);
+                }
+            }
+            for name in ["set_signature", "set_global", "patch", "undo", "rename", "query_debugger"] {
+                assert!(!offered(request, name));
+            }
+            assert!(!system.contains("No other writes"));
+            assert_eq!(system.contains("inline bounded C"), library);
+            assert_eq!(system.contains("whole-storage selectors"), variable);
+        }
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn combined_library_and_data_flags_apply_native_types_and_operand_annotations_through_mcp() {
+    let owned = TypedFixture::new();
+    let original = std::fs::read(&owned.path).unwrap();
+    let client = connect().await;
+    let (script, _) = Script::new(vec![
+        tool("enable_tools", json!({"groups": ["types"]})),
+        tool(
+            "declare_types",
+            json!({"path": owned.path,
+                "header": "/* owned inline seed */ enum TypedMode { MODE_OFF = 0, MODE_READY = 7, MODE_FAULT = -3 }; \
+                    struct TypedRecord { enum TypedMode mode; int4 value; char label[8]; };"}),
+        ),
+        tool("apply_data_type", json!({"path": owned.path, "at": "0x200120", "type_name": "TypedRecord", "count": 2})),
+        tool("read_data", json!({"path": owned.path, "at": "0x200120", "size": 32})),
+        tool("apply_enum", json!({"path": owned.path, "at": "0x201182", "operand": 1, "type_name": "TypedMode"})),
+        tool("apply_offset", json!({"path": owned.path, "at": "0x201187", "operand": 1, "type_name": "TypedRecord"})),
+        tool("disassemble", json!({"path": owned.path, "at": "0x201182", "count": 3})),
+        tool("apply_enum", json!({"path": owned.path, "at": "0x201182", "operand": 1, "clear": true})),
+        tool("apply_offset", json!({"path": owned.path, "at": "0x201187", "operand": 1, "clear": true})),
+        tool("disassemble", json!({"path": owned.path, "at": "0x201182", "count": 3})),
+        final_answer(json!({"summary": "scripted native typing plumbing only"})),
+    ]);
+    let mut bounds = config();
+    bounds.allow_data_type_edits = true;
+    bounds.allow_type_library_edits = true;
+    let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+    assert!(matches!(run.disposition, AgentDisposition::Answer { .. }), "{run:?}");
+    assert_eq!((run.tool_calls, run.tool_errors), (10, 0));
+    assert!(run.calls.iter().all(|call| call.invoked && !call.is_error));
+    assert_eq!(run.task_attempt(), TaskAttempt::Unmeasured);
+    let receipt = call_payload(&run, 2);
+    assert_eq!(receipt["changed"], true);
+    assert_eq!(receipt["binding"]["type_name"], "TypedRecord");
+    assert_eq!(receipt["binding"]["count"], 2);
+    let data = call_payload(&run, 3);
+    assert_eq!(data["objects"][0]["binding"], receipt["binding"]);
+    let fields = data["objects"][0]["fields"].as_array().unwrap();
+    assert!(fields.iter().any(|field| {
+        field["path"].as_str().unwrap().ends_with("[0].value")
+            && field["raw_hex"] == "2a000000"
+            && field["status"] == "stored"
+    }));
+    assert!(fields.iter().any(|field| {
+        field["path"].as_str().unwrap().ends_with("[1].value")
+            && field["raw_hex"] == "f9ffffff"
+            && field["status"] == "stored"
+    }));
+    let enumeration = call_payload(&run, 4);
+    assert_eq!(enumeration["display"]["display"], "TypedMode::MODE_READY");
+    let offset = call_payload(&run, 5);
+    assert_eq!(offset["display"]["field_path"], "value");
+    assert_eq!(offset["display"]["display"], "TypedRecord.value");
+    let listing = call_payload(&run, 6);
+    assert_eq!(listing[0]["operand_annotations"][0]["display"], enumeration["display"]["display"]);
+    assert_eq!(listing[2]["operand_annotations"][0]["display"], offset["display"]["display"]);
+    assert_eq!(listing[0]["bytes"], "833f07");
+    assert_eq!(listing[2]["bytes"], "8b4704");
+    let cleared_listing = call_payload(&run, 9);
+    for index in [0, 2] {
+        assert!(cleared_listing[index].get("operand_annotations").is_none());
+        assert_eq!(cleared_listing[index]["bytes"], listing[index]["bytes"]);
+        assert_eq!(cleared_listing[index]["text"], listing[index]["text"]);
+    }
+    assert_eq!(std::fs::read(&owned.path).unwrap(), original);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn data_only_opt_in_preserves_explicit_utf8_and_utf16_bytes_and_can_clear_bindings() {
+    for (at, encoding, byte_length, text) in
+        [("0x200140", "utf8", 8, "Grüße\0"), ("0x200148", "utf16_le", 8, "A\u{1f680}\0")]
+    {
+        let owned = TypedFixture::new();
+        let original = std::fs::read(&owned.path).unwrap();
+        let source: Value = serde_json::from_slice(&original).unwrap();
+        let source_hex = source["regions"][0]["bytes"].as_str().unwrap();
+        let offset = if encoding == "utf8" { 32 } else { 40 };
+        let client = connect().await;
+        let (script, _) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["types"]})),
+            tool(
+                "apply_data_type",
+                json!({"path": owned.path, "at": at,
+                "encoding": encoding, "byte_length": byte_length}),
+            ),
+            tool("read_data", json!({"path": owned.path, "at": at, "size": byte_length})),
+            tool("apply_data_type", json!({"path": owned.path, "at": at, "clear": true})),
+            tool("read_data", json!({"path": owned.path, "at": at, "size": byte_length})),
+            final_answer(json!({"summary": "scripted encoding preservation only"})),
+        ]);
+        let mut bounds = config();
+        bounds.allow_data_type_edits = true;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert!(matches!(run.disposition, AgentDisposition::Answer { .. }), "{run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (5, 0));
+        let report = call_payload(&run, 2);
+        let field = &report["objects"][0]["fields"][0];
+        assert_eq!(field["value"]["encoding"], encoding);
+        assert_eq!(field["value"]["text"], text);
+        assert_eq!(field["raw_hex"], &source_hex[offset * 2..(offset + 8) * 2]);
+        let cleared = call_payload(&run, 4);
+        assert_eq!(cleared["objects"], json!([]));
+        assert_eq!(cleared["raw"], report["raw"]);
+        assert_eq!(std::fs::read(&owned.path).unwrap(), original);
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn data_opt_in_rejects_other_writes_second_paths_and_non_scalar_or_unknown_arguments() {
+    for (name, input) in [
+        ("set_types", json!({"at": "0x201180", "text": "struct X { int4 n; };"})),
+        ("edit_variable", json!({"at": "0x201180", "variable": "x", "name": "changed"})),
+        ("declare_types", json!({"header": "struct X { int4 n; };"})),
+        ("delete_type", json!({"name": "TypedRecord"})),
+        ("set_signature", json!({"at": "0x201180", "text": "int changed(void)"})),
+        ("set_global", json!({"at": "0x200120", "text": "int changed"})),
+        ("patch", json!({"at": "0x201180", "bytes": "90"})),
+        ("undo", json!({})),
+        ("rename", json!({"at": "0x200120", "name": "changed"})),
+        ("apply_data_type", json!({"path": "/outside/fixture", "at": "0x200120", "type_name": "TypedRecord"})),
+        ("apply_enum", json!({"path": "/outside/fixture", "at": "0x201182", "operand": 1, "clear": true})),
+        ("apply_offset", json!({"path": "/outside/fixture", "at": "0x201187", "operand": 1, "clear": true})),
+        ("read_data", json!({"path": "/outside/fixture", "at": "0x200120"})),
+        ("apply_data_type", json!({"at": "0x200120", "image_offset": "0x10", "clear": true})),
+        ("apply_enum", json!({"at": "0x201182", "operand": 1, "output": "/outside/output", "clear": true})),
+        ("apply_offset", json!({"at": "0x201187", "operand": 1, "header_path": "/outside/header", "clear": true})),
+        ("read_data", json!({"at": "0x200120", "original": "/outside/fixture"})),
+        ("read_data", json!({"at": "0x200120", "image_length": 32})),
+        ("binary_info", json!({"image_offset": "0x10"})),
+        ("apply_data_type", json!({"at": "0x200120", "type_name": {"path": "/outside/fixture"}})),
+        ("apply_enum", json!({"at": "0x201182", "operand": 1, "type_name": ["TypedMode"]})),
+        ("apply_offset", json!({"at": {"path": "/outside/fixture"}, "operand": 1, "clear": true})),
+        ("read_data", json!({"at": "0x200120", "size": {"path": "/outside/fixture"}})),
+        ("apply_data_type", json!({"at": "0x200120", "type_name": "x".repeat(257)})),
+        ("apply_data_type", json!({"at": "0x200120", "count": 4_294_967_296u64})),
+        ("apply_data_type", json!({"at": "0x200120", "byte_length": -1})),
+        ("apply_data_type", json!({"at": "0x200120", "encoding": "UTF8"})),
+        ("apply_data_type", json!({"at": "0x200120", "clear": "true"})),
+        ("apply_enum", json!({"at": "0x201182", "operand": 256, "clear": true})),
+        ("apply_offset", json!({"at": "0x201187", "operand": 1.5, "clear": true})),
+        ("read_data", json!({"at": "0x200120", "size": -1})),
+    ] {
+        let owned = TypedFixture::new();
+        let client = connect().await;
+        let mut input = input;
+        if input.get("path").is_none() {
+            input["path"] = json!(owned.path);
+        }
+        let (script, _) = Script::new(vec![tool("enable_tools", json!({"groups": ["all"]})), tool(name, input)]);
+        let mut bounds = config();
+        bounds.allow_data_type_edits = true;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{name}: {run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (1, 1), "{name}: {run:?}");
+        assert!(!run.calls[1].invoked, "{name}: {run:?}");
+        assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
         client.cancel().await.unwrap();
     }
 }

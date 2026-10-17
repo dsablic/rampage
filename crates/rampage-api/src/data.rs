@@ -27,7 +27,7 @@ pub struct DataInspection {
     pub format: Format,
     pub arch: Arch,
     pub module_uuid: Option<String>,
-    pub selected_image_file_offset: u64,
+    pub selected_image_file_offset: Option<u64>,
     pub selected_image_size: u64,
     pub backing_metadata_checked: bool,
     pub loader_diagnostics: DataLoaderDiagnostics,
@@ -311,6 +311,12 @@ pub fn inspect_native_data(binary: &Binary, query: &DataQuery) -> Result<DataIns
             "static data inspection requires a native image; use runtime tools for captures".into(),
         ));
     }
+    inspect_static_data(binary, query)
+}
+
+/// Typed views may inspect immutable snapshot storage, without presenting synthetic offsets as file offsets.
+pub(crate) fn inspect_static_data(binary: &Binary, query: &DataQuery) -> Result<DataInspection, ApiError> {
+    let snapshot = binary.format == Format::Snapshot;
     let word_size = query.word_size.unwrap_or_else(|| binary.arch.pointer_size());
     if !(1..=MAX_DATA_BYTES).contains(&query.size) || !matches!(word_size, 4 | 8) {
         return Err(ApiError::Invalid("data inspection requires 1..=1024 bytes and word_size 4 or 8".into()));
@@ -322,12 +328,13 @@ pub fn inspect_native_data(binary: &Binary, query: &DataQuery) -> Result<DataIns
     let checked =
         binary.validate_available_backing_source().map_err(|error| ApiError::Unavailable(error.to_string()))?;
     let view = View::new(binary)?;
-    let pointer_targets_suppressed = !binary.warnings.is_empty();
+    let pointer_targets_suppressed = snapshot || !binary.warnings.is_empty();
     let (image, _, _) = binary.inventory_source_context();
     let mut spans: Vec<DataSpan> = Vec::new();
     let mut bytes = Vec::with_capacity(query.size);
     for at in query.address..end {
         let (status, byte, image_offset, permissions) = view.byte(at);
+        let image_offset = if snapshot { None } else { image_offset };
         bytes.push(byte);
         let contiguous = spans.last().is_some_and(|span| {
             span.status == status
@@ -369,6 +376,8 @@ pub fn inspect_native_data(binary: &Binary, query: &DataQuery) -> Result<DataIns
         let rebase = (word_size == binary.arch.pointer_size()).then(|| binary.rebase_target(address)).flatten();
         let (interpretation, target) = if raw_value.is_none() {
             ("unavailable", None)
+        } else if snapshot {
+            ("snapshot_raw_word", None)
         } else if pointer_targets_suppressed {
             ("loader_warnings_pointer_targets_suppressed", None)
         } else if partial_pointer_metadata(binary, address, word_size) {
@@ -418,14 +427,14 @@ pub fn inspect_native_data(binary: &Binary, query: &DataQuery) -> Result<DataIns
         }
     }
     binary.validate_available_backing_source().map_err(|error| ApiError::Unavailable(error.to_string()))?;
-    let report = DataInspection {
+    let mut report = DataInspection {
         format: binary.format,
         arch: binary.arch,
         module_uuid: match &binary.details {
             Details::MachO(details) => details.uuid.clone(),
             _ => None,
         },
-        selected_image_file_offset: image.start as u64,
+        selected_image_file_offset: (!snapshot).then_some(image.start as u64),
         selected_image_size: image.len() as u64,
         backing_metadata_checked: checked,
         loader_diagnostics: loader_diagnostics(binary),
@@ -438,8 +447,12 @@ pub fn inspect_native_data(binary: &Binary, query: &DataQuery) -> Result<DataIns
         spans,
         words,
         limitations: vec![
-            "Native image only. Addresses are image VAs, not runtime addresses. \
-             Selection metadata is not a content hash.",
+            if snapshot {
+                "Immutable snapshot region addresses; file/image offsets are unavailable. Selection size describes \
+                 synthesized region storage, not an executable image or source-file range. No runtime execution proof."
+            } else {
+                "Native image only. Addresses are image VAs, not runtime addresses. Selection metadata is not a content hash."
+            },
             "Words start at the analyst-supplied address; their interpretation does not establish \
              a pointer table or layout.",
             "Raw words are candidates only. Only retained Mach-O chained rebases are decoded; \
@@ -454,9 +467,12 @@ pub fn inspect_native_data(binary: &Binary, query: &DataQuery) -> Result<DataIns
             "ASCII previews are bounded to 64 stored bytes; display names to 96 characters and two labels per target.",
             "Zero-fill and unavailable bytes are not supplied as zeros. No discovery, annotations or target writes.",
             "Backing metadata is checked when available; reads are not atomic with external modification \
-             or truncation.",
+              or truncation.",
         ],
     };
+    if snapshot {
+        report.limitations.push("Snapshot words remain raw and are never followed or treated as native relocations.");
+    }
     if serde_json::to_vec(&report).map_err(|error| ApiError::Invalid(error.to_string()))?.len() > MAX_DATA_RESULT_BYTES
     {
         return Err(ApiError::Invalid("data inspection exceeds output budget; request a smaller size".into()));

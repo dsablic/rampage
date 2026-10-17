@@ -104,6 +104,7 @@ fn plan_with(
         }
     }
     operations.extend(assertions);
+    operations.extend(crate::typed_data::data_type_plan(project, annotations)?);
     for (&address, declaration) in annotations.globals() {
         validate(declaration)?;
         reject_late_type_definitions(declaration, &layouts)?;

@@ -537,6 +537,9 @@ impl Workspace {
             Field::TypeLibrary => Err(rampage_api::ApiError::Invalid(
                 "project type-library edits require the declare_types/delete_type MCP tools".to_owned(),
             )),
+            Field::DataType | Field::OperandType => Err(rampage_api::ApiError::Invalid(
+                "data and operand type edits require the selector-aware MCP typing tools".to_owned(),
+            )),
         };
         match result {
             Ok(edit) => {

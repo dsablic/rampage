@@ -2663,7 +2663,7 @@ Datatype *CParse::newStruct(const string &ident,vector<TypeDeclarator *> *declis
 
 { // Build a new structure
   if (libraryMode && declist->size() > 256) throw ParseError("Type library field limit exceeded (256)");
-  Datatype *prior = glb->types->findByName(ident);
+  Datatype *prior = ident.empty() ? (Datatype *)0 : glb->types->findByName(ident);
   if (libraryMode && prior != (Datatype *)0 && (!prior->isIncomplete() || prior->getTypedef() != (Datatype *)0))
     throw ParseError("Duplicate type name: " + ident);
   TypeStruct *res = glb->types->getTypeStruct(ident); // Create stub (for recursion)
@@ -2724,7 +2724,7 @@ Datatype *CParse::newUnion(const string &ident,vector<TypeDeclarator *> *declist
 
 {
   if (libraryMode && declist->size() > 256) throw ParseError("Type library field limit exceeded (256)");
-  Datatype *prior = glb->types->findByName(ident);
+  Datatype *prior = ident.empty() ? (Datatype *)0 : glb->types->findByName(ident);
   if (libraryMode && prior != (Datatype *)0 && (!prior->isIncomplete() || prior->getTypedef() != (Datatype *)0))
     throw ParseError("Duplicate type name: " + ident);
   TypeUnion *res = glb->types->getTypeUnion(ident); // Create stub (for recursion)

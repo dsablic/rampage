@@ -313,6 +313,7 @@ mod tests {
                     comment: None,
                     note: None,
                     noreturn: None,
+                    operand_annotations: Vec::new(),
                 }],
             })
             .collect();

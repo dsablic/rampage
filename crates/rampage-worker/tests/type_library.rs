@@ -31,6 +31,73 @@ fn config() -> WorkerConfig {
 }
 
 #[test]
+fn worker_replays_multiple_anonymous_typedef_batches_without_empty_name_collisions() {
+    let mut request = request(TypeQuery::Inventory, true);
+    request.operations = vec![
+        WorkerOperation::TypeLibrary {
+            declarations: "typedef enum { READY = 7, BAD = -3 } Mode;
+                typedef struct { int4 prefix; int4 bias; } State;"
+                .to_owned(),
+            packing: None,
+        },
+        WorkerOperation::TypeLibrary {
+            declarations: "typedef union { int4 number; uint1 bytes[4]; } Payload;
+                typedef enum { STOP = 9 } OtherMode;"
+                .to_owned(),
+            packing: None,
+        },
+        WorkerOperation::TypeLibrary {
+            declarations: "typedef struct { int8 value; } OtherState;
+                typedef union { int8 value; uint1 bytes[8]; } OtherPayload;"
+                .to_owned(),
+            packing: None,
+        },
+    ];
+    let output = run_supervised(&request, &config(), None).unwrap();
+    let batches = output.type_declarations.unwrap();
+    assert_eq!(batches.len(), 3);
+    assert_eq!(batches[0].iter().map(|ty| ty.name.as_str()).collect::<Vec<_>>(), ["Mode", "State"]);
+    assert_eq!(batches[1].iter().map(|ty| ty.name.as_str()).collect::<Vec<_>>(), ["Payload", "OtherMode"]);
+    assert_eq!(batches[2].iter().map(|ty| ty.name.as_str()).collect::<Vec<_>>(), ["OtherState", "OtherPayload"]);
+    let types = output.type_inventory.unwrap();
+    assert!(types.iter().all(|ty| !ty.name.is_empty()));
+    let mode = types.iter().find(|ty| ty.name == "Mode").unwrap();
+    assert_eq!(mode.kind, rampage_decompiler::NamedTypeKind::Typedef);
+    assert_eq!(mode.enum_values.iter().find(|value| value.name == "READY").unwrap().value, "7");
+    assert_eq!(mode.enum_values.iter().find(|value| value.name == "BAD").unwrap().value, "-3");
+    let state = types.iter().find(|ty| ty.name == "State").unwrap();
+    assert_eq!(state.kind, rampage_decompiler::NamedTypeKind::Typedef);
+    assert_eq!(state.fields[1].name, "bias");
+    assert_eq!(state.fields[1].offset, 4);
+    assert_eq!(state.size, Some(8));
+    let payload = types.iter().find(|ty| ty.name == "Payload").unwrap();
+    assert_eq!(payload.size, Some(4));
+    assert!(payload.fields.iter().all(|field| field.offset == 0));
+}
+
+#[test]
+fn worker_refuses_named_overwrites_after_anonymous_typedef_registration() {
+    for replacement in [
+        WorkerOperation::TypeLibrary {
+            declarations: "typedef struct { int8 replacement; } State;".to_owned(),
+            packing: None,
+        },
+        WorkerOperation::ParseTypes { declarations: "typedef struct { int8 replacement; } State;".to_owned() },
+    ] {
+        let mut request = request(TypeQuery::Inventory, true);
+        request.operations = vec![
+            WorkerOperation::TypeLibrary {
+                declarations: "typedef struct { int4 prefix; int4 bias; } State;".to_owned(),
+                packing: None,
+            },
+            replacement,
+        ];
+        let error = run_supervised(&request, &config(), None).unwrap_err().to_string();
+        assert!(error.contains("operation 1"), "{error}");
+    }
+}
+
+#[test]
 fn query_runs_after_type_library_replay_without_entry_bytes_even_in_validation_mode() {
     for validate_only in [false, true] {
         let output =

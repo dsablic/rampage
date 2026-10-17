@@ -278,7 +278,7 @@ impl Project {
             }
             annotations
                 .set_validated(Field::Name, address, value.clone(), |candidate| {
-                    if candidate.globals().is_empty() {
+                    if candidate.globals().is_empty() && candidate.data_types().is_empty() {
                         return Ok(());
                     }
                     self.validate_annotation_snapshot(&state, &options, candidate)
@@ -330,7 +330,7 @@ impl Project {
             let (changes, preserved) = candidates(annotations);
             let changed = annotations
                 .set_batch_validated(&changes, |candidate| {
-                    if candidate.globals().is_empty() {
+                    if candidate.globals().is_empty() && candidate.data_types().is_empty() {
                         return Ok(());
                     }
                     self.validate_annotation_snapshot(&state, &options, candidate)
@@ -418,7 +418,7 @@ impl Project {
                 let changed = annotations
                     .set_batch_validated(&changes, |candidate| {
                         self.binary.validate_backing_source().map_err(|error| error.to_string())?;
-                        let result = if candidate.globals().is_empty() {
+                        let result = if candidate.globals().is_empty() && candidate.data_types().is_empty() {
                             Ok(())
                         } else {
                             self.validate_annotation_snapshot(state, options, candidate)
@@ -493,6 +493,8 @@ impl Project {
                         && candidate.globals().is_empty()
                         && candidate.local_names().is_empty()
                         && candidate.local_types().is_empty()
+                        && candidate.data_types().is_empty()
+                        && candidate.operand_types().is_empty()
                     {
                         return Ok(());
                     }
@@ -527,6 +529,8 @@ impl Project {
                         && candidate.globals().is_empty()
                         && candidate.local_names().is_empty()
                         && candidate.local_types().is_empty()
+                        && candidate.data_types().is_empty()
+                        && candidate.operand_types().is_empty()
                     {
                         return Ok(());
                     }
@@ -552,6 +556,8 @@ impl Project {
             local_names: rows(annotations.local_names()),
             local_types: rows(annotations.local_types()),
             type_library: rows(annotations.type_library()),
+            data_types: rows(annotations.data_types()),
+            operand_types: rows(annotations.operand_types()),
         }
     }
 

@@ -181,7 +181,7 @@ impl Project {
         }
         let changed = annotations
             .set_batch_validated(&changes, |candidate| {
-                if candidate.globals().is_empty() {
+                if candidate.globals().is_empty() && candidate.data_types().is_empty() {
                     return Ok(());
                 }
                 self.validate_annotation_snapshot(state, options, candidate)

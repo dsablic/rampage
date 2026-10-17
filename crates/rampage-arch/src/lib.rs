@@ -6,11 +6,14 @@ mod flow;
 pub mod hex;
 pub mod ir;
 mod mrs;
+mod operand;
 pub mod registers;
 mod track;
 mod x86;
 
 use serde::Serialize;
+
+pub use operand::{MemoryOperand, OperandEvidence, OperandKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -296,6 +299,15 @@ impl RegisterFacts {
 }
 
 pub trait Disassembler {
+    /// Decoder-native evidence for exactly one complete instruction, without changing decoder state.
+    /// `bytes` must contain the whole instruction and no trailing bytes. `None` means invalid,
+    /// incomplete, or unsupported evidence, not proof that the instruction has no operands.
+    /// Indices are zero-based in native Intel / preferred A64 explicit operand order; unsupported
+    /// operands retain their indices rather than causing later operands to be renumbered.
+    fn operands(&self, _bytes: &[u8], _address: u64) -> Option<Vec<OperandEvidence>> {
+        None
+    }
+
     /// Decodes one instruction. Undecodable bytes yield a `Flow::Invalid` instruction.
     ///
     /// Decoders may carry state from one instruction to the next within a straight-line run (AArch64 builds

@@ -103,6 +103,7 @@ pub(crate) struct DecompilerState {
     types: std::collections::BTreeMap<u64, String>,
     type_library: std::collections::BTreeMap<u64, String>,
     globals: std::collections::BTreeMap<u64, String>,
+    data_types: std::collections::BTreeMap<u64, String>,
     local_names: std::collections::BTreeMap<u64, String>,
     local_types: std::collections::BTreeMap<u64, String>,
     pub(crate) worker: Option<rampage_decompiler::worker::WorkerConfig>,
@@ -184,6 +185,16 @@ impl Project {
         validate_cached_layout_source(self, state).map_err(|error| error.to_string())?;
         crate::debug_layout_import::validate_replay_source(self, candidate).map_err(|error| error.to_string())?;
         self.validate_type_library_snapshot(state, options, candidate).map_err(|error| error.to_string())?;
+        if !candidate.data_types().is_empty() || !candidate.operand_types().is_empty() {
+            let mut names = crate::typed_data::binding_names(candidate).map_err(|error| error.to_string())?;
+            names.extend(crate::operand_types::binding_names(candidate).map_err(|error| error.to_string())?);
+            names.sort();
+            names.dedup();
+            let types = self.native_data_types(state, options, candidate, &names).map_err(|error| error.to_string())?;
+            crate::typed_data::validate_bindings(self, candidate, &types).map_err(|error| error.to_string())?;
+            crate::operand_types::validate_operand_annotations(self, candidate, &types)
+                .map_err(|error| error.to_string())?;
+        }
         let targets = crate::variables::targets(candidate);
         if !targets.is_empty() {
             for address in targets {
@@ -196,6 +207,8 @@ impl Project {
             && candidate.type_library().is_empty()
             && candidate.signatures().is_empty()
             && candidate.globals().is_empty()
+            && candidate.data_types().is_empty()
+            && candidate.operand_types().is_empty()
         {
             return Ok(());
         }
@@ -307,7 +320,7 @@ impl Project {
         annotations.locked_staged_checked(|candidate| {
             validate_cached_layout_source(self, &state)?;
             crate::debug_layout_import::validate_replay_source(self, candidate)?;
-            if !crate::variables::targets(candidate).is_empty() {
+            if !crate::variables::targets(candidate).is_empty() || !candidate.data_types().is_empty() {
                 self.validate_annotation_snapshot(&state, &selected, candidate).map_err(ApiError::Invalid)?;
             } else if let Some(config) = &state.worker {
                 isolated::decompile(
@@ -361,6 +374,11 @@ impl Project {
         let name = self.function_name_in(&annotations, start);
         if let Some(config) = slot.worker.clone() {
             let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
+            if !annotations.data_types().is_empty() {
+                let names = crate::typed_data::binding_names(&annotations)?;
+                let types = self.native_data_types(&slot, &options, &annotations, &names)?;
+                crate::typed_data::validate_bindings(self, &annotations, &types)?;
+            }
             drop(slot);
             return isolated::decompile(self, &annotations, &options, &config, Some((start, name)), cancellation);
         }
@@ -374,6 +392,7 @@ impl Project {
             || slot.types != *annotations.types()
             || slot.type_library != *annotations.type_library()
             || slot.globals != *annotations.globals()
+            || slot.data_types != *annotations.data_types()
             || slot.local_names != *annotations.local_names()
             || slot.local_types != *annotations.local_types()
         {
@@ -387,6 +406,7 @@ impl Project {
             slot.types = annotations.types().clone();
             slot.type_library = annotations.type_library().clone();
             slot.globals = annotations.globals().clone();
+            slot.data_types = annotations.data_types().clone();
             slot.local_names = annotations.local_names().clone();
             slot.local_types = annotations.local_types().clone();
         }
@@ -462,8 +482,93 @@ impl Project {
         operations.extend(crate::variables::plan(self, annotations, None)?);
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         symbols::apply(operations, &mut decompiler)?;
+        let data_types = crate::typed_data::binding_names(annotations)?
+            .into_iter()
+            .map(|name| decompiler.get_type(&name).map_err(|error| ApiError::Invalid(error.to_string())))
+            .collect::<Result<Vec<_>, _>>()?;
+        crate::typed_data::validate_bindings(self, annotations, &data_types)?;
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         Ok(decompiler)
+    }
+
+    /// Queries a bounded native graph against one immutable annotation/options snapshot. Worker failures never
+    /// fall back in-process; the in-process path uses one fresh engine for every reference in the graph.
+    pub(crate) fn native_data_types(
+        &self,
+        state: &DecompilerState,
+        options: &DecompilerOptions,
+        annotations: &crate::annotations::Annotations,
+        names: &[String],
+    ) -> Result<Vec<rampage_decompiler::NamedType>, ApiError> {
+        use std::collections::{BTreeMap, BTreeSet};
+        validate_cached_layout_source(self, state)?;
+        crate::debug_layout_import::validate_replay_source(self, annotations)?;
+        let mut pending: BTreeSet<String> = names.iter().cloned().collect();
+        let mut types = BTreeMap::new();
+        let mut identity_nodes = 0usize;
+        let engine = if state.worker.is_none() { Some(self.build_decompiler(options, annotations)?) } else { None };
+        let mut worker_queries = 0usize;
+        let mut catalog: BTreeMap<String, rampage_decompiler::NamedType> = if let Some(config) = &state.worker {
+            worker_queries += 1;
+            isolated_type_query(
+                self,
+                annotations,
+                options,
+                config,
+                rampage_decompiler::worker::TypeQuery::Inventory,
+                &[],
+            )?
+            .type_inventory
+            .ok_or_else(|| ApiError::Unavailable("worker omitted native data type catalog".into()))?
+            .into_iter()
+            .map(|ty| (ty.name.clone(), ty))
+            .collect()
+        } else {
+            BTreeMap::new()
+        };
+        while let Some(name) = pending.pop_first() {
+            if types.contains_key(&name) {
+                continue;
+            }
+            if types.len() >= 64 {
+                return Err(ApiError::Invalid("native data type query budget exceeds 64 names".into()));
+            }
+            let ty = if let Some(config) = &state.worker {
+                if let Some(ty) = catalog.remove(&name) {
+                    ty
+                } else {
+                    worker_queries += 1;
+                    if worker_queries > 64 {
+                        return Err(ApiError::Invalid("native data type query budget exceeds 64 queries".into()));
+                    }
+                    let output = isolated_type_query(
+                        self,
+                        annotations,
+                        options,
+                        config,
+                        rampage_decompiler::worker::TypeQuery::Get { name: name.clone() },
+                        &[],
+                    )?;
+                    output
+                        .type_inventory
+                        .and_then(|types| types.into_iter().find(|ty| ty.name == name))
+                        .ok_or_else(|| ApiError::Unavailable("worker omitted requested native data type".into()))?
+                }
+            } else {
+                engine
+                    .as_ref()
+                    .expect("in-process type engine")
+                    .get_type(&name)
+                    .map_err(|error| ApiError::Invalid(error.to_string()))?
+            };
+            if let Some(identity) = &ty.identity {
+                crate::typed_data::identity_references(identity, &mut pending, 0, &mut identity_nodes)?;
+            }
+            types.insert(name, ty);
+            pending.retain(|name| !types.contains_key(name));
+        }
+        crate::debug_layout_import::validate_replay_source(self, annotations)?;
+        Ok(types.into_values().collect())
     }
 
     pub(crate) fn decompile_annotation_candidate(

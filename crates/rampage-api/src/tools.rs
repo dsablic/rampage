@@ -640,6 +640,70 @@ struct DeleteTypeArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum DataEncodingInput {
+    Utf8,
+    Utf16Le,
+    Utf16Be,
+    Ascii,
+}
+
+impl DataEncodingInput {
+    fn native(self) -> crate::annotations::DataStringEncoding {
+        use crate::annotations::DataStringEncoding;
+        match self {
+            Self::Utf8 => DataStringEncoding::Utf8,
+            Self::Utf16Le => DataStringEncoding::Utf16Le,
+            Self::Utf16Be => DataStringEncoding::Utf16Be,
+            Self::Ascii => DataStringEncoding::Ascii,
+        }
+    }
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ApplyDataTypeArgs {
+    at: String,
+    /// Exact native/library type name. Count declares an array of this complete element type.
+    type_name: Option<String>,
+    count: Option<u32>,
+    /// Explicit string decoding, not an inference from a char array; original bytes are preserved.
+    encoding: Option<DataEncodingInput>,
+    byte_length: Option<u32>,
+    #[serde(default)]
+    clear: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ApplyOperandTypeArgs {
+    at: String,
+    /// Zero-based decoded explicit operand index; unsupported or stale selections are refused.
+    operand: u8,
+    type_name: Option<String>,
+    #[serde(default)]
+    clear: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReadDataArgs {
+    at: String,
+    /// Bounded byte window. Missing/zero-fill bytes are not fabricated as stored zeros.
+    size: Option<usize>,
+}
+
+fn data_typing_view(result: &impl Serialize) -> Result<Value, ApiError> {
+    let value = serde_json::to_value(result).map_err(|error| ApiError::Invalid(error.to_string()))?;
+    if value.to_string().len() > MAX_RESULT_CHARS {
+        return Err(ApiError::Invalid(
+            "data/operand typing result exceeds the JSON budget; no edit was persisted".into(),
+        ));
+    }
+    Ok(value)
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ListTypesArgs {
     /// Case-sensitive substring of the native type name.
@@ -2002,6 +2066,80 @@ pub fn tools() -> Vec<Tool> {
             },
         )
         .annotates(),
+        tool(
+            Group::Types,
+            "apply_data_type",
+            "Annotate a mapped data range with a complete native element type and optional array count, or an \
+             explicit byte-length/string encoding. Native globals feed decompilation; read_data renders typed \
+             fields without patching bytes. Checked undo/replay preserves bindings. Conflicting globals, invalid \
+             ranges and unsupported layouts refuse atomically; missing bytes remain explicit.",
+            |project, args: ApplyDataTypeArgs| {
+                let request = crate::ApplyDataTypeRequest {
+                    type_name: args.type_name,
+                    count: args.count,
+                    encoding: args.encoding.map(DataEncodingInput::native),
+                    byte_length: args.byte_length,
+                    clear: args.clear,
+                };
+                let result =
+                    project.apply_data_type_with_preflight(project.resolve(&args.at)?, &request, |result| {
+                        data_typing_view(result).map(|_| ())
+                    })?;
+                data_typing_view(&result)
+            },
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "apply_enum",
+            "Apply a named enum to one native-decoded immediate operand. Uses decoded logical width and raw \
+             value, not formatted-text matching. Disassembly keeps raw bytes/text and exposes analyst-symbolic \
+             annotations. Unsupported forms, missing types and stale instruction bytes are refused; no patches.",
+            |project, args: ApplyOperandTypeArgs| {
+                let request = crate::ApplyOperandTypeRequest {
+                    operand: args.operand,
+                    type_name: args.type_name,
+                    clear: args.clear,
+                };
+                let result = project.apply_enum_with_preflight(project.resolve(&args.at)?, &request, |result| {
+                    data_typing_view(result).map(|_| ())
+                })?;
+                data_typing_view(&result)
+            },
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "apply_offset",
+            "Display a decoded base-register memory displacement as a named struct field under an explicit \
+             analyst type assertion. Rejects PC-relative, indexed, negative or unsupported selectors rather than \
+             guessing an object base. Persists exact instruction-byte selectors with checked undo/replay.",
+            |project, args: ApplyOperandTypeArgs| {
+                let request = crate::ApplyOperandTypeRequest {
+                    operand: args.operand,
+                    type_name: args.type_name,
+                    clear: args.clear,
+                };
+                let result = project.apply_offset_with_preflight(project.resolve(&args.at)?, &request, |result| {
+                    data_typing_view(result).map(|_| ())
+                })?;
+                data_typing_view(&result)
+            },
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "read_data",
+            "Read a bounded image or immutable-snapshot data window with persistent typed fields, array elements and \
+             explicit string encodings. Retains raw bytes, backing status, byte order and loader limitations. \
+             Integers remain exact, pointer words are not followed, and invalid/partial text stays visible.",
+            |project, args: ReadDataArgs| {
+                data_typing_view(
+                    &project
+                        .read_data(&crate::TypedDataQuery { address: project.resolve(&args.at)?, size: args.size })?,
+                )
+            },
+        ),
         tool(
             Group::Types,
             "declare_types",

@@ -4,6 +4,7 @@
 //! and its assembly syntax. The operand semantics the open-source specification leaves out (how field values
 //! become register names, immediates and labels) are written by hand in `operands.rs`.
 
+mod evidence;
 pub(crate) mod flow;
 mod helpers;
 mod operands;
@@ -97,6 +98,14 @@ pub struct A64Disassembler {
 }
 
 impl Disassembler for A64Disassembler {
+    fn operands(&self, bytes: &[u8], address: u64) -> Option<Vec<crate::OperandEvidence>> {
+        if address & 3 != 0 {
+            return None;
+        }
+        let bytes: [u8; 4] = bytes.try_into().ok()?;
+        evidence::operands(&decode_word(u32::from_le_bytes(bytes))?)
+    }
+
     fn reset(&mut self) {
         let memory_changed = self.addresses.memory_changed;
         self.addresses = flow::Addresses::default();

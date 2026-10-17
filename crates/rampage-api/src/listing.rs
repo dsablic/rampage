@@ -5,6 +5,7 @@ use rampage_arch::Flow;
 use rampage_loaders::Binary;
 use serde::Serialize;
 
+use crate::operand_types::{OperandAnnotationDisplay, OperandListingContext};
 use crate::{ApiError, Project};
 
 #[derive(Debug, Serialize)]
@@ -37,6 +38,9 @@ pub struct DisassemblyLine {
     /// `listed` by name as never returning, or discovery `inferred` it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub noreturn: Option<NoreturnEvidence>,
+    /// Analyst-selected operand interpretations; raw instruction text, bytes and flow remain unchanged.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub operand_annotations: Vec<OperandAnnotationDisplay>,
 }
 
 /// A function's instructions grouped by basic block, in address order.
@@ -58,7 +62,8 @@ impl Project {
                 .entry
                 .ok_or_else(|| ApiError::Invalid("no entry point; pass an address or symbol".to_owned()))?,
         };
-        self.decode_lines(start, u64::MAX, count)
+        let operands = self.operand_listing_context()?;
+        self.decode_lines(start, u64::MAX, count, operands.as_ref())
     }
 
     /// The function containing `address`, disassembled block by block in address order.
@@ -67,10 +72,11 @@ impl Project {
             .function_containing(address)?
             .ok_or_else(|| ApiError::NotFound(format!("no function contains {address:#x}")))?;
         let function = self.analysis()?.program.function_at(start).expect("block index names a known function");
+        let operands = self.operand_listing_context()?;
         let mut blocks: Vec<Vec<DisassemblyLine>> = function
             .blocks
             .iter()
-            .map(|block| self.decode_lines(block.start, block.end, usize::MAX))
+            .map(|block| self.decode_lines(block.start, block.end, usize::MAX, operands.as_ref()))
             .collect::<Result<_, _>>()?;
         let program = &self.analysis()?.program;
         let flows = &program.resolved_flows;
@@ -83,7 +89,7 @@ impl Project {
                     _ => None,
                 };
                 if let Some(name) = target.and_then(|at| self.name_at(at)) {
-                    line.comment = Some(name);
+                    line.comment = with_operand_comments(Some(name), &line.operand_annotations);
                 }
             }
             let target = match line.flow {
@@ -97,7 +103,13 @@ impl Project {
     }
 
     /// Decodes up to `count` instructions from `start`, stopping before `end`.
-    fn decode_lines(&self, start: u64, end: u64, count: usize) -> Result<Vec<DisassemblyLine>, ApiError> {
+    fn decode_lines(
+        &self,
+        start: u64,
+        end: u64,
+        count: usize,
+        operands: Option<&OperandListingContext>,
+    ) -> Result<Vec<DisassemblyLine>, ApiError> {
         let mut decoder = self.binary.decoder()?;
         if self.binary.arch == rampage_arch::Arch::Arm {
             decoder.set_code_modes(&self.analysis()?.program.code_modes);
@@ -115,6 +127,9 @@ impl Project {
             let insn =
                 decoder.decode_with_memory(&code[offset..], address, &|at, size| self.binary.read_pointer(at, size));
             let bytes = &code[offset..(offset + usize::from(insn.len)).min(code.len())];
+            let operand_annotations =
+                operands.map(|context| context.display(self, address, bytes)).transpose()?.unwrap_or_default();
+            let comment = with_operand_comments(self.describe_reference(&insn), &operand_annotations);
             lines.push(DisassemblyLine {
                 address,
                 bytes: rampage_arch::hex::bytes(bytes),
@@ -125,8 +140,9 @@ impl Project {
                 immediate: insn.immediate,
                 label: self.name_at(address),
                 note: self.comment_at(address),
-                comment: self.describe_reference(&insn),
+                comment,
                 noreturn: None,
+                operand_annotations,
             });
             offset += usize::from(insn.len.max(1));
         }
@@ -150,6 +166,15 @@ impl Project {
         }
         string_at(&self.binary, data).map(|text| format!("{text:?}"))
     }
+}
+
+fn with_operand_comments(comment: Option<String>, annotations: &[OperandAnnotationDisplay]) -> Option<String> {
+    if annotations.is_empty() {
+        return comment;
+    }
+    let mut parts: Vec<String> = comment.into_iter().collect();
+    parts.extend(annotations.iter().map(|entry| format!("op{}: {}", entry.operand, entry.display)));
+    Some(parts.join("; "))
 }
 
 /// The NUL-terminated printable ASCII string at `address`, if there is one of at least four characters. Long
