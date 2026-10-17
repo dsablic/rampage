@@ -29,7 +29,14 @@ pub struct FunctionSummary {
 
 impl Project {
     pub fn function_summary(&self, address: u64) -> Result<FunctionSummary, ApiError> {
-        let graph = self.function_graph(address)?;
+        self.summary_from_graph(self.function_graph(address)?)
+    }
+
+    pub(crate) fn function_summary_for_frame(&self, address: u64) -> Result<FunctionSummary, ApiError> {
+        self.summary_from_graph(self.function_graph_for_frame(address)?)
+    }
+
+    fn summary_from_graph(&self, graph: FunctionGraph) -> Result<FunctionSummary, ApiError> {
         let references = self.xrefs(XrefQuery::From(graph.address), None, Some(1000))?;
         let mut ir = Vec::new();
         for line in graph.blocks.iter().flat_map(|block| &block.lines) {

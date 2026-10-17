@@ -38,7 +38,16 @@ fn worker_replays_storage_keyed_local_types_before_decompilation() {
     let mut request = request();
     let initial = run_supervised(&request, &config(), None).unwrap();
     let structure = initial.structure.unwrap();
+    let mapping = &structure.signature.parameters[0].storage;
+    assert_eq!(mapping.address_size_bytes, Some(4));
+    let frame = structure.frame_context.as_ref().unwrap();
+    assert_eq!(frame.stack_space, "stack");
+    assert_eq!(frame.address_size_bytes, 8);
     let storage = VariableStorage::try_from(&structure.signature.parameters[0].storage).unwrap();
+    let mut without_width = mapping.clone();
+    without_width.address_size_bytes = None;
+    assert_eq!(VariableStorage::try_from(&without_width).unwrap(), storage);
+    assert!(serde_json::to_value(&storage).unwrap().get("address_size_bytes").is_none());
     request.operations = vec![
         WorkerOperation::ParseTypes { declarations: "struct PhaseState { int4 gain; int4 bias; };".to_owned() },
         WorkerOperation::LocalVariables {

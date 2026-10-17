@@ -14,6 +14,9 @@ pub struct StructuredResult {
     /// None means the producer did not export recovery diagnostics, not that recovery was issue-free.
     #[serde(default)]
     pub diagnostics: Option<RecoveryDiagnostics>,
+    /// Native stack-space configuration, not a recovered frame layout or entry-SP equivalence proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_context: Option<FrameContext>,
 }
 
 impl StructuredResult {
@@ -31,8 +34,40 @@ impl StructuredResult {
             calls: Vec::new(),
             jump_tables: Vec::new(),
             diagnostics: None,
+            frame_context: None,
         }
     }
+}
+
+/// Bounded to one native stack space and, when configured unambiguously, one base register.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct FrameContext {
+    pub stack_space: String,
+    /// Ghidra AddrSpace::getAddrSize(), in bytes; not the target's assumed pointer width.
+    pub address_size_bytes: u32,
+    pub base_convention: FrameBaseConvention,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_register: Option<FrameBaseRegister>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameBaseConvention {
+    /// The space is indexed relative to its configured Ghidra spacebase register.
+    /// This does not establish equivalence to the machine stack pointer at function entry.
+    NativeSpacebaseRegister,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct FrameBaseRegister {
+    pub space: String,
+    #[serde(with = "crate::variables::hex_address")]
+    pub address: u64,
+    pub size: u32,
+    /// Width of the register address space, not the register value's size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address_size_bytes: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -129,6 +164,10 @@ pub struct Parameter {
 pub struct Storage {
     pub kind: StorageKind,
     pub space: Option<String>,
+    /// Native address-space width in bytes. None means unavailable (including addressless dynamic storage).
+    /// Interpret stack offset bit patterns using this width, not the target pointer width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address_size_bytes: Option<u32>,
     #[serde(with = "crate::variables::optional_hex_address")]
     pub address: Option<u64>,
     pub size: u32,
@@ -165,6 +204,9 @@ pub struct StorageUseRange {
 pub struct StoragePiece {
     pub kind: StorageKind,
     pub space: String,
+    /// Width of this physical component's own address space, not its value size or the join space width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address_size_bytes: Option<u32>,
     #[serde(with = "crate::variables::hex_address")]
     pub address: u64,
     pub size: u32,

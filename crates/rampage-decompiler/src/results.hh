@@ -158,6 +158,10 @@ inline void emitStorage(Json &json, const ghidra::Address &address, ghidra::int4
     else json.quote(address.getSpace()->getName());
     json.append(",\"address\":");
     json.address(address);
+    if (!address.isInvalid()) {
+        json.append(",\"address_size_bytes\":");
+        json.number(address.getSpace()->getAddrSize());
+    }
     json.append(",\"size\":");
     json.number(nonnegative(size));
     json.append(",\"use_ranges\":");
@@ -206,6 +210,8 @@ inline void emitStorage(Json &json, const ghidra::Address &address, ghidra::int4
             json.quote(piece.space->getName());
             json.append(",\"address\":");
             json.number(piece.offset);
+            json.append(",\"address_size_bytes\":");
+            json.number(piece.space->getAddrSize());
             json.append(",\"size\":");
             json.number(nonnegative(piece.size));
             json.append(",\"logical_offset\":");
@@ -238,6 +244,31 @@ inline void emitVariable(Json &json, const ghidra::Symbol *symbol, size_t &count
 inline bool isVariable(const ghidra::Symbol *symbol) {
     return symbol->getCategory() == ghidra::Symbol::no_category
         || symbol->getCategory() == ghidra::Symbol::function_parameter;
+}
+
+inline void emitFrameContext(Json &json, const ghidra::AddrSpace *stack) {
+    if (stack == nullptr) return;
+    json.append(",\"frame_context\":{\"stack_space\":");
+    json.quote(stack->getName());
+    json.append(",\"address_size_bytes\":");
+    json.number(stack->getAddrSize());
+    json.append(",\"base_convention\":");
+    if (stack->getType() == ghidra::IPTR_SPACEBASE && stack->numSpacebase() == 1) {
+        const auto &base = stack->getSpacebase(0);
+        if (base.space != nullptr && base.size > 0) {
+            json.quote("native_spacebase_register");
+            json.append(",\"base_register\":{\"space\":");
+            json.quote(base.space->getName());
+            json.append(",\"address\":");
+            json.number(base.offset);
+            json.append(",\"size\":");
+            json.number(nonnegative(base.size));
+            json.append(",\"address_size_bytes\":");
+            json.number(base.space->getAddrSize());
+            json.append("}");
+        } else json.quote("unknown");
+    } else json.quote("unknown");
+    json.append("}");
 }
 
 } // namespace results_detail
@@ -402,7 +433,9 @@ inline std::string collectResults(ghidra::Funcdata *function,
         json.quote(warning->getText());
         json.append("}");
     }
-    json.append("]}}");
+    json.append("]}");
+    emitFrameContext(json, function->getArch()->getStackSpace());
+    json.append("}");
     return json.take();
 }
 

@@ -1,7 +1,7 @@
 use rampage_arch::Arch;
 use rampage_decompiler::{Decompiler, MemoryRegion, Segment};
 
-use rampage_decompiler::results::{RecoveryStatus, ResultProvenance, StorageKind, parse_results};
+use rampage_decompiler::results::{FrameBaseConvention, RecoveryStatus, ResultProvenance, StorageKind, parse_results};
 
 fn snapshot() -> serde_json::Value {
     serde_json::json!({
@@ -35,6 +35,8 @@ fn parser_preserves_full_width_addresses_and_unknown_call_targets() {
     assert_eq!(result.calls[1].target, Some(u64::MAX - 1));
     assert_eq!(result.provenance, ResultProvenance::EngineRecovered);
     assert_eq!(result.recovery_status(), RecoveryStatus::Unavailable);
+    assert_eq!(result.frame_context, None);
+    assert!(serde_json::to_value(&result).unwrap().get("frame_context").is_none());
 }
 
 #[test]
@@ -55,6 +57,8 @@ fn parser_preserves_dynamic_storage_and_partial_jump_tables() {
     assert_eq!(result.variables[0].name, "temporary\n\"λ\\");
     assert_eq!(result.variables[0].storage[0].kind, StorageKind::Dynamic);
     assert_eq!(result.variables[0].storage[0].address, None);
+    assert_eq!(result.variables[0].storage[0].address_size_bytes, None);
+    assert!(serde_json::to_value(&result.variables[0].storage[0]).unwrap().get("address_size_bytes").is_none());
     assert_eq!(result.variables[0].storage[0].dynamic_hash, None);
     assert_eq!(result.variables[0].storage[0].use_ranges, None);
     assert!(result.variables[0].storage[0].pieces.is_empty());
@@ -284,9 +288,11 @@ fn engine_result_resolves_struct_parameter_join_pieces_and_symbol_offsets() {
     let storage = &result.signature.parameters[0].storage;
     assert_eq!(storage.kind, StorageKind::Join, "{result:?}");
     assert_eq!(storage.join_logical_size, Some(16));
+    assert!(storage.address_size_bytes.is_some());
     assert_eq!(storage.pieces.len(), 2);
     for (piece, offset) in storage.pieces.iter().zip([0, 8]) {
         assert_eq!(piece.space, "register");
+        assert_eq!(piece.address_size_bytes, Some(4));
         assert_eq!(piece.size, 8);
         assert_eq!(piece.logical_offset, offset);
     }
@@ -371,9 +377,77 @@ fn parser_preserves_dynamic_identity_ranges_and_precision_piece_metadata() {
     assert_eq!(storage.dynamic_hash, Some(u64::MAX));
     assert_eq!(storage.symbol_offset, Some(4));
     assert_eq!(storage.is_piece, Some(true));
+    assert_eq!(storage.address_size_bytes, None);
     let range = &storage.use_ranges.as_ref().unwrap()[0];
     assert_eq!(range.space, "ram");
     assert_eq!((range.start, range.end), (0x1004, 0x1004));
+}
+
+#[test]
+fn optional_widths_preserve_old_join_snapshots_and_do_not_invent_dynamic_addresses() {
+    let mut value = snapshot();
+    value["variables"] = serde_json::json!([{
+        "name": "pair", "data_type": {"name": "uint8", "size": 8}, "kind": "local",
+        "storage": [{
+            "kind": "join", "space": "join", "address": 0, "size": 8,
+            "pieces": [{
+                "kind": "spacebase", "space": "stack", "address": "0xfffffff0",
+                "size": 4, "logical_offset": 0
+            }]
+        }, {
+            "kind": "dynamic", "space": null, "address": null, "size": 4, "dynamic_hash": 123
+        }]
+    }]);
+    let old = parse_results(&value.to_string()).unwrap();
+    let join = &old.variables[0].storage[0];
+    assert_eq!(join.address_size_bytes, None);
+    assert_eq!(join.pieces[0].address_size_bytes, None);
+    let serialized = serde_json::to_value(join).unwrap();
+    assert!(serialized.get("address_size_bytes").is_none());
+    assert!(serialized["pieces"][0].get("address_size_bytes").is_none());
+
+    value["variables"][0]["storage"][0]["address_size_bytes"] = serde_json::json!(8);
+    value["variables"][0]["storage"][0]["pieces"][0]["address_size_bytes"] = serde_json::json!(4);
+    let new = parse_results(&value.to_string()).unwrap();
+    let join = &new.variables[0].storage[0];
+    assert_eq!(join.address_size_bytes, Some(8));
+    assert_eq!(join.pieces[0].address_size_bytes, Some(4));
+    assert_eq!(join.pieces[0].address, 0xfffffff0);
+    assert_eq!(new.variables[0].storage[1], old.variables[0].storage[1]);
+    assert!(rampage_decompiler::VariableStorage::try_from(join).is_err());
+    assert!(rampage_decompiler::VariableStorage::try_from(&new.variables[0].storage[1]).is_err());
+}
+
+#[test]
+fn native_frame_context_reports_configured_registers_without_entry_sp_claims() {
+    for (arch, bytes, width) in
+        [(Arch::X86, &[0xc3][..], 4), (Arch::X86_64, &[0xc3][..], 8), (Arch::Aarch64, &[0xc0, 0x03, 0x5f, 0xd6][..], 8)]
+    {
+        let mut engine = Decompiler::open(arch, false, &[Segment { base: 0x1000, bytes, writable: false }]).unwrap();
+        engine.decompile(0x1000, "frame_context", false).unwrap();
+        let result = engine.structured_result().unwrap();
+        let frame = result.frame_context.unwrap();
+        assert_eq!(frame.stack_space, "stack");
+        assert_eq!(frame.address_size_bytes, width);
+        assert_eq!(frame.base_convention, FrameBaseConvention::NativeSpacebaseRegister);
+        let base = frame.base_register.unwrap();
+        assert_eq!(base.space, "register");
+        assert_eq!(base.size, width);
+        assert_eq!(base.address_size_bytes, Some(4));
+    }
+}
+
+#[test]
+fn unknown_native_frame_base_stays_unknown_and_omits_register_evidence() {
+    let mut value = snapshot();
+    value["frame_context"] = serde_json::json!({
+        "stack_space": "stack", "address_size_bytes": 4, "base_convention": "unknown"
+    });
+    let result = parse_results(&value.to_string()).unwrap();
+    let frame = result.frame_context.unwrap();
+    assert_eq!(frame.base_convention, FrameBaseConvention::Unknown);
+    assert_eq!(frame.base_register, None);
+    assert!(serde_json::to_value(&frame).unwrap().get("base_register").is_none());
 }
 
 #[test]

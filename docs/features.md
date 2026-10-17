@@ -101,6 +101,10 @@ annotations remain compatible. Limits: bounded type-only C, minimal explicit ABI
 data ranges, renders typed fields alongside raw backing status, and labels selected immediate enums and struct
 memory offsets in disassembly. Raw instructions and file bytes remain unchanged. Limits: bounded data windows,
 supported x86/x64/AArch64 operands, no automatic object-type inference or pointer traversal.
+
+[`function_frame`](function-frame.md) exposes current native local/parameter names, types and complete storage
+with actual address-space widths, plus available AArch64 stack-access/register candidates. Limits: bounded
+paging and recovery evidence, separate coordinate origins, no guessed full-frame size or ABI preservation claim.
 The decompiler library can inspect/assert complete flat-struct layouts for x86-64 GCC before using dependent
 prototypes. This read-only bridge compares native field offsets, sizes, alignment and leaf types against independent
 facts; it does not import debug layouts or persist assertions across engine rebuilds. Nested aggregates and inferred

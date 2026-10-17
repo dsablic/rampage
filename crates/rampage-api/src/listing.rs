@@ -68,11 +68,19 @@ impl Project {
 
     /// The function containing `address`, disassembled block by block in address order.
     pub fn function_listing(&self, address: u64) -> Result<FunctionListing, ApiError> {
+        self.function_listing_with_operands(address, true)
+    }
+
+    pub(crate) fn function_listing_for_frame(&self, address: u64) -> Result<FunctionListing, ApiError> {
+        self.function_listing_with_operands(address, false)
+    }
+
+    fn function_listing_with_operands(&self, address: u64, render_operands: bool) -> Result<FunctionListing, ApiError> {
         let start = self
             .function_containing(address)?
             .ok_or_else(|| ApiError::NotFound(format!("no function contains {address:#x}")))?;
         let function = self.analysis()?.program.function_at(start).expect("block index names a known function");
-        let operands = self.operand_listing_context()?;
+        let operands = if render_operands { self.operand_listing_context()? } else { None };
         let mut blocks: Vec<Vec<DisassemblyLine>> = function
             .blocks
             .iter()

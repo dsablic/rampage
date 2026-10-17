@@ -640,6 +640,7 @@ fn allowed_name(name: &str, config: &AgentConfig) -> bool {
                 | "disassemble"
                 | "function_graph"
                 | "function_summary"
+                | "function_frame"
                 | "decompile"
                 | "xrefs"
                 | "list_strings"

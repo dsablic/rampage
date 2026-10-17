@@ -20,6 +20,7 @@ mod detect;
 mod diagnostics;
 mod dotnet;
 mod files;
+mod frame;
 mod graph;
 mod jumptable;
 mod listing;
@@ -96,6 +97,10 @@ pub use dotnet::{DotNetCounts, DotNetIl, DotNetIlQuery, DotNetList, DotNetQuery,
 pub use files::{
     MAX_CONSTANTS_BYTES, MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MAX_SIGNATURE_DB_BYTES,
     read_bounded,
+};
+pub use frame::{
+    FrameCategory, FrameCoordinate, FrameLocation, FrameQuery, FrameRow, FrameSource, FrameTrackerSlot,
+    FunctionFrameReport, MAX_FRAME_PAGE, MAX_FRAME_WORK, NativeFrameEvidence, TrackerFrameEvidence,
 };
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
 pub use jumptable::{JumpTable, JumpTableEntry};

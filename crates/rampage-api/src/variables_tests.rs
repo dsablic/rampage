@@ -59,6 +59,7 @@ fn variable(name: &str, selector: VariableStorage) -> Variable {
             kind: selector.kind,
             space: Some(selector.space),
             address: Some(selector.address),
+            address_size_bytes: Some(8),
             size: selector.size,
             use_ranges: Some(selector.use_ranges),
             dynamic_hash: None,

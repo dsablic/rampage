@@ -72,7 +72,10 @@ successful decoding do not authenticate content or prove stream boundaries.
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
 yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are \
-loaded with their licence and provenance. Types: apply_data_type binds a complete element type/array or explicit \
+loaded with their licence and provenance. Types: function_frame pages native locals/parameters with current \
+names/types, raw storage and address-space widths, plus available static stack/register candidates. Native \
+stack-space coordinates and tracker entry-SP offsets remain separate; conditional reloads are not ABI proof. \
+apply_data_type binds a complete element type/array or explicit \
 string encoding to a data range; read_data shows native fields with raw bytes/backing status. apply_enum and \
 apply_offset label decoder-native operand selectors in disassembly without changing raw bytes/text. Unsupported \
 or stale operands refuse; interpretations are analyst assertions, not runtime object or producer proof. \

@@ -44,6 +44,7 @@ pub struct Statement {
     pub bits: u8,
     pub definitions: Vec<usize>,
     /// Recovered memory-read results alias values, but do not grant entry-SP address provenance.
+    /// In definition order, paired with the equally ordered suffix of retained load observations.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recovered_loads: Vec<usize>,
     pub observations: Vec<Expression>,
@@ -1149,6 +1150,18 @@ pub(crate) fn recovered_load_definitions(ssa: &Ssa) -> Result<Vec<bool>, String>
         let accesses = statement.observations.iter().filter(|value| matches!(value, Expression::Load { .. })).count();
         if statement.recovered_loads.len() > accesses {
             return Err("recovered loads require retained memory-access observations".to_owned());
+        }
+        let retained_start = statement.observations.len() - statement.recovered_loads.len();
+        let recovered_ids: BTreeSet<_> = statement.recovered_loads.iter().copied().collect();
+        if statement.observations[retained_start..].iter().any(|value| !matches!(value, Expression::Load { .. }))
+            || statement
+                .definitions
+                .iter()
+                .filter(|id| recovered_ids.contains(*id))
+                .copied()
+                .ne(statement.recovered_loads.iter().copied())
+        {
+            return Err("recovered loads require ordered definitions and a retained-load observation suffix".to_owned());
         }
         for &id in &statement.recovered_loads {
             if owners.get(id) != Some(&(index + 1))

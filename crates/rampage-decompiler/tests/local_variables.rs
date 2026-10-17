@@ -142,6 +142,8 @@ fn aarch64_parameter_storage_supports_native_struct_pointer_edits() {
     engine.parse_c("struct PhaseState { int4 gain; int4 bias; };").unwrap();
     engine.decompile(0x1000, "phase_parameter", false).unwrap();
     let before = engine.structured_result().unwrap();
+    assert_eq!(before.signature.parameters[0].storage.address_size_bytes, Some(4));
+    assert_eq!(before.frame_context.as_ref().unwrap().address_size_bytes, 8);
     let storage = VariableStorage::try_from(&before.signature.parameters[0].storage).unwrap();
     engine
         .set_variable_overrides(
@@ -203,6 +205,20 @@ fn stack_local_mapping_is_renamed_and_retyped_in_scope() {
                 && variable.storage[0].size == 4
         })
         .unwrap_or_else(|| panic!("missing single whole four-byte stack local: {}", variable_summary(&result)));
+    let mapping = &local.storage[0];
+    assert_eq!(mapping.address_size_bytes, Some(8));
+    assert_eq!(mapping.address.unwrap() as i64, -4);
+    let selector = VariableStorage::try_from(mapping).unwrap();
+    let mut without_width = mapping.clone();
+    without_width.address_size_bytes = None;
+    assert_eq!(VariableStorage::try_from(&without_width).unwrap(), selector);
+    assert_eq!(
+        serde_json::to_value(&selector).unwrap(),
+        serde_json::json!({
+            "kind": "spacebase", "space": "stack", "address": "0xfffffffffffffffc", "size": 4,
+            "use_ranges": serde_json::to_value(&selector.use_ranges).unwrap()
+        })
+    );
     engine
         .set_variable_overrides(
             0x1000,
@@ -326,6 +342,9 @@ fn selectors_accept_numeric_or_hex_addresses_but_always_serialize_losslessly() {
     assert_eq!(serialized["address"], "0xfffffffffffffff0");
     assert_eq!(serialized["use_ranges"][0]["start"], "0xfff");
     assert_eq!(serialized["use_ranges"][0]["end"], "0x20000000000001");
+    let mut with_metadata = serialized.clone();
+    with_metadata["address_size_bytes"] = serde_json::json!(8);
+    assert!(serde_json::from_value::<VariableStorage>(with_metadata).is_err());
     for invalid in [serde_json::json!(-1), serde_json::json!(1.5), serde_json::json!("0x10000000000000000")] {
         let mut value = serialized.clone();
         value["address"] = invalid;
@@ -334,6 +353,47 @@ fn selectors_accept_numeric_or_hex_addresses_but_always_serialize_losslessly() {
     let mut incomplete = serialized;
     incomplete.as_object_mut().unwrap().remove("use_ranges");
     assert!(serde_json::from_value::<VariableStorage>(incomplete).is_err());
+}
+
+#[test]
+fn x86_negative_stack_offsets_use_native_width_and_keep_exact_selector_wire_identity() {
+    let bytes = [
+        0x83, 0xec, 0x10, 0xc7, 0x44, 0x24, 0x0c, 7, 0, 0, 0, 0x8d, 0x44, 0x24, 0x0c, 0x50, 0xe8, 0xeb, 0x0f, 0, 0,
+        0x83, 0xc4, 4, 0x8b, 0x44, 0x24, 0x0c, 0x83, 0xc4, 0x10, 0xc3,
+    ];
+    let mut engine =
+        Decompiler::open(Arch::X86, false, &[Segment { base: 0x1000, bytes: &bytes, writable: false }]).unwrap();
+    engine.set_symbol(0x2000, "consume").unwrap();
+    engine.apply_prototype(0x2000, false, "void consume(int4 *value);").unwrap();
+    engine.decompile(0x1000, "stack_value", false).unwrap();
+    let result = engine.structured_result().unwrap();
+    let mapping = result
+        .variables
+        .iter()
+        .flat_map(|variable| &variable.storage)
+        .find(|storage| storage.space.as_deref() == Some("stack") && storage.address == Some(0xffff_fffc))
+        .unwrap_or_else(|| panic!("missing negative stack mapping: {}", variable_summary(&result)));
+    assert_eq!(mapping.address_size_bytes, Some(4));
+    assert_eq!(mapping.address.unwrap() as u32 as i32, -4);
+    let selector = VariableStorage::try_from(mapping).unwrap();
+    let serialized = serde_json::to_value(&selector).unwrap();
+    assert_eq!(
+        serialized,
+        serde_json::json!({
+            "kind": "spacebase", "space": "stack", "address": "0xfffffffc", "size": 4,
+            "use_ranges": serde_json::to_value(&selector.use_ranges).unwrap()
+        })
+    );
+    let mut without_width = mapping.clone();
+    without_width.address_size_bytes = None;
+    assert_eq!(VariableStorage::try_from(&without_width).unwrap(), selector);
+    engine
+        .set_variable_overrides(
+            0x1000,
+            &[LocalOverride { storage: selector, name: Some("stack_count".to_owned()), data_type: None }],
+        )
+        .unwrap();
+    assert!(engine.decompile(0x1000, "stack_value", false).unwrap().contains("stack_count"));
 }
 
 #[test]

@@ -693,7 +693,17 @@ struct ReadDataArgs {
     size: Option<usize>,
 }
 
-fn data_typing_view(result: &impl Serialize) -> Result<Value, ApiError> {
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FunctionFrameArgs {
+    at: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    /// Include available static stack-tracker evidence; unknown coordinates are never silently merged.
+    include_tracker: Option<bool>,
+}
+
+pub(crate) fn data_typing_view(result: &impl Serialize) -> Result<Value, ApiError> {
     let value = serde_json::to_value(result).map_err(|error| ApiError::Invalid(error.to_string()))?;
     if value.to_string().len() > MAX_RESULT_CHARS {
         return Err(ApiError::Invalid(
@@ -2066,6 +2076,24 @@ pub fn tools() -> Vec<Tool> {
             },
         )
         .annotates(),
+        tool(
+            Group::Types,
+            "function_frame",
+            "Inspect one function's native locals/parameters with current user names/types and complete storage, \
+             plus available static stack-access/register-preservation candidates. Coordinate origins and unknown \
+             widths remain explicit; native stack space is not silently equated with entry-SP tracker offsets. \
+             Bounded paging, diagnostics and omissions do not imply a complete frame or producer ABI proof.",
+            |project, args: FunctionFrameArgs| {
+                data_typing_view(&project.function_frame(
+                    project.resolve(&args.at)?,
+                    &crate::FrameQuery {
+                        offset: args.offset.unwrap_or(0),
+                        limit: args.limit.unwrap_or(64),
+                        include_tracker: args.include_tracker.unwrap_or(true),
+                    },
+                )?)
+            },
+        ),
         tool(
             Group::Types,
             "apply_data_type",

@@ -100,6 +100,7 @@ async fn lists_all_tools_with_instructions() {
         "entry_diagnostics",
         "find_crypto",
         "find_main",
+        "function_frame",
         "function_graph",
         "function_summary",
         "get_type",

@@ -11,14 +11,27 @@ pub(crate) struct Resolution {
     pub stores: BTreeSet<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoredValue {
+    Constant(u64),
+    EntryRegister(u8),
+}
+
+#[derive(Debug, Clone)]
+struct StoreResolution {
+    value: StoredValue,
+    stores: BTreeSet<usize>,
+}
+
 struct Query<'a> {
     ssa: &'a Ssa,
     values: &'a [Known],
     address: Known,
     bits: u8,
     visiting: BTreeSet<usize>,
-    memo: BTreeMap<(usize, usize), Option<Resolution>>,
+    memo: BTreeMap<(usize, usize), Option<StoreResolution>>,
     remaining: &'a mut usize,
+    register: Option<u8>,
 }
 
 fn interval(address: Known, bits: u8) -> Option<(i128, i128)> {
@@ -37,7 +50,7 @@ fn interval(address: Known, bits: u8) -> Option<(i128, i128)> {
 }
 
 impl Query<'_> {
-    fn resolve(&mut self, id: usize, depth: usize) -> Option<Resolution> {
+    fn resolve(&mut self, id: usize, depth: usize) -> Option<StoreResolution> {
         if depth > 64 || *self.remaining == 0 {
             return None;
         }
@@ -57,13 +70,16 @@ impl Query<'_> {
                 Expression::Store { memory, address, value, bits } => {
                     let written = dataflow::evaluate(address, self.values);
                     if written == self.address && *bits == self.bits {
-                        match dataflow::evaluate(value, self.values) {
-                            Known::Constant(value) => Some(Resolution {
-                                value: value & if *bits == 64 { u64::MAX } else { (1u64 << bits) - 1 },
-                                stores: BTreeSet::from([id]),
-                            }),
-                            _ => None,
-                        }
+                        let value = if let Some(register) = self.register {
+                            dataflow::entry_register(self.ssa, value, self.remaining)
+                                .filter(|&source| source == register)
+                                .map(StoredValue::EntryRegister)
+                        } else if let Known::Constant(value) = dataflow::evaluate(value, self.values) {
+                            Some(StoredValue::Constant(value & if *bits == 64 { u64::MAX } else { (1u64 << bits) - 1 }))
+                        } else {
+                            None
+                        };
+                        value.map(|value| StoreResolution { value, stores: BTreeSet::from([id]) })
                     } else {
                         let same_domain = matches!(
                             (written, self.address),
@@ -76,7 +92,7 @@ impl Query<'_> {
                     }
                 }
                 Expression::Phi { inputs } if !inputs.is_empty() => {
-                    let mut result: Option<Resolution> = None;
+                    let mut result: Option<StoreResolution> = None;
                     for input in inputs {
                         let Some(resolved) = self.resolve(input.definition, depth + 1) else {
                             result = None;
@@ -117,5 +133,41 @@ pub(crate) fn resolve(
 ) -> Option<Resolution> {
     let address = dataflow::evaluate(address, values);
     interval(address, bits)?;
-    Query { ssa, values, address, bits, visiting: BTreeSet::new(), memo: BTreeMap::new(), remaining }.resolve(memory, 0)
+    let result = Query {
+        ssa,
+        values,
+        address,
+        bits,
+        visiting: BTreeSet::new(),
+        memo: BTreeMap::new(),
+        remaining,
+        register: None,
+    }
+    .resolve(memory, 0)?;
+    let StoredValue::Constant(value) = result.value else { return None };
+    Some(Resolution { value, stores: result.stores })
+}
+
+pub(crate) fn resolve_register(
+    ssa: &Ssa,
+    values: &[Known],
+    memory: usize,
+    offset: i64,
+    register: u8,
+    remaining: &mut usize,
+) -> Option<BTreeSet<usize>> {
+    let address = Known::Stack(offset);
+    interval(address, 64)?;
+    Query {
+        ssa,
+        values,
+        address,
+        bits: 64,
+        visiting: BTreeSet::new(),
+        memo: BTreeMap::new(),
+        remaining,
+        register: Some(register),
+    }
+    .resolve(memory, 0)
+    .map(|result| result.stores)
 }

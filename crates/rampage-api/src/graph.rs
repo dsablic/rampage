@@ -57,7 +57,14 @@ impl FunctionGraph {
 impl Project {
     /// The control-flow graph of the function containing `address`.
     pub fn function_graph(&self, address: u64) -> Result<FunctionGraph, ApiError> {
-        let listing = self.function_listing(address)?;
+        self.graph_from_listing(self.function_listing(address)?)
+    }
+
+    pub(crate) fn function_graph_for_frame(&self, address: u64) -> Result<FunctionGraph, ApiError> {
+        self.graph_from_listing(self.function_listing_for_frame(address)?)
+    }
+
+    fn graph_from_listing(&self, listing: crate::FunctionListing) -> Result<FunctionGraph, ApiError> {
         let program = &self.analysis()?.program;
         let function = program.function_at(listing.address).expect("listing names a function");
         let ends: HashMap<_, _> = function.blocks.iter().map(|block| (block.start, block.end)).collect();
