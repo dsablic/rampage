@@ -669,6 +669,16 @@ impl Annotations {
         Ok(candidate)
     }
 
+    /// Reads a bounded annotation snapshot without creating lock files or publishing a writer transaction.
+    pub(crate) fn checked_read_snapshot(&self) -> Result<Self, ApiError> {
+        self.preflight_checked().map_err(ApiError::Invalid)?;
+        let mut candidate = Self { log: self.log.clone(), checked_reads: true, ..self.snapshot() };
+        candidate.refresh().map_err(ApiError::Invalid)?;
+        candidate.log = None;
+        candidate.held = false;
+        Ok(candidate)
+    }
+
     /// Applies edits other processes have appended to the log since it was last read. Returns whether any were.
     pub fn refresh(&mut self) -> Result<bool, String> {
         if self.checked_reads || self.has_checked_layouts() || !self.type_library.is_empty() {

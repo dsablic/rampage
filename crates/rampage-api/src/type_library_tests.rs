@@ -25,6 +25,20 @@ fn empty_history_does_not_create_annotation_files_or_lockfiles() {
 }
 
 #[test]
+fn read_only_type_queries_do_not_create_annotation_files_or_lockfiles() {
+    let log = LogFixture::new();
+    let project = project(Annotations::open(log.0.clone()).unwrap(), None);
+    let before = project.annotations().revision();
+    assert!(project.list_types(None, 0, 16).unwrap().types.is_empty());
+    assert_eq!(project.get_type("int4").unwrap().metadata.size, Some(4));
+    assert!(!log.0.exists());
+    let mut lock = log.0.as_os_str().to_owned();
+    lock.push(".lock");
+    assert!(!PathBuf::from(lock).exists());
+    assert!(std::sync::Arc::ptr_eq(&project.annotations().revision(), &before));
+}
+
+#[test]
 fn bundled_c_posix_and_windows_types_use_explicit_target_profiles_and_keep_opaque_layouts_unknown() {
     let linux = project(Annotations::in_memory(), None);
     linux

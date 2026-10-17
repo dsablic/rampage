@@ -278,10 +278,10 @@ impl Project {
         }
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| default_options(&self.binary));
-        let mut annotations = self.annotations.write().expect("annotations lock");
-        annotations.locked_staged_checked(|annotations| {
-            let units = stored_declarations(annotations)?;
-            let native = self.inspect_types(&state, &options, annotations, None, &[])?;
+        let annotations = self.annotations.read().expect("annotations lock").checked_read_snapshot()?;
+        {
+            let units = stored_declarations(&annotations)?;
+            let native = self.inspect_types(&state, &options, &annotations, None, &[])?;
             let mut types: Vec<_> = native
                 .types
                 .into_iter()
@@ -295,7 +295,7 @@ impl Project {
             let types: Vec<_> = types.into_iter().skip(offset).take(limit).map(|ty| entry(ty, &units)).collect();
             let end = offset.saturating_add(types.len());
             Ok(TypeLibraryPage { types, total, offset, limit, next_offset: (end < total).then_some(end) })
-        })
+        }
     }
 
     /// Inspects a native named type; non-library types are read-only and have no declaration unit.
@@ -303,17 +303,17 @@ impl Project {
         validate_name(name)?;
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| default_options(&self.binary));
-        let mut annotations = self.annotations.write().expect("annotations lock");
-        annotations.locked_staged_checked(|annotations| {
-            let units = stored_declarations(annotations)?;
-            let native = self.inspect_types(&state, &options, annotations, Some(name), &[])?;
+        let annotations = self.annotations.read().expect("annotations lock").checked_read_snapshot()?;
+        {
+            let units = stored_declarations(&annotations)?;
+            let native = self.inspect_types(&state, &options, &annotations, Some(name), &[])?;
             let ty = native
                 .types
                 .into_iter()
                 .find(|ty| ty.name == name)
                 .ok_or_else(|| ApiError::NotFound(format!("no native type named {name:?}")))?;
             Ok(entry(ty, &units))
-        })
+        }
     }
 
     pub fn declare_types(&self, request: &DeclareTypesRequest) -> Result<TypeLibraryEdit, ApiError> {
