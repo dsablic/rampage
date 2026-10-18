@@ -13,6 +13,7 @@ mod parity;
 mod parity_completion;
 mod parity_graph_files;
 mod parity_live;
+mod strip_pe;
 
 /// Self-supervised evaluation of rampage heuristics against strip-and-compare ground truth.
 #[derive(Parser)]
@@ -72,6 +73,8 @@ enum Command {
         #[arg(long)]
         keep_symbols: bool,
     },
+    /// Write an exact PE32+ x64 twin without terminal COFF names; never relink or open a PDB.
+    StripPe { input: PathBuf, output: PathBuf },
     /// Score a heuristic family on stripped targets against their truth, per slice. Prints
     /// {"slices": {"<name>": report}, "gates": {..}} as JSON and a one-line summary per slice on stderr; exits 1
     /// when any slice fails its gate (any wrong answer; for libid any spurious name; recall or precision below
@@ -249,6 +252,7 @@ fn main() -> ExitCode {
         }
         Command::TypeTruth { debug, stripped } => type_truth(&debug, stripped.as_deref()),
         Command::Strip { input, output, keep_symbols } => strip(&input, &output, keep_symbols),
+        Command::StripPe { input, output } => strip_pe_file(&input, &output),
         Command::Run(args) => run(*args),
     };
     match result {
@@ -415,6 +419,32 @@ fn strip(input: &Path, output: &Path, keep_symbols: bool) -> Result<ExitCode, St
     std::fs::write(output, stripped).map_err(written)?;
     let permissions = std::fs::metadata(input).map_err(written)?.permissions();
     std::fs::set_permissions(output, permissions).map_err(written)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn strip_pe_file(input: &Path, output: &Path) -> Result<ExitCode, String> {
+    use std::io::{Read, Write};
+    if !std::fs::metadata(input).map_err(|error| error.to_string())?.is_file() {
+        return Err("PE stripping requires a regular input file".into());
+    }
+    let mut source = std::fs::File::open(input).map_err(|error| error.to_string())?;
+    let metadata = source.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() > 256 * 1024 * 1024 {
+        return Err("PE stripping requires a regular file at most 256 MiB".into());
+    }
+    let mut bytes = Vec::new();
+    (&mut source).take(256 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    if bytes.len() as u64 != metadata.len() {
+        return Err("PE source changed length while reading".into());
+    }
+    let stripped = strip_pe::strip_pe(&bytes)?;
+    strip_pe::verify_pe_twin(&bytes, &stripped)?;
+    let mut destination = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|error| format!("{}: {error}", output.display()))?;
+    destination.write_all(&stripped).map_err(|error| error.to_string())?;
     Ok(ExitCode::SUCCESS)
 }
 

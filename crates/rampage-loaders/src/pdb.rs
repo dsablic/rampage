@@ -52,6 +52,16 @@ pub struct PdbFunction {
     pub name: String,
 }
 
+/// A concrete producer procedure range; public-only name records never supply a size.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PdbProcedure {
+    pub address: u64,
+    pub size: u64,
+    pub name: String,
+    /// Producer global-procedure record, not a claim of strong library-object ownership.
+    pub global: bool,
+}
+
 /// Observable provenance of one bounded, owned PDB read. This is not PDB authentication or a filesystem snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdbProvenance {
@@ -268,6 +278,45 @@ pub fn matched_symbols_checked(binary: &Binary, path: &Path) -> Result<(PdbRepor
     let report = pdb_symbols_bytes(&input.bytes)?;
     let report = with_backing_source(binary, || match_report(binary, || Ok(report)))?;
     Ok((report, input.provenance))
+}
+
+/// Reads exact producer procedure lengths from an explicitly selected, identity-matched owned PDB.
+pub fn matched_procedures_checked(
+    binary: &Binary,
+    path: &Path,
+) -> Result<(Vec<PdbProcedure>, PdbProvenance), LoadError> {
+    binary.validate_backing_source()?;
+    let input = read_pdb_input(path, open_pdb_file)?;
+    input.provenance.require_identity()?;
+    let procedures = with_backing_source(binary, || {
+        let mut budget = Budget { bytes: MAX_SOURCE_BYTES, work: MAX_STRUCTURAL_WORK };
+        let msf = preflight_msf(&input.bytes, &mut budget)?;
+        preflight_symbols(&msf, &mut budget)?;
+        let (report, mut procedures) = read_pdb_full(&input.bytes, budget, PdbReadMode::Procedures)?;
+        match_report(binary, || Ok(report))?;
+        let parsed = object::File::parse(binary.image_bytes())?;
+        for procedure in &mut procedures {
+            procedure.address = procedure
+                .address
+                .checked_add(parsed.relative_address_base())
+                .ok_or_else(|| malformed("procedure VA overflows"))?;
+            let end =
+                procedure.address.checked_add(procedure.size).ok_or_else(|| malformed("procedure extent overflows"))?;
+            let section = binary
+                .segment_containing(procedure.address)
+                .ok_or_else(|| malformed("procedure has no mapped section"))?;
+            if !section.perms.execute
+                || !section.perms.read
+                || procedure.size == 0
+                || binary.segment_containing(end - 1) != Some(section)
+                || binary.read(procedure.address, procedure.size).is_none()
+            {
+                return Err(malformed("procedure range is not executable file-backed code"));
+            }
+        }
+        Ok(procedures)
+    })?;
+    Ok((procedures, input.provenance))
 }
 
 fn with_backing_source<T>(binary: &Binary, work: impl FnOnce() -> Result<T, LoadError>) -> Result<T, LoadError> {
@@ -645,6 +694,18 @@ impl<'a> ::pdb::Source<'a> for BoundedSource<'a> {
 }
 
 fn read_pdb(bytes: &[u8], budget: Budget) -> Result<PdbReport, LoadError> {
+    read_pdb_full(bytes, budget, PdbReadMode::Names).map(|(report, _)| report)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PdbReadMode {
+    /// Strict combined PROCEDURE/PUBLIC names, including same-RVA ambiguity rejection.
+    Names,
+    /// Only PROCEDURE records supply names/ranges; PUBLIC aliases are still validated.
+    Procedures,
+}
+
+fn read_pdb_full(bytes: &[u8], budget: Budget, mode: PdbReadMode) -> Result<(PdbReport, Vec<PdbProcedure>), LoadError> {
     let source = BoundedSource { bytes, remaining: budget.bytes, remaining_work: budget.work };
     let mut pdb = PDB::open(source).map_err(malformed)?;
     let info = pdb.pdb_information().map_err(malformed)?;
@@ -655,6 +716,7 @@ fn read_pdb(bytes: &[u8], budget: Budget) -> Result<PdbReport, LoadError> {
         return Err(malformed("missing or conflicting PDB age"));
     }
     let mut functions = BTreeMap::new();
+    let mut procedures = BTreeMap::new();
     let mut names_bytes = 0usize;
     let mut modules = debug.modules().map_err(malformed)?;
     let mut count = 0usize;
@@ -664,16 +726,26 @@ fn read_pdb(bytes: &[u8], budget: Budget) -> Result<PdbReport, LoadError> {
             return Err(malformed("module count exceeds limit"));
         }
         if let Some(info) = pdb.module_info(&module).map_err(malformed)? {
-            collect_procedures(info.symbols().map_err(malformed)?, &sections, &mut functions, &mut names_bytes)?;
+            collect_procedures(
+                info.symbols().map_err(malformed)?,
+                &sections,
+                &mut functions,
+                &mut names_bytes,
+                &mut procedures,
+                mode,
+            )?;
         }
     }
     let globals = pdb.global_symbols().map_err(malformed)?;
-    collect_procedures(globals.iter(), &sections, &mut functions, &mut names_bytes)?;
-    Ok(PdbReport {
-        functions: functions.into_iter().map(|(address, name)| PdbFunction { address, name }).collect(),
-        identity: Some(identity),
-        warnings: Vec::new(),
-    })
+    collect_procedures(globals.iter(), &sections, &mut functions, &mut names_bytes, &mut procedures, mode)?;
+    Ok((
+        PdbReport {
+            functions: functions.into_iter().map(|(address, name)| PdbFunction { address, name }).collect(),
+            identity: Some(identity),
+            warnings: Vec::new(),
+        },
+        procedures.into_values().collect(),
+    ))
 }
 
 fn collect_procedures(
@@ -681,12 +753,16 @@ fn collect_procedures(
     sections: &[::pdb::ImageSectionHeader],
     functions: &mut BTreeMap<u64, String>,
     names_bytes: &mut usize,
+    procedures: &mut BTreeMap<u64, PdbProcedure>,
+    mode: PdbReadMode,
 ) -> Result<(), LoadError> {
     while let Some(symbol) = symbols.next().map_err(malformed)? {
         validate_numeric_symbol(symbol.raw_bytes())?;
-        let (offset, name) = match symbol.parse() {
-            Ok(SymbolData::Procedure(procedure)) => (procedure.offset, procedure.name),
-            Ok(SymbolData::Public(public)) if public.function => (public.offset, public.name),
+        let (offset, name, procedure_range) = match symbol.parse() {
+            Ok(SymbolData::Procedure(procedure)) => {
+                (procedure.offset, procedure.name, Some((procedure.len, procedure.global)))
+            }
+            Ok(SymbolData::Public(public)) if public.function => (public.offset, public.name, None),
             Ok(_) | Err(::pdb::Error::UnimplementedSymbolKind(_)) => continue,
             Err(error) => return Err(malformed(error)),
         };
@@ -702,6 +778,31 @@ fn collect_procedures(
         let name = std::str::from_utf8(name.as_bytes()).map_err(malformed)?;
         if name.is_empty() || name.len() > MAX_NAME_BYTES {
             return Err(malformed("empty or oversized function name"));
+        }
+        if mode == PdbReadMode::Procedures && procedure_range.is_none() {
+            *names_bytes += name.len();
+            if *names_bytes > MAX_NAMES_BYTES {
+                return Err(malformed("function names exceed limit"));
+            }
+            continue;
+        }
+        if let Some((size, global)) = procedure_range.filter(|_| mode == PdbReadMode::Procedures) {
+            if size == 0 {
+                return Err(malformed("producer procedure has no concrete length"));
+            }
+            if offset
+                .offset
+                .checked_add(size)
+                .is_none_or(|end| end > section.virtual_size.max(section.size_of_raw_data))
+            {
+                return Err(malformed("producer procedure exceeds its section"));
+            }
+            let procedure =
+                PdbProcedure { address: u64::from(rva), size: u64::from(size), name: name.to_owned(), global };
+            if procedures.get(&procedure.address).is_some_and(|previous| previous != &procedure) {
+                return Err(malformed("conflicting producer procedure ranges"));
+            }
+            procedures.insert(procedure.address, procedure);
         }
         if let Some(previous) = functions.get(&u64::from(rva)) {
             if previous != name {
@@ -751,6 +852,127 @@ mod tests {
     fn missing_file_reports_io_error() {
         let error = pdb_symbols(Path::new("/nonexistent/does-not-exist.pdb")).unwrap_err();
         assert!(matches!(error, LoadError::Io { .. }));
+    }
+
+    #[test]
+    fn matched_procedure_truth_keeps_producer_lengths_not_next_start_padding() {
+        let binary = Binary::open(fixture_support::fixture("fixture.exe")).unwrap();
+        let (procedures, provenance) =
+            matched_procedures_checked(&binary, &fixture_support::fixture("fixture.pdb")).unwrap();
+        // Concrete S_GPROC32/S_LPROC32 lengths in the owned fixture, independently inspectable with llvm-pdbutil.
+        let expected =
+            [("pdb_mix", 30, true), ("pdb_local", 15, false), ("pdb_export", 14, true), ("pdb_entry", 52, true)];
+        for (name, size, global) in expected {
+            let procedure = procedures.iter().find(|procedure| procedure.name == name).unwrap();
+            assert_eq!(procedure.size, size);
+            assert_eq!(procedure.global, global);
+            assert!(binary.read(procedure.address, procedure.size).is_some());
+        }
+        provenance.validate_current().unwrap();
+        let wrong = Binary::open(fixture_support::fixture("../bin/hello-x64.exe")).unwrap();
+        assert!(matched_procedures_checked(&wrong, &fixture_support::fixture("fixture.pdb")).is_err());
+    }
+
+    #[test]
+    fn global_procedure_admission_excludes_a_same_named_local_producer_range() {
+        let mut bytes = std::fs::read(fixture_support::fixture("fixture.pdb")).unwrap();
+        let module = fixture_support::module_stream(&bytes);
+        let start = fixture_support::stream_offset(&bytes, module, 0);
+        let name = bytes[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+        let record = start + name - 39;
+        assert_eq!(ushort(&bytes, record + 2).unwrap(), 0x110f);
+        bytes[start + name..start + name + 10].copy_from_slice(b"pdb_mix\0\0\0");
+        let files = fixture_support::TempFiles::new();
+        let path = files.write("same-named-local-and-global.pdb", &bytes);
+        let names = pdb_symbols(&path).unwrap();
+        assert_eq!(names.functions.iter().filter(|function| function.name == "pdb_mix").count(), 2);
+        let binary = Binary::open(fixture_support::fixture("fixture.exe")).unwrap();
+        let (procedures, provenance) = matched_procedures_checked(&binary, &path).unwrap();
+        let same_named: Vec<_> = procedures.iter().filter(|procedure| procedure.name == "pdb_mix").collect();
+        assert_eq!(same_named.len(), 2);
+        let local = same_named.iter().find(|procedure| !procedure.global).unwrap();
+        assert_eq!((local.address, local.size), (0x140001020, 15));
+        let admitted: Vec<_> =
+            procedures.iter().filter(|procedure| procedure.global && procedure.name == "pdb_mix").collect();
+        assert_eq!(admitted.len(), 1);
+        assert_eq!((admitted[0].address, admitted[0].size), (0x140001000, 30));
+        provenance.validate_current().unwrap();
+    }
+
+    #[test]
+    fn typed_procedures_preserve_ranges_without_choosing_conflicting_public_alias_names() {
+        let original = std::fs::read(fixture_support::fixture("fixture.pdb")).unwrap();
+        let globals = fixture_support::uint(&original, fixture_support::stream_offset(&original, 3, 20)) & 0xffff;
+        let start = fixture_support::stream_offset(&original, globals, 0);
+        let name = original[start..start + 512].windows(8).position(|name| name == b"pdb_mix\0").unwrap();
+        let public = start + name - 14;
+        assert_eq!(ushort(&original, public + 2).unwrap(), 0x110e);
+        assert_eq!(uint(&original, public + 8).unwrap(), 0);
+        assert_eq!(ushort(&original, public + 12).unwrap(), 1);
+        let binary = Binary::open(fixture_support::fixture("fixture.exe")).unwrap();
+        let (expected, _) = matched_procedures_checked(&binary, &fixture_support::fixture("fixture.pdb")).unwrap();
+        let files = fixture_support::TempFiles::new();
+        for alias in [b".weak.x\0", b"otherxx\0"] {
+            let mut bytes = original.clone();
+            bytes[start + name..start + name + 8].copy_from_slice(alias);
+            let path = files.write(std::str::from_utf8(&alias[..7]).unwrap(), &bytes);
+            assert!(pdb_symbols_bytes(&bytes).is_err());
+            assert!(pdb_symbols(&path).is_err());
+            assert!(matched_symbols_checked(&binary, &path).is_err());
+            let (actual, provenance) = matched_procedures_checked(&binary, &path).unwrap();
+            assert_eq!(actual, expected);
+            assert!(!actual.iter().any(|procedure| procedure.name.as_bytes() == &alias[..7]));
+            provenance.validate_current().unwrap();
+
+            bytes[public + 12..public + 14].fill(0);
+            let invalid = files.write(&format!("invalid-{}", std::str::from_utf8(&alias[..7]).unwrap()), &bytes);
+            assert!(matched_procedures_checked(&binary, &invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn typed_procedures_still_reject_conflicting_procedure_definitions_at_one_rva() {
+        let mut bytes = std::fs::read(fixture_support::fixture("fixture.pdb")).unwrap();
+        let module = fixture_support::module_stream(&bytes);
+        let start = fixture_support::stream_offset(&bytes, module, 0);
+        let name = bytes[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+        let procedure = start + name - 39;
+        bytes[procedure + 32..procedure + 36].fill(0);
+        let files = fixture_support::TempFiles::new();
+        let path = files.write("conflicting-procedure.pdb", &bytes);
+        let binary = Binary::open(fixture_support::fixture("fixture.exe")).unwrap();
+        let error = matched_procedures_checked(&binary, &path).unwrap_err();
+        assert!(error.to_string().contains("conflicting producer procedure ranges"), "{error}");
+    }
+
+    #[test]
+    fn producer_range_overflow_is_rejected_without_changing_the_name_only_reader() {
+        let mut bytes = std::fs::read(fixture_support::fixture("fixture.pdb")).unwrap();
+        let module = fixture_support::module_stream(&bytes);
+        let start = fixture_support::stream_offset(&bytes, module, 0);
+        let name = bytes[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+        let procedure = start + name - 39;
+        bytes[procedure + 16..procedure + 20].copy_from_slice(&u32::MAX.to_le_bytes());
+        let files = fixture_support::TempFiles::new();
+        let path = files.write("overflowing-procedure.pdb", &bytes);
+        assert!(pdb_symbols(&path).is_ok());
+        let binary = Binary::open(fixture_support::fixture("fixture.exe")).unwrap();
+        assert!(matched_procedures_checked(&binary, &path).is_err());
+    }
+
+    #[test]
+    fn typed_procedures_do_not_silently_discard_a_zero_length_procedure() {
+        let mut bytes = std::fs::read(fixture_support::fixture("fixture.pdb")).unwrap();
+        let module = fixture_support::module_stream(&bytes);
+        let start = fixture_support::stream_offset(&bytes, module, 0);
+        let name = bytes[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+        let procedure = start + name - 39;
+        bytes[procedure + 16..procedure + 20].fill(0);
+        let files = fixture_support::TempFiles::new();
+        let path = files.write("zero-length-procedure.pdb", &bytes);
+        assert!(pdb_symbols(&path).is_ok());
+        let binary = Binary::open(fixture_support::fixture("fixture.exe")).unwrap();
+        assert!(matched_procedures_checked(&binary, &path).is_err());
     }
 
     #[test]
