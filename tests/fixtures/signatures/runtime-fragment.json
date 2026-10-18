@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "integration": "fragment only; parent runner registration and manifest merging required",
+  "producer": "tools/signature_runtime.py:build_runtime_profile",
+  "cli": "python3 tools/signature_runtime.py --profile PROFILE --target TARGET --output-dir target/signature-corpus/RUN --zig ZIG --eval EVAL --builder BUILDER [--ownership-scope linked-artifact] [--rustc /toolchain/bin/rustc --rust-sysroot /absolute/target/sysroot] [--owned-member-limit N]",
+  "source_class": "installed-runtime",
+  "zig_version": "0.17.0",
+  "targets": [
+    "x86_64-linux-musl", "aarch64-linux-musl", "x86-linux-musl",
+    "thumb-linux-musleabi", "x86_64-windows-gnu"
+  ],
+  "harness_optimizations": ["O1", "O2"],
+  "native_linker_optimization": "Exact captured GNU LLD -O0/-O1/-O2/-O3 flags are retained verbatim as host-linker options, never inferred as harness or runtime compilation levels; joined -znow is also supported exactly",
+  "runtime_optimization": "installed producer policy; not asserted to equal harness O1/O2",
+  "profiles": {
+    "musl": {
+      "bundled_version": "1.2.5",
+      "version_provenance": "Zig 0.17 distribution; installed musl tree has no VERSION file",
+      "original_notice": "libc/musl/COPYRIGHT",
+      "license_note": "MIT baseline with per-file exceptions preserved by original notice",
+      "targets": "Linux only"
+    },
+    "libc++": {
+      "bundled_version": "22.1.8",
+      "version_evidence": "libcxx/include/__config: _LIBCPP_VERSION 220108",
+      "original_notice": "libcxx/LICENSE.TXT",
+      "license_note": "Apache-2.0 WITH LLVM-exception; retain historical notices"
+    },
+    "libc++abi": {
+      "version_provenance": "Zig 0.17 installed source hashes; no independent version inferred",
+      "original_notice": "libcxxabi/LICENSE.TXT",
+      "archive_note": "Separate archive or unambiguous source-member subset of actual libc++.a link input"
+    },
+    "libunwind": {
+      "version_provenance": "Zig 0.17 installed source hashes; no independent version inferred",
+      "original_notice": "libunwind/LICENSE.TXT"
+    },
+    "compiler-runtime": {
+      "identity": "Zig compiler_rt.zig plus compiler_rt sources, NOT LLVM compiler-rt",
+      "version_provenance": "Zig 0.17 installed source hashes",
+      "original_notice": "Zig distribution LICENSE (MIT)"
+    },
+    "mingw-support": {
+      "version_provenance": "Zig 0.17 installed source hashes; no independent version inferred",
+      "original_notice": "libc/mingw/COPYING",
+      "license_note": "Composite upstream terms, not a blanket MIT/LLVM license",
+      "targets": "Windows GNU only",
+      "archive_note": "Only actual traced mingw32/mingwex/msvcrt-os archives; import libraries are dependencies"
+    },
+    "rust-std": {
+      "toolchain": "explicit resolved installed rustc; exact target component required",
+      "candidate_toolchains": ["stable-aarch64-apple-darwin 1.99.0", "1.87-aarch64-apple-darwin"],
+      "operator_inventory": "Host toolchains lack requested components; explicit parent-materialized isolated sysroots may supply exact components. Darwin is not a substitute",
+      "owned_scope": "actual traced libstd-<hash>.rlib native objects only",
+      "dependencies": "alloc/core/compiler_builtins and other rlibs recorded separately, never silently owned"
+    },
+    "rust-core": {
+      "toolchain": "explicit resolved installed rustc; exact target component required",
+      "operator_inventory": "Host toolchains lack requested components; explicit parent-materialized isolated sysroots may supply exact components. Darwin is not a substitute",
+      "owned_scope": "actual traced libcore-<hash>.rlib native objects only",
+      "dependencies": "std/alloc/compiler_builtins and other rlibs recorded separately, never silently owned"
+    }
+  },
+  "retention": "Identical frozen selected native objects explicitly linked in both harnesses; --no-gc-sections",
+  "icf_policy": "Every measured output, including default public-strong, is a native embedded LLD replay using --icf=none and --no-relax. Original Zig-driver links are unmeasured discovery artifacts only. Actual linker argv and exact producer versions are retained",
+  "bounded_subset": "Optional --owned-member-limit N (1..2048) explicitly selects an ordinal-prefix subset BEFORE extraction and records available/selected counts; no automatic truncation or failure fallback. Full selected components above 2048 objects are unsupported unless the operator declares a bounded subset before measurement",
+  "ownership": "Member receipts plus actual LLVM link-map winning-object adapter required for weak/hidden symbols",
+  "map_producer": "Same installed Zig's embedded ld.lld 22.1.8 ALWAYS replays both final captured GNU argv from regular native-input snapshots with --icf=none/--no-relax. Only linked-artifact ownership requests append -Map; replay alone never enables weak/hidden ownership. Static -l tokens or pairs are replaced entirely by resolved snapshot paths. Both measured links share identical frozen dependency paths; owned object receipt paths stay unchanged. Before/after replay and publication SHA-256 checks cover source and consumed bytes. Original Zig-linked hashes are retained as explicitly unmeasured discovery evidence, never as consumed-byte proof. No executable lookup, cache guessing, fallback or synthesized maps",
+  "static_library_lookup": "Bounded GNU static lookup collects all explicit joined/separate -L directories in recorded order, canonical against captured cwd, even when directories occur later in argv. Sequential -Bstatic/-Bdynamic/-static/--static state controls each -lfoo or -l:basename lookup; only static lookups are supported. First existing libfoo.a or exact safe simple basename must be a regular native archive or relocatable object, never a thin archive, shared image or linker script. Bitcode inside regular dependency archives is allowed without owned-member extraction. Search evidence, role, source/consumed paths and SHA-256 are retained. Dynamic/default lookup, missing inputs, sysroot substitution, scripts, start-lib and unsupported state/lookup forms are unsupported before measured replay. Limits: 256 search directories, 20000 resolved libraries/native inputs, 100000 argv words and 16 MiB argv text",
+  "measurement_tools": "Parent freeze_measurement_tool captures evaluator and builder exactly once into run/tools BEFORE producer empty-directory validation. Original and captured paths/hashes are retained; all measurement commands use only captured paths with end-hash validation. The builder report evaluator_binary_sha256 binds the captured builder, not the separate inspection evaluator",
+  "command_environment": "Real parent Commands(clean_environment=True) supplies the recorded configured-clean-allowlist-v1 environment and isolated run/configured-home before the first Zig/compiler call; inherited variables are removed, not merely omitted from receipts",
+  "owned_preflight": "Before either final link/replay: 1..2048 owned objects, at most 256 MiB owned bytes, at most 1 MiB serialized JSON member receipts. Regular archives remain bounded to 512 MiB, members to 64 MiB, native input/member counts to 20000, total archive headers to 40000. Dependency-only archives are hashed and linked, never parsed under the selected component's native-member policy",
+  "notice_policy": "Hash only the selected component notice and selected component/shared-header source inventory. Zig compiler-runtime LICENSE must match actual zig env lib_dir: ordinary unpacked zig.parent/lib with zig.parent/LICENSE, or Homebrew bin/zig with distribution lib/zig and zig.parent.parent/LICENSE. Never fall back to an unrelated parent LICENSE",
+  "publication_policy": "Changed source or consumed native input/tool bytes reject publication without regrading or overwriting raw builder metrics; historical results remain provisional and are not upgraded by this policy",
+  "isolated_rust_component": "--rust-sysroot consumes component-receipt.json. --rust-component-archive or receipt archive_path selects the pinned archive; fixed parent component_file_hashes verifies bounded archive payload bytes == receipt hashes == all materialized files before linking and publishing. Compiler-installed sysroot supplies original notices. Caller-reviewed hashes are not independent publisher authentication",
+  "receipt_file": "archive-member-receipts.json (JSON array)",
+  "member_ordinal_basis": "object 0.40 ArchiveFile::members().enumerate(): zero-based after leading special tables; ordinary Rust metadata consumes an ordinal",
+  "truth_gate": "Zero named truth is unsupported, never 100 percent recall",
+  "target_execution": "never",
+  "evaluation": "Parent ELF/PE symbolized and stripped twin evaluator; Darwin unrun/unsupported",
+  "status": "unrun; parent central build/test job budget only"
+}
