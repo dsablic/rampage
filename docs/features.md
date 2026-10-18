@@ -157,16 +157,16 @@ constant database finds AES, DES, Blowfish, SHA/MD5, ChaCha, CRC, Deflate, Base6
 
 ## Library identification
 
-FLIRT/Function-ID-style signatures hash function bytes with position-dependent encodings masked out: relative
+Native signatures hash function bytes with position-dependent encodings masked out: relative
 branch/call targets, x86 RIP-relative displacements and PC-relative encodings of fixed-width instruction sets.
 Supported signature architectures are x86, x86-64, AArch64, A32/Thumb, MIPS/MIPS64 and PowerPC/PowerPC64.
 
-Identification applies the bundled musl libc starter database for x86-64 and AArch64 without setup. Build an
+Identification applies the reviewed default corpus for x86-64, AArch64, i386 and A32/Thumb without setup. Build an
 overlay database from a binary with named functions using `function build-signatures` (legacy `signatures`).
 A database hashes each function over both its symbol size and discovered extent. A function cut short at an
 unresolved jump table can match when discovery stops at the same place in the target.
 
-MCP identification pages complete match/warning rows within 60000 JSON bytes, keeping whole-result match/apply
+MCP identification pages complete match/warning/candidate rows within 60000 JSON bytes, keeping whole-result match/apply
 totals. Its default window is 100 rows; offsets never select which names apply. Oversized receipts refuse before
 renaming, without truncating JSON strings.
 
@@ -177,9 +177,18 @@ build it was generated from, not every version of that library. Regenerate or ex
 `tools/gen-signatures.sh`; see [rampage-signatures](../crates/rampage-signatures).
 
 Bundled databases use deterministic gzip and lazy per-architecture decoding; pack listing does not decode them.
-The [offline corpus pilot](signature-corpus.md) builds pinned public libraries with ownership-filtered truth and
-collision-preserving export. Limits: exact-build pilot only; failed recall/precision gates and unrun coverage
-remain explicit, and no new pilot database is automatically promoted into the bundle.
+The [offline corpus pipeline](signature-corpus.md) builds public-library profiles with ownership-filtered truth,
+frozen tool/input receipts and collision-preserving export. Reviewed precision-safe exports are promoted explicitly;
+raw recall/precision failures, unsupported profiles and unrun coverage remain visible. The default corpus does not
+identify arbitrary library versions or satisfy the full Phase 2 recall target.
+
+[User-supplied PAT inputs](signature-imports.md) match validated byte patterns, CRC windows and tails without
+converting them to native hashes. Genuine schema-6 FID databases use the separate explicitly configured trusted
+Ghidra/JVM import/query API. It is static host analysis, not target execution or a sandbox for untrusted tools.
+
+[Secondary fuzzy matching](fuzzy-signatures.md) compares CFG, constants and calls. API/CLI/MCP results expose
+scores, provenance and confidence gates as separate suggestions; even eligible proposals do not automatically
+rename functions. Exact signatures and existing analyst names retain priority.
 
 ## Guided reports and batch analysis
 

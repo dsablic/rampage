@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-18",
+  "scope": "Phase 2 bounded implementation completion, not full matrix/recall, release, CI or live-model acceptance",
+  "implementation_complete": {"2.1": true, "2.2": true, "2.3": true},
+  "implementation_commits": {"bounded_corpus_delivery": "45b2284", "signature_engines": "a8878c0", "api_cli_mcp_integration": "c8207eb"},
+  "phase2_recall_acceptance": false,
+  "phase1_live_gate_changed": false,
+  "target_executed": false,
+  "repository_private": true,
+  "tags_created": false,
+  "ci_dispatches_created": false,
+  "retained_validation_receipt": "${WORKSPACE}/target/phase2-2-validation/final-validation.json",
+  "retained_validation_receipt_sha256": "6065d7ba42c4b185fe43bfa9dd591dc93e329d01ab1a58999634b89da437d4a8",
+  "receipt_contents": {"source_file_hashes": 31, "retained_log_records": 21},
+  "source_attestation_boundary": "Source/log hashes bind retained bytes, not publisher identity or cryptographic compiled-source attestation.",
+  "tests": [
+    {"suite": "signature library", "passed": 147, "failed": 0, "ignored": 2},
+    {"suite": "API library, canonical temp root and two test threads", "passed": 591, "failed": 0, "ignored": 9},
+    {"suite": "configured real FID reader and host queries", "passed": 17, "failed": 0, "ignored": 0},
+    {"suite": "configured public Project FID positive/negative workflow", "passed": 1, "failed": 0, "ignored": 0},
+    {"suite": "generated ELF fuzzy Project checks, including explicit fixture-dependent check", "passed": 5, "failed": 0, "ignored": 0},
+    {"suite": "API signature imports", "passed": 9, "failed": 0, "ignored": 0},
+    {"suite": "CLI signature imports", "passed": 3, "failed": 0, "ignored": 0},
+    {"suite": "actual duplex MCP signature imports", "passed": 2, "failed": 0, "ignored": 0},
+    {"suite": "API pack integration", "passed": 17, "failed": 0, "ignored": 0},
+    {"suite": "actual duplex MCP signature paging", "passed": 4, "failed": 0, "ignored": 1}
+  ],
+  "test_count_boundary": "Suites overlap; counts are not summed into independent investigations. Ignored tests remain explicit; a zero-test example invocation is compile-only, not extra test coverage.",
+  "clippy": {"status": "passed", "warnings_denied": true, "packages": ["rampage-signatures", "rampage-api", "rampage-cli", "rampage-mcp", "rampage-eval"], "targets": "all"},
+  "format": {
+    "changed_rust_files": "passed scoped rustfmt check",
+    "global": "failed on pre-existing formatting differences outside this import/fuzzy diff",
+    "unchanged_files": ["crates/rampage-api/src/packs.rs", "crates/rampage-api/tests/packs.rs", "crates/rampage-eval/examples/signature_corpus_support/linked_inputs.rs", "crates/rampage-eval/examples/signature_corpus_support/ownership.rs"]
+  },
+  "imports": {
+    "pat": "Bounded supported PAT subset through SignatureDb and API/CLI/MCP; constraints and negative evidence survive JSON/gzip. Unsupported references/flags/tail tuples reject atomically.",
+    "fid": "Genuine raw header-v1/schema-6 fidbf import and persistence; explicit trusted Ghidra 12.1.4/JVM API-only read-only query, restricted static x86 ELF profile.",
+    "fid_native_workflow": {"stripped_holdout_suggestions": 2, "altered_negative_suggestions": 0, "annotation_changes": 0},
+    "fid_limit": "FID deliberately omits some scalar values. A match is not semantic identity; no automatic application or arbitrary raw-p-code/hash conversion.",
+    "fid_host_trust": "Explicit host executable/installation configuration, not a sandbox. Generic CLI/MCP loading never auto-launches Ghidra. Mixed FID/native/PAT composition is explicitly unsupported."
+  },
+  "fuzzy": {
+    "publication": "docs/benchmarks/phase2-3-fuzzy-2026-10-18.json",
+    "correct_unique_top_candidates": 2,
+    "incorrect_unique_top_candidates": 2,
+    "top_candidate_precision": 0.5,
+    "qualified_correct": 0,
+    "qualified_incorrect": 0,
+    "automatic_names_applied": 0,
+    "qualified_recognition_gain_claimed": false,
+    "same_seen_holdout_reused": true,
+    "fresh_blind_evaluation_claimed": false
+  },
+  "preserved_failures_and_limits": [
+    "SDK technical quarantines and every earlier corpus recall/precision failure remain unchanged.",
+    "First broad API timeout had no final summary; five cache fixture failures came from a symlinked macOS temp ancestor. The existing production no-follow contract was not relaxed; canonical temp-root reruns pass.",
+    "Initial import test compilation called a private constructor; the test now uses the public API.",
+    "macOS rejected the non-UTF-8 filename fixture; unsupported extensions now reject before filesystem access.",
+    "Synthetic fuzzy regression snapshot lacked required provenance; the fixture was fixed without changing production gates, scores or corpus.",
+    "MCP oversized-name regression now reaches the stricter JSON string admission before receipt sizing; zero writes remain asserted and receipt-budget unit coverage remains.",
+    "Clippy failures were corrected without lint suppressions; earlier retained logs remain in the validation receipt.",
+    "Some earlier managed shell logs expired. Conversation outcomes and fresh retained runs are separate evidence, not retroactive replacement.",
+    "Earlier fuzzy measurements lack a retained collector digest and one matching historical source snapshot. The later frozen repeat does not retroactively attest them."
+  ]
+}

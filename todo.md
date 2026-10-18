@@ -207,19 +207,24 @@ the final reviewed report omits its matrix. Actual paired MCP metadata receipts 
 binary revision or prove complete boundaries. This is a bounded publication, not full matrix acceptance,
 default promotion, fresh validation, a live model result, or authorization to skip the remaining 2.1 gate.
 
-The latest requested order is to finish all of Phase 2. Bounded 2.1 delivery is complete;
-2.2 import formats and 2.3 fuzzy work are active in parallel. Finish 2.2 then 2.3 before
-top-level Phases 3–6. Source-corpus infrastructure is not full acceptance of the library-recognition phase;
+The latest requested order is to finish all of Phase 2, then top-level Phases 3–6. Bounded 2.1 delivery and
+the supported 2.2/2.3 implementation are complete. Source-corpus infrastructure is not full acceptance of the library-recognition phase;
 the independent live Phase 1 gate remains open.
 
-### Active: 2.2 import formats and 2.3 secondary candidates
+### Phases 2.2 and 2.3: implementation complete
 
-- [ ] Validate and publish bounded user-supplied PAT imports, including persistence and ambiguity preservation.
-- [ ] Validate and publish genuine FID import/query with explicitly trusted Ghidra/JVM configuration.
-- [ ] Complete API/CLI/MCP regressions before accepting the new import/candidate surfaces.
-- [ ] Publish the measured fuzzy candidate results, preserving incorrect candidates, extraction failures and
+- [x] Validate and publish bounded user-supplied PAT imports, including persistence and ambiguity preservation.
+- [x] Validate and publish genuine FID import/query with explicitly trusted Ghidra/JVM configuration.
+- [x] Complete API/CLI/MCP regressions before accepting the new import/candidate surfaces.
+- [x] Publish the measured fuzzy candidate results, preserving incorrect candidates, extraction failures and
   the reused-holdout caveat; never report candidate-only results as qualified naming gains.
-- [ ] Review, test and publish the remaining Phase 2 implementation before advancing through Phases 3–6.
+- [x] Review, test and publish the remaining Phase 2 implementation before advancing through Phases 3–6.
+
+Phase 2 implementation is complete in the supported scopes documented in `docs/signature-imports.md` and
+`docs/fuzzy-signatures.md`; `docs/benchmarks/phase2-validation-2026-10-18.json` records validation boundaries.
+The full Phase 2 recall target is still unmet, not regraded. Fuzzy top candidates are 2 correct / 2 incorrect,
+with zero qualified naming gain. FID is API-only trusted-host static analysis, not automatic CLI/MCP execution.
+The next implementation milestone is Phase 3; the independent live Phase 1 and recall gates remain open.
 
 ### Implemented Phase 1 milestones
 

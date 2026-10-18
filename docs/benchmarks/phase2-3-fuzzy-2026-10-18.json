@@ -1,0 +1,327 @@
+{
+  "schema_version": 1,
+  "implementation_validation": {
+    "status": "bounded secondary-candidate implementation complete",
+    "reference": "docs/benchmarks/phase2-validation-2026-10-18.json",
+    "historical_candidate_stage_fields_below": "preserved measurements and prior validation state, not current implementation sign-off",
+    "qualified_recognition_gain": false,
+    "phase2_recall_acceptance": false
+  },
+  "date": "2026-10-18",
+  "measurement": "phase2-3-owned-secondary-fuzzy-candidates",
+  "status": "Candidate-only measured slice; integration tests and fresh publication review remain pending.",
+  "phase2_3_complete": false,
+  "phase2_complete": false,
+  "qualified_recognition_gain": false,
+  "phase2_80_percent_acceptance": false,
+  "publication_scope": "Inspection of retained measurements, not a new benchmark, build or blind restart.",
+  "native_targets_executed": false,
+  "names_applied": 0,
+  "source_scope": "Three owned freestanding checksum/runlength algorithms; no external commercial source.",
+  "method": "secondary_cfg_constants_calls_v1",
+  "policy": {
+    "priority": "Exact user/data-pack/bundled signatures precede fuzzy candidates; existing names are preserved.",
+    "interpretation": "Bounded similarity, not probability, publisher authentication or runtime object identity.",
+    "application": "No fuzzy names are automatically applied, including correct or eligible proposals.",
+    "target_gold": "Scoring only after frozen predictions; not target sizes, features, matching or calibration input.",
+    "all_second_run_candidates": "Unqualified: all twelve ranked candidates have disposition below_threshold.",
+    "scope_limit": "Native ELF inspection only; no hardware, plugin, runtime-execution or population-accuracy claim."
+  },
+  "metrics": {
+    "owned_gold_functions": 3,
+    "discovered_owned_functions": 3,
+    "discovered_negative_functions": 3,
+    "exact_correct_owned": 0,
+    "exact_incorrect": 0,
+    "secondary_top_candidate_correct_owned_exact_misses": 2,
+    "secondary_top_candidate_incorrect_exact_misses": 2,
+    "secondary_eligible_correct_owned_exact_misses": 0,
+    "secondary_eligible_incorrect_exact_misses": 0,
+    "secondary_eligible_negative_exact_misses": 0,
+    "exact_misses_with_secondary_features": 4,
+    "candidate_top1_precision": 0.5,
+    "eligible_precision": null,
+    "combined_correct_owned": 0,
+    "combined_owned_recall": 0.0,
+    "novel_secondary_top_candidate_correct_owned_exact_misses": 2,
+    "novel_secondary_eligible_correct_owned_exact_misses": 0
+  },
+  "calibration": {
+    "architecture": "x86_64",
+    "threshold": 0.75,
+    "margin": 0.15,
+    "positives": 2,
+    "negatives": 2,
+    "correct_eligible": 1,
+    "incorrect_eligible": 0,
+    "declared_threshold_grid": [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9],
+    "declared_margin_grid": [0.02, 0.05, 0.1, 0.15],
+    "cohort": "4b31e0cd05978225d018ddb6f582c427b7f4aa112484ea47ba012114484d4f8a",
+    "scope": "Separate O1 calibration observations, not held-out recognition or a population false-positive bound."
+  },
+  "heldout_rows": {
+    "columns": ["address", "gold_name", "owned", "top_name", "score", "margin", "top_correct", "qualified"],
+    "rows": [
+      ["0x401000", "corpus_crc32", true, "corpus_crc32",
+        0.4430915793959272, 0.09295020220359579, true, false],
+      ["0x401042", "corpus_adler32", true, null, null, null, false, false],
+      ["0x40108a", "corpus_runlength", true, "corpus_runlength",
+        0.7288461538461538, 0.24841302841302842, true, false],
+      ["0x4010e4", "application_crc_like", false, "corpus_crc32",
+        0.37351351351351353, 0.05823573573573576, false, false],
+      ["0x401125", "application_scan", false, "corpus_crc32",
+        0.36391718641718646, 0.015325412429484875, false, false],
+      ["0x401155", "_start", false, null, null, null, false, false]
+    ],
+    "exact_result_all_rows": null,
+    "all_four_top_candidates": "Unique top name, no identical-feature collision, below threshold; none qualified.",
+    "feature_rejected_addresses": ["0x401042", "0x401155"],
+    "feature_rejection": "invalid or unsupported fuzzy evidence: insufficient fixed constants/known-call evidence",
+    "incorrect_top_candidates": "Both occur on unrelated application functions, not on an owned function.",
+    "ranked_candidate_columns": ["name", "total_score", "margin_to_next_name"],
+    "all_ranked_candidates": {
+      "0x401000": [
+        ["corpus_crc32", 0.4430915793959272, 0.09295020220359579],
+        ["corpus_adler32", 0.3501413771923314, 0.033150401983964906],
+        ["corpus_runlength", 0.3169909752083665, 0.3169909752083665]
+      ],
+      "0x401042": [],
+      "0x40108a": [
+        ["corpus_runlength", 0.7288461538461538, 0.24841302841302842],
+        ["corpus_crc32", 0.4804331254331254, 0.03826350018657704],
+        ["corpus_adler32", 0.44216962524654835, 0.44216962524654835]
+      ],
+      "0x4010e4": [
+        ["corpus_crc32", 0.37351351351351353, 0.05823573573573576],
+        ["corpus_runlength", 0.31527777777777777, 0.016107340372046253],
+        ["corpus_adler32", 0.2991704374057315, 0.2991704374057315]
+      ],
+      "0x401125": [
+        ["corpus_crc32", 0.36391718641718646, 0.015325412429484875],
+        ["corpus_adler32", 0.3485917739877016, 0.0013738252697528819],
+        ["corpus_runlength", 0.3472179487179487, 0.3472179487179487]
+      ],
+      "0x401155": []
+    },
+    "code_novel_to_prior_cohorts_all_rows": true,
+    "novelty_scope": "Existing masked instruction identity against all discovered reference/calibration bodies.",
+    "novelty_limit":
+      "Two correct unique tops are novel by that check; zero qualified novel gain, not semantic independence."
+  },
+  "first_run_and_second_run_boundary": {
+    "first_run": "measurement-first.json retained unchanged: zero top-candidate or qualified gain.",
+    "first_reference_features": 1,
+    "first_calibration": null,
+    "first_calibration_failure":
+      "invalid or unsupported fuzzy evidence: calibration requires positive and negative samples",
+    "first_candidate_top1_precision": null,
+    "first_combined_owned_recall": 0.0,
+    "second_reference_features": 3,
+    "fix": "Exclude nonallocated ELF metadata at address zero from mapped pointer ranges; restore scalar constants.",
+    "weights_changed": false,
+    "threshold_or_margin_grid_changed": false,
+    "corpus_source_or_compiler_flags_changed_between_measurements": false,
+    "same_heldout_reused": true,
+    "fresh_untouched_holdout": false,
+    "limit": "Extraction bug fix followed by a same-heldout rerun, not retuning or an independent blind restart."
+  },
+  "build_and_cohort_identities": {
+    "source": "tests/fixtures/src/signature-fuzzy-corpus.c",
+    "source_sha256": "c4ba281c24b3ebeb3783ecd3dbf48d6342bbd75c59ccee403782e5756f1f1919",
+    "manifest_sha256": "f170f6e278d37e1ef6b00fcf832b773b785496c8371392be6fa91bd65f335012",
+    "compiler": "Homebrew Clang 22.1.8",
+    "compiler_sha256": "5ff8c034eab4eef825e353dbb0d602b5422236e1e2db77fd45933a42c5ccffad",
+    "linker": "Explicit ld.lld selected before scoring; no linker release inferred from an empty version receipt.",
+    "linker_sha256": "0e8d86df17646cb52c2ad0061eac11173b8c1d8424ff3908cdefcf57331055eb",
+    "strip_tool": "llvm-strip",
+    "strip_sha256": "dfb72aa604e65231c9bc3fc99dabb8119ffd7847509ef52e27ee0a80ffeb8833",
+    "target": "x86_64-unknown-linux-gnu",
+    "common_flags": [
+      "-std=c11", "-nostdlib", "-fno-builtin", "-fno-stack-protector", "-fno-pie", "-no-pie",
+      "-Wl,--build-id=none", "-Wl,-e,_start", "-Wl,-Ttext=0x401000"
+    ],
+    "reference_flags": ["-O2", "-DREFERENCE_ONLY=1"],
+    "calibration_flags": ["-O1"],
+    "heldout_flags": ["-Os"],
+    "flag_scope": "Declared source/optimization variance fixed before scoring; no held-out-answer tuning.",
+    "reference_image_sha256": "4770e42f97cb2e15f2f728f66a8e883bb33f2b965b63e9ee7d69afb38ee13ced",
+    "calibration_symbolized_sha256": "1854429666346e22309778de67213b93632dd7427884b3fe8bfc774c827cd73d",
+    "calibration_stripped_sha256": "28741bdeaadafdec6e447e91d0233e37853a3ed3aff7c484db9649ceaf188afd",
+    "heldout_symbolized_sha256": "3cdb3af9c4dfe03d834015aa6a161432e7f0ce30fee54daa4c33fd2b5be65f59",
+    "heldout_stripped_sha256": "5b8215cb82e2b4181184d0868df0054d1039e349e857efe7ca4b7b2ba5a6175d",
+    "reference_code_cohort": "3c09a15b06cb19ddad2324ff6ae7f8b146bc430162c84fb70024f80dfe33e0e6",
+    "calibration_code_cohort": "4b31e0cd05978225d018ddb6f582c427b7f4aa112484ea47ba012114484d4f8a",
+    "heldout_code_cohort": "5c21b58a30fd454831468c697e51aa607e831b7ec52bcbcd08ae0c8630c3b03c",
+    "authentication":
+      "Source/image/code hashes and release strings bind bytes, not publisher or library-version identity."
+  },
+  "raw_evidence": {
+    "root": "${WORKSPACE}/target/phase2-3-first",
+    "sha256": {
+      "handoff.json": "644761ed8c1d5b0a5c929a02715f13065c5bd14d6c294e3c2ee7152a904b0b66",
+      "measurement-first.json": "5d884bb275d185f2275a8674df5d130268ab9066302363a10e72903533bb5432",
+      "measurement-second.json": "f22a3c22806954995c410dd04a08e39a2c2fa3f3b8173967e067f9f5fbfc0124",
+      "frozen-fuzzy-db-first.json": "c98fe7cb815ac42b0b02acd75ec098e3dbac58d7e2b307309d93684edbdc281e",
+      "frozen-fuzzy-db-second.json": "c910722985e1cfe8d7f499df1b09bcb55ec6560e87c1b266bbb65ffecced1405",
+      "heldout-predictions-before-gold-first.json": "a30ea90ce45e33608d031b578774d0f06b7b2c81afa3bd8c8b5502d444d6a019",
+      "heldout-predictions-before-gold-second.json": "5c9566b7e7d34c0ad116345bcadf2e13538728619568f32fc247ceede52b925d",
+      "native-api-readonly-first.json": "75501f59639afc791c2755f4c7513c341e08fa38bb7fca91b094f52fb4913f25",
+      "corpus/build-manifest.txt": "f170f6e278d37e1ef6b00fcf832b773b785496c8371392be6fa91bd65f335012",
+      "fuzzy-corpus-second.json": "5785504a8652bd809c09fd9de32b73c1d50db0560c96c69ae825f29a80975581"
+    },
+    "pre_gold_reconciliation":
+      "All six prediction rows match scored rows except initially empty evaluation_gold_names.",
+    "raw_detail_scope": "Full feature scores, candidates and rejection evidence remain in the hash-bound raw files."
+  },
+  "native_api_readonly": {
+    "source_references": 3,
+    "source_rejections": [],
+    "read_only": true,
+    "source_annotations_unchanged": true,
+    "target_annotations_unchanged": true,
+    "gold_opened": false,
+    "names_applied": 0,
+    "scope": "Actual native ELF Project API with explicit memory-only instances, not a fabricated response.",
+    "database_sha256": "c910722985e1cfe8d7f499df1b09bcb55ec6560e87c1b266bbb65ffecced1405",
+    "limit": "Read-only API evidence and unchanged annotation revisions do not establish recognition accuracy."
+  },
+  "validation_boundary": {
+    "earlier_signature_suite": "138 passed, zero failed, one ignored before later concurrent FID additions.",
+    "earlier_focused_api_tests": "Three passed before later concurrent FID API additions.",
+    "after_layout_fix_focused_tests": "Blocked at handoff by later FID test compile errors, not a final passing gate.",
+    "blockers_recorded": [
+      "FID signature tests supplied an extra Binary::open argument and imported unavailable macOS mkfifoat.",
+      "FID API tests supplied an extra Binary::open argument."
+    ],
+    "initial_failures_retained": [
+      "First corpus build selected a nonexistent ld.lld path; corrected linker selection before scoring.",
+      "First API test attempt refused a locked Cargo.lock update.",
+      "First post-fix API test command rejected --include-ignored before the test-argument separator.",
+      "Measurement/test logs retain a rust-objcopy missing-libLLVM stripping warning; not a target-strip failure."
+    ],
+    "clippy_status": "No final Clippy result is established by the supplied handoff/log set.",
+    "log_sha256": {
+      "corpus-build-first.log": "ba1575fa7c2884087178c0d00e1c6dd2192b9fdb9391016ab452ae88086bc513",
+      "signatures-fuzzy-tests-first.log": "4e5743ffdf412dee254a8ced247751084402b81e34bd5bf1654d30204dd003ae",
+      "signatures-full-first.log": "a529f5666114ba414db0d3cc47a2a07804b44011091714ccc3d32587e016ec2b",
+      "api-fuzzy-tests-first.log": "3bc268cbbd18af0f859ccd73b95b32b21c191ac80b37f57f266996fcb57c6c15",
+      "api-fuzzy-tests-second.log": "f395ab6dc83ffeef6d4be7d59fc70fc9256bad78906970d56e35042b99e28eb3",
+      "signatures-fuzzy-after-layout-fix.log": "a438c02fdcd065dfe66e2fb66e9d78a5bd7de48886b0d13194264f0ffab25c9f",
+      "api-fuzzy-native-after-layout-fix.log": "a42a3b7f39b0d36a6d73d276059de38fef8f88254183f6196b3ff6c0233b17bc",
+      "api-fuzzy-native-after-layout-fix-second.log":
+        "e3efd399d2d3421782cb835239c07c4f6a3393e77eb16bb2006ae76f79c76afb",
+      "measurement-first.log": "94c2e7cd8099c6a8c82f6b1c1b7afd26af25fe8a477d30db64e082400546e7ab",
+      "measurement-second.log": "a8818fdc38853f0cf610374d5b83a45dfa7ddc0738d257c23fd8b81cfea7fb0e",
+      "native-api-readonly-first.log": "763ee64e99a5b46a9423870dd819a210f2a6036a5d1651c71019c6beba36e910"
+    },
+    "publication_source_witness_sha256": {
+      "crates/rampage-signatures/src/fuzzy.rs": "6510f57e5762bc0de9a40de14acae5c7a057463e2aee119db529fca8cbf0e83d",
+      "crates/rampage-api/src/fuzzy_signatures.rs": "9309653aac775df4996f968cdb5a5b6f86c402285c17c90939bdace144fa7537",
+      "crates/rampage-eval/examples/fuzzy_corpus.rs":
+        "81b104ba200e8d45f2599b7802801dc5bb799521041b7f11f5321b6dc2536007",
+      "tests/fixtures/signatures/build-fuzzy-corpus.sh":
+        "96117fc36a22a785cc253c424578fd02467ccdc0b0aaedcef8c6a4af8b677cd8"
+    },
+    "source_witness_scope":
+      "Read-only publication-time source hashes, not independent attestation of the measured executable.",
+    "collector_executable_sha256": null,
+    "collector_attestation_limit":
+      "No frozen executable digest supplied; a mutable target/debug binary is not substituted.",
+    "publication_actions":
+      "JSON/hash/row reconciliation and documentation only; no cargo, agents, network or target execution.",
+    "remaining":
+      "Parent fresh publication audit, post-integration tests and reviews; no overall Phase 2 completion claim."
+  },
+  "controlled_repeat_supplement": {
+    "pre_supplement_publication_sha256": "a005ed10455728a884f40ed04b00524859aa86de19fa233be8f3c7fb8d8cb988",
+    "scope": "Additive controlled repeat on the same already-seen heldout, not a fresh blind evaluation.",
+    "root": "${WORKSPACE}/target/phase2-3-frozen-repeat-first",
+    "receipt_sha256": "ce9c56c05d329f47ed7038ae7bf5d857d25b7ff413e671b93217ad739ea2947f",
+    "collector": {
+      "path": "${WORKSPACE}/target/phase2-3-frozen-repeat-first/collector",
+      "sha256": "5670cecba42ba18bda1f046db413f320fa3ec0d62aed3cb16e58ba94b3cbdcae",
+      "bytes": 125249408,
+      "format": "Host Mach-O executable",
+      "capture": "Existing successfully built fuzzy_corpus host executable copied before this repeat; no recompile.",
+      "unchanged_after_repeat": true,
+      "source_correspondence_independently_attested": false
+    },
+    "configuration_sha256": "d9f8bfc28a5518612b6916be3263bf42a15db163fdcd0f10946c7d35e1b56ee1",
+    "configuration_change": "Only output snapshot destinations differ from the original second-run configuration.",
+    "input_sha256": {
+      "reference": "4770e42f97cb2e15f2f728f66a8e883bb33f2b965b63e9ee7d69afb38ee13ced",
+      "calibration": "28741bdeaadafdec6e447e91d0233e37853a3ed3aff7c484db9649ceaf188afd",
+      "calibration_gold": "1854429666346e22309778de67213b93632dd7427884b3fe8bfc774c827cd73d",
+      "heldout": "5b8215cb82e2b4181184d0868df0054d1039e349e857efe7ca4b7b2ba5a6175d",
+      "heldout_gold": "3cdb3af9c4dfe03d834015aa6a161432e7f0ce30fee54daa4c33fd2b5be65f59",
+      "source_path": "c4ba281c24b3ebeb3783ecd3dbf48d6342bbd75c59ccee403782e5756f1f1919",
+      "build_manifest": "f170f6e278d37e1ef6b00fcf832b773b785496c8371392be6fa91bd65f335012",
+      "original_config": "5785504a8652bd809c09fd9de32b73c1d50db0560c96c69ae825f29a80975581",
+      "prior_measurement": "f22a3c22806954995c410dd04a08e39a2c2fa3f3b8173967e067f9f5fbfc0124"
+    },
+    "inputs_checked_before_and_after": 9,
+    "all_inputs_unchanged": true,
+    "environment": {
+      "HOME": "${WORKSPACE}/target/phase2-3-frozen-repeat-first/home",
+      "TMPDIR": "${WORKSPACE}/target/phase2-3-frozen-repeat-first/tmp",
+      "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+      "LC_ALL": "C",
+      "RAYON_NUM_THREADS": "2"
+    },
+    "returncode": 0,
+    "wall_seconds": 1.227897791,
+    "timeout_seconds": 120,
+    "target_executed": false,
+    "source_threshold_grid_margin_or_flags_retuned": false,
+    "output_sha256": {
+      "measurement.json": "f22a3c22806954995c410dd04a08e39a2c2fa3f3b8173967e067f9f5fbfc0124",
+      "frozen-database.json": "c910722985e1cfe8d7f499df1b09bcb55ec6560e87c1b266bbb65ffecced1405",
+      "predictions-before-gold.json": "5c9566b7e7d34c0ad116345bcadf2e13538728619568f32fc247ceede52b925d",
+      "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "metrics_equal_second_measurement": true,
+    "measurement_byte_identical_to_second": true,
+    "metrics_summary": {
+      "secondary_unique_top_correct": 2,
+      "secondary_unique_top_incorrect": 2,
+      "top_candidate_precision": 0.5,
+      "qualified_correct": 0,
+      "qualified_incorrect": 0,
+      "combined_owned_recall": 0.0
+    },
+    "receipt_current_source_snapshot_sha256": {
+      "crates/rampage-signatures/src/fuzzy.rs": "6510f57e5762bc0de9a40de14acae5c7a057463e2aee119db529fca8cbf0e83d",
+      "crates/rampage-api/src/fuzzy_signatures.rs": "82172f3d578730485df7821fb8f3f1b9bdec4332903c9c2f9ff86a3c4342fa6a",
+      "crates/rampage-eval/examples/fuzzy_corpus.rs":
+        "81b104ba200e8d45f2599b7802801dc5bb799521041b7f11f5321b6dc2536007"
+    },
+    "source_snapshot_boundary":
+      "Receipt-time source bytes only; not proof of the captured binary build source or final repository state.",
+    "historical_source_witness_reconciliation": {
+      "historical_map": "validation_boundary.publication_source_witness_sha256; retained unchanged",
+      "historical_map_role": "Historical pre-FID-update hashes, not a current-source-match assertion.",
+      "historical_api_source_sha256": "9309653aac775df4996f968cdb5a5b6f86c402285c17c90939bdace144fa7537",
+      "retained_matching_historical_api_source_snapshot_found": false,
+      "historical_api_source_digest_independently_verified": false,
+      "independent_verification":
+        "Unavailable: no retained matching historical API source snapshot was found; no reconstruction attempted.",
+      "post_fid_api_witness_in_repeat_receipt_sha256":
+        "82172f3d578730485df7821fb8f3f1b9bdec4332903c9c2f9ff86a3c4342fa6a",
+      "later_api_source_snapshot": {
+        "path": "${WORKSPACE}/target/phase2-3-frozen-repeat-first/source-witness-later/fuzzy_signatures.rs.snapshot",
+        "sha256": "55fa42002f145303a1b15c546e115d4b6f83eba464b34f837b1fdb2b347aacff",
+        "bytes": 32444,
+        "scope": "Exact later read-only source-byte snapshot while concurrent FID work could continue.",
+        "final_repository_match_claimed": false,
+        "captured_executable_build_source_claimed": false
+      },
+      "source_change_scope":
+        "No matching historical snapshot: full source diff and executable/source correspondence remain unverified.",
+      "measurement_boundary":
+        "Raw measurements and frozen repeat executable/output hashes stand separately from source attestation."
+    },
+    "earlier_missing_collector_digest_retroactively_attested": false,
+    "earlier_measurements_and_caveats_preserved": true,
+    "conclusion": "Repeatability evidence only: no qualified recognition gain, fresh holdout or Phase 2 acceptance."
+  }
+}

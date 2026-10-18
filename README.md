@@ -102,6 +102,8 @@ Additional focused guides:
 - [Owned worker observations](docs/worker-observations.md): host milestones, cleanup ownership and owned measurements.
 - [Debugger workspace](docs/debugger-workspace.md): explicit local inspection, Prepare/Compare/Save/Open and privacy.
 - [Debug signature import](docs/debug-signatures.md) and [ARM64 semantics validation](docs/arm64-development.md).
+- [Library signature inputs](docs/signature-imports.md): native/PAT databases and explicitly configured FID import.
+- [Fuzzy library candidates](docs/fuzzy-signatures.md): secondary similarity evidence without automatic naming.
 - [Benchmarks](docs/benchmarks.md) and the [decompiler integration corpus](docs/decompiler-corpus.md).
 - [Plugins and extension points](docs/plugins.md): experimental explicit triage components and builtin registries.
 - [Plugin security boundaries](docs/plugin-security.md): admission, resource limits, claim provenance and exclusions.

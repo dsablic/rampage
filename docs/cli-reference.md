@@ -50,8 +50,8 @@ rampage binary analyze module.dylib --all-architectures --workflow triage-report
 | `function summarize FILE --at ADDRESS` | `summarize` | Structural CFG/reference summary, not recovered source |
 | `function pseudocode FILE --at ADDRESS [--structured]` | `pseudocode` | Partial ARM64 SSA with explicit unknowns |
 | `function xrefs FILE --to ADDRESS` or `--from ADDRESS` | `xrefs` | Code/data references; exactly one direction |
-| `function identify FILE [--db DB] [--apply]` | `identify` | Library signature matches; optionally save names |
-| `function build-signatures FILE [--output DB]` | `signatures` | JSON database from named functions |
+| `function identify FILE [--db DB] [--apply]` | `identify` | Native/PAT matches; optional separate fuzzy candidates |
+| `function build-signatures FILE [--output DB]` | `signatures` | Named-function JSON; separate fuzzy mode with `--fuzzy-request` |
 | `function compare FILE --reference JSON` | `compare` | Versioned, image-matched function-start comparison |
 | `function inspect-table FILE --at ADDRESS --count N` | `jump-table` | Explicit immutable ARM64 table validation |
 | `string list FILE [--min-len N] [--contains TEXT]` | `strings` | ASCII and UTF-16LE strings; minimum defaults to 4 |
@@ -67,6 +67,11 @@ when present; `--isolated` requires supervision explicitly. See the
 `identify --no-bundled` requires a user database or a matching pack database. `build-signatures` defaults to
 stdout; identification defaults to the bundled starter database. See
 [library identification](features.md#library-identification).
+`identify --db` accepts bounded `.pat`, native `.json`, native `.gz`, or extensionless JSON inputs.
+`--fuzzy-db FILE --fuzzy-request FILE` adds read-only suggestions without increasing exact matched/applied counts;
+it cannot currently combine with `--no-bundled`. `build-signatures --fuzzy-request FILE` builds the separate
+fuzzy format. See [signature inputs](signature-imports.md) and [fuzzy requests and limits](fuzzy-signatures.md).
+FID import/query uses the explicitly configured trusted-host Rust API; the generic CLI does not launch Ghidra.
 `inspect-table --relative-base ADDRESS` selects signed-relative32 rather than absolute64 entries.
 
 ## Managed code

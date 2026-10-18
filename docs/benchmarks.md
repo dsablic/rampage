@@ -6,6 +6,48 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 2.3 fuzzy candidates — no qualified recognition gain
+
+The [pinned fuzzy measurement](benchmarks/phase2-3-fuzzy-2026-10-18.json) inspects three owned checksum/runlength
+functions and three unrelated discovered functions in a freestanding x64 ELF corpus. Exact signatures recognize
+none. Secondary unique-top candidates are **two correct and two incorrect: 50% top-candidate precision**.
+**Zero correct and zero incorrect candidates qualify**, so combined owned recall remains 0/3, not a qualified
+recognition gain or 80% acceptance. Correct candidates remain unqualified; no names are automatically applied.
+
+| Held-out function | Top candidate | Score | Result |
+| --- | --- | ---: | --- |
+| `corpus_crc32` | `corpus_crc32` | 0.443092 | Correct, below threshold |
+| `corpus_adler32` | None | — | Insufficient feature evidence |
+| `corpus_runlength` | `corpus_runlength` | 0.728846 | Correct, below threshold |
+| `application_crc_like` | `corpus_crc32` | 0.373514 | **Incorrect**, below threshold |
+| `application_scan` | `corpus_crc32` | 0.363917 | **Incorrect**, below threshold |
+| `_start` | None | — | Insufficient feature evidence |
+
+Separate O1 calibration has two positive/two negative samples: threshold **0.75**, margin **0.15**, one correct
+and zero incorrect eligible observations. That is calibration, not held-out success or a false-positive guarantee.
+The first zero-gain run remains frozen. A mapped-layout bug fix excluded nonallocated metadata at address zero
+from pointer ranges; the second run **reuses the same heldout**, not a fresh blind restart. Weights, grids, source
+and compiler flags were unchanged between runs. Reference O2, calibration O1 and heldout Os variance was fixed
+before scoring. Predictions were frozen before held-out gold was opened. The two correct tops are code-novel
+against prior cohorts by the recorded masked instruction-identity check, not qualified or semantic novelty gains.
+
+An additive controlled repeat with a captured existing host collector returned 0 in 1.2279 s: collector and all
+nine inputs stayed unchanged, and outputs reproduced run two's 2 correct/2 incorrect tops and zero qualified names.
+It used the **same seen holdout**, not a blind restart; source snapshots do not attest the captured binary's build
+source, and the earlier missing collector digest remains explicitly unattested.
+The historical API source witness has no retained matching snapshot, so independent source verification is
+unavailable; the receipt-time and later byte-pinned API witnesses are separate, not compiled-source attestation.
+
+A separate actual native ELF Project API check used memory-only instances, opened no gold and left source/target
+annotation revisions unchanged. Exact candidates retain priority; fuzzy scores are similarities, not identity
+probabilities. The source corpus is owned, with no commercial payload, target execution or hardware/plugin claim.
+Earlier 138 signature tests and three focused API tests passed before later concurrent FID additions; post-fix
+attempts initially encountered those FID compile errors. The [final implementation validation](benchmarks/phase2-validation-2026-10-18.json)
+records the subsequent passing signature/API libraries, configured FID host workflow, API/CLI/MCP integration,
+pack/paging regressions and Clippy. **The bounded Phase 2 implementation is complete; the recall acceptance
+target remains unmet.** Historical candidate-stage validation fields remain in the measured JSON rather than being
+retroactively changed. The committed 2.1 section below is unchanged.
+
 ## Phase 2.1 bounded SDK/Rust data delivery
 
 The [SDK/Rust delivery evidence](benchmarks/phase2-1-sdk-delivery-2026-10-18.json) accompanies three reviewed
