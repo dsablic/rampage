@@ -1,0 +1,22 @@
+{
+  "openssl-3.0.15": {
+    "id": "openssl-3.0.15",
+    "family": "openssl",
+    "harness": "openssl",
+    "version": "3.0.15",
+    "url": "https://github.com/openssl/openssl/releases/download/openssl-3.0.15/openssl-3.0.15.tar.gz",
+    "archive": "openssl-3.0.15.tar.gz",
+    "sha256": "23c666d0edf20f14249b3d8f0368acaee9ab585b09e1de82107c66e1f3ec9533",
+    "root": "openssl-3.0.15",
+    "license": "Apache-2.0",
+    "license_file": "LICENSE.txt",
+    "include": "include",
+    "sources": [],
+    "defines": [],
+    "build_driver": "configured",
+    "source_class": "public-source-archive",
+    "supported_targets": ["x86_64-linux-musl", "aarch64-linux-musl"],
+    "scope": "Portable static libcrypto/libssl; no asm, tests, shared libraries, threads, async, dynamic modules/engines, legacy provider, compression, config autoload, secure memory or KTLS. No CLI build or target execution. Public-strong function ownership only.",
+    "build_condition": "tools/signature_configured.py OPENSSL_OPTIONS; explicit linux-x86_64/linux-aarch64 Configure target; build_generated then libcrypto.a/libssl.a only. Whole pinned source archive admits trusted host Perl/build scripts. Fixed configured driver, not an explicit-source recipe."
+  }
+}

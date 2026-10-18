@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import gzip
+import hashlib
 import importlib.util
 import io
 import json
@@ -56,12 +57,18 @@ class FakeProducers:
         fail_compile: bool = False,
         passed: bool = True,
         baseline_available: bool = True,
+        binary_format: str = "elf",
+        emit_pdb: bool = True,
     ) -> None:
         self.version = version
         self.arch = arch
         self.fail_compile = fail_compile
         self.passed = passed
         self.baseline_available = baseline_available
+        self.binary_format = binary_format
+        self.emit_pdb = emit_pdb
+        self.pe_policy = "-DEBUG"
+        self.pdb_conflict = False
         self.report_updates: dict[str, Any] = {}
         self.calls: list[list[str]] = []
 
@@ -81,28 +88,59 @@ class FakeProducers:
         text = ""
         if tool == "zig" and argv[1:] == ["version"]:
             text = self.version
+        elif tool == "sh" and Path(argv[1]).name == "config.guess":
+            text = "aarch64-apple-darwin24\n"
+        elif tool == "make" and argv[1:] == ["--version"]:
+            text = "fake make version\n"
         elif tool == "zig" and argv[1] == "cc":
             if self.fail_compile:
                 code = 3
                 stderr.write(b"fake compilation rejected\n")
             else:
-                Path(argv[argv.index("-o") + 1]).write_bytes(" ".join(argv).encode())
+                produced = Path(argv[argv.index("-o") + 1])
+                produced.write_bytes(" ".join(argv).encode())
+                if self.binary_format == "pe" and "-c" not in argv:
+                    pdb = produced.with_suffix(".pdb")
+                    if self.emit_pdb:
+                        pdb.write_bytes(f"fake explicit {produced.name} PDB".encode())
+                    stderr.write(
+                        f'lld-link {self.pe_policy} "-PDB:{pdb}" "-OUT:{produced}" "input object.o"\n'.encode()
+                    )
         elif tool == "zig" and argv[1] == "ar":
             Path(argv[3]).write_bytes(b"fake library archive")
+        elif tool == "zig" and argv[1] == "lld-link":
+            program = Path(
+                next(argument[5:] for argument in argv if argument.startswith("-OUT:"))
+            )
+            pdb = Path(
+                next(argument[5:] for argument in argv if argument.startswith("-PDB:"))
+            )
+            program.write_bytes(
+                program.read_bytes() + b" replayed explicit NOREF NOICF"
+            )
+            pdb.write_bytes(pdb.read_bytes() + b" replayed explicit policy")
         elif tool == "eval" and argv[1] == "artifact-info":
             stripped = "stripped" in argv[2]
             text = json.dumps(
                 {
-                    "format": "elf",
+                    "format": self.binary_format,
                     "arch": self.arch,
-                    "static_function_symbols": 0 if stripped else 10,
-                    "dynamic_function_symbols": 0,
+                    "static_function_symbols": 0
+                    if stripped or self.binary_format == "pe"
+                    else 10,
+                    "dynamic_function_symbols": 4 if self.binary_format == "pe" else 0,
                     "debug_sections": [],
+                    "thumb_ranges": 1 if self.arch == "arm" else 0,
                 }
             )
-        elif tool == "eval" and argv[1] == "strip":
+        elif tool == "eval" and argv[1] in ("strip", "strip-pe"):
             Path(argv[3]).write_bytes(Path(argv[2]).read_bytes())
         elif tool == "builder":
+            if self.pdb_conflict:
+                stderr.write(
+                    b"malformed binary: PDB: conflicting function names at one RVA\n"
+                )
+                return subprocess.CompletedProcess(argv, 1)
             database = Path(argv[argv.index("--output") + 1])
             database.write_text('{"fake": true}', encoding="utf-8")
             database.with_suffix(".json.gz").write_bytes(
@@ -132,6 +170,7 @@ class FakeProducers:
                 "schema_version": 1,
                 "measurement": "phase2-1-library-signatures",
                 "arch": self.arch,
+                "evaluator_binary_sha256": corpus.sha256(Path(argv[0])),
                 "baseline_available": self.baseline_available,
                 "passed": self.passed,
                 "baseline": baseline,
@@ -156,6 +195,16 @@ class FakeProducers:
                     database.with_suffix(".json.gz")
                 ),
             }
+            if self.binary_format == "pe":
+                report.update(
+                    producer_range_source="explicit_identity_matched_pdb_procedures",
+                    reference_pdb_sha256=corpus.sha256(
+                        Path(argv[argv.index("--pdb") + 1])
+                    ),
+                    target_pdb_sha256=corpus.sha256(
+                        Path(argv[argv.index("--target-pdb") + 1])
+                    ),
+                )
             report.update(self.report_updates)
             corpus.write_json(Path(argv[argv.index("--report") + 1]), report)
             code = 0 if self.passed else 1
@@ -189,12 +238,42 @@ class SignatureCorpusTests(unittest.TestCase):
             entries.append(
                 (f"{recipe['root']}/{recipe['license_file']}", b"test license")
             )
+        if library == "zlib-1.2.13":
+            entries.extend(
+                (f"{recipe['root']}/{filename}", b"test dependency header")
+                for filename in ("zlib.h", "zconf.h")
+            )
+        if library == "libpng-1.6.44":
+            header = b"#define PNG_TEST_PREBUILT 1\n"
+            entries.append((f"{recipe['root']}/{corpus.PNG_HEADER_SOURCE}", header))
+            recipe["header_copy"]["sha256"] = hashlib.sha256(header).hexdigest()
+            recipe["license_sha256"] = hashlib.sha256(b"test license").hexdigest()
+            dependency, _, _ = self.fixture("zlib-1.2.13")
+            patched = mock.patch.object(
+                corpus, "png_zlib_recipe", return_value=dependency
+            )
+            patched.start()
+            self.addCleanup(patched.stop)
+        if library in corpus.configured.PINS:
+            scripts = (
+                ("Configure",)
+                if library.startswith("openssl")
+                else ("config.guess", "configure")
+            )
+            entries.extend(
+                (f"{recipe['root']}/{filename}", b"fake trusted host script")
+                for filename in scripts
+            )
         make_archive(archive, entries)
         recipe["sha256"] = corpus.sha256(archive)
         paths: dict[str, str] = {}
-        for name in ("zig", "eval", "builder"):
+        tool_names = ("zig", "eval", "builder")
+        if library in corpus.configured.PINS:
+            tool_names += ("make", "perl", "sh")
+        for name in tool_names:
             tool = self.base / name
             tool.write_text(f"fake {name}", encoding="utf-8")
+            tool.chmod(0o755)
             paths[name] = str(tool)
         args = corpus.parser().parse_args(
             [
@@ -234,7 +313,7 @@ class SignatureCorpusTests(unittest.TestCase):
         sqlite = corpus.load_manifest()["libraries"]["sqlite"]
         pin = sqlite["sha256"] or "PENDING_SHA256"
         self.assertIn(f"sqlite {sqlite['version']} sha256={pin}", stdout.getvalue())
-        self.assertIn("6 families, 10 profile aliases", stdout.getvalue())
+        self.assertIn("9 families, 13 profile aliases", stdout.getvalue())
         self.assertIn("not a broad Phase 2 coverage claim", stdout.getvalue())
         self.assertIn("not typical production-config coverage", stdout.getvalue())
 
@@ -350,7 +429,7 @@ class SignatureCorpusTests(unittest.TestCase):
                 corpus.harness_family(profile, recipe)
 
     def test_new_profiles_reject_identity_family_and_version_changes(self) -> None:
-        for profile in ("zstd-1.5.6", "mbedtls-2.28.9"):
+        for profile in ("zstd-1.5.6", "mbedtls-2.28.9", "libpng-1.6.44"):
             for field, value in (
                 ("id", "untrusted"),
                 ("family", "untrusted"),
@@ -420,6 +499,154 @@ class SignatureCorpusTests(unittest.TestCase):
             corpus.prepare_output(output)
         self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
 
+    def test_measurement_tool_capture_binds_exact_bytes_and_refuses_existing_outputs(
+        self,
+    ) -> None:
+        source = self.base / "source-tool"
+        source.write_bytes(b"original trusted host tool")
+        source.chmod(0o755)
+        output = self.base / "captured-tool"
+        receipt = corpus.freeze_measurement_tool(str(source), output)
+        source.write_bytes(b"rebuilt original host tool")
+        self.assertEqual(output.read_bytes(), b"original trusted host tool")
+        self.assertEqual(receipt["original_path"], str(source.resolve()))
+        self.assertEqual(receipt["path"], str(output.resolve()))
+        self.assertEqual(receipt["original_sha256"], corpus.sha256(output))
+        self.assertEqual(receipt["sha256"], corpus.sha256(output))
+        self.assertNotEqual(receipt["original_sha256"], corpus.sha256(source))
+        self.assertTrue(output.stat().st_mode & 0o111)
+        self.assertFalse(output.stat().st_mode & 0o222)
+        with self.assertRaises(corpus.CorpusError):
+            corpus.freeze_measurement_tool(str(source), output)
+        self.assertEqual(output.read_bytes(), b"original trusted host tool")
+
+    def test_measurement_tool_capture_refuses_special_empty_and_oversized_inputs(
+        self,
+    ) -> None:
+        fifo = self.base / "tool-fifo"
+        corpus.os.mkfifo(fifo)
+        empty = self.base / "empty-tool"
+        empty.write_bytes(b"")
+        oversized = self.base / "oversized-tool"
+        with oversized.open("wb") as stream:
+            stream.truncate(256 * 1024 * 1024 + 1)
+        for source in (fifo, empty, oversized):
+            with (
+                self.subTest(source=source),
+                mock.patch.object(corpus, "executable", return_value=str(source)),
+                self.assertRaises(corpus.CorpusError),
+            ):
+                corpus.freeze_measurement_tool(str(source), self.base / "not-created")
+            self.assertFalse((self.base / "not-created").exists())
+
+    def test_main_captures_measurement_tools_once_and_survives_original_binary_rebuilds(
+        self,
+    ) -> None:
+        recipe, args, _ = self.fixture()
+        manifest = corpus.load_manifest()
+        manifest["libraries"]["zlib"] = recipe
+        original_builder_sha = corpus.sha256(Path(args.builder))
+        original_eval_sha = corpus.sha256(Path(args.evaluator))
+        fake = FakeProducers()
+        rebuilt = False
+
+        def produce(
+            argv: list[str],
+            *,
+            cwd: Path,
+            env: dict[str, str],
+            stdout: BinaryIO,
+            stderr: BinaryIO,
+            check: bool,
+        ) -> subprocess.CompletedProcess[bytes]:
+            nonlocal rebuilt
+            completed = fake.run(
+                argv, cwd=cwd, env=env, stdout=stdout, stderr=stderr, check=check
+            )
+            if Path(argv[0]).name == "builder" and not rebuilt:
+                Path(args.builder).write_bytes(b"rebuilt original collector")
+                Path(args.evaluator).write_bytes(b"rebuilt original evaluator")
+                rebuilt = True
+            return completed
+
+        output = self.base / "target/signature-corpus/captured"
+        with (
+            mock.patch.object(corpus, "load_manifest", return_value=manifest),
+            mock.patch.object(corpus.subprocess, "run", side_effect=produce),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            code = corpus.main(
+                [
+                    "--source-cache",
+                    str(self.base),
+                    "--output-dir",
+                    str(output),
+                    "--zig",
+                    args.zig,
+                    "--eval",
+                    args.evaluator,
+                    "--builder",
+                    args.builder,
+                    "--optimization",
+                    "O1",
+                    "--optimization",
+                    "O2",
+                ]
+            )
+        self.assertEqual(code, 0)
+        inventory = json.loads((output / "inventory.json").read_text(encoding="utf-8"))
+        captured = inventory["measurement_tool_snapshot"]
+        self.assertEqual(captured["builder"]["sha256"], original_builder_sha)
+        self.assertEqual(captured["evaluator"]["sha256"], original_eval_sha)
+        self.assertEqual(len(inventory["slices"]), 2)
+        for result in inventory["slices"].values():
+            self.assertEqual(result["status"], "measured", result)
+            self.assertEqual(result["tools"]["builder"]["sha256"], original_builder_sha)
+            self.assertEqual(
+                result["builder_report"]["evaluator_binary_sha256"],
+                original_builder_sha,
+            )
+            self.assertEqual(result["tools"]["evaluator"]["sha256"], original_eval_sha)
+            self.assertEqual(
+                result["tools"]["builder"]["path"], captured["builder"]["path"]
+            )
+        self.assertEqual(Path(captured["builder"]["path"]).parent.name, "tools")
+
+    def test_installed_zig_drift_during_case_invalidates_the_measurement(self) -> None:
+        recipe, args, directory = self.fixture()
+        fake = FakeProducers()
+
+        def produce(
+            argv: list[str],
+            *,
+            cwd: Path,
+            env: dict[str, str],
+            stdout: BinaryIO,
+            stderr: BinaryIO,
+            check: bool,
+        ) -> subprocess.CompletedProcess[bytes]:
+            completed = fake.run(
+                argv, cwd=cwd, env=env, stdout=stdout, stderr=stderr, check=check
+            )
+            if Path(argv[0]).name == "builder":
+                Path(args.zig).write_bytes(b"changed installed compiler")
+            return completed
+
+        with mock.patch.object(corpus.subprocess, "run", side_effect=produce):
+            result = corpus.build_slice(
+                corpus.Selection("zlib", corpus.TARGETS[0], "O1"),
+                recipe,
+                args,
+                directory,
+            )
+        self.assertEqual(result["status"], "failed", result)
+        self.assertFalse(result["tool_identity_valid"])
+        self.assertIn("zig binary changed", result["reason"])
+        self.assertEqual(
+            result["measurements"]["new"]["status"], "invalid_producer_identity"
+        )
+        self.assertTrue(result["builder_report"]["passed"])
+
     def test_missing_pin_and_corruption_fail_before_any_producer(self) -> None:
         for pin in (None, "0" * 64):
             with self.subTest(pin=pin):
@@ -452,6 +679,132 @@ class SignatureCorpusTests(unittest.TestCase):
             stream.addfile(link)
         with self.assertRaises(corpus.CorpusError):
             corpus.extract_archive(archive, self.base / "extraction", "root")
+
+    def test_archive_preflight_rejects_case_collisions_before_any_materialization(
+        self,
+    ) -> None:
+        archive = self.base / "case-collision.tar.gz"
+        make_archive(
+            archive, [("root/Configure", b"first"), ("root/configure", b"second")]
+        )
+        destination = self.base / "extraction"
+        with self.assertRaisesRegex(corpus.CorpusError, "case-colliding"):
+            corpus.extract_archive(archive, destination, "root")
+        self.assertFalse(destination.exists())
+
+    def test_archive_snapshot_rejects_pin_mismatch_and_special_files_before_tar_open(
+        self,
+    ) -> None:
+        archive = self.base / "pinned.tar.gz"
+        make_archive(archive, [("root/Configure", b"trusted script")])
+        destination = self.base / "extraction"
+        with (
+            mock.patch.object(corpus.tarfile, "open") as opened,
+            self.assertRaisesRegex(corpus.CorpusError, "SHA-256 mismatch"),
+        ):
+            corpus.extract_archive(
+                archive, destination, "root", expected_sha256="0" * 64
+            )
+        opened.assert_not_called()
+        self.assertFalse(destination.exists())
+        fifo = self.base / "archive-fifo"
+        corpus.os.mkfifo(fifo)
+        for path in (fifo, self.base):
+            with (
+                self.subTest(path=path),
+                self.assertRaisesRegex(corpus.CorpusError, "regular file"),
+            ):
+                corpus.archive_snapshot(path, None)
+        oversized = self.base / "oversized.tar.gz"
+        with oversized.open("wb") as stream:
+            stream.truncate(128 * 1024 * 1024 + 1)
+        with self.assertRaisesRegex(corpus.CorpusError, "snapshot size bound"):
+            corpus.archive_snapshot(oversized, None)
+        linked = self.base / "linked.tar.gz"
+        linked.symlink_to(archive)
+        with self.assertRaises(corpus.CorpusError):
+            corpus.archive_snapshot(linked, corpus.sha256(archive))
+
+    def test_extraction_consumes_verified_snapshot_even_if_cache_path_is_replaced(
+        self,
+    ) -> None:
+        archive = self.base / "pinned.tar.gz"
+        replacement = self.base / "replacement.tar.gz"
+        trusted = b"trusted pinned host script"
+        make_archive(archive, [("root/Configure", trusted)])
+        make_archive(
+            replacement, [("root/Configure", b"unverified replacement script")]
+        )
+        pin = corpus.sha256(archive)
+        real_open = corpus.tarfile.open
+
+        def replace_cache(*, fileobj: io.BytesIO, mode: str) -> tarfile.TarFile:
+            self.assertEqual(hashlib.sha256(fileobj.getvalue()).hexdigest(), pin)
+            replacement.replace(archive)
+            return real_open(fileobj=fileobj, mode=mode)
+
+        with mock.patch.object(corpus.tarfile, "open", side_effect=replace_cache):
+            source = corpus.extract_archive(
+                archive, self.base / "extraction", "root", expected_sha256=pin
+            )
+        self.assertEqual((source / "Configure").read_bytes(), trusted)
+        self.assertNotEqual(corpus.sha256(archive), pin)
+
+    def test_configured_cache_swap_after_precheck_refuses_source_scripts(self) -> None:
+        profile = "curl-8.10.1"
+        recipe, args, directory = self.fixture(profile)
+        real_check = corpus.checked_archive
+
+        def swap(cache: Path, selected: dict[str, Any]) -> Path:
+            archive = real_check(cache, selected)
+            make_archive(
+                archive, [(f"{selected['root']}/configure", b"unverified host script")]
+            )
+            return archive
+
+        fake = FakeProducers()
+        with (
+            mock.patch.dict(corpus.configured.PINS, {profile: recipe["sha256"]}),
+            mock.patch.object(corpus, "checked_archive", side_effect=swap),
+            mock.patch.object(corpus, "executable", side_effect=lambda value: value),
+            mock.patch.object(corpus.subprocess, "run", side_effect=fake.run),
+            mock.patch.object(corpus.configured, "build_configured_profile") as build,
+        ):
+            result = corpus.build_slice(
+                corpus.Selection(profile, corpus.TARGETS[0], "O1"),
+                recipe,
+                args,
+                directory,
+            )
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("SHA-256 mismatch", result["reason"])
+        self.assertEqual(fake.calls, [[args.zig, "version"]])
+        self.assertFalse((directory / "source").exists())
+        self.assertNotIn("archive_sha256", result)
+        build.assert_not_called()
+
+    def test_png_dependency_revalidates_snapshot_before_compilation(self) -> None:
+        recipe, _, directory = self.fixture("zlib-1.2.13")
+        archive = corpus.checked_archive(self.base, recipe)
+        make_archive(
+            archive, [(f"{recipe['root']}/adler32.c", b"unverified replacement")]
+        )
+        directory.mkdir()
+        commands = corpus.Commands(directory)
+        with (
+            mock.patch.object(corpus.subprocess, "run") as run,
+            self.assertRaisesRegex(corpus.CorpusError, "SHA-256 mismatch"),
+        ):
+            corpus.build_png_zlib(
+                archive,
+                recipe,
+                corpus.Selection("libpng-1.6.44", corpus.TARGETS[0], "O1"),
+                directory,
+                commands,
+                "zig",
+            )
+        run.assert_not_called()
+        self.assertFalse((directory / "dependency-source").exists())
 
     def test_scoped_archive_skips_unselected_links_without_materializing_tests(
         self,
@@ -493,6 +846,7 @@ class SignatureCorpusTests(unittest.TestCase):
                 self.assertFalse((self.base / "extraction").exists())
 
     def test_scoped_archive_checks_all_names_duplicates_and_budgets(self) -> None:
+        (self.base / "scoped.tar.gz").write_bytes(b"mocked archive backing")
         oversized = tarfile.TarInfo("root/tests/oversized")
         oversized.size = 128 * 1024 * 1024 + 1
         cases = [
@@ -520,6 +874,7 @@ class SignatureCorpusTests(unittest.TestCase):
     def test_archive_rejects_negative_sizes_before_budgeting_or_materialization(
         self,
     ) -> None:
+        (self.base / "negative.tar.gz").write_bytes(b"mocked archive backing")
         for roots in (None, ["lib"]):
             for name in ("root/lib/negative", "root/tests/link"):
                 with self.subTest(roots=roots, name=name):
@@ -724,6 +1079,8 @@ class SignatureCorpusTests(unittest.TestCase):
 
     def test_versioned_pipeline_reuses_family_harness_and_profile_sources(self) -> None:
         for profile in corpus.VERSIONED_FAMILIES:
+            if profile in corpus.configured.PINS:
+                continue
             with self.subTest(profile=profile):
                 recipe, args, directory = self.fixture(profile)
                 family = recipe["harness"]
@@ -764,7 +1121,13 @@ class SignatureCorpusTests(unittest.TestCase):
                 self.assertEqual(result["recipe"]["version"], recipe["version"])
                 self.assertEqual(set(result["source_sha256"]), set(recipe["sources"]))
                 compilations = [
-                    call for call in fake.calls if call[1] == "cc" and "-c" in call
+                    call
+                    for call in fake.calls
+                    if call[1] == "cc"
+                    and "-c" in call
+                    and not Path(call[call.index("-o") + 1]).name.startswith(
+                        "dependency-"
+                    )
                 ]
                 units = [Path(call[call.index("-c") + 1]) for call in compilations]
                 self.assertEqual(
@@ -788,7 +1151,11 @@ class SignatureCorpusTests(unittest.TestCase):
                 for compilation in compilations:
                     for define in recipe["defines"]:
                         self.assertIn(f"-D{define}", compilation)
-                archive = next(call for call in fake.calls if call[1] == "ar")
+                archive = next(
+                    call
+                    for call in fake.calls
+                    if call[1] == "ar" and Path(call[3]).name == f"lib{profile}.a"
+                )
                 self.assertEqual(Path(archive[3]).name, f"lib{profile}.a")
                 if family == "mbedtls":
                     truth = json.loads(
@@ -807,9 +1174,586 @@ class SignatureCorpusTests(unittest.TestCase):
                             any(flag.startswith("-DMBEDTLS_") for flag in compilation)
                         )
 
+    def test_configured_profiles_link_all_owned_archives_and_preserve_provenance(
+        self,
+    ) -> None:
+        for profile in corpus.configured.PINS:
+            with self.subTest(profile=profile):
+                recipe, args, directory = self.fixture(profile)
+                directory = directory.with_name(profile)
+                fake = FakeProducers()
+                returned: list[Any] = []
+
+                def build(
+                    context: Any,
+                    *,
+                    recipe: dict[str, Any] = recipe,
+                    profile: str = profile,
+                    directory: Path = directory,
+                    returned: list[Any] = returned,
+                ) -> Any:
+                    self.assertEqual(
+                        context.verified_archive_sha256,
+                        corpus.sha256(self.base / recipe["archive"]),
+                    )
+                    self.assertEqual(context.source_class, "public-source-archive")
+                    self.assertEqual(context.jobs, 1)
+                    self.assertNotIn("CREDENTIAL_SENTINEL", context.environment)
+                    script = (
+                        "Configure" if profile.startswith("openssl") else "configure"
+                    )
+                    self.assertEqual(
+                        (context.source / script).read_bytes(),
+                        b"fake trusted host script",
+                    )
+                    context.run(
+                        [str(context.make), "--version"],
+                        cwd=context.source,
+                        env={"CC": "recorded-wrapper", "SOURCE_DATE_EPOCH": "0"},
+                    )
+                    names = (
+                        ("libssl.a", "libcrypto.a")
+                        if profile.startswith("openssl")
+                        else ("libcurl.a",)
+                    )
+                    archives = tuple(directory / name for name in names)
+                    objects = tuple(
+                        directory / f"owned-{index}.o" for index in range(len(names))
+                    )
+                    for path in (*archives, *objects):
+                        path.write_bytes(b"fake owned library output")
+                    includes = (
+                        context.source / "include",
+                        context.source / "generated/include",
+                    )
+                    provenance = {
+                        "archive_sha256": context.verified_archive_sha256,
+                        "compiler_wrapper": {"sha256": "f" * 64},
+                        "host_script_sha256": {
+                            name: corpus.sha256(context.source / name)
+                            for name in (
+                                ("Configure",)
+                                if profile.startswith("openssl")
+                                else ("configure",)
+                            )
+                        },
+                        "tools": {
+                            "make": {
+                                "path": str(context.make),
+                                "sha256": corpus.sha256(context.make),
+                            }
+                        },
+                    }
+                    produced = corpus.configured.ConfiguredBuild(
+                        archives, objects, includes, ("-lm",), provenance
+                    )
+                    returned.append(produced)
+                    return produced
+
+                def resolve(value: str) -> str:
+                    return (
+                        str(self.base / value)
+                        if value in ("make", "perl", "sh")
+                        else value
+                    )
+
+                poisoned = {
+                    "CREDENTIAL_SENTINEL": "not-for-receipts",
+                    "OPENSSL_LOCAL_CONFIG_DIR": "/not-executed",
+                    "OPENSSL_CONF": "/not-executed",
+                    "PERL5OPT": "not-executed",
+                    "PERL5LIB": "/not-executed",
+                    "BASH_ENV": "/not-executed",
+                    "ENV": "/not-executed",
+                    "CONFIG_SITE": "/not-executed",
+                    "HOME": "/not-the-isolated-home",
+                }
+                with (
+                    mock.patch.dict(
+                        corpus.configured.PINS, {profile: recipe["sha256"]}
+                    ),
+                    mock.patch.dict(corpus.os.environ, poisoned),
+                    mock.patch.object(corpus, "executable", side_effect=resolve),
+                    mock.patch.object(
+                        corpus.configured, "build_configured_profile", side_effect=build
+                    ),
+                    mock.patch.object(
+                        corpus.subprocess, "run", side_effect=fake.run
+                    ) as run,
+                ):
+                    result = corpus.build_slice(
+                        corpus.Selection(profile, corpus.TARGETS[0], "O1"),
+                        recipe,
+                        args,
+                        directory,
+                    )
+                self.assertEqual(result["status"], "measured", result)
+                produced = returned[0]
+                self.assertEqual(result["configured_build"], produced.provenance)
+                self.assertEqual(result["archive_sha256"], recipe["sha256"])
+                self.assertEqual(
+                    result["source_snapshot_policy"],
+                    "bounded-regular-fd-sha256-verified-bytes-v1",
+                )
+                self.assertEqual(result["env_policy"], "configured-clean-allowlist-v1")
+                self.assertEqual(
+                    result["tools"]["zig"]["sha256"], corpus.sha256(Path(args.zig))
+                )
+                license_path = (
+                    directory / "source" / recipe["root"] / recipe["license_file"]
+                )
+                self.assertEqual(result["license_sha256"], corpus.sha256(license_path))
+                compilations = [
+                    call for call in fake.calls if call[1] == "cc" and "-c" in call
+                ]
+                self.assertEqual(len(compilations), 2)
+                for call in compilations:
+                    for include in produced.include_directories:
+                        self.assertIn(str(include), call)
+                links = [
+                    call for call in fake.calls if call[1] == "cc" and "-c" not in call
+                ]
+                for call in links:
+                    start, end = (
+                        call.index("-Wl,--whole-archive"),
+                        call.index("-Wl,--no-whole-archive"),
+                    )
+                    self.assertEqual(
+                        call[start + 1 : end], list(map(str, produced.archives))
+                    )
+                    self.assertIn("-Wl,--no-gc-sections", call)
+                builder = next(
+                    call for call in fake.calls if Path(call[0]).name == "builder"
+                )
+                owned = [
+                    builder[index + 1]
+                    for index, flag in enumerate(builder)
+                    if flag == "--object"
+                ]
+                self.assertEqual(owned, list(map(str, produced.objects)))
+                records = json.loads(
+                    (directory / "commands.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(len(records), len(run.call_args_list))
+                for record, call in zip(records, run.call_args_list):
+                    actual_env = call.kwargs["env"]
+                    self.assertEqual(
+                        record["env_policy"], "configured-clean-allowlist-v1"
+                    )
+                    self.assertEqual(record["environment"], actual_env)
+                    self.assertEqual(
+                        actual_env["HOME"], str(directory / "configured-home")
+                    )
+                    self.assertEqual(actual_env["CONFIG_SITE"], "/dev/null")
+                    self.assertTrue(
+                        set(actual_env) <= corpus.configured.CLEAN_ENVIRONMENT_KEYS
+                    )
+                    for key in poisoned.keys() - {"HOME", "CONFIG_SITE"}:
+                        self.assertNotIn(key, actual_env)
+                host = next(
+                    record
+                    for record in records
+                    if Path(record["argv"][0]).name == "make"
+                )
+                self.assertEqual(
+                    host["cwd"], str(directory / "source" / recipe["root"])
+                )
+                self.assertEqual(host["environment"]["CC"], "recorded-wrapper")
+                self.assertNotIn("CREDENTIAL_SENTINEL", json.dumps(records))
+                if profile.startswith("curl"):
+                    guess = directory / "source" / recipe["root"] / "config.guess"
+                    self.assertEqual(
+                        result["host_build_triplet"]["sha256"], corpus.sha256(guess)
+                    )
+                    self.assertEqual(
+                        result["host_build_triplet"]["value"], "aarch64-apple-darwin24"
+                    )
+
+    def test_command_recorder_preserves_positional_api_and_scopes_overlay_receipts(
+        self,
+    ) -> None:
+        directory = self.base / "commands"
+        directory.mkdir()
+        child = directory / "host-build"
+        child.mkdir()
+        fake = FakeProducers()
+        with mock.patch.dict(
+            corpus.os.environ, {"CREDENTIAL_SENTINEL": "not-for-receipts"}
+        ):
+            commands = corpus.Commands(directory)
+        output = directory / "version.txt"
+        with mock.patch.object(corpus.subprocess, "run", side_effect=fake.run) as run:
+            self.assertEqual(
+                commands.run(["zig", "version"], output, (0,)), fake.version
+            )
+            commands.run(["zig", "version"], cwd=child, env={"CFLAGS": "-O1 -g0"})
+        self.assertEqual(output.read_text(encoding="utf-8"), fake.version)
+        first, second = run.call_args_list
+        self.assertEqual(first.kwargs["cwd"], directory)
+        self.assertEqual(second.kwargs["cwd"], child)
+        self.assertEqual(second.kwargs["env"]["CFLAGS"], "-O1 -g0")
+        self.assertEqual(
+            second.kwargs["env"]["CREDENTIAL_SENTINEL"], "not-for-receipts"
+        )
+        records = json.loads((directory / "commands.json").read_text(encoding="utf-8"))
+        self.assertEqual(records[1]["environment"]["CFLAGS"], "-O1 -g0")
+        self.assertEqual(records[1]["cwd"], str(child))
+        self.assertNotIn("CREDENTIAL_SENTINEL", json.dumps(records))
+
+    def test_clean_command_mode_rejects_inherited_and_overlay_script_environment(
+        self,
+    ) -> None:
+        directory = self.base / "clean-commands"
+        directory.mkdir()
+        poisoned = {
+            "PERL5OPT": "not-executed",
+            "PERL5LIB": "/not-executed",
+            "BASH_ENV": "/not-executed",
+            "ENV": "/not-executed",
+            "OPENSSL_LOCAL_CONFIG_DIR": "/not-executed",
+            "HOME": "/not-the-isolated-home",
+            "CONFIG_SITE": "/not-executed",
+        }
+        with mock.patch.dict(corpus.os.environ, poisoned):
+            commands = corpus.Commands(directory, clean_environment=True)
+        fake = FakeProducers()
+        with mock.patch.object(corpus.subprocess, "run", side_effect=fake.run) as run:
+            commands.run(
+                ["zig", "version"],
+                env={**poisoned, "CFLAGS": "-O1"},
+                clean_environment=True,
+            )
+        actual = run.call_args.kwargs["env"]
+        for key in poisoned.keys() - {"HOME", "CONFIG_SITE"}:
+            self.assertNotIn(key, actual)
+        self.assertEqual(actual["HOME"], str(directory / "configured-home"))
+        self.assertEqual(actual["CONFIG_SITE"], "/dev/null")
+        self.assertEqual(actual["CFLAGS"], "-O1")
+        self.assertEqual(commands.records[0]["environment"], actual)
+        self.assertEqual(
+            commands.records[0]["env_policy"], "configured-clean-allowlist-v1"
+        )
+
+    def test_configured_manifest_refuses_custom_commands_sources_or_driver_overrides(
+        self,
+    ) -> None:
+        invalid = (
+            ("curl-8.10.1", "sources", ["lib/url.c"]),
+            ("curl-8.10.1", "build_driver", "custom"),
+            ("curl-8.10.1", "configure_argv", ["echo", "arbitrary"]),
+            ("curl-8.10.1", "source_class", "unknown"),
+            ("openssl-3.0.15", "sha256", "0" * 64),
+            ("openssl-3.0.15", "defines", ["CUSTOM_CONFIG"]),
+            ("zlib", "build_driver", "configured"),
+            ("zlib", "sources", []),
+        )
+        for profile, field, value in invalid:
+            with self.subTest(profile=profile, field=field):
+                manifest = corpus.load_manifest()
+                manifest["libraries"][profile][field] = value
+                path = self.base / "configured-recipes.json"
+                corpus.write_json(path, manifest)
+                with self.assertRaises(corpus.CorpusError):
+                    corpus.load_manifest(path)
+
+    def test_configured_unsupported_targets_do_not_touch_cache_or_execute_tools(
+        self,
+    ) -> None:
+        for profile in corpus.configured.PINS:
+            recipe = corpus.load_manifest()["libraries"][profile]
+            for target in corpus.TARGETS[2:]:
+                with (
+                    self.subTest(profile=profile, target=target),
+                    mock.patch.object(corpus, "checked_archive") as check,
+                    mock.patch.object(corpus.subprocess, "run") as run,
+                ):
+                    directory = self.base / f"{profile}-{target}"
+                    result = corpus.build_slice(
+                        corpus.Selection(profile, target, "O1"), recipe, None, directory
+                    )
+                self.assertEqual(result["status"], "unsupported", result)
+                check.assert_not_called()
+                run.assert_not_called()
+
+    def test_configured_archive_corruption_stops_before_host_scripts(self) -> None:
+        profile = "curl-8.10.1"
+        recipe, args, directory = self.fixture(profile)
+        (self.base / recipe["archive"]).write_bytes(b"corrupted archive")
+        with (
+            mock.patch.dict(corpus.configured.PINS, {profile: recipe["sha256"]}),
+            mock.patch.object(corpus.configured, "build_configured_profile") as build,
+            mock.patch.object(corpus.subprocess, "run") as run,
+        ):
+            result = corpus.build_slice(
+                corpus.Selection(profile, corpus.TARGETS[0], "O1"),
+                recipe,
+                args,
+                directory,
+            )
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("SHA-256 mismatch", result["reason"])
+        run.assert_not_called()
+        build.assert_not_called()
+
+    def test_configured_driver_error_remains_failed_without_direct_source_fallback(
+        self,
+    ) -> None:
+        profile = "openssl-3.0.15"
+        recipe, args, directory = self.fixture(profile)
+        fake = FakeProducers()
+        with (
+            mock.patch.dict(corpus.configured.PINS, {profile: recipe["sha256"]}),
+            mock.patch.object(
+                corpus,
+                "executable",
+                side_effect=lambda value: (
+                    str(self.base / value) if value in ("make", "perl", "sh") else value
+                ),
+            ),
+            mock.patch.object(
+                corpus.configured,
+                "build_configured_profile",
+                side_effect=corpus.configured.ConfiguredBuildError(
+                    "explicit configured producer failure"
+                ),
+            ),
+            mock.patch.object(corpus.subprocess, "run", side_effect=fake.run),
+        ):
+            result = corpus.build_slice(
+                corpus.Selection(profile, corpus.TARGETS[0], "O1"),
+                recipe,
+                args,
+                directory,
+            )
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("configured producer failure", result["reason"])
+        self.assertEqual(fake.calls, [[args.zig, "version"]])
+
+    def test_png_dependency_is_linked_but_never_owned_on_elf_targets(self) -> None:
+        recipe, args, directory = self.fixture("libpng-1.6.44")
+        for target in corpus.TARGETS[:-1]:
+            for optimization in ("O1", "O2"):
+                with self.subTest(target=target, optimization=optimization):
+                    selection = corpus.Selection("libpng-1.6.44", target, optimization)
+                    output = directory.with_name(selection.name)
+                    fake = FakeProducers(arch=corpus.ARCHES[target])
+                    with (
+                        mock.patch.object(
+                            corpus, "executable", side_effect=lambda value: value
+                        ),
+                        mock.patch.object(
+                            corpus.subprocess, "run", side_effect=fake.run
+                        ),
+                    ):
+                        result = corpus.build_slice(selection, recipe, args, output)
+                    self.assertEqual(result["status"], "measured", result)
+                    builder = next(
+                        call for call in fake.calls if Path(call[0]).name == "builder"
+                    )
+                    owned = [
+                        Path(builder[index + 1]).name
+                        for index, flag in enumerate(builder)
+                        if flag == "--object"
+                    ]
+                    self.assertEqual(
+                        owned, [f"library-{index:02}.o" for index in range(15)]
+                    )
+                    dependency = result["dependency"]
+                    self.assertTrue(dependency["objects"])
+                    self.assertTrue(set(owned).isdisjoint(dependency["objects"]))
+                    self.assertEqual(
+                        set(result["source_sha256"]), set(recipe["sources"])
+                    )
+                    self.assertEqual(
+                        set(dependency["header_sha256"]), {"zlib.h", "zconf.h"}
+                    )
+                    for call in fake.calls:
+                        if call[1] != "cc":
+                            continue
+                        self.assertIn(f"-{optimization}", call)
+                        self.assertEqual(call[call.index("-target") + 1], target)
+                        if "-c" not in call:
+                            end = call.index("-Wl,--no-whole-archive")
+                            self.assertEqual(
+                                Path(call[end + 1]).name, dependency["archive"]
+                            )
+                            self.assertEqual(call[end + 2], "-lm")
+                            self.assertIn("-Wl,--no-gc-sections", call)
+                        else:
+                            obj = Path(call[call.index("-o") + 1]).name
+                            if obj.startswith("dependency-"):
+                                self.assertIn("-DZ_SOLO", call)
+                                self.assertFalse(
+                                    any(flag.startswith("-DPNG_") for flag in call)
+                                )
+                            else:
+                                self.assertNotIn("-DZ_SOLO", call)
+                                for define in recipe["defines"]:
+                                    self.assertIn(f"-D{define}", call)
+                                includes = [
+                                    Path(call[index + 1])
+                                    for index, flag in enumerate(call)
+                                    if flag == "-I"
+                                ]
+                                self.assertEqual(
+                                    includes,
+                                    [
+                                        output / "source" / recipe["root"],
+                                        output / "dependency-source/zlib-1.2.13",
+                                    ],
+                                )
+                    header = result["header_copy"]
+                    root = output / "source" / recipe["root"]
+                    self.assertEqual(
+                        (root / header["source"]).read_bytes(),
+                        (root / header["destination"]).read_bytes(),
+                    )
+                    self.assertEqual(
+                        header["source_sha256"], recipe["header_copy"]["sha256"]
+                    )
+                    self.assertEqual(
+                        header["destination_sha256"], header["source_sha256"]
+                    )
+                    self.assertNotEqual(
+                        result["harness_sha256"]["reference"],
+                        result["harness_sha256"]["target"],
+                    )
+                    self.assertTrue(
+                        all(
+                            Path(call[0]).name in ("zig", "eval", "builder")
+                            for call in fake.calls
+                        )
+                    )
+
+    def test_png_manifest_rejects_unsafe_header_dependency_and_simd_changes(
+        self,
+    ) -> None:
+        original = corpus.load_manifest()["libraries"]["libpng-1.6.44"]
+        invalid = [
+            ("dependency", "zlib"),
+            ("dependency", ["zlib-1.2.13"]),
+            ("dependency", "../zlib-1.2.13"),
+            ("dependency", "libpng-1.6.44"),
+            ("header_copy", {**original["header_copy"], "source": "../header.h"}),
+            ("header_copy", {**original["header_copy"], "destination": "/header.h"}),
+            (
+                "header_copy",
+                {**original["header_copy"], "destination": "nested/header.h"},
+            ),
+            ("header_copy", {**original["header_copy"], "sha256": "bad"}),
+            ("header_copy", {**original["header_copy"], "command": "configure"}),
+            ("defines", ["PNG_ARM_NEON_OPT=1"]),
+            ("defines", list(corpus.PNG_SIMD_DEFINES[:-1])),
+            ("sources", ["../png.c"]),
+            ("sources", ["pngtest.c"]),
+            ("sources", original["sources"][:-1]),
+            ("extract_roots", ["scripts"]),
+            ("license_sha256", None),
+            ("license_sha256", "A" * 64),
+        ]
+        for field, value in invalid:
+            with self.subTest(field=field, value=value):
+                manifest = corpus.load_manifest()
+                manifest["libraries"]["libpng-1.6.44"][field] = value
+                path = self.base / "recipes.json"
+                corpus.write_json(path, manifest)
+                with self.assertRaises(corpus.CorpusError):
+                    corpus.load_manifest(path)
+        for profile in ("zlib", "zstd-1.5.6", "mbedtls-2.28.9"):
+            for field in ("dependency", "header_copy"):
+                with self.subTest(profile=profile, field=field):
+                    manifest = corpus.load_manifest()
+                    manifest["libraries"][profile][field] = original[field]
+                    path = self.base / "recipes.json"
+                    corpus.write_json(path, manifest)
+                    with self.assertRaises(corpus.CorpusError):
+                        corpus.load_manifest(path)
+
+    def test_png_bad_dependency_archive_fails_before_any_producer(self) -> None:
+        recipe, args, directory = self.fixture("libpng-1.6.44")
+        (self.base / "zlib-1.2.13.tar.gz").write_bytes(b"corrupt dependency")
+        with mock.patch.object(corpus.subprocess, "run") as run:
+            result = corpus.build_slice(
+                corpus.Selection("libpng-1.6.44", corpus.TARGETS[0], "O1"),
+                recipe,
+                args,
+                directory,
+            )
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("archive SHA-256 mismatch", result["reason"])
+        run.assert_not_called()
+
+    def test_png_bad_header_or_notice_hash_prevents_compilation(self) -> None:
+        recipe, args, directory = self.fixture("libpng-1.6.44")
+        for field in ("header_copy", "license_sha256"):
+            changed = dict(recipe)
+            if field == "header_copy":
+                changed[field] = {**recipe[field], "sha256": "0" * 64}
+            else:
+                changed[field] = "0" * 64
+            fake = FakeProducers()
+            with (
+                self.subTest(field=field),
+                mock.patch.object(
+                    corpus, "executable", side_effect=lambda value: value
+                ),
+                mock.patch.object(corpus.subprocess, "run", side_effect=fake.run),
+            ):
+                result = corpus.build_slice(
+                    corpus.Selection("libpng-1.6.44", corpus.TARGETS[0], "O1"),
+                    changed,
+                    args,
+                    directory.with_name(field),
+                )
+            self.assertEqual(result["status"], "failed", result)
+            self.assertIn("SHA-256 mismatch", result["reason"])
+            self.assertEqual([call[1:] for call in fake.calls], [["version"]])
+
+    def test_png_prebuilt_copy_refuses_existing_destination_and_source_links(
+        self,
+    ) -> None:
+        recipe, _, _ = self.fixture("libpng-1.6.44")
+        source = self.base / "copy-source"
+        original = source / recipe["header_copy"]["source"]
+        destination = source / recipe["header_copy"]["destination"]
+        original.parent.mkdir(parents=True)
+        original.write_bytes(b"#define PNG_TEST_PREBUILT 1\n")
+        destination.write_bytes(b"existing user header")
+        with self.assertRaises(corpus.CorpusError):
+            corpus.copy_png_header(source, recipe)
+        self.assertEqual(destination.read_bytes(), b"existing user header")
+        destination.unlink()
+        original.unlink()
+        original.symlink_to(self.base / "outside-header")
+        (self.base / "outside-header").write_bytes(b"#define PNG_TEST_PREBUILT 1\n")
+        with self.assertRaises(corpus.CorpusError):
+            corpus.copy_png_header(source, recipe)
+        self.assertFalse(destination.exists())
+
+    def test_png_dependency_is_one_level_only(self) -> None:
+        recipe, args, directory = self.fixture("libpng-1.6.44")
+        dependency = dict(corpus.png_zlib_recipe())
+        dependency["dependency"] = "libpng-1.6.44"
+        fake = FakeProducers()
+        with (
+            mock.patch.object(corpus, "png_zlib_recipe", return_value=dependency),
+            mock.patch.object(corpus, "executable", side_effect=lambda value: value),
+            mock.patch.object(corpus.subprocess, "run", side_effect=fake.run),
+        ):
+            result = corpus.build_slice(
+                corpus.Selection("libpng-1.6.44", corpus.TARGETS[0], "O1"),
+                recipe,
+                args,
+                directory,
+            )
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("nonrecursive", result["reason"])
+        self.assertEqual([call[1:] for call in fake.calls], [["version"]])
+
     def test_new_profile_scope_is_printed_before_any_producer_measurement(self) -> None:
         manifest = corpus.load_manifest()
-        for profile in ("zstd-1.5.6", "mbedtls-2.28.9"):
+        _, tool_args, _ = self.fixture()
+        for profile in ("zstd-1.5.6", "mbedtls-2.28.9", "libpng-1.6.44"):
             with self.subTest(profile=profile):
                 stdout = io.StringIO()
                 output = self.base / "target/signature-corpus" / profile
@@ -846,6 +1790,12 @@ class SignatureCorpusTests(unittest.TestCase):
                             str(self.base),
                             "--output-dir",
                             str(output),
+                            "--zig",
+                            tool_args.zig,
+                            "--eval",
+                            tool_args.evaluator,
+                            "--builder",
+                            tool_args.builder,
                         ]
                     )
                 self.assertEqual(code, 0)
@@ -884,6 +1834,7 @@ class SignatureCorpusTests(unittest.TestCase):
             if corpus.harness_family(profile, recipe) not in ("zstd", "mbedtls")
         }
         output = self.base / "target/signature-corpus/selected-version"
+        _, tool_args, _ = self.fixture()
         profile = "sqlite-3.45.3"
         with (
             mock.patch.object(
@@ -900,6 +1851,12 @@ class SignatureCorpusTests(unittest.TestCase):
                     str(self.base),
                     "--output-dir",
                     str(output),
+                    "--zig",
+                    tool_args.zig,
+                    "--eval",
+                    tool_args.evaluator,
+                    "--builder",
+                    tool_args.builder,
                 ]
             )
         self.assertEqual(code, 0)
@@ -1017,6 +1974,7 @@ class SignatureCorpusTests(unittest.TestCase):
             {"baseline_available": "false"},
             {"matched_version_recall_gate": 0.0},
             {"database_sha256": "0" * 64},
+            {"evaluator_binary_sha256": "0" * 64},
             {
                 "after": {
                     "correct": 7,
@@ -1132,17 +2090,262 @@ class SignatureCorpusTests(unittest.TestCase):
             )
         self.assertEqual(result["status"], "measured", result)
 
-    def test_windows_is_explicitly_unsupported_without_producers(self) -> None:
+    def test_windows_direct_profiles_use_matched_pdbs_and_native_pe_policy(
+        self,
+    ) -> None:
+        for profile in ("zlib", "lz4"):
+            with self.subTest(profile=profile):
+                recipe, args, directory = self.fixture(profile)
+                directory = directory.with_name(profile + "-windows")
+                args.diagnostic_limit = 0
+                fake = FakeProducers(binary_format="pe")
+                with (
+                    mock.patch.object(
+                        corpus, "executable", side_effect=lambda value: value
+                    ),
+                    mock.patch.object(corpus.subprocess, "run", side_effect=fake.run),
+                ):
+                    result = corpus.build_slice(
+                        corpus.Selection(profile, "x86_64-windows-gnu", "O1"),
+                        recipe,
+                        args,
+                        directory,
+                    )
+                self.assertEqual(result["status"], "measured", result)
+                compilations = [
+                    call for call in fake.calls if call[1] == "cc" and "-c" in call
+                ]
+                self.assertTrue(compilations)
+                for call in compilations:
+                    self.assertIn("-gcodeview", call)
+                    self.assertIn("-g", call)
+                    self.assertNotIn("-g0", call)
+                links = [
+                    call for call in fake.calls if call[1] == "cc" and "-c" not in call
+                ]
+                for call in links:
+                    self.assertIn("-Wl,--no-gc-sections", call)
+                    self.assertIn("-v", call)
+                    self.assertNotIn("-no-pie", call)
+                    self.assertNotIn("-Wl,--icf=none", call)
+                    self.assertFalse(
+                        any(flag.startswith("-Wl,--pdb=") for flag in call)
+                    )
+                strip = next(call for call in fake.calls if call[1] == "strip-pe")
+                self.assertEqual(Path(strip[2]).name, "target.exe")
+                self.assertEqual(Path(strip[3]).name, "target.stripped.exe")
+                builder = next(
+                    call for call in fake.calls if Path(call[0]).name == "builder"
+                )
+                self.assertEqual(
+                    builder[builder.index("--pdb") + 1],
+                    str(directory / "reference.pdb"),
+                )
+                self.assertEqual(
+                    builder[builder.index("--target-pdb") + 1],
+                    str(directory / "target.pdb"),
+                )
+                self.assertEqual(builder[builder.index("--diagnostic-limit") + 1], "0")
+                for role in ("reference", "target"):
+                    receipt = result["pdb_producer"][role]
+                    self.assertEqual(
+                        receipt["sha256"], corpus.sha256(directory / f"{role}.pdb")
+                    )
+                    self.assertEqual(
+                        result["builder_report"][f"{role}_pdb_sha256"],
+                        receipt["sha256"],
+                    )
+                    replay = receipt["replay"]
+                    self.assertEqual(replay["argv"][1], "lld-link")
+                    self.assertEqual(replay["argv"][-2:], ["-OPT:NOREF", "-OPT:NOICF"])
+                    self.assertEqual(
+                        replay["argv"][2:-2], replay["captured_linker_argv"][1:]
+                    )
+                    self.assertIn("input object.o", replay["argv"])
+                    self.assertNotEqual(
+                        replay["before"]["program_sha256"],
+                        replay["after"]["program_sha256"],
+                    )
+                owned = [
+                    builder[index + 1]
+                    for index, flag in enumerate(builder)
+                    if flag == "--object"
+                ]
+                self.assertTrue(
+                    all(Path(path).name.startswith("library-") for path in owned)
+                )
+
+    def test_windows_missing_pdb_or_unproven_linker_policy_never_reaches_collector(
+        self,
+    ) -> None:
+        for missing_pdb in (True, False):
+            with self.subTest(missing_pdb=missing_pdb):
+                recipe, args, directory = self.fixture()
+                directory = directory.with_name(f"windows-blocked-{missing_pdb}")
+                fake = FakeProducers(binary_format="pe", emit_pdb=not missing_pdb)
+                if not missing_pdb:
+                    fake.pe_policy = "-DEBUG -OPT:REF -OPT:ICF"
+                with (
+                    mock.patch.object(
+                        corpus, "executable", side_effect=lambda value: value
+                    ),
+                    mock.patch.object(corpus.subprocess, "run", side_effect=fake.run),
+                ):
+                    result = corpus.build_slice(
+                        corpus.Selection("zlib", "x86_64-windows-gnu", "O1"),
+                        recipe,
+                        args,
+                        directory,
+                    )
+                self.assertEqual(
+                    result["status"], "unsupported" if missing_pdb else "failed", result
+                )
+                self.assertIn("PDB" if missing_pdb else "ICF", result["reason"])
+                self.assertFalse(
+                    any(Path(call[0]).name == "builder" for call in fake.calls)
+                )
+
+    def test_pe_receipt_does_not_accept_echoed_policy_without_native_execution(
+        self,
+    ) -> None:
+        directory = self.base / "echoed-pe-policy"
+        directory.mkdir()
+        program, pdb = directory / "reference.exe", directory / "reference.pdb"
+        program.write_bytes(b"owned generated executable")
+        pdb.write_bytes(b"owned generated PDB")
+        stderr = directory / "command-000.stderr"
+        stderr.write_text(
+            f"lld-link -DEBUG -OPT:NOREF -OPT:NOICF -OUT:{program} -PDB:{pdb}\n",
+            encoding="utf-8",
+        )
+        commands = corpus.Commands(directory)
+        commands.records.append(
+            {"argv": ["zig", "cc", "-v"], "returncode": 0, "stderr": stderr.name}
+        )
+        with self.assertRaisesRegex(corpus.CorpusError, "native Zig lld-link"):
+            corpus.pe_linker_receipt(commands, "zig", program, pdb)
+
+    def test_pe_replay_refuses_captured_linker_command_for_another_output(self) -> None:
+        directory = self.base / "wrong-pe-output"
+        directory.mkdir()
+        program, pdb = directory / "reference.exe", directory / "reference.pdb"
+        program.write_bytes(b"owned generated executable")
+        pdb.write_bytes(b"owned generated PDB")
+        stderr = directory / "command-000.stderr"
+        stderr.write_text(
+            f"lld-link -DEBUG -OUT:{directory / 'other.exe'} -PDB:{pdb}\n",
+            encoding="utf-8",
+        )
+        commands = corpus.Commands(directory)
+        commands.records.append(
+            {
+                "argv": ["zig", "cc", "-v", "-o", str(program)],
+                "returncode": 0,
+                "stderr": stderr.name,
+                "cwd": str(directory),
+            }
+        )
+        with (
+            mock.patch.object(commands, "run") as run,
+            self.assertRaisesRegex(corpus.CorpusError, "owned output"),
+        ):
+            corpus._replay_pe_link(commands, "zig", program, pdb)
+        run.assert_not_called()
+
+    def test_windows_conflicting_pdb_names_are_explicitly_unsupported_without_measurements(
+        self,
+    ) -> None:
         recipe, args, directory = self.fixture()
-        with mock.patch.object(corpus.subprocess, "run") as run:
+        fake = FakeProducers(binary_format="pe")
+        fake.pdb_conflict = True
+        with mock.patch.object(corpus.subprocess, "run", side_effect=fake.run):
             result = corpus.build_slice(
                 corpus.Selection("zlib", "x86_64-windows-gnu", "O1"),
                 recipe,
                 args,
                 directory,
             )
-        self.assertEqual(result["status"], "unsupported")
-        run.assert_not_called()
+        self.assertEqual(result["status"], "unsupported", result)
+        self.assertIn("conflicting function names", result["reason"])
+        self.assertNotIn("measurements", result)
+        self.assertNotIn("builder_report", result)
+        self.assertFalse((directory / "db.json").exists())
+        self.assertTrue(
+            result["pdb_producer"]["target"]["replay"]["after"]["pdb_sha256"]
+        )
+
+    def test_windows_rejects_collector_pdb_hash_or_range_source_mismatch(self) -> None:
+        for index, update in enumerate(
+            (
+                {"reference_pdb_sha256": "0" * 64},
+                {"target_pdb_sha256": "0" * 64},
+                {"producer_range_source": "unmatched_symbols"},
+            )
+        ):
+            with self.subTest(update=update):
+                recipe, args, directory = self.fixture()
+                directory = directory.with_name(f"windows-wrong-pdb-{index}")
+                fake = FakeProducers(binary_format="pe")
+                fake.report_updates.update(update)
+                with (
+                    mock.patch.object(
+                        corpus, "executable", side_effect=lambda value: value
+                    ),
+                    mock.patch.object(corpus.subprocess, "run", side_effect=fake.run),
+                ):
+                    result = corpus.build_slice(
+                        corpus.Selection("zlib", "x86_64-windows-gnu", "O1"),
+                        recipe,
+                        args,
+                        directory,
+                    )
+                self.assertEqual(result["status"], "failed", result)
+
+    def test_pe_inspection_relaxes_only_symbol_presence_not_format_or_strip_checks(
+        self,
+    ) -> None:
+        directory = self.base / "inspect"
+        directory.mkdir()
+        commands = corpus.Commands(directory)
+        metadata = {
+            "format": "pe",
+            "arch": "x86_64",
+            "static_function_symbols": 0,
+            "dynamic_function_symbols": 4,
+            "debug_sections": [],
+        }
+        with mock.patch.object(commands, "run", return_value=json.dumps(metadata)):
+            corpus.inspect(
+                commands,
+                "eval",
+                directory / "input.exe",
+                "x86_64-windows-gnu",
+                stripped=True,
+            )
+            with self.assertRaises(corpus.CorpusError):
+                corpus.inspect(
+                    commands, "eval", directory / "wrong.elf", "x86_64-linux-musl"
+                )
+        for update in (
+            {"debug_sections": [".debug_info"]},
+            {"static_function_symbols": 1},
+            {"arch": "x86"},
+        ):
+            with self.subTest(update=update):
+                changed = {**metadata, **update}
+                with (
+                    mock.patch.object(
+                        commands, "run", return_value=json.dumps(changed)
+                    ),
+                    self.assertRaises(corpus.CorpusError),
+                ):
+                    corpus.inspect(
+                        commands,
+                        "eval",
+                        directory / "bad.exe",
+                        "x86_64-windows-gnu",
+                        stripped=True,
+                    )
 
     def test_legacy_refresh_synchronizes_deterministic_gzip_and_counts(self) -> None:
         path = self.base / "musl-x86_64.json"

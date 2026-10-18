@@ -191,6 +191,37 @@
       ],
       "scope": "C lib/dictBuilder; no asm files/BMI2 dispatch/MT/legacy/zbuff/CLI/tests/contrib; divsufsort MIT in source. Materialize only lib, LICENSE and COPYING; other archive entries are inspected but not extracted."
     },
+    "libpng-1.6.44": {
+      "id": "libpng-1.6.44",
+      "family": "libpng",
+      "version": "1.6.44",
+      "harness": "libpng",
+      "url": "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.44.tar.gz",
+      "archive": "libpng-1.6.44.tar.gz",
+      "sha256": "0ef5b633d0c65f780c4fced27ff832998e71478c13b45dfb6e94f23a82f64f7c",
+      "root": "libpng-1.6.44",
+      "license": "libpng-2.0",
+      "license_file": "LICENSE",
+      "license_sha256": "7317e078e2d3b5d7ba5a6159e650945153262b44b76f6700f8e9edb261c5143e",
+      "include": ".",
+      "dependency": "zlib-1.2.13",
+      "header_copy": {
+        "source": "scripts/pnglibconf.h.prebuilt",
+        "destination": "pnglibconf.h",
+        "sha256": "42b42e28082fe3e6560f036ef3aa6b1cf8fa28b7a60738fb7e81f8f9f2d829d0"
+      },
+      "defines": [
+        "PNG_ARM_NEON_OPT=0", "PNG_INTEL_SSE_OPT=0", "PNG_MIPS_MSA_OPT=0",
+        "PNG_MIPS_MMI_OPT=0", "PNG_POWERPC_VSX_OPT=0", "PNG_LOONGARCH_LSX_OPT=0"
+      ],
+      "sources": [
+        "png.c", "pngerror.c", "pngget.c", "pngmem.c", "pngpread.c",
+        "pngread.c", "pngrio.c", "pngrtran.c", "pngrutil.c", "pngset.c",
+        "pngtrans.c", "pngwio.c", "pngwrite.c", "pngwtran.c", "pngwutil.c"
+      ],
+      "scope": "Portable static C core: all 15 ordinary library png*.c units; no pngtest/example, ARM/Intel/MIPS/PowerPC/LoongArch SIMD or assembly. Upstream prebuilt pnglibconf.h copied unchanged; all SIMD OPT macros explicitly zero. Fixed zlib-1.2.13 Z_SOLO dependency is link/header-only, never PNG ownership truth. No target execution or default promotion; not optimized production-config coverage.",
+      "build_condition": "No configure or generated target programs. Copy scripts/pnglibconf.h.prebuilt to pnglibconf.h with equal recorded hashes; compile PNG and dependency separately; only PNG objects reach builder --object."
+    },
     "mbedtls-2.28.9": {
       "version": "2.28.9",
       "harness": "mbedtls",
@@ -303,6 +334,46 @@
       ],
       "scope": "Default-config crypto, PSA, X.509 and TLS core; all externally visible strong library functions counted. Default-config includes library self-test entrypoints; not typical production-config coverage. Harnesses use normal APIs only; no self-test calls.",
       "build_condition": "Unmodified include/mbedtls/config.h; library/*.c only; default-disabled Everest omitted. Default-config includes library self-test entrypoints; not typical production-config coverage."
+    },
+    "openssl-3.0.15": {
+      "id": "openssl-3.0.15",
+      "family": "openssl",
+      "harness": "openssl",
+      "version": "3.0.15",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.0.15/openssl-3.0.15.tar.gz",
+      "archive": "openssl-3.0.15.tar.gz",
+      "sha256": "23c666d0edf20f14249b3d8f0368acaee9ab585b09e1de82107c66e1f3ec9533",
+      "root": "openssl-3.0.15",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE.txt",
+      "include": "include",
+      "sources": [],
+      "defines": [],
+      "build_driver": "configured",
+      "source_class": "public-source-archive",
+      "supported_targets": ["x86_64-linux-musl", "aarch64-linux-musl"],
+      "scope": "Portable static libcrypto/libssl; no asm, tests, shared libraries, threads, async, dynamic modules/engines, legacy provider, compression, config autoload, secure memory or KTLS. No CLI build or target execution. Public-strong function ownership only.",
+      "build_condition": "tools/signature_configured.py OPENSSL_OPTIONS; explicit linux-x86_64/linux-aarch64 Configure target; build_generated then libcrypto.a/libssl.a only. Whole pinned source archive admits trusted host Perl/build scripts. Fixed configured driver, not an explicit-source recipe."
+    },
+    "curl-8.10.1": {
+      "id": "curl-8.10.1",
+      "family": "curl",
+      "harness": "curl",
+      "version": "8.10.1",
+      "url": "https://curl.se/download/curl-8.10.1.tar.gz",
+      "archive": "curl-8.10.1.tar.gz",
+      "sha256": "d15ebab765d793e2e96db090f0e172d127859d78ca6f6391d7eafecfd894bbc0",
+      "root": "curl-8.10.1",
+      "license": "curl",
+      "license_file": "COPYING",
+      "include": "include",
+      "sources": [],
+      "defines": [],
+      "build_driver": "configured",
+      "source_class": "public-source-archive",
+      "supported_targets": ["x86_64-linux-musl", "aarch64-linux-musl"],
+      "scope": "Static HTTP-only libcurl, without TLS, compression, IDN, PSL, SSH, RTMP, HTTP2/3, proxy, threaded resolver or optional external libraries. Memory-only URL/escape harnesses never perform transfers. Public-strong function ownership only.",
+      "build_condition": "tools/signature_configured.py CURL_OPTIONS; explicit unequal actual-host --build and target --host force cross mode before any target execution check; make -C lib libcurl.la only. Whole pinned source archive admits trusted host configure/build scripts. Fixed configured driver, not an explicit-source recipe."
     }
   }
 }

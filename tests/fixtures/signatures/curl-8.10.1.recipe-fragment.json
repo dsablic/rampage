@@ -1,0 +1,22 @@
+{
+  "curl-8.10.1": {
+    "id": "curl-8.10.1",
+    "family": "curl",
+    "harness": "curl",
+    "version": "8.10.1",
+    "url": "https://curl.se/download/curl-8.10.1.tar.gz",
+    "archive": "curl-8.10.1.tar.gz",
+    "sha256": "d15ebab765d793e2e96db090f0e172d127859d78ca6f6391d7eafecfd894bbc0",
+    "root": "curl-8.10.1",
+    "license": "curl",
+    "license_file": "COPYING",
+    "include": "include",
+    "sources": [],
+    "defines": [],
+    "build_driver": "configured",
+    "source_class": "public-source-archive",
+    "supported_targets": ["x86_64-linux-musl", "aarch64-linux-musl"],
+    "scope": "Static HTTP-only libcurl, without TLS, compression, IDN, PSL, SSH, RTMP, HTTP2/3, proxy, threaded resolver or optional external libraries. Memory-only URL/escape harnesses never perform transfers. Public-strong function ownership only.",
+    "build_condition": "tools/signature_configured.py CURL_OPTIONS; explicit unequal actual-host --build and target --host force cross mode before any target execution check; make -C lib libcurl.la only. Whole pinned source archive admits trusted host configure/build scripts. Fixed configured driver, not an explicit-source recipe."
+  }
+}
