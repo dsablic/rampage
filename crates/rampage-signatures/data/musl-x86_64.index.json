@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "arch": "x86_64",
+  "scheme": 2,
+  "asset": "musl-x86_64.json.gz",
+  "gzip_sha256": "a694f22852bee59d48d1110dcdd67ad28ae0139a77bf1550c258c9a04bb17693",
+  "compressed_bytes": 8083,
+  "json_bytes": 14244,
+  "signatures": 166,
+  "callee_keys": 6,
+  "recognition": "same_build",
+  "profiles": [
+    {
+      "id": "legacy-musl-x86_64",
+      "library": "musl libc",
+      "version": "musl version not recorded; bundled with Zig 0.17.0",
+      "target": "x86_64-linux-musl",
+      "compiler": "Zig 0.17.0",
+      "optimization": "O1",
+      "license": "MIT",
+      "source": "musl sources bundled with Zig 0.17.0",
+      "source_recipe": "tools/gen-signatures.sh (no-argument frozen baseline recipe)",
+      "archive_sha256": null,
+      "archive_identity_unavailable": "Frozen baseline records Zig version but no upstream source archive digest."
+    }
+  ]
+}

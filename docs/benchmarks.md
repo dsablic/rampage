@@ -6,6 +6,52 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 2.1 delivery slice — four-architecture default corpus
+
+The [frozen delivery evidence](benchmarks/phase2-1-delivery-2026-10-18.json) records 92 raw attempts and
+80 final ELF aggregate cases. The new default assets are data-only compressed databases with per-architecture
+provenance indexes. **2.1 remains open for remaining SDK/runtime and Windows bundle delivery.** The 80% recall
+target remains a Phase 2 acceptance target; a recorded recall failure is not relabeled as a pass.
+
+| Default architecture | Masked entries | Callee keys | Build profiles | Compressed bytes |
+| --- | ---: | ---: | ---: | ---: |
+| x86-64 | 7,489 | 664 | 27 | 479,033 |
+| AArch64 | 7,066 | 404 | 27 | 433,155 |
+| i386 | 2,082 | 90 | 14 | 114,556 |
+| ARM/Thumb | 2,117 | 0 | 14 | 112,076 |
+
+These are index-key counts, not unique-function counts or version-identification results. Current promoted profiles
+cover nine public-library families across the matrix; the x64/AArch64 profiles include reduced OpenSSL and HTTP-only
+curl builds. The frozen musl starter files remain unchanged, with their missing historical archive identity explicit.
+Requested O1/O2 variants can have identical stripped code/databases and do not establish optimizer diversity.
+
+All 80 final cases have **zero wrong/spurious named proposals against full sized twin truth** after reloading the
+actual exported gzip. Input-order and gzip round-trip checks passed. This is bounded evidence, not a universal
+precision claim. Per-library and aggregate recall failures remain in the machine-readable evidence.
+
+Unfiltered x64 unions exposed cross-library false names, including Lua's `pairscont` being called
+`ZSTD_defaultCLevel`. Full training-reference conflict checks remove those collisions without exporting reference
+answers. The hardened per-profile AArch64 OpenSSL run still has two wrong names through raw exact fallbacks;
+those raw results remain frozen. The final corpus withholds raw exact fallback answers across all profiles,
+preserving masked/callee-qualified answers and leaving generic matching schemes and user database priority unchanged.
+It removes 21, 198, 23 and 70 exact answer keys from the respective x64, AArch64, i386 and Thumb candidates.
+
+One new zstd attempt had collector executable hash drift during a local rebuild. Its raw verdict is retained but
+invalidated; the replacement uses frozen tools. Pre-hardening configured-script attempts are also retained and not
+used for promotion. The final validation uses a global held-out image split and complete atomic reference batches.
+
+Live MCP samples loaded hash-checked JSON views of these gzip artifacts, with no writes: the four zlib targets
+returned 79/92/52/39 total names, including runtime names. These are whole-result totals with two detail rows sampled,
+not owned-library recall or independent MCP precision scoring. The running server's built-in corpus was not restarted;
+compiled default-loader/index tests and 17 pack integration tests separately exercise the new registrations.
+The first attempt to pass a gzip directly as a user database failed because that live path accepts JSON; it remains
+recorded rather than omitted. Full API library tests passed with two test threads after a separate 120-second timeout.
+
+Windows x64 producer validation separately measures zlib at 54/62 and LZ4 at 80/104 for both requested optimizations,
+all zero wrong/spurious. These rows do not yet claim Windows profiles in the promoted indexes. No target programs,
+commercial inputs, release tags or CI dispatches are involved. The independent live Phase 1 gate remains unchanged.
+See the [corpus reference](signature-corpus.md) for ownership, curation and reproducibility limits.
+
 ## Phase 2.1 parallel slice — SQLite, aggregate precision and Thumb discovery
 
 **Source slices:** corpus/diagnostics `5f5a7e4`, EHABI discovery `1b67d7c` (2026-10-18).

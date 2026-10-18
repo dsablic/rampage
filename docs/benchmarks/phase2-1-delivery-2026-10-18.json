@@ -1,0 +1,5389 @@
+{
+  "aggregate_cases": [
+    {
+      "arch": "x86_64",
+      "case": "sqlite-x86_64-linux-musl-O1",
+      "case_report_sha256": "11b07ea0f634b7ea24eed671f623993b3d16b0148a9f5bc2b7207ca7c3304780",
+      "full": {
+        "correct": 323,
+        "missed": 1965,
+        "precision": 1.0,
+        "recall": 0.14117132867132867,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2288,
+      "owned": {
+        "correct": 225,
+        "missed": 37,
+        "precision": 1.0,
+        "recall": 0.8587786259541985,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "50dbbcc0b78b357fc1636b172dc1b3f13b5c5388671a4e3915b5ea662160bee0",
+      "symbolized_target_sha256": "82a961600ee5b47b3280db63d8683b426e49da595bf99a4a7dc62863f9b69b82",
+      "truth_functions": 262
+    },
+    {
+      "arch": "x86_64",
+      "case": "libpng-1.6.44-x86_64-linux-musl-O2",
+      "case_report_sha256": "13889be6647d63ba23a76df62922c32e86b3ee0f80393bf54c667c87937541d0",
+      "full": {
+        "correct": 552,
+        "missed": 798,
+        "precision": 1.0,
+        "recall": 0.4088888888888889,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1350,
+      "owned": {
+        "correct": 377,
+        "missed": 19,
+        "precision": 1.0,
+        "recall": 0.952020202020202,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "59cf095724450e8407f40fd3bec7dd0b40f60c0838b7c6cf0eed698dfebbb938",
+      "symbolized_target_sha256": "0d846e231ded65fff8ba4fecea9c5e982b4a084aace39277b58502af9c47b472",
+      "truth_functions": 396
+    },
+    {
+      "arch": "x86_64",
+      "case": "lz4-1.9.4-x86_64-linux-musl-O1",
+      "case_report_sha256": "20c6c41f5d2c038bdf7cbf745f9680df8f756e5a8613194e1a75595343d6af93",
+      "full": {
+        "correct": 141,
+        "missed": 718,
+        "precision": 1.0,
+        "recall": 0.16414435389988358,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 859,
+      "owned": {
+        "correct": 67,
+        "missed": 34,
+        "precision": 1.0,
+        "recall": 0.6633663366336634,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "f351f0e359873aa55bca6eb25ab404080029c8bc531a7a3fdf5955ac20a1d99b",
+      "symbolized_target_sha256": "d334d9d68d5b1076014bdd5e7d88aec863ca720d5d3a6605aa18729c34793faf",
+      "truth_functions": 101
+    },
+    {
+      "arch": "x86_64",
+      "case": "lua-5.4.8-x86_64-linux-musl-O2",
+      "case_report_sha256": "26af2260ae343f18b87ff4b65a4217f2dcd32760d168940aad77398d4dafb7dd",
+      "full": {
+        "correct": 294,
+        "missed": 1246,
+        "precision": 1.0,
+        "recall": 0.19090909090909092,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1540,
+      "owned": {
+        "correct": 151,
+        "missed": 3,
+        "precision": 1.0,
+        "recall": 0.9805194805194806,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "f4ae06392315b586e46b1d0db623dafbf8839c32031d9461b9269d8aa827961b",
+      "symbolized_target_sha256": "28b088690afe2a0832fbdd4ccde98e6e3e6372b261b53c581120f66e9d28fc62",
+      "truth_functions": 154
+    },
+    {
+      "arch": "x86_64",
+      "case": "lua-5.4.8-x86_64-linux-musl-O1",
+      "case_report_sha256": "28bec1ede7f733de4df4c0af5a81f97fd3474a9d5ad1e6ff08909d0082decc46",
+      "full": {
+        "correct": 294,
+        "missed": 1246,
+        "precision": 1.0,
+        "recall": 0.19090909090909092,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1540,
+      "owned": {
+        "correct": 151,
+        "missed": 3,
+        "precision": 1.0,
+        "recall": 0.9805194805194806,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "f4ae06392315b586e46b1d0db623dafbf8839c32031d9461b9269d8aa827961b",
+      "symbolized_target_sha256": "3430844d62c5aba8a30f6a4968a2384973d1dfb45e9967833a6b50dde98e278f",
+      "truth_functions": 154
+    },
+    {
+      "arch": "x86_64",
+      "case": "lz4-x86_64-linux-musl-O1",
+      "case_report_sha256": "36525413ff5cee145c80f20cbcd1325eba6b8abc61fe077fb6584e6831b1d444",
+      "full": {
+        "correct": 144,
+        "missed": 722,
+        "precision": 1.0,
+        "recall": 0.16628175519630484,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 866,
+      "owned": {
+        "correct": 70,
+        "missed": 34,
+        "precision": 1.0,
+        "recall": 0.6730769230769231,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "865f10f197e5130c0d39ff454055baa1d891cd0d26fa273829ea28b48539a02a",
+      "symbolized_target_sha256": "3af8ab4669ff649ed18b0fb5855f0fe8f8fdcb526011f60f1699d7656d19f612",
+      "truth_functions": 104
+    },
+    {
+      "arch": "x86_64",
+      "case": "lz4-1.9.4-x86_64-linux-musl-O2",
+      "case_report_sha256": "3cf40b795e0b62c33aa3e0e60e28de11e3dc739180cee683c310becd90fa9973",
+      "full": {
+        "correct": 141,
+        "missed": 718,
+        "precision": 1.0,
+        "recall": 0.16414435389988358,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 859,
+      "owned": {
+        "correct": 67,
+        "missed": 34,
+        "precision": 1.0,
+        "recall": 0.6633663366336634,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "f351f0e359873aa55bca6eb25ab404080029c8bc531a7a3fdf5955ac20a1d99b",
+      "symbolized_target_sha256": "254145735dc5e01057d75aaeac863dccdf69d672d609e2a7448a34e2a5def018",
+      "truth_functions": 101
+    },
+    {
+      "arch": "x86_64",
+      "case": "zlib-x86_64-linux-musl-O1",
+      "case_report_sha256": "40c3e27c5bd1d98be90158a31d8aff14cda7e96d71070f0ef8b88c5c7c6f2aec",
+      "full": {
+        "correct": 79,
+        "missed": 468,
+        "precision": 1.0,
+        "recall": 0.14442413162705667,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 547,
+      "owned": {
+        "correct": 54,
+        "missed": 8,
+        "precision": 1.0,
+        "recall": 0.8709677419354839,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "6cdbe4f889b413de4eb5e01a4a2b1e4b27484b5ab9b6aa10055a276ba9b81675",
+      "symbolized_target_sha256": "f52bf46adeb84bb2b20bc0d4dd9dc5aac39f27488d6cda67ef4d9cc3f86fcf76",
+      "truth_functions": 62
+    },
+    {
+      "arch": "x86_64",
+      "case": "lua-x86_64-linux-musl-O1",
+      "case_report_sha256": "417eb0be72a7e73cb59d608d85e66dd393310da227ec141233ac364905faf0f1",
+      "full": {
+        "correct": 294,
+        "missed": 1245,
+        "precision": 1.0,
+        "recall": 0.19103313840155944,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1539,
+      "owned": {
+        "correct": 151,
+        "missed": 3,
+        "precision": 1.0,
+        "recall": 0.9805194805194806,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "08c244ebb2ee750f05cba1814c24333925dbbe05d77964db0fb0825abdaeb09e",
+      "symbolized_target_sha256": "4611672eabcdfeb312da60bcb1a065a1b5be5fdc68f7ef698a1c252f15fd5b1c",
+      "truth_functions": 154
+    },
+    {
+      "arch": "x86_64",
+      "case": "sqlite-x86_64-linux-musl-O2",
+      "case_report_sha256": "47050194c9a01bbc94c40e7ff7f8d208053b942135d510088c3850054f7ac13d",
+      "full": {
+        "correct": 323,
+        "missed": 1965,
+        "precision": 1.0,
+        "recall": 0.14117132867132867,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2288,
+      "owned": {
+        "correct": 225,
+        "missed": 37,
+        "precision": 1.0,
+        "recall": 0.8587786259541985,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "50dbbcc0b78b357fc1636b172dc1b3f13b5c5388671a4e3915b5ea662160bee0",
+      "symbolized_target_sha256": "aca42ebab5e230c6a6044422ecd8c26e44ebfe9220e95a0ceba03172c6198998",
+      "truth_functions": 262
+    },
+    {
+      "arch": "x86_64",
+      "case": "sqlite-3.45.3-x86_64-linux-musl-O2",
+      "case_report_sha256": "4c575a614e0280ccc491858bba720d6adde4017e336493c1dfe5d4e8df8e8f18",
+      "full": {
+        "correct": 323,
+        "missed": 1948,
+        "precision": 1.0,
+        "recall": 0.14222809335094672,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2271,
+      "owned": {
+        "correct": 225,
+        "missed": 37,
+        "precision": 1.0,
+        "recall": 0.8587786259541985,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "56c34fa936cddf9f906397ae8da9fe18b315ae88147a28beca05737158cffdaa",
+      "symbolized_target_sha256": "e780ed21db2daa3a9b64e0f2dd29d6c23c964518b366c214498be3e8b471eb84",
+      "truth_functions": 262
+    },
+    {
+      "arch": "x86_64",
+      "case": "openssl-3.0.15-x86_64-linux-musl-O2",
+      "case_report_sha256": "52026e3d603a5cf1427f5a5b7ef406b429f4c5c6db9c59cf13edaf4778ce6184",
+      "full": {
+        "correct": 5151,
+        "missed": 7267,
+        "precision": 1.0,
+        "recall": 0.4148010951844097,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 12418,
+      "owned": {
+        "correct": 5007,
+        "missed": 2949,
+        "precision": 1.0,
+        "recall": 0.6293363499245852,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "3f5c334cf8146f528a26a3e921c5a83f2f65089ffd128b915bd92e8b63c4905c",
+      "symbolized_target_sha256": "6826d494a2d9a6aeb452520b924ad5b646d89409e16499dfd221f7bb429af173",
+      "truth_functions": 7956
+    },
+    {
+      "arch": "x86_64",
+      "case": "sqlite-3.45.3-x86_64-linux-musl-O1",
+      "case_report_sha256": "76c9e33f623ee3590ffd5531d949b91c098087fa45fe804e80687f7a3a00744d",
+      "full": {
+        "correct": 323,
+        "missed": 1948,
+        "precision": 1.0,
+        "recall": 0.14222809335094672,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2271,
+      "owned": {
+        "correct": 225,
+        "missed": 37,
+        "precision": 1.0,
+        "recall": 0.8587786259541985,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "56c34fa936cddf9f906397ae8da9fe18b315ae88147a28beca05737158cffdaa",
+      "symbolized_target_sha256": "5154d976782493b0385370313f51fe933cf5a40fe39df18c493066d98d063f5c",
+      "truth_functions": 262
+    },
+    {
+      "arch": "x86_64",
+      "case": "lz4-x86_64-linux-musl-O2",
+      "case_report_sha256": "77a5d17184c07aa8d250239fcae6e9a81d7610b329867003b493851f6eb1251c",
+      "full": {
+        "correct": 144,
+        "missed": 722,
+        "precision": 1.0,
+        "recall": 0.16628175519630484,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 866,
+      "owned": {
+        "correct": 70,
+        "missed": 34,
+        "precision": 1.0,
+        "recall": 0.6730769230769231,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "865f10f197e5130c0d39ff454055baa1d891cd0d26fa273829ea28b48539a02a",
+      "symbolized_target_sha256": "1f0c598f296082101682e62afaad90d7c8e5e6ce13f5a65d5694f03b168997d2",
+      "truth_functions": 104
+    },
+    {
+      "arch": "x86_64",
+      "case": "zstd-1.5.6-x86_64-linux-musl-O2",
+      "case_report_sha256": "87e5615f7b6d1cbb445ef476fb69aeb24adde2a85583b9886c2626a7850e64ef",
+      "full": {
+        "correct": 400,
+        "missed": 935,
+        "precision": 1.0,
+        "recall": 0.299625468164794,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1335,
+      "owned": {
+        "correct": 299,
+        "missed": 84,
+        "precision": 1.0,
+        "recall": 0.7806788511749347,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "3827b2c465c524f6bc73d81001ed00725d01b20c4827f3a08b91416eeb356a39",
+      "symbolized_target_sha256": "370fd822feca9205f5288d74eaa2e36b2d4e74c35f08fa4134c526056794a13e",
+      "truth_functions": 383
+    },
+    {
+      "arch": "x86_64",
+      "case": "mbedtls-2.28.9-x86_64-linux-musl-O2",
+      "case_report_sha256": "abdda48a0dda57f87aabd0ffe45462812a2ea08ab7b3487affa2f45ef84c5bf5",
+      "full": {
+        "correct": 1028,
+        "missed": 1206,
+        "precision": 1.0,
+        "recall": 0.4601611459265891,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2234,
+      "owned": {
+        "correct": 900,
+        "missed": 117,
+        "precision": 1.0,
+        "recall": 0.8849557522123894,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "204af7eb82573c47529511fd2a2c27161975a5f7500f1aa393f8825c5217367b",
+      "symbolized_target_sha256": "d2f24b252c21ed0341b496f38869519ba40dfab957392f8182c64e748b0982d2",
+      "truth_functions": 1017
+    },
+    {
+      "arch": "x86_64",
+      "case": "openssl-3.0.15-x86_64-linux-musl-O1",
+      "case_report_sha256": "ad862e9d3e97f592428e206639c7d3be77036387de0a8fe9afdd1f34f4e7d8d4",
+      "full": {
+        "correct": 5151,
+        "missed": 7267,
+        "precision": 1.0,
+        "recall": 0.4148010951844097,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 12418,
+      "owned": {
+        "correct": 5007,
+        "missed": 2949,
+        "precision": 1.0,
+        "recall": 0.6293363499245852,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "ff113f443a96b77e2fc4d470cdaca3c956c204ef9ad1c2aba933eb9994ddc146",
+      "symbolized_target_sha256": "06c993fbcbf85d696f47c0dd86ce3bfe327b0ba791a8c3df9c54069b18c422b9",
+      "truth_functions": 7956
+    },
+    {
+      "arch": "x86_64",
+      "case": "libpng-1.6.44-x86_64-linux-musl-O1",
+      "case_report_sha256": "c130bea7bb8a08fd8239b42899e916b46976c00a588a90b4a53adfaafb2b2372",
+      "full": {
+        "correct": 552,
+        "missed": 798,
+        "precision": 1.0,
+        "recall": 0.4088888888888889,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1350,
+      "owned": {
+        "correct": 377,
+        "missed": 19,
+        "precision": 1.0,
+        "recall": 0.952020202020202,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "59cf095724450e8407f40fd3bec7dd0b40f60c0838b7c6cf0eed698dfebbb938",
+      "symbolized_target_sha256": "5b5a94bbfe33def31de863764688aa5b7897bd36fd348b05d2460d7071cd1405",
+      "truth_functions": 396
+    },
+    {
+      "arch": "x86_64",
+      "case": "zlib-1.2.13-x86_64-linux-musl-O1",
+      "case_report_sha256": "c241b403a5f9a29217fca6079657ec572c35143345b8af1ce57fa6106f634132",
+      "full": {
+        "correct": 79,
+        "missed": 468,
+        "precision": 1.0,
+        "recall": 0.14442413162705667,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 547,
+      "owned": {
+        "correct": 54,
+        "missed": 8,
+        "precision": 1.0,
+        "recall": 0.8709677419354839,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "b4bd4eba9f5e12feb0c7880a7b9c3f235bc7fb81654ae2fd9d045aa90f4ce8fd",
+      "symbolized_target_sha256": "85050c473d2c569bfcbcf3f2305e2e4334a9d6fd38025f53ba350dabe6dcafbd",
+      "truth_functions": 62
+    },
+    {
+      "arch": "x86_64",
+      "case": "zstd-1.5.6-x86_64-linux-musl-O1",
+      "case_report_sha256": "ca8c0ed293e3cfe588b011576a753e820aee384ea63dee43e22345e4816c162f",
+      "full": {
+        "correct": 400,
+        "missed": 935,
+        "precision": 1.0,
+        "recall": 0.299625468164794,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1335,
+      "owned": {
+        "correct": 299,
+        "missed": 84,
+        "precision": 1.0,
+        "recall": 0.7806788511749347,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "3827b2c465c524f6bc73d81001ed00725d01b20c4827f3a08b91416eeb356a39",
+      "symbolized_target_sha256": "7c2fbc26adeacc18af4f41a427f6bd824a972de2b46c194b6d25e9ef1c5c921a",
+      "truth_functions": 383
+    },
+    {
+      "arch": "x86_64",
+      "case": "curl-8.10.1-x86_64-linux-musl-O1",
+      "case_report_sha256": "cac1a9139bdeece74a644fcc503d6db56d666b2503570b6fa7859a97d821b9a2",
+      "full": {
+        "correct": 696,
+        "missed": 1094,
+        "precision": 1.0,
+        "recall": 0.3888268156424581,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1790,
+      "owned": {
+        "correct": 553,
+        "missed": 85,
+        "precision": 1.0,
+        "recall": 0.8667711598746082,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "987532114c2a0e3842d60289ac7e0b57f573e2a96cb08473d850aeb1291766f0",
+      "symbolized_target_sha256": "327c0cf34552b942589bab6a604bb0b1d3449096cf79b84c767ee0bf7c9d0db4",
+      "truth_functions": 638
+    },
+    {
+      "arch": "x86_64",
+      "case": "lua-x86_64-linux-musl-O2",
+      "case_report_sha256": "da83365dd203bcbb41b84d2c39d196769bc2d4d1e7479f0c91d01c31467edb11",
+      "full": {
+        "correct": 294,
+        "missed": 1245,
+        "precision": 1.0,
+        "recall": 0.19103313840155944,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1539,
+      "owned": {
+        "correct": 151,
+        "missed": 3,
+        "precision": 1.0,
+        "recall": 0.9805194805194806,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "08c244ebb2ee750f05cba1814c24333925dbbe05d77964db0fb0825abdaeb09e",
+      "symbolized_target_sha256": "948bcd05b5def6834e64f2efe0c4b92009560c3a081ea33c7c0934d881f9b7a1",
+      "truth_functions": 154
+    },
+    {
+      "arch": "x86_64",
+      "case": "zlib-1.2.13-x86_64-linux-musl-O2",
+      "case_report_sha256": "db8e3186dd4c9ef7c200cf98b20168c271477c2ad2b512ed187ed4b588784ea8",
+      "full": {
+        "correct": 79,
+        "missed": 468,
+        "precision": 1.0,
+        "recall": 0.14442413162705667,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 547,
+      "owned": {
+        "correct": 54,
+        "missed": 8,
+        "precision": 1.0,
+        "recall": 0.8709677419354839,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "b4bd4eba9f5e12feb0c7880a7b9c3f235bc7fb81654ae2fd9d045aa90f4ce8fd",
+      "symbolized_target_sha256": "588ec36b9a4d7aca9a3603bbb6d0dd6d4bf9673cb70b2a70e19414944a1964c4",
+      "truth_functions": 62
+    },
+    {
+      "arch": "x86_64",
+      "case": "curl-8.10.1-x86_64-linux-musl-O2",
+      "case_report_sha256": "e429c10fec8511f2796d14cf50b9ebf95a22bcf79607987922eb64038a8aaff9",
+      "full": {
+        "correct": 696,
+        "missed": 1094,
+        "precision": 1.0,
+        "recall": 0.3888268156424581,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1790,
+      "owned": {
+        "correct": 553,
+        "missed": 85,
+        "precision": 1.0,
+        "recall": 0.8667711598746082,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "987532114c2a0e3842d60289ac7e0b57f573e2a96cb08473d850aeb1291766f0",
+      "symbolized_target_sha256": "bae98c28f8114a34517a1b5245404b5d6690359401ae35373509336786c16b5c",
+      "truth_functions": 638
+    },
+    {
+      "arch": "x86_64",
+      "case": "zlib-x86_64-linux-musl-O2",
+      "case_report_sha256": "e9799ba00c0b473db6719b35b44f53af65d7ab2541e6ef81bc2d86a4041f7252",
+      "full": {
+        "correct": 79,
+        "missed": 468,
+        "precision": 1.0,
+        "recall": 0.14442413162705667,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 547,
+      "owned": {
+        "correct": 54,
+        "missed": 8,
+        "precision": 1.0,
+        "recall": 0.8709677419354839,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "6cdbe4f889b413de4eb5e01a4a2b1e4b27484b5ab9b6aa10055a276ba9b81675",
+      "symbolized_target_sha256": "1245c32ab16b31eed5f2a70f3ed5604c48f366e483c4604a40138cd4588c1d86",
+      "truth_functions": 62
+    },
+    {
+      "arch": "x86_64",
+      "case": "mbedtls-2.28.9-x86_64-linux-musl-O1",
+      "case_report_sha256": "fb2397a203dc29ec7236bbfc8f35783b3dbd21d73544ccbedee7a6f507c107b6",
+      "full": {
+        "correct": 1028,
+        "missed": 1206,
+        "precision": 1.0,
+        "recall": 0.4601611459265891,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2234,
+      "owned": {
+        "correct": 900,
+        "missed": 117,
+        "precision": 1.0,
+        "recall": 0.8849557522123894,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "204af7eb82573c47529511fd2a2c27161975a5f7500f1aa393f8825c5217367b",
+      "symbolized_target_sha256": "ab92bcac7e1189591c504cc207d9380f2365c9cf42aec95bbb1e7a609a78177c",
+      "truth_functions": 1017
+    },
+    {
+      "arch": "aarch64",
+      "case": "lua-aarch64-linux-musl-O2",
+      "case_report_sha256": "0d8a3fa9af8bed927b2cd4fe50fff30f0d98fbd4b2a1cefd7b33abcc8bb9bf65",
+      "full": {
+        "correct": 299,
+        "missed": 1345,
+        "precision": 1.0,
+        "recall": 0.1818734793187348,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1644,
+      "owned": {
+        "correct": 145,
+        "missed": 9,
+        "precision": 1.0,
+        "recall": 0.9415584415584416,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "1448c1f0e9c41533e667c7ccb3194ddd33466dc31b4f4ff29ab37f916e6e7ec5",
+      "symbolized_target_sha256": "dbab6cbbb087c409c320efbe0e04651ca0e1c368cf88cc084d95e5d5695fb091",
+      "truth_functions": 154
+    },
+    {
+      "arch": "aarch64",
+      "case": "mbedtls-2.28.9-aarch64-linux-musl-O2",
+      "case_report_sha256": "0db1f419c6d81964ee44599d100db53c8e5349cec149b95492b6860d5b1fb3c9",
+      "full": {
+        "correct": 968,
+        "missed": 1365,
+        "precision": 1.0,
+        "recall": 0.4149164166309473,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2333,
+      "owned": {
+        "correct": 826,
+        "missed": 186,
+        "precision": 1.0,
+        "recall": 0.8162055335968379,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "f64109c5dbcf212d8475d1095f10772f329a15b00e05ea28ee6541f6f87c6d76",
+      "symbolized_target_sha256": "45f7979c72090829eac402a023995f0df056a788df5b52edd55371b57582b777",
+      "truth_functions": 1012
+    },
+    {
+      "arch": "aarch64",
+      "case": "zlib-1.2.13-aarch64-linux-musl-O1",
+      "case_report_sha256": "16897bb7403226c3113ada81d610dd3dc2986216144910676988f0240ea94416",
+      "full": {
+        "correct": 92,
+        "missed": 559,
+        "precision": 1.0,
+        "recall": 0.141321044546851,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 651,
+      "owned": {
+        "correct": 51,
+        "missed": 11,
+        "precision": 1.0,
+        "recall": 0.8225806451612904,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "7dadbacfe6ad1a211369272651d5f8fe083f456dda42dfa9f24a999cb1ef7da8",
+      "symbolized_target_sha256": "62924c33a70132a15dae26a3c31743562c933814a6065b263c99a95e2de7f9e1",
+      "truth_functions": 62
+    },
+    {
+      "arch": "aarch64",
+      "case": "curl-8.10.1-aarch64-linux-musl-O2",
+      "case_report_sha256": "2ed7f0302f5fb315b8ca9f8bb29a97bd63c98b6ddcb8db514a5116175030dd90",
+      "full": {
+        "correct": 699,
+        "missed": 1197,
+        "precision": 1.0,
+        "recall": 0.3686708860759494,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1896,
+      "owned": {
+        "correct": 541,
+        "missed": 97,
+        "precision": 1.0,
+        "recall": 0.8479623824451411,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "6392ff3e3fef516b705673f813bf6a735c55ca14bfbae3eedd9554297fb0a6c2",
+      "symbolized_target_sha256": "7c4008bae118ecb2a507a15dc2f059e63aa44e008d4e794726838b55e8009640",
+      "truth_functions": 638
+    },
+    {
+      "arch": "aarch64",
+      "case": "sqlite-3.45.3-aarch64-linux-musl-O2",
+      "case_report_sha256": "41175c5a59a22371b2c4324d4eab0dd36bc3a8182c4f8634bb178a0155fe8829",
+      "full": {
+        "correct": 302,
+        "missed": 2068,
+        "precision": 1.0,
+        "recall": 0.12742616033755275,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2370,
+      "owned": {
+        "correct": 199,
+        "missed": 63,
+        "precision": 1.0,
+        "recall": 0.7595419847328244,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "8166b52d1065012f1a4277c7c7e24e0e42ac0be4e4481ade2aa63dee2e10279d",
+      "symbolized_target_sha256": "99a6c7f7bb5694aa6bfbf0be8272ef728bf973f8a5eeae67f1be2486a3cfaec3",
+      "truth_functions": 262
+    },
+    {
+      "arch": "aarch64",
+      "case": "openssl-3.0.15-aarch64-linux-musl-O1",
+      "case_report_sha256": "487b7a8cea81db771fa33273806245ab5f17623b6e836d4f0d858e383cccab6a",
+      "full": {
+        "correct": 4724,
+        "missed": 7801,
+        "precision": 1.0,
+        "recall": 0.37716566866267465,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 12525,
+      "owned": {
+        "correct": 4587,
+        "missed": 3369,
+        "precision": 1.0,
+        "recall": 0.5765460030165912,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "c1a36d35fe0af6ace079c088174b32913a5698d16ca40b00488c4a7fefb9f029",
+      "symbolized_target_sha256": "5735cdd5954f0962434ce486c2ed03ec581c69009ccad719bb76896d0397240f",
+      "truth_functions": 7956
+    },
+    {
+      "arch": "aarch64",
+      "case": "sqlite-aarch64-linux-musl-O2",
+      "case_report_sha256": "676dc76c8f5b14a62f3008d8fdd6105f95102350d83b5cef55036143113c1f03",
+      "full": {
+        "correct": 302,
+        "missed": 2085,
+        "precision": 1.0,
+        "recall": 0.1265186426476749,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2387,
+      "owned": {
+        "correct": 199,
+        "missed": 63,
+        "precision": 1.0,
+        "recall": 0.7595419847328244,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "6b379f185c8f38b15cd07eb4d6b82c59ee6334573b32235727892a8e6e2fe84e",
+      "symbolized_target_sha256": "3d03a1b62cb0d5942a6539030b4fd24532d7d5f44235ddf449dfefe4dd32c1ff",
+      "truth_functions": 262
+    },
+    {
+      "arch": "aarch64",
+      "case": "sqlite-aarch64-linux-musl-O1",
+      "case_report_sha256": "6c399d14e7bf3e765a8ce5e0751148dcf55e656d44283820c6c927a05cf0c4a9",
+      "full": {
+        "correct": 302,
+        "missed": 2085,
+        "precision": 1.0,
+        "recall": 0.1265186426476749,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2387,
+      "owned": {
+        "correct": 199,
+        "missed": 63,
+        "precision": 1.0,
+        "recall": 0.7595419847328244,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "6b379f185c8f38b15cd07eb4d6b82c59ee6334573b32235727892a8e6e2fe84e",
+      "symbolized_target_sha256": "a16834a3530f9095455b4444152221a0ef28594a43dcb096667dd037ab9028a6",
+      "truth_functions": 262
+    },
+    {
+      "arch": "aarch64",
+      "case": "sqlite-3.45.3-aarch64-linux-musl-O1",
+      "case_report_sha256": "75ce8b5aab4d9e01c16f640b5d86aca355f5a43353f7c08fd5b66d7dd74435ed",
+      "full": {
+        "correct": 302,
+        "missed": 2068,
+        "precision": 1.0,
+        "recall": 0.12742616033755275,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2370,
+      "owned": {
+        "correct": 199,
+        "missed": 63,
+        "precision": 1.0,
+        "recall": 0.7595419847328244,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "8166b52d1065012f1a4277c7c7e24e0e42ac0be4e4481ade2aa63dee2e10279d",
+      "symbolized_target_sha256": "1bad63efb97f3f7b796e157d82cdfd36a5320a932f93168d7e7c9287ec8cec40",
+      "truth_functions": 262
+    },
+    {
+      "arch": "aarch64",
+      "case": "mbedtls-2.28.9-aarch64-linux-musl-O1",
+      "case_report_sha256": "79f249646d037da5d165007c0fffc0ae4f3d5091063260a49c69624306722914",
+      "full": {
+        "correct": 968,
+        "missed": 1365,
+        "precision": 1.0,
+        "recall": 0.4149164166309473,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2333,
+      "owned": {
+        "correct": 826,
+        "missed": 186,
+        "precision": 1.0,
+        "recall": 0.8162055335968379,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "f64109c5dbcf212d8475d1095f10772f329a15b00e05ea28ee6541f6f87c6d76",
+      "symbolized_target_sha256": "1008f5a9f2e196982abce7bcab02c97009dd823c0a3fa82a177df9467a7751a7",
+      "truth_functions": 1012
+    },
+    {
+      "arch": "aarch64",
+      "case": "zlib-1.2.13-aarch64-linux-musl-O2",
+      "case_report_sha256": "7b94d60805a648e0e4687e3c1f49ddb4a968a866c3921d5e01f574684c1abae7",
+      "full": {
+        "correct": 92,
+        "missed": 559,
+        "precision": 1.0,
+        "recall": 0.141321044546851,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 651,
+      "owned": {
+        "correct": 51,
+        "missed": 11,
+        "precision": 1.0,
+        "recall": 0.8225806451612904,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "7dadbacfe6ad1a211369272651d5f8fe083f456dda42dfa9f24a999cb1ef7da8",
+      "symbolized_target_sha256": "97b21865d8427d8ef63ee898f643437577377a5a7300923802a7d4025a8198e8",
+      "truth_functions": 62
+    },
+    {
+      "arch": "aarch64",
+      "case": "zlib-aarch64-linux-musl-O2",
+      "case_report_sha256": "93e623558c29ae138f29daedd3201f95756b66003813e5ea5d5881ad5346a029",
+      "full": {
+        "correct": 92,
+        "missed": 559,
+        "precision": 1.0,
+        "recall": 0.141321044546851,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 651,
+      "owned": {
+        "correct": 51,
+        "missed": 11,
+        "precision": 1.0,
+        "recall": 0.8225806451612904,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "09199a2a497b7465413bef018d4fb7d55f1c645b8efb392350b46e411223cf9d",
+      "symbolized_target_sha256": "459915d0228c9fe1d116c9bb61ee27df71aeda59f5d30dafe2afcaf1f89aecf3",
+      "truth_functions": 62
+    },
+    {
+      "arch": "aarch64",
+      "case": "lua-aarch64-linux-musl-O1",
+      "case_report_sha256": "98444b7ad9a0c2dd098fd49307be3652c0134687b9bd507ca6328c02384e8951",
+      "full": {
+        "correct": 299,
+        "missed": 1345,
+        "precision": 1.0,
+        "recall": 0.1818734793187348,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1644,
+      "owned": {
+        "correct": 145,
+        "missed": 9,
+        "precision": 1.0,
+        "recall": 0.9415584415584416,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "1448c1f0e9c41533e667c7ccb3194ddd33466dc31b4f4ff29ab37f916e6e7ec5",
+      "symbolized_target_sha256": "7a1545c380c60a2418e383dc83b3d9f1d71b2107402cfbe2f704a10aecd50194",
+      "truth_functions": 154
+    },
+    {
+      "arch": "aarch64",
+      "case": "lz4-1.9.4-aarch64-linux-musl-O2",
+      "case_report_sha256": "998f8846fb8e2df20538954fa2f152de9ae5fe2f870f9008005047263e43e5ad",
+      "full": {
+        "correct": 155,
+        "missed": 809,
+        "precision": 1.0,
+        "recall": 0.1607883817427386,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 964,
+      "owned": {
+        "correct": 63,
+        "missed": 38,
+        "precision": 1.0,
+        "recall": 0.6237623762376238,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "c68fbc380423be5d2927bb478d9fcaa0bfff246751d5ec7190e16887d2c31732",
+      "symbolized_target_sha256": "626035fb05dadb2eb3404d87ad355cdf7f4ed8b058126e0e2f1848247955df64",
+      "truth_functions": 101
+    },
+    {
+      "arch": "aarch64",
+      "case": "openssl-3.0.15-aarch64-linux-musl-O2",
+      "case_report_sha256": "99d411157351fa1e48a09542afe1bb6e0a209b7dc6b8c2a0ba2c011f2e4e20c4",
+      "full": {
+        "correct": 4724,
+        "missed": 7801,
+        "precision": 1.0,
+        "recall": 0.37716566866267465,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 12525,
+      "owned": {
+        "correct": 4587,
+        "missed": 3369,
+        "precision": 1.0,
+        "recall": 0.5765460030165912,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "950b415010ed8f6803a5afdd0be3e0e1210be83fb4db57290475a8f869d5a84a",
+      "symbolized_target_sha256": "c9c695b7692ad1367cb6f37c3b7bfe4406ebf6047b711076baefecd46373d65f",
+      "truth_functions": 7956
+    },
+    {
+      "arch": "aarch64",
+      "case": "zstd-1.5.6-aarch64-linux-musl-O1",
+      "case_report_sha256": "a9e20c3f3ac691e4eb1d626568c0e321693439db0fe8661c67c7993bf35d44e6",
+      "full": {
+        "correct": 386,
+        "missed": 1054,
+        "precision": 1.0,
+        "recall": 0.26805555555555555,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1440,
+      "owned": {
+        "correct": 268,
+        "missed": 115,
+        "precision": 1.0,
+        "recall": 0.6997389033942559,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "080720c92501f993102df8abe865a7d23b29f7032ad798768c28109929f0afb5",
+      "symbolized_target_sha256": "4de91535436b685f5b98879b69f36113642a143b51b92e730bb1509277e1455a",
+      "truth_functions": 383
+    },
+    {
+      "arch": "aarch64",
+      "case": "zstd-1.5.6-aarch64-linux-musl-O2",
+      "case_report_sha256": "aaa04b2efa671b712efef20234a772dac3b1cfcb8d57ca22cc0f411be8db8a1a",
+      "full": {
+        "correct": 386,
+        "missed": 1054,
+        "precision": 1.0,
+        "recall": 0.26805555555555555,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1440,
+      "owned": {
+        "correct": 268,
+        "missed": 115,
+        "precision": 1.0,
+        "recall": 0.6997389033942559,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "080720c92501f993102df8abe865a7d23b29f7032ad798768c28109929f0afb5",
+      "symbolized_target_sha256": "7e59646e43d53312b68d9f897eaec7b8ac86a4aef57e6ddb45ce83a21c79d759",
+      "truth_functions": 383
+    },
+    {
+      "arch": "aarch64",
+      "case": "lua-5.4.8-aarch64-linux-musl-O2",
+      "case_report_sha256": "aadd746d0eac994dbb156b4c2c5bd221d9bb1a60d0c881cd3598b57ffe345c43",
+      "full": {
+        "correct": 299,
+        "missed": 1346,
+        "precision": 1.0,
+        "recall": 0.1817629179331307,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1645,
+      "owned": {
+        "correct": 145,
+        "missed": 9,
+        "precision": 1.0,
+        "recall": 0.9415584415584416,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "1253c69a24db42a9a10e3599036d3ece521e6c873b658ad4f4164828876b2d06",
+      "symbolized_target_sha256": "1c761ade24d6afa1a3e49c868ef9f018d782bf7b153aede38877fa96cba4ed28",
+      "truth_functions": 154
+    },
+    {
+      "arch": "aarch64",
+      "case": "curl-8.10.1-aarch64-linux-musl-O1",
+      "case_report_sha256": "ac0c68793e4f06f8d0fe65378b0827a0d82c7d11b9dfe4ccb4b172e4ecce878a",
+      "full": {
+        "correct": 699,
+        "missed": 1197,
+        "precision": 1.0,
+        "recall": 0.3686708860759494,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1896,
+      "owned": {
+        "correct": 541,
+        "missed": 97,
+        "precision": 1.0,
+        "recall": 0.8479623824451411,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "6392ff3e3fef516b705673f813bf6a735c55ca14bfbae3eedd9554297fb0a6c2",
+      "symbolized_target_sha256": "19fd87c60e4755a424a48e7559b04625de385f8f0a22ed66524b41bdbfb76771",
+      "truth_functions": 638
+    },
+    {
+      "arch": "aarch64",
+      "case": "libpng-1.6.44-aarch64-linux-musl-O1",
+      "case_report_sha256": "acb55a8c1c1465447567e212690442a3c885ba82ad16a010ae928f65eba0693d",
+      "full": {
+        "correct": 541,
+        "missed": 915,
+        "precision": 1.0,
+        "recall": 0.3715659340659341,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1456,
+      "owned": {
+        "correct": 354,
+        "missed": 42,
+        "precision": 1.0,
+        "recall": 0.8939393939393939,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "16ce8267e1e5e805c89b1bc9c4a173ca236dbf9ac692c3f891fb1005fe44da87",
+      "symbolized_target_sha256": "fae882ac3f04a0969c7fdf7daa9ef864aacc3fef9bf16ac1ba0b3d90fd4545f0",
+      "truth_functions": 396
+    },
+    {
+      "arch": "aarch64",
+      "case": "lz4-aarch64-linux-musl-O2",
+      "case_report_sha256": "aff036d13b2220dcec9f595fc99b523854ca24a0e2cf7dacdc87a0a1c432430f",
+      "full": {
+        "correct": 158,
+        "missed": 813,
+        "precision": 1.0,
+        "recall": 0.1627188465499485,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 971,
+      "owned": {
+        "correct": 66,
+        "missed": 38,
+        "precision": 1.0,
+        "recall": 0.6346153846153846,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "ec91753b0b724437693bace5caf52f934cf40205aad3bd19cfa4f37d80820592",
+      "symbolized_target_sha256": "e0e2ce56f351565abe9bba49f632d75a20c3b1882e4fbc7ba35772666cfb5a38",
+      "truth_functions": 104
+    },
+    {
+      "arch": "aarch64",
+      "case": "zlib-aarch64-linux-musl-O1",
+      "case_report_sha256": "b98c9f88b9dcf0a9a45d5b305cc1654850b9e548abb68e9cfc5fb6bbb96424bf",
+      "full": {
+        "correct": 92,
+        "missed": 559,
+        "precision": 1.0,
+        "recall": 0.141321044546851,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 651,
+      "owned": {
+        "correct": 51,
+        "missed": 11,
+        "precision": 1.0,
+        "recall": 0.8225806451612904,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "09199a2a497b7465413bef018d4fb7d55f1c645b8efb392350b46e411223cf9d",
+      "symbolized_target_sha256": "5649315bd86ef4ffd4b444370384804ad90209a64de0eb6bf39e2ecd40990ab9",
+      "truth_functions": 62
+    },
+    {
+      "arch": "aarch64",
+      "case": "libpng-1.6.44-aarch64-linux-musl-O2",
+      "case_report_sha256": "d07e0cb7dbc51b02288ae19b5014c8ec539890c80847aa3bfe4b109e10e5084f",
+      "full": {
+        "correct": 541,
+        "missed": 915,
+        "precision": 1.0,
+        "recall": 0.3715659340659341,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1456,
+      "owned": {
+        "correct": 354,
+        "missed": 42,
+        "precision": 1.0,
+        "recall": 0.8939393939393939,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "16ce8267e1e5e805c89b1bc9c4a173ca236dbf9ac692c3f891fb1005fe44da87",
+      "symbolized_target_sha256": "bbbaec6ed332f8a571fdcbdba2c74616da059018236024c9330bb0cfd1e58342",
+      "truth_functions": 396
+    },
+    {
+      "arch": "aarch64",
+      "case": "lz4-1.9.4-aarch64-linux-musl-O1",
+      "case_report_sha256": "d4703e6b86428dcb0ca3bab4ab573388a88e6c8dda006d4b6eb0190ab8e78a82",
+      "full": {
+        "correct": 155,
+        "missed": 809,
+        "precision": 1.0,
+        "recall": 0.1607883817427386,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 964,
+      "owned": {
+        "correct": 63,
+        "missed": 38,
+        "precision": 1.0,
+        "recall": 0.6237623762376238,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "c68fbc380423be5d2927bb478d9fcaa0bfff246751d5ec7190e16887d2c31732",
+      "symbolized_target_sha256": "20e10e05433ae4a3952d6f4a73973c8dc30e7d9c26c01cfb674e31aeda803e60",
+      "truth_functions": 101
+    },
+    {
+      "arch": "aarch64",
+      "case": "lua-5.4.8-aarch64-linux-musl-O1",
+      "case_report_sha256": "dc0df1e69d7ac36c54008300bcc3c383e9df937ea952f05096f2fb43b313f078",
+      "full": {
+        "correct": 299,
+        "missed": 1346,
+        "precision": 1.0,
+        "recall": 0.1817629179331307,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1645,
+      "owned": {
+        "correct": 145,
+        "missed": 9,
+        "precision": 1.0,
+        "recall": 0.9415584415584416,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "1253c69a24db42a9a10e3599036d3ece521e6c873b658ad4f4164828876b2d06",
+      "symbolized_target_sha256": "cf17069cd4eae519d9a122da1406f1a418d4ae55201cc2c3afa33ade3d851a19",
+      "truth_functions": 154
+    },
+    {
+      "arch": "aarch64",
+      "case": "lz4-aarch64-linux-musl-O1",
+      "case_report_sha256": "ed38694dd4aa163113e7b29d7665cec5b8ab034ea7c73fafcf3c570f15004419",
+      "full": {
+        "correct": 158,
+        "missed": 813,
+        "precision": 1.0,
+        "recall": 0.1627188465499485,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 971,
+      "owned": {
+        "correct": 66,
+        "missed": 38,
+        "precision": 1.0,
+        "recall": 0.6346153846153846,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "ec91753b0b724437693bace5caf52f934cf40205aad3bd19cfa4f37d80820592",
+      "symbolized_target_sha256": "52ed9fb50f7cfd77ecab2dbbbebc3391bd626f04da18291f20f3e0c5adad009c",
+      "truth_functions": 104
+    },
+    {
+      "arch": "x86",
+      "case": "lz4-x86-linux-musl-O1",
+      "case_report_sha256": "10e0e0249d7ce586f55640d2986421fb62aa7ce8935590b254e047c6f21d077b",
+      "full": {
+        "correct": 75,
+        "missed": 791,
+        "precision": 1.0,
+        "recall": 0.08660508083140878,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 866,
+      "owned": {
+        "correct": 75,
+        "missed": 29,
+        "precision": 1.0,
+        "recall": 0.7211538461538461,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "cf0b759804cb429099f52ade3b391f779c95929ca7d69db0d8182fea60bba75f",
+      "symbolized_target_sha256": "cc78e839421a6caf0d8c1498a146b81e1fb4dd403b5315c57551dcf7f10b5d42",
+      "truth_functions": 104
+    },
+    {
+      "arch": "x86",
+      "case": "lua-x86-linux-musl-O1",
+      "case_report_sha256": "24571c1162c007074da1be8458306cf0947ad53861cfc7e54bab6042a1a82c68",
+      "full": {
+        "correct": 151,
+        "missed": 1387,
+        "precision": 1.0,
+        "recall": 0.09817945383615084,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1538,
+      "owned": {
+        "correct": 151,
+        "missed": 3,
+        "precision": 1.0,
+        "recall": 0.9805194805194806,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "f88a751cead43fad0dcf46f264c04edc8c5b3e114132397b7f6116318b8470af",
+      "symbolized_target_sha256": "455b38090637e133396a86c8572ea852e3670087071e144b651948a0ab79e475",
+      "truth_functions": 154
+    },
+    {
+      "arch": "x86",
+      "case": "zstd-1.5.6-x86-linux-musl-O2",
+      "case_report_sha256": "2898896b4138f8ada03f6ac39c2aea550196da26c05e590accc0e7107643ea97",
+      "full": {
+        "correct": 290,
+        "missed": 1042,
+        "precision": 1.0,
+        "recall": 0.21771771771771772,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1332,
+      "owned": {
+        "correct": 290,
+        "missed": 93,
+        "precision": 1.0,
+        "recall": 0.7571801566579635,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "a7981fbe008b02f9329d898a0e441c7d3d931fa7b4849d60870a42cdae9f4dc5",
+      "symbolized_target_sha256": "ea6a7bc93d072a96e353bb09297f5c3445ad5c7658e7c1b85afb983f522e55a5",
+      "truth_functions": 383
+    },
+    {
+      "arch": "x86",
+      "case": "zlib-x86-linux-musl-O2",
+      "case_report_sha256": "3605505adc66599e28721a8a64868bb1b7506cb5169384d06a82c51624fcf54e",
+      "full": {
+        "correct": 52,
+        "missed": 496,
+        "precision": 1.0,
+        "recall": 0.0948905109489051,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 548,
+      "owned": {
+        "correct": 52,
+        "missed": 10,
+        "precision": 1.0,
+        "recall": 0.8387096774193549,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "3eea87ae7dc874847e09bd7bb33c6c7a126fedcf3190137b6c48cc0b29c52df1",
+      "symbolized_target_sha256": "cf548314cdb0e2353f2d98bae532551720a9d3a39e89f76b0f1176bbac2981cb",
+      "truth_functions": 62
+    },
+    {
+      "arch": "x86",
+      "case": "mbedtls-2.28.9-x86-linux-musl-O2",
+      "case_report_sha256": "5032ac95fc0fccb9d0883e001e8243ced97f6cee4030916c31b99e496ba6fbba",
+      "full": {
+        "correct": 922,
+        "missed": 1313,
+        "precision": 1.0,
+        "recall": 0.41252796420581656,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2235,
+      "owned": {
+        "correct": 922,
+        "missed": 93,
+        "precision": 1.0,
+        "recall": 0.9083743842364532,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "cb9474bbbf86f862a08b701a5e3eafca589c3741a9c32f0f329694e923290b31",
+      "symbolized_target_sha256": "0f027007699513497b73188c05be55967ab5d3036aff378203205ce98fa0ba32",
+      "truth_functions": 1015
+    },
+    {
+      "arch": "x86",
+      "case": "sqlite-x86-linux-musl-O2",
+      "case_report_sha256": "56c4178dab77545a2d27738583ae00e6f98ae2743ee15c23e74bdea381f5b484",
+      "full": {
+        "correct": 242,
+        "missed": 2043,
+        "precision": 1.0,
+        "recall": 0.10590809628008753,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2285,
+      "owned": {
+        "correct": 242,
+        "missed": 20,
+        "precision": 1.0,
+        "recall": 0.9236641221374046,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "3a2a76fd34e3b5da1e294057bf26a3ea3140ef469e5b8fae344ad012b2ec56bb",
+      "symbolized_target_sha256": "b1ce44ec6d43759f1d6a9832104468e44b366f4c75ed8405ba7e8e0cdd498c0f",
+      "truth_functions": 262
+    },
+    {
+      "arch": "x86",
+      "case": "zlib-x86-linux-musl-O1",
+      "case_report_sha256": "6f25c9a0497774c7c82317c4ac0b06d129f188f36bef79367cc23a235c9c6da0",
+      "full": {
+        "correct": 52,
+        "missed": 496,
+        "precision": 1.0,
+        "recall": 0.0948905109489051,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 548,
+      "owned": {
+        "correct": 52,
+        "missed": 10,
+        "precision": 1.0,
+        "recall": 0.8387096774193549,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "3eea87ae7dc874847e09bd7bb33c6c7a126fedcf3190137b6c48cc0b29c52df1",
+      "symbolized_target_sha256": "60f9cb24f8f7e943896d72e6b8a254012bedf893ce3a03ae8bf3d6b6aaccdcca",
+      "truth_functions": 62
+    },
+    {
+      "arch": "x86",
+      "case": "libpng-1.6.44-x86-linux-musl-O1",
+      "case_report_sha256": "80f38974d4ac98c4a4ca55d5dd65c17987c8057339b05aaddff765f2986c93bc",
+      "full": {
+        "correct": 422,
+        "missed": 930,
+        "precision": 1.0,
+        "recall": 0.3121301775147929,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1352,
+      "owned": {
+        "correct": 378,
+        "missed": 18,
+        "precision": 1.0,
+        "recall": 0.9545454545454546,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "41b74c2c5aebb87316da90ba21f6e7c59d1a80d21ebee17498498222845e12d0",
+      "symbolized_target_sha256": "e408d7f74b5370535b55f1e516a96c67138bdc4ee88361d1812b62fb5b944331",
+      "truth_functions": 396
+    },
+    {
+      "arch": "x86",
+      "case": "zstd-1.5.6-x86-linux-musl-O1",
+      "case_report_sha256": "91dbc03ed8fd100280071c1644369acfa373dc4d6256f3d99d6103588d8885f9",
+      "full": {
+        "correct": 290,
+        "missed": 1042,
+        "precision": 1.0,
+        "recall": 0.21771771771771772,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1332,
+      "owned": {
+        "correct": 290,
+        "missed": 93,
+        "precision": 1.0,
+        "recall": 0.7571801566579635,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "a7981fbe008b02f9329d898a0e441c7d3d931fa7b4849d60870a42cdae9f4dc5",
+      "symbolized_target_sha256": "779b10f7223279ec9874a23fc2f096c1c1af1247691ae8ca7b8759d2acc7ade5",
+      "truth_functions": 383
+    },
+    {
+      "arch": "x86",
+      "case": "lz4-x86-linux-musl-O2",
+      "case_report_sha256": "9b01ff9753f29871e4165753a2d1a256d720772c5f420d9888e5c118f9c104b3",
+      "full": {
+        "correct": 75,
+        "missed": 791,
+        "precision": 1.0,
+        "recall": 0.08660508083140878,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 866,
+      "owned": {
+        "correct": 75,
+        "missed": 29,
+        "precision": 1.0,
+        "recall": 0.7211538461538461,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "cf0b759804cb429099f52ade3b391f779c95929ca7d69db0d8182fea60bba75f",
+      "symbolized_target_sha256": "d8116790e9466e5ddd0339c30d087d4a55ec59793a6c804114864d69a6b855ad",
+      "truth_functions": 104
+    },
+    {
+      "arch": "x86",
+      "case": "mbedtls-2.28.9-x86-linux-musl-O1",
+      "case_report_sha256": "b305eaaba5e58e52a17e1b5354b8f04241249b5d13141deb1b4169cc82fefd12",
+      "full": {
+        "correct": 922,
+        "missed": 1313,
+        "precision": 1.0,
+        "recall": 0.41252796420581656,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2235,
+      "owned": {
+        "correct": 922,
+        "missed": 93,
+        "precision": 1.0,
+        "recall": 0.9083743842364532,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "cb9474bbbf86f862a08b701a5e3eafca589c3741a9c32f0f329694e923290b31",
+      "symbolized_target_sha256": "5ade9f28f600d72b405a6715152f4c05dd4f4ae6de726efa7568e9cf4359f493",
+      "truth_functions": 1015
+    },
+    {
+      "arch": "x86",
+      "case": "sqlite-x86-linux-musl-O1",
+      "case_report_sha256": "bc131619e08511c5317fb397135790f92f1d36d365bb97424ae2d3375e6a5ae6",
+      "full": {
+        "correct": 242,
+        "missed": 2043,
+        "precision": 1.0,
+        "recall": 0.10590809628008753,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2285,
+      "owned": {
+        "correct": 242,
+        "missed": 20,
+        "precision": 1.0,
+        "recall": 0.9236641221374046,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "3a2a76fd34e3b5da1e294057bf26a3ea3140ef469e5b8fae344ad012b2ec56bb",
+      "symbolized_target_sha256": "9a49cd8879655f98c9845a72a935ffd05f4c8e366e5f7238b7dd105346b8fba4",
+      "truth_functions": 262
+    },
+    {
+      "arch": "x86",
+      "case": "libpng-1.6.44-x86-linux-musl-O2",
+      "case_report_sha256": "dced116797ec726a9b3e7297ae5b93fc2cb083aea48a41350c06b179e7fce4d5",
+      "full": {
+        "correct": 422,
+        "missed": 930,
+        "precision": 1.0,
+        "recall": 0.3121301775147929,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1352,
+      "owned": {
+        "correct": 378,
+        "missed": 18,
+        "precision": 1.0,
+        "recall": 0.9545454545454546,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "41b74c2c5aebb87316da90ba21f6e7c59d1a80d21ebee17498498222845e12d0",
+      "symbolized_target_sha256": "4029b1fdcd01c63175394ae95a6b4c4b0683f06d09d7e1ff793360eda23eb112",
+      "truth_functions": 396
+    },
+    {
+      "arch": "x86",
+      "case": "lua-x86-linux-musl-O2",
+      "case_report_sha256": "fc390c7f64405ce2903da36b4d4e6776879c15699f00906f741e6535cb8ceaac",
+      "full": {
+        "correct": 151,
+        "missed": 1387,
+        "precision": 1.0,
+        "recall": 0.09817945383615084,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1538,
+      "owned": {
+        "correct": 151,
+        "missed": 3,
+        "precision": 1.0,
+        "recall": 0.9805194805194806,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "f88a751cead43fad0dcf46f264c04edc8c5b3e114132397b7f6116318b8470af",
+      "symbolized_target_sha256": "b4d72b0e2e794460188279e20bef0400282c08e9fc1eaf08ad0c9fa0e4ee1bb2",
+      "truth_functions": 154
+    },
+    {
+      "arch": "arm",
+      "case": "libpng-1.6.44-thumb-linux-musleabi-O1",
+      "case_report_sha256": "06ba0d961c8f7dce2ad44cb9df6f3dcc875da4bb0f0d45d8f836eac4e2295162",
+      "full": {
+        "correct": 233,
+        "missed": 1100,
+        "precision": 1.0,
+        "recall": 0.17479369842460615,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1333,
+      "owned": {
+        "correct": 200,
+        "missed": 196,
+        "precision": 1.0,
+        "recall": 0.5050505050505051,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "69ca37f4e229341237a2c78412e3e4f589a171251efbc918ab62c8a3d1de2352",
+      "symbolized_target_sha256": "b32852f56af9e313896915e48a8e09a1bcc4dc5212ed73c9fdf9e09a44352618",
+      "truth_functions": 396
+    },
+    {
+      "arch": "arm",
+      "case": "sqlite-thumb-linux-musleabi-O2",
+      "case_report_sha256": "097a10154092ee51ed11e5f0ee417e67ba367d87e30558df0068ff8c367a676f",
+      "full": {
+        "correct": 137,
+        "missed": 2129,
+        "precision": 1.0,
+        "recall": 0.06045895851721095,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2266,
+      "owned": {
+        "correct": 137,
+        "missed": 125,
+        "precision": 1.0,
+        "recall": 0.5229007633587787,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "b5a07669d0aba3c4b7d65d3ae753a73d7144dab0aefd266d5384b78469a8f529",
+      "symbolized_target_sha256": "141c32cafc8a3f98f0df5a6cd8b069beb2e9e1ed12d024861da88ca33e4705ff",
+      "truth_functions": 262
+    },
+    {
+      "arch": "arm",
+      "case": "lua-thumb-linux-musleabi-O2",
+      "case_report_sha256": "36d8afaf7c8c58520bdfa23ec7e72beb18924e8bce409f5b759cd460c97df2e0",
+      "full": {
+        "correct": 104,
+        "missed": 1416,
+        "precision": 1.0,
+        "recall": 0.06842105263157895,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1520,
+      "owned": {
+        "correct": 104,
+        "missed": 50,
+        "precision": 1.0,
+        "recall": 0.6753246753246753,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "325b6b0054d844967314f2a47517d7f96d84f79ef2808dda712a0650af8525fb",
+      "symbolized_target_sha256": "091e657101fe912a0043de2da9f48c0e9844adead6ee6639df946acb3a82717c",
+      "truth_functions": 154
+    },
+    {
+      "arch": "arm",
+      "case": "lua-thumb-linux-musleabi-O1",
+      "case_report_sha256": "49869fdd253ea3fb767d67b1063dd42908dbef7d4529c1a1ec3b6da19371c687",
+      "full": {
+        "correct": 104,
+        "missed": 1416,
+        "precision": 1.0,
+        "recall": 0.06842105263157895,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1520,
+      "owned": {
+        "correct": 104,
+        "missed": 50,
+        "precision": 1.0,
+        "recall": 0.6753246753246753,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "325b6b0054d844967314f2a47517d7f96d84f79ef2808dda712a0650af8525fb",
+      "symbolized_target_sha256": "cbd90689801d156cea989bf41b1e37e99af3fd82fc236812f81c6b694424c6eb",
+      "truth_functions": 154
+    },
+    {
+      "arch": "arm",
+      "case": "zlib-thumb-linux-musleabi-O2",
+      "case_report_sha256": "57ceede31de81a5efe1c976999325df977db12738f2387f18ea39057bfa55313",
+      "full": {
+        "correct": 39,
+        "missed": 500,
+        "precision": 1.0,
+        "recall": 0.07235621521335807,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 539,
+      "owned": {
+        "correct": 39,
+        "missed": 23,
+        "precision": 1.0,
+        "recall": 0.6290322580645161,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "86d9d8d46cbdcd44d299ddca12503f2ec8a5dba492dabde4ae491d887bfbc171",
+      "symbolized_target_sha256": "0ed7e5cf7882920cab538d3af41eb733085c84ce4b7474d2d429e6206b7c66a9",
+      "truth_functions": 62
+    },
+    {
+      "arch": "arm",
+      "case": "zlib-thumb-linux-musleabi-O1",
+      "case_report_sha256": "59937e13e448c5377439520d81b40bb8380273339303e01ca38d6e2ad58b4e29",
+      "full": {
+        "correct": 39,
+        "missed": 500,
+        "precision": 1.0,
+        "recall": 0.07235621521335807,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 539,
+      "owned": {
+        "correct": 39,
+        "missed": 23,
+        "precision": 1.0,
+        "recall": 0.6290322580645161,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "86d9d8d46cbdcd44d299ddca12503f2ec8a5dba492dabde4ae491d887bfbc171",
+      "symbolized_target_sha256": "f508f76181dc596559339bfffab7554ddf7ec0f86a36f212704b993feb6c9c91",
+      "truth_functions": 62
+    },
+    {
+      "arch": "arm",
+      "case": "mbedtls-2.28.9-thumb-linux-musleabi-O2",
+      "case_report_sha256": "65991ca70a8ab76618b6d1ecc176c29f512f2b01e7519077602c74837af6d140",
+      "full": {
+        "correct": 839,
+        "missed": 1370,
+        "precision": 1.0,
+        "recall": 0.37980986871887734,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2209,
+      "owned": {
+        "correct": 839,
+        "missed": 173,
+        "precision": 1.0,
+        "recall": 0.8290513833992095,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "e2ad573d80c187a50df8e924b32a2c848e0f78e945ac668cf03c88dceb8a04e4",
+      "symbolized_target_sha256": "bc5a6c6706b539279259fcf3231017867cd03014365b0b333779a3b8038083ac",
+      "truth_functions": 1012
+    },
+    {
+      "arch": "arm",
+      "case": "zstd-1.5.6-thumb-linux-musleabi-O1",
+      "case_report_sha256": "920f5d7ce7aea54f5f45b72224374a7fae187e4848e725543d84289c034fe0a3",
+      "full": {
+        "correct": 247,
+        "missed": 1065,
+        "precision": 1.0,
+        "recall": 0.18826219512195122,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1312,
+      "owned": {
+        "correct": 247,
+        "missed": 136,
+        "precision": 1.0,
+        "recall": 0.6449086161879896,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "aaa7c1c756d6b5928a5c387d72a8239b06e76f5c2cb52af2a6a3d13617b2cc8f",
+      "symbolized_target_sha256": "bf14721aaf9a037c08edc73e0e268b95a15600b64254f90ee4336bfd7d97f5e1",
+      "truth_functions": 383
+    },
+    {
+      "arch": "arm",
+      "case": "sqlite-thumb-linux-musleabi-O1",
+      "case_report_sha256": "98cd9699efdaefce148e204e15c26a64b46e8d22f4298eb2449fddf753c99aad",
+      "full": {
+        "correct": 137,
+        "missed": 2129,
+        "precision": 1.0,
+        "recall": 0.06045895851721095,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2266,
+      "owned": {
+        "correct": 137,
+        "missed": 125,
+        "precision": 1.0,
+        "recall": 0.5229007633587787,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "b5a07669d0aba3c4b7d65d3ae753a73d7144dab0aefd266d5384b78469a8f529",
+      "symbolized_target_sha256": "8e0c64f620688333a296354eb6ded10b1cac20bd363ebe675e4f2924174a2386",
+      "truth_functions": 262
+    },
+    {
+      "arch": "arm",
+      "case": "lz4-thumb-linux-musleabi-O1",
+      "case_report_sha256": "a04996dc141b4c28df3c759e7731b55e3711f6c3f154b8f09cb6205ab0bc0f36",
+      "full": {
+        "correct": 62,
+        "missed": 783,
+        "precision": 1.0,
+        "recall": 0.07337278106508875,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 845,
+      "owned": {
+        "correct": 62,
+        "missed": 42,
+        "precision": 1.0,
+        "recall": 0.5961538461538461,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "20e37a5228005b4eb1ff35250f04b5d1d6bf91d6782940c776e1559cb7007dd9",
+      "symbolized_target_sha256": "5fedaee81378687bdda7575c129431260149c9d79618db049f2269c53969313a",
+      "truth_functions": 104
+    },
+    {
+      "arch": "arm",
+      "case": "libpng-1.6.44-thumb-linux-musleabi-O2",
+      "case_report_sha256": "abae7f2966ba25c41c5bc328e18afd3695dfb2cd092d02d96f6df336045ccf67",
+      "full": {
+        "correct": 233,
+        "missed": 1100,
+        "precision": 1.0,
+        "recall": 0.17479369842460615,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1333,
+      "owned": {
+        "correct": 200,
+        "missed": 196,
+        "precision": 1.0,
+        "recall": 0.5050505050505051,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "69ca37f4e229341237a2c78412e3e4f589a171251efbc918ab62c8a3d1de2352",
+      "symbolized_target_sha256": "3277dcb6e63053fa97d2fb4de99afe9303ee9b5b8f387886cef25cf8606a0622",
+      "truth_functions": 396
+    },
+    {
+      "arch": "arm",
+      "case": "lz4-thumb-linux-musleabi-O2",
+      "case_report_sha256": "c40208bd371143736759c3433109f880687b576801be9d229b1caa8b99a88518",
+      "full": {
+        "correct": 62,
+        "missed": 783,
+        "precision": 1.0,
+        "recall": 0.07337278106508875,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 845,
+      "owned": {
+        "correct": 62,
+        "missed": 42,
+        "precision": 1.0,
+        "recall": 0.5961538461538461,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "20e37a5228005b4eb1ff35250f04b5d1d6bf91d6782940c776e1559cb7007dd9",
+      "symbolized_target_sha256": "327bd5f48382b021ffab455c256915b9b915f41c66ffe74a1f3bea282c9e320f",
+      "truth_functions": 104
+    },
+    {
+      "arch": "arm",
+      "case": "mbedtls-2.28.9-thumb-linux-musleabi-O1",
+      "case_report_sha256": "c8de09495606c457ffcc77e9b8e7f621e7f95c14afe514cf3ea8cd96a7544bd6",
+      "full": {
+        "correct": 839,
+        "missed": 1370,
+        "precision": 1.0,
+        "recall": 0.37980986871887734,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 2209,
+      "owned": {
+        "correct": 839,
+        "missed": 173,
+        "precision": 1.0,
+        "recall": 0.8290513833992095,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": true,
+      "stripped_target_sha256": "e2ad573d80c187a50df8e924b32a2c848e0f78e945ac668cf03c88dceb8a04e4",
+      "symbolized_target_sha256": "192a4778ac71cafc097367412256d1cf6f95c301d06d61e94ddb624dd7b4ac8d",
+      "truth_functions": 1012
+    },
+    {
+      "arch": "arm",
+      "case": "zstd-1.5.6-thumb-linux-musleabi-O2",
+      "case_report_sha256": "e3cb0673628e6a6a7b05a9a0e9f4ba28fd5990744d434dba4b2013aab44c0681",
+      "full": {
+        "correct": 247,
+        "missed": 1065,
+        "precision": 1.0,
+        "recall": 0.18826219512195122,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "full_twin_truth_functions": 1312,
+      "owned": {
+        "correct": 247,
+        "missed": 136,
+        "precision": 1.0,
+        "recall": 0.6449086161879896,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "passed": false,
+      "stripped_target_sha256": "aaa7c1c756d6b5928a5c387d72a8239b06e76f5c2cb52af2a6a3d13617b2cc8f",
+      "symbolized_target_sha256": "f4fddcac572425e045e83098f3de8728d736a29fddcd2a0b4236c7e152ab4136",
+      "truth_functions": 383
+    }
+  ],
+  "aggregate_owned_recall_denominator": "original library_truth count, including wrong names",
+  "assets": [
+    {
+      "aggregate_raw_report_sha256": "5e5065945b526aabb377c9318573dc94c591bdd3f468c59f6ad9303a68dfa7e6",
+      "arch": "x86_64",
+      "asset": "corpus-x86_64.json.gz",
+      "callee_keys": 664,
+      "compressed_bytes": 479033,
+      "gzip_sha256": "62fc582b2002fb53e1d55512aafe60adf3e2ac9c5777fcf5d96ae7d57c894781",
+      "index_sha256": "cce0696d968f6a7ccbd2ab60b28fa452bfae29f9a49525020a750abd79b5f9c4",
+      "json_bytes": 882161,
+      "profiles": 27,
+      "raw_exact_fallback_answer_keys_withheld": 21,
+      "raw_recall_gate_passed": false,
+      "reference_conflict_answer_keys_suppressed": 3,
+      "signatures": 7489
+    },
+    {
+      "aggregate_raw_report_sha256": "0293c21ffb6ee0897af74e7b9ba53983441b794a49d192fec09e97c66dda2851",
+      "arch": "aarch64",
+      "asset": "corpus-aarch64.json.gz",
+      "callee_keys": 404,
+      "compressed_bytes": 433155,
+      "gzip_sha256": "fbaa36359747b52713fc127f9271a4056c7582d2b39537710b69a290daec53d3",
+      "index_sha256": "17dd140748e6abd7247df4dfcc20b2cc2c395c9463565cc2759fe2cfee22f2d3",
+      "json_bytes": 795463,
+      "profiles": 27,
+      "raw_exact_fallback_answer_keys_withheld": 198,
+      "raw_recall_gate_passed": false,
+      "reference_conflict_answer_keys_suppressed": 0,
+      "signatures": 7066
+    },
+    {
+      "aggregate_raw_report_sha256": "a1b4427e7e4d1156bf05774f1532fa151e85f7e5dc2c50ad4545091731167a30",
+      "arch": "x86",
+      "asset": "corpus-x86.json.gz",
+      "callee_keys": 90,
+      "compressed_bytes": 114556,
+      "gzip_sha256": "31c510d13e6e84def7854aca86affa4df06c33285e24efcb8599fb11a963d087",
+      "index_sha256": "ba8a8da39b293ece5458ae2f0654c3cde236f795f0397079f0877d5577b76bec",
+      "json_bytes": 224486,
+      "profiles": 14,
+      "raw_exact_fallback_answer_keys_withheld": 23,
+      "raw_recall_gate_passed": false,
+      "reference_conflict_answer_keys_suppressed": 4,
+      "signatures": 2082
+    },
+    {
+      "aggregate_raw_report_sha256": "17e0ebd0f3c12f95908b4758a9ef31d731af3c99d8912718775fbf58cb567954",
+      "arch": "arm",
+      "asset": "corpus-arm.json.gz",
+      "callee_keys": 0,
+      "compressed_bytes": 112076,
+      "gzip_sha256": "f97ffa54fcd52a57c5eb38f5b7285ca8e203b74eb0e783d19ec963dcf82a5b0e",
+      "index_sha256": "4c613e2bb8cab04b4c582f1e3afab9c18dff89f36574615716e937ce52c4d86e",
+      "json_bytes": 217566,
+      "profiles": 14,
+      "raw_exact_fallback_answer_keys_withheld": 70,
+      "raw_recall_gate_passed": false,
+      "reference_conflict_answer_keys_suppressed": 6,
+      "signatures": 2117
+    }
+  ],
+  "date": "2026-10-18",
+  "default_assets_registered": true,
+  "limitations": [
+    "Pipeline implemented; remaining SDK/runtime and Windows default-bundle delivery is not complete.",
+    "Matched-version recall failures are not passes and do not alone block 2.1 delivery.",
+    "Per-profile AArch64 OpenSSL retains two wrong names; the curated artifact withholds raw exact fallbacks and has zero wrong/spurious proposals in these aggregate cases.",
+    "Requested O1/O2 variants with identical code/databases do not demonstrate optimizer diversity.",
+    "Legacy musl source archive identity remains explicitly unavailable.",
+    "Live MCP samples used JSON views as user databases, not a restarted server built-in; full precision is from aggregate twin scoring.",
+    "No new live Phase1 acceptance, release tags, CI dispatches, commercial inputs or target execution."
+  ],
+  "live_mcp_samples": {
+    "annotations_applied": false,
+    "database_source": "user database; hash-checked JSON views of final gzip artifacts",
+    "detail_limit": 2,
+    "earlier_attempts": [
+      {
+        "limitation": "the live user-database path requires JSON; native bundled gzip loading is a separate path",
+        "operation": "identify_functions with a gzip user database path",
+        "result": "tool error: not UTF-8 text"
+      },
+      {
+        "applied": 0,
+        "matched": 56,
+        "operation": "identify_functions with original zlib x64 per-profile JSON"
+      }
+    ],
+    "live_agent_task": false,
+    "live_server_default_builtin_exercised": false,
+    "measurement": "phase2-1-live-mcp-json-views-of-promoted-gzip",
+    "precision_scope": "sample receipts only; full proposal precision is established separately by aggregate twin scoring",
+    "samples": [
+      {
+        "applied": 0,
+        "arch": "x86_64",
+        "matched": 79,
+        "more": true,
+        "next_offset": 2,
+        "returned": 2,
+        "warnings_total": 0
+      },
+      {
+        "applied": 0,
+        "arch": "aarch64",
+        "matched": 92,
+        "more": true,
+        "next_offset": 2,
+        "returned": 2,
+        "warnings_total": 0
+      },
+      {
+        "applied": 0,
+        "arch": "x86",
+        "matched": 52,
+        "more": true,
+        "next_offset": 2,
+        "returned": 2,
+        "warnings_total": 0
+      },
+      {
+        "applied": 0,
+        "arch": "arm",
+        "matched": 39,
+        "more": true,
+        "next_offset": 2,
+        "returned": 2,
+        "warnings_total": 0
+      }
+    ],
+    "target_executed": false
+  },
+  "live_phase1_gate": "open; frozen publications unchanged",
+  "measurement": "reviewed-four-architecture-corpus-delivery",
+  "milestone_complete": false,
+  "phase": "2.1",
+  "phase2_recall_acceptance": false,
+  "policy": {
+    "forward_reverse_rotated_exports_equal": true,
+    "generic_matcher_and_hash_schemes_unchanged": true,
+    "global_held_out_split": true,
+    "gzip_reload_scored": true,
+    "raw_exact_fallback_answers_withheld": true,
+    "reference_only_answers_never_exported": true,
+    "training_references_hash_bound": true,
+    "user_database_priority_unchanged": true
+  },
+  "raw_attempts": [
+    {
+      "after": {
+        "correct": 145,
+        "missed": 9,
+        "precision": 1.0,
+        "recall": 0.9415584415584416,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 154,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "lua-5.4.8-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "905241b34b36ea83c4f09b430559a25172467470ab99a16761b0c3a17c1499f5",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "dc0df1e69d7ac36c54008300bcc3c383e9df937ea952f05096f2fb43b313f078",
+      "raw_result_sha256": "7927fba80350afe9e0c93cddcfb6601e96397c192abb77a02a70dcb839dac411",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lua-5.4.8",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 145,
+        "missed": 9,
+        "precision": 1.0,
+        "recall": 0.9415584415584416,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 154,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "lua-5.4.8-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "905241b34b36ea83c4f09b430559a25172467470ab99a16761b0c3a17c1499f5",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "aadd746d0eac994dbb156b4c2c5bd221d9bb1a60d0c881cd3598b57ffe345c43",
+      "raw_result_sha256": "d967ff5dc68aedd2e610701764e5e0274f080c60093db5638fc7be423a36680c",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lua-5.4.8",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 152,
+        "missed": 2,
+        "precision": 1.0,
+        "recall": 0.987012987012987,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 153,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lua-5.4.8-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "a6ef5813cf515c81d2a9af11d5eac4793418407583b7b1f0eb4edca3332cad68",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "28bec1ede7f733de4df4c0af5a81f97fd3474a9d5ad1e6ff08909d0082decc46",
+      "raw_result_sha256": "215a820a1d603db2af5c7b5eae1090c89b53e94927b4d3546053f7fc43c026d1",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lua-5.4.8",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 152,
+        "missed": 2,
+        "precision": 1.0,
+        "recall": 0.987012987012987,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 153,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lua-5.4.8-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "a6ef5813cf515c81d2a9af11d5eac4793418407583b7b1f0eb4edca3332cad68",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "26af2260ae343f18b87ff4b65a4217f2dcd32760d168940aad77398d4dafb7dd",
+      "raw_result_sha256": "5ae79ef4a41d8f27bffd50d263130cf26017def786f06a5e501de3743cf0784a",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lua-5.4.8",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 145,
+        "missed": 9,
+        "precision": 1.0,
+        "recall": 0.9415584415584416,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 154,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "lua-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "ab39417652a19e7d003a62e9bb14f0d9bf683383aaa1ae82ac3d3cc411515136",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "98444b7ad9a0c2dd098fd49307be3652c0134687b9bd507ca6328c02384e8951",
+      "raw_result_sha256": "d3d38ea109feebbe6580826d5a77d3910d6038e8a0604ac116eddb289db4ad98",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lua",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 145,
+        "missed": 9,
+        "precision": 1.0,
+        "recall": 0.9415584415584416,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 154,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "lua-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "ab39417652a19e7d003a62e9bb14f0d9bf683383aaa1ae82ac3d3cc411515136",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "0d8a3fa9af8bed927b2cd4fe50fff30f0d98fbd4b2a1cefd7b33abcc8bb9bf65",
+      "raw_result_sha256": "8c3c28292f52a0f3c1fbf68e8b0b55222df9e852406df4f88243fb39e0d779e0",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lua",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 152,
+        "missed": 2,
+        "precision": 1.0,
+        "recall": 0.987012987012987,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 153,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lua-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "3f4bd9a5f8e95b0ae032dea437c3cfd221974e4c878956be72337461e0dd2452",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "417eb0be72a7e73cb59d608d85e66dd393310da227ec141233ac364905faf0f1",
+      "raw_result_sha256": "fe01f8e08c6fe444dad7bd5f541676936c09ace588aabc7a77cc215a72a02e78",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lua",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 152,
+        "missed": 2,
+        "precision": 1.0,
+        "recall": 0.987012987012987,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 153,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lua-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "3f4bd9a5f8e95b0ae032dea437c3cfd221974e4c878956be72337461e0dd2452",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "da83365dd203bcbb41b84d2c39d196769bc2d4d1e7479f0c91d01c31467edb11",
+      "raw_result_sha256": "201c72b9c5b41d48fd50ee3b79e4d8fce0adedf308c1b2c68e6a0d6e9e58dd95",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lua",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 65,
+        "missed": 36,
+        "precision": 1.0,
+        "recall": 0.6435643564356436,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 101,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "lz4-1.9.4-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "0a3c37e20c9ada975c93826c9d93daea1dc83684c6b044f1df994115a3609c4a",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "d4703e6b86428dcb0ca3bab4ab573388a88e6c8dda006d4b6eb0190ab8e78a82",
+      "raw_result_sha256": "6ed0dbdf443a2826088cf0e94299d70e60410f5ec95ed82941d19af0df3ddbc4",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lz4-1.9.4",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 101
+    },
+    {
+      "after": {
+        "correct": 65,
+        "missed": 36,
+        "precision": 1.0,
+        "recall": 0.6435643564356436,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 101,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "lz4-1.9.4-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "0a3c37e20c9ada975c93826c9d93daea1dc83684c6b044f1df994115a3609c4a",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "998f8846fb8e2df20538954fa2f152de9ae5fe2f870f9008005047263e43e5ad",
+      "raw_result_sha256": "ad0217842a8726b5ac145aa964ad6751635af2fee1f0438a2e3d0ee692c86b4d",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lz4-1.9.4",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 101
+    },
+    {
+      "after": {
+        "correct": 78,
+        "missed": 23,
+        "precision": 1.0,
+        "recall": 0.7722772277227723,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 100,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lz4-1.9.4-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "d8fdddcdbd64396cd6bc636293a4475ad9cc30e51d82317355f5c91f0f38b933",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "20c6c41f5d2c038bdf7cbf745f9680df8f756e5a8613194e1a75595343d6af93",
+      "raw_result_sha256": "24a761c2b18f7061eb665afacd35aa584a5db717727b241f88ef4827be5f5753",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lz4-1.9.4",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 101
+    },
+    {
+      "after": {
+        "correct": 78,
+        "missed": 23,
+        "precision": 1.0,
+        "recall": 0.7722772277227723,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 100,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lz4-1.9.4-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "d8fdddcdbd64396cd6bc636293a4475ad9cc30e51d82317355f5c91f0f38b933",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "3cf40b795e0b62c33aa3e0e60e28de11e3dc739180cee683c310becd90fa9973",
+      "raw_result_sha256": "0a6e16c9faf2fa03fdb7116b3b3d1bf419863a25b4662f7bf1aa62d267aba4e6",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lz4-1.9.4",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 101
+    },
+    {
+      "after": {
+        "correct": 68,
+        "missed": 36,
+        "precision": 1.0,
+        "recall": 0.6538461538461539,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 104,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "lz4-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "efce2edd56ad16c32ccbb38e4d5ca43a4bb62559a2eb4f3aafa2f40567f0f0c6",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "ed38694dd4aa163113e7b29d7665cec5b8ab034ea7c73fafcf3c570f15004419",
+      "raw_result_sha256": "c9000a8376b68177120802aff37017a0505d5310df048afe8d54bd36400fa851",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 68,
+        "missed": 36,
+        "precision": 1.0,
+        "recall": 0.6538461538461539,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 104,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "lz4-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "efce2edd56ad16c32ccbb38e4d5ca43a4bb62559a2eb4f3aafa2f40567f0f0c6",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "aff036d13b2220dcec9f595fc99b523854ca24a0e2cf7dacdc87a0a1c432430f",
+      "raw_result_sha256": "7a74998b1485c751f45c6d93828603ed915629e860a74b730118e1a1b3921606",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 81,
+        "missed": 23,
+        "precision": 1.0,
+        "recall": 0.7788461538461539,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 103,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lz4-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "650e3de622af1d3a18d24757c0523f59c844e73802473ed08e87b8544d31e84a",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "36525413ff5cee145c80f20cbcd1325eba6b8abc61fe077fb6584e6831b1d444",
+      "raw_result_sha256": "45e6dffbabf1bf192207dd1d682ff29279c686f675789b9314425ccb25a0a918",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 81,
+        "missed": 23,
+        "precision": 1.0,
+        "recall": 0.7788461538461539,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 103,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lz4-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "650e3de622af1d3a18d24757c0523f59c844e73802473ed08e87b8544d31e84a",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "77a5d17184c07aa8d250239fcae6e9a81d7610b329867003b493851f6eb1251c",
+      "raw_result_sha256": "6f920fd05e86ce378bedd4549781389955dfe427c3ea5278bbf3860395cee8df",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 830,
+        "missed": 182,
+        "precision": 1.0,
+        "recall": 0.8201581027667985,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 1012,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "mbedtls-2.28.9-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "0f8a0b8139740c618f55534f11806486b0f1154c3392663b9f70a4d0dece5412",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "79f249646d037da5d165007c0fffc0ae4f3d5091063260a49c69624306722914",
+      "raw_result_sha256": "e143d08939fc68275138a15767986f73fdff58b7ce076b99d205d125fa6556b3",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "mbedtls-2.28.9",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 1012
+    },
+    {
+      "after": {
+        "correct": 830,
+        "missed": 182,
+        "precision": 1.0,
+        "recall": 0.8201581027667985,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 1012,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "mbedtls-2.28.9-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "0f8a0b8139740c618f55534f11806486b0f1154c3392663b9f70a4d0dece5412",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "0db1f419c6d81964ee44599d100db53c8e5349cec149b95492b6860d5b1fb3c9",
+      "raw_result_sha256": "9416355335c739c3a276c9a0d9ff148cc4428373125f2021fc503b47fccfb858",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "mbedtls-2.28.9",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 1012
+    },
+    {
+      "after": {
+        "correct": 935,
+        "missed": 82,
+        "precision": 1.0,
+        "recall": 0.9193706981317601,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 991,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 26
+      },
+      "baseline_available": true,
+      "case": "mbedtls-2.28.9-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "bcc17858118ce1a39fb0e46020b968de69a54477b6a7e92b9dca8356676946b6",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "fb2397a203dc29ec7236bbfc8f35783b3dbd21d73544ccbedee7a6f507c107b6",
+      "raw_result_sha256": "3f4bde28a718fc70b103fb359b7b6a11e0f5cda29cd674869a255ef65a57663a",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "mbedtls-2.28.9",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 1017
+    },
+    {
+      "after": {
+        "correct": 935,
+        "missed": 82,
+        "precision": 1.0,
+        "recall": 0.9193706981317601,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 991,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 26
+      },
+      "baseline_available": true,
+      "case": "mbedtls-2.28.9-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "bcc17858118ce1a39fb0e46020b968de69a54477b6a7e92b9dca8356676946b6",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "abdda48a0dda57f87aabd0ffe45462812a2ea08ab7b3487affa2f45ef84c5bf5",
+      "raw_result_sha256": "f3f733760eb59134388bf90e1e4ef356d3e7de5d68880557dc1707694659698e",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "mbedtls-2.28.9",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 1017
+    },
+    {
+      "after": {
+        "correct": 201,
+        "missed": 61,
+        "precision": 1.0,
+        "recall": 0.767175572519084,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 262,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "sqlite-3.45.3-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "04ca0af0f562f70e9efd5d057f9f8e9e77c5628eb2d7e32f450ef5582f721f60",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "75ce8b5aab4d9e01c16f640b5d86aca355f5a43353f7c08fd5b66d7dd74435ed",
+      "raw_result_sha256": "4dfa29047b5f803618f32b2c12cf21cfcdda60af74b82d73fa77a63b67651517",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "sqlite-3.45.3",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 201,
+        "missed": 61,
+        "precision": 1.0,
+        "recall": 0.767175572519084,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 262,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "sqlite-3.45.3-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "04ca0af0f562f70e9efd5d057f9f8e9e77c5628eb2d7e32f450ef5582f721f60",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "41175c5a59a22371b2c4324d4eab0dd36bc3a8182c4f8634bb178a0155fe8829",
+      "raw_result_sha256": "17874eeb4a4a3369665e6b072feb12cfb341e28eb739d18c4d1467f49f42fde7",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "sqlite-3.45.3",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 243,
+        "missed": 19,
+        "precision": 1.0,
+        "recall": 0.9274809160305344,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 260,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 2
+      },
+      "baseline_available": true,
+      "case": "sqlite-3.45.3-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "6799655236ccf8d575fc0f5a739606298beb25d46122a1da7c7bb5974751c034",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "76c9e33f623ee3590ffd5531d949b91c098087fa45fe804e80687f7a3a00744d",
+      "raw_result_sha256": "782f94f73f0f145473698dd01036d0c09809bc48d7e3099943d94b1515947c68",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "sqlite-3.45.3",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 243,
+        "missed": 19,
+        "precision": 1.0,
+        "recall": 0.9274809160305344,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 260,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 2
+      },
+      "baseline_available": true,
+      "case": "sqlite-3.45.3-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "6799655236ccf8d575fc0f5a739606298beb25d46122a1da7c7bb5974751c034",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "4c575a614e0280ccc491858bba720d6adde4017e336493c1dfe5d4e8df8e8f18",
+      "raw_result_sha256": "bea887d055958afa49787ebe56d3b57759130cd47f294e46d87fca7502647ed1",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "sqlite-3.45.3",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 201,
+        "missed": 61,
+        "precision": 1.0,
+        "recall": 0.767175572519084,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 262,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "sqlite-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "e03246978b4c9ba2066160eaabf03d79b9a3877c81ed9255cee08f803a174c13",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "6c399d14e7bf3e765a8ce5e0751148dcf55e656d44283820c6c927a05cf0c4a9",
+      "raw_result_sha256": "0eb1667a84c8f5e6814aed117cb486cfd34d0cbfc5a94f0101f549563bb8dede",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "sqlite",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 201,
+        "missed": 61,
+        "precision": 1.0,
+        "recall": 0.767175572519084,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 262,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "sqlite-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "e03246978b4c9ba2066160eaabf03d79b9a3877c81ed9255cee08f803a174c13",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "676dc76c8f5b14a62f3008d8fdd6105f95102350d83b5cef55036143113c1f03",
+      "raw_result_sha256": "8d8ba249b9eb0f6c2517b24a446c061ab7d0b92465e01b58100a98b38918017d",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "sqlite",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 243,
+        "missed": 19,
+        "precision": 1.0,
+        "recall": 0.9274809160305344,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 260,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 2
+      },
+      "baseline_available": true,
+      "case": "sqlite-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "44088da71a59595d3b0b0601750a7433b2c2478e664616f467a1586590132d1d",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "11b07ea0f634b7ea24eed671f623993b3d16b0148a9f5bc2b7207ca7c3304780",
+      "raw_result_sha256": "6825867d1bfe4db24edba248ba0145a101154be878a1fccf19682eff1e4dbf1c",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "sqlite",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 243,
+        "missed": 19,
+        "precision": 1.0,
+        "recall": 0.9274809160305344,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 260,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 2
+      },
+      "baseline_available": true,
+      "case": "sqlite-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "44088da71a59595d3b0b0601750a7433b2c2478e664616f467a1586590132d1d",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "47050194c9a01bbc94c40e7ff7f8d208053b942135d510088c3850054f7ac13d",
+      "raw_result_sha256": "868bc710c3df1e00f06cfffcdc66c5514e63b5636629066f1a7e9dc7d8e300d6",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "sqlite",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 51,
+        "missed": 11,
+        "precision": 1.0,
+        "recall": 0.8225806451612904,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-1.2.13-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "eaaa2f8f44b6c34691dd4f3718d3f30864b4efab63262eb770ca87c2b5022f69",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "16897bb7403226c3113ada81d610dd3dc2986216144910676988f0240ea94416",
+      "raw_result_sha256": "8f0d0e32d721ea963700fb0a3ae6d445a0dfe78432136377d941da82786d2854",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zlib-1.2.13",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 51,
+        "missed": 11,
+        "precision": 1.0,
+        "recall": 0.8225806451612904,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-1.2.13-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "eaaa2f8f44b6c34691dd4f3718d3f30864b4efab63262eb770ca87c2b5022f69",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "7b94d60805a648e0e4687e3c1f49ddb4a968a866c3921d5e01f574684c1abae7",
+      "raw_result_sha256": "bef2c148cc20595b49c8c8841e1a12bcdb0b211fa15de3ba19e343dc7621bd86",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zlib-1.2.13",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 56,
+        "missed": 6,
+        "precision": 1.0,
+        "recall": 0.9032258064516129,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-1.2.13-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "61387f90e5340cb79f3495d11a8ab86ceef16bc78c084e862dabffa303a04369",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "c241b403a5f9a29217fca6079657ec572c35143345b8af1ce57fa6106f634132",
+      "raw_result_sha256": "2723194d81ad4c92efab3aa6b7c2a99234f63312aafab1063275f669474a708d",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zlib-1.2.13",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 56,
+        "missed": 6,
+        "precision": 1.0,
+        "recall": 0.9032258064516129,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-1.2.13-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "61387f90e5340cb79f3495d11a8ab86ceef16bc78c084e862dabffa303a04369",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "db8e3186dd4c9ef7c200cf98b20168c271477c2ad2b512ed187ed4b588784ea8",
+      "raw_result_sha256": "c779ec7ed15f68783bfd59c4764d90e3395a06c19c671a6d73973602e9a36a5c",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zlib-1.2.13",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 51,
+        "missed": 11,
+        "precision": 1.0,
+        "recall": 0.8225806451612904,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "387d69dfcb76712b8ad49cb6568447f2432494582828a69c1a3c4d85429e226a",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "b98c9f88b9dcf0a9a45d5b305cc1654850b9e548abb68e9cfc5fb6bbb96424bf",
+      "raw_result_sha256": "7100643da0445eaf393d992b098bba0491a7d1b68c7f05461e5459f35b71d96b",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 51,
+        "missed": 11,
+        "precision": 1.0,
+        "recall": 0.8225806451612904,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "387d69dfcb76712b8ad49cb6568447f2432494582828a69c1a3c4d85429e226a",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "93e623558c29ae138f29daedd3201f95756b66003813e5ea5d5881ad5346a029",
+      "raw_result_sha256": "18317788c76a55d13cb4a2f55c6e28d4131ccb212159b79b4a15599ca39ba63c",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 56,
+        "missed": 6,
+        "precision": 1.0,
+        "recall": 0.9032258064516129,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "d31cd3412623d407cd36aed6697b1eae26cfa22f2bdf74df3e67c8cf0ed9657c",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "40c3e27c5bd1d98be90158a31d8aff14cda7e96d71070f0ef8b88c5c7c6f2aec",
+      "raw_result_sha256": "ba52ef40c497dec6904d8735dd01adee7747f70b2a784dd3ab4dc85c374bb9ff",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 56,
+        "missed": 6,
+        "precision": 1.0,
+        "recall": 0.9032258064516129,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "d31cd3412623d407cd36aed6697b1eae26cfa22f2bdf74df3e67c8cf0ed9657c",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "e9799ba00c0b473db6719b35b44f53af65d7ab2541e6ef81bc2d86a4041f7252",
+      "raw_result_sha256": "28d218ccd12023add32aaa24bc980c6ce9366f46cdc431b1e37840492659b913",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 270,
+        "missed": 113,
+        "precision": 1.0,
+        "recall": 0.7049608355091384,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 383,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zstd-1.5.6-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "b8f26c208605285a5b0d48dfb7b345823b8e0448b1aa3cc448e18dcc2c6e60ee",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "a9e20c3f3ac691e4eb1d626568c0e321693439db0fe8661c67c7993bf35d44e6",
+      "raw_result_sha256": "b5b0c6b0e86c53bca0a9bd007e01c49ebf1d3f2c499f373d4f1eac83ce9483f6",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zstd-1.5.6",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 383
+    },
+    {
+      "after": {
+        "correct": 270,
+        "missed": 113,
+        "precision": 1.0,
+        "recall": 0.7049608355091384,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 383,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zstd-1.5.6-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "b8f26c208605285a5b0d48dfb7b345823b8e0448b1aa3cc448e18dcc2c6e60ee",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "aaa04b2efa671b712efef20234a772dac3b1cfcb8d57ca22cc0f411be8db8a1a",
+      "raw_result_sha256": "c1d7deeb8440623edb5fa2e44cbc618acb54d6ba383b3f794c2de0dfce853a24",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zstd-1.5.6",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 383
+    },
+    {
+      "acceptance": "invalid_tool_hash_drift; raw verdict retained unchanged",
+      "after": {
+        "correct": 312,
+        "missed": 71,
+        "precision": 1.0,
+        "recall": 0.814621409921671,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 378,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 5
+      },
+      "baseline_available": true,
+      "case": "zstd-1.5.6-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": false,
+      "compressed_database_sha256": "aaa1e2036f38b7a92920f019968a2325ddcd6852f60f405d4152be6f42d52714",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "c7cf34fd23426ff17314ef7e9aaba4c519868cbd54ac115f40f339aff60d997a",
+      "raw_result_sha256": "2525b71ef19df22cbf173d03899337c6b59ef8220acec65df775a3736834ae48",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zstd-1.5.6",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 383
+    },
+    {
+      "after": {
+        "correct": 312,
+        "missed": 71,
+        "precision": 1.0,
+        "recall": 0.814621409921671,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 378,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 5
+      },
+      "baseline_available": true,
+      "case": "zstd-1.5.6-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "aaa1e2036f38b7a92920f019968a2325ddcd6852f60f405d4152be6f42d52714",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "87e5615f7b6d1cbb445ef476fb69aeb24adde2a85583b9886c2626a7850e64ef",
+      "raw_result_sha256": "031f70792ced2c99cb2e16b8f6825a29737cd5ac1e423d8758f82bfebbb0fe23",
+      "run": "delivery-core-first",
+      "selection": {
+        "library": "zstd-1.5.6",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 383
+    },
+    {
+      "after": {
+        "correct": 312,
+        "missed": 71,
+        "precision": 1.0,
+        "recall": 0.814621409921671,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 378,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 5
+      },
+      "baseline_available": true,
+      "case": "zstd-1.5.6-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "aaa1e2036f38b7a92920f019968a2325ddcd6852f60f405d4152be6f42d52714",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "ca8c0ed293e3cfe588b011576a753e820aee384ea63dee43e22345e4816c162f",
+      "raw_result_sha256": "7fab0f70ab20a820d48274a2b55647ee075b983d5d81b8fdc1a789981b13a496",
+      "run": "delivery-core-zstd-tool-drift-second",
+      "selection": {
+        "library": "zstd-1.5.6",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 383
+    },
+    {
+      "after": {
+        "correct": 206,
+        "missed": 190,
+        "precision": 1.0,
+        "recall": 0.5202020202020202,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 396,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "libpng-1.6.44-thumb-linux-musleabi-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "c30cfec6bb1b1e22230dff1822fa69d848ec3a051ad79fa628f960c77ddecca6",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "06ba0d961c8f7dce2ad44cb9df6f3dcc875da4bb0f0d45d8f836eac4e2295162",
+      "raw_result_sha256": "97d7c79242a640be1860bc1a15260b55173b0d7db2e6fcc10071d7eedf166713",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "libpng-1.6.44",
+        "optimization": "O1",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 396
+    },
+    {
+      "after": {
+        "correct": 206,
+        "missed": 190,
+        "precision": 1.0,
+        "recall": 0.5202020202020202,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 396,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "libpng-1.6.44-thumb-linux-musleabi-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "c30cfec6bb1b1e22230dff1822fa69d848ec3a051ad79fa628f960c77ddecca6",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "abae7f2966ba25c41c5bc328e18afd3695dfb2cd092d02d96f6df336045ccf67",
+      "raw_result_sha256": "1395ebbeb15f4550048fbebc2aa64c2b7c82d5487bff817345e42b503cb61c92",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "libpng-1.6.44",
+        "optimization": "O2",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 396
+    },
+    {
+      "after": {
+        "correct": 380,
+        "missed": 16,
+        "precision": 1.0,
+        "recall": 0.9595959595959596,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 396,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "libpng-1.6.44-x86-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "4fe3adacc38536e026dcac35580a8283d7225ac804b428114f6abd0687c3bd13",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "80f38974d4ac98c4a4ca55d5dd65c17987c8057339b05aaddff765f2986c93bc",
+      "raw_result_sha256": "45b2136015cfc43a5e39e98cb0a6c36ef6964721029c019a4a766ac0507a804f",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "libpng-1.6.44",
+        "optimization": "O1",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 396
+    },
+    {
+      "after": {
+        "correct": 380,
+        "missed": 16,
+        "precision": 1.0,
+        "recall": 0.9595959595959596,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 396,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "libpng-1.6.44-x86-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "4fe3adacc38536e026dcac35580a8283d7225ac804b428114f6abd0687c3bd13",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "dced116797ec726a9b3e7297ae5b93fc2cb083aea48a41350c06b179e7fce4d5",
+      "raw_result_sha256": "2728ca5dad3c8d3f5302a929ce6a55db508f340c745130ddf1d599fbe6b285fd",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "libpng-1.6.44",
+        "optimization": "O2",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 396
+    },
+    {
+      "after": {
+        "correct": 108,
+        "missed": 46,
+        "precision": 1.0,
+        "recall": 0.7012987012987013,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 154,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "lua-thumb-linux-musleabi-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "9119c44b9f0856f26aee2d71c61fea942678b74dc28fd89cc5bb6b388b957a05",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "49869fdd253ea3fb767d67b1063dd42908dbef7d4529c1a1ec3b6da19371c687",
+      "raw_result_sha256": "576396c983924ade4cf92543f5d95b26e163afbbe3dbc2c8ee17569b0715996d",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "lua",
+        "optimization": "O1",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 108,
+        "missed": 46,
+        "precision": 1.0,
+        "recall": 0.7012987012987013,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 154,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "lua-thumb-linux-musleabi-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "9119c44b9f0856f26aee2d71c61fea942678b74dc28fd89cc5bb6b388b957a05",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "36d8afaf7c8c58520bdfa23ec7e72beb18924e8bce409f5b759cd460c97df2e0",
+      "raw_result_sha256": "9111bdb710fbf62f0ee618fce99560a2cc8d27b24f1cf0eadda9db6fbb5b0b91",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "lua",
+        "optimization": "O2",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 153,
+        "missed": 1,
+        "precision": 1.0,
+        "recall": 0.9935064935064936,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 154,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "lua-x86-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "bc4ce73e6b476dcc5a42a0567ef6c410c572b4f29245dc151e629e44183112ee",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "24571c1162c007074da1be8458306cf0947ad53861cfc7e54bab6042a1a82c68",
+      "raw_result_sha256": "f38df4f8d16e4f794bea6fabed0d1a3432392ed97303814e5f546444d5fdaa8c",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "lua",
+        "optimization": "O1",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 153,
+        "missed": 1,
+        "precision": 1.0,
+        "recall": 0.9935064935064936,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 154,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "lua-x86-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "bc4ce73e6b476dcc5a42a0567ef6c410c572b4f29245dc151e629e44183112ee",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "fc390c7f64405ce2903da36b4d4e6776879c15699f00906f741e6535cb8ceaac",
+      "raw_result_sha256": "b088c08c92366a9a41b3ee581df6ad58508e3d2f0b973c57878f7793cf651e47",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "lua",
+        "optimization": "O2",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 154
+    },
+    {
+      "after": {
+        "correct": 73,
+        "missed": 31,
+        "precision": 1.0,
+        "recall": 0.7019230769230769,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 104,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "lz4-thumb-linux-musleabi-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "47578a23102212f0a7bba5fb600c4e90114056f862d19dbac9f88839bc9301a7",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "a04996dc141b4c28df3c759e7731b55e3711f6c3f154b8f09cb6205ab0bc0f36",
+      "raw_result_sha256": "88a250f8ddcec5af3049d348cc320db3be4b5824800c630e49e47b0113acf4c6",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O1",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 73,
+        "missed": 31,
+        "precision": 1.0,
+        "recall": 0.7019230769230769,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 104,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "lz4-thumb-linux-musleabi-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "47578a23102212f0a7bba5fb600c4e90114056f862d19dbac9f88839bc9301a7",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "c40208bd371143736759c3433109f880687b576801be9d229b1caa8b99a88518",
+      "raw_result_sha256": "280228da2ccf44fc643d9c317387a3438bb4aa94741bd7dae71f5a69f05ea502",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O2",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 83,
+        "missed": 21,
+        "precision": 1.0,
+        "recall": 0.7980769230769231,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 104,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "lz4-x86-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "afaf5b2ea9760ae1a4701a79b2b297492ba581ffb0051bb2b0a03cacf226b12e",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "10e0e0249d7ce586f55640d2986421fb62aa7ce8935590b254e047c6f21d077b",
+      "raw_result_sha256": "8300a4afb9a22809004691363b98443e4657daed61560c878b9a6194b00a504f",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O1",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 83,
+        "missed": 21,
+        "precision": 1.0,
+        "recall": 0.7980769230769231,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 104,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "lz4-x86-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "afaf5b2ea9760ae1a4701a79b2b297492ba581ffb0051bb2b0a03cacf226b12e",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "9b01ff9753f29871e4165753a2d1a256d720772c5f420d9888e5c118f9c104b3",
+      "raw_result_sha256": "dd94d6cd8dd78f25c38318ce41e9e2f821d56ef0f6189c526226f0013a859753",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O2",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 893,
+        "missed": 119,
+        "precision": 1.0,
+        "recall": 0.8824110671936759,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 1012,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "mbedtls-2.28.9-thumb-linux-musleabi-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "b23b17e8497065ddf3f9555aec593b559d39049f57d27ea625ec4edd288af5dd",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "c8de09495606c457ffcc77e9b8e7f621e7f95c14afe514cf3ea8cd96a7544bd6",
+      "raw_result_sha256": "19a125ecce917128f569208453555c4ade922cde6036ce6c35bf7f335ed22487",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "mbedtls-2.28.9",
+        "optimization": "O1",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 1012
+    },
+    {
+      "after": {
+        "correct": 893,
+        "missed": 119,
+        "precision": 1.0,
+        "recall": 0.8824110671936759,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 1012,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "mbedtls-2.28.9-thumb-linux-musleabi-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "b23b17e8497065ddf3f9555aec593b559d39049f57d27ea625ec4edd288af5dd",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "65991ca70a8ab76618b6d1ecc176c29f512f2b01e7519077602c74837af6d140",
+      "raw_result_sha256": "71b3a4a279c449e94d9cd048ed30c403c713465a4d07e64417beaec3e0dd6065",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "mbedtls-2.28.9",
+        "optimization": "O2",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 1012
+    },
+    {
+      "after": {
+        "correct": 929,
+        "missed": 86,
+        "precision": 1.0,
+        "recall": 0.9152709359605912,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 1015,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "mbedtls-2.28.9-x86-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "fbcb97be7b46cdea7293f47a91f7e3d4fe78b2fec7ac48891c0f0475f2436361",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "b305eaaba5e58e52a17e1b5354b8f04241249b5d13141deb1b4169cc82fefd12",
+      "raw_result_sha256": "022a2e0d398e3a5296d42140ad0c74268e0f368a24c1781a810830c5742067e1",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "mbedtls-2.28.9",
+        "optimization": "O1",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 1015
+    },
+    {
+      "after": {
+        "correct": 929,
+        "missed": 86,
+        "precision": 1.0,
+        "recall": 0.9152709359605912,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 1015,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "mbedtls-2.28.9-x86-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "fbcb97be7b46cdea7293f47a91f7e3d4fe78b2fec7ac48891c0f0475f2436361",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "5032ac95fc0fccb9d0883e001e8243ced97f6cee4030916c31b99e496ba6fbba",
+      "raw_result_sha256": "f4fe9dac5451212efd57c19dad60a236f0ece58186933d44d6ade346f9ade60f",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "mbedtls-2.28.9",
+        "optimization": "O2",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 1015
+    },
+    {
+      "after": {
+        "correct": 145,
+        "missed": 117,
+        "precision": 1.0,
+        "recall": 0.5534351145038168,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 262,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "sqlite-thumb-linux-musleabi-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "f3819625df651653aa143b8c88022e837685e5d38bb732abb3768efb140158f2",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "98cd9699efdaefce148e204e15c26a64b46e8d22f4298eb2449fddf753c99aad",
+      "raw_result_sha256": "c3c2c4a960210a3d1d271013667d9365072ed7687e81551acc2e4f77ceccc2ce",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "sqlite",
+        "optimization": "O1",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 145,
+        "missed": 117,
+        "precision": 1.0,
+        "recall": 0.5534351145038168,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 262,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "sqlite-thumb-linux-musleabi-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "f3819625df651653aa143b8c88022e837685e5d38bb732abb3768efb140158f2",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "097a10154092ee51ed11e5f0ee417e67ba367d87e30558df0068ff8c367a676f",
+      "raw_result_sha256": "b7fe556bcef8d94e3eb65e5b721ec689eee3189f0c42651bc4e9c1fa98410eeb",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "sqlite",
+        "optimization": "O2",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 247,
+        "missed": 15,
+        "precision": 1.0,
+        "recall": 0.9427480916030534,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 262,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "sqlite-x86-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "64c666e49b187467a0394fe8ab6d4357962c60909263c8894ddd3a0b6c95b8f2",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "bc131619e08511c5317fb397135790f92f1d36d365bb97424ae2d3375e6a5ae6",
+      "raw_result_sha256": "f8925d22c2f65e1b73c004afb4f6b6263d1950038737d5a24cda32f095c0c22e",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "sqlite",
+        "optimization": "O1",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 247,
+        "missed": 15,
+        "precision": 1.0,
+        "recall": 0.9427480916030534,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 262,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "sqlite-x86-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "64c666e49b187467a0394fe8ab6d4357962c60909263c8894ddd3a0b6c95b8f2",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "56c4178dab77545a2d27738583ae00e6f98ae2743ee15c23e74bdea381f5b484",
+      "raw_result_sha256": "6f1ea4c1b62f72179bb7572d11c3e5c993801a384839455dc1ce7a04febf4ac7",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "sqlite",
+        "optimization": "O2",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 262
+    },
+    {
+      "after": {
+        "correct": 41,
+        "missed": 21,
+        "precision": 1.0,
+        "recall": 0.6612903225806451,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "zlib-thumb-linux-musleabi-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "f4830d3b2a8411ce28b5d1f4df0adf6efa19876211226c5a1b400623fdf06287",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "59937e13e448c5377439520d81b40bb8380273339303e01ca38d6e2ad58b4e29",
+      "raw_result_sha256": "9baa1b99fc2fbc02cc1a6bac546c1873d6a1ef8d8b697603a9b43c06423e5093",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O1",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 41,
+        "missed": 21,
+        "precision": 1.0,
+        "recall": 0.6612903225806451,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "zlib-thumb-linux-musleabi-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "f4830d3b2a8411ce28b5d1f4df0adf6efa19876211226c5a1b400623fdf06287",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "57ceede31de81a5efe1c976999325df977db12738f2387f18ea39057bfa55313",
+      "raw_result_sha256": "18f3b3232565abcda29dd1c124ddb50b64eba33f1166b4e7e4737f9f0be81474",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O2",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 54,
+        "missed": 8,
+        "precision": 1.0,
+        "recall": 0.8709677419354839,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "zlib-x86-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "5fd074c8d0435a3c27754b962f2ec129f1bb41484e8029e4cb171ed5e6c6c2c9",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "6f25c9a0497774c7c82317c4ac0b06d129f188f36bef79367cc23a235c9c6da0",
+      "raw_result_sha256": "59ee4eabd0178f7b7c70c8542bcc70056254febedd8b9fbf819d4f8f3bf4e315",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O1",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 54,
+        "missed": 8,
+        "precision": 1.0,
+        "recall": 0.8709677419354839,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "zlib-x86-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "5fd074c8d0435a3c27754b962f2ec129f1bb41484e8029e4cb171ed5e6c6c2c9",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "3605505adc66599e28721a8a64868bb1b7506cb5169384d06a82c51624fcf54e",
+      "raw_result_sha256": "5fdd3aa57ffd1602e72c553e203c5424f9b7a0ecb50d9fdbd37cb0e7ea1667b6",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O2",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 265,
+        "missed": 118,
+        "precision": 1.0,
+        "recall": 0.6919060052219321,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 383,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "zstd-1.5.6-thumb-linux-musleabi-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "e68334141da453b3c0ed6dec21449b533bd138db47d7b17c1c57c5752e77d821",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "920f5d7ce7aea54f5f45b72224374a7fae187e4848e725543d84289c034fe0a3",
+      "raw_result_sha256": "c8c4f841cbabaf5b8df1316fa66904d936694b526cbf71075c678e2089802690",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "zstd-1.5.6",
+        "optimization": "O1",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 383
+    },
+    {
+      "after": {
+        "correct": 265,
+        "missed": 118,
+        "precision": 1.0,
+        "recall": 0.6919060052219321,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 383,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "zstd-1.5.6-thumb-linux-musleabi-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "e68334141da453b3c0ed6dec21449b533bd138db47d7b17c1c57c5752e77d821",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "e3cb0673628e6a6a7b05a9a0e9f4ba28fd5990744d434dba4b2013aab44c0681",
+      "raw_result_sha256": "13d912a9f09d4aca6d4df5fcf665fc32845877fb7c440db0ec22771792712b19",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "zstd-1.5.6",
+        "optimization": "O2",
+        "target": "thumb-linux-musleabi"
+      },
+      "target_executed": false,
+      "truth_functions": 383
+    },
+    {
+      "after": {
+        "correct": 304,
+        "missed": 79,
+        "precision": 1.0,
+        "recall": 0.793733681462141,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 383,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "zstd-1.5.6-x86-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "5ab5f5215be7887710978b8bdbac311aff964021cbee82c53939070f8b91b3df",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "91dbc03ed8fd100280071c1644369acfa373dc4d6256f3d99d6103588d8885f9",
+      "raw_result_sha256": "32aa643fcbe2281bea7ef42d871f6cf4339f381257ebb56ad9fd6a89e40004cd",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "zstd-1.5.6",
+        "optimization": "O1",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 383
+    },
+    {
+      "after": {
+        "correct": 304,
+        "missed": 79,
+        "precision": 1.0,
+        "recall": 0.793733681462141,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 383,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": false,
+      "case": "zstd-1.5.6-x86-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "5ab5f5215be7887710978b8bdbac311aff964021cbee82c53939070f8b91b3df",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "2898896b4138f8ada03f6ac39c2aea550196da26c05e590accc0e7107643ea97",
+      "raw_result_sha256": "51f69acac62e5d2efe5d2547371b71e8fd2fe8274c11976d691294d8f26ad3f9",
+      "run": "delivery-elf32-first",
+      "selection": {
+        "library": "zstd-1.5.6",
+        "optimization": "O2",
+        "target": "x86-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 383
+    },
+    {
+      "case": "curl-8.10.1-x86_64-linux-musl-O1",
+      "producer_status": "failed",
+      "promotion_eligible": false,
+      "promotion_rejection": "pre-hardening host-script environment/archive binding; first attempt retained",
+      "raw_result_sha256": "6072cbaa8c69d08ec2acb8e9b7c21cda4a91def2dd144a817fcd6332e8388a95",
+      "reason": "command failed (1): ['/opt/homebrew/Cellar/zig/0.17.0/bin/zig', 'cc', '-target', 'x86_64-linux-musl', '-O1', '-g0', '-fno-lto', '-ffile-prefix-map=${WORKSPACE}/target/signature-corpus/delivery-new-x64-first/curl-8.10.1-x86_64-linux-musl-O1=.', '-I', '${WORKSPACE}/target/signature-corpus/delivery-new-x64-first/curl-8.10.1-x86_64-linux-musl-O1/source/curl-8.10.1/include', '-static', '-no-pie', '-Wl,--no-gc-sections', '${WORKSPACE}/target/signature-corpus/delivery-new-x64-first/curl-8.10.1-x86_64-linux-musl-O1/reference.o', '-Wl,--whole-archive', '${WORKSPACE}/target/signature-corpus/delivery-new-x64-first/curl-8.10.1-x86_64-linux-musl-O1/source/curl-8.10.1/lib/.libs/libcurl.a', '-Wl,--no-whole-archive', '-lm', '-o', '${WORKSPACE}/target/signature-corpus/delivery-new-x64-first/curl-8.10.1-x86_64-linux-musl-O1/reference.elf']; see ${WORKSPACE}/target/signature-corpus/delivery-new-x64-first/curl-8.10.1-x86_64-linux-musl-O1/command-011.stderr",
+      "run": "delivery-new-x64-first",
+      "selection": {
+        "library": "curl-8.10.1",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false
+    },
+    {
+      "after": {
+        "correct": 380,
+        "missed": 16,
+        "precision": 1.0,
+        "recall": 0.9595959595959596,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 394,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 2
+      },
+      "baseline_available": true,
+      "case": "libpng-1.6.44-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "f114a34c95c75175dc72ec01a5a960c4941284a01795e9d1cfa1c1016043bea5",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "promotion_eligible": false,
+      "promotion_rejection": "pre-hardening host-script environment/archive binding; first attempt retained",
+      "raw_passed": true,
+      "raw_report_sha256": "bebe9cac10277f0b05af30907bed11a8bdc01571145b516fa18f65a3a20cb36e",
+      "raw_result_sha256": "0d2b0e02b171c64581dee1a12cd6a50f455db17002f77ac87a191341a83ce127",
+      "run": "delivery-new-x64-first",
+      "selection": {
+        "library": "libpng-1.6.44",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 396
+    },
+    {
+      "after": {
+        "correct": 5059,
+        "missed": 2897,
+        "precision": 1.0,
+        "recall": 0.6358722976370035,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 7820,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 136
+      },
+      "baseline_available": true,
+      "case": "openssl-3.0.15-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "c32a5f357b9df5fd0cce9d8647000f1de08b5d1ab0ef4c8361400ef090543c11",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "promotion_eligible": false,
+      "promotion_rejection": "pre-hardening host-script environment/archive binding; first attempt retained",
+      "raw_passed": false,
+      "raw_report_sha256": "f75dd7e7ba88af6422ece6e41112c785fc5b76cfb5c57a6cfadb6997f8d3665c",
+      "raw_result_sha256": "8b602fbc5902c58e44d3d3f8ef0adf98cdd04862d3458896754a912486fbbbf2",
+      "run": "delivery-new-x64-first",
+      "selection": {
+        "library": "openssl-3.0.15",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 7956
+    },
+    {
+      "after": {
+        "correct": 545,
+        "missed": 93,
+        "precision": 1.0,
+        "recall": 0.85423197492163,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 637,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "curl-8.10.1-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "286acf2f6cbb4b21d13ae0bb822c17f21d39ff0f54d6b2ef4bb81f9cb91d9332",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "ac0c68793e4f06f8d0fe65378b0827a0d82c7d11b9dfe4ccb4b172e4ecce878a",
+      "raw_result_sha256": "89a5a6283f566daee40f715ea931f6c236c8523df5330cde36983ac988ce5742",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "curl-8.10.1",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 638
+    },
+    {
+      "after": {
+        "correct": 545,
+        "missed": 93,
+        "precision": 1.0,
+        "recall": 0.85423197492163,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 637,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "curl-8.10.1-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "286acf2f6cbb4b21d13ae0bb822c17f21d39ff0f54d6b2ef4bb81f9cb91d9332",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "2ed7f0302f5fb315b8ca9f8bb29a97bd63c98b6ddcb8db514a5116175030dd90",
+      "raw_result_sha256": "a00cf8b8b01328d51bea7da666a0c083760ac489f4e846ce2dbc717a4de77b31",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "curl-8.10.1",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 638
+    },
+    {
+      "after": {
+        "correct": 570,
+        "missed": 68,
+        "precision": 1.0,
+        "recall": 0.8934169278996865,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 626,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 12
+      },
+      "baseline_available": true,
+      "case": "curl-8.10.1-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "21c00520ccc0ace92733fff06d250b19c0a55436907c52512bb4f1db8c040655",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "cac1a9139bdeece74a644fcc503d6db56d666b2503570b6fa7859a97d821b9a2",
+      "raw_result_sha256": "c392702662b4d266a88884c4daf1dbddf3213b4b4afde547a36a6435fd03eeb3",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "curl-8.10.1",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 638
+    },
+    {
+      "after": {
+        "correct": 570,
+        "missed": 68,
+        "precision": 1.0,
+        "recall": 0.8934169278996865,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 626,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 12
+      },
+      "baseline_available": true,
+      "case": "curl-8.10.1-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "21c00520ccc0ace92733fff06d250b19c0a55436907c52512bb4f1db8c040655",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "e429c10fec8511f2796d14cf50b9ebf95a22bcf79607987922eb64038a8aaff9",
+      "raw_result_sha256": "081c4f83f0a6ab3df67803532e05da824c721fbf4085d7475e17c9c857e01fdf",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "curl-8.10.1",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 638
+    },
+    {
+      "after": {
+        "correct": 354,
+        "missed": 42,
+        "precision": 1.0,
+        "recall": 0.8939393939393939,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 396,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "libpng-1.6.44-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "ceb96fa7f2a27f52109837944ce4cb5eac4bb7668b1e333d1e80104ed7ab6b8e",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "acb55a8c1c1465447567e212690442a3c885ba82ad16a010ae928f65eba0693d",
+      "raw_result_sha256": "63cc451c88a1e403c9f8be8268e5ff95f0f3661f3ebe40734cc9164fe7ccf04d",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "libpng-1.6.44",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 396
+    },
+    {
+      "after": {
+        "correct": 354,
+        "missed": 42,
+        "precision": 1.0,
+        "recall": 0.8939393939393939,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 396,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "libpng-1.6.44-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "ceb96fa7f2a27f52109837944ce4cb5eac4bb7668b1e333d1e80104ed7ab6b8e",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "d07e0cb7dbc51b02288ae19b5014c8ec539890c80847aa3bfe4b109e10e5084f",
+      "raw_result_sha256": "9b949979df5862f548d8177bfc2ffa2ab74858be7608cd6fc25806716e075c9e",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "libpng-1.6.44",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 396
+    },
+    {
+      "after": {
+        "correct": 380,
+        "missed": 16,
+        "precision": 1.0,
+        "recall": 0.9595959595959596,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 394,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 2
+      },
+      "baseline_available": true,
+      "case": "libpng-1.6.44-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "f114a34c95c75175dc72ec01a5a960c4941284a01795e9d1cfa1c1016043bea5",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "c130bea7bb8a08fd8239b42899e916b46976c00a588a90b4a53adfaafb2b2372",
+      "raw_result_sha256": "00a415c1c3bdce467decdcc346daad03868892bade827e41e207c79f982e12ef",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "libpng-1.6.44",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 396
+    },
+    {
+      "after": {
+        "correct": 380,
+        "missed": 16,
+        "precision": 1.0,
+        "recall": 0.9595959595959596,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 394,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 2
+      },
+      "baseline_available": true,
+      "case": "libpng-1.6.44-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "f114a34c95c75175dc72ec01a5a960c4941284a01795e9d1cfa1c1016043bea5",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "13889be6647d63ba23a76df62922c32e86b3ee0f80393bf54c667c87937541d0",
+      "raw_result_sha256": "d74aed0517ea725d52426431b4a2af4b5927cb7423b4946bbe78effa910cf913",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "libpng-1.6.44",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 396
+    },
+    {
+      "after": {
+        "correct": 4592,
+        "missed": 3362,
+        "precision": 0.999564649542882,
+        "recall": 0.5773195876288659,
+        "spurious": 0,
+        "wrong": 2
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 7955,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "openssl-3.0.15-aarch64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "f94a82fbcc2a5628f376294ac351ae06f7e15aebb9a25a35b2766442b00db505",
+      "non_miss_disagreements": [
+        {
+          "address": "0x120a0d4",
+          "outcome": "wrong",
+          "proposed": "EVP_MAC_CTX_get_mac_size",
+          "truth": "EVP_MAC_CTX_get_block_size"
+        },
+        {
+          "address": "0x12a390c",
+          "outcome": "wrong",
+          "proposed": "RSA_PSS_PARAMS_dup",
+          "truth": "X509_CRL_dup"
+        }
+      ],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "487b7a8cea81db771fa33273806245ab5f17623b6e836d4f0d858e383cccab6a",
+      "raw_result_sha256": "205715c616afbd893eb74059b46a90eaee57d18bfcd650f67b7651e1705c3c38",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "openssl-3.0.15",
+        "optimization": "O1",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 7956
+    },
+    {
+      "after": {
+        "correct": 4592,
+        "missed": 3362,
+        "precision": 0.999564649542882,
+        "recall": 0.5773195876288659,
+        "spurious": 0,
+        "wrong": 2
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 7955,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "openssl-3.0.15-aarch64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "f94a82fbcc2a5628f376294ac351ae06f7e15aebb9a25a35b2766442b00db505",
+      "non_miss_disagreements": [
+        {
+          "address": "0x120a0d4",
+          "outcome": "wrong",
+          "proposed": "EVP_MAC_CTX_get_mac_size",
+          "truth": "EVP_MAC_CTX_get_block_size"
+        },
+        {
+          "address": "0x12a390c",
+          "outcome": "wrong",
+          "proposed": "RSA_PSS_PARAMS_dup",
+          "truth": "X509_CRL_dup"
+        }
+      ],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "99d411157351fa1e48a09542afe1bb6e0a209b7dc6b8c2a0ba2c011f2e4e20c4",
+      "raw_result_sha256": "b964a6d9b7fbcdbc05dd980837602c8b93f2abef1cf21144932caba72455c4f2",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "openssl-3.0.15",
+        "optimization": "O2",
+        "target": "aarch64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 7956
+    },
+    {
+      "after": {
+        "correct": 5059,
+        "missed": 2897,
+        "precision": 1.0,
+        "recall": 0.6358722976370035,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 7820,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 136
+      },
+      "baseline_available": true,
+      "case": "openssl-3.0.15-x86_64-linux-musl-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "3a4b5b009e69dc5547efeeef2bfdc89fdb869a5bc9b69745db5943a81da948d8",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "ad862e9d3e97f592428e206639c7d3be77036387de0a8fe9afdd1f34f4e7d8d4",
+      "raw_result_sha256": "f3f28ff57bd7338888f4d0a70a15488763e31d971ad5393326d6a609e4485035",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "openssl-3.0.15",
+        "optimization": "O1",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 7956
+    },
+    {
+      "after": {
+        "correct": 5059,
+        "missed": 2897,
+        "precision": 1.0,
+        "recall": 0.6358722976370035,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 7820,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 136
+      },
+      "baseline_available": true,
+      "case": "openssl-3.0.15-x86_64-linux-musl-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "3a4b5b009e69dc5547efeeef2bfdc89fdb869a5bc9b69745db5943a81da948d8",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "52026e3d603a5cf1427f5a5b7ef406b429f4c5c6db9c59cf13edaf4778ce6184",
+      "raw_result_sha256": "0bcc8e459c448b1349d2c7ff7ef66c946162a814b70270a32228da343a1cc8ae",
+      "run": "delivery-new-hardened-second",
+      "selection": {
+        "library": "openssl-3.0.15",
+        "optimization": "O2",
+        "target": "x86_64-linux-musl"
+      },
+      "target_executed": false,
+      "truth_functions": 7956
+    },
+    {
+      "case": "lz4-x86_64-windows-gnu-O1",
+      "producer_status": "failed",
+      "raw_result_sha256": "da501613ef4ab914fcd5f8b123db6eef73d4290ff7ea172149b3c01943080ef1",
+      "reason": "PE producer must attest explicit LLD -DEBUG -OPT:NOREF -OPT:NOICF; no GC/ICF fallback",
+      "run": "delivery-windows-first",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O1",
+        "target": "x86_64-windows-gnu"
+      },
+      "target_executed": false
+    },
+    {
+      "case": "zlib-x86_64-windows-gnu-O1",
+      "producer_status": "failed",
+      "raw_result_sha256": "d0b07352e3812e97209e8f416aa05cef731b8a7da3fc127bff2a0052d0c00eff",
+      "reason": "PE producer must attest explicit LLD -DEBUG -OPT:NOREF -OPT:NOICF; no GC/ICF fallback",
+      "run": "delivery-windows-first",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O1",
+        "target": "x86_64-windows-gnu"
+      },
+      "target_executed": false
+    },
+    {
+      "case": "lz4-x86_64-windows-gnu-O1",
+      "producer_status": "failed",
+      "raw_result_sha256": "fdfdf9d96559a74bb9251d570a7d3e4fc94d0bd0f30362ea934437efbf772753",
+      "reason": "builder did not produce a nonempty required artifact: ${WORKSPACE}/target/signature-corpus/delivery-windows-second/lz4-x86_64-windows-gnu-O1/db.json",
+      "run": "delivery-windows-second",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O1",
+        "target": "x86_64-windows-gnu"
+      },
+      "target_executed": false
+    },
+    {
+      "case": "zlib-x86_64-windows-gnu-O1",
+      "producer_status": "failed",
+      "raw_result_sha256": "2c28aff79b58af5adfd2590531bff791b64cab49ba1d8d85b2dee237dd39393a",
+      "reason": "builder did not produce a nonempty required artifact: ${WORKSPACE}/target/signature-corpus/delivery-windows-second/zlib-x86_64-windows-gnu-O1/db.json",
+      "run": "delivery-windows-second",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O1",
+        "target": "x86_64-windows-gnu"
+      },
+      "target_executed": false
+    },
+    {
+      "after": {
+        "correct": 80,
+        "missed": 24,
+        "precision": 1.0,
+        "recall": 0.7692307692307693,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 103,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lz4-x86_64-windows-gnu-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "2007b6480284eaf22ef13f0b14fbafeb4f20dc427e96314dc55defe860eb3809",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "c06855329a6e32755624afa3222a787704a1ebf8c750fae6407a883a20cbf071",
+      "raw_result_sha256": "755f70ec6beef753307e9e733d3a3f157ef082fa184c43a47e1b1f81a8e7910f",
+      "run": "delivery-windows-third",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O1",
+        "target": "x86_64-windows-gnu"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 54,
+        "missed": 8,
+        "precision": 1.0,
+        "recall": 0.8709677419354839,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-x86_64-windows-gnu-O1",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "592756718fda8be19336dea89e45422b630328e8ee5bdb252038c996a10e5710",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "899f2aa751844595fb21ccbec3eb803b580504c32b70da4781aef5e967fc342c",
+      "raw_result_sha256": "05891533a6d2b5bf1dcd65e3c1009417b11b58ae8a25af1d61c3d9ae24e95732",
+      "run": "delivery-windows-third",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O1",
+        "target": "x86_64-windows-gnu"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    },
+    {
+      "after": {
+        "correct": 80,
+        "missed": 24,
+        "precision": 1.0,
+        "recall": 0.7692307692307693,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 103,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 1
+      },
+      "baseline_available": true,
+      "case": "lz4-x86_64-windows-gnu-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "2007b6480284eaf22ef13f0b14fbafeb4f20dc427e96314dc55defe860eb3809",
+      "non_miss_disagreements": [],
+      "producer_status": "measured_failed",
+      "raw_passed": false,
+      "raw_report_sha256": "588a44d3f04937c69f99caf4d9726fd2280c3183f3791e16e1dcf1f37d641b46",
+      "raw_result_sha256": "005089488dc42a9b3a066f881ee0262f96696fca6c8f75796db94520c47f1e0a",
+      "run": "delivery-windows-third-o2",
+      "selection": {
+        "library": "lz4",
+        "optimization": "O2",
+        "target": "x86_64-windows-gnu"
+      },
+      "target_executed": false,
+      "truth_functions": 104
+    },
+    {
+      "after": {
+        "correct": 54,
+        "missed": 8,
+        "precision": 1.0,
+        "recall": 0.8709677419354839,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline": {
+        "correct": 0,
+        "missed": 62,
+        "precision": 0.0,
+        "recall": 0.0,
+        "spurious": 0,
+        "wrong": 0
+      },
+      "baseline_available": true,
+      "case": "zlib-x86_64-windows-gnu-O2",
+      "collector_tool_identity_consistent": true,
+      "compressed_database_sha256": "592756718fda8be19336dea89e45422b630328e8ee5bdb252038c996a10e5710",
+      "non_miss_disagreements": [],
+      "producer_status": "measured",
+      "raw_passed": true,
+      "raw_report_sha256": "5766d64fb0df1ce8278b4f6d5122f0d9a73cb4b2a2ab0f3e1c6e77ea5fab9d81",
+      "raw_result_sha256": "635a0cbf863a04ce2127c12ba98fc9b43a6eed45ab5e46aaf68fb83d4de510d8",
+      "run": "delivery-windows-third-o2",
+      "selection": {
+        "library": "zlib",
+        "optimization": "O2",
+        "target": "x86_64-windows-gnu"
+      },
+      "target_executed": false,
+      "truth_functions": 62
+    }
+  ],
+  "raw_metric_recall_denominator": "correct + missed, preserving the original per-profile score contract",
+  "schema_version": 1,
+  "target_execution": false,
+  "validation": {
+    "broad_api_library_tests": "passed with two test threads after an earlier 120-second timeout; timeout retained as a separate attempt",
+    "changed_crate_tests": "passed ninth run; subsequent PE aggregate support passed tenth run",
+    "clippy_changed_crates_and_api": "passed fourth run",
+    "independent_precision_gate_review": "passed; static review is not independent corpus execution",
+    "pack_integration": "17 passed; collision-withheld legacy answers are not required to survive",
+    "signature_asset_loading_and_indexes": "passed"
+  }
+}

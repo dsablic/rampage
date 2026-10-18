@@ -1,69 +1,142 @@
-# Signature corpus pipeline
+# Signature corpus reference
 
-The offline pilot builds pinned zlib, LZ4, Lua, SQLite, zstd and mbedTLS references and distinct target
-programs. It never executes target code or downloads sources. Generated artifacts go into an empty, explicit
-`target/signature-corpus/RUN` directory; the pilot does not overwrite the bundled databases.
+The built-in function databases contain hash/name data from declared public-library builds. They recognize
+compatible builds; a match does not identify a library version, authenticate source, or establish complete SDK coverage.
+
+## Shipped artifacts
+
+| Architecture | Masked signature entries | Callee keys | Recorded build profiles |
+| --- | ---: | ---: | ---: |
+| x86-64 | 7,489 | 664 | 27 |
+| AArch64 | 7,066 | 404 | 27 |
+| i386 | 2,082 | 90 | 14 |
+| ARM/Thumb | 2,117 | 0 | 14 |
+
+Counts describe index keys, not unique recognized functions. The ARM profiles are Thumb builds. The x64/AArch64
+indexes include the frozen musl starter inputs; their original source archive identity was not recorded and is
+explicitly unavailable. The other profiles record archive digests, compiler identity, requested optimization,
+license declarations, recipe fingerprints and an aggregate measurement witness.
+
+Each architecture has a compressed database and a small provenance index. Metadata listing does not decompress
+databases. Database loading is cached separately per architecture and checks the index's digest, lengths, target,
+scheme and counts. User databases and data packs retain priority over the built-in corpus.
+Upstream notices are retained with source/archive and excerpt digests in the data notice index; they are textual
+license declarations, not source authentication or a legal determination.
+
+The promoted Linux profiles cover zlib, LZ4, Lua, SQLite, zstd, mbedTLS and libpng; x64/AArch64 additionally include
+the reduced OpenSSL and HTTP-only curl profiles. Several libraries have second versions. SDK/runtime and Windows
+coverage is tracked separately; the current promoted indexes do not claim Windows build-profile coverage.
+
+## Recognition policy
+
+Corpus composition uses collision-safe union, not priority overlay. Full named training references supply negative
+collision evidence without exporting their runtime, local or harness names. A global image-hash split rejects
+training references that are also held-out targets anywhere in the aggregate.
+The exact frozen musl inputs are a separately reported legacy exception: their original source-image provenance
+is unavailable, so their inclusion does not earn a complete historical training-provenance attestation.
+
+Promoted corpora withhold raw exact fallback answers. Such keys can accidentally coincide across different linked
+layouts, even when their masked bodies are already ambiguous. Masked and callee-qualified answers remain available;
+the generic matcher, hash schemes, and explicitly supplied user databases are unchanged. Withholding creates
+persistent tombstones for known keys. Composition that introduces new keys requires applying the curation policy again.
+
+All 80 ELF cases used for these four assets have zero wrong/spurious named proposals against their full sized
+symbolized twins after reloading the final gzip. This is bounded corpus evidence, not a universal precision guarantee.
+Per-library and aggregate recall failures remain recorded. The 80% matched-version recall target belongs to Phase 2
+acceptance; it is not substituted for the precision checks used to select default artifacts.
+
+Requested O1/O2 variants can produce identical signature databases and stripped images. Those cases remain separate
+measurements but do not establish independent optimizer diversity. Bare compiler flags are not evidence of a
+prebuilt runtime library's optimization level.
+
+## Producers
+
+`tools/signature-corpus.py` consumes an explicit offline cache of pinned source archives. It checks and extracts the
+same bounded regular-file snapshot, records actual commands and artifacts, freezes evaluator/collector executables,
+and never runs generated target programs. Configured host scripts run with a clean recorded environment and isolated
+home directory. Supported host build tools still execute; this is not an arbitrary-source execution sandbox.
+
+```sh
+python3 tools/signature-corpus.py --list
+python3 tools/signature-corpus.py \
+  --only libpng-1.6.44 --target aarch64-linux-musl --optimization O1 \
+  --source-cache "$SOURCE_CACHE" \
+  --output-dir target/signature-corpus/libpng-aarch64 \
+  --eval target/debug/rampage-eval \
+  --builder target/debug/examples/signature_corpus
+```
+
+The default ownership cohort consists of externally visible strong ELF definitions or public executable COFF
+definitions with checked global PDB procedure ranges. Local/hidden/weak functions are excluded before scoring.
+PE production requires separate explicit identity-matched PDBs for both programs and recorded native linker replay
+with GC/ICF disabled. Public PDB aliases are not a substitute for sized producer procedure records.
+
+The installed-runtime producer offers a separate explicit ELF linked-artifact scope. It binds archive members and
+actual kept linker-map inputs to raw names, producer ranges and instruction bytes, allowing only supported native
+relocation bits to differ. Unsupported relocations, ambiguous ownership and empty truth refuse the scope. This is
+not source authentication or general object/archive project loading.
+
+Rust target components can be materialized as data under the ignored target directory without executing installers.
+Their archive snapshots, expanded metadata, selected file membership and materialized file hashes are bounded and
+checked; receipt file hashes alone do not establish archive membership.
+
+The existing `tools/gen-signatures.sh` wrapper accepts the same corpus arguments. `ZIG`, `RAMPAGE_EVAL` and
+`RAMPAGE_SIGNATURE_CORPUS` select existing producer executables; `--only`, `--target` and `--optimization` are
+repeatable. A native tool build is available with:
 
 ```sh
 cargo build --locked -j 2 -p rampage-eval --bin rampage-eval --example signature_corpus
 tools/gen-signatures.sh --list
-tools/gen-signatures.sh --source-cache target/phase2-1/sources \
-  --output-dir target/signature-corpus/lua-pilot --only lua \
-  --target x86_64-linux-musl --optimization O1
 ```
 
-Supply archives listed by the recipe manifest in the read-only cache. Profiles select exact versions and
-allowlisted family harnesses; original IDs/defaults remain unchanged. Archive digests and the exact
-Zig 0.17.0 version are checked before compilation. `--only`, `--target` and `--optimization` are repeatable.
-`ZIG`, `RAMPAGE_EVAL` and `RAMPAGE_SIGNATURE_CORPUS` select existing producer executables.
-
-| Output | Contents |
+| Producer output | Contents |
 | --- | --- |
-| `inventory.json` | Selected profiles, outcomes, commands, source/tool/artifact identities and measurements. |
-| `builder-report.json` | Library-owned truth, baseline/after precision and recall, disagreements and gate result. |
-| `db.json`, `db.json.gz` | The same ordered database in ordinary JSON and deterministic gzip form. |
-| `truth.json` | The builder's library-owned truth, not a separately filtered denominator. |
+| `inventory.json` | Profiles, outcomes, commands, source/tool/artifact identities and measurements |
+| `builder-report.json` | Owned truth, baseline/after metrics, disagreements and the original gate result |
+| `db.json`, `db.json.gz` | The same ordered database as JSON and deterministic gzip |
+| `truth.json` | Original library-owned truth, not a newly filtered denominator |
 
-Only externally visible strong function definitions from the explicitly compiled library objects enter measured
-truth. Local, hidden, weak and unresolved ownership are not counted as covered. Non-library functions in the reference
-provide collision evidence but cannot become exported answers. Scoring reloads the serialized gzip artifact.
-Reference/target self-identity is rejected; stripping must preserve load mappings, retained section metadata and
-load-image bytes, except the ELF section-table header fields that stripping updates.
+The original gate still requires at least 80% recall and zero wrong/spurious names. Failed gates retain their
+measurements as `measured_failed` and return failure; unsupported targets are not successful coverage.
 
-The gate requires at least 80% recall and zero wrong/spurious names. Gate failures retain their measurements,
-are marked `measured_failed`, and return failure. Unsupported targets are not successful coverage. The Windows
-profile is explicitly unsupported by this pilot's ELF strip/truth path; broader versions, libraries and targets
-remain required before Phase 2.1 acceptance.
-
-SQLite uses its public-domain amalgamation with thread safety and extension loading disabled. The recipe hashes
-the complete license-containing `sqlite3.c`, not a separate license document; this profile is not full SQLite coverage.
-
-zstd materializes only its declared library/license roots; unrelated test symlinks are not extracted or followed.
-Global archive validation and byte/entry budgets still apply. mbedTLS uses its unmodified default configuration,
-including library self-test entrypoints; that is not typical production-configuration coverage. These profiles
-do not execute compression, crypto, networking, or other target code.
+SQLite's public-domain amalgamation profile disables thread safety and extension loading. Its license-containing
+source file is hashed in full; the distributed notice is a verbatim disclaimer excerpt rather than the amalgamation.
+zstd extracts only declared library/license roots and does not follow unrelated test symlinks; global path, byte
+and entry checks still cover the archive. mbedTLS uses its unmodified default configuration, including library
+self-tests, not a claim about typical production configurations. libpng uses the unchanged prebuilt configuration
+header with SIMD options disabled and a separately owned, fixed zlib dependency that is excluded from PNG truth.
 
 ## Aggregate validation
 
-The `signature_aggregate` evaluator example accepts repeated `--database` gzip files, `--case` builder reports,
-`--target` stripped images and `--symbolized` twins, plus new `--output` and `--report` paths. Associations use
-content hashes, not argument order. Inputs must share architecture/scheme; old reports without the shared
-validator source hash require regeneration.
+`signature_aggregate` requires hash-bound case reports and their stripped/symbolized twins. Repeated images may
+share a digest, but every case and every supplied input identity remains accounted for. All named proposals are
+graded against full twin truth, not only addresses owned by the library under test.
 
-It reloads the collision-safe aggregate before scoring each frozen library truth. Every proposed name is also
-checked against full verified twin truth, so correct names from other libraries are distinguished from false
-positives. Forward/reverse/rotation exports must agree. Failed gates retain all cases and return failure; they
-do not promote the database or silently change alias names or recall denominators.
+Default-corpus validation additionally supplies every original training reference and enables raw-exact withholding:
 
-The builder's optional `--diagnostic-limit` (0–512, default 0) emits address-sorted symbol/discovery evidence for
-truth rows. It reports actual production gate measures, ambiguity tombstones and bounded missing-callee lists;
-omitted rows remain counted. Reference labels and final target proposals are separate inputs. Diagnostics do
-not modify matches or establish execution, function boundaries or semantic identity.
+```sh
+target/debug/examples/signature_aggregate \
+  --database "$DATABASE" --case "$CASE_REPORT" \
+  --target "$STRIPPED_TARGET" --symbolized "$SYMBOLIZED_TARGET" \
+  --reference "$TRAINING_REFERENCE" --withhold-exact-fallbacks \
+  --output target/candidate.json.gz --report target/candidate-report.json
+```
 
-The existing no-argument starter generator still rebuilds musl. It now refreshes gzip and small count indexes
-together with JSON. Builtin identification lazily decodes each selected architecture once; listing packs reads
-only the index. Ordinary user/pack database inputs remain JSON. Corpus combination preserves collisions;
-explicit user overlays retain their existing precedence.
+Reports distinguish reference-conflict removals from raw exact fallback removals. Forward, reverse and rotated
+input orders must produce identical compressed output. A nonzero recall-gate exit retains the artifact and all case
+measurements; it does not authorize promotion when wrong/spurious proposals remain.
 
-Limits: exact-build public-function pilot, not complete library coverage, version attribution, near-miss
-matching, FLIRT/FIDBF import or authorization to publish signatures derived from private binaries.
+The builder's optional `--diagnostic-limit` (0–512, default 0) emits bounded, address-sorted symbol/discovery evidence.
+It preserves actual gates, ambiguity tombstones and missing-callee evidence, counts omitted rows, and keeps supplied
+reference labels separate from final target proposals. Diagnostics do not change matches or establish execution,
+complete function boundaries or semantic identity. Old case reports lacking the shared-validator source hash are
+not accepted as current aggregate evidence.
+
+The no-argument starter generator still rebuilds musl JSON/gzip/count inputs. It does not rebuild the composed default
+corpora; deliberately changing those frozen legacy inputs requires a separately reviewed baseline update.
+Ordinary user/pack database inputs remain JSON. FLIRT/FIDBF import, near-miss matching and authorization to publish
+signatures derived from private binaries are outside this corpus pipeline.
+
+Generated native programs, PDBs, archives and runtime captures are evaluation inputs, not bundled outputs. Only
+reviewed hash/name databases and their provenance data belong in the default signature assets. Existing raw attempts
+and frozen baseline reports are not overwritten by a new consumer replay or a later acceptance decision.

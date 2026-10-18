@@ -128,12 +128,22 @@ remain explicit preview-only boundaries. The old checked layouts and PDB names c
 - [x] Record paired Thumb EHABI recall and actual MCP metadata evidence, keeping baseline revision unattested.
 - [ ] Measure serialized artifacts per library/architecture/profile; preserve misses, wrong names and unrun coverage.
 - [ ] Extend the pilot to the roadmap library/version/architecture matrix before declaring 2.1 complete.
-- [ ] Review, validate changed crates/MCP and publish the milestone before starting 2.2.
+- [x] Add atomic training-reference conflict filtering, preserving negative evidence without exporting names.
+- [x] Enforce a global held-out image split and retain separate cases for byte-identical stripped targets.
+- [x] Deliver reviewed compressed default databases and provenance indexes for the four-architecture ELF cohort.
+- [ ] Complete remaining SDK/runtime and Windows default coverage; do not ship a precision failure.
+- [ ] Review, validate changed crates/MCP and publish the milestone before starting Phase 3.
+
+Status: **2.1 pipeline and four-architecture core/default delivery implemented; remaining SDK/runtime and Windows
+corpus delivery are incomplete.**
+The 80% matched-version recall target belongs to Phase 2 acceptance, not a separate 2.1 completion gate.
+Known recall failures remain visible; wrong/spurious names still prevent candidate promotion.
 
 The pilot is not full 2.1 acceptance. Early GC-enabled linked-subset measurements remain separate from the
 full-retention cohort. Pinned slice `198c024`: zlib and Lua pass the tested x64/AArch64 O1 gates; LZ4 remains
 77.9%/65.4% recall, with zero wrong/spurious names. All six results are published in `docs/benchmarks.md`.
-No new pilot database is promoted into the default bundle. Earlier results and the live Phase 1 gate are unchanged.
+That pilot publication promoted no new default database. The later delivery slice below adds reviewed assets;
+the earlier results and live Phase 1 gate remain unchanged.
 
 Further reviewed slices: `5f5a7e4` adds SQLite, aggregate validation and exact-match diagnostics; `1b67d7c` adds
 ARM EHABI candidate starts (Thumb LZ4 2/104 → 73/104, still below gate). `8640ae7` expands the pinned catalog to
@@ -141,6 +151,16 @@ ten profiles/six families, including second versions. `7f58743` fixes large MCP 
 mbedTLS matches are available in four complete bounded pages instead of truncated JSON. Current source suites,
 targeted large-corpus MCP acceptance, Clippy, Python tests and reviews passed. Remaining roster/recall and
 promotion gates are still open; Phases 3–6 are not started.
+
+Reviewed core/default delivery expands the pinned catalog to thirteen profiles/nine families, adds explicit
+PE/PDB production and exact stripping, and provisions hash-pinned Rust target-library data without installers.
+Core and ELF32 cohorts cover x64, AArch64, i386 and Thumb. Cross-library evaluation exposed false names that
+per-library scoring missed; reference-only filtering removes those measured core collisions. The hardened
+AArch64 OpenSSL profile still reports two wrong names; the final curated corpus withholds raw exact fallbacks
+and has zero wrong/spurious proposals across all 80 ELF aggregate cases. Tool snapshots,
+raw failed attempts and the one invalidated collector-hash-drift attempt remain separate. Runtime byte-binding
+and broader SDK coverage require fresh measurements. The four lazy-loaded default corpora and their indexes are
+recorded in `docs/benchmarks/phase2-1-delivery-2026-10-18.json`; Phase 2.1 is not yet complete.
 
 The follow-up `5f5a7e4` / `1b67d7c` evidence is pinned in
 `docs/benchmarks/phase2-1-parallel-2026-10-18.json`: SQLite x64 is 243/262; AArch64 is 201/262 and fails.
@@ -153,8 +173,9 @@ the final reviewed report omits its matrix. Actual paired MCP metadata receipts 
 binary revision or prove complete boundaries. This is a bounded publication, not full matrix acceptance,
 default promotion, fresh validation, a live model result, or authorization to skip the remaining 2.1 gate.
 
-Phases 2–6 are authorized in order. Phase 2.2 import formats, 2.3 fuzzy matching, and top-level Phases 3–6
-remain queued; source-corpus infrastructure is not acceptance of the entire library-recognition phase.
+The latest requested order is to finish 2.1, then proceed directly through top-level Phases 3–6. Phase 2.2
+import formats and 2.3 fuzzy matching remain queued. Source-corpus infrastructure is not acceptance of the
+entire library-recognition phase; the independent live Phase 1 gate also remains open.
 
 ### Implemented Phase 1 milestones
 

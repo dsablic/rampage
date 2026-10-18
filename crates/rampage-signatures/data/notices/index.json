@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "classification": "upstream textual notices; not source authentication or legal advice",
+  "notices": [
+    {
+      "profile": "zlib",
+      "license_declaration": "zlib",
+      "source_archive_sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+      "source_notice_path": "LICENSE",
+      "source_notice_sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+      "notice": "zlib.txt",
+      "notice_sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "lz4",
+      "license_declaration": "BSD-2-Clause",
+      "source_archive_sha256": "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b",
+      "source_notice_path": "lib/LICENSE",
+      "source_notice_sha256": "8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c",
+      "notice": "lz4.txt",
+      "notice_sha256": "8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "lua",
+      "license_declaration": "MIT",
+      "source_archive_sha256": "9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30",
+      "source_notice_path": "doc/readme.html",
+      "source_notice_sha256": "33a975a766520bc54de2d71e45442e504effa0519e331e31ee3fc46eca4f98bd",
+      "notice": "lua.txt",
+      "notice_sha256": "bbb97463a684d2c24cf3ee2489d2bd84c8f83c57ecc23de62eb36ec0c67d4498",
+      "scope": "verbatim HTML copyright/license excerpt; markup retained"
+    },
+    {
+      "profile": "sqlite",
+      "license_declaration": "public-domain",
+      "source_archive_sha256": "67d3fe6d268e6eaddcae3727fce58fcc8e9c53869bdd07a0c61e38ddf2965071",
+      "source_notice_path": "sqlite3.c",
+      "source_notice_sha256": "6c35bc5f7f85eac9c49928bacbb02bb694b547aabf69197e058cca245ad80e83",
+      "notice": "sqlite.txt",
+      "notice_sha256": "49cf7bcb103eb3244150a23bb23d840370a4762914faf1b450072a4b03c14670",
+      "scope": "verbatim copyright-disclaimer comment from amalgamation"
+    },
+    {
+      "profile": "zlib-1.2.13",
+      "license_declaration": "zlib",
+      "source_archive_sha256": "b3a24de97a8fdbc835b9833169501030b8977031bcb54b3b3ac13740f846ab30",
+      "source_notice_path": "LICENSE",
+      "source_notice_sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+      "notice": "zlib-1.2.13.txt",
+      "notice_sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "lz4-1.9.4",
+      "license_declaration": "BSD-2-Clause",
+      "source_archive_sha256": "0b0e3aa07c8c063ddf40b082bdf7e37a1562bda40a0ff5272957f3e987e0e54b",
+      "source_notice_path": "lib/LICENSE",
+      "source_notice_sha256": "8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c",
+      "notice": "lz4-1.9.4.txt",
+      "notice_sha256": "8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "lua-5.4.8",
+      "license_declaration": "MIT",
+      "source_archive_sha256": "4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae",
+      "source_notice_path": "doc/readme.html",
+      "source_notice_sha256": "3773a4900f3539c56aea9d6cd48d71c8751d495c4abc28472706bb9553d1493c",
+      "notice": "lua-5.4.8.txt",
+      "notice_sha256": "2bc2472d571d1e87e6348d0055ab4be4a68e191a041d4ed5a270b96ce760892d",
+      "scope": "verbatim HTML copyright/license excerpt; markup retained"
+    },
+    {
+      "profile": "sqlite-3.45.3",
+      "license_declaration": "public-domain",
+      "source_archive_sha256": "b2809ca53124c19c60f42bf627736eae011afdcc205bb48270a5ee9a38191531",
+      "source_notice_path": "sqlite3.c",
+      "source_notice_sha256": "9ca336fbcbff9f1d78b4f45b6a19583fcc097192310dd2f5f6cd43b9a33d7d69",
+      "notice": "sqlite-3.45.3.txt",
+      "notice_sha256": "49cf7bcb103eb3244150a23bb23d840370a4762914faf1b450072a4b03c14670",
+      "scope": "verbatim copyright-disclaimer comment from amalgamation"
+    },
+    {
+      "profile": "zstd-1.5.6",
+      "license_declaration": "BSD-3-Clause AND MIT",
+      "source_archive_sha256": "30f35f71c1203369dc979ecde0400ffea93c27391bfd2ac5a9715d2173d92ff7",
+      "source_notice_path": "LICENSE",
+      "source_notice_sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+      "notice": "zstd-1.5.6.txt",
+      "notice_sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "zstd-1.5.6",
+      "license_declaration": "MIT (embedded divsufsort)",
+      "source_archive_sha256": "30f35f71c1203369dc979ecde0400ffea93c27391bfd2ac5a9715d2173d92ff7",
+      "source_notice_path": "lib/dictBuilder/divsufsort.c",
+      "source_notice_sha256": "2081acb08865f623857d2c0dcb0e79fce9489f01416528c30cfee7097915c616",
+      "notice": "zstd-divsufsort-MIT.txt",
+      "notice_sha256": "49ea9487741f926c49d0e6a4da9ffde7e315d413f5f823830acd743fdedb2afa",
+      "scope": "verbatim embedded license comment"
+    },
+    {
+      "profile": "libpng-1.6.44",
+      "license_declaration": "libpng-2.0",
+      "source_archive_sha256": "0ef5b633d0c65f780c4fced27ff832998e71478c13b45dfb6e94f23a82f64f7c",
+      "source_notice_path": "LICENSE",
+      "source_notice_sha256": "7317e078e2d3b5d7ba5a6159e650945153262b44b76f6700f8e9edb261c5143e",
+      "notice": "libpng-1.6.44.txt",
+      "notice_sha256": "7317e078e2d3b5d7ba5a6159e650945153262b44b76f6700f8e9edb261c5143e",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "mbedtls-2.28.9",
+      "license_declaration": "Apache-2.0",
+      "source_archive_sha256": "e4dbcf86a4fb31506482888560f02b161e0ecfb82fee0643abcfc86abee5817e",
+      "source_notice_path": "LICENSE",
+      "source_notice_sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b",
+      "notice": "mbedtls-2.28.9.txt",
+      "notice_sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "openssl-3.0.15",
+      "license_declaration": "Apache-2.0",
+      "source_archive_sha256": "23c666d0edf20f14249b3d8f0368acaee9ab585b09e1de82107c66e1f3ec9533",
+      "source_notice_path": "LICENSE.txt",
+      "source_notice_sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "notice": "openssl-3.0.15.txt",
+      "notice_sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "curl-8.10.1",
+      "license_declaration": "curl",
+      "source_archive_sha256": "d15ebab765d793e2e96db090f0e172d127859d78ca6f6391d7eafecfd894bbc0",
+      "source_notice_path": "COPYING",
+      "source_notice_sha256": "adb1fc06547fd136244179809f7b7c2d2ae6c4534f160aa513af9b6a12866a32",
+      "notice": "curl-8.10.1.txt",
+      "notice_sha256": "adb1fc06547fd136244179809f7b7c2d2ae6c4534f160aa513af9b6a12866a32",
+      "scope": "complete upstream notice file"
+    }
+  ]
+}

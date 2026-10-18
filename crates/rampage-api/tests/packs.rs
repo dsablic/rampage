@@ -64,6 +64,66 @@ fn statuses(pack: &PackInfo) -> Vec<(&str, ContentStatus)> {
     pack.contents.iter().map(|content| (content.kind, content.status)).collect()
 }
 
+#[test]
+fn builtin_listing_uses_unique_catalog_assets_and_index_counts() {
+    let listing = Packs::default().listing();
+    let builtin = listing.last().unwrap();
+    assert!(builtin.builtin);
+    let manifest = builtin.manifest.as_ref().unwrap();
+    assert_eq!(manifest.name, "rampage-builtin");
+    assert!(manifest.source.contains("public-source corpus"));
+    let mut paths = std::collections::BTreeSet::new();
+    for content in &builtin.contents {
+        assert!(paths.insert(&content.path), "duplicate builtin path: {}", content.path);
+        if content.kind != "signatures" {
+            continue;
+        }
+        let arch: Arch = content.arch.as_ref().unwrap().parse().unwrap();
+        let metadata = rampage_signatures::SignatureDb::bundled_metadata(arch).unwrap().unwrap();
+        assert_eq!(content.status, ContentStatus::Loaded);
+        assert_eq!(content.path, format!("bundled:{}", metadata.asset));
+        assert_eq!(rampage_signatures::bundled_counts(arch), Some((metadata.signatures, metadata.callee_keys)));
+        assert!(content.detail.starts_with(&format!(
+            "{} public-source corpus signatures and {} callee keys;",
+            metadata.signatures, metadata.callee_keys,
+        )));
+        assert!(content.detail.contains("same-build recognition, not version identification"));
+        assert!(content.detail.contains(&metadata.gzip_sha256));
+    }
+}
+
+#[test]
+fn bundled_corpus_never_relabels_surviving_musl_fixture_answers() {
+    for (arch, json, target) in [
+        (
+            Arch::X86_64,
+            include_str!("../../rampage-signatures/data/musl-x86_64.json"),
+            "musl-static-x86_64.elf",
+        ),
+        (
+            Arch::Aarch64,
+            include_str!("../../rampage-signatures/data/musl-aarch64.json"),
+            "musl-static-aarch64.elf",
+        ),
+    ] {
+        let baseline = rampage_signatures::SignatureDb::from_json(json).unwrap();
+        assert_eq!(baseline.arch(), arch);
+        let project = Session::default().open(&fixture(target), None).unwrap();
+        let original = project.identify_functions(Some(&baseline), false, false).unwrap();
+        let corpus = project.identify_functions(None, true, false).unwrap();
+        assert!(original.matched >= 10, "{arch}: baseline must exercise library recognition");
+        assert!(corpus.matched >= 10, "{arch}: corpus must still exercise library recognition");
+        let actual: std::collections::BTreeMap<_, _> =
+            corpus.matches.iter().map(|matched| (matched.address, &matched.name)).collect();
+        for matched in original.matches {
+            if let Some(name) = actual.get(&matched.address) {
+                assert_eq!(*name, &matched.name, "{arch}: a surviving baseline answer must not be relabeled");
+            }
+        }
+        assert!(corpus.matches.iter().all(|matched| matched.source == "rampage-builtin"));
+    }
+}
+
 fn session(packs: Packs) -> Session {
     Session::default().with_packs(Arc::new(packs))
 }
