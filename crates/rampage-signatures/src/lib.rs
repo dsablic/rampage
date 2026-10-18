@@ -888,12 +888,38 @@ impl SignatureDb {
         db
     }
 
+    /// Builds function answers from `binary` while qualifying calls with an independent source name map.
+    /// This lets a producer-definition view select existing function names without losing the original
+    /// source's callee-qualified negative evidence. The map is borrowed only during construction; callers
+    /// supply its source provenance. Ordinary constructors keep using `binary`'s canonical callee names.
+    pub fn from_binary_with_extents_and_callees(
+        binary: &Binary,
+        extents: &BTreeMap<u64, u64>,
+        source_callees: &BTreeMap<u64, String>,
+    ) -> SignatureDb {
+        let mut db = SignatureDb::empty(binary.arch, CURRENT_SCHEME);
+        db.add_binary_with_callees(binary, extents, Some(source_callees));
+        db
+    }
+
     fn add_binary(&mut self, binary: &Binary, extents: &BTreeMap<u64, u64>) {
+        self.add_binary_with_callees(binary, extents, None);
+    }
+
+    fn add_binary_with_callees(
+        &mut self,
+        binary: &Binary,
+        extents: &BTreeMap<u64, u64>,
+        source_callees: Option<&BTreeMap<u64, String>>,
+    ) {
         let target = binary.target();
         let image = MaskContext::from_binary(binary);
         // One spelling per address: aliases hashed under each name would make the hash ambiguous.
         let functions = canonical_functions(binary);
-        let name = |address: u64| functions.get(&address).map(|symbol| symbol.name.as_str());
+        let name = |address: u64| match source_callees {
+            Some(names) => names.get(&address).map(String::as_str),
+            None => functions.get(&address).map(|symbol| symbol.name.as_str()),
+        };
         for symbol in functions.values() {
             let end = symbol.address.saturating_add(symbol.size);
             let discovered = extents.get(&symbol.address).copied().filter(|&found| found != end);
@@ -1877,6 +1903,24 @@ mod tests {
     /// The symbol named `name` in `binary`.
     fn symbol<'b>(binary: &'b Binary, name: &str) -> &'b Symbol {
         binary.symbols.iter().find(|symbol| symbol.name == name).unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    #[test]
+    fn explicit_source_callee_constructor_preserves_native_and_latent_evidence() {
+        let reference = Binary::open(fixture("eval-ref-x86_64.elf")).unwrap();
+        let names = canonical_functions(&reference)
+            .into_iter()
+            .map(|(address, symbol)| (address, symbol.name.clone()))
+            .collect();
+        let pop_arg = symbol(&reference, "pop_arg");
+        let extents = BTreeMap::from([(pop_arg.address, pop_arg.address + 236)]);
+        let expected = SignatureDb::from_binary_with_extents(&reference, &extents);
+        let actual = SignatureDb::from_binary_with_extents_and_callees(&reference, &extents, &names);
+        assert_eq!(actual.to_json(), expected.to_json());
+        assert_eq!(actual.entry_calls, expected.entry_calls);
+        assert_eq!(actual.entry_exact, expected.entry_exact);
+        assert!(!actual.entry_calls.is_empty());
+        assert!(actual.callee_keys() > 0);
     }
 
     #[test]

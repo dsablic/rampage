@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
+use object::{Object, ObjectSymbol};
 use rampage_eval::{Report, Truth, discovered_extents, proposals, score};
 use rampage_loaders::Binary;
 use rampage_signatures::SignatureDb;
@@ -16,6 +17,9 @@ use signature_corpus_support::{digest, verify_twin};
 #[path = "signature_corpus_support/pdb_inputs.rs"]
 mod pdb_inputs;
 use pdb_inputs::{BoundPdb, PdbInputs};
+#[path = "signature_corpus_support/alias_truth.rs"]
+mod alias_truth;
+use alias_truth::{AliasSet, producer_alias_sets, score_aliases};
 
 #[cfg(test)]
 #[allow(dead_code)]
@@ -51,6 +55,12 @@ struct Arguments {
     pdbs: Vec<PathBuf>,
     #[arg(long)]
     withhold_exact_fallbacks: bool,
+    /// Accept native ELF STT_FUNC aliases only with identical sized, file-backed executable ranges.
+    /// Owned names stay strict; all raw proposals and accepted-alias proof are retained in the report.
+    /// Source references select a unique global/default definition only with weak/default aliases.
+    /// Original source-canonical callee contexts remain available independently of selected answer labels.
+    #[arg(long)]
+    producer_alias_sets: bool,
     #[arg(long)]
     output: PathBuf,
     #[arg(long)]
@@ -80,6 +90,8 @@ struct CaseReport {
     library_object_sha256: Vec<String>,
     truth_functions: usize,
     library_truth: StrictTruth,
+    ownership_scope_id: Option<String>,
+    ownership_scope: Option<String>,
     load_image_equivalent_stripped_twin: bool,
     target_executed: bool,
     baseline: Report,
@@ -337,6 +349,32 @@ fn grade(proposed: &[(u64, Option<String>)], owned: &Truth, full: &Truth) -> (Re
     (owned_report, all_report, passed)
 }
 
+fn validate_owned_truth(
+    owned: &Truth,
+    full: &Truth,
+    aliases: Option<&BTreeMap<u64, AliasSet>>,
+    linked_artifact: bool,
+) -> Result<(), String> {
+    for (address, name) in &owned.0 {
+        if full.0.get(address) == Some(name)
+            || aliases.is_some_and(|sets| sets.get(address).is_some_and(|set| set.admits_owned(name, linked_artifact)))
+        {
+            continue;
+        }
+        return Err(if aliases.is_some() {
+            format!(
+                "owned/full twin truth differs at {address:#x}; no same-range native alias with required owned scope"
+            )
+        } else {
+            format!(
+                "owned/full canonical twin truth differs at {address:#x}; \
+                 alias-set reconciliation is unsupported, so frozen owned names cannot be regraded"
+            )
+        });
+    }
+    Ok(())
+}
+
 struct PreparedCase {
     path: PathBuf,
     report_sha256: String,
@@ -346,6 +384,7 @@ struct PreparedCase {
     target: Binary,
     symbolized: Binary,
     full_truth: Truth,
+    alias_sets: BTreeMap<u64, AliasSet>,
     reference: Option<Binary>,
     reference_path: Option<PathBuf>,
     target_pdb: Option<BoundPdb>,
@@ -373,6 +412,7 @@ fn prepare_cases(
     symbolized: &BTreeMap<String, PathBuf>,
     references: Option<&BTreeMap<String, PathBuf>>,
     pdbs: &mut PdbInputs,
+    producer_alias_policy: bool,
 ) -> Result<Vec<PreparedCase>, String> {
     let mut prepared = Vec::new();
     let mut report_bytes = 0;
@@ -416,14 +456,16 @@ fn prepare_cases(
         if full_truth.0.is_empty() || full_truth.0.len() > 100_000 {
             return Err("full symbolized truth is empty or exceeds 100000 functions".into());
         }
-        for (address, name) in &case.library_truth.0.0 {
-            if full_truth.0.get(address) != Some(name) {
-                return Err(format!(
-                    "owned/full canonical twin truth differs at {address:#x}; \
-                     alias-set reconciliation is unsupported, so frozen owned names cannot be regraded"
-                ));
-            }
-        }
+        let alias_sets =
+            if producer_alias_policy { producer_alias_sets(&symbolized, &full_truth)? } else { BTreeMap::new() };
+        let linked_artifact = case.ownership_scope_id.as_deref() == Some("linked_artifact")
+            || (case.ownership_scope_id.is_none() && case.ownership_scope.as_deref() == Some("linked_artifact"));
+        validate_owned_truth(
+            &case.library_truth.0,
+            &full_truth,
+            producer_alias_policy.then_some(&alias_sets),
+            linked_artifact,
+        )?;
         verify_twin(&symbolized, &target, &full_truth)?;
         let mut reference = reference_path.as_ref().map(|path| open_bound(path, &case.reference_sha256)).transpose()?;
         let mut reference_pdb = None;
@@ -450,6 +492,7 @@ fn prepare_cases(
             target,
             symbolized,
             full_truth,
+            alias_sets,
             reference,
             reference_path,
             target_pdb,
@@ -484,6 +527,158 @@ fn filtered_export<'a>(
     let suppressed = combined.reject_reference_conflicts_from(references).map_err(|error| error.to_string())?;
     let withheld_exact = if withhold_exact_fallbacks { combined.withhold_exact_fallbacks() } else { 0 };
     Ok((combined.to_gzip().map_err(|error| error.to_string())?, suppressed, withheld_exact))
+}
+
+fn reference_alias_choices(
+    source: &Binary,
+    aliases: &BTreeMap<u64, AliasSet>,
+) -> Result<(BTreeMap<u64, Vec<String>>, Value), String> {
+    let mut eligible: BTreeSet<_> = aliases.keys().copied().collect();
+    let mut strong = BTreeMap::<u64, BTreeSet<String>>::new();
+    let mut global_records = BTreeSet::new();
+    let mut facts = BTreeMap::<u64, Vec<Value>>::new();
+    if !aliases.is_empty() {
+        let file = object::File::parse(source.image_bytes()).map_err(|error| error.to_string())?;
+        for (table, symbol) in file
+            .symbols()
+            .map(|symbol| ("symtab", symbol))
+            .chain(file.dynamic_symbols().map(|symbol| ("dynsym", symbol)))
+        {
+            let Some(set) = aliases.get(&symbol.address()) else { continue };
+            let object::SymbolFlags::Elf { st_info, st_other } = symbol.flags() else { continue };
+            if symbol.is_undefined() || !matches!(st_info.st_type(), object::elf::STT_FUNC | object::elf::STT_GNU_IFUNC)
+            {
+                continue;
+            }
+            let name = symbol.name().unwrap_or("");
+            facts.entry(symbol.address()).or_default().push(json!({
+                "table":table,"symbol_index":symbol.index().0,"raw_name":name,
+                "symbol_type":st_info.st_type().0,"binding":st_info.st_bind().0,
+                "visibility":st_other.visibility().0,"size":symbol.size(),
+                "section_index":symbol.section_index().map(|index|index.0)
+            }));
+            if st_info.st_type() != object::elf::STT_FUNC
+                || symbol.size() != set.original_symbol_size
+                || symbol.section_index().map(|index| index.0) != Some(set.section_index)
+                || !set.contains(name)
+                || st_other.visibility() != object::elf::STV_DEFAULT
+                || !matches!(st_info.st_bind(), object::elf::STB_GLOBAL | object::elf::STB_WEAK)
+            {
+                eligible.remove(&symbol.address());
+            }
+            if st_info.st_bind() == object::elf::STB_GLOBAL {
+                if !global_records.insert((symbol.address(), table, name.to_owned())) {
+                    eligible.remove(&symbol.address());
+                }
+                strong.entry(symbol.address()).or_default().insert(name.to_owned());
+            }
+        }
+    }
+    let mut selected = BTreeMap::new();
+    let choices = aliases
+        .iter()
+        .map(|(address, set)| {
+            if let Some(name) = strong
+                .get(address)
+                .filter(|names| names.len() == 1)
+                .and_then(|names| names.first())
+                .filter(|_| eligible.contains(address))
+                && set
+                    .alias_names
+                    .iter()
+                    .all(|alias| alias.raw_name != *name || alias.binding == object::elf::STB_GLOBAL.0)
+            {
+                selected.insert(*address, name.clone());
+                return (*address, vec![name.clone()]);
+            }
+            let names: BTreeSet<_> = set.alias_names.iter().map(|alias| alias.raw_name.clone()).collect();
+            (*address, names.into_iter().collect())
+        })
+        .collect();
+    let conservative: Vec<_> = aliases.keys().filter(|address| !selected.contains_key(*address)).copied().collect();
+    Ok((
+        choices,
+        json!({
+            "selected_existing_strong_definitions":selected,"source_address_function_definitions":facts,
+            "conservative_alias_group_addresses":conservative,
+            "definition_count_basis":"distinct raw definitions; symtab/dynsym mirrors are one definition",
+            "unselected_group_policy":"all verified same-range producer spellings combined as ambiguity"
+        }),
+    ))
+}
+
+fn producer_alias_reference(
+    source: &Binary,
+    path: &Path,
+    hash: &str,
+    extents: &BTreeMap<u64, u64>,
+) -> Result<(SignatureDb, Value), String> {
+    let source_callees = Truth::from_binary(source);
+    let aliases = producer_alias_sets(source, &source_callees)?;
+    let (choices, definition_evidence) = reference_alias_choices(source, &aliases)?;
+    let variants = choices.values().map(Vec::len).max().unwrap_or(0);
+    if variants > 256 {
+        return Err("reference alias policy exceeds 256 native spelling variants".into());
+    }
+    let mut views = BTreeSet::<BTreeMap<u64, String>>::new();
+    if !choices.is_empty() {
+        // Seed the original conservative-group answer choices, keeping proven strong answers fixed.
+        views.insert(
+            choices
+                .iter()
+                .map(|(address, names)| {
+                    let name = if names.len() == 1 { &names[0] } else { &aliases[address].canonical_name };
+                    (*address, name.clone())
+                })
+                .collect(),
+        );
+        for ordinal in 0..variants {
+            views.insert(
+                choices.iter().map(|(address, names)| (*address, names[ordinal % names.len()].clone())).collect(),
+            );
+        }
+    }
+    let database = if !views.is_empty() {
+        let mut database = None::<SignatureDb>;
+        let mut variant = open_bound(path, hash)?;
+        let original_symbols = variant.symbols.clone();
+        for view in &views {
+            // Select existing producer records, never rename symbols or prefer a candidate's spelling.
+            variant.symbols = original_symbols
+                .iter()
+                .filter(|symbol| {
+                    let Some(name) = view.get(&symbol.address) else { return true };
+                    symbol.name == *name && symbol.size == aliases[&symbol.address].original_symbol_size
+                })
+                .cloned()
+                .collect();
+            let mut native = SignatureDb::from_binary_with_extents_and_callees(&variant, extents, &source_callees.0);
+            native
+                .combine(&SignatureDb::from_binary_with_extents(&variant, extents))
+                .map_err(|error| error.to_string())?;
+            if let Some(combined) = database.as_mut() {
+                combined.combine(&native).map_err(|error| error.to_string())?;
+            } else {
+                database = Some(native);
+            }
+        }
+        database.ok_or("missing native reference view")?
+    } else {
+        SignatureDb::from_binary_with_extents(source, extents)
+    };
+    Ok((
+        database,
+        json!({
+            "reference_alias_definition_policy":alias_truth::REFERENCE_POLICY,
+            "producer_alias_sets":aliases,"native_spelling_views":views.len(),
+            "definition_evidence":definition_evidence,
+            "callee_context_policy":alias_truth::CALLEE_CONTEXT_POLICY,
+            "original_source_callee_truth":serde_json::from_str::<Value>(&source_callees.to_json())
+                .map_err(|error|error.to_string())?,
+            "original_source_callee_truth_sha256":digest(source_callees.to_json().as_bytes()),
+            "limitation":"Source binding selects definitions, not library identity; unselected aliases may suppress recall."
+        }),
+    ))
 }
 
 fn write_outputs(output: &Path, gzip: &[u8], report: &Path, json: &[u8]) -> Result<(), String> {
@@ -549,6 +744,7 @@ fn run(arguments: Arguments) -> Result<(), String> {
         &symbolized.by_hash,
         (!arguments.references.is_empty()).then_some(&references.by_hash),
         &mut pdbs,
+        arguments.producer_alias_sets,
     )?;
     let legacy_unattested = validate_database_provenance(
         &databases,
@@ -559,9 +755,22 @@ fn run(arguments: Arguments) -> Result<(), String> {
     for case in &prepared {
         if let Some(reference) = &case.reference {
             let extents = discovered_extents(reference).map_err(|error| error.to_string())?;
-            let database = SignatureDb::from_binary_with_extents(reference, &extents);
-            reference_evidence.push(json!({"path":case.reference_path,"sha256":case.case.reference_sha256,
-                "database_sha256":digest(database.to_json().as_bytes())}));
+            let (database, alias_evidence) = if arguments.producer_alias_sets {
+                producer_alias_reference(
+                    reference,
+                    case.reference_path.as_deref().ok_or("reference path missing")?,
+                    &case.case.reference_sha256,
+                    &extents,
+                )?
+            } else {
+                (SignatureDb::from_binary_with_extents(reference, &extents), Value::Null)
+            };
+            let mut evidence = json!({"path":case.reference_path,"sha256":case.case.reference_sha256,
+                "database_sha256":digest(database.to_json().as_bytes())});
+            if arguments.producer_alias_sets {
+                evidence["producer_alias_policy"] = alias_evidence;
+            }
+            reference_evidence.push(evidence);
             reference_databases.push(database);
         }
     }
@@ -593,14 +802,34 @@ fn run(arguments: Arguments) -> Result<(), String> {
         let case = &prepared_case.case;
         let measurement = match proposals(&measured, &prepared_case.target) {
             Ok(proposed) => {
-                let (owned, full, case_passed) = grade(&proposed, &case.library_truth.0, &prepared_case.full_truth);
+                let (owned, strict_full, strict_passed) =
+                    grade(&proposed, &case.library_truth.0, &prepared_case.full_truth);
+                let (full, accepted_aliases) = if arguments.producer_alias_sets {
+                    score_aliases(&proposed, &prepared_case.full_truth, &prepared_case.alias_sets)?
+                } else {
+                    (strict_full, Vec::new())
+                };
+                let case_passed = if arguments.producer_alias_sets {
+                    !case.library_truth.0.0.is_empty()
+                        && owned.recall >= 0.8
+                        && owned.wrong == 0
+                        && full.wrong == 0
+                        && full.spurious == 0
+                } else {
+                    strict_passed
+                };
                 passed &= case_passed;
-                json!({
+                let mut measurement = json!({
                     "owned":owned,"all_proposed_against_full_twin_truth":full,"passed":case_passed,
                     "named_proposals":proposed.iter().filter(|(_, name)|name.is_some()).count(),
                     "other_owned_scope_named_proposals":proposed.iter()
                         .filter(|(address,name)|name.is_some() && !case.library_truth.0.0.contains_key(address)).count()
-                })
+                });
+                if arguments.producer_alias_sets {
+                    measurement["accepted_producer_aliases"] = json!(accepted_aliases);
+                    measurement["raw_full_proposals"] = json!(proposed);
+                }
+                measurement
             }
             Err(error) => {
                 passed = false;
@@ -628,6 +857,14 @@ fn run(arguments: Arguments) -> Result<(), String> {
             "load_image_equivalent_stripped_twin":true,"measurement":measurement
         });
         case_evidence["input_format"] = json!(prepared_case.symbolized.format);
+        if arguments.producer_alias_sets {
+            case_evidence["producer_alias_sets"] = json!(prepared_case.alias_sets);
+            case_evidence["owned_truth_alias_admission_scope"] = json!({
+                "ownership_scope_id":case.ownership_scope_id,
+                "ownership_scope":case.ownership_scope,
+                "owned_scoring":"strict_original_owned_name_and_count"
+            });
+        }
         case_evidence["training_reference_binding"] =
             json!(match (prepared_case.reference.is_some(), prepared_case.reference_pdb.is_some(),) {
                 (true, true) => "actual_hash_bound_image_and_identity_checked_pdb",
@@ -690,13 +927,31 @@ fn run(arguments: Arguments) -> Result<(), String> {
             "Frozen legacy musl inputs lack recorded source archive and case/reference provenance.",
             "Full gold uses ELF sized symbols or all checked PE producer procedures, never unsized PUBLIC names.",
             "PE coverage is exact PE32+ x64 linked builds, not OS DLL implementation coverage.",
-            "Owned truth stays frozen; alias-set reconciliation is unsupported and canonical-name differences reject.",
+            if arguments.producer_alias_sets {
+                concat!(
+                    "Owned names/counts stay frozen and strict; full ELF grading accepts only verified same-range ",
+                    "STT_FUNC producer aliases. PE aliases remain unsupported; no PUBLIC size inference."
+                )
+            } else {
+                "Owned truth stays frozen; alias-set reconciliation is unsupported and canonical-name differences reject."
+            },
             "Order checks cover forward/reverse/rotation exports, not every permutation.",
             "Cases sharing an exact image SHA-256 remain separate measurements, not independent code diversity.",
             "Output pairs use create_new with I/O-error cleanup, not crash-atomic multi-file publication."
         ]
     });
     report["target_inputs"] = json!(targets.evidence);
+    if arguments.producer_alias_sets {
+        report["evaluation_policy"] = json!(alias_truth::POLICY);
+        report["reference_alias_definition_policy"] = json!(alias_truth::REFERENCE_POLICY);
+        report["reference_callee_context_policy"] = json!(alias_truth::CALLEE_CONTEXT_POLICY);
+        report["signature_constructor_source_sha256"] =
+            json!(digest(include_bytes!("../../rampage-signatures/src/lib.rs")));
+        report["producer_alias_sets_source_sha256"] =
+            json!(digest(include_bytes!("signature_corpus_support/alias_truth.rs")));
+        report["full_truth_name_role"] =
+            json!("canonical display only; exact native alias range membership grades names");
+    }
     report["pdb_inputs"] = json!(pdbs.evidence);
     let actual_case_references_checked = prepared.iter().all(|item| item.reference.is_some());
     report["nonlegacy_database_case_associations_checked"] = json!(true);
