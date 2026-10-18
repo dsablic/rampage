@@ -1,0 +1,105 @@
+{
+  "measurement": "phase1-6-debug-type-import",
+  "design": "paired-owned-central-struct-reconstruction-not-blind-whole-program-re",
+  "requested_model": "github-copilot/gpt-6.1-sol",
+  "model_variant": "default",
+  "fixture_sha256": "47458e57eaa7ec0e522b4db0ad3d57b284eef61d52f141b9fb02dc9ce2ed58ed",
+  "source_sha256": "67d0d1d7392e8accb45bbdf612394ba065952dc0d36d15a6cd5b67082bed6115",
+  "source_recipe": "crates/rampage-eval/tasks/phase1-6/debug-types.toml",
+  "method": "0x201190", "wrapper": "0x2011e0",
+  "agent_summary": {
+    "disposition": "failed", "model_source": "provider", "answer_contract_matches": false,
+    "model_turns": 2, "tool_requests": 4, "tool_calls": 4, "tool_errors": 0, "model_errors": 1,
+    "catalog_requests": 2, "catalog_tool_count": 33,
+    "catalog_inventory": [
+      {"complete": true, "tool_count": 49, "required_tools": [
+        {"name": "import_debug_types", "present": true}, {"name": "get_type", "present": true},
+        {"name": "decompile", "present": true}, {"name": "edit_variable", "present": true}
+      ]},
+      {"complete": true, "tool_count": 49, "required_tools": [
+        {"name": "import_debug_types", "present": true}, {"name": "get_type", "present": true},
+        {"name": "decompile", "present": true}, {"name": "edit_variable", "present": true}
+      ]}
+    ],
+    "usage": {"input_tokens": null, "output_tokens": null, "reasoning_tokens": null,
+      "cache_read_input_tokens": null, "cache_creation_input_tokens": null},
+    "agent_wall_time_ms": 10933,
+    "timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+  },
+  "task_contract": {
+    "fields": ["owner_size", "cell_stride", "bias_offset", "next_offset", "typed_cells", "analyst_edits_preserved"],
+    "manual_analyst_retype": true, "qualified_this_producer_signature_claimed": false
+  },
+  "preparation_tool_calls": 4, "preparation_tool_errors": 0,
+  "preparation_native_checks": {"independent_dwarf_type_graph": 1, "compiler_layout_table": 1},
+  "verifier_tool_calls": 4, "verifier_tool_errors": 0, "verification_wall_time_ms": 28,
+  "model_tool_workflow_verified": false, "permanent_scope_violation": false,
+  "checked_import_receipt": {
+    "review_sha256": "9997f4c359a29f9db6e51d3440e317b6ae0eb98d0ed314c43666b1ff7a6e8afc",
+    "manifest_id": "5157554b429eaffa61e84d28661bf421f66c5bb9485d0bdb3a240af8e1431d11",
+    "complete_detail_count": 20, "producer_type_total": 20,
+    "applied": null, "imported_types": null, "imported_signatures": null
+  },
+  "native_state_verified": false, "task_verified": false,
+  "initial_verification": {"native_state_verified": false, "verification_error": "checked proof ownership count/address"},
+  "fresh_server_verification": {
+    "native_state_verified": false, "verification_error": "checked proof ownership count/address"
+  },
+  "stable_annotation_log": false, "source_and_owned_image_bytes_unchanged": true, "no_extra_fixture_files": true,
+  "wrapper_source_dwarf_comparison": {
+    "before": {
+      "matched_components": 0, "total_components": 3, "components": [false, false, false],
+      "exact_parameter_count": true, "reference": "independent DWARF DTO",
+      "producer_function_id": "dwarf:cu:0:die:109", "producer_function_address": "0x2011e0"
+    },
+    "after": null, "scope": "one wrapper, three components; not Phase-0 corpus improvement"
+  },
+  "baseline_method_field_paths": false,
+  "limits": {"max_turns": 16, "max_tool_calls": 32},
+  "target_executed": false,
+  "permissions": {
+    "allow_debug_type_import": true, "allow_variable_edits": true, "all_other_write_flags": false,
+    "approved_debug_pdb": false, "task_scope_guard_rejects_set_types_and_signatures": true
+  },
+  "owned_output_wall_time_ms": 11973,
+  "owned_output_timing_boundary": "fixture preparation through native/fresh verification, shutdown and cleanup",
+  "provenance": {
+    "evaluator_binary_sha256": "f1932ba5a1cb2616562017d44e9a1fd2378cbb5a654e1711b81c5d638780c30c",
+    "collector_source_sha256": "a3658a4b0567e4117e6c0b506f7108a7d613f4116e55d81bcc50b16818416d84",
+    "measured_unix_ms": 1792293059618,
+    "source_revision": "02e61733af1c9e4563e3f611bb3cc1fced5cf5e4",
+    "source_report_sha256": "280093679cbd3684d08c0e3b806593e612cbf36329c518792bd50ee4e6d22d3d",
+    "collector_sources_match_revision": true, "worktree_measurement": true
+  },
+  "before": {
+    "source_revision": "7d615d1", "import_debug_types_available": false,
+    "pdb_names_only_matched_functions": 3, "nested_x64_checked_layout_types": 0,
+    "aarch64_checked_layout_status": "rejected"
+  },
+  "controlled_fixture_acceptance": {
+    "mode": "scripted actual MCP plus independent native/source checks; not the live agent result",
+    "generated_api_targets": ["x86_64 PE/PDB", "x86_64 DWARF", "AArch64 DWARF"],
+    "mcp_fixture_cases_passed": 5,
+    "central_cpp_struct_retyped": true,
+    "wrapper_agreement_after": {"matched_components": 3, "total_components": 3},
+    "cold_server_replay_verified": true,
+    "target_executed": false
+  },
+  "investigation_revalidation": {
+    "installed_arm64": {"c_bytes": 892, "variables": 6, "recovery_status": "warnings", "annotations_unchanged": true},
+    "firmware_window": {
+      "instructions_decoded": 8, "bytes_consumed": 20, "stop_reason": "instruction_limit",
+      "mapping_validation": "analyst_asserted", "target_executed": false,
+      "device_identity_or_full_memory_map_claimed": false
+    }
+  },
+  "publication_notes": [
+    "First live run, no retry or regrading: it stopped after preview/paging and before apply/retype, with one model-side error.",
+    "Native state, workflow, task success and stable log remain false. Applied/import counts and after-agreement are unknown, not zero or success.",
+    "The bounded summary does not retain the error reason. Token usage is unknown; no provider/format/transport diagnosis is asserted.",
+    "Controlled fixture acceptance demonstrates the product but cannot replace this failed live result.",
+    "The live central-struct completion-call bound is unearned; max_tool_calls=32 is only an execution cap, not successful N.",
+    "The one-wrapper controlled 3/3 result is not a regrade or corpus-wide improvement over Phase 0.",
+    "Phase 1 live end-to-end acceptance remains open. Earlier phase publications are unchanged."
+  ]
+}

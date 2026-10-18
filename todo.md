@@ -1,6 +1,6 @@
 # To do
 
-## Parity roadmap: Phases 0 and 1.1–1.5 completed
+## Parity roadmap: Phase 0 and 1.1–1.6 implementation completed; live Phase 1 sign-off open
 
 Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One milestone at a time;
 parallel slices share central builds and undergo fresh-context review before publication.
@@ -91,12 +91,27 @@ Implementation `321ea28`; audited metrics and limits are in `docs/benchmarks.md`
 Clippy passed, with a full worker rerun after its new error-category test expectation was corrected. Some
 multi-hop/refinement cases remain explicit unsupported boundaries; automatic ephemeral display is not durable apply.
 
-## Active milestone: Phase 1.6, checked PDB/DWARF type import
+## Phase 1.6: checked PDB/DWARF type-import implementation completed
 
-- [ ] Measure current PDB names-only and flat checked-DWARF limits against owned PE/PDB and nested/AArch64 fixtures.
-- [ ] Import identity-matched PDB type records into the project library and function signatures with preview/apply.
-- [ ] Widen checked DWARF layouts to nested aggregates/arrays and AArch64; preserve unsupported bitfield evidence.
-- [ ] Validate complete atomic edits, stale-source refusal, native/worker replay and phase-end investigation tasks.
+- [x] Measure PDB names-only and flat checked-DWARF limits against owned PE/PDB and nested/AArch64 fixtures.
+- [x] Import identity/machine-matched PDB type records into the project library with whole-plan review/apply.
+- [x] Add nested DWARF aggregates/arrays and AArch64 counterpart checks, preserving unknown alignment/bitfield facts.
+- [x] Validate complete atomic proof/library/signature edits, stale-source refusal, cold native/worker replay and history.
+- [x] Controlled MCP C++ reconstruction passes: Owner/Cell fields and one-wrapper DWARF agreement improve to 3/3.
+- [x] Preserve first live attempt: four successful MCP calls, then one model-side error before apply/retype;
+  workflow/native/task verification false, usage unknown, no retries/regrading.
+- [x] Revalidate audio and original firmware static workloads without annotation changes or target execution.
+
+Implementation `02e6173`; audited evidence is in `docs/benchmarks.md`. Changed-crate suites, scoped Clippy and
+actual MCP/collector fixtures passed. Bitfields, qualifiers, ambiguous C CodeView forwards and unsupported ABIs
+remain explicit preview-only boundaries. The old checked layouts and PDB names contracts are preserved.
+
+## Open acceptance gate: live Phase 1 completion
+
+- [ ] Genuine live checked import → central C++ struct retype → owner-linked field verification and fresh replay.
+- [ ] Record successful reconstruction call bound N and independent DWARF agreement; execution caps are not N.
+- [ ] Diagnose the model-side failure only with new evidence; keep first attempts and prior publications frozen.
+- [ ] Do not claim full Phase 1 acceptance or start top-level Phase 2 from controlled test success alone.
 - [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no class
   rows; symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
 
@@ -105,7 +120,7 @@ multi-hop/refinement cases remain explicit unsupported boundaries; automatic eph
 - [x] 1.3 Apply types to data and operands.
 - [x] 1.4 Stack-frame inspection.
 - [x] 1.5 Type propagation with analyst edits taking priority.
-- [ ] 1.6 PDB/DWARF type import with identity and layout checks (active).
+- [x] 1.6 PDB/DWARF type import with identity and layout checks (implementation complete; live sign-off above).
 
 ## Audio/firmware investigation acceptance workloads
 

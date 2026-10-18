@@ -6,6 +6,62 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 1.6 — checked PDB and nested DWARF type import
+
+**Run:** 2026-10-18, committed implementation/collector `02e6173`. The
+[measurement](benchmarks/phase1-6-2026-10-18.json) preserves the first live attempt. **Live Phase 1 sign-off is
+not earned:** the model stopped after preview/paging, before apply or retyping.
+
+| Measurement | Before | Implementation / controlled fixture result |
+| --- | --- | --- |
+| PDB type import | Identity-matched function names only | Bounded TPI/IPI graphs, explicit aliases, enums and scalar/pointer signatures |
+| Nested checked DWARF layouts | Zero admitted types on the owned nested fixture | Nested aggregates, arrays and callbacks in the project library |
+| AArch64 checked import | Rejected by the old x64/GCC-only path | Target-aware native counterpart assertions and replay |
+| Central C++ structure | Pointer arithmetic, no source field paths | Controlled MCP import/retype exposes owner-linked cell fields and bias |
+| Wrapper agreement against DWARF | 0/3 components in the measured baseline | Controlled fixture verification: 3/3; live after-result unavailable |
+| First live reconstruction task | New workload | **Failed: one model-side error; no apply/retype completed** |
+
+The first `github-copilot/gpt-6.1-sol` attempt, variant `default`, made **4 successful MCP calls / 2 model turns**
+with zero tool errors, then recorded one model-side error. Agent wall time was 10.933 s. Token totals are unknown,
+and the bounded report does not retain the error reason, so no provider/format/transport diagnosis is asserted.
+There was no retry or regrading. Workflow, native-state and task verification remain false. The collected
+preview covered 20 producer types, but applied/import counts and after-agreement remain null—not success or
+measured zero. The successful completion-call bound **N is unearned**; the 32-call cap is not a result.
+
+Separate scripted tests exercised real MCP transports, not model answers: five generated-fixture cases passed,
+covering reviewed whole-batch apply, rollback, undo/redo, stale-source refusal, cold replay and deletion guards.
+The owned C++ collector test independently verified a 48-byte Owner, 16-byte Cell stride, member offsets, exact
+annotation maps, owner-linked native field access and 3/3 wrapper signature agreement against the DWARF DTO.
+That one-wrapper controlled result is not the live task result, a Phase 0 regrade, or corpus-wide agreement gain.
+
+The checked path retains producer facts separately from consumer measurements. Native alignment does not fill
+missing producer alignment. Unsupported bitfields preserve their bit-size/offset evidence; qualified types and
+unsupported ABIs remain preview-only rather than becoming complete assertions. Review hashes bind the entire
+proposal, image, target/specifications, evidence and edits; pages never select writes. Proofs and library units
+are cross-validated at complete annotation boundaries, with sealed signatures and cache-independent replay
+witnesses. The legacy flat/projected layout and names-only PDB workflows remain unchanged.
+
+PDB identity checks include GUID/age and same-buffer DBI/PE machine compatibility. Forward completion requires
+producer unique identity, not same-named C tags; the original C fixture remains a negative control. The positive
+control retains C function linkage while supplying CodeView C++ unique names. Explicit `S_UDT` aliases retain
+their exact TypeIndex relationships. Source-name preservation, signed enum wire forms, array occupied versus
+allocation extents and unknown-versus-absent bounds/strides have independent producer regressions.
+
+API and the other six changed-crate suites passed in named runs after correcting the explicit Win32 convention
+declarator; scoped all-target Clippy, actual MCP fixtures, collector tests and independent reviews passed.
+This is not full-workspace/release acceptance. Static investigation revalidation preserved 892 C bytes and six
+descriptors with warnings on an installed ARM64 core, without annotation changes. An original firmware window
+returned eight decoder observations without execution or new device/full-map claims.
+
+**Remaining phase-end gate:** obtain a genuine live completion of checked import → analyst retype → verified
+central-struct fields, record successful N, and report independent agreement. This failed first attempt stays
+frozen; controlled test success is not substituted for it. Earlier publications remain unchanged.
+
+```sh
+tests/fixtures/debug-types/build.sh target/phase1-6
+cargo run --locked -j 2 -p rampage-eval --example debug_type_import -- target/phase1-6/debug-cpp-x64.elf
+```
+
 ## Phase 1.5 — bounded unlocked type propagation
 
 **Run:** 2026-10-18, committed source `321ea28`. The
