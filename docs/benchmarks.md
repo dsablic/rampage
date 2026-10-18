@@ -6,6 +6,62 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 1.5 — bounded unlocked type propagation
+
+**Run:** 2026-10-18, committed source `321ea28`. The
+[measurement](benchmarks/phase1-5-2026-10-18.json) preserves the first live result, source/executable/fixture
+identities, bounded catalog evidence, and the failed agent outcome.
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Provenance-bearing preview/apply | Missing | `propagate_types`, with conflicts, source fingerprints and full payload edits |
+| Callee body-local pointer edit | Fields readable only in callee; caller had no arguments | Bounded native callee-shape bootstrap recovers caller arguments |
+| Explicit callee signature | Forward native flow already available | Preserved; not counted as a new capability |
+| Analyst priority | Hard annotations only | Separate unlocked hints; analyst types and names remain authoritative |
+| Durable state and fresh-server checks | Missing workflow | Verified exact hints, current sources, unchanged hard types and bytes |
+| First live agent task | Unmeasured | **Failed: one model-side error**, despite a verified native tool workflow |
+
+The first `github-copilot/gpt-6.1-sol` run, variant `default`, made **9 actual MCP calls / 4 model turns** with
+zero tool errors, then failed with one model-side error. `task_verified=false` remains recorded; there was no
+retry or regrading. The bounded summary does not retain the error reason, so this publication does not assert
+a provider, format or transport diagnosis. Usage totals are **unknown**, not zero. Agent wall time was 43.394 s;
+11 preparation calls and two six-call verifier passes are counted separately.
+
+The model completed the preview/apply/inspection workflow. Independent checks confirmed the exact durable
+hints and current source fingerprint, unchanged analyst maps/library/fixture, and native caller/callee types
+on both initial and fresh servers. Ordinary decompilation already supplied ephemeral recovery after seeding;
+durable apply was therefore graded by stored hints and provenance, not by demanding another C-text change.
+The complete compact inventory contains 48 tools; the raw 77061-byte catalog exceeded retention, so its schema
+and hash remain explicitly unavailable. The agent's offered allowlist contained 30 tools.
+
+Native/API tests demonstrate both parameter directions; worker tests cover hint replay, bootstrap, return
+evidence, global value/address distinctions and analyst precedence. Native field tokens now
+retain real emission spans/addresses instead of disappearing from token output. Unknown, joined, hidden,
+variadic and unsupported mappings remain explicit. Some multi-hop contexts and generic-pointer refinement
+combinations remain unsupported; optional inference cannot suppress otherwise valid ordinary C.
+
+Apply receipts expose complete old/new hint payloads, including clears and provenance-only updates. The
+transaction validates all retained fresh targets within the combined function budget; a partial clear cannot
+silently invalidate another function's selector. Preview, preflight rollback, independent clear/undo/redo,
+shared-client changes and outside-context rejection are covered. Fatal worker/source/attestation failures are
+not converted into partial success. External-spec selection without stored hints is handled separately from
+strict fingerprint errors; no worker-to-inline fallback is introduced.
+
+Target-model import prototypes cover portable `memcpy`, explicitly selected POSIX `recv`, corrected Windows
+`recv` and x86/x64 `CreateFileW`, with native-parser width/convention tests. Default/ELF is not Linux proof.
+An installed ARM64 core revalidation still returned 892 C bytes and six descriptors, preserving warnings and
+leaving annotations unchanged.
+
+API, decompiler, evaluator, MCP and UI suites passed in the broad run. That run reached an outdated worker
+redaction-test expectation after adding a new error category; the corrected **full worker suite** then passed.
+Scoped all-target Clippy, collector regressions and independent reviews passed. These are changed-crate checks,
+not full-workspace/release acceptance. The live task grades direct pointer propagation only, not the broader
+return/multi-hop test coverage or blind recovery. Earlier published measurements remain unchanged.
+
+```sh
+cargo run --locked -j 2 -p rampage-eval --example type_propagation -- tests/data/type-propagation-x64.snapshot.json
+```
+
 ## Phase 1.4 — native and tracked function-frame evidence
 
 **Run:** 2026-10-17, committed source `8fdfb2b`. The

@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "measurement": "phase1-5-type-propagation",
+  "design": "seeded-owned-direct-call-fixture-not-blind-re",
+  "requested_model": "github-copilot/gpt-6.1-sol",
+  "model_variant": "default",
+  "fixture_sha256": "40293c1598f6f1915fff91c6efbfb32a42e97d1790059dfd3a7c386a04312fc6",
+  "caller": "0x201170", "callee": "0x201160",
+  "agent_summary": {
+    "disposition": "failed", "answer_contract_matches": false, "model_source": "provider",
+    "model_turns": 4, "model_errors": 1, "tool_requests": 9, "tool_calls": 9, "tool_errors": 0,
+    "catalog_requests": 1, "catalog_tool_count": 30,
+    "catalog_inventory": [{
+      "complete": true, "tool_count": 48,
+      "required_tools": [
+        {"name": "propagate_types", "present": true}, {"name": "decompile", "present": true},
+        {"name": "get_type", "present": true}
+      ],
+      "ordered_names_sha256": "8bd8a3f0d3b7bf8395b12a9570fd1fc648a37cb08156ecb2804c41a1a7f9f845",
+      "raw_catalog_sha256": null, "raw_catalog_original_bytes": 77061, "raw_catalog_complete": false,
+      "propagate_types_input_schema": null
+    }],
+    "usage": {"input_tokens": null, "output_tokens": null, "reasoning_tokens": null,
+      "cache_read_input_tokens": null, "cache_creation_input_tokens": null},
+    "agent_wall_time_ms": 43394,
+    "agent_timing_boundary": "monotonic: before initial MCP tools/list through final answer parsing; excludes server connection, fixture preparation/identity verification and evaluator checking"
+  },
+  "seed_metrics": {"tool_calls": 11, "tool_errors": 0, "transport_errors": 0},
+  "preparation_wall_time_ms": 13445,
+  "initial_verifier_metrics": {"tool_calls": 6, "tool_errors": 0, "transport_errors": 0},
+  "fresh_verifier_metrics": {"tool_calls": 6, "tool_errors": 0, "transport_errors": 0},
+  "verification_wall_time_ms": 15074,
+  "selected_callee_storage": {
+    "kind": "processor", "space": "register", "address": "0x38", "size": 8,
+    "use_ranges": [{"space": "ram", "start": "0x20115f", "end": "0x20115f"}]
+  },
+  "selected_caller_storage": {
+    "kind": "processor", "space": "register", "address": "0x38", "size": 8,
+    "use_ranges": [{"space": "ram", "start": "0x20116f", "end": "0x20116f"}]
+  },
+  "derived_hint_authorization": {
+    "source_function": "0x201160", "source_parameter_index": 0, "source_type": "PropState *",
+    "independent_native_edge_count": 2, "bootstrap_inference_is_source": false
+  },
+  "seed_annotation_log_sha256": "c93e66ac8ccb52bc2af79e1b1ab3ff54c606b2eca6f0b6518c4c5a6b43448b8d",
+  "stable_annotation_log": true,
+  "seeded_caller_already_typed_by_automatic_recovery": true,
+  "unseeded_caller_code_sha256": "afb363ff66653d2280cc7ae908b78133e534ea033eca55d1afb535d8eb14c520",
+  "seeded_caller_code_sha256": "8094d1eb99d8f51cd2514e4c2502bff0951b92c285fd53254057eeb8972da9cd",
+  "model_tool_workflow_verified": true, "native_state_verified": true,
+  "applied_receipt_sha256": "b14262adca05fddb03b5a84392aaffdb6689293b7c486a00fd7d3da80e5e5902",
+  "task_verified": false,
+  "initial_verification": {
+    "native_state_verified": true, "native_caller_and_callee_parameters_verified": true,
+    "exact_durable_hints_and_current_source_verified": true, "analyst_types_preserved": true,
+    "native_annotation_query_matches_log": true, "read_only_verification_log_stable": true,
+    "fixture_sha256_unchanged": true,
+    "annotation_log_sha256": "d1e1e25b45ae397a5ba36ab84cb43e7a8708769a189db2865679fb4ce59c19ce",
+    "source_fingerprint": "f1be253c4427b553a614255f6d9a1f89b1d8183f5adc7adec3a8f5c4c17833b8",
+    "durable_hint_sha256": "90f3a7a78680f357bec68ebac71fde8f429ccd602393f46b6f1a898998999a4f",
+    "caller_code_sha256": "8094d1eb99d8f51cd2514e4c2502bff0951b92c285fd53254057eeb8972da9cd",
+    "c_delta_required": false
+  },
+  "fresh_server_verification": {
+    "native_state_verified": true, "native_caller_and_callee_parameters_verified": true,
+    "exact_durable_hints_and_current_source_verified": true, "analyst_types_preserved": true,
+    "native_annotation_query_matches_log": true, "read_only_verification_log_stable": true,
+    "fixture_sha256_unchanged": true,
+    "annotation_log_sha256": "d1e1e25b45ae397a5ba36ab84cb43e7a8708769a189db2865679fb4ce59c19ce",
+    "source_fingerprint": "f1be253c4427b553a614255f6d9a1f89b1d8183f5adc7adec3a8f5c4c17833b8",
+    "durable_hint_sha256": "90f3a7a78680f357bec68ebac71fde8f429ccd602393f46b6f1a898998999a4f",
+    "caller_code_sha256": "8094d1eb99d8f51cd2514e4c2502bff0951b92c285fd53254057eeb8972da9cd",
+    "c_delta_required": false
+  },
+  "limitations": [
+    "Only bounded native direct-call scalar/pointer recovery is evaluated; not blind RE or ABI proof.",
+    "Multi-hop, indirect, aggregate, return-value and whole-program recovery are not graded.",
+    "Native decompile already derives ephemeral types; durable apply need not change C.",
+    "Undoing durable hints does not disable automatic ephemeral derivation."
+  ],
+  "limits": {"max_turns": 12, "max_tool_calls": 24, "max_record_bytes": 65536,
+    "max_retained_bytes": 512000, "max_conversation_bytes": 1000000,
+    "max_functions": 4, "max_candidates": 32},
+  "owned_output_wall_time_ms": 72714,
+  "owned_output_timing_boundary": "fixture preparation through verification, shutdown and cleanup",
+  "provenance": {
+    "evaluator_binary_sha256": "a1ee27bd09cb30f4cd6da049f9cd6bb7f962c88e501b73f20aea4b0119a2be2c",
+    "collector_source_sha256": "2ed36a61493e551f2eeed6de6e113b3e4059055fa3c1a2a39f68faaf62431c5a",
+    "measured_unix_ms": 1792281692748,
+    "source_revision": "321ea2883f74fc8796aad520d27a43f0abcc9230",
+    "source_report_sha256": "51fb6807d304df6a7199068f7d446f9cba2168d0bb13848bf9888beadd55427e",
+    "collector_sources_match_revision": true, "worktree_measurement": true
+  },
+  "before": {
+    "source_revision": "effcb6c", "propagation_preview_apply_surface": false,
+    "persisted_low_priority_type_candidates": false,
+    "body_local_callee_parameter_edit_bootstrapped_caller_arguments": false,
+    "explicit_callee_signature_native_forward_flow_already_available": true
+  },
+  "fixture_recipe": "crates/rampage-eval/tasks/phase1-5/type-propagation.toml",
+  "publication_notes": [
+    "First live run, no retry or regrading: task_verified=false and one model-side error remain recorded.",
+    "The bounded summary does not retain the model-error reason; no provider/format/transport diagnosis is asserted.",
+    "All usage totals are unknown, not zero. Nine actual MCP calls had no tool errors.",
+    "Compact tool-name inventory is complete; the 77061-byte raw catalog was truncated, so no complete schema or raw-catalog hash is claimed.",
+    "Native workflow and durable-state verification do not turn a failed agent run into task success.",
+    "An installed ARM64 core revalidation returned 892 C bytes and six descriptors with warnings, without annotation changes.",
+    "Changed-crate acceptance combines the broad API/decompiler/evaluator/MCP/UI run with a full worker rerun after correcting the redaction test's new-category expectation.",
+    "Earlier phase publications remain unchanged."
+  ]
+}

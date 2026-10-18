@@ -1,6 +1,6 @@
 # To do
 
-## Parity roadmap: Phases 0 and 1.1–1.4 completed
+## Parity roadmap: Phases 0 and 1.1–1.5 completed
 
 Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One milestone at a time;
 parallel slices share central builds and undergo fresh-context review before publication.
@@ -77,12 +77,26 @@ Clippy and grader regressions passed. Instruction operands are supported; arbitr
 Implementation `8fdfb2b`; audited metrics and limits are in `docs/benchmarks.md`. All seven changed-crate suites
 and scoped Clippy passed. No complete frame-size or ABI callee-save claim is made.
 
-## Active milestone: Phase 1.5, type propagation
+## Phase 1.5: type propagation completed
 
-- [ ] Measure caller/callee/return/global propagation on owned fixtures with explicit analyst types taking priority.
-- [ ] Derive bounded candidate types across proven calls and expose provenance, conflicts and unknowns through MCP.
-- [ ] Apply candidates at lower priority than analyst annotations; add target-model import prototypes.
-- [ ] Validate native/worker replay, deterministic conflicts, measured task use and independent review.
+- [x] Measure caller/callee/return/global propagation on owned fixtures with explicit analyst types taking priority.
+- [x] Derive bounded direct-call candidates with provenance, conflicts and unknowns through MCP.
+- [x] Apply separate unlocked hints and target-model import prototypes without hard analyst replacements.
+- [x] Validate complete retained hint state, full payload receipts, native/worker replay and source fingerprints.
+- [x] Preserve fatal error categories, ordinary C at unsupported optional boundaries and exact-entry observations.
+- [x] Publish the first live run without retry/regrading: nine MCP calls, zero tool errors; workflow/native/fresh
+  state verified, but one model-side error leaves `task_verified=false` and usage unknown.
+
+Implementation `321ea28`; audited metrics and limits are in `docs/benchmarks.md`. Changed-crate suites and scoped
+Clippy passed, with a full worker rerun after its new error-category test expectation was corrected. Some
+multi-hop/refinement cases remain explicit unsupported boundaries; automatic ephemeral display is not durable apply.
+
+## Active milestone: Phase 1.6, checked PDB/DWARF type import
+
+- [ ] Measure current PDB names-only and flat checked-DWARF limits against owned PE/PDB and nested/AArch64 fixtures.
+- [ ] Import identity-matched PDB type records into the project library and function signatures with preview/apply.
+- [ ] Widen checked DWARF layouts to nested aggregates/arrays and AArch64; preserve unsupported bitfield evidence.
+- [ ] Validate complete atomic edits, stale-source refusal, native/worker replay and phase-end investigation tasks.
 - [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no class
   rows; symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
 
@@ -90,8 +104,8 @@ and scoped Clippy passed. No complete frame-size or ABI callee-save claim is mad
 
 - [x] 1.3 Apply types to data and operands.
 - [x] 1.4 Stack-frame inspection.
-- [ ] 1.5 Type propagation with analyst edits taking priority (active).
-- [ ] 1.6 PDB/DWARF type import with identity and layout checks.
+- [x] 1.5 Type propagation with analyst edits taking priority.
+- [ ] 1.6 PDB/DWARF type import with identity and layout checks (active).
 
 ## Audio/firmware investigation acceptance workloads
 
