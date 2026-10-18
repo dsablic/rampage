@@ -347,12 +347,18 @@ fn main() -> ExitCode {
             commands::pseudocode(&mut out, &file, &at, structured, &options)
         }
         Command::Compare(CompareArgs { file, reference }) => commands::compare(&mut out, &file, &reference, &options),
-        Command::Signatures(SignaturesArgs { file, output }) => {
-            commands::signatures(&mut out, &file, output.as_deref(), &options)
+        Command::Signatures(SignaturesArgs { file, output, fuzzy_request }) => {
+            commands::signatures(&mut out, &file, output.as_deref(), fuzzy_request.as_deref(), &options)
         }
-        Command::Identify(IdentifyArgs { file, db, no_bundled, apply }) => {
-            commands::identify(&mut out, &file, db.as_deref(), no_bundled, apply, &options)
-        }
+        Command::Identify(IdentifyArgs { file, db, fuzzy_db, fuzzy_request, no_bundled, apply }) => commands::identify(
+            &mut out,
+            &file,
+            db.as_deref(),
+            (fuzzy_db.as_deref(), fuzzy_request.as_deref()),
+            no_bundled,
+            apply,
+            &options,
+        ),
         Command::JumpTable(JumpTableArgs { file, at, count, relative_base }) => {
             commands::jump_table(&mut out, &file, &at, count, relative_base.as_deref(), &options)
         }

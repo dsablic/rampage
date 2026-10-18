@@ -20,8 +20,10 @@ pub mod derived_cache;
 mod detect;
 mod diagnostics;
 mod dotnet;
+mod fid_signatures;
 mod files;
 mod frame;
+mod fuzzy_signatures;
 mod graph;
 mod import_types;
 mod jumptable;
@@ -42,6 +44,7 @@ mod raw_file;
 mod rows;
 mod runtime_compare;
 mod session;
+mod signature_import;
 mod signatures;
 mod summary;
 pub mod tools;
@@ -100,6 +103,10 @@ pub use decompile::{
 };
 pub use detect::ToolDetections;
 pub use dotnet::{DotNetCounts, DotNetIl, DotNetIlQuery, DotNetList, DotNetQuery, DotNetSummary, parse_il_offset};
+pub use fid_signatures::{
+    FidHostAdapter, FidReader, FidSignatureReport, FidSignatureRow, FidSignatureStatus, MAX_FID_QUERY_ROWS,
+    MAX_FID_REPORT_BYTES,
+};
 pub use files::{
     MAX_CONSTANTS_BYTES, MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MAX_SIGNATURE_DB_BYTES,
     read_bounded,
@@ -107,6 +114,11 @@ pub use files::{
 pub use frame::{
     FrameCategory, FrameCoordinate, FrameLocation, FrameQuery, FrameRow, FrameSource, FrameTrackerSlot,
     FunctionFrameReport, MAX_FRAME_PAGE, MAX_FRAME_WORK, NativeFrameEvidence, TrackerFrameEvidence,
+};
+pub use fuzzy_signatures::{
+    FuzzyBuildReport, FuzzyBuildRequest, FuzzyExactEvidence, FuzzyFeatureRejection, FuzzySuggestRequest,
+    FuzzySuggestion, FuzzySuggestionStatus, FuzzySuggestions, FuzzyTarget, MAX_FUZZY_BUILD_FUNCTIONS,
+    MAX_FUZZY_QUERY_FUNCTIONS, fuzzy_code_identity, fuzzy_code_projection,
 };
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
 pub use import_types::{ImportPrototype, PosixContext, import_prototype};
@@ -169,6 +181,7 @@ pub use rows::{
 };
 pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, RuntimeRange};
 pub use session::Session;
+pub use signature_import::load_signature_database;
 pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};
 pub use summary::FunctionSummary;
 pub use type_headers::{HeaderBundle, HeaderDeclaration, HeaderProvenance, PreparedHeader};

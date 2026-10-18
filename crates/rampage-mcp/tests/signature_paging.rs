@@ -225,7 +225,7 @@ fn replace_name(value: &mut Value, old: &str, new: &str) -> usize {
 }
 
 #[tokio::test]
-async fn oversized_complete_row_is_rejected_before_apply_writes() {
+async fn oversized_database_name_is_rejected_before_apply_writes() {
     let owned = OwnedDirectory::new();
     let reference = owned.copy(&fixture("eval-ref-x86_64.elf"), "reference.elf");
     let target = owned.copy(&fixture("eval-twin-x86_64.elf"), "target.elf");
@@ -249,7 +249,7 @@ async fn oversized_complete_row_is_rejected_before_apply_writes() {
     let refused = call(&client, "identify_functions", oversized).await;
     assert_eq!(refused.is_error, Some(true));
     let text = &refused.content.first().unwrap().as_text().unwrap().text;
-    assert!(text.contains("first complete row") && text.contains("no names written"), "{text}");
+    assert!(text.contains("signature database limit exceeded") && text.contains("JSON string bytes"), "{text}");
     assert_eq!(body(&call(&client, "list_annotations", json!({"path": target})).await), before);
     client.cancel().await.unwrap();
 }

@@ -152,6 +152,9 @@ pub(crate) struct SignaturesArgs {
     /// Write the database here (JSON); defaults to standard output
     #[arg(long)]
     pub(crate) output: Option<PathBuf>,
+    /// Build a separate fuzzy database using a JSON FuzzyBuildRequest (explicit source names/provenance)
+    #[arg(long)]
+    pub(crate) fuzzy_request: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -160,6 +163,12 @@ pub(crate) struct IdentifyArgs {
     /// A signature database to apply first, before data packs' databases and the bundled starter one
     #[arg(long)]
     pub(crate) db: Option<PathBuf>,
+    /// Separate fuzzy JSON database: suggestions only, never counted or applied as exact matches
+    #[arg(long, requires = "fuzzy_request", conflicts_with = "no_bundled")]
+    pub(crate) fuzzy_db: Option<PathBuf>,
+    /// JSON FuzzySuggestRequest: cohort, numeric addresses (1..64), candidates_per_function (1..16)
+    #[arg(long, requires = "fuzzy_db")]
+    pub(crate) fuzzy_request: Option<PathBuf>,
     /// Do not apply the bundled starter database (needs --db or a data pack with a database for the architecture)
     #[arg(long)]
     pub(crate) no_bundled: bool,

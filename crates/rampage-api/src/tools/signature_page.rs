@@ -9,29 +9,46 @@ pub(super) fn identify_page(project: &Project, args: IdentifyArgs) -> Result<Val
         return Err(ApiError::Invalid("limit must be in 1..=256; no names written".to_owned()));
     }
     let user = match &args.database {
-        Some(path) => {
-            let text =
-                crate::read_bounded(std::path::Path::new(path), crate::MAX_SIGNATURE_DB_BYTES, "signature database")?;
-            Some(
-                rampage_signatures::SignatureDb::from_json(&text)
-                    .map_err(|error| ApiError::Invalid(error.to_string()))?,
-            )
-        }
+        Some(path) => Some(crate::load_signature_database(std::path::Path::new(path), project.binary.arch)?),
         None => None,
     };
+    let fuzzy =
+        match (&args.fuzzy_database, &args.fuzzy_request) {
+            (Some(database), Some(request)) if !args.no_bundled => Some(
+                serde_json::to_value(project.suggest_fuzzy_signature_files(
+                    std::path::Path::new(database),
+                    std::path::Path::new(request),
+                    user.as_ref(),
+                )?)
+                .map_err(|error| ApiError::Invalid(format!("cannot serialize fuzzy suggestions: {error}")))?,
+            ),
+            (None, None) => None,
+            _ => return Err(ApiError::Invalid(
+                "fuzzy queries need both fuzzy_database and fuzzy_request and cannot use no_bundled; no names written"
+                    .to_owned(),
+            )),
+        };
     let mut receipt = Value::Null;
     let application =
         project.identify_functions_with_preflight(user.as_ref(), !args.no_bundled, args.apply, |planned| {
             // Reserve the largest possible applied count before the first rename. Only this numeric field
             // changes afterwards; all detail rows and warnings come from this same plan.
             let max_applied = if args.apply { planned.matched } else { 0 };
-            receipt = signature_page(planned, args.apply, max_applied, args.offset.unwrap_or(0), limit)?;
+            receipt = signature_page_with_fuzzy(
+                planned,
+                fuzzy.as_ref(),
+                args.apply,
+                max_applied,
+                args.offset.unwrap_or(0),
+                limit,
+            )?;
             Ok(())
         })?;
     receipt["applied"] = json!(application.applied);
     Ok(receipt)
 }
 
+#[cfg(test)]
 fn signature_page(
     application: &SignatureApplication,
     apply: bool,
@@ -39,9 +56,22 @@ fn signature_page(
     offset: usize,
     limit: usize,
 ) -> Result<Value, ApiError> {
+    signature_page_with_fuzzy(application, None, apply, applied, offset, limit)
+}
+
+fn signature_page_with_fuzzy(
+    application: &SignatureApplication,
+    fuzzy: Option<&Value>,
+    apply: bool,
+    applied: usize,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, ApiError> {
     let matches_total = application.matches.len();
     let warnings_total = application.warnings.len();
-    let details_total = matches_total + warnings_total;
+    let fuzzy_rows = fuzzy.and_then(|value| value["suggestions"].as_array());
+    let fuzzy_total = fuzzy_rows.map_or(0, Vec::len);
+    let details_total = matches_total + warnings_total + fuzzy_total;
     let start = offset.min(details_total);
     let end = start.saturating_add(limit).min(details_total);
     let mut receipt = json!({
@@ -64,24 +94,49 @@ fn signature_page(
         "next_offset": if start < details_total { json!(start) } else { Value::Null },
         "byte_capped": start < end,
     });
+    if let Some(fuzzy) = fuzzy {
+        let mut metadata = fuzzy.clone();
+        metadata["suggestions"] = json!([]);
+        metadata["suggestions_total"] = json!(fuzzy_total);
+        metadata["suggestions_omitted"] = json!(fuzzy_total);
+        metadata["candidates_total"] = json!(
+            fuzzy_rows
+                .into_iter()
+                .flatten()
+                .map(|row| { row["report"]["candidates"].as_array().map_or(0, Vec::len) })
+                .sum::<usize>()
+        );
+        receipt["fuzzy"] = metadata;
+    }
     if receipt.to_string().len() > MAX_RESULT_CHARS {
         return Err(too_large());
     }
     for index in start..end {
         let mut candidate = receipt.clone();
-        let field = if index < matches_total { "matches" } else { "warnings" };
         let row = if index < matches_total {
             serde_json::to_value(&application.matches[index])
                 .map_err(|error| ApiError::Invalid(format!("cannot serialize signature match: {error}")))?
-        } else {
+        } else if index < matches_total + warnings_total {
             json!(&application.warnings[index - matches_total])
+        } else {
+            fuzzy_rows.expect("fuzzy detail rows")[index - matches_total - warnings_total].clone()
         };
-        candidate[field].as_array_mut().expect("detail array").push(row);
+        if index < matches_total {
+            candidate["matches"].as_array_mut().expect("match array").push(row);
+        } else if index < matches_total + warnings_total {
+            candidate["warnings"].as_array_mut().expect("warning array").push(row);
+        } else {
+            candidate["fuzzy"]["suggestions"].as_array_mut().expect("fuzzy array").push(row);
+        }
         let next = index + 1;
         let returned = next - start;
         candidate["returned"] = json!(returned);
         candidate["matches_omitted"] = json!(matches_total - candidate["matches"].as_array().unwrap().len());
         candidate["warnings_omitted"] = json!(warnings_total - candidate["warnings"].as_array().unwrap().len());
+        if fuzzy.is_some() {
+            candidate["fuzzy"]["suggestions_omitted"] =
+                json!(fuzzy_total - candidate["fuzzy"]["suggestions"].as_array().unwrap().len());
+        }
         candidate["details_omitted"] = json!(details_total - returned);
         candidate["more"] = json!(next < details_total);
         candidate["next_offset"] = if next < details_total { json!(next) } else { Value::Null };
@@ -144,6 +199,35 @@ mod tests {
             assert_eq!(page["details_total"], 5);
             assert_eq!(page["warnings_total"], 2);
         }
+    }
+
+    #[test]
+    fn fuzzy_pages_keep_secondary_totals_separate_and_budget_before_apply() {
+        let planned = application(&["exact"], &["pack warning"]);
+        let fuzzy = json!({
+            "read_only":true,
+            "warnings":[],
+            "suggestions":[
+                {"address":"0x2000","report":{"candidates":[{"name":"candidate"}]}},
+                {"address":"0x3000","report":{"candidates":[]}}
+            ]
+        });
+        let first = signature_page_with_fuzzy(&planned, Some(&fuzzy), true, 1, 0, 2).unwrap();
+        let next = signature_page_with_fuzzy(&planned, Some(&fuzzy), true, 1, 2, 1).unwrap();
+        let last = signature_page_with_fuzzy(&planned, Some(&fuzzy), true, 1, 3, 1).unwrap();
+        assert_eq!(first["fuzzy"]["suggestions"], json!([]));
+        assert_eq!(next["fuzzy"]["suggestions"][0]["address"], "0x2000");
+        assert_eq!(last["fuzzy"]["suggestions"][0]["address"], "0x3000");
+        for page in [first, next, last] {
+            assert_eq!(page["matched"], 1);
+            assert_eq!(page["applied"], 1);
+            assert_eq!(page["details_total"], 4);
+            assert_eq!(page["fuzzy"]["suggestions_total"], 2);
+            assert_eq!(page["fuzzy"]["candidates_total"], 1);
+        }
+        let mut huge = fuzzy;
+        huge["suggestions"][0]["report"]["candidates"][0]["name"] = json!("x".repeat(MAX_RESULT_CHARS));
+        assert!(signature_page_with_fuzzy(&planned, Some(&huge), true, 1, 2, 1).is_err());
     }
 
     #[test]

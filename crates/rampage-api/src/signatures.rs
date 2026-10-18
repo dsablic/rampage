@@ -89,6 +89,9 @@ impl Project {
         warnings: Vec<String>,
         preflight: impl FnOnce(&SignatureApplication) -> Result<(), ApiError>,
     ) -> Result<SignatureApplication, ApiError> {
+        for (_, database) in databases {
+            database.ensure_byte_matching_supported().map_err(|error| ApiError::Invalid(error.to_string()))?;
+        }
         if databases.is_empty() {
             let application = SignatureApplication { matched: 0, applied: 0, matches: Vec::new(), warnings };
             preflight(&application)?;

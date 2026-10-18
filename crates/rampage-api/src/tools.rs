@@ -1410,14 +1410,26 @@ fn pdb_import_page(imported: crate::PdbImport, apply: bool, offset: usize, limit
 struct SignatureBuildArgs {
     /// File path to write the signature database (JSON). Required: the database is too large to return inline.
     output: String,
+    /// Optional bounded JSON FuzzyBuildRequest path: explicit owned_names and source provenance.
+    /// Writes a separate fuzzy database, never an exact database or project annotations.
+    #[serde(default)]
+    fuzzy_request: Option<String>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
 struct IdentifyArgs {
-    /// Optional file path of a signature database built with build_signatures, applied first: before the loaded
-    /// data packs' databases and the bundled starter database. Omit it to match against those alone.
+    /// Optional native JSON/gzip or user-supplied PAT database, consulted before packs and builtins.
+    /// FID namespaces require the separate explicitly configured trusted-host API.
     #[serde(default)]
     database: Option<String>,
+    /// Separate bounded fuzzy JSON database, never an exact match or an applied name.
+    /// Requires fuzzy_request; currently cannot combine with no_bundled.
+    #[serde(default)]
+    fuzzy_database: Option<String>,
+    /// Bounded JSON FuzzySuggestRequest path: distinct cohort, 1..64 numeric entry addresses,
+    /// and candidates_per_function (1..16). Required with fuzzy_database.
+    #[serde(default)]
+    fuzzy_request: Option<String>,
     /// Leave out the bundled starter database, matching against `database` and the data packs' databases only
     /// (needs at least one of them).
     #[serde(default)]
@@ -1425,7 +1437,7 @@ struct IdentifyArgs {
     /// Persist matched names for still-unnamed functions as user names (never overwriting existing names).
     #[serde(default)]
     apply: bool,
-    /// Detail rows to skip: address-sorted matches first, then pack warnings. Never selects writes.
+    /// Detail rows to skip: exact matches, pack warnings, then fuzzy suggestions. Never selects writes.
     #[serde(default)]
     offset: Option<usize>,
     /// Detail rows per page (default 100, 1..=256), also bounded to 60000 complete JSON bytes.
@@ -1693,7 +1705,8 @@ fn page_limit(limit: Option<usize>) -> Option<usize> {
 
 /// Every tool, in the order the model sees them.
 pub fn tools() -> Vec<Tool> {
-    let mut tools = vec![
+    let mut tools =
+        vec![
         tool(
             Group::Diagnostics,
             "inspect_jump_table",
@@ -1779,12 +1792,29 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Detection,
             "build_signatures",
-            "Build a library-function signature database (FLIRT/Function-ID style) from this binary's named \
+            "Build a native library-function signature database from this binary's named \
              functions and write it to the output path. Each function is hashed over its symbol size and over the \
              extent discovery finds for it; functions whose masked bodies collide also get callee keys (the \
              optional calls/ambiguous_calls fields). Reports function signatures and callee keys separately. Use it \
-             on a binary with symbols, then identify_functions on a stripped one.",
+              on a binary with symbols, then identify_functions on a stripped one. Optional fuzzy_request is an \
+              explicit source-name/provenance JSON request; it builds a SEPARATE secondary fuzzy database, not \
+              exact identity evidence. Query it with identify_functions fuzzy_database and fuzzy_request.",
             |project, arguments: SignatureBuildArgs| {
+                if let Some(request) = &arguments.fuzzy_request {
+                    let report = project.build_fuzzy_signature_file(std::path::Path::new(request))?;
+                    let database = report.database.as_ref().ok_or_else(|| ApiError::Invalid(
+                        "no selected source bodies passed the fuzzy evidence gate; no database written".to_owned(),
+                    ))?;
+                    let bytes = database.save_json().map_err(|error| ApiError::Invalid(error.to_string()))?;
+                    std::fs::write(&arguments.output, bytes)
+                        .map_err(|error| ApiError::Invalid(format!("cannot write {}: {error}", arguments.output)))?;
+                    return Ok(serde_json::json!({
+                        "fuzzy_references":report.references,
+                        "rejected":report.rejected.len(),
+                        "suggestions_only":true,
+                        "output":arguments.output,
+                    }));
+                }
                 let database = project.build_signatures();
                 std::fs::write(&arguments.output, database.to_json())
                     .map_err(|error| ApiError::Invalid(format!("cannot write {}: {error}", arguments.output)))?;
@@ -1798,7 +1828,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Detection,
             "identify_functions",
-            "Name functions by matching signature databases (FLIRT/Function-ID style), so statically linked \
+            "Identify library functions using native databases or user-supplied PAT patterns. Statically linked \
              library code in a stripped binary gets recognized. Applies, first match winning: an optional \
              database path, then loaded data packs' databases in pack order, then the bundled starter database for \
              the architecture (left out with no_bundled=true, which works with a database path, a data pack's \
@@ -1812,7 +1842,12 @@ pub fn tools() -> Vec<Tool> {
              result totals; apply=true considers ALL matches regardless of the page, preserving existing names \
              and skipping rename collisions. Read later pages with apply=false. Complete rows and the full receipt \
              fit within 60000 JSON bytes; more/next_offset continue details, omission counts include prior pages. \
-             An oversized first row or header is refused before any names are written; strings are never cut.",
+              An oversized first row or header is refused before any names are written; strings are never cut. \
+              database accepts explicit .pat, .json, native .gz or extensionless JSON; FID requires separate \
+              explicitly configured Ghidra import. Optional fuzzy_database plus fuzzy_request produces separate \
+              read-only fuzzy suggestions after exact/warning rows. Fuzzy totals never increase matched/applied; \
+              all fuzzy loading, querying and receipt validation finish BEFORE exact apply writes. Fuzzy requests \
+              currently cannot combine with no_bundled. Exact and existing analyst names retain priority.",
             identify_page,
         )
         .annotates(),

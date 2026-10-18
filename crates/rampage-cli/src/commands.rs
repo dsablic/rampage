@@ -1563,8 +1563,33 @@ mod pdb_receipt_tests {
     }
 }
 
-pub fn signatures(out: &mut impl Write, path: &Path, output: Option<&Path>, options: &Options) -> Result<()> {
-    let database = open(path, options)?.build_signatures();
+pub fn signatures(
+    out: &mut impl Write,
+    path: &Path,
+    output: Option<&Path>,
+    fuzzy_request: Option<&Path>,
+    options: &Options,
+) -> Result<()> {
+    let project = open(path, options)?;
+    if let Some(request) = fuzzy_request {
+        let report = project.build_fuzzy_signature_file(request)?;
+        let database = report.database.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "no selected source bodies passed the fuzzy evidence gate: {}",
+                serde_json::to_string(&report.rejected).unwrap_or_default()
+            )
+        })?;
+        let bytes = database.save_json()?;
+        if let Some(output) = output {
+            std::fs::write(output, bytes)?;
+            writeln!(out, "wrote {} fuzzy references to {} (suggestions only)", report.references, output.display())?;
+        } else {
+            out.write_all(&bytes)?;
+            writeln!(out)?;
+        }
+        return Ok(());
+    }
+    let database = project.build_signatures();
     let json = database.to_json();
     if let Some(output) = output {
         std::fs::write(output, &json)?;
@@ -1576,31 +1601,43 @@ pub fn signatures(out: &mut impl Write, path: &Path, output: Option<&Path>, opti
     Ok(())
 }
 
-fn load_signature_database(db: &Path) -> Result<rampage_api::SignatureDb> {
-    let text = rampage_api::read_bounded(db, rampage_api::MAX_SIGNATURE_DB_BYTES, "signature database")?;
-    Ok(rampage_api::SignatureDb::from_json(&text)?)
-}
-
 pub fn identify(
     out: &mut impl Write,
     path: &Path,
     db: Option<&Path>,
+    fuzzy_paths: (Option<&Path>, Option<&Path>),
     no_bundled: bool,
     apply: bool,
     options: &Options,
 ) -> Result<()> {
+    let project = open(path, options)?;
     let user = match db {
-        Some(db) => Some(load_signature_database(db)?),
+        Some(db) => Some(rampage_api::load_signature_database(db, project.binary.arch)?),
         None => None,
     };
-    let result = open(path, options)?.identify_functions(user.as_ref(), !no_bundled, apply)?;
+    let fuzzy = match fuzzy_paths {
+        (Some(database), Some(request)) if !no_bundled => {
+            Some(serde_json::to_value(project.suggest_fuzzy_signature_files(database, request, user.as_ref())?)?)
+        }
+        (None, None) => None,
+        _ => anyhow::bail!("fuzzy queries need both --fuzzy-db and --fuzzy-request and cannot use --no-bundled"),
+    };
+    let result = project.identify_functions(user.as_ref(), !no_bundled, apply)?;
     if options.json {
+        if let Some(fuzzy) = fuzzy {
+            let mut value = serde_json::to_value(&result)?;
+            value["fuzzy"] = fuzzy;
+            return write_json(out, &value);
+        }
         return write_json(out, &result);
     }
     writeln!(out, "{} matched, {} applied", result.matched, result.applied)?;
     for item in result.matches {
         let mark = if item.unnamed { "" } else { " (already named)" };
         writeln!(out, "{:#x}  {}{}  [{}]", item.address, item.name, mark, item.source)?;
+    }
+    if let Some(fuzzy) = fuzzy {
+        writeln!(out, "fuzzy suggestions (read-only, not exact matches): {}", serde_json::to_string(&fuzzy)?)?;
     }
     Ok(())
 }
