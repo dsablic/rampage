@@ -50,6 +50,10 @@ x86-64 and ARM64 Go (go1.18+) uses Go's register ABI with per-function argument 
 from that table and from how callers use results; see the
 [decompiler reference](../crates/rampage-decompiler/README.md).
 
+ARM ELF32 [EHABI unwind metadata](arm-unwind-starts.md) supplies checked discovery candidates from compact
+EXIDX/extab records. Limits: metadata is not boundary proof; no unwinding, interior-range expansion or ARM32
+exact-entry architecture expansion is implied. Unsupported descriptors and malformed prefixes retain warnings.
+
 On AArch64, ADRP+ADD and ADRP+LDR pairs provide data references. Known ADR/ADRP/ADD/MOV/LDR values can resolve
 BR/BLR targets through readable, non-writable pointers. This does not resolve authenticated pointers or prove
 that a runtime branch executes. Writable captured slots are observation evidence, not proven call edges.

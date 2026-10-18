@@ -7,6 +7,9 @@ use rampage_arch::bytes::read_uint;
 
 use crate::Binary;
 
+mod arm_exidx;
+pub(crate) use arm_exidx::{arm_exidx, arm_exidx_tables};
+
 /// Decodes `LC_FUNCTION_STARTS`: ULEB128 deltas starting from `text_address`, ended by a zero delta.
 pub(crate) fn macho(parsed: &object::File, image: &[u8], text_address: u64) -> Vec<u64> {
     let Some(data) = macho_function_starts_data(parsed, image) else { return Vec::new() };

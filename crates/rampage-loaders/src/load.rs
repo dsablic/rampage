@@ -83,7 +83,7 @@ pub struct Binary {
     /// Where the dynamic loader stores each import's address, sorted by address.
     pub import_slots: Vec<ImportSlot>,
     pub exports: Vec<Export>,
-    /// Function start addresses from format metadata (Mach-O `LC_FUNCTION_STARTS`, PE `.pdata`), sorted.
+    /// Candidate function starts from format metadata, sorted; unwind ranges can include function fragments.
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
     pub function_starts: Vec<u64>,
     /// Architectures present in the file: several for a universal Mach-O, otherwise just `arch`.
@@ -734,6 +734,7 @@ impl Binary {
         let code_big_endian = big_endian && !be8;
         let exception_directory = starts::pe_exception_directory(&parsed);
         let tls_directory = starts::pe_tls_directory(&parsed);
+        let arm_exidx_tables = starts::arm_exidx_tables(&parsed, &mut warnings);
         let import_slots = crate::slots::collect(&parsed, image_bytes, &mut warnings);
         let rebases = crate::slots::chained_rebases(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
@@ -777,6 +778,11 @@ impl Binary {
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
+        if let Some(tables) = arm_exidx_tables {
+            let (starts, warnings) = starts::arm_exidx(&binary, &tables);
+            function_starts.extend(starts);
+            binary.warnings.extend(warnings);
+        }
         binary.global_pointer = binary.find_global_pointer();
         binary.got = binary.read_got();
         if let Some(directory) = exception_directory {

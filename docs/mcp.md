@@ -55,6 +55,10 @@ does not imply target execution, and bundled signature results are distinct from
 
 ## Inputs, paging and decompiler tokens
 
+`entry_diagnostics` can report ARM ELF32 EHABI candidates using its existing `function_starts` origin. These
+are metadata assertions, not verified boundaries; `CantUnwind` and coalesced interiors are not expanded. See
+[ARM unwind candidates](arm-unwind-starts.md).
+
 `identify_functions` retains its existing JSON database inputs and read-only default. Builtin signatures are
 cached per architecture from compressed assets; `list_packs` uses count indexes without decoding every bundle.
 The [offline corpus pipeline](signature-corpus.md) measures generated databases separately; its failed or unrun
