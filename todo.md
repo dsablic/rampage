@@ -226,6 +226,33 @@ The full Phase 2 recall target is still unmet, not regraded. Fuzzy top candidate
 with zero qualified naming gain. FID is API-only trusted-host static analysis, not automatic CLI/MCP execution.
 The next implementation milestone is Phase 3; the independent live Phase 1 and recall gates remain open.
 
+## Phase 3.1: bounded search complete
+
+- [x] Add address-sorted, paginated search for byte wildcards, ASCII/UTF-16 text and regex.
+- [x] Add immediate/instruction-pattern search and functions referencing strings/imports/constants.
+- [x] Expose search through API/CLI/MCP with function context, scan bounds and explicit truncation.
+- [x] Measure an owned investigation without rewriting the frozen Phase 0 baseline.
+- [x] Review, test and publish search before the Phase 3.2 patch/assemble/export slice.
+
+The API library passed 651 tests with nine ignored, including 60 search-core cases; API/CLI/MCP search
+integration passed 6/2/2, and all-targets scoped Clippy passed. Independent reviews cover source mapping,
+virtual continuity, shared-block context, decoder lookahead/read budgets, cancellation and transport bounds.
+The owned mechanical MCP comparison is 2 calls → 1 with complete equivalent evidence, but slower and larger
+in that observation. It is not a Phase 0/live-model improvement or the Phase 3 token/call acceptance gate.
+
+## Active milestone: Phase 3.2, checked patch/assemble/export
+
+- [ ] Persist bounded identity/preimage-checked patches in the existing annotation log with undo/redo.
+- [ ] Publish immutable effective projects so listing, discovery, strings and decompilation agree on bytes.
+- [ ] Add bounded x86/x64 and AArch64 assembly feeding the same checked patch path.
+- [ ] Export only to a new file; verify original bytes unchanged and export/reopen/decompile round trips.
+- [ ] Review, test and publish patching before measured Phase 3.3 ergonomics.
+
+Phase 3.2 follows search: annotation-backed effective bytes, disassembly/decompilation visibility, bounded
+x86/AArch64 assembly, create-new export, and an owned patch/export/reopen/decompile round trip. Phase 3.3 then
+measures compact views/name resolution/batching against the accepted Phase 0 transcript; existing `annotate_batch`
+is reused rather than duplicated. No commercial target execution or in-place binary modification is authorized.
+
 ### Implemented Phase 1 milestones
 
 - [x] 1.3 Apply types to data and operands.

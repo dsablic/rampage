@@ -6,6 +6,28 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 3.1 owned search comparison
+
+The [owned search supplement](benchmarks/phase3-1-search-2026-10-18.json) compares two scripted arms over
+byte-identical, independently verified copies of the greeting ELF. Real MCP `list_strings` plus `xrefs`
+took **two calls**, while string `functions_referencing` search took **one** and preserved the literal,
+reference site and uniquely identified `main` function. Both arms produced complete equivalent answer evidence.
+
+| Arm | MCP requests | Serialized response bytes | Observed arm time |
+| --- | ---: | ---: | ---: |
+| Manual strings + xrefs | 2 | 383 | 63.497 ms |
+| Search | 1 | 2,586 | 147.502 ms |
+
+**Only call count improved.** Search returned more data and took longer in this single observation.
+Times exclude setup/catalog/evaluator work, response bytes exclude JSON-RPC envelopes and catalogs, and OS
+file caches were not flushed. Provider tokens are unmeasured/null: this is a new scripted known-literal
+workload, not a Phase 0 token/call improvement, live acceptance or Phase 1 completion N.
+
+The host collector was built offline with locked dependencies, frozen before use and unchanged afterward.
+All 800 source files / 20,095,735 bytes matched across build and measurement. Original bytes/native listing
+established truth before either arm; expected addresses were not supplied to the search request. The
+accepted Phase 0 task definitions, transcript and unsupported patch/export contract remain unchanged.
+
 ## Phase 2.3 fuzzy candidates — no qualified recognition gain
 
 The [pinned fuzzy measurement](benchmarks/phase2-3-fuzzy-2026-10-18.json) inspects three owned checksum/runlength

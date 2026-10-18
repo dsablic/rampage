@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "implementation_validation": {
+    "status": "Phase 3.1 bounded search implementation complete",
+    "api_library": {"passed": 651, "failed": 0, "ignored": 9},
+    "search_core_cases": 60,
+    "integration": {"api_passed": 6, "cli_passed": 2, "mcp_passed": 2},
+    "clippy": "API/CLI/MCP/eval all targets passed with warnings denied",
+    "review": "independent source and publication audits passed; tests are separate execution evidence",
+    "post_measurement_formatting": "module ordering and existing closure formatting only; recorded build/run source snapshots remain historical, not final-tree attestation",
+    "whole_phase3_acceptance": false,
+    "phase1_live_gate_changed": false,
+    "phase2_recall_gate_changed": false
+  },
+  "task_id": "phase31-owned-greeting-reference-elf",
+  "scope": "owned_scripted_mechanical_mcp_comparison_not_live_acceptance",
+  "started_unix_ms": 1792354388038,
+  "complete": true,
+  "question": "Locate the known greeting literal and its retained static reference site/function.",
+  "outcome": {
+    "equivalent_answer_evidence": true,
+    "manual_mcp_tools_call_requests": 2,
+    "search_mcp_tools_call_requests": 1,
+    "controlled_mcp_call_delta": 1,
+    "claim": "One fewer actual MCP tools/call request on this new scripted known-literal task only.",
+    "phase0_improvement": false,
+    "live_acceptance": false,
+    "phase1_completion_n_earned": false,
+    "phase2_recall_evidence": false,
+    "provider_calls": 0,
+    "provider_tokens": null,
+    "target_executed": false
+  },
+  "fixture": {
+    "path": "tests/fixtures/bin/hello-x64.elf",
+    "sha256": "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742",
+    "source": "tests/fixtures/src/hello.c",
+    "source_sha256": "3f06109c966ca8c3d6cf5c87a031aab612be8f871f42c704f37a41b16ca1ecf7",
+    "build_recipe": "tests/fixtures/build.sh",
+    "build_recipe_sha256": "ea11d18b2c4f67dd13b23637dc917b41de277b78fc802c66e22f35f11959b687",
+    "ownership": "Repository-owned source fixture; copied byte-identically into a new directory for each arm.",
+    "original_and_copies_unchanged": true,
+    "native_owned_image_field": false,
+    "native_owned_image_field_meaning": "The loader reports an ordinary ELF, not an owned capture; fixture ownership is established separately by the source and fixture identities."
+  },
+  "independent_truth": {
+    "verified_before_either_arm": true,
+    "method": "Original mapped bytes and native function_listing, separate from search results.",
+    "literal": "rampage fixture greeting",
+    "literal_address": "0x100019a",
+    "literal_bytes_hex": "72616d706167652066697874757265206772656574696e6700",
+    "reference_site": "0x1001914",
+    "instruction_bytes": "bf9a010001",
+    "instruction_text": "mov edi, 0x100019a",
+    "function_address": "0x1001910",
+    "function_name": "main",
+    "native_function_name_unique": true,
+    "manual_function_identity": "The returned from_function name main equals the independently verified unique native function name at 0x1001910.",
+    "search_function_identity": "Returned hit entry, function.address and code.native_function all equal 0x1001910; name main matches without truncation.",
+    "expected_addresses_sent_as_search_inputs": false,
+    "manual_xrefs_target_origin": "Address returned by list_strings, not evaluator truth."
+  },
+  "measurement": {
+    "transport": "actual_rmcp_in_memory_duplex",
+    "api_dispatch_requests_direct": 0,
+    "attempts_per_arm": 1,
+    "order": ["manual", "search"],
+    "cache_boundary": "Fresh server/session and unique fixture copy per arm; separate native truth project is not shared with either server.",
+    "os_file_cache_flushed": false,
+    "catalog": "Actual initial core catalog acquired with list_all_tools separately for each arm; required search/list_strings/xrefs tools present.",
+    "count_exclusions": ["MCP initialization", "catalog discovery", "independent evaluator verification", "fixture copying", "provenance collection"],
+    "timing_boundary": "Arm request execution plus response parsing/extraction; excludes server setup, catalog discovery, fixture copying and evaluator verification.",
+    "response_byte_metric": "Compact UTF-8 serde_json serialization of returned CallToolResult values, excluding the JSON-RPC envelope and catalog.",
+    "published_input_paths": "Repository-relative rendering of actual absolute copied-fixture paths; exact original arguments and responses remain in bound raw receipts.",
+    "manual": {
+      "elapsed_us": 63497,
+      "serialized_response_bytes": 383,
+      "error": null,
+      "calls": [
+        {
+          "name": "list_strings",
+          "input": {
+            "path": "target/phase3-1-investigation-first/run-001/manual/fixture.elf",
+            "contains": "rampage fixture greeting",
+            "min_len": 4,
+            "offset": 0,
+            "limit": 100
+          },
+          "elapsed_us": 9494,
+          "serialized_response_bytes": 182
+        },
+        {
+          "name": "xrefs",
+          "input": {
+            "path": "target/phase3-1-investigation-first/run-001/manual/fixture.elf",
+            "to": "0x100019a",
+            "offset": 0,
+            "limit": 100
+          },
+          "elapsed_us": 53784,
+          "serialized_response_bytes": 201
+        }
+      ],
+      "literal_page_total": 1,
+      "reference_page_total": 1,
+      "reference_kind": "data",
+      "contract_matches": true
+    },
+    "search": {
+      "elapsed_us": 147502,
+      "serialized_response_bytes": 2586,
+      "error": null,
+      "calls": [
+        {
+          "name": "search",
+          "input": {
+            "path": "target/phase3-1-investigation-first/run-001/search/fixture.elf",
+            "mode": {
+              "kind": "functions_referencing",
+              "reference": {
+                "kind": "string",
+                "text": "rampage fixture greeting",
+                "encoding": "utf8"
+              }
+            },
+            "offset": 0,
+            "limit": 100,
+            "include_context": true
+          },
+          "elapsed_us": 146929,
+          "serialized_response_bytes": 2586
+        }
+      ],
+      "contract_matches": true,
+      "symbol_source": "loader_name",
+      "native_evidence_kind": "string_xref",
+      "scope": "production_discovered_blocks_and_retained_xrefs",
+      "total": 1,
+      "total_is_exact": true,
+      "returned": 1,
+      "hits_omitted": 0,
+      "unavailable_observed_hits": 0,
+      "more": false,
+      "next_offset": null,
+      "byte_capped": false,
+      "truncated": false,
+      "cancelled": false,
+      "stop_reason": "complete",
+      "scanned_bytes": 12025,
+      "scanned_instructions": 1197,
+      "scanned_references": 234,
+      "match_work": 181687,
+      "budget_limits": {
+        "scan_bytes": 268435456,
+        "match_work": 67108864,
+        "instructions": 1000000,
+        "results": 100000
+      },
+      "decoded_indirect_transfers_without_retained_resolved_flows": 27
+    }
+  },
+  "collector": {
+    "source": "crates/rampage-eval/examples/search_investigation.rs",
+    "source_sha256": "83e36a5407f712a0388b9c25738f3dda29412fd4157d9697ac826d53d0f6fa7f",
+    "compiled_in_consumer_source_equals_disk": true,
+    "executable": "target/phase3-1-investigation-first/build-001-collector",
+    "executable_sha256": "db9cffc3b5abb21f9a9823ce0416a266a41affd258ad1534d2528832539e5ce9",
+    "executable_bytes": 200178840,
+    "executable_permissions_before_and_after": "0555",
+    "frozen_before_measurement": true,
+    "executable_unchanged": true,
+    "repository_revision": "5def7d8f6a42ea3d57728c7f9fcb4bc5919c9f0c",
+    "worktree_dirty": true,
+    "source_files": 800,
+    "source_bytes": 20095735,
+    "source_inventory_file_limit": 10000,
+    "source_inventory_byte_limit": 536870912,
+    "source_snapshot_sha256_compact_serde_json": "891e25c2f155addd208468cf0a08f1016859703ac5fc80c498ebc4af89da4369",
+    "sources_equal_before_build_after_build_before_run_after_run": true,
+    "build_exit_code": 0,
+    "run_exit_code": 0,
+    "build_command_publication_view": ["cargo", "build", "--offline", "--locked", "-j2", "-p", "rampage-eval", "--example", "search_investigation"],
+    "exact_build_and_run_argv_in_bound_receipts": true,
+    "host": "aarch64-apple-darwin",
+    "rustc_version": "1.99.0 (b940084d7 2026-09-28)",
+    "rustc_sha256": "dd6f58440b3418aa9157ae3f05d71eecff741ca41bc4eec120e7e8f2d933b9a0",
+    "cargo_version": "1.99.0 (5f94df478 2026-08-27)",
+    "cargo_sha256": "fc7aa5077deca8abc0651f329e8ec1d968f520e996a93b428f9935014362b382",
+    "rustdoc_sha256": "6fbad8d9ad24774d81de7314568739cf9ed1d46636bd2d65156694637897aeab",
+    "build_warning": "Debug stripping via rust-objcopy failed because libLLVM.dylib was unavailable; Cargo succeeded and the resulting unstripped host executable was hashed and frozen. No tool installation or retry.",
+    "tool_source_sha256": {
+      "crates/rampage-api/src/tools.rs": "b80ad941718052c972b9f3360fe11442e3b545a1b019203a4ce096256145c2ca",
+      "crates/rampage-api/src/tools/search_page.rs": "a7195503f42b36a70ea3c3ab03cc6f418616a1e187c638ab174586ee829f1b1f",
+      "crates/rampage-api/src/search_request.rs": "732cbbcba4788e56c0bb77c5b3acbd756f572b7fdc99f2938fb68cb5383208b3",
+      "crates/rampage-api/src/search.rs": "592fbc33194db512e2b94f71f611b556e0abe6cc78f32f16ec4c2e89070ae849",
+      "crates/rampage-api/src/search_code.rs": "bcceccc873fe0951efc06992cbad6063040effe5e812d3774297ae7e55d08642",
+      "crates/rampage-api/src/search/bytes.rs": "6e1a67cd1a844819b3a6ec42acfd2e73cdfa8b9121e844792962ac7b73000a7f",
+      "crates/rampage-api/src/xrefs.rs": "f43b0522d69939b687bbb7336e6d722341560c44427e90d5cbae42240ab3dc93",
+      "crates/rampage-api/src/listing.rs": "e23455f6ad21704b04816e66bc2f8cbe177f033af34b651feb8b11fe2d73ce52",
+      "crates/rampage-api/src/project.rs": "e59b40206edcb143e2bedaf9639caae57ed04f6dcf761875e9689feecc4a4f8f",
+      "crates/rampage-api/src/rows.rs": "73903603b9dfecfe743c6e11750a86914fcb6f067b44918fad58f9220b346b1a",
+      "crates/rampage-mcp/src/lib.rs": "cae0f9427d73139a4310788372b85f0a3535b720340890ed5627b1c60accfea0",
+      "Cargo.toml": "cf40a52099e2e534c3f497b0b420458cb31b700bda3036a2d57b465bd811d32d",
+      "Cargo.lock": "8e0906ea8cd76d513386dc5b6ab5dd6d2b992c38bbe23e2feb38cf1430e9655e"
+    }
+  },
+  "phase0_reference_only": {
+    "source_report": "target/parity/phase0-completion/accepted-scorecard.json",
+    "source_report_sha256": "28fdbdcc2077b906db0f4676550b08a4752a7b3498945923a5276d7f81a4ce90",
+    "published_scorecard": "docs/benchmarks/phase0-2026-10-17.json",
+    "mcp_tool_calls": 38,
+    "input_tokens": 286183,
+    "output_tokens": 4347,
+    "reasoning_tokens": 1555,
+    "comparison_denominator": false,
+    "recorded_artifact_paths_followed": false,
+    "frozen_tasks_regraded": false
+  },
+  "artifacts_sha256": {
+    "target/phase3-1-investigation-first/build-001-receipt.json": "914b43bde0c9a8eed07149f9908d4960cf52bc512bd2ab174814c5e226916c27",
+    "target/phase3-1-investigation-first/build-001-sources-before.json": "7a971e92bcb1f7c0924c9556666e672c9f3df262a009044e6bd370f0c540487d",
+    "target/phase3-1-investigation-first/build-001-sources-after.json": "7a971e92bcb1f7c0924c9556666e672c9f3df262a009044e6bd370f0c540487d",
+    "target/phase3-1-investigation-first/build-001-stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "target/phase3-1-investigation-first/build-001-stderr.log": "904df7334e6b87269e47d3e8c9a819c36f783d6aee91ff437b6bcfc82fc41a3a",
+    "target/phase3-1-investigation-first/run-001-launch.json": "157f2d0a985af3365c054b9d9ea205cfc5ca857a3fba814231f000a6b7dae589",
+    "target/phase3-1-investigation-first/run-001-process.json": "84f319cb4731f2a8b2733075d34f1763fda0900169154a91652c4e6873408f80",
+    "target/phase3-1-investigation-first/run-001-stdout.log": "9c2e2f70885c933c60f04624604c73b9271002e02ee113c9f4a4a60512364b8a",
+    "target/phase3-1-investigation-first/run-001-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "target/phase3-1-investigation-first/run-001/before.json": "5f7452b88626f5c40bb7f69f4996467d3535ac296b3351dd64bd70a5a1f065fe",
+    "target/phase3-1-investigation-first/run-001/independent-truth.json": "755cb663a48210e0b809f334c46a7caac9c8402dd5110813e44efd7961ed802f",
+    "target/phase3-1-investigation-first/run-001/manual.json": "de20ae7132c782c6c1d6afa41ea66664604d3885bb6c467a2132967815c8f025",
+    "target/phase3-1-investigation-first/run-001/search.json": "5ea7d19f83d04101105fcbd09376d0ae64b73c93770356b4c6e9f757c75a94a8",
+    "target/phase3-1-investigation-first/run-001/report.json": "ba4e07c594f0e30729be38745c45dcde349306577d5424f104f006d507c8de07"
+  },
+  "limitations": [
+    "This is a new scripted known-literal task, not the accepted Phase 0 question asking which literal main prints. The accepted greeting task already used one MCP call.",
+    "Only call count improved in this controlled run: search returned 2586 serialized response bytes versus 383 for the manual arm, and its arm time was 147502 us versus 63497 us. No token or latency improvement is claimed.",
+    "One run per arm, manual first; no statistical speed comparison, OS-cache control or live model was involved.",
+    "Completeness is limited to production-discovered code and retained references. Undiscovered code, unresolved indirect references and runtime-generated or decoded strings are not covered.",
+    "The evaluator verified original bytes and native listing before search; it shares the native decoder implementation and is not independent-disassembler validation.",
+    "Manual xrefs returns a function name rather than a function address; this finite task joins that name to independently verified unique native function identity.",
+    "Caller-collected source/compiler/build receipts bind observed inputs and the frozen executable; they do not authenticate source ownership or establish a reproducible build.",
+    "No provider authentication, network, target execution, commercial input, frozen task edits, patch/export regrading or completion-credit promotion."
+  ]
+}

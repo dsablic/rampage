@@ -20,6 +20,7 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | `binary carve FILE [--max-candidates N]` | `carve` | Validated embedded headers; no extraction/decompression |
 | `binary inventory DIR` | `inventory` | Binaries in bundles/extracted packages; no execution |
 | `binary archive-inventory ARCHIVE` | — | Standalone ZIP32 directory metadata; no member opening or extraction |
+| `binary search FILE --query REQUEST.json` | `search FILE --query-json JSON` | Address-sorted byte/text/code/reference evidence |
 | `binary list-imports FILE [--contains TEXT]` | `imports` | Imports, libraries and import slots |
 | `binary list-exports FILE [--contains TEXT]` | `exports` | Exported symbols |
 | `binary scan-yara FILE [--rules FILE_OR_DIR]` | `yara` | Embedded yara-x rule scan |
@@ -31,6 +32,9 @@ are refused in every rule set, including user files, packs and agent-supplied ru
 `carve` accepts 1–4096 candidates. Header-estimated extents do not establish that a whole container is valid.
 `archive-inventory` has independent row/byte budgets and metadata/member references, not native-image offsets.
 See [ZIP32 inventory](archive-inventory.md) for format, path, paging and output limits.
+Search requests accept typed names/addresses for ranges and reference targets, not for immediate constants.
+Request files require the checked Unix descriptor reader; inline JSON is available on other platforms.
+See [search modes, Unicode, budgets and continuation](search.md).
 
 See [CLI batch analysis](cli-analysis.md) for `analyze` task selection, limits, worker requirements and exit
 behavior. Its flat examples remain compatible:

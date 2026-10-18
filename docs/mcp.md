@@ -19,7 +19,7 @@ can replace `rampage`; install the worker beside it for supervised native decomp
 By default the server lists `core` plus `enable_tools`, keeping the initial tool list short.
 
 - `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
-  `function_summary`, `xrefs`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
+  `function_summary`, `xrefs`, `search`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
   `annotate_batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `triage_report`,
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
   `decode_file_range`, `inspect_raw_code`.

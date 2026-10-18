@@ -155,6 +155,18 @@ The corresponding MCP tools are `detect_tools`, `yara_scan`, `capa_detect` and `
 constant database finds AES, DES, Blowfish, SHA/MD5, ChaCha, CRC, Deflate, Base64 and curve-parameter tables.
 [Data packs](data-packs.md) extend these heuristic databases with data only.
 
+## Search
+
+The Core `search` tool and `binary search` CLI query mapped bytes, ASCII/Unicode UTF-16 text and regex,
+structured immediates, mnemonic/operand globs, and retained references or referencing functions. Results
+preserve function context, native evidence and address ordering; incomplete scans report lower-bound totals
+and explicit budgets rather than complete negative answers. See [search reference](search.md).
+
+Search is static and read-only. Native preparation/scanning is bounded and cancellable after the existing
+non-interruptible analysis/cache initialization. Unmapped overlays, virtual gaps and zero-fill are not
+invented byte content. Instruction evidence uses production decoding, retained modes and bounded semantic
+lookahead, not arbitrary byte sweeps.
+
 ## Library identification
 
 Native signatures hash function bytes with position-dependent encodings masked out: relative
