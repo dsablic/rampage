@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "measurement": "phase2-1-public-library-pilot",
+  "source_revision": "198c024ede0b8b77ff07cbe53b9503cfcbb6d582",
+  "collector_source_sha256": "869054b985026e73d7b3f47de99baf38156c10d807f96ff2fd3078196a42a49d",
+  "evaluator_binary_sha256": "40dfc2419cfd7ef351d3fea1930d5e515b9b1e4ce41fe79e1d6f3c01a6ce02e8",
+  "recipe_manifest_sha256": "a0c1d31e7d1040a9c45ccfc59ff2b505b040a95b4d9f9b09fe7b100e8b7be823",
+  "runner_sha256": "5800dd359707552a575b21814d018d4280a8acc4d600b635cbe83e4a6ce7c0cb",
+  "recipe": "tests/fixtures/signatures/recipes.json",
+  "zig_version": "0.17.0",
+  "optimization": "O1",
+  "link_policy": "full_library_gc_disabled",
+  "ownership_scope": "externally visible strong ELF functions; local, hidden and weak definitions excluded",
+  "reference_only_negative_collision_evidence": true,
+  "measurement_uses_reloaded_gzip_artifact": true,
+  "load_image_equivalent_stripped_twins": true,
+  "target_executed": false,
+  "acceptance_status": "pilot_only_phase2_1_open",
+  "all_profiles_passed": false,
+  "default_bundle_promoted": false,
+  "gate": {"min_recall": 0.8, "max_wrong": 0, "max_spurious": 0},
+  "profiles": [
+    {
+      "profile": "lua-aarch64-linux-musl-O1", "version": "5.4.7", "truth_functions": 154,
+      "reference_sha256": "de6bb4b030479ef5cf86c15ef894a68f63935c2e48530c4f02b5f9693b88338f",
+      "symbolized_target_sha256": "c54f302750306b1eef76cdf2e00443e29981cc0072010dd26262db3cc12a8b3e",
+      "stripped_target_sha256": "1448c1f0e9c41533e667c7ccb3194ddd33466dc31b4f4ff29ab37f916e6e7ec5",
+      "database_sha256": "91b3acde355da5a988f1521d61edca54cda3fe5e637569ae660355aad61455b1",
+      "compressed_database_sha256": "ab39417652a19e7d003a62e9bb14f0d9bf683383aaa1ae82ac3d3cc411515136",
+      "database_bytes": 16536, "compressed_database_bytes": 8234,
+      "baseline": {"correct": 0, "wrong": 0, "missed": 154, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "after": {"correct": 145, "wrong": 0, "missed": 9, "spurious": 0, "recall": 0.9415584415584416, "precision": 1.0},
+      "passed": true
+    },
+    {
+      "profile": "lua-x86_64-linux-musl-O1", "version": "5.4.7", "truth_functions": 154,
+      "reference_sha256": "6f8f38f27be904a33002b5989276a96ed0a1b0d093e5949378a29244cc2d896a",
+      "symbolized_target_sha256": "796e8c2bcdf2cd58a73ace915b023b202238aee3bd208a3a487989649a1eeee3",
+      "stripped_target_sha256": "08c244ebb2ee750f05cba1814c24333925dbbe05d77964db0fb0825abdaeb09e",
+      "database_sha256": "1e02325de7e004c43cf151030962500d3795281dc8746f937bb9fa58d5571689",
+      "compressed_database_sha256": "3f4bd9a5f8e95b0ae032dea437c3cfd221974e4c878956be72337461e0dd2452",
+      "database_bytes": 18622, "compressed_database_bytes": 9098,
+      "baseline": {"correct": 0, "wrong": 1, "missed": 153, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "after": {"correct": 152, "wrong": 0, "missed": 2, "spurious": 0, "recall": 0.987012987012987, "precision": 1.0},
+      "passed": true
+    },
+    {
+      "profile": "lz4-aarch64-linux-musl-O1", "version": "1.10.0", "truth_functions": 104,
+      "reference_sha256": "ab69a4cdd1aaf0b3245fb62231c329d030a5679086cae87fc976002c2cac9d4e",
+      "symbolized_target_sha256": "e789e1fffda8579f5a930d58949ee5e02cab793e6c4af05e2d72a8e8f1589241",
+      "stripped_target_sha256": "ec91753b0b724437693bace5caf52f934cf40205aad3bd19cfa4f37d80820592",
+      "database_sha256": "d772a8522f3d4dc5f22906ae026051a6c529167d4e16c885dcd9ef4157893f05",
+      "compressed_database_sha256": "efce2edd56ad16c32ccbb38e4d5ca43a4bb62559a2eb4f3aafa2f40567f0f0c6",
+      "database_bytes": 11413, "compressed_database_bytes": 5025,
+      "baseline": {"correct": 0, "wrong": 0, "missed": 104, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "after": {"correct": 68, "wrong": 0, "missed": 36, "spurious": 0, "recall": 0.6538461538461539, "precision": 1.0},
+      "passed": false
+    },
+    {
+      "profile": "lz4-x86_64-linux-musl-O1", "version": "1.10.0", "truth_functions": 104,
+      "reference_sha256": "0d9bb9f923cdca53b172bcf4b52f90a258bf6ba721d358b6c0c44521029c168c",
+      "symbolized_target_sha256": "80fc24195ba6fe9ba709041af96affc35bd4191c752450436ba29787aa826852",
+      "stripped_target_sha256": "865f10f197e5130c0d39ff454055baa1d891cd0d26fa273829ea28b48539a02a",
+      "database_sha256": "8f54f00b86dd3f63a5e0c466836bcc6e3f207dd613fcafadacd3bafef1d26115",
+      "compressed_database_sha256": "650e3de622af1d3a18d24757c0523f59c844e73802473ed08e87b8544d31e84a",
+      "database_bytes": 14034, "compressed_database_bytes": 6117,
+      "baseline": {"correct": 0, "wrong": 1, "missed": 103, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "after": {"correct": 81, "wrong": 0, "missed": 23, "spurious": 0, "recall": 0.7788461538461539, "precision": 1.0},
+      "passed": false
+    },
+    {
+      "profile": "zlib-aarch64-linux-musl-O1", "version": "1.3.1", "truth_functions": 62,
+      "reference_sha256": "33db1b36d5f8a42e4a131d07da74846e3bda6c02d4b66d2b1466e804a938ffd7",
+      "symbolized_target_sha256": "dbb3822535fca5b3a69fcadbcff161b5322a28c012d2c65e57641b8f43edaaf6",
+      "stripped_target_sha256": "09199a2a497b7465413bef018d4fb7d55f1c645b8efb392350b46e411223cf9d",
+      "database_sha256": "79f775269209c8091d9d21dffcb80a6ff29a0040c1bbaab2b0050891550d7859",
+      "compressed_database_sha256": "387d69dfcb76712b8ad49cb6568447f2432494582828a69c1a3c4d85429e226a",
+      "database_bytes": 5447, "compressed_database_bytes": 2858,
+      "baseline": {"correct": 0, "wrong": 0, "missed": 62, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "after": {"correct": 51, "wrong": 0, "missed": 11, "spurious": 0, "recall": 0.8225806451612904, "precision": 1.0},
+      "passed": true
+    },
+    {
+      "profile": "zlib-x86_64-linux-musl-O1", "version": "1.3.1", "truth_functions": 62,
+      "reference_sha256": "0a5588cf36e1f0582e9951390af6cfa0f83cd5eb5e7be03812d9d02f21a70446",
+      "symbolized_target_sha256": "3a00b5d284faae8b4ce3bb3e423bb8220d894f0d8179bd01199ae6200bc8b37d",
+      "stripped_target_sha256": "6cdbe4f889b413de4eb5e01a4a2b1e4b27484b5ab9b6aa10055a276ba9b81675",
+      "database_sha256": "53895ab5cec1b2f512bffb524a7aa526235605fd18f6a9b97401aa25866b1328",
+      "compressed_database_sha256": "d31cd3412623d407cd36aed6697b1eae26cfa22f2bdf74df3e67c8cf0ed9657c",
+      "database_bytes": 6652, "compressed_database_bytes": 3345,
+      "baseline": {"correct": 0, "wrong": 0, "missed": 62, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "after": {"correct": 56, "wrong": 0, "missed": 6, "spurious": 0, "recall": 0.9032258064516129, "precision": 1.0},
+      "passed": true
+    }
+  ],
+  "compressed_starter_bytes": {"json": 29338, "gzip": 16539, "recognition_data_changed": false},
+  "earlier_diagnostics": [
+    "Initial runner/builder metadata-key mismatch was fixed; no successful pipeline run is claimed for it.",
+    "GC-enabled linked subsets produced low recall and Lua false positives; those are separate truth cohorts.",
+    "Reference-only negative collisions removed Lua false positives without changing the matcher confidence gate.",
+    "Whole-archive extraction alone did not prevent Zig linker GC. Full-retention experiments disable GC explicitly.",
+    "Hidden globals localized at link time are excluded before training/scoring; the earlier Lua refusal is retained."
+  ],
+  "remaining_coverage": [
+    "LZ4 recall below 80% on both tested architectures",
+    "Additional upstream versions and the roadmap library roster",
+    "Final full-retention optimization matrix beyond O1",
+    "i386 and ARM Thumb measurements; Windows PE strip/truth support",
+    "Serialized aggregate database evaluation and reviewed promotion into default bundles",
+    "Phase 2.2 import formats and Phase 2.3 fuzzy matching"
+  ],
+  "publication_notes": [
+    "Four of six profiles pass; the pilot command exits 1 because both LZ4 profiles fail.",
+    "Baseline excludes unrelated runtime addresses; after scoring penalizes all non-truth names.",
+    "Static exact-build public-function evidence, not version attribution, full coverage or live model success.",
+    "No new pilot library database is installed by default; ordinary user and pack inputs remain JSON.",
+    "Only string wrapping follows the measured revision; report contents are unchanged.",
+    "Five path tests failed without canonical TMPDIR; those tests and the full suite passed after fixing it.",
+    "Earlier Phase 0/1 results and open sign-off remain unchanged. Phases 2-6 are authorized, not complete."
+  ]
+}

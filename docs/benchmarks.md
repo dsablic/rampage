@@ -6,6 +6,45 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 2.1 pilot — library corpus and compressed databases
+
+**Implementation slice:** `198c024`; [pinned measurements](benchmarks/phase2-1-pilot-2026-10-18.json).
+**Phase 2.1 remains open.** These are generated, source-known public-function experiments, not live agent
+tasks, version attribution or completion of the roadmap library/version/architecture matrix.
+
+| Library/build | x64 correct / truth | AArch64 correct / truth | Gate |
+| --- | --- | --- | --- |
+| zlib 1.3.1, Z_SOLO units, O1 | 56/62 (90.3%) | 51/62 (82.3%) | Both pass |
+| Lua 5.4.7, O1 | 152/154 (98.7%) | 145/154 (94.2%) | Both pass |
+| LZ4 1.10.0, LZ4/HC/xxHash units, O1 | 81/104 (77.9%) | 68/104 (65.4%) | **Both fail** |
+
+All six after-results have zero wrong and zero spurious names. The bundled musl baseline correctly names none
+of these owned library functions; it makes one wrong proposal each on the x64 Lua/LZ4 targets. Baseline recall
+uses the owned addresses, counting unrelated runtime proposals separately. After scoring penalizes every
+non-truth proposal. The pipeline exits 1 because both LZ4 profiles miss the 80% floor; no aggregate average
+overrides those failures, and no pilot DB is promoted into default identification.
+
+The offline pipeline checks source archive hashes and Zig 0.17.0, records exact commands/tool/artifact identities,
+builds distinct harnesses and verifies stripped load-image equivalence. Truth covers externally visible strong
+ELF definitions only; local, hidden and weak coverage is excluded. Reference-only non-library bodies retain
+negative collision evidence but cannot become exported names. Scoring reloads the actual gzip artifact.
+
+Early diagnostic runs exposed a report-key mismatch, linker GC despite whole-archive extraction, and hidden
+globals localized at link time. GC-enabled linked-subset results have different denominators and are not
+silently regraded as full-library results. The pinned run disables GC, refuses missing public definitions and
+retains both LZ4 failures. Additional versions, libraries, optimization profiles, i386/Thumb/Windows coverage,
+aggregate-DB evaluation and bundle promotion remain open.
+
+The existing musl recognition data is unchanged. Compressed starter assets total **16,539 bytes**, versus
+29,338 JSON bytes, with parsed per-architecture caches and metadata-only pack listing. User overlay precedence
+is unchanged; corpus union instead preserves ambiguity. Changed-crate suites, MCP regression, scoped Clippy,
+15 Python tests, Ruff/ty and independent reviews passed. An initial run without canonical `TMPDIR` failed five
+cache/capture path tests; those five and the full suite passed with the established environment and no related
+production change. Earlier Phase 0/1 measurements and live Phase 1 sign-off remain unchanged.
+
+See [signature corpus pipeline](signature-corpus.md) for reproduction. The runner never executes target code
+or downloads sources; only public-source inputs belong in this corpus.
+
 ## Phase 1.6 — checked PDB and nested DWARF type import
 
 **Run:** 2026-10-18, committed implementation/collector `02e6173`. The

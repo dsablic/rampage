@@ -368,7 +368,10 @@ fn run(arguments: Arguments) -> Result<(), String> {
         "database_signatures":database.len(),"database_callee_keys":database.callee_keys(),
         "diagnostic_symbol_sized_direct_matches":symbol_sized_correct,
         "diagnostic_first_eight_symbol_sized_misses":diagnostic_misses,
-        "ownership_scope":"externally visible strong ELF function definitions only; local, hidden and weak definitions excluded",
+        "ownership_scope":concat!(
+            "externally visible strong ELF function definitions only; ",
+            "local, hidden and weak definitions excluded"
+        ),
         "nonlibrary_reference_collision_evidence":true,
         "baseline":baseline_report,"baseline_available":baseline_available,
         "baseline_other_library_proposals":baseline_unrelated,
@@ -379,7 +382,8 @@ fn run(arguments: Arguments) -> Result<(), String> {
             "Exact build and linked subset only; this is not near-miss or version identification.",
             "Baseline recall scores owned library addresses; unrelated bundled runtime names are counted separately.",
             "After precision includes all named target proposals, including outside the owned library truth.",
-            "Names are selected by unique externally visible strong object definitions; static, hidden and weak coverage is not measured."
+            concat!("Names are selected by unique externally visible strong object definitions; ",
+                "static, hidden and weak coverage is not measured.")
         ]
     });
     for path in [&arguments.output, &gzip_path, &arguments.report] {

@@ -128,8 +128,9 @@ remain explicit preview-only boundaries. The old checked layouts and PDB names c
 - [ ] Review, validate changed crates/MCP and publish the milestone before starting 2.2.
 
 The pilot is not full 2.1 acceptance. Early GC-enabled linked-subset measurements remain separate from the
-full-retention cohort. Zlib passes the tested x64/AArch64 O1 gate; LZ4 still misses the 80% target. No new pilot
-database is promoted into the default bundle. Earlier Phase 0/1 results and the open live Phase 1 gate are unchanged.
+full-retention cohort. Pinned slice `198c024`: zlib and Lua pass the tested x64/AArch64 O1 gates; LZ4 remains
+77.9%/65.4% recall, with zero wrong/spurious names. All six results are published in `docs/benchmarks.md`.
+No new pilot database is promoted into the default bundle. Earlier results and the live Phase 1 gate are unchanged.
 
 Phases 2–6 are authorized in order. Phase 2.2 import formats, 2.3 fuzzy matching, and top-level Phases 3–6
 remain queued; source-corpus infrastructure is not acceptance of the entire library-recognition phase.
