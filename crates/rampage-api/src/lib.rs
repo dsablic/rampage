@@ -43,6 +43,9 @@ mod raw_code;
 mod raw_file;
 mod rows;
 mod runtime_compare;
+pub mod search;
+pub mod search_code;
+mod search_request;
 mod session;
 mod signature_import;
 mod signatures;
@@ -180,6 +183,10 @@ pub use rows::{
     Summary, label,
 };
 pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, RuntimeRange};
+pub use search_request::{
+    MAX_SEARCH_REQUEST_BYTES, SearchAddress, SearchRequest, SearchRequestMode, SearchRequestRange,
+    SearchRequestReference,
+};
 pub use session::Session;
 pub use signature_import::load_signature_database;
 pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};

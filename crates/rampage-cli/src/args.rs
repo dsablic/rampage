@@ -3,6 +3,17 @@ use std::path::PathBuf;
 use clap::Args;
 
 #[derive(Args)]
+pub(crate) struct SearchArgs {
+    pub(crate) file: PathBuf,
+    /// Bounded regular JSON SearchRequest file; see `search` MCP schema for the six typed mode selectors
+    #[arg(long, required_unless_present = "query_json", conflicts_with = "query_json")]
+    pub(crate) query: Option<PathBuf>,
+    /// Inline JSON SearchRequest (explicitly JSON, never inferred as a filename); output is structured JSON
+    #[arg(long, required_unless_present = "query")]
+    pub(crate) query_json: Option<String>,
+}
+
+#[derive(Args)]
 pub(crate) struct FileArgs {
     pub(crate) file: PathBuf,
 }

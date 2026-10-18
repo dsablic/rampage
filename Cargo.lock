@@ -4565,6 +4565,7 @@ dependencies = [
  "rampage-plugin-contract",
  "rampage-signatures",
  "rampage-yara",
+ "regex",
  "rustix 1.1.5",
  "schemars",
  "serde",

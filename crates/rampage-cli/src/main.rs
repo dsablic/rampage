@@ -62,6 +62,9 @@ enum PacksCommand {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Search retained bytes, Unicode text, instructions, immediates or native references
+    #[command(hide = true)]
+    Search(args::SearchArgs),
     #[command(skip)]
     ArchiveInventory(ArchiveInventoryArgs),
     #[command(hide = true)]
@@ -347,6 +350,7 @@ fn main() -> ExitCode {
             commands::pseudocode(&mut out, &file, &at, structured, &options)
         }
         Command::Compare(CompareArgs { file, reference }) => commands::compare(&mut out, &file, &reference, &options),
+        Command::Search(args) => commands::search(&mut out, &args, &options),
         Command::Signatures(SignaturesArgs { file, output, fuzzy_request }) => {
             commands::signatures(&mut out, &file, output.as_deref(), fuzzy_request.as_deref(), &options)
         }

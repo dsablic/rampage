@@ -75,6 +75,7 @@ pub(crate) enum RootCommand {
 impl RootCommand {
     pub(crate) fn into_action(self) -> Result<Command, &'static str> {
         Ok(match self {
+            Self::Binary(BinaryCommand::Search(args)) => Command::Search(args),
             Self::Binary(BinaryCommand::Inspect(args)) => Command::Info(args),
             Self::Binary(BinaryCommand::InspectData(args)) => Command::InspectData(args),
             Self::Binary(BinaryCommand::InspectRaw(args)) => Command::InspectRaw(args),
@@ -141,6 +142,8 @@ impl RootCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum BinaryCommand {
+    /// Search retained bytes, text, instructions, immediates or references using a typed JSON request
+    Search(crate::args::SearchArgs),
     /// Show format, architecture, entry point, segments and sections
     Inspect(FileArgs),
     /// Inspect bounded image bytes and pointer candidates without discovery or annotation sidecars

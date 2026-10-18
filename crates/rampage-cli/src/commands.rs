@@ -1563,6 +1563,17 @@ mod pdb_receipt_tests {
     }
 }
 
+pub fn search(out: &mut impl Write, args: &crate::args::SearchArgs, options: &Options) -> Result<()> {
+    let request = match (&args.query, &args.query_json) {
+        (Some(path), None) => rampage_api::SearchRequest::from_file(path)?,
+        (None, Some(json)) => rampage_api::SearchRequest::from_json(json.as_bytes())?,
+        _ => anyhow::bail!("search needs exactly one of --query FILE or --query-json JSON"),
+    };
+    let page = open(&args.file, options)?.search_page(&request)?;
+    writeln!(out, "{page}")?;
+    Ok(())
+}
+
 pub fn signatures(
     out: &mut impl Write,
     path: &Path,

@@ -15,6 +15,7 @@ const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
 const MAX_PDB_ERROR_BYTES: usize = 1024;
 
+pub(crate) mod search_page;
 mod signature_page;
 use signature_page::identify_page;
 
@@ -1705,8 +1706,24 @@ fn page_limit(limit: Option<usize>) -> Option<usize> {
 
 /// Every tool, in the order the model sees them.
 pub fn tools() -> Vec<Tool> {
-    let mut tools =
-        vec![
+    let mut tools = vec![
+        tool(
+            Group::Core,
+            "search",
+            "Read-only unified native search. mode.kind selects bytes (hex/nibble wildcards), text \
+             (ascii, utf16_le or utf16_be; literal or Unicode regex), immediate (signed/unsigned numeric value, \
+             optional width_bits/include_displacements/include_addresses), instruction (mnemonic/operand globs), \
+             references (exact target) or functions_referencing (address/string/import/constant reference). \
+             Address targets and half-open range endpoints accept numbers, address strings or resolvable names; \
+             immediate values never resolve names. Example: {\"mode\":{\"kind\":\"functions_referencing\",\"reference\":\
+             {\"kind\":\"string\",\"text\":\"hello\",\"encoding\":\"utf8\"}}}. Context defaults true. \
+             offset/limit (1..1000) page hits, never restrict scan work. total_is_exact distinguishes exact totals \
+             from observed lower bounds; stop_reason/budget explain incomplete scans. more/next_offset page \
+             observed rows even after incomplete scans, not scan resumption. Complete JSON stays within 60000 \
+             bytes with whole hit rows and no wrapper string cutting. Native context truncation/provenance and \
+             retained source paths are preserved. Capture file_offset is null. No annotations or source writes.",
+            |project, request: crate::SearchRequest| project.search_page(&request),
+        ),
         tool(
             Group::Diagnostics,
             "inspect_jump_table",
@@ -1802,9 +1819,11 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: SignatureBuildArgs| {
                 if let Some(request) = &arguments.fuzzy_request {
                     let report = project.build_fuzzy_signature_file(std::path::Path::new(request))?;
-                    let database = report.database.as_ref().ok_or_else(|| ApiError::Invalid(
-                        "no selected source bodies passed the fuzzy evidence gate; no database written".to_owned(),
-                    ))?;
+                    let database = report.database.as_ref().ok_or_else(|| {
+                        ApiError::Invalid(
+                            "no selected source bodies passed the fuzzy evidence gate; no database written".to_owned(),
+                        )
+                    })?;
                     let bytes = database.save_json().map_err(|error| ApiError::Invalid(error.to_string()))?;
                     std::fs::write(&arguments.output, bytes)
                         .map_err(|error| ApiError::Invalid(format!("cannot write {}: {error}", arguments.output)))?;
