@@ -6,6 +6,27 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 2.1 Windows supplement — explicit PDB truth and a declared CRT subset
+
+The [frozen Windows supplement](benchmarks/phase2-1-windows-delivery-2026-10-18.json) extends x64 delivery to
+31 mixed ELF/PE cases, all with zero wrong/spurious named proposals after reloading the final exported gzip.
+The current x64 asset has **7,624 masked entries, 670 callee keys and 32 recorded profiles** in 487,601 compressed
+bytes. Together with the unchanged other architectures, the current delivery cohort contains 85 cases.
+
+Windows zlib remains 54/62 and LZ4 80/104 for both requested harness optimizations; LZ4's recall failure remains
+a failure. The added MinGW profile is exactly nine GLOBAL procedures from the declared `pesect.c` unit: 9/9 correct,
+zero wrong/spurious, with the selected archive member/object hash checked against the collector's one-object receipt.
+This is not whole-CRT coverage or coverage of imported Windows DLL implementations. The header identity is
+15.0.0 alpha; no source-release commit is inferred. An attempted indiscriminate CRT whole-archive link failed and
+was not substituted for this predetermined compatible subset.
+
+Both PE reference and target PDBs are explicit, hash-bound and image-identity checked. Stripped matching targets
+receive no PDB names. Every nonlegacy database has a validated case association. The exact frozen musl input is
+the only x64 legacy exception; its original source provenance is unavailable, so the report deliberately does
+**not** claim completely attested historical training provenance. All case reference inputs are checked separately.
+Previous publications below remain frozen. Phase 2.1 still awaits remaining SDK/runtime corpus delivery; the live
+Phase 1 gate, Phase 2 recall failures and queued Phases 3–6 are unchanged.
+
 ## Phase 2.1 delivery slice — four-architecture default corpus
 
 The [frozen delivery evidence](benchmarks/phase2-1-delivery-2026-10-18.json) records 92 raw attempts and

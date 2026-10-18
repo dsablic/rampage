@@ -141,6 +141,34 @@
       "notice": "curl-8.10.1.txt",
       "notice_sha256": "adb1fc06547fd136244179809f7b7c2d2ae6c4534f160aa513af9b6a12866a32",
       "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "mingw-pesect-zig-0.17.0",
+      "license_declaration": "Declared pesect.c Public Domain notice; mixed runtime terms recorded separately",
+      "source_class": "installed-runtime",
+      "source_release_commit": null,
+      "runtime_archive_sha256": "7baa86c164f6acda9c3b6f1ff333fb8677645a80de3155acb90961404e0b14f4",
+      "source_notice_path": "libc/mingw/crt/pesect.c",
+      "source_notice_sha256": {
+        "libc/include/any-windows-any/_mingw_mac.h": "a23e0228c8b760492cd7e150221f75d1888fcb59eefaabf71b7296d903533eb1",
+        "libc/mingw/COPYING": "99a69660981156c21336fdb5661f89341b013c94e4bf9e1c7467b4745718397f",
+        "libc/mingw/crt/pesect.c": "445b26d25d9fe5c3270df3341cbe8af6da07ae3a82d7e9bbcef548f5893eaefd"
+      },
+      "notice": "mingw-pesect.txt",
+      "notice_sha256": "17cf54b690656d4e7b69fb977f7ac1ac53c0a6a989f359fec838ccb6fdc4490b",
+      "scope": "verbatim leading notice; referenced DISCLAIMER.PD absent from installed vendored tree"
+    },
+    {
+      "profile": "mingw-pesect-zig-0.17.0",
+      "license_declaration": "Declared pesect.c Public Domain notice; mixed runtime terms recorded separately",
+      "source_class": "installed-runtime",
+      "source_release_commit": null,
+      "runtime_archive_sha256": "7baa86c164f6acda9c3b6f1ff333fb8677645a80de3155acb90961404e0b14f4",
+      "source_notice_path": "libc/mingw/COPYING",
+      "source_notice_sha256": "99a69660981156c21336fdb5661f89341b013c94e4bf9e1c7467b4745718397f",
+      "notice": "mingw-runtime-COPYING.txt",
+      "notice_sha256": "8cf9580e38caf10bef699107591f9790b1642fc999f55d8f6a1602132b48a751",
+      "scope": "complete upstream runtime notice with line-end whitespace normalized; does not imply ownership of all components"
     }
   ]
 }

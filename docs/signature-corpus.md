@@ -7,7 +7,7 @@ compatible builds; a match does not identify a library version, authenticate sou
 
 | Architecture | Masked signature entries | Callee keys | Recorded build profiles |
 | --- | ---: | ---: | ---: |
-| x86-64 | 7,489 | 664 | 27 |
+| x86-64 | 7,624 | 670 | 32 |
 | AArch64 | 7,066 | 404 | 27 |
 | i386 | 2,082 | 90 | 14 |
 | ARM/Thumb | 2,117 | 0 | 14 |
@@ -24,8 +24,10 @@ Upstream notices are retained with source/archive and excerpt digests in the dat
 license declarations, not source authentication or a legal determination.
 
 The promoted Linux profiles cover zlib, LZ4, Lua, SQLite, zstd, mbedTLS and libpng; x64/AArch64 additionally include
-the reduced OpenSSL and HTTP-only curl profiles. Several libraries have second versions. SDK/runtime and Windows
-coverage is tracked separately; the current promoted indexes do not claim Windows build-profile coverage.
+the reduced OpenSSL and HTTP-only curl profiles. Several libraries have second versions. x64 also includes the
+validated Windows zlib/LZ4 builds and exactly nine GLOBAL functions from MinGW's `pesect.c`; this is not whole-CRT
+or Windows DLL implementation coverage. The observed MinGW header identity is 15.0.0 alpha, not an attested release
+commit. Broader SDK/runtime coverage remains separately tracked.
 
 ## Recognition policy
 
@@ -40,8 +42,9 @@ layouts, even when their masked bodies are already ambiguous. Masked and callee-
 the generic matcher, hash schemes, and explicitly supplied user databases are unchanged. Withholding creates
 persistent tombstones for known keys. Composition that introduces new keys requires applying the curation policy again.
 
-All 80 ELF cases used for these four assets have zero wrong/spurious named proposals against their full sized
-symbolized twins after reloading the final gzip. This is bounded corpus evidence, not a universal precision guarantee.
+All 85 current cases used for these four assets have zero wrong/spurious named proposals against full producer-sized
+twin truth after reloading the final gzip. PE truth uses checked PDB procedure ranges, not guessed PUBLIC-name sizes.
+This is bounded corpus evidence, not a universal precision guarantee.
 Per-library and aggregate recall failures remain recorded. The 80% matched-version recall target belongs to Phase 2
 acceptance; it is not substituted for the precision checks used to select default artifacts.
 
@@ -125,6 +128,9 @@ target/debug/examples/signature_aggregate \
 Reports distinguish reference-conflict removals from raw exact fallback removals. Forward, reverse and rotated
 input orders must produce identical compressed output. A nonzero recall-gate exit retains the artifact and all case
 measurements; it does not authorize promotion when wrong/spurious proposals remain.
+PE aggregate cases additionally require the actual reference image and explicit `--pdb` inputs for both paired
+producer PDBs. Every nonlegacy database must be associated with a validated case; only the two exact frozen musl
+digests are admitted as separately disclosed legacy inputs without original case provenance.
 
 The builder's optional `--diagnostic-limit` (0–512, default 0) emits bounded, address-sorted symbol/discovery evidence.
 It preserves actual gates, ambiguity tombstones and missing-callee evidence, counts omitted rows, and keeps supplied

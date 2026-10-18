@@ -131,11 +131,12 @@ remain explicit preview-only boundaries. The old checked layouts and PDB names c
 - [x] Add atomic training-reference conflict filtering, preserving negative evidence without exporting names.
 - [x] Enforce a global held-out image split and retain separate cases for byte-identical stripped targets.
 - [x] Deliver reviewed compressed default databases and provenance indexes for the four-architecture ELF cohort.
+- [x] Extend x64 delivery with checked Windows zlib/LZ4 profiles and the declared nine-function MinGW subset.
 - [ ] Complete remaining SDK/runtime and Windows default coverage; do not ship a precision failure.
 - [ ] Review, validate changed crates/MCP and publish the milestone before starting Phase 3.
 
-Status: **2.1 pipeline and four-architecture core/default delivery implemented; remaining SDK/runtime and Windows
-corpus delivery are incomplete.**
+Status: **2.1 pipeline and four-architecture core/default delivery implemented, including bounded Windows profiles;
+remaining SDK/runtime corpus breadth is incomplete.**
 The 80% matched-version recall target belongs to Phase 2 acceptance, not a separate 2.1 completion gate.
 Known recall failures remain visible; wrong/spurious names still prevent candidate promotion.
 
@@ -161,6 +162,8 @@ and has zero wrong/spurious proposals across all 80 ELF aggregate cases. Tool sn
 raw failed attempts and the one invalidated collector-hash-drift attempt remain separate. Runtime byte-binding
 and broader SDK coverage require fresh measurements. The four lazy-loaded default corpora and their indexes are
 recorded in `docs/benchmarks/phase2-1-delivery-2026-10-18.json`; Phase 2.1 is not yet complete.
+The Windows supplement records 31 precision-clean x64 ELF/PE cases and the declared MinGW `pesect.c` unit at 9/9.
+The current x64 index has 7,624 entries and 670 callee keys; the prior ELF-only publication remains unchanged.
 
 The follow-up `5f5a7e4` / `1b67d7c` evidence is pinned in
 `docs/benchmarks/phase2-1-parallel-2026-10-18.json`: SQLite x64 is 243/262; AArch64 is 201/262 and fails.
