@@ -57,6 +57,20 @@
         "src/lstrlib.c", "src/ltable.c", "src/ltablib.c", "src/ltm.c",
         "src/lundump.c", "src/lutf8lib.c", "src/lvm.c", "src/lzio.c"
       ]
+    },
+    "sqlite": {
+      "version": "3.46.1",
+      "url": "https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz",
+      "archive": "sqlite-autoconf-3460100.tar.gz",
+      "sha256": "67d3fe6d268e6eaddcae3727fce58fcc8e9c53869bdd07a0c61e38ddf2965071",
+      "root": "sqlite-autoconf-3460100",
+      "license": "public-domain",
+      "license_file": "sqlite3.c",
+      "license_note": "Public-domain dedication in amalgamation header; license_sha256 hashes all of sqlite3.c.",
+      "include": ".",
+      "defines": ["SQLITE_THREADSAFE=0", "SQLITE_OMIT_LOAD_EXTENSION"],
+      "sources": ["sqlite3.c"],
+      "build_condition": "Limited single-threaded, no-load-extension amalgamation; not full SQLite SDK coverage."
     }
   }
 }

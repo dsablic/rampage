@@ -173,18 +173,21 @@ class SignatureCorpusTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name)
 
-    def fixture(self) -> tuple[dict[str, Any], Any, Path]:
-        recipe = dict(corpus.load_manifest()["libraries"]["zlib"])
-        recipe["sources"] = ["adler32.c", "crc32.c"]
+    def fixture(self, library: str = "zlib") -> tuple[dict[str, Any], Any, Path]:
+        recipe = dict(corpus.load_manifest()["libraries"][library])
+        if library == "zlib":
+            recipe["sources"] = ["adler32.c", "crc32.c"]
         archive = self.base / recipe["archive"]
-        make_archive(
-            archive,
-            [
-                (f"{recipe['root']}/adler32.c", b"int library_one(void) { return 1; }"),
-                (f"{recipe['root']}/crc32.c", b"int library_two(void) { return 2; }"),
-                (f"{recipe['root']}/LICENSE", b"test license"),
-            ],
-        )
+        entries = [
+            (
+                f"{recipe['root']}/{source}",
+                f"int library_{index}(void) {{ return {index}; }}".encode(),
+            )
+            for index, source in enumerate(recipe["sources"])
+        ]
+        if recipe["license_file"] not in recipe["sources"]:
+            entries.append((f"{recipe['root']}/{recipe['license_file']}", b"test license"))
+        make_archive(archive, entries)
         recipe["sha256"] = corpus.sha256(archive)
         paths: dict[str, str] = {}
         for name in ("zig", "eval", "builder"):
@@ -217,14 +220,18 @@ class SignatureCorpusTests(unittest.TestCase):
 
     def test_list_has_no_outputs_or_tool_invocations(self) -> None:
         output = self.base / "target/signature-corpus/list"
+        stdout = io.StringIO()
         with (
-            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stdout(stdout),
             mock.patch.object(corpus.subprocess, "run") as run,
         ):
             code = corpus.main(["--list", "--output-dir", str(output)])
         self.assertEqual(code, 0)
         self.assertFalse(output.exists())
         run.assert_not_called()
+        sqlite = corpus.load_manifest()["libraries"]["sqlite"]
+        pin = sqlite["sha256"] or "PENDING_SHA256"
+        self.assertIn(f"sqlite {sqlite['version']} sha256={pin}", stdout.getvalue())
 
     def test_selection_is_explicit_deduplicated_and_bounded(self) -> None:
         args = corpus.parser().parse_args(
@@ -234,6 +241,8 @@ class SignatureCorpusTests(unittest.TestCase):
                 "--only",
                 "lua",
                 "--only",
+                "sqlite",
+                "--only",
                 "lz4",
                 "--target",
                 "aarch64-linux-musl",
@@ -242,7 +251,7 @@ class SignatureCorpusTests(unittest.TestCase):
             ]
         )
         rows = corpus.select(args)
-        self.assertEqual([row.library for row in rows], ["lz4", "lua"])
+        self.assertEqual([row.library for row in rows], ["lz4", "lua", "sqlite"])
         self.assertTrue(
             all(
                 row.target == "aarch64-linux-musl" and row.optimization == "O2"
@@ -253,6 +262,40 @@ class SignatureCorpusTests(unittest.TestCase):
             corpus.parser().parse_args(["--only", "untrusted"])
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             corpus.parser().parse_args(["--baseline-db", "custom.json"])
+
+    def test_sqlite_manifest_rejects_unpinned_versions_and_malformed_hashes(self) -> None:
+        for field, value in (
+            ("version", "3.46.2"),
+            ("sha256", "pending"),
+            ("sha256", "a" * 63),
+            ("sha256", "A" * 64),
+        ):
+            with self.subTest(field=field, value=value):
+                manifest = corpus.load_manifest()
+                manifest["libraries"]["sqlite"][field] = value
+                path = self.base / "recipes.json"
+                corpus.write_json(path, manifest)
+                with self.assertRaises(corpus.CorpusError):
+                    corpus.load_manifest(path)
+
+    def test_sqlite_pending_pin_is_valid_but_blocks_production(self) -> None:
+        manifest = corpus.load_manifest()
+        manifest["libraries"]["sqlite"]["sha256"] = None
+        path = self.base / "recipes.json"
+        corpus.write_json(path, manifest)
+        recipe = corpus.load_manifest(path)["libraries"]["sqlite"]
+        with self.assertRaisesRegex(
+            corpus.CorpusError, "pin is pending; no download attempted"
+        ):
+            corpus.checked_archive(self.base, recipe)
+
+    def test_manifest_still_rejects_arbitrary_recipe_rosters(self) -> None:
+        manifest = corpus.load_manifest()
+        manifest["libraries"]["untrusted"] = manifest["libraries"].pop("sqlite")
+        path = self.base / "recipes.json"
+        corpus.write_json(path, manifest)
+        with self.assertRaises(corpus.CorpusError):
+            corpus.load_manifest(path)
 
     def test_output_refuses_nonempty_and_fixture_paths(self) -> None:
         with self.assertRaises(corpus.CorpusError):
@@ -361,6 +404,60 @@ class SignatureCorpusTests(unittest.TestCase):
                 for command in commands
             )
         )
+
+    def test_sqlite_pipeline_compiles_only_amalgamation_and_retains_full_profile(
+        self,
+    ) -> None:
+        recipe, args, directory = self.fixture("sqlite")
+        fake = FakeProducers()
+        with (
+            mock.patch.object(corpus, "executable", side_effect=lambda value: value),
+            mock.patch.object(corpus.subprocess, "run", side_effect=fake.run),
+        ):
+            result = corpus.build_slice(
+                corpus.Selection("sqlite", corpus.TARGETS[0], "O1"),
+                recipe,
+                args,
+                directory,
+            )
+        self.assertEqual(result["status"], "measured", result)
+        self.assertEqual(result["link_policy"], "full_library_gc_disabled")
+        compilations = [call for call in fake.calls if call[1] == "cc" and "-c" in call]
+        sources = [Path(call[call.index("-c") + 1]) for call in compilations]
+        self.assertEqual(
+            [source.name for source in sources],
+            ["sqlite3.c", "signature-sqlite-reference.c", "signature-sqlite-target.c"],
+        )
+        for compilation in compilations:
+            self.assertIn("-DSQLITE_THREADSAFE=0", compilation)
+            self.assertIn("-DSQLITE_OMIT_LOAD_EXTENSION", compilation)
+            self.assertEqual(
+                Path(compilation[compilation.index("-I") + 1]),
+                directory / "source" / recipe["root"],
+            )
+        links = [call for call in fake.calls if call[1] == "cc" and "-c" not in call]
+        self.assertEqual(len(links), 2)
+        for link in links:
+            self.assertIn("-Wl,--no-gc-sections", link)
+            self.assertNotIn("-Wl,--gc-sections", link)
+            archive_start = link.index("-Wl,--whole-archive")
+            self.assertEqual(Path(link[archive_start + 1]).name, "libsqlite.a")
+            self.assertEqual(link[archive_start + 2], "-Wl,--no-whole-archive")
+        builder = next(call for call in fake.calls if Path(call[0]).name == "builder")
+        owned = [
+            Path(builder[index + 1]).name
+            for index, flag in enumerate(builder)
+            if flag == "--object"
+        ]
+        self.assertEqual(owned, ["library-00.o"])
+        self.assertEqual(
+            result["source_sha256"], {"sqlite3.c": corpus.sha256(sources[0])}
+        )
+        self.assertEqual(result["license_sha256"], result["source_sha256"]["sqlite3.c"])
+        self.assertNotEqual(
+            result["harness_sha256"]["reference"], result["harness_sha256"]["target"]
+        )
+        self.assertIn("db.json.gz", result["artifacts"])
 
     def test_wrong_version_headers_and_compile_failure_are_not_green(self) -> None:
         for fake in (

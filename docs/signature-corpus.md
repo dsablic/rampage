@@ -1,6 +1,6 @@
 # Signature corpus pipeline
 
-The offline pilot builds checksum-pinned zlib 1.3.1, LZ4 1.10.0 and Lua 5.4.7 references and distinct target
+The offline pilot builds pinned zlib 1.3.1, LZ4 1.10.0, Lua 5.4.7 and SQLite 3.46.1 references and distinct target
 programs. It never executes target code or downloads sources. Generated artifacts go into an empty, explicit
 `target/signature-corpus/RUN` directory; the pilot does not overwrite the bundled databases.
 
@@ -33,6 +33,26 @@ The gate requires at least 80% recall and zero wrong/spurious names. Gate failur
 are marked `measured_failed`, and return failure. Unsupported targets are not successful coverage. The Windows
 profile is explicitly unsupported by this pilot's ELF strip/truth path; broader versions, libraries and targets
 remain required before Phase 2.1 acceptance.
+
+SQLite uses its public-domain amalgamation with thread safety and extension loading disabled. The recipe hashes
+the complete license-containing `sqlite3.c`, not a separate license document; this profile is not full SQLite coverage.
+
+## Aggregate validation
+
+The `signature_aggregate` evaluator example accepts repeated `--database` gzip files, `--case` builder reports,
+`--target` stripped images and `--symbolized` twins, plus new `--output` and `--report` paths. Associations use
+content hashes, not argument order. Inputs must share architecture/scheme; old reports without the shared
+validator source hash require regeneration.
+
+It reloads the collision-safe aggregate before scoring each frozen library truth. Every proposed name is also
+checked against full verified twin truth, so correct names from other libraries are distinguished from false
+positives. Forward/reverse/rotation exports must agree. Failed gates retain all cases and return failure; they
+do not promote the database or silently change alias names or recall denominators.
+
+The builder's optional `--diagnostic-limit` (0–512, default 0) emits address-sorted symbol/discovery evidence for
+truth rows. It reports actual production gate measures, ambiguity tombstones and bounded missing-callee lists;
+omitted rows remain counted. Reference labels and final target proposals are separate inputs. Diagnostics do
+not modify matches or establish execution, function boundaries or semantic identity.
 
 The existing no-argument starter generator still rebuilds musl. It now refreshes gzip and small count indexes
 together with JSON. Builtin identification lazily decodes each selected architecture once; listing packs reads

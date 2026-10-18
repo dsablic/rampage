@@ -40,12 +40,17 @@
 
 mod bundled;
 mod compressed;
+mod diagnostics;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 pub use bundled::{bundled, bundled_counts, bundled_ref};
 pub use compressed::{CombineError, SignatureDbError};
+pub use diagnostics::{
+    CalleeNameInput, CalleeNameSource, FingerprintStatus, GateDiagnostics, KeyDiagnostics, LookupState,
+    MatchDiagnostics, MatchVia,
+};
 use iced_x86::{ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
 use rampage_arch::{Arch, Target};
 use rampage_loaders::{Binary, Symbol, SymbolKind};
@@ -213,11 +218,7 @@ impl Fingerprint {
     /// around a tail call, as `fmodl` and `__addtf3`, does); it must also branch outside itself at least once, and
     /// `name` must name every such target.
     fn callee_key<'n>(&self, body: Range<u64>, name: impl Fn(u64) -> Option<&'n str>) -> Option<FunctionHash> {
-        let mut core = self.core.clone();
-        if let Some((fold, content, false)) = self.last {
-            core.add(fold, content);
-        }
-        if !self.measure.discriminating() || !core.has_content() {
+        if !self.measure.discriminating() || !self.callee_core().has_content() {
             return None;
         }
         let callees = self.branch_targets.iter().filter(|target| !body.contains(target));
@@ -233,6 +234,14 @@ impl Fingerprint {
             hasher.update([0]);
         }
         Some(hasher.finalize().into())
+    }
+
+    fn callee_core(&self) -> Measure {
+        let mut core = self.core.clone();
+        if let Some((fold, content, false)) = self.last {
+            core.add(fold, content);
+        }
+        core
     }
 
     /// Feeds one instruction's masked encoding into the hash and the content measures, with its target when it is
@@ -2027,5 +2036,249 @@ mod tests {
         assert_eq!(aarch64_branch_target(0xd65f_03c0, 0x1000), None);
         // A branch near the top of the address space wraps instead of overflowing.
         assert_eq!(aarch64_branch_target(0x1400_0002, u64::MAX - 3), Some(4));
+    }
+
+    fn explain_checked(
+        db: &SignatureDb,
+        target: &Target,
+        bytes: &[u8],
+        address: u64,
+        callees: &BTreeMap<u64, String>,
+    ) -> MatchDiagnostics {
+        let before = db.to_json();
+        let diagnostics = db.explain_in(target, &image(), bytes, address, callees);
+        let actual =
+            db.identify_with_callees(target, &image(), bytes, address, |at| callees.get(&at).map(String::as_str));
+        assert_eq!(diagnostics.named_result.as_deref(), actual);
+        assert_eq!(db.to_json(), before);
+        diagnostics
+    }
+
+    #[test]
+    fn explanation_preserves_masked_exact_and_gate_results() {
+        let x64 = target(Arch::X86_64, false);
+        let names = BTreeMap::new();
+        let (first, second) = colliding_pair();
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        add_function(&mut db, &first, "first");
+        let masked = explain_checked(&db, &x64, &first, 0x1000, &names);
+        assert_eq!(masked.named_result.as_deref(), Some("first"));
+        assert_eq!(masked.via, MatchVia::Masked);
+        assert!(masked.masked_key.present && !masked.masked_key.ambiguous);
+        add_function(&mut db, &second, "second");
+        let exact = explain_checked(&db, &x64, &second, 0x1000, &names);
+        assert_eq!(exact.named_result.as_deref(), Some("second"));
+        assert_eq!(exact.via, MatchVia::Exact);
+        assert!(!exact.masked_key.present && exact.masked_key.ambiguous);
+        assert!(exact.exact_key.present && !exact.exact_key.ambiguous);
+        let relinked = absolute_sample([0x40_a200, 0x40_b200, 0x40_c200, 0x40_d200]);
+        let unknown = explain_checked(&db, &x64, &relinked, 0x1000, &names);
+        assert_eq!(unknown.lookup_state, LookupState::Unknown);
+        assert!(!unknown.exact_key.present && !unknown.exact_key.ambiguous);
+        let rejected = explain_checked(&db, &x64, &[0x90; 16], 0x1000, &names);
+        assert_eq!(rejected.fingerprint_status, FingerprintStatus::LowContent);
+        assert!(rejected.body_hash.is_none());
+        let gate = rejected.gates.unwrap();
+        assert!(gate.instructions_pass && gate.content_bytes_pass && !gate.distinct_encodings_pass);
+        let invalid = explain_checked(&db, &x64, &[0x48], 0x1000, &names);
+        assert_eq!(invalid.fingerprint_status, FingerprintStatus::NoDecodedInstructions);
+        assert_eq!(invalid.gates.unwrap().instruction_count, 0);
+        let internal = explain_checked(&db, &x64, &sample(), 0x1000, &names);
+        assert_eq!(internal.external_target_count, 0);
+        assert!(internal.missing_callee_targets.is_empty() && internal.callee_key.is_none());
+        let mut legacy = SignatureDb::empty(Arch::X86_64, LEGACY_SCHEME);
+        legacy.add(function_hash(&x64, &sample(), 0x1000).unwrap(), None, None, "legacy");
+        let named = explain_checked(&legacy, &x64, &sample(), 0x1000, &names);
+        assert_eq!(named.via, MatchVia::Masked);
+        assert_eq!(named.body_hash, named.scheme1_fallback_hash);
+    }
+
+    #[test]
+    fn explanation_tracks_actual_callee_waits_rounds_and_tombstones() {
+        let x64 = target(Arch::X86_64, false);
+        let call = [0xe8, 0xfb, 0x0f, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xc3];
+        let leaf = [0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0x89, 0xca, 0xc3];
+        let print = || fingerprint(&x64, &call, 0x1000, Some(&image())).unwrap();
+        let key = print().callee_key(0x1000..0x100d, |_| Some("callee")).unwrap();
+        let hash = print().finish().unwrap();
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        db.add(hash, None, Some(key), "wrapper");
+        db.add(hash, None, None, "other");
+        let waiting = explain_checked(&db, &x64, &call, 0x1000, &BTreeMap::new());
+        assert_eq!(waiting.lookup_state, LookupState::AwaitsCallees);
+        assert_eq!(waiting.missing_callee_targets, ["0x2000"]);
+        assert!(waiting.callee_key.is_none());
+        db.add(function_hash_in(&x64, &image(), &leaf, 0x2000).unwrap(), None, None, "callee");
+        let functions: [(u64, &[u8]); 2] = [(0x1000, &call), (0x2000, &leaf)];
+        let names = identify_program(&[&db], &x64, &image(), &functions)
+            .into_iter()
+            .map(|(at, name)| (at, name.to_owned()))
+            .collect();
+        let named = explain_checked(&db, &x64, &call, 0x1000, &names);
+        assert_eq!(named.named_result.as_deref(), Some("wrapper"));
+        assert_eq!(named.via, MatchVia::Callees);
+        assert!(named.callee_key_state.present && !named.callee_key_state.ambiguous);
+        db.add(hash, None, Some(key), "conflict");
+        let conflict = explain_checked(&db, &x64, &call, 0x1000, &names);
+        assert_eq!(conflict.lookup_state, LookupState::Unknown);
+        assert!(!conflict.callee_key_state.present && conflict.callee_key_state.ambiguous);
+        let exact = function_hash(&x64, &call, 0x1000).unwrap();
+        db.add_exact(hex(&exact), "first".into());
+        db.add_exact(hex(&exact), "second".into());
+        assert!(explain_checked(&db, &x64, &call, 0x1000, &names).exact_key.ambiguous);
+    }
+
+    #[test]
+    fn explanation_keeps_the_core_callee_content_gate_separate() {
+        let x64 = target(Arch::X86_64, false);
+        let padded = [0xf3, 0x0f, 0x1e, 0xfa, 0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xe9, 0xf0, 0x0f, 0, 0];
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        db.ambiguous.insert(hex(&function_hash_in(&x64, &image(), &padded, 0x1000).unwrap()));
+        db.calls.insert(hex(&[7; 32]), "unrelated".into());
+        let evidence = explain_checked(&db, &x64, &padded, 0x1000, &BTreeMap::from([(0x2000, "callee".into())]));
+        assert!(evidence.gates.unwrap().discriminating);
+        assert!(!evidence.core_callee_gate.unwrap().has_content);
+        assert!(evidence.callee_key.is_none());
+        assert_eq!(evidence.lookup_state, LookupState::Unknown);
+    }
+
+    #[test]
+    fn explanation_bounds_native_missing_targets_and_serializes_addresses_losslessly() {
+        let x64 = target(Arch::X86_64, false);
+        let address = 0x20_0000_0000_1000;
+        let mut bytes = Vec::new();
+        for _ in 0..20 {
+            bytes.extend([0xe8, 0, 0x10, 0, 0]);
+        }
+        bytes.extend([0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xc3]);
+        let db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        let evidence = explain_checked(&db, &x64, &bytes, address, &BTreeMap::new());
+        assert_eq!(evidence.external_target_count, 20);
+        assert_eq!(evidence.missing_callee_targets.len(), 16);
+        assert_eq!(evidence.missing_callee_targets_omitted, 4);
+        let first = format!("{:#x}", address + 5 + 0x1000);
+        assert_eq!(evidence.missing_callee_targets[0], first);
+        let json = serde_json::to_value(&evidence).unwrap();
+        assert_eq!(json["missing_callee_targets"][0], first);
+        let named = explain_checked(&db, &x64, &bytes, address, &BTreeMap::from([(address + 5 + 0x1000, "c".into())]));
+        assert_eq!(named.external_target_count, 20);
+        assert_eq!(named.missing_callee_targets_omitted, 3);
+    }
+
+    #[test]
+    fn explanation_distinguishes_unsupported_scheme_target_and_architecture_mismatch() {
+        let x64 = target(Arch::X86_64, false);
+        let db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        let unsupported = explain_checked(&db, &target(Arch::Riscv64, false), &sample(), 0x1000, &BTreeMap::new());
+        assert!(!unsupported.target_supported && unsupported.scheme_supported && !unsupported.arch_matches);
+        assert_eq!(unsupported.fingerprint_status, FingerprintStatus::UnsupportedTarget);
+        assert!(unsupported.gates.is_none());
+        let unknown_scheme = SignatureDb::empty(Arch::X86_64, 99);
+        let unsupported = explain_checked(&unknown_scheme, &x64, &sample(), 0x1000, &BTreeMap::new());
+        assert!(unsupported.target_supported && !unsupported.scheme_supported && unsupported.arch_matches);
+        assert_eq!(unsupported.fingerprint_status, FingerprintStatus::UnsupportedScheme);
+        assert!(unsupported.body_hash.is_none());
+        let other_arch = SignatureDb::empty(Arch::X86, CURRENT_SCHEME);
+        let mismatch = explain_checked(&other_arch, &x64, &sample(), 0x1000, &BTreeMap::new());
+        assert!(!mismatch.arch_matches && mismatch.target_supported);
+        assert_eq!(mismatch.fingerprint_status, FingerprintStatus::Ready);
+        assert_eq!(mismatch.lookup_state, LookupState::Unknown);
+    }
+
+    #[test]
+    fn explanation_preserves_known_external_occurrence_order_duplicates_and_independent_bounds() {
+        let x64 = target(Arch::X86_64, false);
+        let address = 0x1000u64;
+        let mut bytes = Vec::new();
+        for index in 0..40 {
+            let at = if index % 2 == 0 { if index % 4 == 0 { 0x3000 } else { 0x2000 } } else { 0x4000 + index };
+            let next = address + bytes.len() as u64 + 5;
+            bytes.push(0xe8);
+            bytes.extend(((at as i64 - next as i64) as i32).to_le_bytes());
+        }
+        bytes.extend([0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xc3]);
+        let mut names = BTreeMap::from([(0x2000, "second".into()), (0x3000, "first".into())]);
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        let evidence = explain_checked(&db, &x64, &bytes, address, &names);
+        assert_eq!(evidence.external_target_count, 40);
+        assert_eq!(evidence.known_callee_inputs.len(), 16);
+        assert_eq!(evidence.known_omitted, 4);
+        assert_eq!(evidence.missing_callee_targets.len(), 16);
+        assert_eq!(evidence.missing_callee_targets_omitted, 4);
+        assert_eq!(evidence.missing_callee_targets[0], "0x4001");
+        for (index, input) in evidence.known_callee_inputs.iter().enumerate() {
+            let (at, name) = if index % 2 == 0 { ("0x3000", "first") } else { ("0x2000", "second") };
+            assert_eq!(input.source, CalleeNameSource::CallerSupplied);
+            assert_eq!(input.address, at);
+            assert_eq!(input.name_preview, name);
+            assert_eq!(input.name_bytes, name.len());
+            assert_eq!(input.name_sha256, hex(&raw_sha(name.as_bytes())));
+            assert!(!input.name_truncated);
+        }
+        let json = serde_json::to_value(&evidence).unwrap();
+        assert_eq!(json["known_callee_inputs"][0]["source"], "caller_supplied");
+        names.extend((1..40).step_by(2).map(|index| (0x4000 + index, "later".into())));
+        let print = fingerprint(&x64, &bytes, address, Some(&image())).unwrap();
+        let key =
+            print.callee_key(address..address + bytes.len() as u64, |at| names.get(&at).map(String::as_str)).unwrap();
+        let hash = print.finish().unwrap();
+        db.add(hash, None, Some(key), "ordered");
+        db.add(hash, None, None, "other");
+        let all_known = explain_checked(&db, &x64, &bytes, address, &names);
+        assert_eq!(all_known.named_result.as_deref(), Some("ordered"));
+        assert_eq!(all_known.callee_key, Some(hex(&key)));
+        assert_eq!(all_known.known_omitted, 24);
+        assert_eq!(all_known.known_callee_inputs[0].address, all_known.known_callee_inputs[4].address);
+        assert!(all_known.missing_callee_targets.is_empty());
+        assert_eq!(all_known.missing_callee_targets_omitted, 0);
+    }
+
+    #[test]
+    fn explanation_unicode_preview_never_replaces_full_names_in_callee_keys() {
+        let x64 = target(Arch::X86_64, false);
+        let call = [0xe8, 0xfb, 0x0f, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0x89, 0xc1, 0xc3];
+        let name = format!("{}e\u{301}tail", "界".repeat(255));
+        let preview: String = name.chars().take(256).collect();
+        let print = || fingerprint(&x64, &call, 0x1000, Some(&image())).unwrap();
+        let key = print().callee_key(0x1000..0x100d, |_| Some(name.as_str())).unwrap();
+        let hash = print().finish().unwrap();
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        db.add(hash, None, Some(key), "wrapper");
+        db.add(hash, None, None, "other");
+        let names = BTreeMap::from([(0x2000, name.clone())]);
+        let evidence = explain_checked(&db, &x64, &call, 0x1000, &names);
+        assert_eq!(evidence.named_result.as_deref(), Some("wrapper"));
+        assert_eq!(evidence.via, MatchVia::Callees);
+        assert_eq!(evidence.callee_key, Some(hex(&key)));
+        let input = &evidence.known_callee_inputs[0];
+        assert_eq!(input.name_preview, preview);
+        assert_eq!(input.name_preview.chars().count(), 256);
+        assert_eq!(input.name_bytes, name.len());
+        assert!(input.name_bytes > input.name_preview.len());
+        assert_eq!(input.name_sha256, hex(&raw_sha(name.as_bytes())));
+        assert_ne!(input.name_sha256, hex(&raw_sha(preview.as_bytes())));
+        assert!(input.name_truncated);
+        let shortened = explain_checked(&db, &x64, &call, 0x1000, &BTreeMap::from([(0x2000, preview.clone())]));
+        assert_eq!(shortened.known_callee_inputs[0].name_preview, preview);
+        assert!(!shortened.known_callee_inputs[0].name_truncated);
+        assert_ne!(shortened.callee_key, evidence.callee_key);
+        assert!(shortened.named_result.is_none());
+        assert_eq!(names[&0x2000], name);
+    }
+
+    #[test]
+    fn explanation_reports_the_existing_prefix_instruction_cap() {
+        let x64 = target(Arch::X86_64, false);
+        let mut bytes = sample();
+        bytes.resize(bytes.len() + MAX_INSTRUCTIONS as usize, 0x90);
+        let prefix_length = sample().len() + (MAX_INSTRUCTIONS - 4) as usize;
+        let mut db = SignatureDb::empty(Arch::X86_64, CURRENT_SCHEME);
+        let hash = function_hash_in(&x64, &image(), &bytes[..prefix_length], 0x1000).unwrap();
+        db.add(hash, None, None, "prefix");
+        let evidence = explain_checked(&db, &x64, &bytes, 0x1000, &BTreeMap::new());
+        assert_eq!(evidence.named_result.as_deref(), Some("prefix"));
+        assert!(evidence.instruction_cap_reached);
+        assert_eq!(evidence.gates.unwrap().instruction_count, MAX_INSTRUCTIONS);
+        assert_eq!(evidence.body_hash, Some(hex(&hash)));
     }
 }

@@ -23,6 +23,12 @@ leaves the receiver unchanged on mismatch. In-memory fallback evidence survives 
 union; evidence omitted from a saved database cannot be reconstructed. Use `merge`
 only for intentional user-priority overlays, where the incoming database wins.
 
+## Read-only match diagnostics
+
+`explain_in` reports the existing matcher's gates, key tombstones and lookup result without changing matches
+or the database. Callee labels remain caller-supplied: bounded previews, full-name hashes and omitted counts
+preserve their limits. Diagnostic names are not independent function-identity or execution proof.
+
 ## License and provenance
 
 The crate retains the workspace Apache-2.0 license. Compression does not add a new

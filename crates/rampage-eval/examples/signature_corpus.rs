@@ -1,15 +1,17 @@
-use std::collections::BTreeSet;
+mod signature_corpus_support;
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use object::{Object, ObjectSection, ObjectSymbol};
+use object::{Object, ObjectSymbol};
 use rampage_eval::{Truth, discovered_extents, proposals, score};
 use rampage_loaders::Binary;
 use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, function_hash_in};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use signature_corpus_support::{digest, verify_twin};
 
 #[derive(Parser)]
 struct Arguments {
@@ -25,10 +27,9 @@ struct Arguments {
     output: PathBuf,
     #[arg(long)]
     report: PathBuf,
-}
-
-fn digest(bytes: &[u8]) -> String {
-    rampage_arch::hex::bytes(&Sha256::digest(bytes))
+    /// Address-sorted truth rows with exact matcher evidence; zero disables the diagnostic matrix.
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u16).range(0..=512))]
+    diagnostic_limit: u16,
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, String> {
@@ -91,130 +92,6 @@ fn owned_names(
     Ok((names, hashes))
 }
 
-fn verify_twin(symbolized: &Binary, stripped: &Binary, truth: &Truth) -> Result<(), String> {
-    let before = symbolized.target();
-    let after = stripped.target();
-    if before.arch != after.arch
-        || before.big_endian != after.big_endian
-        || before.data_big_endian != after.data_big_endian
-        || before.thumb != after.thumb
-    {
-        return Err("stripped twin target differs from symbolized target".into());
-    }
-    if symbolized.format != rampage_loaders::Format::Elf || stripped.format != rampage_loaders::Format::Elf {
-        return Err("this corpus pilot validates ELF stripping only".into());
-    }
-    if symbolized.segments != stripped.segments || symbolized.entry != stripped.entry {
-        return Err("stripping changed load mappings or entry point".into());
-    }
-    for segment in &symbolized.segments {
-        let original = normalized_segment(symbolized.image_bytes(), segment.file_offset, segment.file_size)?;
-        let retained = normalized_segment(stripped.image_bytes(), segment.file_offset, segment.file_size)?;
-        if original != retained {
-            return Err("stripping changed load-image bytes outside permitted section-table header fields".into());
-        }
-    }
-    let retained_sections = |binary: &Binary, stripped: bool| -> Result<Vec<_>, String> {
-        let file = object::File::parse(binary.image_bytes()).map_err(|error| error.to_string())?;
-        let mut sections = Vec::new();
-        for section in file.sections() {
-            let name = section.name().map_err(|error| error.to_string())?;
-            if removable_metadata(name, section.flags())? {
-                if stripped && name != ".shstrtab" {
-                    return Err("stripped twin retains removable metadata".into());
-                }
-                continue;
-            }
-            let backing = section.file_range().map(|(_, size)| size);
-            let allocated = matches!(section.flags(),object::SectionFlags::Elf {sh_flags,..}
-                if sh_flags.contains(object::elf::SHF_ALLOC));
-            sections.push((
-                name.to_owned(),
-                section.address(),
-                section.size(),
-                section.align(),
-                section.flags(),
-                section.kind(),
-                backing,
-                if allocated { section.file_range() } else { None },
-                digest(section.data().map_err(|error| error.to_string())?),
-            ));
-        }
-        Ok(sections)
-    };
-    if retained_sections(symbolized, false)? != retained_sections(stripped, true)? {
-        return Err("stripping changed retained section types, boundaries, backing or data".into());
-    }
-    let symbols = canonical_functions(symbolized);
-    for address in truth.0.keys() {
-        let symbol = symbols.get(address).ok_or("missing sized library function")?;
-        let original = symbolized.read(*address, symbol.size).ok_or("unbacked truth function")?;
-        if stripped.read(*address, symbol.size) != Some(original) {
-            return Err(format!("stripping changed library function bytes at {address:#x}"));
-        }
-    }
-    let file = object::File::parse(stripped.image_bytes()).map_err(|error| error.to_string())?;
-    if file
-        .symbols()
-        .chain(file.dynamic_symbols())
-        .any(|symbol| symbol.kind() == object::SymbolKind::Text && !symbol.is_undefined())
-        || file
-            .sections()
-            .any(|section| section.name().is_ok_and(|name| name.starts_with(".debug") || name.starts_with(".zdebug")))
-    {
-        return Err("stripped twin retains static function symbols or debug sections".into());
-    }
-    Ok(())
-}
-
-fn removable_metadata(name: &str, flags: object::SectionFlags) -> Result<bool, String> {
-    let object::SectionFlags::Elf { sh_type, sh_flags } = flags else {
-        return Err("expected ELF section flags".into());
-    };
-    let expected = match name {
-        ".symtab" => Some(object::elf::SHT_SYMTAB),
-        ".strtab" | ".shstrtab" => Some(object::elf::SHT_STRTAB),
-        ".symtab_shndx" => Some(object::elf::SHT_SYMTAB_SHNDX),
-        _ => None,
-    };
-    if let Some(expected) = expected {
-        if sh_type != expected || sh_flags.0 != 0 {
-            return Err("reserved metadata section name has incompatible type/flags".into());
-        }
-        return Ok(true);
-    }
-    if name.starts_with(".debug") || name.starts_with(".zdebug") {
-        if sh_type != object::elf::SHT_PROGBITS
-            || sh_flags.contains(object::elf::SHF_ALLOC)
-            || sh_flags.contains(object::elf::SHF_EXECINSTR)
-        {
-            return Err("debug section has analysis-relevant type/flags".into());
-        }
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-fn normalized_segment(image: &[u8], offset: u64, length: u64) -> Result<Vec<u8>, String> {
-    let start = usize::try_from(offset).map_err(|_| "invalid load offset")?;
-    let end =
-        usize::try_from(offset.checked_add(length).ok_or("invalid load extent")?).map_err(|_| "invalid load extent")?;
-    let mut bytes = image.get(start..end).ok_or("unbacked load segment")?.to_vec();
-    let fields: &[(usize, usize)] = match image.get(..5) {
-        Some([0x7f, b'E', b'L', b'F', 1]) => &[(32, 36), (48, 52)],
-        Some([0x7f, b'E', b'L', b'F', 2]) => &[(40, 48), (60, 64)],
-        _ => return Err("expected ELF header".into()),
-    };
-    for &(first, last) in fields {
-        for position in first..last {
-            if (start..end).contains(&position) {
-                bytes[position - start] = 0;
-            }
-        }
-    }
-    Ok(bytes)
-}
-
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .create_new(true)
@@ -242,6 +119,35 @@ fn retain_owned(binary: &mut Binary, names: &BTreeSet<String>) -> Result<(), Str
     }
     binary.symbols.retain(|symbol| owned.contains(&(symbol.address, symbol.name.clone())));
     Ok(())
+}
+
+fn diagnostic_body(
+    database: &SignatureDb,
+    binary: &Binary,
+    address: u64,
+    end: Option<u64>,
+    callees: &BTreeMap<u64, String>,
+    name_source: &str,
+) -> Value {
+    let body = end.and_then(|end| end.checked_sub(address)).and_then(|size| binary.read(address, size));
+    let Some(body) = body else {
+        return json!({"start":format!("{address:#x}"),"end":end.map(|end|format!("{end:#x}")),"available":false});
+    };
+    let mut evidence =
+        json!(database.explain_in(&binary.target(), &MaskContext::from_binary(binary), body, address, callees));
+    if let Some(inputs) = evidence["known_callee_inputs"].as_array_mut() {
+        for input in inputs {
+            input["synthetic_reference_label"] = json!(
+                name_source == "reference_supplied_labels"
+                    && input["name_preview"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("__rampage_corpus_negative_"))
+            );
+        }
+    }
+    json!({"start":format!("{address:#x}"),"end":end.map(|end|format!("{end:#x}")),"available":true,
+        "raw_sha256":digest(body),"bytes":body.len(),
+        "callee_name_input_source":name_source,"match_evidence":evidence})
 }
 
 fn run(arguments: Arguments) -> Result<(), String> {
@@ -319,7 +225,12 @@ fn run(arguments: Arguments) -> Result<(), String> {
     let serialized = database.to_json();
     let compressed = database.to_gzip().map_err(|error| error.to_string())?;
     let measured_database = SignatureDb::from_gzip(&compressed).map_err(|error| error.to_string())?;
-    let after = rampage_eval::evaluate(&measured_database, &stripped, &truth).map_err(|error| error.to_string())?;
+    let measured_proposals = proposals(&measured_database, &stripped).map_err(|error| error.to_string())?;
+    let final_names: BTreeMap<_, _> = measured_proposals
+        .iter()
+        .filter_map(|(address, name)| name.as_ref().map(|name| (*address, name.clone())))
+        .collect();
+    let after = score(measured_proposals, &truth);
     let image = MaskContext::from_binary(&stripped);
     let symbol_sized_correct = canonical_functions(&target_truth)
         .into_iter()
@@ -350,11 +261,36 @@ fn run(arguments: Arguments) -> Result<(), String> {
             break;
         }
     }
+    let mut diagnostic_rows = Vec::new();
+    if arguments.diagnostic_limit > 0 {
+        let target_extents = discovered_extents(&stripped).map_err(|error| error.to_string())?;
+        let reference_names = canonical_functions(&reference)
+            .into_iter()
+            .map(|(address, symbol)| (address, symbol.name.clone()))
+            .collect();
+        for symbol in canonical_functions(&target_truth).values().take(usize::from(arguments.diagnostic_limit)) {
+            let original = owned_symbols
+                .iter()
+                .find(|original| original.name == symbol.name)
+                .ok_or("diagnostic reference definition unavailable")?;
+            diagnostic_rows.push(json!({"name":symbol.name,
+                "final_proposal":final_names.get(&symbol.address),
+                "reference_symbol":diagnostic_body(&measured_database,&reference,original.address,
+                    original.address.checked_add(original.size),&reference_names,"reference_supplied_labels"),
+                "reference_discovered":diagnostic_body(&measured_database,&reference,original.address,
+                    reference_extents.get(&original.address).copied(),&reference_names,"reference_supplied_labels"),
+                "target_symbol":diagnostic_body(&measured_database,&stripped,symbol.address,
+                    symbol.address.checked_add(symbol.size),&final_names,"final_measured_proposals"),
+                "target_discovered":diagnostic_body(&measured_database,&stripped,symbol.address,
+                    target_extents.get(&symbol.address).copied(),&final_names,"final_measured_proposals")}));
+        }
+    }
     let gzip_path = PathBuf::from(format!("{}.gz", arguments.output.display()));
     object_hashes.sort();
     let report = json!({
         "schema_version":1,"measurement":"phase2-1-library-signatures",
         "collector_source_sha256":digest(include_bytes!("signature_corpus.rs")),
+        "collector_support_sha256":digest(include_bytes!("signature_corpus_support/mod.rs")),
         "evaluator_binary_sha256":digest(&read(&std::env::current_exe().map_err(|error|error.to_string())?)?),
         "arch":reference.arch.to_string(),"scheme":database.scheme(),
         "reference_sha256":digest(reference.image_bytes()),
@@ -368,6 +304,8 @@ fn run(arguments: Arguments) -> Result<(), String> {
         "database_signatures":database.len(),"database_callee_keys":database.callee_keys(),
         "diagnostic_symbol_sized_direct_matches":symbol_sized_correct,
         "diagnostic_first_eight_symbol_sized_misses":diagnostic_misses,
+        "diagnostic_matrix":diagnostic_rows,"diagnostic_rows_omitted":truth.0.len()-diagnostic_rows.len(),
+        "diagnostic_matrix_requested":arguments.diagnostic_limit>0,
         "ownership_scope":concat!(
             "externally visible strong ELF function definitions only; ",
             "local, hidden and weak definitions excluded"
@@ -466,6 +404,7 @@ mod tests {
             objects: vec![root.join("eval-program-corpus-x86_64.o")],
             output: image.clone(),
             report: image,
+            diagnostic_limit: 0,
         })
         .unwrap_err();
         assert!(error.contains("different linked programs"), "{error}");
@@ -479,34 +418,5 @@ mod tests {
         assert!(names.contains("lua_newstate"));
         assert!(!names.contains("luaE_checkcstack"));
         assert!(!names.contains("close_state"));
-    }
-
-    #[test]
-    fn strip_normalization_never_ignores_entry_program_headers_or_body_changes() {
-        let mut original = vec![0u8; 128];
-        original[..5].copy_from_slice(b"\x7fELF\x02");
-        let expected = normalized_segment(&original, 0, 128).unwrap();
-        let mut stripped = original.clone();
-        for range in [40..48, 60..64] {
-            stripped[range].fill(0xff);
-        }
-        assert_eq!(normalized_segment(&stripped, 0, 128).unwrap(), expected);
-        for index in [24, 32, 48, 56, 64, 100] {
-            let mut changed = original.clone();
-            changed[index] = 0xff;
-            assert_ne!(normalized_segment(&changed, 0, 128).unwrap(), expected, "byte {index}");
-        }
-        assert!(normalized_segment(&original, 100, 29).is_err());
-    }
-
-    #[test]
-    fn metadata_names_do_not_hide_analysis_changing_section_types_or_permissions() {
-        let flags = |sh_type, sh_flags| object::SectionFlags::Elf { sh_type, sh_flags };
-        assert!(removable_metadata(".strtab", flags(object::elf::SHT_STRTAB, object::elf::SectionFlags(0))).unwrap());
-        assert!(removable_metadata(".strtab", flags(object::elf::SHT_PROGBITS, object::elf::SHF_EXECINSTR)).is_err());
-        assert!(removable_metadata(".debug_line", flags(object::elf::SHT_PROGBITS, object::elf::SHF_ALLOC)).is_err());
-        assert!(
-            !removable_metadata(".eh_frame", flags(object::elf::SHT_PROGBITS, object::elf::SectionFlags(0))).unwrap()
-        );
     }
 }

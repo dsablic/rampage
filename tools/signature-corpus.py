@@ -19,7 +19,12 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "tests/fixtures/signatures/recipes.json"
-VERSIONS = {"zlib": "1.3.1", "lz4": "1.10.0", "lua": "5.4.7"}
+VERSIONS = {
+    "zlib": "1.3.1",
+    "lz4": "1.10.0",
+    "lua": "5.4.7",
+    "sqlite": "3.46.1",
+}
 TARGETS = (
     "x86_64-linux-musl",
     "aarch64-linux-musl",
@@ -76,7 +81,7 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         libraries = data["libraries"]
         if set(libraries) != set(VERSIONS):
             raise CorpusError(
-                "only the pinned zlib, lz4 and Lua recipe roster is supported"
+                "only the pinned zlib, lz4, Lua and SQLite recipe roster is supported"
             )
         for name, recipe in libraries.items():
             if recipe["version"] != VERSIONS[name]:
