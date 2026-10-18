@@ -6,6 +6,69 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 2.1 parallel slice — SQLite, aggregate precision and Thumb discovery
+
+**Source slices:** corpus/diagnostics `5f5a7e4`, EHABI discovery `1b67d7c` (2026-10-18).
+The [pinned evidence](benchmarks/phase2-1-parallel-2026-10-18.json) binds the existing raw reports and their
+embedded collector/helper/executable hashes. Read-only hashing of the committed collector sources matches
+those embedded source hashes; this is not an independent rebuild or attestation of every executable dependency.
+**Phase 2.1 remains open; no default database is promoted.** Earlier publications remain unchanged.
+
+| Owned-library profile, O1 | Correct / truth | Missed | Wrong / spurious | 80% recall gate |
+| --- | --- | --- | --- | --- |
+| SQLite 3.46.1, x64 | 243/262 (92.7481%) | 19 | 0 / 0 | Pass |
+| SQLite 3.46.1, AArch64 | 201/262 (76.7176%) | 61 | 0 / 0 | **Fail** |
+| LZ4 1.10.0, i386 | 83/104 (79.80769%) | 21 | 0 / 0 | **Fail**, not rounded to 80% |
+| LZ4 1.10.0, Thumb before EHABI | 2/104 (1.9231%) | 102 | 0 / 0 | **Fail** |
+| LZ4 1.10.0, Thumb after reviewed EHABI | 73/104 (70.1923%) | 31 | 0 / 0 | **Fail** |
+
+SQLite is the single-threaded, no-load-extension amalgamation (`SQLITE_THREADSAFE=0`,
+`SQLITE_OMIT_LOAD_EXTENSION`), not full SQLite SDK coverage. Truth is externally visible strong ELF functions;
+local, hidden and weak functions remain excluded. No bundled database is available for i386/Thumb; the raw
+reports nevertheless measure an empty-database baseline: 0 correct, 104 missed, 0 wrong/spurious, precision and
+recall both 0.0. This is not bundled-database recognition coverage. The Thumb rows are paired on identical
+reference, target and database digests, with zero callee keys: neither target gold-name seeding nor a
+confidence-threshold change explains the gain.
+
+### Same-architecture serialized aggregate
+
+SQLite + LZ4 + the existing musl database are combined as a collision-preserving union, not a priority overlay.
+Both runs score the reloaded gzip artifact. Forward, reversed and rotated input orders export identically, and
+gzip round trips preserve the export; these are three checked orders, not every possible permutation.
+
+| Aggregate / target | Owned correct / truth | All named proposals correct / proposed | Full sized-twin truth | Target gate |
+| --- | --- | --- | --- | --- |
+| x64 / LZ4 | 80/104 | 154/154 | 866 | **Fail** |
+| x64 / SQLite | 243/262 | 342/342 | 2288 | Pass |
+| AArch64 / LZ4 | 68/104 | 160/160 | 971 | **Fail** |
+| AArch64 / SQLite | 201/262 | 304/304 | 2387 | **Fail** |
+
+Every case has all-named precision **1.0**, with zero wrong/spurious names against canonical sized symbols from
+its verified stripped/symbolized twin. That is precision of actual proposals, not complete library or runtime
+coverage. **Both aggregate runs fail overall.** No averaging overrides a failed target. The x64 LZ4 aggregate
+loses one name (`LZ4_versionString`) to a cross-library collision, reducing its per-library 81/104 to 80/104.
+Case receipts bind the actual reference/object/collector hashes and load-image-equivalent twins. Reference and
+object provenance remains a recorded builder assertion, not independently rebuilt source proof. Unsized functions
+and alias-set reconciliation are outside this full-twin gold scope.
+
+### Paired discovery evidence and limits
+
+The full pre-EHABI Thumb trace has 100/104 owned target starts unavailable. An earlier, pre-final-review EHABI
+matrix has 0/104 unavailable; the final reviewed 73/104 report omits the matrix, so that earlier diagnostic is not
+silently represented as a final-review full trace. Start recovery does not establish correct complete boundaries
+or guarantee a name: the final recall still fails.
+
+Actual paired MCP `entry_diagnostics` receipts on an owned stripped Thumb fixture change the distinct entry from
+zero metadata records / `caller_address` to one record / `function_starts`. A coalesced interior remains at zero
+records / `caller_address`; EHABI range interiors are not expanded into invented starts. The baseline MCP binary
+revision is **unattested** (`runtime_binary_revision_attested=false`), and the after receipt records a worktree
+measurement after rebuild/reconnect, not an exact-source binary attestation. Metadata candidates are evidence,
+not complete boundary proof. No target execution or live model task is claimed.
+
+The remaining roster/version/optimization/Windows matrix, failing recall profiles, broader aggregate evaluation
+and reviewed bundle promotion remain open. This publication performs no new builds, tests or model runs and
+does not earn Phase 1 live sign-off or start Phase 2.2.
+
 ## Phase 2.1 pilot — library corpus and compressed databases
 
 **Implementation slice:** `198c024`; [pinned measurements](benchmarks/phase2-1-pilot-2026-10-18.json).

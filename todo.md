@@ -123,6 +123,9 @@ remain explicit preview-only boundaries. The old checked layouts and PDB names c
 - [x] Add deterministic gzip, lazy builtin architecture loading and collision-safe corpus combination.
 - [x] Preserve reference-only negative collision evidence without exporting runtime/harness names.
 - [x] Disable linker GC and refuse lost public definitions; distinguish public from hidden/local/weak coverage.
+- [x] Publish the bounded SQLite x64/AArch64 O1 and LZ4 i386/Thumb evidence, preserving every failed recall gate.
+- [x] Measure reloaded SQLite/LZ4/musl aggregates with full-sized-twin proposal precision and checked input orders.
+- [x] Record paired Thumb EHABI recall and actual MCP metadata evidence, keeping baseline revision unattested.
 - [ ] Measure serialized artifacts per library/architecture/profile; preserve misses, wrong names and unrun coverage.
 - [ ] Extend the pilot to the roadmap library/version/architecture matrix before declaring 2.1 complete.
 - [ ] Review, validate changed crates/MCP and publish the milestone before starting 2.2.
@@ -131,6 +134,17 @@ The pilot is not full 2.1 acceptance. Early GC-enabled linked-subset measurement
 full-retention cohort. Pinned slice `198c024`: zlib and Lua pass the tested x64/AArch64 O1 gates; LZ4 remains
 77.9%/65.4% recall, with zero wrong/spurious names. All six results are published in `docs/benchmarks.md`.
 No new pilot database is promoted into the default bundle. Earlier results and the live Phase 1 gate are unchanged.
+
+The follow-up `5f5a7e4` / `1b67d7c` evidence is pinned in
+`docs/benchmarks/phase2-1-parallel-2026-10-18.json`: SQLite x64 is 243/262; AArch64 is 201/262 and fails.
+Both same-architecture SQLite/LZ4/musl aggregate runs fail overall despite all-named precision 1.0 in every
+case; x64 aggregate LZ4 is 80/104, not its per-library 81/104. i386 LZ4 is 83/104 (79.80769%, fail).
+Thumb improves from 2/104 to 73/104 on identical artifacts after EHABI, still below 80%; wrong/spurious stay zero.
+The i386/Thumb reports retain a measured empty-database baseline (0 correct, 104 missed), despite no bundled DB.
+The full trace's 100 missing owned starts and the earlier pre-final-review matrix's zero are separate evidence;
+the final reviewed report omits its matrix. Actual paired MCP metadata receipts do not attest the baseline
+binary revision or prove complete boundaries. This is a bounded publication, not full matrix acceptance,
+default promotion, fresh validation, a live model result, or authorization to skip the remaining 2.1 gate.
 
 Phases 2–6 are authorized in order. Phase 2.2 import formats, 2.3 fuzzy matching, and top-level Phases 3–6
 remain queued; source-corpus infrastructure is not acceptance of the entire library-recognition phase.

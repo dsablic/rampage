@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "measurement": "phase2-1-parallel-public-library-evidence",
+  "date": "2026-10-18",
+  "source_revisions": {
+    "corpus_diagnostics_aggregate": "5f5a7e4ceb65d1bca46fe8f98caf37e9387b98d7",
+    "arm_ehabi_discovery": "1b67d7c90dfed44b66dfdff5f07be408a06ad099"
+  },
+  "source_hash_verification": {
+    "method": "SHA-256 of git show REV:path bytes, read-only; all three hashes match at both recorded revisions",
+    "independent_rebuild": false,
+    "sources": [
+      {
+        "path": "crates/rampage-eval/examples/signature_corpus.rs",
+        "sha256": "ad6a7fa28903db08e7596967436cca66536cd20e4cc72d1e7e1cc4ccf04d31a7"
+      },
+      {
+        "path": "crates/rampage-eval/examples/signature_aggregate.rs",
+        "sha256": "158e86159276a2bf87d9faa584d330fc5ac46b56ec5872cce969aada832e85f9"
+      },
+      {
+        "path": "crates/rampage-eval/examples/signature_corpus_support/mod.rs",
+        "sha256": "d813ddcb82e6f9a1e33f2a427885c9cb61b2054b564587447d25d1a15842f872"
+      }
+    ]
+  },
+  "embedded_collector_identities": {
+    "builder": {
+      "source_sha256": "ad6a7fa28903db08e7596967436cca66536cd20e4cc72d1e7e1cc4ccf04d31a7",
+      "support_sha256": "d813ddcb82e6f9a1e33f2a427885c9cb61b2054b564587447d25d1a15842f872",
+      "executable_sha256": "9cf87258c0e73bc662e7d9a97e6cd7f422029a70922862290c33e88c49dae13d"
+    },
+    "aggregate": {
+      "source_sha256": "158e86159276a2bf87d9faa584d330fc5ac46b56ec5872cce969aada832e85f9",
+      "support_sha256": "d813ddcb82e6f9a1e33f2a427885c9cb61b2054b564587447d25d1a15842f872",
+      "executable_sha256": "08ceec3f8432cd8c4ce2619f84778549363b50c330a01e74165b9f70fe9b3dba"
+    },
+    "ehabi_reviewed_builder": {
+      "source_sha256": "ad6a7fa28903db08e7596967436cca66536cd20e4cc72d1e7e1cc4ccf04d31a7",
+      "support_sha256": "d813ddcb82e6f9a1e33f2a427885c9cb61b2054b564587447d25d1a15842f872",
+      "executable_sha256": "60b168d954315accd17d1fc0fe0f5d8d830b1c7016167c2c4eca22c53cb605a9"
+    }
+  },
+  "gate": {"min_recall": 0.8, "max_wrong": 0, "max_spurious": 0},
+  "optimization": "O1",
+  "ownership_scope": "externally visible strong ELF functions; local, hidden and weak definitions excluded",
+  "source_reference_object_provenance": "Recorded builder assertions, not independently rebuilt source proof",
+  "target_executed": false,
+  "new_builds_tests_or_model_runs_for_publication": false,
+  "phase2_1_complete": false,
+  "all_profiles_passed": false,
+  "default_bundle_promoted": false,
+  "earlier_publications_changed": false,
+  "sqlite_profile": {
+    "version": "3.46.1",
+    "defines": ["SQLITE_THREADSAFE=0", "SQLITE_OMIT_LOAD_EXTENSION"],
+    "scope": "Single-threaded no-load-extension amalgamation, not full SQLite SDK coverage",
+    "archive_sha256": "67d3fe6d268e6eaddcae3727fce58fcc8e9c53869bdd07a0c61e38ddf2965071",
+    "recipe_evidence": "target/signature-corpus/sqlite-parallel-pilot/recipes.json"
+  },
+  "profiles": [
+    {
+      "profile": "sqlite-x86_64-linux-musl-O1", "collector_identity": "builder",
+      "raw_report": "target/signature-corpus/sqlite-parallel-pilot/sqlite-x86_64-linux-musl-O1/compact-report.json",
+      "raw_report_sha256": "fc571b8b7396e1d9c1472bef5eece90b77d6fda265f6f7a09af7c9bae6a4f049",
+      "reference_sha256": "760885271c0745fc29d9b7379c0f8a8f843dccf05002efa9bb1a004f68bd47a3",
+      "symbolized_target_sha256": "5a383a43e9a593bfe56151b3e0065615b6acb8ffda231d6da99d660ff104b054",
+      "stripped_target_sha256": "50dbbcc0b78b357fc1636b172dc1b3f13b5c5388671a4e3915b5ea662160bee0",
+      "library_object_sha256": ["95c0873a5b6c1f120ed5f586ebb5f00533723e61bf17146920ede539466c3e97"],
+      "database_sha256": "06e27886c60f136f304ba246ad9439ae1011798740f41a28c9ae3aa3afb141ec",
+      "compressed_database_sha256": "44088da71a59595d3b0b0601750a7433b2c2478e664616f467a1586590132d1d",
+      "load_image_equivalent_stripped_twin": true,
+      "truth_functions": 262, "baseline_available": true,
+      "baseline": {"correct": 0, "wrong": 2, "missed": 260, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "baseline_other_library_proposals": 138,
+      "after": {
+        "correct": 243, "wrong": 0, "missed": 19, "spurious": 0,
+        "recall": 0.9274809160305344, "precision": 1.0
+      },
+      "passed": true
+    },
+    {
+      "profile": "sqlite-aarch64-linux-musl-O1", "collector_identity": "builder",
+      "raw_report": "target/signature-corpus/sqlite-parallel-pilot/sqlite-aarch64-linux-musl-O1/compact-report.json",
+      "raw_report_sha256": "6b366845699f63cfcd6fd931f3bdf4147f7a0507119580fe51b5346c1d14f34b",
+      "reference_sha256": "4d3b65c21fd652b4dee41fdb0121ccaa0e5b024209d0f52df756871c584c35b0",
+      "symbolized_target_sha256": "0c9fc32a6d3bc8436fc54d3b31b8f1bc5c91abdcefc3a3ec44fc5a45e82961e0",
+      "stripped_target_sha256": "6b379f185c8f38b15cd07eb4d6b82c59ee6334573b32235727892a8e6e2fe84e",
+      "library_object_sha256": ["66f5c569e93b95d228ec04cfc6cf16637df775ce1c4e1e22432a658ced8bba3d"],
+      "database_sha256": "4300a5f534beed47c148bf0eadc464beb9146e470d8d0bf84e76360f8a17b054",
+      "compressed_database_sha256": "e03246978b4c9ba2066160eaabf03d79b9a3877c81ed9255cee08f803a174c13",
+      "load_image_equivalent_stripped_twin": true,
+      "truth_functions": 262, "baseline_available": true,
+      "baseline": {"correct": 0, "wrong": 0, "missed": 262, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "baseline_other_library_proposals": 115,
+      "after": {"correct": 201, "wrong": 0, "missed": 61, "spurious": 0, "recall": 0.767175572519084, "precision": 1.0},
+      "passed": false
+    },
+    {
+      "profile": "lz4-x86-linux-musl-O1", "version": "1.10.0", "collector_identity": "builder",
+      "raw_report": "target/signature-corpus/lz4-32bit-pilot/lz4-x86-linux-musl-O1/builder-report.json",
+      "raw_report_sha256": "7ca090e6111990ce13331157c1f989ebf79581a2d1da3594b8a2c78017fe5fe5",
+      "reference_sha256": "7232a453388bf504d7b3c849b8bf61f18cb1830a60a47ada6a0b85efc62e4744",
+      "symbolized_target_sha256": "e41774f7d176dd78ff60e55e3a685b73cab1f68da00eed9266d85525edc7534f",
+      "stripped_target_sha256": "cf0b759804cb429099f52ade3b391f779c95929ca7d69db0d8182fea60bba75f",
+      "library_object_sha256": [
+        "356dc7a82ea3f9f036672abbd3837c49cc6287ad2258effc4acc956c06fac9b7",
+        "d39aaa5ec073dc6d3f15bf6c98677df25a462d30e15183f37a74902b9bda877e",
+        "f4d0f6e08048732fb90bb4885c49493cebfb9fdbedaceaec864d292eff9df8a5"
+      ],
+      "database_sha256": "5125ab65816d7600e38539fea2d74c16de3b1358e68fbba9abc5ac73a3849d48",
+      "compressed_database_sha256": "afaf5b2ea9760ae1a4701a79b2b297492ba581ffb0051bb2b0a03cacf226b12e",
+      "load_image_equivalent_stripped_twin": true,
+      "truth_functions": 104, "baseline_available": false,
+      "baseline_scope": "Measured empty database; no bundled architecture database available",
+      "baseline": {"correct": 0, "wrong": 0, "missed": 104, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "after": {"correct": 83, "wrong": 0, "missed": 21, "spurious": 0, "recall": 0.7980769230769231, "precision": 1.0},
+      "passed": false
+    },
+    {
+      "profile": "lz4-thumb-linux-musleabi-O1", "version": "1.10.0",
+      "reference_sha256": "33ec4f4449ad9dbebfd9051ebc95c186e41f436fe46844cf611ee184f1d065aa",
+      "symbolized_target_sha256": "4a809236936d40bacae3f8055620ad68734796a4b080a9c0f1d41b613380e504",
+      "stripped_target_sha256": "20e37a5228005b4eb1ff35250f04b5d1d6bf91d6782940c776e1559cb7007dd9",
+      "library_object_sha256": [
+        "5d4688cae0ff20d35e58a60fc549555287d6d109b38586c789179b6ffb559289",
+        "cc73d03c7e627cab26095d4123b70a8c4457ff95df83a05a5ac4c33357056c16",
+        "d4791d58e9204a0357319496587c370f8d0bd1f2ec089bb7d94a9b5afab92314"
+      ],
+      "database_sha256": "895b4f3633f7f8c0934528ef01602f142c269786f38e5d7beba3d55ebb3526b9",
+      "compressed_database_sha256": "47578a23102212f0a7bba5fb600c4e90114056f862d19dbac9f88839bc9301a7",
+      "paired_artifact_digests_equal": true, "database_callee_keys": 0,
+      "target_gold_names_seeded": false, "confidence_threshold_changed": false,
+      "load_image_equivalent_stripped_twin": true,
+      "truth_functions": 104, "baseline_available": false,
+      "baseline_scope": "Measured empty database; same baseline in before and reviewed-after reports",
+      "baseline": {"correct": 0, "wrong": 0, "missed": 104, "spurious": 0, "recall": 0.0, "precision": 0.0},
+      "before_ehabi": {
+        "collector_identity": "builder",
+        "raw_report": "target/signature-corpus/lz4-32bit-pilot/lz4-thumb-linux-musleabi-O1/builder-report.json",
+        "raw_report_sha256": "e3ff4ca3d3e805d4f2af71f8a82d63dd8857197c01c6c775ab4c5497010d097e",
+        "after": {
+          "correct": 2, "wrong": 0, "missed": 102, "spurious": 0,
+          "recall": 0.019230769230769232, "precision": 1.0
+        },
+        "passed": false
+      },
+      "after_reviewed_ehabi": {
+        "collector_identity": "ehabi_reviewed_builder",
+        "raw_report": "target/signature-corpus/lz4-32bit-pilot/lz4-thumb-linux-musleabi-O1/ehabi-reviewed-report.json",
+        "raw_report_sha256": "9100f2dcfb5ef7c62b2dbc9e4a72de8edddc362a4d57aaec22727e2ccba4f94b",
+        "after": {
+          "correct": 73, "wrong": 0, "missed": 31, "spurious": 0,
+          "recall": 0.7019230769230769, "precision": 1.0
+        },
+        "diagnostic_matrix_requested": false, "diagnostic_rows_omitted": 104,
+        "passed": false
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "arch": "x86_64", "collector_identity": "aggregate",
+      "raw_report": "target/phase2-1/wave-aggregate-x64-report.json",
+      "raw_report_sha256": "92b55a7480c7491ebe554142880b985d0bac2e3a53f079f703678cf57088d7cc",
+      "database_sha256": "0acd1d1298e7be4346c0f4bbcc8c9f46e0192621b7ff15c974d2ad047df59fd5",
+      "compressed_database_sha256": "157a71ec627412cc076f1eb36c6a1f1c27f8beadeebac1c344fc385eb90c4550",
+      "compressed_database_bytes": 26478,
+      "scored_reloaded_export": true, "reversed_order_export_equal": true,
+      "rotated_order_export_equal": true, "gzip_round_trip_equal": true,
+      "cases": [
+        {"library": "lz4", "truth_functions": 104, "full_twin_truth_functions": 866,
+         "case_report_sha256": "5780f7867d26e9c5df81d684cc3cd7130beb0f22e004fd173624191f65da5c3b",
+         "reference_sha256": "74f89f7108ad15f7217caa4b2dd8fb32615171486e5f32f756f6a93874ef0f96",
+         "symbolized_target_sha256": "323b019fc13b97328198d93223d9ac60d813fb3fa69a1b6e8a9f34ba5d21085d",
+         "stripped_target_sha256": "865f10f197e5130c0d39ff454055baa1d891cd0d26fa273829ea28b48539a02a",
+         "full_twin_truth_sha256": "033175a328e34d4cd0e08daf6d9f6260ab24db5d0646b8865248d9fbe0e2a8a7",
+         "load_image_equivalent_stripped_twin": true,
+         "owned": {
+           "correct": 80, "wrong": 0, "missed": 24, "spurious": 0,
+           "recall": 0.7692307692307693, "precision": 1.0
+         },
+         "all_named": {
+           "correct": 154, "wrong": 0, "missed": 712, "spurious": 0,
+           "precision": 1.0, "recall": 0.17782909930715934
+         },
+         "named_proposals": 154, "per_library_correct": 81,
+         "collision_dropped_name": "LZ4_versionString", "passed": false},
+        {"library": "sqlite", "profile_identity": "sqlite-x86_64-linux-musl-O1", "truth_functions": 262,
+         "case_report_sha256": "fc571b8b7396e1d9c1472bef5eece90b77d6fda265f6f7a09af7c9bae6a4f049",
+         "full_twin_truth_functions": 2288,
+         "full_twin_truth_sha256": "723c9a9984d27ded72d81c30cdfea91675664ae6ccecfe2b9d105e3d7730ab59",
+         "load_image_equivalent_stripped_twin": true,
+         "owned": {
+           "correct": 243, "wrong": 0, "missed": 19, "spurious": 0,
+           "recall": 0.9274809160305344, "precision": 1.0
+         },
+         "all_named": {
+           "correct": 342, "wrong": 0, "missed": 1946, "spurious": 0,
+           "precision": 1.0, "recall": 0.14947552447552448
+         },
+         "named_proposals": 342, "passed": true}
+      ],
+      "passed": false
+    },
+    {
+      "arch": "aarch64", "collector_identity": "aggregate",
+      "raw_report": "target/phase2-1/wave-aggregate-arm64-report.json",
+      "raw_report_sha256": "028e62a8a24f40fa6672a5636655f0f836230f88f194b26657df523a526cfd25",
+      "database_sha256": "3d11e4a5bf675396976cfff03e84a0c51da8399281000fb1f41f884d8766db77",
+      "compressed_database_sha256": "c0705505f4e82e927ee10660fd19e7eaac48422d8db4ece38b492ef050bf4142",
+      "compressed_database_bytes": 23787,
+      "scored_reloaded_export": true, "reversed_order_export_equal": true,
+      "rotated_order_export_equal": true, "gzip_round_trip_equal": true,
+      "cases": [
+        {"library": "lz4", "truth_functions": 104, "full_twin_truth_functions": 971,
+         "case_report_sha256": "45531b72e03d726c2fbde8960efa6a4adcd68fe995aef1edce5c22e0c29c13bf",
+         "reference_sha256": "3c72a83a31d8e5de552159271d08f1c499638a961d39d1adf009493658900930",
+         "symbolized_target_sha256": "a586244218b672f0876b53c0c6a0af442664b3dbda3763d8527a5efa1115d57c",
+         "stripped_target_sha256": "ec91753b0b724437693bace5caf52f934cf40205aad3bd19cfa4f37d80820592",
+         "full_twin_truth_sha256": "ffc5c1df1919501f14bc6b8c9cfbc150ebc8d59a392383d29fcdd461c566c6e5",
+         "load_image_equivalent_stripped_twin": true,
+         "owned": {
+           "correct": 68, "wrong": 0, "missed": 36, "spurious": 0,
+           "recall": 0.6538461538461539, "precision": 1.0
+         },
+         "all_named": {
+           "correct": 160, "wrong": 0, "missed": 811, "spurious": 0,
+           "precision": 1.0, "recall": 0.164778578784758
+         },
+         "named_proposals": 160, "passed": false},
+        {"library": "sqlite", "profile_identity": "sqlite-aarch64-linux-musl-O1", "truth_functions": 262,
+         "case_report_sha256": "6b366845699f63cfcd6fd931f3bdf4147f7a0507119580fe51b5346c1d14f34b",
+         "full_twin_truth_functions": 2387,
+         "full_twin_truth_sha256": "8c74e2e1833c61f1b22176ecd33b2812a24f61372acdd052af546044cccef092",
+         "load_image_equivalent_stripped_twin": true,
+         "owned": {
+           "correct": 201, "wrong": 0, "missed": 61, "spurious": 0,
+           "recall": 0.767175572519084, "precision": 1.0
+         },
+         "all_named": {
+           "correct": 304, "wrong": 0, "missed": 2083, "spurious": 0,
+           "precision": 1.0, "recall": 0.12735651445328866
+         },
+         "named_proposals": 304, "passed": false}
+      ],
+      "passed": false
+    }
+  ],
+  "aggregate_scope": {
+    "inputs": ["same-architecture SQLite", "same-architecture LZ4", "existing same-architecture musl"],
+    "composition": "SignatureDb::combine; collision-preserving union, not priority overlay",
+    "owned_denominator": "Frozen original library_truth count, including wrong names",
+    "all_named_gold": "Canonical sized symbols from load-image-equivalent symbolized twin",
+    "all_permutations_checked": false,
+    "both_aggregate_runs_passed": false,
+    "limitations": [
+      "No averaging overrides a failing profile",
+      "Full named precision is not full recall",
+      "Unsized functions and alias-set reconciliation excluded",
+      "Case reference/object hashes are recorded assertions, not independently rebuilt source proof"
+    ]
+  },
+  "thumb_diagnostic_trace": {
+    "before": {
+      "raw_report": "target/signature-corpus/lz4-32bit-pilot/lz4-thumb-linux-musleabi-O1/trace-report.json",
+      "raw_report_sha256": "866d6962478d5a6b21059ee861c8673e14a9a69e232b9426cc723ce76d234225",
+      "rows": 104, "target_discovered_unavailable": 100
+    },
+    "earlier_pre_final_review_after": {
+      "raw_report": "target/signature-corpus/lz4-32bit-pilot/lz4-thumb-linux-musleabi-O1/ehabi-report.json",
+      "raw_report_sha256": "b96210a90d054ccb7b0c77ec7b2de5069ee67f8b946ce7b75024e5b4d000e3b8",
+      "executable_sha256": "680623cc0e50b4506c02cab30c72ac97b10f575b00de4d47e4dd3b7b7f40ed41",
+      "rows": 104, "target_discovered_unavailable": 0
+    },
+    "final_reviewed_matrix_available": false,
+    "limitation": "Pre-final matrix only; discovered candidates do not prove full boundaries or naming success"
+  },
+  "actual_mcp_paired_metadata": {
+    "before": {
+      "raw_report": "target/phase2-1/arm-exidx-before.json",
+      "raw_report_sha256": "8702f2a5ac2e975fc80c3b175c5d1b6dc4e0e01f956e7e4d2a84a25c77c6c81c",
+      "runtime_binary_revision_attested": false, "source_revision": null,
+      "surface": "actual rampage MCP entry_diagnostics on paired distinct stripped fixture",
+      "address": "0x28130", "metadata_records_at_address": 0, "origin_kinds": ["caller_address"]
+    },
+    "after": {
+      "raw_report": "target/phase2-1/arm-exidx-after.json",
+      "raw_report_sha256": "90d624315f76849ad0503f2aef8427e610d94a106d520b2fef37cdb08a881f23",
+      "source_worktree_measurement": true, "exact_source_binary_attestation_claimed": false,
+      "surface": "actual rampage MCP entry_diagnostics after CLI rebuild/server reconnect",
+      "distinct": {
+        "address": "0x28130", "metadata_records_at_address": 1, "origin_kinds": ["function_starts"]
+      },
+      "coalesced": {
+        "address": "0x28100", "metadata_records_at_address": 0, "origin_kinds": ["caller_address"]
+      }
+    },
+    "target_executed": false,
+    "limitations": [
+      "Baseline MCP binary revision is UNATTESTED",
+      "Metadata candidates do not prove complete boundaries; coalesced interiors are not expanded",
+      "Receipts do not contain executable/fixture digests"
+    ]
+  },
+  "remaining_coverage": [
+    "Failing LZ4 and AArch64 SQLite recall gates",
+    "Additional roadmap libraries and upstream versions",
+    "Full optimization and architecture matrix, including Windows",
+    "Broader aggregate evaluation and reviewed default bundle promotion",
+    "Phase 1 live sign-off remains unchanged; Phase 2.2 is not started by this publication"
+  ]
+}
