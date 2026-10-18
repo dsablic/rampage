@@ -1,0 +1,421 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-18",
+  "phase": "2.1",
+  "delivery_signoff": {
+    "scope": "bounded 2.1 corpus pipeline and precision-safe default delivery, not full matrix or Phase 2 recall acceptance",
+    "status": "complete",
+    "artifact_and_publication_audit": "independent read-only reconciliation passed for all three current pairs and notices",
+    "audited_pre_signoff_document_sha256": "4f598f70f6d256edcb08ae31a0b91ca0cb59eb775c49f3f109d1d70763fbcce0",
+    "bundled_asset_tests": "passed: actual gzip/index admission, lazy loading, legacy byte preservation and exact withholding",
+    "signature_suite": {"passed": 138, "failed": 0, "ignored": 1},
+    "retained_signature_suite_log": "${WORKSPACE}/target/phase2-3-first/signatures-full-first.log",
+    "retained_signature_suite_log_sha256": "a529f5666114ba414db0d3cc47a2a07804b44011091714ccc3d32587e016ec2b",
+    "test_boundary": "suite passed before subsequent FID test additions; import/fuzzy cross-phase integration remains separately pending",
+    "historical_author_rows_below": "unchanged candidate-stage facts, not the current delivery state",
+    "phase2_recall_acceptance": false,
+    "phase1_live_gate_changed": false
+  },
+  "measurement": "finite-sdk-and-rust-native-database-delivery-candidates",
+  "outcome": "Three precision-safe whole-database exports ready for parent review; no assets promoted.",
+  "assets_modified": false,
+  "target_executed": false,
+  "phase2_recall_acceptance": false,
+  "whole_phase2_1_acceptance_claimed": false,
+  "updated_case_count": 81,
+  "unchanged_thumb_historical_case_count": 14,
+  "combined_count_with_unmodified_historical_thumb_cases": 95,
+  "combined_count_limitation": "Thumb was not rerun; this is not a new four-architecture acceptance claim.",
+  "precision_safe_candidate_count": 3,
+  "quarantined_unsupported_sdk_profile_count": 8,
+  "quarantined_precision_failed_selected_candidate_count": 0,
+  "rust_profiles_included": 4,
+  "new_native_analysis_attempts": 4,
+  "outer_timeouts": 0,
+  "max_concurrent_native_analyses": 2,
+  "new_compiler_or_cargo_builds": false,
+  "curation_decision": {
+    "recall": "Low recall is not a Phase 2.1 curation blocker; every raw recall failure remains visible.",
+    "rust": "All four original Rust databases and cases are included, including raw std 1.87 with one wrong.",
+    "rust_raw_assessment": "Original closure JSON is unchanged; its recall-based quarantine is not adopted here.",
+    "precision": "Zero owned wrong, full wrong and full spurious across every case of each reloaded export.",
+    "filtering": "Generic source-reference conflict rejection and raw exact-fallback withholding only.",
+    "prohibited_selection": "No per-name blacklist, target-gold-driven matching or selective function deletion.",
+    "unsupported": "Eight SDK technical refusals and earlier provisional C++ measurements remain excluded.",
+    "promotion": "Parent review and publication audit remain required; existing default assets are untouched."
+  },
+  "shared_checks": {
+    "evaluation_policy": "elf-producer-alias-sets-v3",
+    "reference_alias_definition_policy":
+      "unique-strong-default-with-only-weak-default-aliases-source-callee-context-v3",
+    "reference_callee_context_policy": "original_source_canonical_plus_each_definition_view; answer labels independent",
+    "owned_scoring": "Strict original owned names and counts; linked-artifact admission requires native alias proof.",
+    "full_truth_names": "Canonical display only; exact native alias ranges grade names.",
+    "target_gold_role": "Scoring only, never matching input.",
+    "original_database_inputs": "Actual generated native archive/member-derived databases, not source archive URLs.",
+    "scored_reloaded_export": true,
+    "reversed_order_export_equal": true,
+    "rotated_order_export_equal": true,
+    "gzip_round_trip_equal": true,
+    "all_old_and_new_case_rows_retained": true,
+    "duplicate_database_bytes_deduplicated_not_case_rows": true,
+    "nonlegacy_database_case_associations_checked": true,
+    "global_case_reference_hash_split_checked": true,
+    "actual_case_training_reference_inputs_checked": true,
+    "all_existing_exact_windows_pdb_inputs_retained": true,
+    "pdb_names_used_for_stripped_matching": false,
+    "reference_conflict_filter_applied": true,
+    "raw_exact_fallback_answers_withheld": true,
+    "collector_source_sha256": "143b7df17699b14c6a20c0b1663b7a4c250a2e6c2c6773bd3b1ac172bea0af77",
+    "collector_support_sha256": "6f65f5af608fd066177e5b908d17a220fca45c2298777f931ac96587692c4e17",
+    "evaluator_binary_sha256": "609d74bed43ff14764b2c1d72dc9a891ae2c1632332b9bfb0e25084706cbfdfa",
+    "signature_constructor_source_sha256": "4c55f175c8c98443c7a9bf28b7aba82473f267c25500eeaea001b9e9c6e4f61a",
+    "producer_alias_sets_source_sha256": "9e417acf08cb672b80e1e6b075053c33de8054e32da213618758af78f1aee01d"
+  },
+  "count_columns": ["correct", "wrong", "missed", "spurious"],
+  "candidates": [
+    {
+      "arch": "x86_64",
+      "case_count": 39,
+      "unique_stripped_target_images": 27,
+      "database_input_count": 25,
+      "disposition": "precision_safe_candidate_for_parent_review_not_promoted",
+      "candidate": {
+        "path": "target/phase2-1/final-sdk-rust-candidate-x86_64-first/db.json.gz",
+        "sha256": "c2da13bae430747e89c829e9c73160c7fca0e49b33aad1d2bb6befe335381bff"
+      },
+      "database_json_sha256": "80e3ab535c5e27a93c09c21f864a0239d63fb3534bdda179927cbbc57628d016",
+      "compressed_bytes": 825951,
+      "json_bytes": 1571999,
+      "signatures": 11369,
+      "callee_keys": 822,
+      "owned_totals": [19749, 0, 9130, 0],
+      "full_totals": [25435, 0, 50536, 0],
+      "accepted_producer_alias_count": 1,
+      "precision_safe": true,
+      "raw_recall_gate_passed": false,
+      "recall_failed_cases": 16,
+      "reference_conflict_answer_keys_suppressed": 646,
+      "raw_exact_fallback_answer_keys_withheld": 40,
+      "legacy_unattested_database_count": 1,
+      "actual_training_reference_inputs_checked": false,
+      "inputs_unchanged": true,
+      "outer_status": "completed",
+      "outer_returncode": 1,
+      "outer_elapsed_seconds": 248.97912883758545,
+      "raw_report": {
+        "path": "target/phase2-1/final-sdk-rust-candidate-x86_64-first/aggregate-report.json",
+        "sha256": "ce27ddfceb91fcc050c1ecd2ae0634cac7f449a6b49b2dfd9d34d07ee4a111c1"
+      },
+      "execution": {
+        "path": "target/phase2-1/final-sdk-rust-candidate-x86_64-first/execution.json",
+        "sha256": "7e7b94414cc8ff550f7bd30b3150fce74b145b69fc491d9d57e16fe44d326b61"
+      },
+      "command": {
+        "path": "target/phase2-1/final-sdk-rust-candidate-x86_64-first/command.json",
+        "sha256": "518545bf4632ee45d17eb8f9214f0fa7615fd8e29b35bb158e09bb09a87c4338"
+      },
+      "per_case_summary": {
+        "path": "target/phase2-1/final-sdk-rust-candidate-x86_64-first/selected-per-case-summary.json",
+        "sha256": "20b776e92d3938f1840aac5e85e91d9317a14899d14afccbf37dff5bfcd24f52"
+      }
+    },
+    {
+      "arch": "aarch64",
+      "case_count": 27,
+      "unique_stripped_target_images": 15,
+      "database_input_count": 15,
+      "disposition": "precision_safe_candidate_for_parent_review_not_promoted",
+      "candidate": {
+        "path": "target/phase2-1/final-sdk-candidate-aarch64-first/db.json.gz",
+        "sha256": "9f9e05efcf5847342a601f88e12f3631277961af229b44368776f232ed745c3c"
+      },
+      "database_json_sha256": "897da90ff988a1c775307052a2cc73326e828ed5dac89cbc05deb5d5089904e4",
+      "compressed_bytes": 453180,
+      "json_bytes": 830934,
+      "signatures": 7037,
+      "callee_keys": 402,
+      "owned_totals": [15035, 0, 8616, 0],
+      "full_totals": [17430, 0, 45309, 0],
+      "accepted_producer_alias_count": 0,
+      "precision_safe": true,
+      "raw_recall_gate_passed": false,
+      "recall_failed_cases": 13,
+      "reference_conflict_answer_keys_suppressed": 557,
+      "raw_exact_fallback_answer_keys_withheld": 198,
+      "legacy_unattested_database_count": 1,
+      "actual_training_reference_inputs_checked": false,
+      "inputs_unchanged": true,
+      "outer_status": "completed",
+      "outer_returncode": 1,
+      "outer_elapsed_seconds": 179.94763326644897,
+      "raw_report": {
+        "path": "target/phase2-1/final-sdk-candidate-aarch64-first/aggregate-report.json",
+        "sha256": "6549612d08c7180a7d4f601431fba46c36980fe9ea090e6175304ec279b5abf9"
+      },
+      "execution": {
+        "path": "target/phase2-1/final-sdk-candidate-aarch64-first/execution.json",
+        "sha256": "9e7735bc0ab52bc6e1bc97603f0a99c251a97bd03454f2f82063dbdc4da3c98f"
+      },
+      "command": {
+        "path": "target/phase2-1/final-sdk-candidate-aarch64-first/command.json",
+        "sha256": "bf6055f7fb135ddb68d71bba8d9547f8a8720f36da2ad073e0d61bcdfee7947c"
+      },
+      "per_case_summary": {
+        "path": "target/phase2-1/final-sdk-candidate-aarch64-first/selected-per-case-summary.json",
+        "sha256": "e29ef3f2a4c0275ee24544c3e2cac504240bc00287687ea230ada91900ed1651"
+      }
+    },
+    {
+      "arch": "x86",
+      "case_count": 15,
+      "unique_stripped_target_images": 8,
+      "database_input_count": 8,
+      "disposition": "precision_safe_candidate_for_parent_review_not_promoted",
+      "candidate": {
+        "path": "target/phase2-1/final-sdk-candidate-x86-first/db.json.gz",
+        "sha256": "444f5ca5d48ad2cb9b932d01a4469479c32232cc727ff4f9975e68c31e6eaea0"
+      },
+      "database_json_sha256": "a522b82448b1065dbb9d29e51c4ca76deee55668834e7847dd57b2870e53406c",
+      "compressed_bytes": 132968,
+      "json_bytes": 255788,
+      "signatures": 2123,
+      "callee_keys": 90,
+      "owned_totals": [4261, 0, 947, 0],
+      "full_totals": [4845, 0, 16236, 0],
+      "accepted_producer_alias_count": 0,
+      "precision_safe": true,
+      "raw_recall_gate_passed": false,
+      "recall_failed_cases": 5,
+      "reference_conflict_answer_keys_suppressed": 408,
+      "raw_exact_fallback_answer_keys_withheld": 23,
+      "legacy_unattested_database_count": 0,
+      "actual_training_reference_inputs_checked": true,
+      "inputs_unchanged": true,
+      "outer_status": "completed",
+      "outer_returncode": 1,
+      "outer_elapsed_seconds": 96.70341420173645,
+      "raw_report": {
+        "path": "target/phase2-1/final-sdk-candidate-x86-first/aggregate-report.json",
+        "sha256": "2e55b2f51573c4d45c2e91de23830374d14a3010e47e412afbb27113cbf65fae"
+      },
+      "execution": {
+        "path": "target/phase2-1/final-sdk-candidate-x86-first/execution.json",
+        "sha256": "5f8640f631ef8d4a0d80966d5b896ec38462e2d95b41c43b2041bf082fb26e74"
+      },
+      "command": {
+        "path": "target/phase2-1/final-sdk-candidate-x86-first/command.json",
+        "sha256": "68291590f36733a13de7752962ade2d45defa9e234d6957d7a79766d14f0cabe"
+      },
+      "per_case_summary": {
+        "path": "target/phase2-1/final-sdk-candidate-x86-first/selected-per-case-summary.json",
+        "sha256": "88162a5df461f60b290d71ac67deef3a558913925a5ee544aa8d6c8d6c7493cb"
+      }
+    }
+  ],
+  "profile_table_policy": {
+    "columns": "Count arrays use count_columns; recall = correct / original truth count, including wrong.",
+    "all_curated_profile_precisions": 1.0,
+    "all_curated_profile_raw_recall_gates_passed": false,
+    "all_profile_dispositions": "included_precision_safe_low_recall_not_excluded",
+    "sdk_harness_optimization": "O2; runtime optimization is Zig installed-driver policy, not harness O2.",
+    "rust_harness_optimization": "O1; installed/prebuilt runtime optimization is not inferred.",
+    "raw_report_path_rule": "target/signature-corpus/<case>/builder-report.json",
+    "source_receipts": "Per-profile result.json and runtime-provenance.json remain unchanged beside each raw report.",
+    "publisher_authentication": false
+  },
+  "profiles": [
+    {
+      "case": "hardened-sdk-compiler-runtime-x86_64-linux-musl-O2-second",
+      "truth_functions": 455,
+      "raw": [429, 0, 26, 0],
+      "raw_gate_passed": true,
+      "curated_owned": [40, 0, 415, 0],
+      "curated_full": [85, 0, 680, 0],
+      "raw_report_sha256": "c348cd1c8a05b451df381314e2d8a874235496353a1310fa22a9f59d431b8111",
+      "frozen_archive_sha256": "0435908293024b28e221c8d587cc1785d485fc104568437eb6d291f1ccdbc850"
+    },
+    {
+      "case": "hardened-sdk-musl-x86_64-linux-musl-O2-second",
+      "truth_functions": 1512,
+      "raw": [1317, 0, 195, 0],
+      "raw_gate_passed": true,
+      "curated_owned": [1183, 0, 329, 0],
+      "curated_full": [1233, 0, 990, 0],
+      "raw_report_sha256": "bc40ebe1b36175732ead65f35be44bf92a1dd391e739013de8fdac1630bca74a",
+      "frozen_archive_sha256": "d2bdb16c909544b63e31dce501c6e657afc4564830ffb66b773e47e974e47ab1"
+    },
+    {
+      "case": "hardened-sdk-compiler-runtime-aarch64-linux-musl-O2-first",
+      "truth_functions": 559,
+      "raw": [554, 0, 5, 0],
+      "raw_gate_passed": true,
+      "curated_owned": [45, 0, 514, 0],
+      "curated_full": [76, 0, 797, 0],
+      "raw_report_sha256": "83290b983602b7ef0b820fc8abccbd9f0b60bda216ab29f5f25290420e3bf8f3",
+      "frozen_archive_sha256": "8afaf78b7aca8920e034434da8cc421cabe8188decdd337354ebc632d3786513"
+    },
+    {
+      "case": "hardened-sdk-compiler-runtime-x86-linux-musl-O2-first",
+      "truth_functions": 456,
+      "raw": [445, 0, 11, 0],
+      "raw_gate_passed": true,
+      "curated_owned": [41, 0, 415, 0],
+      "curated_full": [41, 0, 728, 0],
+      "raw_report_sha256": "05f3ad636e16b0626fed7c412ff1d16dbdb604d7855d20a8956f0ed5fa7b7786",
+      "frozen_archive_sha256": "e3a5ac362bc0178cf7c12597739ac6b2a41bab4482e46565a80db8f6972a1ca7"
+    },
+    {
+      "case": "closure-rust-core-1.87.0-x64-O1-first",
+      "truth_functions": 499,
+      "raw": [362, 0, 137, 0],
+      "raw_gate_passed": false,
+      "curated_owned": [298, 0, 201, 0],
+      "curated_full": [971, 0, 1728, 0],
+      "raw_report_sha256": "af2bac84758bc05cbed02ce0382e2767e0d4529a0662f107e3863f5b38424897",
+      "frozen_archive_sha256": "0e56b2c16992f2e2c707bd87d6fd652410092ec22a79f8adda5813fe046c6da1"
+    },
+    {
+      "case": "closure-rust-core-1.99.0-x64-O1-first",
+      "truth_functions": 543,
+      "raw": [353, 0, 190, 0],
+      "raw_gate_passed": false,
+      "curated_owned": [302, 0, 241, 0],
+      "curated_full": [1014, 0, 1750, 0],
+      "raw_report_sha256": "64b1e9c122e03b0779a30c3776610e2d15d1512f7329a6e5505fed48dbaa9b23",
+      "frozen_archive_sha256": "ec40a08b062e673cb43e2008c797ed14959e40885f43e440d34a04f31f01bc2d"
+    },
+    {
+      "case": "closure-rust-std-1.87.0-x64-O1-first",
+      "truth_functions": 1183,
+      "raw": [843, 1, 339, 0],
+      "raw_gate_passed": false,
+      "curated_owned": [675, 0, 508, 0],
+      "curated_full": [971, 0, 1728, 0],
+      "raw_report_sha256": "69d116b64797d4667a610703d59f85d3e7b786a7f840215ca1c4b06d37e7b097",
+      "frozen_archive_sha256": "f2ac8478add136aad5da8d71bbb9f003d728f294899152487f513a85b2efbdaf"
+    },
+    {
+      "case": "closure-rust-std-1.99.0-x64-O1-first",
+      "truth_functions": 1235,
+      "raw": [876, 0, 359, 0],
+      "raw_gate_passed": false,
+      "curated_owned": [713, 0, 522, 0],
+      "curated_full": [1015, 0, 1749, 0],
+      "raw_report_sha256": "c21e1926f7661c47346081f304051654be7f964c0efee0f3aeba4deb2b6c8433",
+      "frozen_archive_sha256": "b6375ae12c2a2418f08b9feebce48a11bef6e9e7760f401085b6d837f60d0aa9"
+    }
+  ],
+  "evidence": {
+    "all_case_summary": {
+      "path": "target/phase2-1/final-sdk-rust-candidate-x86_64-first/selected-all-case-summary.json",
+      "sha256": "3ab7d411048b210f6dd34cb3d2d3c9124f6b74d0b3df7751465a5fb46e0dba6a"
+    },
+    "sdk_native_input_audit": {
+      "path": "target/phase2-1/final-sdk-candidate-x86_64-first/sdk-native-input-audit.json",
+      "sha256": "349263a07fa7696be8e4c4c82a5c25c797a662dbb0743d0f9e8ddeaca9cabe9e"
+    },
+    "sdk_source_inventory_audit": {
+      "path": "target/phase2-1/final-sdk-candidate-x86_64-first/sdk-source-inventory-audit.json",
+      "sha256": "f57665e2e245110aaa228702922cb85e41f546564fd041c69203d5ff8ab2d2ac"
+    },
+    "rust_native_input_audit": {
+      "path": "target/phase2-1/final-sdk-candidate-x86_64-first/rust-native-input-audit.json",
+      "sha256": "45d1c93a7ff9de129429fc37c260fde34d391803adcaf92650a42ba2aa0d06e9"
+    },
+    "input_association_preflight": {
+      "path": "target/phase2-1/final-sdk-rust-candidate-x86_64-first/input-association-preflight.json",
+      "sha256": "0941d185db933b7c90c758f936c0de0d65c6f3b785080e55f444f73c1536e7cb"
+    },
+    "raw_sdk_cohort": {
+      "path": "target/phase2-1/hardened-sdk-patched-cohort-first.json",
+      "sha256": "abd69c5c8809c7b14e26a4d80f31196686b1d974dd9251b49ef26bde12f81afc"
+    },
+    "raw_rust_closure_original_assessment": {
+      "path": "target/phase2-1/phase2-1-rust-closure.json",
+      "sha256": "52716a832eddbc015f2cf8b0312157592d15db620dbbc6989012370bbdaff889"
+    },
+    "sdk_disposition_pending_parent_audit": {
+      "path": "docs/benchmarks/phase2-1-sdk-disposition-2026-10-18.json",
+      "sha256": "d1b4f1cdcaa007834da01fb184ac36a03ff0fd942e5a095076f844d5a2e4febb"
+    },
+    "preserved_sdk_only_x64_trial": {
+      "path": "target/phase2-1/final-sdk-candidate-x86_64-first/aggregate-report.json",
+      "sha256": "2cbba53cd38da35c911cbeeb79e1a62ce10d1793a3e808fdfbcb23420db27370"
+    },
+    "frozen_historical_publication": {
+      "path": "docs/benchmarks/phase2-1-delivery-2026-10-18.json",
+      "sha256": "d01fb7fa8ee05b83a72f8f2bcf45c5146b1900b43704e90b6379fdd99c21c28f"
+    }
+  },
+  "prepared_delivery": {
+    "status": "Bounded 2.1 data delivery implemented; parent asset tests and formal publication audit pending.",
+    "author_fields_scope": "All original rows and pre-copy outcome/assets_modified assertions above remain unchanged.",
+    "current_assets_replaced": [
+      {
+        "arch": "x86_64",
+        "index": "crates/rampage-signatures/data/corpus-x86_64.index.json",
+        "index_sha256": "0e5a9bbbfd03ba5720ab5ca80d23a5d9371f7cc2e775b03d438f86155a4c8bd2",
+        "profiles": 40,
+        "prior_profile_records_preserved": 34
+      },
+      {
+        "arch": "aarch64",
+        "index": "crates/rampage-signatures/data/corpus-aarch64.index.json",
+        "index_sha256": "05f1b97ac9423613b06fe442eeb4d45849cedce3022a4024a9120da7d30217bc",
+        "profiles": 28,
+        "prior_profile_records_preserved": 27
+      },
+      {
+        "arch": "x86",
+        "index": "crates/rampage-signatures/data/corpus-x86.index.json",
+        "index_sha256": "6cc950091b3d90aa2f262208c4b9522c7683ad4cf4f26fcef9992d326fec9226",
+        "profiles": 15,
+        "prior_profile_records_preserved": 14
+      }
+    ],
+    "asset_bytes": "Exact three candidate gzip hashes and sizes above; no recomposition or target execution here.",
+    "case_scope": "81 freshly revalidated cases plus 14 unchanged historical Thumb cases: 95 accounted, not 95 rerun.",
+    "native_index_generator_sha256": "61dfc522054643dc40124f37cbc3015159964d8def66ef66282b02b891cb7b3a",
+    "staging": "${WORKSPACE}/target/phase2-1/sdk-delivery-reviewable-v1",
+    "staging_policy": "Create-only indexes and previous-pair backups; metadata validated before replacing each pair.",
+    "sdk_profile_archive_identity":
+      "archive_sha256 identifies generated native Zig-cache archives, not published upstream source archive pins.",
+    "sdk_source_revision":
+      "Unknown; musl installed header reports 1.2.5; exact installed source/header bytes inventoried.",
+    "rust_profile_archive_identity":
+      "archive_sha256 is the verified binary target-component tar.xz; owned rlib hashes remain in source_recipe.",
+    "rust_releases_recorded": [
+      "rustc 1.87.0 (17067e9ac 2025-05-09); release 1.87.0; LLVM 20.1.1",
+      "rustc 1.99.0 (b940084d7 2026-09-28); release 1.99.0; LLVM 23.1.1"
+    ],
+    "optimization_scope": "SDK harness O2 and Rust harness O1 only; native library optimization is not inferred.",
+    "ownership_scope": "Selected component native members only; unselected dependency archives/objects are not owned.",
+    "rust_metadata_scope": "rlib metadata is not native code; actual archive ordinals remain unchanged.",
+    "source_review_boundary":
+      "Captured source/header/native-input and component-member bytes; not source rebuild or publisher authentication.",
+    "notices_index_sha256": "38d9f199996150c0b25972ef4b4449388d768da92d206d1f4246213a2bb64aa6",
+    "new_notice_files": [
+      "sdk-zig-0.17.0-LICENSE.txt", "sdk-musl-installed-COPYRIGHT.txt", "sdk-llvm-installed-LICENSE.txt",
+      "sdk-rust-MIT.txt", "sdk-rust-Apache-2.0.txt", "sdk-rust-LLVM-exception.txt",
+      "sdk-rust-1.87.0-COPYRIGHT-library.html", "sdk-rust-1.99.0-COPYRIGHT-library.html"
+    ],
+    "notice_copy_scope": "Complete captured public legal texts, byte-identical including EOF; prior notices unchanged.",
+    "notice_whitespace_exception":
+      "Only the two Rust library HTML files retain upstream trailing whitespace: 252 and 845 lines; no normalization.",
+    "acceptance":
+      "Not release/CI, full-roster or whole-Phase-2 acceptance; low recall does not block bounded 2.1 delivery.",
+    "next": "2.2 import formats and 2.3 fuzzy work active in parallel; finish 2.2 then 2.3 before Phases 3-6.",
+    "phase1_live_gate": "unchanged and open"
+  },
+  "limitations": [
+    "Raw gates fail on recall; no Phase 2 recall, version-identification or whole Phase 2.1 acceptance is claimed.",
+    "Source hashes matching receipts do not prove source-to-binary reproduction or publisher authentication.",
+    "Legacy musl lacks original source archive/case-reference provenance; global training verification stays false.",
+    "Equal image hashes remain separate case measurements, not independent code diversity.",
+    "SDK O2 and Rust O1 label harness optimization only, not installed/prebuilt runtime optimization.",
+    "The frozen aggregate binary predates later nonsemantic Clippy edits; actual binary/source hashes are retained.",
+    "Raw reports retain all proposals, disagreements, native alias proofs, source-callee contexts and PDB receipts.",
+    "No private ROM inputs, target execution, network, installation, code/data-asset changes or commits."
+  ]
+}

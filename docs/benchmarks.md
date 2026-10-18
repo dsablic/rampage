@@ -6,6 +6,70 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 2.1 bounded SDK/Rust data delivery
+
+The [SDK/Rust delivery evidence](benchmarks/phase2-1-sdk-delivery-2026-10-18.json) accompanies three reviewed
+database/index pairs. **Bounded 2.1 delivery is complete** after gzip/index/lazy-loading tests and independent
+publication audit; this is not release/CI acceptance or completion of all Phase 2. The original author rows, raw failures and
+earlier 87/80/31-case publications remain unchanged; a separate metadata block records the prepared assets.
+
+| Architecture | Masked entries | Callee keys | Profiles | Revalidated cases | Compressed bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| x86-64 | 11,369 | 822 | 40 | 39 | 825,951 |
+| AArch64 | 7,037 | 402 | 28 | 27 | 453,180 |
+| i386 | 2,123 | 90 | 15 | 15 | 132,968 |
+| ARM/Thumb, unchanged historical asset | 2,117 | 0 | 14 | Not rerun: 14 historical cases | 112,076 |
+
+The three reloaded exports have **zero owned/full wrong or spurious names across 81 freshly revalidated cases**.
+Together with 14 unchanged historical Thumb cases, **95 cases are accounted for, not 95 freshly rerun**.
+The x64/AArch64/i386 raw recall gates still fail in 16/13/5 cases respectively. Low recall remains visible and
+does not block this bounded 2.1 delivery; no full Phase 2 recall acceptance is claimed.
+
+| Added native profile | Raw owned correct / truth | Curated owned correct / truth |
+| --- | ---: | ---: |
+| Zig compiler runtime, x64 | 429/455 | 40/455 |
+| Installed musl, x64 | 1,317/1,512 | 1,183/1,512 |
+| Zig compiler runtime, AArch64 | 554/559 | 45/559 |
+| Zig compiler runtime, i386 | 445/456 | 41/456 |
+| Rust core 1.87.0, x64 | 362/499 | 298/499 |
+| Rust core 1.99.0, x64 | 353/543 | 302/543 |
+| Rust std 1.87.0, x64 | 843/1,183, plus one wrong | 675/1,183 |
+| Rust std 1.99.0, x64 | 876/1,235 | 713/1,235 |
+
+All four original Rust databases/cases are included. The raw std 1.87 wrong answer is retained; generic atomic
+training-reference conflict rejection and raw exact-fallback withholding remove unsafe answers from the final
+union. There is no per-name blacklist, target-gold-driven matching or deletion from owned gold. All earlier
+profile records remain unchanged, including x64's 32 historical and two portable LLVM/glibc records.
+
+SDK O2 and Rust O1 describe harnesses, not native library optimization. Zig compiler runtime is distinct from
+the existing LLVM eight-C-unit profile. Generated Zig-cache native archives are byte-pinned, not published
+upstream source archive pins; musl's installed header reports 1.2.5, but source revisions remain unknown.
+Rust compiler release strings record 1.87.0 and 1.99.0; Linux-musl binary component archives, selected members and
+native-input snapshots are verified without installers. Dependency objects are not owned component signatures,
+and rlib metadata is excluded from native code without changing archive ordinals. These are captured identities,
+not publisher authentication, source-to-binary reproduction or language-version identification guarantees.
+
+The [technical disposition](benchmarks/phase2-1-sdk-disposition-2026-10-18.json) retains eight SDK quarantines:
+
+| Profile | Target | Native diagnostic |
+| --- | --- | --- |
+| musl | AArch64 Linux-musl | Unsupported ELF text relocation `Aarch64/311`; ownership refused |
+| libc++ | x64 Linux-musl | Unsupported ELF text relocation `X86_64/42`; ownership refused |
+| libc++ | AArch64 Linux-musl | Unsupported ELF text relocation `Aarch64/311`; ownership refused |
+| libc++abi | x64 Linux-musl | Unsupported ELF text relocation `X86_64/42`; ownership refused |
+| libc++abi | AArch64 Linux-musl | Unsupported ELF text relocation `Aarch64/311`; ownership refused |
+| libunwind | x64 Linux-musl | Unsupported ELF text relocation `X86_64/42`; ownership refused |
+| libunwind | AArch64 Linux-musl | Unsupported ELF text relocation `Aarch64/311`; ownership refused |
+| Zig compiler runtime | Thumb Linux-musleabi | Capture refuses LLVM `-target-abi=aapcs` and `-float-abi=soft` |
+
+These are native relocation/capture refusals, not recall exclusions;
+no further LLVM/ABI repairs are part of this delivery.
+Legal texts are copied byte-for-byte; only the two Rust library notice HTML files retain declared upstream
+whitespace exceptions. No native archive, binary or private code data is bundled.
+
+Phase 2.2 import-format and 2.3 fuzzy work are active in parallel; finish 2.2 then 2.3 before Phases 3–6.
+The independent live Phase 1 gate remains open. The sections below describe their frozen historical checkpoints.
+
 ## Phase 2.1 portable supplement — finite LLVM and glibc source profiles
 
 The [reviewed portable supplement](benchmarks/phase2-1-portable-delivery-2026-10-18.json) passed parent asset tests,

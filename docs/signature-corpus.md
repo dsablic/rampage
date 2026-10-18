@@ -5,14 +5,14 @@ compatible builds; a match does not identify a library version, authenticate sou
 
 ## Shipped artifacts
 
-The portable update is **reviewable pending parent asset tests and publication audit**, not release/CI acceptance.
-The counts below describe the prepared current assets; the other three architecture pairs are unchanged.
+**Bounded 2.1 delivery is complete** after gzip/index/lazy-loading tests and independent publication audit, not
+release/CI or full Phase 2 acceptance. The counts below describe the three reviewed current pairs and unchanged Thumb.
 
 | Architecture | Masked signature entries | Callee keys | Recorded build profiles |
 | --- | ---: | ---: | ---: |
-| x86-64 | 7,575 | 670 | 34 |
-| AArch64 | 7,066 | 404 | 27 |
-| i386 | 2,082 | 90 | 14 |
+| x86-64 | 11,369 | 822 | 40 |
+| AArch64 | 7,037 | 402 | 28 |
+| i386 | 2,123 | 90 | 15 |
 | ARM/Thumb | 2,117 | 0 | 14 |
 
 Counts describe index keys, not unique recognized functions. The ARM profiles are Thumb builds. The x64/AArch64
@@ -37,8 +37,18 @@ The two added x64 profiles are LLVM compiler-rt 22.1.8's eight original generic 
 configuration and dependency receipts are recorded in the
 [portable supplement](benchmarks/phase2-1-portable-delivery-2026-10-18.json) and the
 [`corpus-x86_64.index.json` provenance index](../crates/rampage-signatures/data/corpus-x86_64.index.json).
-All 32 existing profile records retain their historical witness hashes. The database adds nine signature keys
-and retires 58 through conservative source-callee-context curation; callee keys are unchanged.
+That portable checkpoint preserved all 32 historical records while adding nine and retiring 58 signature keys
+through conservative source-callee-context curation. The current SDK/Rust update preserves all 34 of those records
+exactly, plus all 27 prior AArch64 and 14 prior i386 records. It adds installed musl and Zig compiler runtime on x64,
+Zig compiler runtime on AArch64/i386, and Rust std/core 1.87.0 and 1.99.0 on x64. See the
+[SDK/Rust delivery evidence](benchmarks/phase2-1-sdk-delivery-2026-10-18.json) for current hashes and raw/curated rows.
+
+For installed SDK profiles, index `archive_sha256` fields identify generated native Zig-cache archives, **not
+published upstream source archive pins**. Exact installed source/header inventories are retained; musl's header
+reports 1.2.5, but source revisions remain unknown. Rust fields identify verified Linux-musl binary target-component
+archives, not rust-src; the owned native rlib identities remain in each recipe. Compiler release strings record
+1.87.0 and 1.99.0, not authenticated language-version identification from matched signatures. SDK O2 and Rust O1
+are harness labels only; native runtime optimization is not inferred. Zig runtime is not the portable LLVM profile.
 
 ## Recognition policy
 
@@ -53,15 +63,17 @@ layouts, even when their masked bodies are already ambiguous. Masked and callee-
 the generic matcher, hash schemes, and explicitly supplied user databases are unchanged. Withholding creates
 persistent tombstones for known keys. Composition that introduces new keys requires applying the curation policy again.
 
-Current delivery evidence spans **87 cases: x64 33, AArch64 26, i386 14 and Thumb 14**. Each recorded cohort has
-zero wrong/spurious named proposals against full producer-sized twin truth after reloading its final gzip under
-its stated policy; this is not a new cross-architecture rerun. The x64 v3 cohort has LLVM 8/8 and glibc 1/1 owned
-recall, but ten of its 33 cases still fail the 80% recall gate. PE truth uses checked PDB procedure ranges, not
-guessed PUBLIC-name sizes. This is bounded corpus evidence, not a universal precision guarantee.
+Current delivery accounts for **95 cases: 39 x64 + 27 AArch64 + 15 i386 freshly revalidated, and 14 historical Thumb**.
+The 81 revalidated cases have zero owned/full wrong or spurious names after reloading the exact three exports;
+Thumb is unchanged, not rerun. Raw recall gates still fail in 16 x64, 13 AArch64 and five i386 cases. All four Rust
+profiles are included despite low recall; the original std 1.87 one-wrong result remains in the raw evidence.
+Generic source-reference conflict rejection and exact-fallback withholding remove unsafe answers, not per-name
+blacklists or gold deletion. PE truth uses checked PDB procedure ranges, not guessed PUBLIC-name sizes.
+This is bounded corpus evidence, not a universal precision guarantee.
 Per-library and aggregate recall failures remain recorded. The 80% matched-version recall target belongs to Phase 2
-acceptance; it is not substituted for the precision checks used to select default artifacts.
+acceptance; low recall does not block bounded 2.1 data delivery or replace the precision checks for default artifacts.
 
-Strict canonical-name behavior remains the default. Explicit `--producer-alias-sets` enables the x64 supplement's
+Strict canonical-name behavior remains the default. Explicit `--producer-alias-sets` enables the revalidated aggregates'
 `elf-producer-alias-sets-v3` policy: full-target grading accepts only verified exact native ELF same-range aliases;
 reference admission requires a unique default-visible strong definition with only weak default-visible aliases.
 Original source-canonical and selected-definition callee contexts remain separate from answer labels. Original
@@ -114,6 +126,19 @@ not source authentication or general object/archive project loading.
 Rust target components can be materialized as data under the ignored target directory without executing installers.
 Their archive snapshots, expanded metadata, selected file membership and materialized file hashes are bounded and
 checked; receipt file hashes alone do not establish archive membership.
+
+SDK/Rust measured outputs use a clean recorded environment, frozen native input snapshots and explicit native
+linker replay with GC/ICF disabled. Only selected component members supply owned signature inputs; unselected
+archives and dependency objects do not. Rust metadata members are not native code, but their original archive
+ordinals remain part of member identity. Source hashes and native snapshots do not independently reproduce a build.
+Complete installed public musl/Zig, related LLVM and Rust MIT/Apache/library notices are retained byte-for-byte;
+the two Rust library HTML notices preserve declared upstream trailing-whitespace exceptions without normalization.
+
+Eight technical refusals stay quarantined in the
+[SDK disposition](benchmarks/phase2-1-sdk-disposition-2026-10-18.json): AArch64 musl, x64/AArch64 libc++, libc++abi
+and libunwind, and Thumb compiler runtime. Their native relocation/capture limits are not recall failures or shipped
+coverage. Earlier provisional C++ results and all raw failed attempts remain separate; no further LLVM repairs are
+part of this bounded delivery.
 
 The existing `tools/gen-signatures.sh` wrapper accepts the same corpus arguments. `ZIG`, `RAMPAGE_EVAL` and
 `RAMPAGE_SIGNATURE_CORPUS` select existing producer executables; `--only`, `--target` and `--optimization` are
@@ -179,5 +204,6 @@ Generated native programs, PDBs, archives and runtime captures are evaluation in
 reviewed hash/name databases and their provenance data belong in the default signature assets. Existing raw attempts
 and frozen baseline reports are not overwritten by a new consumer replay or a later acceptance decision.
 
-Phase 2.1 remains open for broader SDK/runtime delivery and remaining Rust/asset validation. The live Phase 1 gate
-is unchanged. The requested sequence is completion of 2.1, then 2.2 import formats, 2.3 fuzzy matching and Phases 3–6.
+The bounded 2.1 data pass is complete; broader SDK
+coverage and full Phase 2 acceptance are not claimed. Phase 2.2 import-format and 2.3 fuzzy work are active in
+parallel; finish 2.2 then 2.3 before Phases 3–6. The independent live Phase 1 gate remains unchanged and open.

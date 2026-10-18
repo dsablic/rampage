@@ -219,6 +219,106 @@
       "notice": "portable-glibc-2.40-LICENSES.txt",
       "notice_sha256": "bba29819a3e938fae92674d6a88533e10605e389da8b51cdcba0a94f6221c5bc",
       "scope": "complete upstream notices file, byte-identical; no ownership or whole-libc coverage claim"
+    },
+    {
+      "profile": "zig-compiler-runtime-installed-0.17.0",
+      "license_declaration": "MIT (Zig); related musl and LLVM-derived component notices retained separately",
+      "source_class": "installed-runtime",
+      "source_archive_sha256": null,
+      "source_release_commit": null,
+      "source_notice_path": "${SDK}/LICENSE",
+      "source_notice_sha256": "5c537d6853e005298a285d508cff9ac7192cea23576c840d485b2b586a7ff177",
+      "source_provenance_sha256": "3f904476bf71ea8a26218bf911eaddf6b8fab7a5b368bc6f49f84a1a579d416a",
+      "notice": "sdk-zig-0.17.0-LICENSE.txt",
+      "notice_sha256": "5c537d6853e005298a285d508cff9ac7192cea23576c840d485b2b586a7ff177",
+      "related_notices": ["sdk-musl-installed-COPYRIGHT.txt", "sdk-llvm-installed-LICENSE.txt"],
+      "scope": "Complete installed Zig legal text, byte-identical; not a published source archive identity."
+    },
+    {
+      "profile": "musl-installed-zig-0.17.0",
+      "license_declaration": "MIT with component-specific terms in COPYRIGHT",
+      "source_class": "installed-runtime",
+      "source_archive_sha256": null,
+      "source_release_commit": null,
+      "runtime_archive_sha256": "d2bdb16c909544b63e31dce501c6e657afc4564830ffb66b773e47e974e47ab1",
+      "source_notice_path": "${SDK}/lib/zig/libc/musl/COPYRIGHT",
+      "source_notice_sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+      "source_provenance_sha256": "3f823aaa92e7ed6e7ffce699370503ca2bf5582ebb3ef59b7aab80d48da74f6d",
+      "notice": "sdk-musl-installed-COPYRIGHT.txt",
+      "notice_sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+      "scope": "Complete installed legal text, byte-identical; also retained for musl-derived Zig runtime portions."
+    },
+    {
+      "profile": "zig-runtime-related-llvm-derived-notice",
+      "license_declaration": "Apache-2.0 WITH LLVM-exception; complete installed LLVM component notice retained",
+      "source_class": "installed-runtime-related-legal-text",
+      "source_archive_sha256": null,
+      "source_release_commit": null,
+      "source_notice_path": "${SDK}/lib/zig/libcxx/LICENSE.TXT",
+      "source_notice_sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+      "source_provenance_sha256": "cb1ceed9566ef7666bb4efd389013964876ffe3c64e37fabf116116b8bfc1fbe",
+      "notice": "sdk-llvm-installed-LICENSE.txt",
+      "notice_sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+      "scope": "Byte-identical legal text from the captured libc++ notice receipt; no libc++ code is promoted."
+    },
+    {
+      "profile": "rust-std-core-1.87.0-linux-musl-native-members",
+      "license_declaration": "MIT OR Apache-2.0; library third-party notices retained",
+      "source_class": "installed-public-toolchain-legal-text",
+      "source_archive_sha256": null,
+      "target_component_archive_sha256": "074f802189975d7c1bf14cf5269c5f0d77b15eee9b319a2e78db7f5397ca4952",
+      "source_notice_path": "${RUST_TOOLCHAIN_1_87}/share/doc/rust/COPYRIGHT-library.html",
+      "source_notice_sha256": "5645161f3068950fae9ad871223b5cdc01881caccf455308f8ed78b4a61d06ae",
+      "notice": "sdk-rust-1.87.0-COPYRIGHT-library.html",
+      "notice_sha256": "5645161f3068950fae9ad871223b5cdc01881caccf455308f8ed78b4a61d06ae",
+      "scope": "Complete installed library copyright/license HTML, byte-identical; not asserted as a target archive member.",
+      "whitespace_policy": "Preserve upstream EOF and 252 trailing-space/tab lines; scoped diff-check exception, no normalization."
+    },
+    {
+      "profile": "rust-std-core-1.99.0-linux-musl-native-members",
+      "license_declaration": "MIT OR Apache-2.0; library third-party notices retained",
+      "source_class": "installed-public-toolchain-legal-text",
+      "source_archive_sha256": null,
+      "target_component_archive_sha256": "b106b0aa4565cc3525fd3161c69203a9e39044e6e6b4d618f261c3eeda14ad50",
+      "source_notice_path": "${RUST_TOOLCHAIN_1_99}/share/doc/rust/COPYRIGHT-library.html",
+      "source_notice_sha256": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
+      "notice": "sdk-rust-1.99.0-COPYRIGHT-library.html",
+      "notice_sha256": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
+      "scope": "Complete installed library copyright/license HTML, byte-identical; not asserted as a target archive member.",
+      "whitespace_policy": "Preserve upstream EOF and 845 trailing-space/tab lines; scoped diff-check exception, no normalization."
+    },
+    {
+      "profile": "rust-std-core-1.87.0-and-1.99.0-linux-musl",
+      "license_declaration": "MIT",
+      "source_class": "installed-public-toolchain-legal-text",
+      "source_archive_sha256": null,
+      "source_notice_path": "${RUST_TOOLCHAIN}/share/doc/rust/licenses/MIT.txt",
+      "source_notice_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+      "notice": "sdk-rust-MIT.txt",
+      "notice_sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+      "scope": "Complete legal text, byte-identical in both captured toolchains; not a source/archive provenance claim."
+    },
+    {
+      "profile": "rust-std-core-1.87.0-and-1.99.0-linux-musl",
+      "license_declaration": "Apache-2.0",
+      "source_class": "installed-public-toolchain-legal-text",
+      "source_archive_sha256": null,
+      "source_notice_path": "${RUST_TOOLCHAIN}/share/doc/rust/licenses/Apache-2.0.txt",
+      "source_notice_sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "notice": "sdk-rust-Apache-2.0.txt",
+      "notice_sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+      "scope": "Complete legal text, byte-identical in both captured toolchains; not a source/archive provenance claim."
+    },
+    {
+      "profile": "rust-std-core-related-llvm-exception",
+      "license_declaration": "LLVM-exception; retained with Apache-2.0 text and library third-party notices",
+      "source_class": "installed-public-toolchain-legal-text",
+      "source_archive_sha256": null,
+      "source_notice_path": "${RUST_TOOLCHAIN}/share/doc/rust/licenses/LLVM-exception.txt",
+      "source_notice_sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+      "notice": "sdk-rust-LLVM-exception.txt",
+      "notice_sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+      "scope": "Complete related legal text, byte-identical in both captured toolchains; no whole-library license inference."
     }
   ]
 }

@@ -3,10 +3,10 @@
   "arch": "x86",
   "scheme": 2,
   "asset": "corpus-x86.json.gz",
-  "gzip_sha256": "31c510d13e6e84def7854aca86affa4df06c33285e24efcb8599fb11a963d087",
-  "compressed_bytes": 114556,
-  "json_bytes": 224486,
-  "signatures": 2082,
+  "gzip_sha256": "444f5ca5d48ad2cb9b932d01a4469479c32232cc727ff4f9975e68c31e6eaea0",
+  "compressed_bytes": 132968,
+  "json_bytes": 255788,
+  "signatures": 2123,
   "callee_keys": 90,
   "recognition": "same_build",
   "profiles": [
@@ -190,6 +190,19 @@
       "source": "https://github.com/facebook/zstd/archive/refs/tags/v1.5.6.tar.gz",
       "source_recipe": "recipe zstd-1.5.6; manifest SHA-256 e766b04b5b97660ed81dd969fe1de6de0b8edab5de5d71260b60ec51c5cb1e25; runner SHA-256 5bdf9ba02478d13dd416aa4242cb7cf6c882b2a5fa89eaf1791e0f721bdd421a; witness SHA-256 a1b4427e7e4d1156bf05774f1532fa151e85f7e5dc2c50ad4545091731167a30; training-reference conflict filter; raw exact fallback answers withheld",
       "archive_sha256": "30f35f71c1203369dc979ecde0400ffea93c27391bfd2ac5a9715d2173d92ff7",
+      "archive_identity_unavailable": null
+    },
+    {
+      "id": "zig-compiler-runtime-0.17.0-x86-linux-musl-harness-O2-native-members",
+      "library": "Zig compiler runtime (not LLVM compiler-rt)",
+      "version": "Zig 0.17.0 runtime; source revision unknown",
+      "target": "x86-linux-musl",
+      "compiler": "Zig 0.17.0; executable SHA-256 18fbdb9fb852846f0e91008c5b99c9c18db1115671701c2890bf84a44ddc202d; embedded LLD 22.1.8",
+      "optimization": "harness O2; runtime optimization unknown (installed driver policy)",
+      "license": "MIT (Zig); musl/LLVM-derived portions retain related component notices",
+      "source": "Installed public Zig 0.17.0 component and headers; native archive generated in isolated Zig cache, not an upstream published source pin",
+      "source_recipe": "case hardened-sdk-compiler-runtime-x86-linux-musl-O2-first; archive_sha256 is the generated native archive, not a published upstream source archive; exact installed source/header bytes inventoried, upstream source revision not independently identified; Zig compiler_rt.zig runtime is distinct from the separately shipped LLVM generic-eight-C-unit profile; owned native archive SHA-256 e3a5ac362bc0178cf7c12597739ac6b2a41bab4482e46565a80db8f6972a1ca7; runtime-provenance SHA-256 8c6964f53352ba72cdb46f0639e6d03480862504d749b059b258cf6688ad316f; result SHA-256 4550980a2abd1a627ce96c306b73f1c6a1ca1733f914cff6da22d0e7a81b6a7c; commands SHA-256 11ba825c3a0598ba09f2ea13d5f66d915094788cfba86a18f708f34b3086f958; archive-member receipt SHA-256 0eda533f3a6c8db2d4ab3df2756d1040f92e544370d546a1ca70807a2eac4a60; source/header inventory canonical compact sorted JSON SHA-256 3e9b14e0c78a3c50f9f9e29ebecee608f022f49db85bc53e23fb22897139d4fc; harness SHA-256 {\"reference\": \"960b2218cc6a0643eff7024d897a4e231a1e329304399b322c2eb961f29a99c0\", \"target\": \"661eb52a22c49e4cb1bfe38a9bbaf0d14a9769505b867338533239691e5efe6e\"}; aggregate witness SHA-256 2e55b2f51573c4d45c2e91de23830374d14a3010e47e412afbb27113cbf65fae; selected/available native members 1/1; clean recorded runtime environment and frozen native input snapshots; GC and ICF disabled; source-callee-context-v3 conflict rejection; raw exact fallback answers withheld; dependencies are not owned signature inputs; Rust metadata excluded from native code without renumbering archive ordinals; target not executed; source hashes are not source-to-binary reproduction or language-version authentication",
+      "archive_sha256": "e3a5ac362bc0178cf7c12597739ac6b2a41bab4482e46565a80db8f6972a1ca7",
       "archive_identity_unavailable": null
     }
   ]

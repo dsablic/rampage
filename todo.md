@@ -116,7 +116,7 @@ remain explicit preview-only boundaries. The old checked layouts and PDB names c
 - [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no class
   rows; symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
 
-## Active milestone: Phase 2.1, reproducible signature corpus
+## Phase 2.1: bounded reproducible corpus delivery complete
 
 - [x] Measure current bundled recognition on cross-program public-library builds, with symbolized twins as truth.
 - [x] Build an offline zlib/LZ4/Lua pilot with pinned sources, explicit ownership, commands and provenance.
@@ -126,8 +126,9 @@ remain explicit preview-only boundaries. The old checked layouts and PDB names c
 - [x] Publish the bounded SQLite x64/AArch64 O1 and LZ4 i386/Thumb evidence, preserving every failed recall gate.
 - [x] Measure reloaded SQLite/LZ4/musl aggregates with full-sized-twin proposal precision and checked input orders.
 - [x] Record paired Thumb EHABI recall and actual MCP metadata evidence, keeping baseline revision unattested.
-- [ ] Measure serialized artifacts per library/architecture/profile; preserve misses, wrong names and unrun coverage.
-- [ ] Extend the pilot to the roadmap library/version/architecture matrix before declaring 2.1 complete.
+- [x] Measure serialized artifacts per materialized library/architecture/profile; preserve misses, wrong names and unrun coverage.
+- [x] Close the finite delivery roster with measured, quarantined and unrun coverage explicit;
+  the full roadmap library/version/architecture matrix is not a prerequisite for this delivery pass.
 - [x] Add atomic training-reference conflict filtering, preserving negative evidence without exporting names.
 - [x] Enforce a global held-out image split and retain separate cases for byte-identical stripped targets.
 - [x] Deliver reviewed compressed default databases and provenance indexes for the four-architecture ELF cohort.
@@ -135,15 +136,27 @@ remain explicit preview-only boundaries. The old checked layouts and PDB names c
 - [x] Deliver the bounded LLVM/glibc portable supplement with retained v3 evidence and unchanged historical records.
 - [x] Pass parent portable-asset Rust tests, pack integration, Clippy and independent publication audit;
   these checks do not imply release/CI acceptance.
-- [ ] Complete remaining SDK/runtime and Windows default coverage; do not ship a precision failure.
-- [ ] Review, validate changed crates/MCP and publish the milestone before starting Phase 2.2.
+- [x] Complete the bounded SDK/runtime delivery pass: promote precision-safe aggregates and publish technical
+  quarantines and remaining coverage gaps; do not ship a precision failure or exclude solely for low recall.
+- [x] Prepare the three precision-safe SDK/Rust database/index pairs and publish the finite technical disposition.
+- [x] Pass bundled-asset admission/index/legacy-preservation tests and independent final publication audit.
+- [x] Review the corpus producer and publish bounded delivery; native MCP contracts are unchanged.
 
-Status: **2.1 pipeline and four-architecture core/default delivery implemented, including bounded Windows profiles;
-remaining SDK/runtime corpus breadth is incomplete.**
+Status: **bounded 2.1 delivery complete; full Phase 2 recall acceptance remains unearned.**
+The signatures suite passed 138 tests with one ignored, including actual gzip/index admission, lazy loading,
+legacy-byte preservation and exact-fallback withholding. Final cross-phase API/CLI/MCP checks remain tracked
+with the import/fuzzy implementation below; they are not a new SDK-coverage requirement.
+Three exact precision-safe exports revalidate 81 cases: x64 39, AArch64 27 and i386 15; 14 historical Thumb cases
+are unchanged, giving 95 accounted cases, not 95 rerun. Current entries/callee keys/profiles are x64 11,369/822/40,
+AArch64 7,037/402/28 and i386 2,123/90/15; Thumb stays 2,117/0/14.
+All four Rust profiles are included. Raw std 1.87's one wrong remains retained; generic source-reference conflict
+rejection and exact-fallback withholding remove unsafe answers without blacklists or owned-gold deletion.
+The SDK delivery/disposition JSONs record eight technical quarantines and all recall failures. Native archive,
+member, compiler and source/header identities are evidence, not publisher authentication or full SDK coverage.
 The 80% matched-version recall target belongs to Phase 2 acceptance, not a separate 2.1 completion gate.
 Known recall failures remain visible; wrong/spurious names still prevent candidate promotion.
 
-The pilot is not full 2.1 acceptance. Early GC-enabled linked-subset measurements remain separate from the
+The original pilot was not full 2.1 acceptance. Early GC-enabled linked-subset measurements remain separate from the
 full-retention cohort. Pinned slice `198c024`: zlib and Lua pass the tested x64/AArch64 O1 gates; LZ4 remains
 77.9%/65.4% recall, with zero wrong/spurious names. All six results are published in `docs/benchmarks.md`.
 That pilot publication promoted no new default database. The later delivery slice below adds reviewed assets;
@@ -164,14 +177,14 @@ AArch64 OpenSSL profile still reports two wrong names; the final curated corpus 
 and has zero wrong/spurious proposals across all 80 ELF aggregate cases. Tool snapshots,
 raw failed attempts and the one invalidated collector-hash-drift attempt remain separate. Runtime byte-binding
 and broader SDK coverage require fresh measurements. The four lazy-loaded default corpora and their indexes are
-recorded in `docs/benchmarks/phase2-1-delivery-2026-10-18.json`; Phase 2.1 is not yet complete.
+recorded in `docs/benchmarks/phase2-1-delivery-2026-10-18.json`; 2.1 was incomplete at that checkpoint.
 The Windows supplement records 31 precision-clean x64 ELF/PE cases and the declared MinGW `pesect.c` unit at 9/9.
-The current x64 index has 7,575 entries, 670 callee keys and 34 profiles;
-the other architectures are unchanged.
+At the portable checkpoint, the x64 index had 7,575 entries, 670 callee keys and 34 profiles;
+the other architectures were unchanged.
 The reviewed portable supplement is `docs/benchmarks/phase2-1-portable-delivery-2026-10-18.json`; parent asset
 tests, pack integration, Clippy and independent provenance reconciliation passed. Its 33 x64 cases have zero
 wrong/spurious names, LLVM 8/8 and glibc 1/1 owned
-recall, with ten remaining recall failures. The current cohort totals 87 cases:
+recall, with ten remaining recall failures. That checkpoint accounted for 87 cases:
 x64 33 + AArch64 26 + i386 14 + Thumb 14.
 LLVM 22.1.8 covers eight original generic C units; glibc 2.40 covers only original `strverscmp.c`, with strong
 `__strverscmp` and its real weak alias retained. Both are O2 freestanding x64 Linux-musl builds without CRT or target
@@ -181,7 +194,7 @@ Opt-in producer-alias policy v3 preserves raw proposals, strict original owned g
 contexts. Strict remains the default; PE/PDB alias policy is unchanged. The prior strict refusal and v1 glibc 0/1
 remain frozen, not regraded. All 32 historical profile records are unchanged; nine signature keys were added and
 58 conservatively retired. Alias metadata is not publisher authentication or runtime object identity. Earlier
-80-case core and 31-case Windows publications remain unchanged; SDK/runtime breadth and the Rust gate remain open.
+80-case core and 31-case Windows publications remain unchanged; current SDK/Rust validation is tracked above.
 
 The follow-up `5f5a7e4` / `1b67d7c` evidence is pinned in
 `docs/benchmarks/phase2-1-parallel-2026-10-18.json`: SQLite x64 is 243/262; AArch64 is 201/262 and fails.
@@ -194,9 +207,19 @@ the final reviewed report omits its matrix. Actual paired MCP metadata receipts 
 binary revision or prove complete boundaries. This is a bounded publication, not full matrix acceptance,
 default promotion, fresh validation, a live model result, or authorization to skip the remaining 2.1 gate.
 
-The latest requested order is to finish all of Phase 2: complete 2.1, then 2.2 import formats and 2.3 fuzzy
-matching, before proceeding through top-level Phases 3–6 in order. Source-corpus infrastructure is not acceptance
-of the entire library-recognition phase; the independent live Phase 1 gate also remains open.
+The latest requested order is to finish all of Phase 2. Bounded 2.1 delivery is complete;
+2.2 import formats and 2.3 fuzzy work are active in parallel. Finish 2.2 then 2.3 before
+top-level Phases 3–6. Source-corpus infrastructure is not full acceptance of the library-recognition phase;
+the independent live Phase 1 gate remains open.
+
+### Active: 2.2 import formats and 2.3 secondary candidates
+
+- [ ] Validate and publish bounded user-supplied PAT imports, including persistence and ambiguity preservation.
+- [ ] Validate and publish genuine FID import/query with explicitly trusted Ghidra/JVM configuration.
+- [ ] Complete API/CLI/MCP regressions before accepting the new import/candidate surfaces.
+- [ ] Publish the measured fuzzy candidate results, preserving incorrect candidates, extraction failures and
+  the reused-holdout caveat; never report candidate-only results as qualified naming gains.
+- [ ] Review, test and publish the remaining Phase 2 implementation before advancing through Phases 3–6.
 
 ### Implemented Phase 1 milestones
 
