@@ -1,0 +1,29 @@
+{
+  "id": "mingw-pesect-zig-0.17.0",
+  "family": "mingw-crt",
+  "harness": "mingw-pesect",
+  "source_class": "installedruntime",
+  "producer_version": "Zig 0.17.0",
+  "mingw_header_version": "15.0.0 alpha",
+  "source_release_commit": null,
+  "source_unit": "libc/mingw/crt/pesect.c",
+  "source_sha256": "445b26d25d9fe5c3270df3341cbe8af6da07ae3a82d7e9bbcef548f5893eaefd",
+  "notice_sha256": "5c2a55e0974158321a7865d53546e66b940acef0b96479f5ffe4c78af48bf8fc",
+  "license": "Public Domain notice in pesect.c; runtime COPYING retained as separate metadata",
+  "license_file": "libc/mingw/COPYING",
+  "license_sha256": "99a69660981156c21336fdb5661f89341b013c94e4bf9e1c7467b4745718397f",
+  "sdk_header": "libc/include/any-windows-any/_mingw_mac.h",
+  "sdk_header_sha256": "a23e0228c8b760492cd7e150221f75d1888fcb59eefaabf71b7296d903533eb1",
+  "supported_targets": ["x86_64-windows-gnu"],
+  "harness_optimizations": ["O1", "O2"],
+  "runtime_object_optimization": "Not inferred from harness optimization; identify exact emitted object bytes",
+  "runtime_archive_class": "generated-build-artifact, not a published source archive",
+  "runtime_archive_selection": "Fresh Zig -v native LLD input libmingw32.lib; unique pesect.obj member ordinal and payload SHA from bounded regular archive snapshot; no newest-cache lookup",
+  "owned_global_functions": [
+    "_ValidateImageBase", "_FindPESection", "_FindPESectionByName", "__mingw_GetSectionForAddress",
+    "__mingw_GetSectionCount", "_FindPESectionExec", "_GetPEImageBase", "_IsNonwritableInCurrentImage",
+    "__mingw_enum_import_library_names"
+  ],
+  "scope": "Exactly this declared translation unit and all nine GLOBAL procedures; not whole CRT or Windows DLL implementation coverage. Direct selected object precedes dependency archives. No target execution, aliases, assembly or import descriptors owned.",
+  "build_driver": "tools/signature_mingw.py"
+}
