@@ -79,8 +79,20 @@ impl Project {
         databases: &[(&str, &SignatureDb)],
         apply: bool,
     ) -> Result<SignatureApplication, ApiError> {
+        self.apply_layered_signatures_with_preflight(databases, apply, Vec::new(), |_| Ok(()))
+    }
+
+    fn apply_layered_signatures_with_preflight(
+        &self,
+        databases: &[(&str, &SignatureDb)],
+        apply: bool,
+        warnings: Vec<String>,
+        preflight: impl FnOnce(&SignatureApplication) -> Result<(), ApiError>,
+    ) -> Result<SignatureApplication, ApiError> {
         if databases.is_empty() {
-            return Ok(SignatureApplication { matched: 0, applied: 0, matches: Vec::new(), warnings: Vec::new() });
+            let application = SignatureApplication { matched: 0, applied: 0, matches: Vec::new(), warnings };
+            preflight(&application)?;
+            return Ok(application);
         }
         let analysis = self.analysis()?;
         let bodies: Vec<(u64, &[u8])> = analysis
@@ -103,16 +115,17 @@ impl Project {
             });
         }
 
-        let mut applied = 0;
+        let mut application = SignatureApplication { matched: matches.len(), applied: 0, matches, warnings };
+        preflight(&application)?;
         if apply {
-            for candidate in matches.iter().filter(|candidate| candidate.unnamed) {
+            for candidate in application.matches.iter().filter(|candidate| candidate.unnamed) {
                 // Skip a name already in use elsewhere, so renaming cannot collide.
                 if self.rename(candidate.address, Some(&candidate.name)).is_ok() {
-                    applied += 1;
+                    application.applied += 1;
                 }
             }
         }
-        Ok(SignatureApplication { matched: matches.len(), applied, matches, warnings: Vec::new() })
+        Ok(application)
     }
 
     /// The starter signature database bundled for this binary's architecture, or `None` when none ships for it.
@@ -140,6 +153,18 @@ impl Project {
         bundled: bool,
         apply: bool,
     ) -> Result<SignatureApplication, ApiError> {
+        self.identify_functions_with_preflight(user, bundled, apply, |_| Ok(()))
+    }
+
+    /// Plans the full identification, including pack warnings, then calls `preflight` once before any rename.
+    /// A rejected preflight writes nothing. The callback never restricts which matches an apply considers.
+    pub fn identify_functions_with_preflight(
+        &self,
+        user: Option<&SignatureDb>,
+        bundled: bool,
+        apply: bool,
+        preflight: impl FnOnce(&SignatureApplication) -> Result<(), ApiError>,
+    ) -> Result<SignatureApplication, ApiError> {
         let packs = self.packs();
         let packed: Vec<(&str, &SignatureDb)> = packs.signatures_for(self.binary.arch).collect();
         if !bundled && user.is_none() && packed.is_empty() {
@@ -153,8 +178,6 @@ impl Project {
         let user = user.map(|database| (USER_SIGNATURES, database));
         let bundled = bundled.map(|database| (BUILTIN_PACK, database));
         let databases: Vec<(&str, &SignatureDb)> = user.into_iter().chain(packed).chain(bundled).collect();
-        let mut application = self.apply_layered_signatures(&databases, apply)?;
-        application.warnings = packs.problems_for("signatures");
-        Ok(application)
+        self.apply_layered_signatures_with_preflight(&databases, apply, packs.problems_for("signatures"), preflight)
     }
 }

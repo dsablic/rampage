@@ -15,6 +15,9 @@ const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
 const MAX_PDB_ERROR_BYTES: usize = 1024;
 
+mod signature_page;
+use signature_page::identify_page;
+
 type Handler = Box<dyn Fn(&Project, Value) -> Result<Value, String> + Send + Sync>;
 
 /// A set of related tools. MCP clients see the core group first and enable the others when they need them, so the
@@ -1422,6 +1425,13 @@ struct IdentifyArgs {
     /// Persist matched names for still-unnamed functions as user names (never overwriting existing names).
     #[serde(default)]
     apply: bool,
+    /// Detail rows to skip: address-sorted matches first, then pack warnings. Never selects writes.
+    #[serde(default)]
+    offset: Option<usize>,
+    /// Detail rows per page (default 100, 1..=256), also bounded to 60000 complete JSON bytes.
+    #[serde(default)]
+    #[schemars(range(min = 1, max = 256))]
+    limit: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -1797,24 +1807,13 @@ pub fn tools() -> Vec<Tool> {
              A function whose masked body collides with another's is named by the names of the functions it \
              calls, once those are named; thunks too small for the confidence gate are never named. apply=true \
              saves names for unnamed functions. `warnings` names data packs or pack signature databases that did \
-             not load.",
-            |project, arguments: IdentifyArgs| {
-                let user = match &arguments.database {
-                    Some(path) => {
-                        let text = crate::read_bounded(
-                            std::path::Path::new(path),
-                            crate::MAX_SIGNATURE_DB_BYTES,
-                            "signature database",
-                        )?;
-                        Some(
-                            rampage_signatures::SignatureDb::from_json(&text)
-                                .map_err(|error| ApiError::Invalid(error.to_string()))?,
-                        )
-                    }
-                    None => None,
-                };
-                project.identify_functions(user.as_ref(), !arguments.no_bundled, arguments.apply)
-            },
+             not load. offset/limit page details only (default 100, 1..=256): address-sorted matches first, then \
+             warnings using the same offset. matches retains its original row shape. matched/applied are WHOLE \
+             result totals; apply=true considers ALL matches regardless of the page, preserving existing names \
+             and skipping rename collisions. Read later pages with apply=false. Complete rows and the full receipt \
+             fit within 60000 JSON bytes; more/next_offset continue details, omission counts include prior pages. \
+             An oversized first row or header is refused before any names are written; strings are never cut.",
+            identify_page,
         )
         .annotates(),
     ];

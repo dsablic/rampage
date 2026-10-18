@@ -166,6 +166,10 @@ overlay database from a binary with named functions using `function build-signat
 A database hashes each function over both its symbol size and discovered extent. A function cut short at an
 unresolved jump table can match when discovery stops at the same place in the target.
 
+MCP identification pages complete match/warning rows within 60000 JSON bytes, keeping whole-result match/apply
+totals. Its default window is 100 rows; offsets never select which names apply. Oversized receipts refuse before
+renaming, without truncating JSON strings.
+
 Colliding masked bodies, such as `fprintf`/`sscanf`, are distinguished by named callees once those are known.
 Databases retain these keys in optional `calls`/`ambiguous_calls` fields; bodies below the confidence gate do
 not use them, so a thunk is not named after the function it forwards to. A database matches only the library

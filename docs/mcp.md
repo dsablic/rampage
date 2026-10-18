@@ -59,8 +59,10 @@ does not imply target execution, and bundled signature results are distinct from
 are metadata assertions, not verified boundaries; `CantUnwind` and coalesced interiors are not expanded. See
 [ARM unwind candidates](arm-unwind-starts.md).
 
-`identify_functions` retains its existing JSON database inputs and read-only default. Builtin signatures are
-cached per architecture from compressed assets; `list_packs` uses count indexes without decoding every bundle.
+`identify_functions` retains JSON database inputs and its read-only default. Its default detail window is 100
+rows (`limit` 1–256); `offset` continues matches first, then warnings. `matched`/`applied` are whole-result totals:
+pages never select writes. Complete JSON stays within 60000 bytes; an oversized row refuses before any rename.
+Builtin signatures are cached per architecture; `list_packs` reads count indexes without decoding every bundle.
 The [offline corpus pipeline](signature-corpus.md) measures generated databases separately; its failed or unrun
 profiles are not default recognition coverage.
 
