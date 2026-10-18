@@ -56,11 +56,11 @@ pub struct TypeLibraryEdit {
     pub profiles: Vec<HeaderBundle>,
 }
 
-struct NativeInspection {
-    language_id: String,
-    organization: DataOrganization,
-    types: Vec<NamedType>,
-    declarations: Vec<Vec<NamedType>>,
+pub(crate) struct NativeInspection {
+    pub(crate) language_id: String,
+    pub(crate) organization: DataOrganization,
+    pub(crate) types: Vec<NamedType>,
+    pub(crate) declarations: Vec<Vec<NamedType>>,
 }
 
 struct PreparedUnit {
@@ -83,7 +83,7 @@ pub(crate) fn stored_declarations(annotations: &Annotations) -> Result<Vec<Libra
     }
 }
 
-fn library_value(units: &[LibraryDeclaration]) -> Result<Option<String>, ApiError> {
+pub(crate) fn library_value(units: &[LibraryDeclaration]) -> Result<Option<String>, ApiError> {
     if units.len() > MAX_DECLARATIONS
         || units.iter().map(|unit| unit.declarations.len()).sum::<usize>() > MAX_TEXT_BYTES
     {
@@ -113,7 +113,15 @@ pub(crate) fn validate_profile_replay(
 
 fn library_annotations(units: &[LibraryDeclaration]) -> Result<Annotations, ApiError> {
     let mut annotations = Annotations::in_memory();
-    annotations.set(Field::TypeLibrary, 0, library_value(units)?).map_err(ApiError::Invalid)?;
+    // These snapshots measure declaration text only. The actual retained snapshot is separately
+    // checked with its proof before measurement and again before commit; text carries no proof claim.
+    let mut units = units.to_vec();
+    for unit in &mut units {
+        if unit.source.as_ref().is_some_and(|source| source.kind == "checked_debug_types") {
+            unit.source = None;
+        }
+    }
+    annotations.set(Field::TypeLibrary, 0, library_value(&units)?).map_err(ApiError::Invalid)?;
     Ok(annotations)
 }
 
@@ -214,7 +222,7 @@ fn prepare_units(
 }
 
 impl Project {
-    fn inspect_types(
+    pub(crate) fn inspect_types(
         &self,
         state: &DecompilerState,
         options: &DecompilerOptions,
@@ -224,6 +232,8 @@ impl Project {
     ) -> Result<NativeInspection, ApiError> {
         crate::decompile::validate_cached_layout_source(self, state)?;
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
+        crate::debug_type_import::validate_replay_source(self, annotations)?;
+        crate::debug_type_import::validate_options(annotations, options)?;
         if !self.binary.segments.iter().any(|segment| segment.perms.execute && segment.file_size > 0) {
             return Err(ApiError::Unavailable("no executable segments to decompile".to_owned()));
         }
@@ -263,6 +273,7 @@ impl Project {
             None => engine.type_inventory().map_err(|error| ApiError::Invalid(error.to_string()))?,
         };
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
+        crate::debug_type_import::validate_replay_source(self, annotations)?;
         Ok(NativeInspection {
             language_id: engine.language_id().to_owned(),
             organization: engine.data_organization(),
@@ -629,6 +640,7 @@ impl Project {
     ) -> Result<TypeLibraryEdit, ApiError> {
         let LibraryCommit { units, expected, removed, mut result } = pending;
         let value = library_value(units)?;
+        let proofs = crate::debug_type_import::library_transition_proofs(annotations, units)?;
         if annotations.type_library().get(&0) == value.as_ref() {
             result.changed = false;
             preflight(&result)?;
@@ -636,7 +648,7 @@ impl Project {
         }
         let mut preflight = Some(preflight);
         let changed = annotations
-            .set_validated(Field::TypeLibrary, 0, value, |candidate| {
+            .set_batch_validated(&[(Field::TypeLibrary, 0, value), (Field::DebugTypes, 0, proofs)], |candidate| {
                 self.validate_annotation_snapshot(state, options, candidate)?;
                 let actual =
                     self.inspect_types(state, options, candidate, None, &[]).map_err(|error| error.to_string())?;
@@ -657,7 +669,7 @@ impl Project {
                     .map_err(|error| error.to_string())
             })
             .map_err(ApiError::Invalid)?;
-        result.changed = changed;
+        result.changed = changed.into_iter().any(|changed| changed);
         Ok(result)
     }
 

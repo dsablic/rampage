@@ -112,6 +112,8 @@ fn run(
     inspection: TypeInspection<'_>,
 ) -> Result<rampage_decompiler::worker::WorkerOutput, ApiError> {
     let TypeInspection { query: type_query, declarations, extra_operations, hint_context } = inspection;
+    crate::debug_type_import::validate_replay_source(project, annotations)?;
+    crate::debug_type_import::validate_options(annotations, options)?;
     crate::debug_layout_import::validate_replay_source(project, annotations)?;
     let validate_only = function.is_none();
     let (address, name) = function.unwrap_or_default();
@@ -249,6 +251,7 @@ fn run(
         &output.language_id,
     )?;
     crate::debug_layout_import::validate_replay_source(project, annotations)?;
+    crate::debug_type_import::validate_replay_source(project, annotations)?;
     Ok(output)
 }
 

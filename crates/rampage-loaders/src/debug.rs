@@ -9,11 +9,13 @@ use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 
 mod layouts;
+mod type_graph;
 pub use layouts::{
     DebugLayoutField, DebugLayoutLeaf, DebugLayoutMethod, DebugLayoutParameter, DebugLayoutReport, DebugLayoutScalar,
     DebugLayoutScalarKind, DebugLayoutSignature, DebugLayoutSource, DebugLayoutTypeId, DebugLayoutValue,
     DebugStructLayout, layout_signatures,
 };
+pub use type_graph::*;
 
 const MAX_DEBUG_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UNITS: usize = 256;

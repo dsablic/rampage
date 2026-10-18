@@ -17,6 +17,7 @@ const MAX_LAYOUT_ARRAY: usize = 128;
 enum Policy {
     Worker,
     Layout,
+    NamedTypes,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +98,7 @@ impl<'a> Scanner<'a> {
         let (max_depth, max_nodes) = match self.policy {
             Policy::Worker => (32, MAX_REQUEST_NODES),
             Policy::Layout => (12, MAX_LAYOUT_NODES),
+            Policy::NamedTypes => (32, MAX_OPERATION_NODES),
         };
         if depth > max_depth || self.nodes >= max_nodes {
             return Err(self.error("JSON wire depth/node limit exceeded"));
@@ -152,6 +154,7 @@ impl<'a> Scanner<'a> {
         match self.policy {
             Policy::Worker => MAX_DEFAULT_STRING,
             Policy::Layout => MAX_LAYOUT_STRING,
+            Policy::NamedTypes => 256,
         }
     }
 
@@ -190,7 +193,9 @@ impl<'a> Scanner<'a> {
             self.whitespace();
             self.expect(b':')?;
             self.whitespace();
-            if (key.is(b"op") || key.is(b"kind")) && self.bytes.get(self.position) != Some(&b'"') {
+            if (key.is(b"op") || (key.is(b"kind") && matches!(self.policy, Policy::Layout)))
+                && self.bytes.get(self.position) != Some(&b'"')
+            {
                 return Err(self.error("wire tags must use string representation"));
             }
             if matches!(context, Context::Request)
@@ -247,6 +252,9 @@ impl<'a> Scanner<'a> {
             if matches!(self.policy, Policy::Layout) && count >= MAX_LAYOUT_ARRAY {
                 return Err(self.error("layout wire array count limit exceeded"));
             }
+            if matches!(self.policy, Policy::NamedTypes) && count >= 256 {
+                return Err(self.error("named type wire array count limit exceeded (256)"));
+            }
             count += 1;
             let element = if matches!(context, Context::LayoutFields) { Context::LayoutObject } else { Context::Other };
             self.value(element, depth + 1, self.default_string_limit())?;
@@ -285,6 +293,15 @@ impl<'a> Scanner<'a> {
                 // A second allocation-free pass bounds the entire operation, including unknown payloads.
                 // It runs before any Serde Content exists, whether the tag is first, last, or escaped.
                 scan_layout(&self.bytes[operation_start..end], Some(index))?;
+            }
+            if tag.is_some_and(|tag| tag.is(b"assert_named_types")) {
+                let bytes = &self.bytes[operation_start..end];
+                if bytes.len() > crate::type_library::MAX_TYPE_JSON_BYTES {
+                    return Err(self.error("named type assertion wire exceeds 1 MiB"));
+                }
+                let mut scanner = Scanner::new(bytes, Policy::NamedTypes);
+                scanner.operation = Some((index, 0));
+                scanner.finish(Context::Operation)?;
             }
             self.operation = None;
             self.whitespace();

@@ -33,6 +33,7 @@ fn plan_with(
     source: ReplaySource<'_>,
 ) -> Result<Vec<WorkerOperation>, ApiError> {
     use crate::debug_layout_import::{self, LayoutBundle};
+    crate::debug_type_import::validate_replay_source(project, annotations)?;
     match source {
         ReplaySource::WholeProgram => debug_layout_import::validate_replay_source(project, annotations)?,
         ReplaySource::Entry(_) => debug_layout_import::validate_entry_replay_source(project, annotations)?,
@@ -104,6 +105,7 @@ fn plan_with(
         }
     }
     operations.extend(assertions);
+    operations.extend(crate::debug_type_import::operations(annotations)?);
     operations.extend(crate::typed_data::data_type_plan(project, annotations)?);
     for (&address, declaration) in annotations.globals() {
         validate(declaration)?;
@@ -111,6 +113,7 @@ fn plan_with(
         operations.push(WorkerOperation::Global { address, declaration: declaration.clone() });
     }
     for (&address, declaration) in annotations.signatures() {
+        let declaration = crate::debug_type_import::signature_declaration(declaration, annotations)?;
         let declaration = debug_layout_import::signature(declaration, &layouts)?;
         validate(declaration)?;
         reject_late_type_definitions(declaration, &layouts)?;

@@ -1,0 +1,78 @@
+# Owned checked-debug evidence. Build and inspect only; no executable is run.
+schema = "phase1_debug_type_recipe"
+license = "Apache-2.0"
+compiler = "Clang/Clang-CL 23.1.3 with LLD 23.1.3"
+build_script = "tests/fixtures/debug-types/build.sh"
+build_argv = ["target/phase1-6"]
+environment_tools = ["CLANG", "CLANGXX", "CLANG_CL", "LLD_LINK"]
+executed = false
+fixture_environment = "RAMPAGE_DEBUG_TYPE_FIXTURES"
+c_source = "tests/fixtures/src/debug-types.c"
+c_source_sha256 = "8ebbff5d291636eb8d7a5adb7caf68378550d45e9753a311f3a4da64e701545b"
+cpp_source = "tests/fixtures/src/debug-types.cpp"
+cpp_source_sha256 = "67d0d1d7392e8accb45bbdf612394ba065952dc0d36d15a6cd5b67082bed6115"
+pdb_wrapper_source = "tests/fixtures/src/debug-types-pdb.cpp"
+pdb_wrapper_sha256 = "40d922e285195effc79863dffbf6d5ccc30c3e63b6e39b23eac9a8d8e565da04"
+pdb_positive_identity = "C++ CodeView unique UDT names with C function linkage; original C tags remain a negative control."
+
+[c_oracle]
+symbol = "debug_type_layout"
+word_bytes = 4
+table_order = [
+    "Inner.size", "Inner.align", "Record.size", "Record.align", "Record.identifier", "Record.nested",
+    "Record.taps", "Record.mode", "Record.payload", "Record.next", "Record.callback",
+    "Payload.size", "Payload.align", "Bits.size",
+]
+values = [8, 4, 56, 8, 0, 4, 12, 28, 32, 40, 48, 8, 8, 4]
+evidence = "Actual MCP inspect_data on compiler-emitted tables in both x64 and AArch64 ELF; no target execution."
+alignment_note = "Compiler oracle alignment is separate from missing producer DWARF/PDB alignment metadata."
+bitfield_note = "Bitfield records are retained evidence, not permission to import a truncated complete record."
+
+[cpp_oracle]
+symbol = "debug_cpp_layout"
+word_bytes = 4
+table_order = ["Cell.size", "Cell.align", "Cell.count", "Cell.level", "Owner.size", "Owner.align",
+    "Owner.cells", "Owner.bias", "Owner.next"]
+values = [16, 8, 0, 8, 48, 8, 0, 32, 40]
+evidence = "Actual MCP inspect_data on source-built x64 C++ ELF constant table."
+limits = "Plain nested C++ class without inheritance/vtables; no general class recovery claim."
+
+[[artifacts]]
+path = "target/phase1-6/debug-types-cpp.exe"
+sha256 = "bb5642251a8908614e8f13ec244bdc44e610082501f9f6d4af97df837e8d5823"
+
+[[artifacts]]
+path = "target/phase1-6/debug-types-cpp.pdb"
+sha256 = "d239e7889e2f112d4b0c7c17e4b3097385d0cd268cbc5b51451cff6af19e352c"
+
+[[artifacts]]
+path = "target/phase1-6/debug-types.exe"
+sha256 = "5f75aa93abdf706d2302d5882ead3ee9669c449b8dbd6abbb42356d2ed30b841"
+
+[[artifacts]]
+path = "target/phase1-6/debug-types.pdb"
+sha256 = "210a66aba7f34ec6dbf570328916f79c772149fccd61570dd09a9afcf4fb2ca6"
+
+[[artifacts]]
+path = "target/phase1-6/debug-types-x64.elf"
+sha256 = "9b6b665e3e8d420c5c74e9b8234d49b924e0ede81e1449bf76ba2625b4148777"
+
+[[artifacts]]
+path = "target/phase1-6/debug-types-arm64.elf"
+sha256 = "4b640dfad121d7e4927e17b9b9468ce35a85978818a93e0544f43dae05540c68"
+
+[[artifacts]]
+path = "target/phase1-6/debug-cpp.exe"
+sha256 = "2d1d1c88f5e93e0599ad2f7f6a68ecbb1cf5d30358e865ca3b742f14c0938c98"
+
+[[artifacts]]
+path = "target/phase1-6/debug-cpp.pdb"
+sha256 = "2d3a1cfe4a4797721a3264577a5bfb0a3b0addf40d96ac70db4cbd0a8ad712a4"
+
+[[artifacts]]
+path = "target/phase1-6/debug-cpp-x64.elf"
+sha256 = "47458e57eaa7ec0e522b4db0ad3d57b284eef61d52f141b9fb02dc9ce2ed58ed"
+
+[[artifacts]]
+path = "target/phase1-6/debug-cpp-arm64.elf"
+sha256 = "92455ef9abc149a81eac34ab96d281e33eaa9b8bc1a7c053003786c7cd66f6e2"

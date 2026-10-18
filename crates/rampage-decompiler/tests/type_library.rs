@@ -480,3 +480,122 @@ fn native_prototypes_globals_and_member_names_accept_existing_aggregate_and_type
     engine.parse_c("typedef struct State *StatePointer;").unwrap();
     assert_eq!(engine.get_type("StatePointer").unwrap().size, Some(8));
 }
+
+const ASSERTION_LIBRARY: &str = "
+    enum Mode { Idle = -3, Busy = 7 };
+    struct Inner { long count; int code; };
+    union Payload { struct Inner inner; unsigned char bytes[16]; };
+    typedef int (*Callback)(struct Packet *packet, enum Mode mode);
+    struct Packet { struct Inner rows[2]; union Payload payload; enum Mode mode;
+                    Callback callback; struct Packet *next; };";
+
+#[test]
+fn named_assertions_compare_independent_native_measurements_on_each_target_model() {
+    for (arch, platform, long_size, compiler) in [
+        (Arch::X86_64, Platform::Windows, 4, "windows"),
+        (Arch::X86_64, Platform::Default, 8, "gcc"),
+        (Arch::Aarch64, Platform::Default, 8, "default"),
+    ] {
+        let mut measured = engine(arch, platform);
+        measured.parse_type_library(ASSERTION_LIBRARY, None).unwrap();
+        let expected = measured.type_inventory().unwrap();
+        assert!(measured.language_id().ends_with(&format!(":{compiler}")));
+        assert_eq!(measured.data_organization().long, long_size);
+        assert_eq!(measured.get_type("Inner").unwrap().fields[0].size, Some(u64::from(long_size)));
+        let mut checked = engine(arch, platform);
+        checked.parse_type_library(ASSERTION_LIBRARY, None).unwrap();
+        checked.assert_named_types(measured.language_id(), measured.data_organization(), &expected).unwrap();
+        for mutation in ["size", "offset", "child", "enum", "callback", "identity"] {
+            let mut forged = expected.clone();
+            match mutation {
+                "size" => forged.iter_mut().find(|ty| ty.name == "Packet").unwrap().size = Some(1),
+                "offset" => forged.iter_mut().find(|ty| ty.name == "Packet").unwrap().fields[0].offset += 1,
+                "child" => {
+                    forged.iter_mut().find(|ty| ty.name == "Packet").unwrap().fields[1].identity =
+                        Some(serde_json::json!({"reference": "Inner"}));
+                }
+                "enum" => forged.iter_mut().find(|ty| ty.name == "Mode").unwrap().enum_values[0].value = "9".into(),
+                "callback" => {
+                    forged.iter_mut().find(|ty| ty.name == "Callback").unwrap().callback.as_mut().unwrap().parameters
+                        [1]
+                    .type_name = "float8".into();
+                }
+                "identity" => forged[0].identity = None,
+                _ => unreachable!(),
+            }
+            assert!(
+                checked.assert_named_types(measured.language_id(), measured.data_organization(), &forged).is_err(),
+                "accepted {mutation} for {arch}/{platform:?}"
+            );
+            assert_eq!(checked.type_inventory().unwrap(), expected, "assertions must not mutate or poison");
+        }
+        let mut wrong_model = measured.data_organization();
+        wrong_model.long = if wrong_model.long == 8 { 4 } else { 8 };
+        assert!(checked.assert_named_types(measured.language_id(), wrong_model, &expected).is_err());
+        assert!(
+            checked
+                .assert_named_types("x86:LE:64:default:nonexistent", measured.data_organization(), &expected)
+                .is_err()
+        );
+        checked.assert_named_types(measured.language_id(), measured.data_organization(), &expected).unwrap();
+    }
+}
+
+#[test]
+fn named_assertions_refuse_incomplete_dependencies_conflicts_and_oversized_records_before_queries() {
+    let mut engine = engine(Arch::X86_64, Platform::Default);
+    engine.parse_type_library(ASSERTION_LIBRARY, None).unwrap();
+    let expected = engine.type_inventory().unwrap();
+    let organization = engine.data_organization();
+    let language = engine.language_id().to_owned();
+    for mutation in [
+        "roots",
+        "duplicate",
+        "fields",
+        "parameters",
+        "dependencies",
+        "text",
+        "depth",
+        "graph",
+        "closure",
+        "incomplete",
+    ] {
+        let mut forged = expected.clone();
+        match mutation {
+            "roots" => forged = vec![forged[0].clone(); 257],
+            "duplicate" => forged.push(forged[0].clone()),
+            "fields" => {
+                let packet = forged.iter_mut().find(|ty| ty.name == "Packet").unwrap();
+                packet.fields = vec![packet.fields[0].clone(); 257];
+            }
+            "parameters" => {
+                let callback = forged.iter_mut().find(|ty| ty.name == "Callback").unwrap().callback.as_mut().unwrap();
+                callback.parameters = vec![callback.parameters[0].clone(); 257];
+            }
+            "dependencies" => forged[0].dependencies = vec!["Packet".into(); 257],
+            "text" => forged[0].name = "x".repeat(1024 * 1024 + 1),
+            "depth" => {
+                let mut identity = serde_json::json!({"reference": "int4"});
+                for _ in 0..33 {
+                    identity = serde_json::json!({"kind": 9, "target": identity});
+                }
+                forged[0].identity = Some(identity);
+            }
+            "graph" => {
+                forged[0].identity = Some(serde_json::json!({
+                    "kind": 4,
+                    "fields": vec![vec![serde_json::json!({"reference": "int4"}); 256]; 17]
+                }));
+            }
+            "closure" => forged.retain(|ty| ty.name != "Inner"),
+            "incomplete" => forged[0].incomplete = true,
+            _ => unreachable!(),
+        }
+        let error = engine.assert_named_types(&language, organization, &forged).unwrap_err().to_string();
+        assert!(!error.contains("metadata differs"), "must fail preflight for {mutation}: {error}");
+        assert_eq!(engine.type_inventory().unwrap(), expected);
+    }
+    engine.parse_type_library("struct Forward; typedef struct Forward *Handle;", None).unwrap();
+    assert!(engine.assert_named_types(&language, organization, &engine.type_inventory().unwrap()).is_err());
+    engine.assert_named_types(&language, organization, &expected).unwrap();
+}

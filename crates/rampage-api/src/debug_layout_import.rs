@@ -116,6 +116,7 @@ fn validate_replay_source_with(project: &Project, annotations: &Annotations, wor
             }
         }
         for text in annotations.signatures().values().filter(|text| text.starts_with('!')) {
+            let text = crate::debug_type_import::signature_declaration(text, annotations)?;
             signature(text, &layouts)?;
         }
     }

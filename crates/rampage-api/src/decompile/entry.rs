@@ -216,6 +216,8 @@ impl Project {
             debug_layout_import::validate_replay_budget(&current)?;
             current.snapshot()
         };
+        crate::debug_type_import::validate_replay_source(self, &annotations)?;
+        crate::debug_type_import::validate_options(&annotations, &options)?;
         if annotations.has_checked_layouts() {
             self.check_layout_options(&options)?;
         }
@@ -488,6 +490,8 @@ impl Project {
         };
         report_phase(EntryPreparationPhase::ResultValidation)?;
         check("result validation")?;
+        crate::debug_type_import::validate_replay_source(self, &annotations)?;
+        crate::debug_type_import::validate_options(&annotations, &options)?;
         crate::propagation::validate_replayed_targets(
             self,
             &options,

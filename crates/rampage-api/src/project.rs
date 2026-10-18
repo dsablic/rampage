@@ -559,6 +559,7 @@ impl Project {
             local_types: rows(annotations.local_types()),
             type_hints: rows(annotations.type_hints()),
             type_library: rows(annotations.type_library()),
+            debug_types: rows(annotations.debug_types()),
             data_types: rows(annotations.data_types()),
             operand_types: rows(annotations.operand_types()),
         }

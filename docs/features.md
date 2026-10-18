@@ -110,6 +110,12 @@ paging and recovery evidence, separate coordinate origins, no guessed full-frame
 persists them separately from analyst types. Native inference uses unlocked hints; conflicts and unsupported
 mappings remain visible. Limits: bounded scalar/pointer contexts, no forced analyst replacement or general
 alias proof.
+
+[Checked debug-type import](debug-types.md) reads bounded DWARF graphs and explicitly selected, identity-matched
+PDB types into the project library, with native counterpart checks and atomic signature/proof persistence.
+Limits: supported nested aggregates/arrays and scalar/pointer signatures; unknown alignments stay unknown,
+unsupported bitfields/qualifiers are not projected into complete source types, and C tag names alone do not
+resolve ambiguous CodeView forward identities.
 The decompiler library can inspect/assert complete flat-struct layouts for x86-64 GCC before using dependent
 prototypes. This read-only bridge compares native field offsets, sizes, alignment and leaf types against independent
 facts; it does not import debug layouts or persist assertions across engine rebuilds. Nested aggregates and inferred

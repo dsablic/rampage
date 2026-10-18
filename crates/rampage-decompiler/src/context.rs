@@ -190,6 +190,24 @@ pub fn require_verified_bundled_native_context() -> Result<VerifiedBundledContex
 }
 
 impl Decompiler {
+    /// Checks named consumer measurements under the same exact bundled-context boundary as checked layouts.
+    /// The API must separately constrain these records using retained producer evidence; matching metadata
+    /// (including consumer alignments) is not authentication or producer layout proof.
+    pub fn verify_bundled_named_types_counterpart(
+        &self,
+        language_id: &str,
+        organization: crate::DataOrganization,
+        expected: &[crate::NamedType],
+    ) -> Result<(), Error> {
+        crate::named_assertions::validate_named_types(language_id, organization, expected)?;
+        let before = require_verified_bundled_native_context()?;
+        self.assert_named_types(language_id, organization, expected)?;
+        if require_verified_bundled_native_context()? != before {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
     /// Earns a checked counterpart proof, separately measuring native facts before the whole-layout assertion.
     /// Expected leaf names/categories describe the canonical declaration actually parsed, not producer display
     /// names. Missing producer facts must remain missing in the caller's independently retained producer DTO.

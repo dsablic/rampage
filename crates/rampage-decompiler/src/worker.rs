@@ -34,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -157,6 +157,16 @@ pub enum WorkerOperation {
     TypeLibrary {
         declarations: String,
         packing: Option<u32>,
+    },
+    /// Read-only consumer-metadata consistency check; not producer proof or authentication.
+    /// Requires TypeLibrary replay first and precedes dependent globals/prototypes/hints.
+    AssertNamedTypes {
+        language_id: String,
+        organization: crate::DataOrganization,
+        types: Vec<crate::NamedType>,
+        /// Checked imports pin the child's exact embedded manifest before native initialization.
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "expected_context")]
+        expected_context: Option<String>,
     },
     /// Read-only, ephemeral check of an already parsed flat struct, before dependent prototypes.
     /// Reassert in every worker/session/compiler rebuild; this operation supplies no persistence.
@@ -900,11 +910,41 @@ fn validate_layout_operations(
     if let Some(TypeQuery::Get { name }) = &request.type_query {
         crate::type_library::validate_type_name(name).map_err(|error| WorkerError::Protocol(error.to_string()))?;
     }
+    let mut library_seen = false;
+    let mut named_assertion_seen = false;
+    let mut dependent_seen = false;
     for (index, operation) in request.operations.iter().enumerate() {
         if let WorkerOperation::TypeLibrary { declarations, packing } = operation {
+            if named_assertion_seen {
+                return Err(WorkerError::Protocol(format!(
+                    "operation {index}: library declarations follow named assertions"
+                )));
+            }
+            library_seen = true;
             crate::type_library::validate_library_input(declarations, *packing)
                 .map_err(|error| WorkerError::Protocol(format!("operation {index}: {error}")))?;
         }
+        if let WorkerOperation::AssertNamedTypes { language_id, organization, types, expected_context } = operation {
+            crate::named_assertions::validate_named_types(language_id, *organization, types)
+                .map_err(|error| WorkerError::Protocol(format!("operation {index}: {error}")))?;
+            if expected_context.as_deref().is_some_and(|text| !context_digest_valid(text)) {
+                return Err(WorkerError::Protocol("invalid checked context identity".to_owned()));
+            }
+            if !library_seen || dependent_seen {
+                return Err(WorkerError::Protocol(format!(
+                    "operation {index}: named assertions require prior library declarations and precede dependents"
+                )));
+            }
+            named_assertion_seen = true;
+        }
+        dependent_seen |= matches!(
+            operation,
+            WorkerOperation::Global { .. }
+                | WorkerOperation::Prototype { .. }
+                | WorkerOperation::RuntimePrototype { .. }
+                | WorkerOperation::TypeHints { .. }
+                | WorkerOperation::LocalVariables { .. }
+        );
         if let Some(budget) = budget {
             budget.check()?;
         }
@@ -932,7 +972,8 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
         other => other.to_string(),
     })?;
     let checked_context = request.operations.iter().find_map(|operation| match operation {
-        WorkerOperation::AssertPlainStructLayout { expected_context: Some(expected), .. } => Some(expected.as_str()),
+        WorkerOperation::AssertPlainStructLayout { expected_context: Some(expected), .. }
+        | WorkerOperation::AssertNamedTypes { expected_context: Some(expected), .. } => Some(expected.as_str()),
         _ => None,
     });
     if let Some(expected) = checked_context {
@@ -940,7 +981,8 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
         if expected != actual
             || request.operations.iter().any(|operation| {
                 matches!(operation,
-            WorkerOperation::AssertPlainStructLayout { expected_context: Some(other), .. } if other != expected)
+                    WorkerOperation::AssertPlainStructLayout { expected_context: Some(other), .. }
+                    | WorkerOperation::AssertNamedTypes { expected_context: Some(other), .. } if other != expected)
             })
         {
             return Err(
@@ -1010,6 +1052,15 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
                 engine.apply_prototype(address, indirect, &declaration)
             }
             WorkerOperation::ParseTypes { declarations } => engine.parse_c(&declarations),
+            WorkerOperation::AssertNamedTypes { language_id, organization, types, expected_context } => {
+                if types.iter().any(|ty| !protected_types.contains_key(&ty.name)) {
+                    Err(crate::Error::Ghidra("named assertion root was not registered by TypeLibrary".to_owned()))
+                } else if expected_context.is_some() {
+                    engine.verify_bundled_named_types_counterpart(&language_id, organization, &types)
+                } else {
+                    engine.assert_named_types(&language_id, organization, &types)
+                }
+            }
             WorkerOperation::TypeLibrary { declarations, packing } => (|| {
                 let before = engine.type_inventory()?;
                 let declared = engine.parse_type_library(&declarations, packing)?;

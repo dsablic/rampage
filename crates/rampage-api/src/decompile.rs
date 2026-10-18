@@ -138,6 +138,7 @@ pub(crate) struct DecompilerState {
     signatures: std::collections::BTreeMap<u64, String>,
     types: std::collections::BTreeMap<u64, String>,
     type_library: std::collections::BTreeMap<u64, String>,
+    debug_types: std::collections::BTreeMap<u64, String>,
     globals: std::collections::BTreeMap<u64, String>,
     data_types: std::collections::BTreeMap<u64, String>,
     local_names: std::collections::BTreeMap<u64, String>,
@@ -184,7 +185,9 @@ fn go_compiler(binary: &rampage_loaders::Binary) -> Option<String> {
 }
 
 pub(crate) fn validate_cached_layout_source(project: &Project, state: &DecompilerState) -> Result<(), ApiError> {
-    if state.types.values().chain(state.signatures.values()).any(|text| text.starts_with('!')) {
+    if !state.debug_types.is_empty()
+        || state.types.values().chain(state.signatures.values()).any(|text| text.starts_with('!'))
+    {
         crate::debug_layout_import::check_backing(project)?;
     }
     Ok(())
@@ -254,6 +257,8 @@ impl Project {
     ) -> Result<(), String> {
         validate_cached_layout_source(self, state).map_err(|error| error.to_string())?;
         crate::debug_layout_import::validate_replay_source(self, candidate).map_err(|error| error.to_string())?;
+        crate::debug_type_import::validate_replay_source(self, candidate).map_err(|error| error.to_string())?;
+        crate::debug_type_import::validate_options(candidate, options).map_err(|error| error.to_string())?;
         self.validate_type_library_snapshot(state, options, candidate).map_err(|error| error.to_string())?;
         if !candidate.data_types().is_empty() || !candidate.operand_types().is_empty() {
             let mut names = crate::typed_data::binding_names(candidate).map_err(|error| error.to_string())?;
@@ -282,6 +287,7 @@ impl Project {
         }
         if candidate.types().is_empty()
             && candidate.type_library().is_empty()
+            && candidate.debug_types().is_empty()
             && candidate.signatures().is_empty()
             && candidate.globals().is_empty()
             && candidate.data_types().is_empty()
@@ -455,6 +461,8 @@ impl Project {
             return Err(ApiError::Invalid("decompilation requires a file-backed code address".to_owned()));
         }
         let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
+        crate::debug_type_import::validate_replay_source(self, &annotations)?;
+        crate::debug_type_import::validate_options(&annotations, &options)?;
         let (annotations, automatic_limitations) =
             crate::propagation::lazy_context(self, &mut slot, &options, &annotations, start, cancellation)?;
         let name = self.function_name_in(&annotations, start);
@@ -481,6 +489,7 @@ impl Project {
         if slot.signatures != *annotations.signatures()
             || slot.types != *annotations.types()
             || slot.type_library != *annotations.type_library()
+            || slot.debug_types != *annotations.debug_types()
             || slot.globals != *annotations.globals()
             || slot.data_types != *annotations.data_types()
             || slot.local_names != *annotations.local_names()
@@ -503,6 +512,7 @@ impl Project {
             slot.signatures = annotations.signatures().clone();
             slot.types = annotations.types().clone();
             slot.type_library = annotations.type_library().clone();
+            slot.debug_types = annotations.debug_types().clone();
             slot.globals = annotations.globals().clone();
             slot.data_types = annotations.data_types().clone();
             slot.local_names = annotations.local_names().clone();
@@ -521,6 +531,7 @@ impl Project {
         }
         let code = decompiler.decompile(start, &name, thumb).map_err(native_decompile_error)?;
         crate::debug_layout_import::validate_replay_source(self, &annotations)?;
+        crate::debug_type_import::validate_replay_source(self, &annotations)?;
         let tokens = decompiler
             .tokens()
             .into_iter()
@@ -567,6 +578,8 @@ impl Project {
         hint_function: Option<u64>,
         hint_context: Option<&std::collections::BTreeSet<u64>>,
     ) -> Result<Decompiler, ApiError> {
+        crate::debug_type_import::validate_replay_source(self, annotations)?;
+        crate::debug_type_import::validate_options(annotations, options)?;
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         let binary = &self.binary;
         let regions = image::regions(binary)?;

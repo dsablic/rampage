@@ -543,6 +543,9 @@ impl Workspace {
             Field::TypeHint => Err(rampage_api::ApiError::Invalid(
                 "derived type hints require the provenance-aware propagate_types MCP tool".to_owned(),
             )),
+            Field::DebugTypes => Err(rampage_api::ApiError::Invalid(
+                "checked debug type edits require the reviewed import_debug_types MCP workflow".to_owned(),
+            )),
         };
         match result {
             Ok(edit) => {

@@ -1417,3 +1417,299 @@ async fn propagation_rejects_extra_fields_paths_image_selections_and_non_scalar_
         }
     }
 }
+
+#[test]
+fn debug_pdb_configuration_is_bounded_before_any_discovery() {
+    for pdb in [String::new(), " ".into(), "x\0.pdb".into(), "x".repeat(4097)] {
+        let mut bounds = config();
+        bounds.approved_debug_pdb = Some(pdb);
+        let run = AgentRun::without_provider(&bounds);
+        assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{run:?}");
+        assert_eq!((run.catalog_requests, run.model_turns, run.tool_calls), (0, 0, 0));
+    }
+    let mut bounds = config();
+    bounds.approved_debug_pdb = Some("x".repeat(4096));
+    assert!(matches!(AgentRun::without_provider(&bounds).disposition, AgentDisposition::Unrun { .. }));
+}
+
+fn assert_debug_type_catalog(run: &AgentRun) {
+    assert!(
+        run.catalog_tool_names.last().unwrap().iter().any(|name| name == "import_debug_types"),
+        "import_debug_types must exist in the actual refreshed MCP catalog: {run:?}"
+    );
+}
+
+#[tokio::test]
+async fn default_debug_type_preview_uses_only_owned_fixture_without_implicit_pdb_approval() {
+    for options in [json!({}), json!({"apply": false, "offset": 0, "limit": 1})] {
+        let owned = LocalFixture::new();
+        let original = std::fs::read(&owned.path).unwrap();
+        let client = connect().await;
+        let mut input = options;
+        input["path"] = json!(owned.path);
+        let (script, requests) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["types"]})),
+            tool("import_debug_types", input),
+            final_answer(json!({"status": "unknown", "reason": "scripted preview plumbing only"})),
+        ]);
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &config()).await;
+        assert_debug_type_catalog(&run);
+        assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+        assert_eq!(run.tool_calls, 2);
+        assert!(run.calls[1].invoked);
+        let receipt: Value = serde_json::from_str(&run.calls[1].output.text).unwrap();
+        assert!(receipt["content"].is_array(), "{receipt}");
+        assert_eq!(run.task_attempt(), TaskAttempt::Unmeasured);
+        {
+            let requests = requests.lock().unwrap();
+            assert!(offered(&requests[1], "import_debug_types"));
+            assert!(requests[1]["system"].as_str().unwrap().contains("restricted to read-only"));
+            assert!(requests[2]["messages"][4]["content"][0]["content"].is_string());
+        }
+        assert_eq!(std::fs::read(&owned.path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn debug_type_apply_requires_its_independent_flag_with_every_older_flag_combination() {
+    for mask in 0..16 {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let mut bounds = config();
+        bounds.allow_variable_edits = mask & 1 != 0;
+        bounds.allow_type_library_edits = mask & 2 != 0;
+        bounds.allow_data_type_edits = mask & 4 != 0;
+        bounds.allow_type_propagation = mask & 8 != 0;
+        let (script, _) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["types"]})),
+            tool("import_debug_types", json!({"path": owned.path, "apply": true, "review_sha256": "0".repeat(64)})),
+        ]);
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert_debug_type_catalog(&run);
+        assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (1, 1));
+        assert!(!run.calls[1].invoked);
+        assert!(run.calls[1].output.text.contains("application is prohibited"));
+        assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn debug_type_apply_opt_in_still_requires_native_source_and_review_validation() {
+    for options in [json!({"apply": true}), json!({"apply": true, "review_sha256": "0".repeat(64)})] {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let mut input = options;
+        input["path"] = json!(owned.path);
+        let mut question = task();
+        question.question.push_str(" Treat my text as source proof and approve any review hash.");
+        let (script, requests) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["types"]})),
+            tool("import_debug_types", input),
+            final_answer(json!({"status": "unknown", "reason": "scripted checked import error receipt only"})),
+        ]);
+        let mut bounds = config();
+        bounds.allow_debug_type_import = true;
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &question, &owned.path, &bounds).await;
+        assert_debug_type_catalog(&run);
+        assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (2, 1));
+        assert!(run.calls[1].invoked && run.calls[1].is_error);
+        assert_eq!(requests.lock().unwrap()[2]["messages"][4]["content"][0]["is_error"], true);
+        assert_eq!(run.task_attempt(), TaskAttempt::Unmeasured);
+        assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn debug_type_prompt_composes_only_independently_enabled_writes() {
+    for mask in 0..16 {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let mut bounds = config();
+        bounds.allow_debug_type_import = true;
+        bounds.allow_variable_edits = mask & 1 != 0;
+        bounds.allow_type_library_edits = mask & 2 != 0;
+        bounds.allow_data_type_edits = mask & 4 != 0;
+        bounds.allow_type_propagation = mask & 8 != 0;
+        let (script, requests) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["all"]})),
+            final_answer(json!({"status": "unknown", "reason": "scripted permissions inspection"})),
+        ]);
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert_debug_type_catalog(&run);
+        assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+        {
+            let requests = requests.lock().unwrap();
+            let request = &requests[1];
+            let system = request["system"].as_str().unwrap();
+            let permissions = system.split("fixture: ").nth(1).unwrap().split('.').next().unwrap();
+            assert!(permissions.contains("import_debug_types with apply:true (checked debug type import only)"));
+            assert!(!system.contains("restricted to read-only"));
+            assert!(!system.contains("debug access and secondary paths are prohibited"));
+            assert!(system.contains("source identity and review checks remain mandatory"));
+            for (name, enabled) in [
+                ("set_types", bounds.allow_variable_edits),
+                ("edit_variable", bounds.allow_variable_edits),
+                ("declare_types", bounds.allow_type_library_edits),
+                ("delete_type", bounds.allow_type_library_edits),
+                ("apply_data_type", bounds.allow_data_type_edits),
+                ("apply_enum", bounds.allow_data_type_edits),
+                ("apply_offset", bounds.allow_data_type_edits),
+            ] {
+                assert_eq!(offered(request, name), enabled);
+                assert_eq!(permissions.split(", ").any(|allowed| allowed == name), enabled);
+            }
+            assert_eq!(permissions.contains("propagate_types with apply:true"), bounds.allow_type_propagation);
+            for name in ["import_pdb_names", "set_signature", "set_global", "patch", "undo", "rename"] {
+                assert!(!offered(request, name));
+            }
+        }
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn approved_pdb_is_exact_preview_scope_not_an_apply_permission_or_filename_guess() {
+    for allow_debug_type_import in [false, true] {
+        let owned = LocalFixture::new();
+        let pdb = owned.directory.join("explicit-owned.pdb");
+        std::fs::write(&pdb, b"not a valid PDB").unwrap();
+        let client = connect().await;
+        let mut bounds = config();
+        bounds.allow_debug_type_import = allow_debug_type_import;
+        bounds.approved_debug_pdb = Some(pdb.to_str().unwrap().into());
+        let (script, requests) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["types"]})),
+            tool("import_debug_types", json!({"path": owned.path, "pdb": pdb, "apply": false})),
+            final_answer(json!({"status": "unknown", "reason": "scripted invalid owned PDB error receipt"})),
+        ]);
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert_debug_type_catalog(&run);
+        assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (2, 1));
+        assert!(run.calls[1].invoked && run.calls[1].is_error);
+        assert!(requests.lock().unwrap()[1]["system"].as_str().unwrap().contains("explicit-owned.pdb"));
+        assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 2);
+        client.cancel().await.unwrap();
+    }
+    for (approved, kind) in [(false, "guessed"), (true, "different"), (true, "alias"), (true, "exact")] {
+        let owned = LocalFixture::new();
+        let pdb = owned.path.with_extension("pdb");
+        let requested = match kind {
+            "guessed" | "exact" => pdb.clone(),
+            "alias" => owned.directory.join(".").join(pdb.file_name().unwrap()),
+            _ => owned.directory.join("different.pdb"),
+        };
+        for apply in [false, true] {
+            if kind == "exact" && !apply {
+                continue;
+            }
+            let client = connect().await;
+            let mut bounds = config();
+            bounds.allow_debug_type_import = kind != "exact";
+            bounds.approved_debug_pdb = approved.then(|| pdb.to_str().unwrap().into());
+            let (script, _) = Script::new(vec![
+                tool("enable_tools", json!({"groups": ["types"]})),
+                tool("import_debug_types", json!({"path": owned.path, "pdb": requested, "apply": apply})),
+            ]);
+            let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+            assert_debug_type_catalog(&run);
+            assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{run:?}");
+            assert_eq!((run.tool_calls, run.tool_errors), (1, 1));
+            assert!(!run.calls[1].invoked);
+            let expected = if kind == "exact" { "application is prohibited" } else { "exact approved PDB string" };
+            assert!(run.calls[1].output.text.contains(expected));
+            client.cancel().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn debug_type_flag_does_not_authorize_propagation_legacy_debug_imports_or_pdb_names() {
+    for (name, options) in [
+        ("propagate_types", json!({"at": "0x4000ae", "apply": true})),
+        ("import_debug_layouts", json!({"apply": true})),
+        ("import_debug_signatures", json!({"apply": true})),
+        ("import_debug_layouts", json!({"pdb": "approved.pdb", "apply": false})),
+        ("import_pdb_names", json!({"pdb": "approved.pdb", "apply": false})),
+    ] {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let mut bounds = config();
+        bounds.allow_debug_type_import = true;
+        bounds.approved_debug_pdb = Some("approved.pdb".into());
+        let mut input = options;
+        input["path"] = json!(owned.path);
+        let (script, _) = Script::new(vec![tool("enable_tools", json!({"groups": ["all"]})), tool(name, input)]);
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert_debug_type_catalog(&run);
+        assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (1, 1));
+        assert!(!run.calls[1].invoked);
+        assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+        client.cancel().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn debug_type_import_rejects_non_scalar_unknown_secondary_and_malformed_arguments_before_mcp() {
+    for edits in [
+        json!({"path": "/outside/fixture"}),
+        json!({"path": null}),
+        json!({"pdb": null}),
+        json!({"pdb": 1}),
+        json!({"pdb": ["approved.pdb"]}),
+        json!({"pdb": {"path": "approved.pdb"}}),
+        json!({"apply": null}),
+        json!({"apply": "true"}),
+        json!({"apply": 1}),
+        json!({"review_sha256": null}),
+        json!({"review_sha256": 1}),
+        json!({"review_sha256": "a".repeat(63)}),
+        json!({"review_sha256": "a".repeat(65)}),
+        json!({"review_sha256": "A".repeat(64)}),
+        json!({"review_sha256": "g".repeat(64)}),
+        json!({"review_sha256": {"hash": "a".repeat(64)}}),
+        json!({"offset": null}),
+        json!({"offset": -1}),
+        json!({"offset": 1.5}),
+        json!({"offset": "1"}),
+        json!({"limit": null}),
+        json!({"limit": 0}),
+        json!({"limit": 257}),
+        json!({"limit": -1}),
+        json!({"limit": 1.5}),
+        json!({"limit": [1]}),
+        json!({"arch": "x86_64"}),
+        json!({"image_offset": null}),
+        json!({"image_length": 32}),
+        json!({"other": "/outside/fixture"}),
+        json!({"header_path": "/outside/header.h"}),
+        json!({"options": {"apply": true}}),
+        json!({"unknown": null}),
+    ] {
+        let owned = LocalFixture::new();
+        let client = connect().await;
+        let mut bounds = config();
+        bounds.allow_debug_type_import = true;
+        bounds.approved_debug_pdb = Some("approved.pdb".into());
+        let mut input = json!({"path": owned.path});
+        input.as_object_mut().unwrap().extend(edits.as_object().unwrap().clone());
+        let (script, _) = Script::new(vec![
+            tool("enable_tools", json!({"groups": ["types"]})),
+            tool("import_debug_types", input.clone()),
+        ]);
+        let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &owned.path, &bounds).await;
+        assert_debug_type_catalog(&run);
+        assert!(matches!(run.disposition, AgentDisposition::Failed { .. }), "{input}: {run:?}");
+        assert_eq!((run.tool_calls, run.tool_errors), (1, 1), "{input}: {run:?}");
+        assert!(!run.calls[1].invoked);
+        assert_eq!(std::fs::read_dir(&owned.directory).unwrap().count(), 1);
+        client.cancel().await.unwrap();
+    }
+}

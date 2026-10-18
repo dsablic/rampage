@@ -201,6 +201,16 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
                     .verify_bundled_plain_struct_counterpart(&layout)
                     .map_err(|error| ApiError::Invalid(error.to_string()))?
             }
+            WorkerOperation::AssertNamedTypes { language_id, organization, types, expected_context } => {
+                if expected_context.as_deref()
+                    != Some(crate::debug_layout_import::current_specification_digest()?.as_str())
+                {
+                    return Err(ApiError::Invalid("named type assertion specification context changed".into()));
+                }
+                engine
+                    .verify_bundled_named_types_counterpart(&language_id, organization, &types)
+                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
+            }
             WorkerOperation::Global { address, declaration } => {
                 engine.add_global(address, &declaration).map_err(|error| failure(address, "apply global", error))?
             }

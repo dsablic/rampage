@@ -60,8 +60,8 @@ impl Group {
             }
             Group::Types => {
                 "Project type libraries, C headers, signatures, type declarations and globals, \
-                 reviewed checked DWARF layout/signature import, \
-                 demangled names and Itanium vtable/RTTI evidence, and explicit identity-matched PDB name import."
+                 reviewed checked DWARF/PDB type and signature import, \
+                 demangled names and Itanium vtable/RTTI evidence, and explicit identity-matched PDB names."
             }
             Group::Runtime => {
                 "Memory snapshot evidence: captured pointer slots, pointer comparisons across captures, runtime \
@@ -712,6 +712,20 @@ struct PropagateTypesArgs {
     apply: bool,
     max_functions: Option<usize>,
     max_candidates: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ImportDebugTypesArgs {
+    /// Explicit identity-matched PDB path; omit for embedded DWARF. No recorded path or sidecar is followed.
+    pdb: Option<String>,
+    /// Apply the complete reviewed library/signature batch. Preview is read-only.
+    #[serde(default)]
+    apply: bool,
+    /// Whole-plan review hash from a fresh preview; page boundaries do not limit approval or writes.
+    review_sha256: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
 }
 
 pub(crate) fn data_typing_view(result: &impl Serialize) -> Result<Value, ApiError> {
@@ -2084,6 +2098,30 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: RenameArgs| {
                 let name = edit_value(arguments.name, arguments.clear, "name")?;
                 project.rename(project.resolve(&arguments.at)?, name.as_deref())
+            },
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "import_debug_types",
+            "Preview checked project-library types and scalar/pointer function signatures from embedded DWARF \
+             or an explicit identity-matched PDB. Independently compares retained producer facts with native \
+             target layouts; unknown producer alignment stays unknown. Apply requires the whole-plan review \
+             hash and commits the complete library/proof/signature batch atomically. Unsupported bitfields, \
+             dependencies and ABI shapes remain explicit; no partial record is presented as complete. No \
+             implicit debug paths, downloads, host preprocessor or executable-byte changes. Paging is read-only \
+             detail selection, never a write subset. Identity linkage is not source authentication.",
+            |project, args: ImportDebugTypesArgs| {
+                let request = crate::DebugTypesRequest {
+                    pdb: args.pdb.map(std::path::PathBuf::from),
+                    apply: args.apply,
+                    review_sha256: args.review_sha256,
+                    offset: args.offset.unwrap_or(0),
+                    limit: args.limit.unwrap_or(DEFAULT_PAGE),
+                };
+                let result = project
+                    .import_debug_types_with_preflight(&request, |result| data_typing_view(result).map(|_| ()))?;
+                data_typing_view(&result)
             },
         )
         .annotates(),

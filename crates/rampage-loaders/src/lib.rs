@@ -24,6 +24,7 @@ pub use load::{Binary, Embedded, ImageAt, InventorySourceContext, LoadError};
 pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
 mod checked_snapshot;
 pub mod debug;
+pub mod debug_types;
 pub mod dotnet;
 pub mod gopclntab;
 pub mod objc;

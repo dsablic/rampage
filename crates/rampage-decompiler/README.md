@@ -156,6 +156,31 @@ embedded specification manifest and a compatible process-cached context. `verify
 `require_verified_bundled_native_context` expose the respective fresh-worker and native-context checks;
 `verify_bundled_plain_struct_counterpart` measures native facts without filling unknown producer evidence.
 
+### Named-type library consistency assertions
+
+`Decompiler::assert_named_types(language_id: &str, organization: DataOrganization, expected: &[NamedType])`
+is a separate read-only primitive for nested structs, arrays, unions, enums, self-pointers and declared callbacks.
+It checks the live selected language/compiler and pointer/int/long byte widths, then independently calls `get_type`
+for every exact root and compares complete metadata. Supply the complete non-core named dependency closure:
+native identities terminate recursion at named references, so omitting a child is not a complete assertion.
+Stale/conflicting/incomplete/unsupported records fail before success; no parsing, mutation or name creation occurs.
+Ordinary failed assertions leave the engine usable. Bitfields remain unsupported by the native parser.
+
+Expected records are consumer measurements that checked-import callers must independently constrain using producer
+evidence; their alignments are not producer facts. Success is neither authentication nor producer layout proof.
+This does not replace `PlainStructLayout`, checked v1/v2 paths or the exact bundled-context counterpart guards.
+`verify_bundled_named_types_counterpart(language_id, organization, expected)` additionally requires the exact
+verified bundled native context before and after the assertion, without replacing producer constraints.
+The worker's optional `expected_context` manifest SHA-256 pins its embedded bundle before initialization and
+selects this guarded counterpart; omission preserves manual assertions, including external specifications.
+
+Preflight precedes native queries, cloning or output allocation: 1..256 roots, 256 fields/dependencies/enum entries/
+callback parameters, 256-byte strings, depth 32 and 4096 total identity JSON nodes, and one MiB serialized records.
+Native inventory retains its own one-MiB output limit. The worker `assert_named_types` operation uses the same
+validation, including validation-only requests, after all library declarations and before dependent annotations.
+Raw worker requests receive bounded allocation-free wire preflight before Serde buffering. Direct third-party
+Serde decoding is not an allocation-safety guarantee.
+
 ## Structured output and limits
 
 Results include semantic tokens and an engine-derived `structure`: typed signature/parameter storage, local
@@ -184,7 +209,7 @@ Text output is bounded to four MiB and tokens to 262,144; the engine also retain
 Sessions select a sibling worker automatically when installed beside the application; `tools/install.sh`
 installs the worker and CLI together, optionally with the UI. Direct `Project` construction remains explicitly
 opt-in; `Session::open` also selects a sibling worker when present.
-Worker protocol version 7 carries ordered symbol/type/prototype/global/mode, `no_return`, local-variable,
+Worker protocol version 8 carries ordered symbol/type/prototype/global/mode, `no_return`, local-variable,
 soft-type-hint and layout-assertion operations; mismatched request or response versions are rejected. Install CLI and worker
 together rather than mixing builds.
 The protocol bounds input/output, drains pipes concurrently, cancels/times out and reaps failed children without

@@ -181,6 +181,7 @@ pub(super) fn entry_types(
         entry_result_dependencies(text, maximum, false, &mut widths)?;
     }
     for text in annotations.signatures().values() {
+        let text = crate::debug_type_import::signature_declaration(text, annotations)?;
         let text = debug_layout_import::signature(text, &layouts)?;
         super::types::validate(text)?;
         entry_result_dependencies(text, maximum, false, &mut widths)?;

@@ -11,6 +11,7 @@ mod correlation;
 mod data;
 mod debug_import;
 mod debug_layout_import;
+pub(crate) mod debug_type_import;
 mod debugger;
 mod debugger_capture;
 mod decode_content;
@@ -75,6 +76,9 @@ pub use debug_layout_import::{
     DebugLayoutFunction, DebugLayoutImport, DebugLayoutPreview, DebugLayoutProjection, DebugLayoutReport,
     DebugLayoutReview, DebugLayoutType, DebugLayoutVirtualEvidence, DebugLayoutVirtualMethodEvidence,
     DebugLayoutVtableEvidence,
+};
+pub use debug_type_import::{
+    DebugTypesDetail, DebugTypesImport, DebugTypesManifest, DebugTypesRequest, DebugTypesSignature,
 };
 pub use debugger::{
     DebuggerAddress, DebuggerBackend, DebuggerError, DebuggerObservation, DebuggerPermissions, DebuggerRequest,

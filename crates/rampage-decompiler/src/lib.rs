@@ -23,6 +23,7 @@ pub mod worker;
 pub use results::{StructuredResult, parse_results};
 
 pub use abi::{DataOrganization, DecompilerOptions, Platform, language_id, language_id_with_options};
+mod named_assertions;
 pub use context::{VerifiedBundledContext, require_verified_bundled_native_context, verify_bundled_specifications};
 pub use specs::sleigh_home;
 

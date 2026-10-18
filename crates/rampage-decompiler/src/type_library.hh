@@ -311,6 +311,35 @@ inline void emit(Json &json, Datatype *type, const std::map<Datatype *, int4> &p
     json.append("}");
 }
 
+// Assertion-only admission. Inspection remains available for incomplete and unsupported native types.
+inline void assertCompleteGraph(Datatype *type, std::set<Datatype *> &seen, size_t depth = 0) {
+    if (!seen.insert(type).second) return;
+    if (depth > 32 || seen.size() > 4096)
+        throw LowlevelError("Named assertion native graph exceeds depth/node bounds (32/4096)");
+    if (type->isIncomplete() || type->hasBitfields())
+        throw LowlevelError("Named assertion requires complete non-bitfield native types");
+    type_metatype kind = type->getMetatype();
+    if (kind != TYPE_VOID && kind != TYPE_INT && kind != TYPE_UINT && kind != TYPE_BOOL
+        && kind != TYPE_FLOAT && kind != TYPE_CODE && kind != TYPE_PTR && kind != TYPE_ARRAY
+        && kind != TYPE_STRUCT && kind != TYPE_UNION)
+        throw LowlevelError("Named assertion native type kind is unsupported");
+    if (kind != TYPE_VOID && kind != TYPE_CODE
+        && (type->getSize() <= 0 || type->getSize() > 1048576 || type->getAlignment() <= 0))
+        throw LowlevelError("Named assertion native size/alignment is unavailable or unsupported");
+    bounded(type->numDepend());
+    for (int4 i = 0; i < type->numDepend(); ++i)
+        assertCompleteGraph(type->getDepend(i), seen, depth + 1);
+    if (type->getTypedef() != nullptr) assertCompleteGraph(type->getTypedef(), seen, depth + 1);
+    if (kind == TYPE_CODE) {
+        const PrototypePieces *decl = static_cast<TypeCode *>(type)->getDeclaration();
+        if (decl == nullptr || decl->model == nullptr)
+            throw LowlevelError("Named assertion requires a declared callback and native model");
+        bounded(decl->intypes.size());
+        assertCompleteGraph(decl->outtype, seen, depth + 1);
+        for (Datatype *parameter : decl->intypes) assertCompleteGraph(parameter, seen, depth + 1);
+    }
+}
+
 struct Token { std::string text; size_t start; size_t end; };
 
 inline std::vector<Token> tokenize(const std::string &text) {

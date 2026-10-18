@@ -7,7 +7,28 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
-## Protocol version 7
+## Protocol version 8
+
+`assert_named_types` adds a read-only check after all `type_library` declarations and before dependent
+globals, prototypes, local overrides and hints. Its fields are `language_id`, `organization` (the byte
+widths `pointer`, `int`, `long`), `types` (complete native `NamedType` records), and optional
+`expected_context` (canonical 64-character lowercase SHA-256 of the embedded specification manifest). It independently
+queries every exact root and compares all metadata, including structural identities and callback models.
+Every non-core named dependency must be included among the roots, and each root must come from library
+replay, not legacy `parse_types`. The check runs in validation-only requests too. Later legacy operations
+remain subject to library-root protection. No duplicate declarations should be stored in legacy types.
+
+This is consumer-measurement consistency, not authentication or producer layout proof: alignments remain
+consumer facts. Checked import callers supply `expected_context` to pin the worker's exact embedded manifest
+before native initialization; the guarded native counterpart then rechecks the bundled context before and
+after assertions. Callers independently enforce producer constraints. Existing flat-layout checked paths and their exact context guards remain
+unchanged. Unsupported/incomplete identities and unknown callback declarations refuse without changing
+types or poisoning an otherwise usable native engine.
+
+Limits: 1..256 roots, 256 fields/dependencies/enum entries/parameters, 256-byte strings, identity depth 32
+and 4096 total identity JSON nodes, and one MiB serialized expected records. Raw worker assertions also
+receive an allocation-free one-MiB wire preflight (256 entries per array, depth 32, 32 object keys,
+64K JSON nodes); arbitrary third-party Serde decoding is not an allocation-safety boundary.
 
 `type_hints` replaces the pending unlocked native evidence for one function:
 
@@ -70,7 +91,7 @@ consecutive hexadecimal pairs with no prefix. Mapping permissions and zero-fill 
 
 ```json
 {
-   "version": 7,
+   "version": 8,
   "arch": "x86_64",
   "big_endian": false,
   "options": { "platform": "default", "compiler": null },
@@ -97,6 +118,7 @@ The worker installs initial `code_modes`, then replays `operations` in their sup
 | `import` | `slot`, optional `target`, `name` |
 | `parse_types` | `declarations` |
 | `type_library` | type-only `declarations`, optional `packing` (1, 2, 4, 8, or 16) |
+| `assert_named_types` | `language_id`, `organization`: `pointer`/`int`/`long`, `types` closure; optional `expected_context` |
 | `assert_plain_struct_layout` | `layout`: complete bounded descriptor; optional `expected_context` manifest SHA-256 |
 | `prototype` | `address`, `indirect`, `declaration` |
 | `runtime_prototype` | `address`, `indirect`, canonical runtime `name`, optional `optional` boolean |
@@ -109,8 +131,8 @@ failed setup operation is a structured error identifying the operation index. `o
 runtime identities while preserving other setup errors. Unknown fields and versions are
 rejected.
 
-Responses are `{ "version": 7, "status": "ok", "output": ... }` or
-`{ "version": 7, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
+Responses are `{ "version": 8, "status": "ok", "output": ... }` or
+`{ "version": 8, "status": "error", "message": ... }`. Successful output includes C `text`, `language_id`,
 `data_organization` (`pointer`, `int`, `long` byte widths), and optional semantic `tokens` with `text`, `kind`, and
 optional numeric `address` and byte `span`. Native struct/union field identifiers use kind `field`; their
 spans match the current C text and their addresses identify the originating P-code operation when available.

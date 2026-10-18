@@ -31,6 +31,110 @@ fn config() -> WorkerConfig {
 }
 
 #[test]
+fn named_assertions_have_worker_native_parity_including_validation_only_requests() {
+    use rampage_decompiler::{Decompiler, DecompilerOptions, Platform};
+
+    let declarations = "enum Mode { Idle = -3, Busy = 7 }; struct Inner { long count; int code; };
+        union Payload { struct Inner inner; unsigned char bytes[16]; };
+        typedef int (*Callback)(struct Packet *packet, enum Mode mode);
+        struct Packet { struct Inner rows[2]; union Payload payload; enum Mode mode;
+                        Callback callback; struct Packet *next; };";
+    for (platform, arch_name, platform_name) in [
+        (Platform::Windows, "x86_64", "windows"),
+        (Platform::Default, "x86_64", "default"),
+        (Platform::Default, "aarch64", "default"),
+    ] {
+        let mut native = Decompiler::open_with_options(
+            arch_name.parse().unwrap(),
+            false,
+            &[],
+            &DecompilerOptions { platform, compiler: None, arm_be8: false },
+        )
+        .unwrap();
+        native.parse_type_library(declarations, None).unwrap();
+        let types = native.type_inventory().unwrap();
+        let assertion = WorkerOperation::AssertNamedTypes {
+            language_id: native.language_id().to_owned(),
+            organization: native.data_organization(),
+            types: types.clone(),
+            expected_context: None,
+        };
+        for validate_only in [false, true] {
+            let mut request = request(TypeQuery::Inventory, validate_only);
+            request.arch = arch_name.to_owned();
+            request.options.platform = platform_name.to_owned();
+            request.operations = vec![
+                WorkerOperation::TypeLibrary { declarations: declarations.to_owned(), packing: None },
+                assertion.clone(),
+            ];
+            let output = run_supervised(&request, &config(), None).unwrap();
+            assert_eq!(output.language_id, native.language_id());
+            assert_eq!(output.type_inventory.unwrap(), types);
+            let mut checked = request.clone();
+            let digest = rampage_decompiler::verify_bundled_specifications().unwrap().manifest_sha256();
+            let digest = digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+            let WorkerOperation::AssertNamedTypes { expected_context, .. } = &mut checked.operations[1] else {
+                unreachable!()
+            };
+            *expected_context = Some(digest);
+            assert_eq!(run_supervised(&checked, &config(), None).unwrap().type_inventory.unwrap(), types);
+            let WorkerOperation::AssertNamedTypes { expected_context, .. } = &mut checked.operations[1] else {
+                unreachable!()
+            };
+            *expected_context = Some("0".repeat(64));
+            let error = run_supervised(&checked, &config(), None).unwrap_err().to_string();
+            assert!(error.contains("specification identity"), "{error}");
+            for mutation in ["size", "offset", "identity", "enum", "callback", "organization", "language", "oversized"]
+            {
+                let mut forged = request.clone();
+                let WorkerOperation::AssertNamedTypes { language_id, organization, types, .. } =
+                    &mut forged.operations[1]
+                else {
+                    unreachable!()
+                };
+                match mutation {
+                    "size" => types.iter_mut().find(|ty| ty.name == "Packet").unwrap().size = Some(1),
+                    "offset" => types.iter_mut().find(|ty| ty.name == "Packet").unwrap().fields[0].offset += 1,
+                    "identity" => {
+                        types.iter_mut().find(|ty| ty.name == "Packet").unwrap().fields[1].identity =
+                            Some(serde_json::json!({"reference": "Inner"}));
+                    }
+                    "enum" => types.iter_mut().find(|ty| ty.name == "Mode").unwrap().enum_values[0].value = "9".into(),
+                    "callback" => {
+                        types
+                            .iter_mut()
+                            .find(|ty| ty.name == "Callback")
+                            .unwrap()
+                            .callback
+                            .as_mut()
+                            .unwrap()
+                            .variadic = true;
+                    }
+                    "organization" => organization.pointer = 4,
+                    "language" => *language_id = "AARCH64:LE:64:v8A:gcc".into(),
+                    "oversized" => *types = vec![types[0].clone(); 257],
+                    _ => unreachable!(),
+                }
+                assert!(run_supervised(&forged, &config(), None).is_err(), "accepted {mutation}");
+            }
+            let mut reordered = request.clone();
+            reordered.operations.swap(0, 1);
+            assert!(run_supervised(&reordered, &config(), None).is_err());
+            let mut late = request.clone();
+            late.operations.insert(1, WorkerOperation::Global { address: 0x2000, declaration: "int object;".into() });
+            let error = run_supervised(&late, &config(), None).unwrap_err().to_string();
+            assert!(error.contains("precede dependents"), "{error}");
+            let mut changed = request.clone();
+            changed.operations.push(WorkerOperation::ParseTypes {
+                declarations: "typedef struct { char replacement; } Inner;".to_owned(),
+            });
+            let error = run_supervised(&changed, &config(), None).unwrap_err().to_string();
+            assert!(error.contains("operation 2"), "{error}");
+        }
+    }
+}
+
+#[test]
 fn worker_replays_multiple_anonymous_typedef_batches_without_empty_name_collisions() {
     let mut request = request(TypeQuery::Inventory, true);
     request.operations = vec![

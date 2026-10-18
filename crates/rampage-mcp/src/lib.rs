@@ -72,7 +72,11 @@ successful decoding do not authenticate content or prove stream boundaries.
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
 yara_scan and capa_detect (user-supplied rules); data packs extend these databases, and list_packs shows which are \
-loaded with their licence and provenance. Types: propagate_types previews bounded direct-call candidates and \
+loaded with their licence and provenance. Types: import_debug_types reviews embedded DWARF or an explicit \
+identity-matched PDB into the project library. Native counterparts constrain retained producer facts; unknown \
+alignment and unsupported bitfields/qualifiers remain explicit. Whole-plan review hashes gate one atomic \
+library/proof/signature batch, not a page. Identity is linkage, not source authentication. \
+propagate_types previews bounded direct-call candidates and \
 optionally stores source-fingerprinted unlocked hints; analyst types win and conflicts/unsupported mappings \
 remain explicit. Ordinary decompilation may derive ephemeral context without changing the hint log. \
 function_frame pages native locals/parameters with current \

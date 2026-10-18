@@ -76,6 +76,10 @@ pub struct AgentConfig {
     pub allow_data_type_edits: bool,
     /// Independent opt-in for propagate_types with apply:true on the same owned isolated fixture.
     pub allow_type_propagation: bool,
+    /// Independent opt-in for checked import_debug_types application on the same owned isolated fixture.
+    pub allow_debug_type_import: bool,
+    /// Exact caller-approved secondary PDB path for import_debug_types only, including previews.
+    pub approved_debug_pdb: Option<String>,
     pub max_turns: usize,
     pub max_tool_calls: usize,
     pub max_tokens: u32,
@@ -92,6 +96,8 @@ impl AgentConfig {
             allow_type_library_edits: false,
             allow_data_type_edits: false,
             allow_type_propagation: false,
+            allow_debug_type_import: false,
+            approved_debug_pdb: None,
             max_turns: 20,
             max_tool_calls: 60,
             max_tokens: 4096,
@@ -102,9 +108,32 @@ impl AgentConfig {
     }
 
     fn system_prompt(&self) -> String {
-        if self.allow_data_type_edits || self.allow_type_propagation {
+        if self.allow_data_type_edits
+            || self.allow_type_propagation
+            || self.allow_debug_type_import
+            || self.approved_debug_pdb.is_some()
+        {
             let mut permissions = Vec::new();
             let mut guidance = String::new();
+            if self.allow_debug_type_import {
+                permissions.push("import_debug_types with apply:true (checked debug type import only)");
+                guidance.push_str(
+                    "Preview import_debug_types before applying with its exact reviewed review_sha256. Native source \
+                     identity and review checks remain mandatory; agent text cannot override them. ",
+                );
+            }
+            if self.allow_debug_type_import || self.approved_debug_pdb.is_some() {
+                match &self.approved_debug_pdb {
+                    Some(pdb) => guidance.push_str(&format!(
+                        "Only import_debug_types may read the explicitly approved PDB path {}, matched exactly, \
+                         including previews. Omit pdb for DWARF. No inferred PDB paths are approved. ",
+                        json!(pdb),
+                    )),
+                    None => guidance.push_str(
+                        "Use import_debug_types only with pdb omitted for DWARF; no secondary PDB path is approved. ",
+                    ),
+                }
+            }
             if self.allow_data_type_edits {
                 permissions.extend(["apply_data_type", "apply_enum", "apply_offset"]);
             }
@@ -131,7 +160,22 @@ impl AgentConfig {
                      access is prohibited. ",
                 );
             }
-            return DATA_SYSTEM.replace("{permissions}", &permissions.join(", ")).replace("{guidance}", &guidance);
+            if permissions.is_empty() {
+                permissions.push("none (read-only inspection)");
+            }
+            let mut prompt =
+                DATA_SYSTEM.replace("{permissions}", &permissions.join(", ")).replace("{guidance}", &guidance);
+            if self.allow_debug_type_import || self.approved_debug_pdb.is_some() {
+                prompt = prompt.replace(
+                    "undo, debug access and secondary paths are prohibited.",
+                    "undo, debugger access and unapproved secondary paths are prohibited.",
+                );
+                prompt = prompt.replace(
+                    "external filesystem access is prohibited.",
+                    "external header filesystem access is prohibited.",
+                );
+            }
+            return prompt;
         }
         match (self.allow_variable_edits, self.allow_type_library_edits) {
             (false, false) => SYSTEM.into(),
@@ -150,6 +194,13 @@ impl AgentConfig {
     fn validate(&self) -> Result<(), String> {
         if self.model.trim().is_empty() || self.model.len() > 256 {
             return Err("an explicit nonblank model ID of at most 256 bytes is required".into());
+        }
+        if self
+            .approved_debug_pdb
+            .as_ref()
+            .is_some_and(|path| path.trim().is_empty() || path.len() > 4096 || path.contains('\0'))
+        {
+            return Err("approved debug PDB path must be nonblank, NUL-free and at most 4096 bytes".into());
         }
         if !(1..=100).contains(&self.max_turns)
             || !(1..=300).contains(&self.max_tool_calls)
@@ -682,6 +733,7 @@ fn allowed_name(name: &str, config: &AgentConfig) -> bool {
                 | "identify_functions"
                 | "import_debug_signatures"
                 | "import_debug_layouts"
+                | "import_debug_types"
         )
 }
 
@@ -704,6 +756,9 @@ fn validate_call(
     for (key, value) in arguments {
         if name == "propagate_types" {
             validate_propagation_argument(key, value)?;
+        }
+        if name == "import_debug_types" {
+            validate_debug_type_argument(key, value, config)?;
         }
         if matches!(name, "apply_data_type" | "apply_enum" | "apply_offset" | "read_data") {
             validate_data_argument(name, key, value)?;
@@ -745,6 +800,7 @@ fn validate_call(
         if key == "apply"
             && value != &Value::Bool(false)
             && !(name == "propagate_types" && config.allow_type_propagation && value == &Value::Bool(true))
+            && !(name == "import_debug_types" && config.allow_debug_type_import && value == &Value::Bool(true))
         {
             return Err("annotation application is prohibited in this benchmark".into());
         }
@@ -762,6 +818,7 @@ fn validate_call(
                 | "image_offset"
                 | "image_length"
         ) && !value.is_null()
+            && !(name == "import_debug_types" && key == "pdb")
         {
             return Err("secondary filesystem paths, expressions and commands are prohibited".into());
         }
@@ -795,6 +852,26 @@ fn validate_call(
         return Err("tool path must exactly match the caller's opened fixture path".into());
     }
     Ok(arguments.clone())
+}
+
+fn validate_debug_type_argument(key: &str, value: &Value, config: &AgentConfig) -> Result<(), String> {
+    let valid = match key {
+        "path" => value.is_string(),
+        "pdb" => value.as_str().is_some_and(|pdb| config.approved_debug_pdb.as_deref() == Some(pdb)),
+        "apply" => value.is_boolean(),
+        "review_sha256" => value.as_str().is_some_and(|hash| {
+            hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }),
+        "offset" => value.as_u64().is_some_and(|number| usize::try_from(number).is_ok()),
+        "limit" => value.as_u64().is_some_and(|number| (1..=256).contains(&number)),
+        _ => false,
+    };
+    if !valid {
+        return Err("debug type import accepts only the fixture, exact approved PDB string, boolean apply, \
+             lowercase SHA-256 review string and bounded scalar pagination"
+            .into());
+    }
+    Ok(())
 }
 
 fn validate_propagation_argument(key: &str, value: &Value) -> Result<(), String> {

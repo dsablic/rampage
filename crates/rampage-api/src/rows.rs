@@ -176,6 +176,7 @@ pub struct AnnotationList {
     pub data_types: Vec<Annotation>,
     pub operand_types: Vec<Annotation>,
     pub type_hints: Vec<Annotation>,
+    pub debug_types: Vec<Annotation>,
 }
 
 /// The outcome of a rename or comment.

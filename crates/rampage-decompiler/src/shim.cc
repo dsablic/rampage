@@ -176,6 +176,8 @@ public:
     MemArchitecture(const string &target, MemImage *img, ostream *estream)
         : SleighArchitecture("memory", target, estream), image(img) {}
 
+    const string &selectedLanguage() const { return archid; }
+
     void resetTranslationCache() {
         const_cast<Sleigh *>(static_cast<const Sleigh *>(translate))->clearCache();
     }
@@ -842,6 +844,36 @@ uint64_t rampage_decomp_import_target(void *h, uint64_t slot) noexcept {
     if (handle->arch == nullptr || handle->poisoned) return 0;
     auto found = handle->imports.find(slot);
     return found == handle->imports.end() ? 0 : found->second->getRefAddr().getOffset();
+}
+
+const char *rampage_decomp_assert_named_shape(void *h, const char *name) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    if (handle == nullptr || handle->arch == nullptr || handle->poisoned)
+        return "Decompiler handle is unavailable";
+    try {
+        Datatype *type = name == nullptr ? nullptr : handle->arch->types->findByName(name);
+        if (type == nullptr) throw LowlevelError("Named assertion type does not exist");
+        std::set<Datatype *> seen;
+        rampage::type_library::assertCompleteGraph(type, seen);
+        return nullptr;
+    } catch (const LowlevelError &error) {
+        return setError(handle, error.explain.c_str());
+    } catch (...) {
+        return setError(handle, "Named assertion native shape validation failed");
+    }
+}
+
+const char *rampage_decomp_assert_type_model(void *h, const char *language,
+        uint8_t pointerSize, uint8_t intSize, uint8_t longSize) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    if (handle == nullptr || handle->arch == nullptr || handle->poisoned)
+        return "Decompiler handle is unavailable";
+    if (language == nullptr || handle->arch->selectedLanguage() != language
+        || handle->arch->types->getSizeOfPointer() != pointerSize
+        || handle->arch->types->getSizeOfInt() != intSize
+        || handle->arch->types->getSizeOfLong() != longSize)
+        return "Named type assertion target/compiler organization mismatch";
+    return nullptr;
 }
 
 void rampage_decomp_data_organization(void *h, int32_t *pointerSize, int32_t *intSize, int32_t *longSize) noexcept {

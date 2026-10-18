@@ -380,6 +380,7 @@ impl App {
             Field::DataType => format!("Data type {:#x}", editing.address),
             Field::OperandType => format!("Operand type {:#x}", editing.address),
             Field::TypeHint => format!("Derived type hints {:#x}", editing.address),
+            Field::DebugTypes => "Checked debug type imports".to_owned(),
         };
         let mut done = false;
         let mut cancel = false;

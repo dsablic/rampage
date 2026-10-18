@@ -13,6 +13,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{Binary, LoadError};
 
+mod types;
+pub use types::matched_types_checked;
+
 pub const MAX_PDB_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FUNCTIONS: usize = 100_000;
 const MAX_MODULES: usize = 10_000;
@@ -272,6 +275,15 @@ fn with_backing_source<T>(binary: &Binary, work: impl FnOnce() -> Result<T, Load
     let result = work();
     binary.validate_backing_source()?;
     result
+}
+
+/// Reads the selected image's bounded RSDS linkage identity without opening any PDB or recorded debug path.
+pub fn selected_image_identity(binary: &Binary) -> Result<PdbIdentity, LoadError> {
+    with_backing_source(binary, || match object::File::parse(binary.image_bytes())? {
+        object::File::Pe32(file) => image_identity(&file),
+        object::File::Pe64(file) => image_identity(&file),
+        _ => Err(LoadError::Unsupported("PDB identity requires a PE image".to_owned())),
+    })
 }
 
 fn match_report(

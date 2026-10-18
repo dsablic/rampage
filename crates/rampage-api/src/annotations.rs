@@ -28,6 +28,7 @@ pub enum Field {
     Signature,
     Types,
     TypeLibrary,
+    DebugTypes,
     Global,
     LocalName,
     LocalType,
@@ -171,7 +172,7 @@ fn canonical_operand_types(entries: &mut [OperandTypeAnnotation]) {
 }
 
 fn checked_annotation_field(field: Field) -> bool {
-    matches!(field, Field::TypeLibrary | Field::DataType | Field::OperandType | Field::TypeHint)
+    matches!(field, Field::TypeLibrary | Field::DebugTypes | Field::DataType | Field::OperandType | Field::TypeHint)
 }
 
 /// Function-local names keyed by complete storage selectors, never by generated names.
@@ -478,9 +479,100 @@ fn validate_type_library(entries: &[LibraryDeclaration]) -> Result<(), String> {
     Ok(())
 }
 
+/// Structural storage envelope only; import semantics and native proofs are checked by the API.
+pub fn parse_debug_types(value: &str) -> Result<serde_json::Value, String> {
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Envelope {
+        version: u64,
+        imports: Vec<serde_json::Value>,
+    }
+
+    preflight_typed_value(value)?;
+    let envelope: Envelope =
+        serde_json::from_str(value).map_err(|error| format!("invalid debug types annotation: {error}"))?;
+    let value = serde_json::to_value(envelope).map_err(|error| error.to_string())?;
+    validate_debug_types(&value)?;
+    Ok(value)
+}
+
+pub fn encode_debug_types(value: &serde_json::Value) -> Result<String, String> {
+    validate_debug_types(value)?;
+    let mut encoded = CheckedLogBuffer::default();
+    serde_json::to_writer(&mut encoded, value).map_err(|error| error.to_string())?;
+    if encoded.bytes.len() > CHECKED_VALUE_BYTES {
+        return Err(CHECKED_ERROR.to_owned());
+    }
+    checked_json_preflight(&encoded.bytes, false)?;
+    String::from_utf8(encoded.bytes).map_err(|error| error.to_string())
+}
+
+fn validate_debug_types(value: &serde_json::Value) -> Result<(), String> {
+    let root = value.as_object().ok_or("debug types require a versioned object envelope")?;
+    if root.len() != 2 || root.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
+        return Err("debug types require exactly version 1 and imports".to_owned());
+    }
+    let imports =
+        root.get("imports").and_then(serde_json::Value::as_array).ok_or("debug types require an imports array")?;
+    if imports.is_empty() || imports.len() > 16 {
+        return Err("debug types require 1..=16 imports; clear with None".to_owned());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for import in imports {
+        let import = import.as_object().ok_or("debug type imports must be objects")?;
+        let id = import.get("id").and_then(serde_json::Value::as_str).ok_or("debug type imports require an id")?;
+        if id.len() != 64
+            || !id.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || !ids.insert(id)
+        {
+            return Err("debug type import ids must be unique lowercase 64-digit hexadecimal".to_owned());
+        }
+        if let Some(names) = import.get("library_names") {
+            let names = names.as_array().ok_or("debug type library_names must be an array")?;
+            if names.len() > 256 {
+                return Err("debug type imports allow at most 256 library names".to_owned());
+            }
+            for name in names {
+                validate_data_type_name(name.as_str().ok_or("debug type library names must be strings")?)?;
+            }
+        }
+    }
+    validate_debug_types_text(value, 0)
+}
+
+fn validate_debug_types_text(value: &serde_json::Value, depth: usize) -> Result<(), String> {
+    let depth = depth + usize::from(value.is_array() || value.is_object());
+    if depth > 8 {
+        return Err(CHECKED_ERROR.to_owned());
+    }
+    match value {
+        serde_json::Value::String(text) if text.contains('\0') => {
+            return Err("debug type annotations must not contain NUL".to_owned());
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                validate_debug_types_text(value, depth)?;
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for (key, value) in values {
+                if key.contains('\0') {
+                    return Err("debug type annotations must not contain NUL".to_owned());
+                }
+                validate_debug_types_text(value, depth)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn validate_project_address(field: Field, address: u64) -> Result<(), String> {
     if field == Field::TypeLibrary && address != 0 {
         return Err("the project-wide type library requires address 0".to_owned());
+    }
+    if field == Field::DebugTypes && address != 0 {
+        return Err("project-wide debug types require address 0".to_owned());
     }
     Ok(())
 }
@@ -593,6 +685,7 @@ fn canonical_local_value(field: Field, value: Option<&str>) -> Result<Option<Str
             Field::LocalType => encode_local_types(&parse_local_types(value)?),
             Field::TypeHint => encode_type_hints(&parse_type_hints(value)?),
             Field::TypeLibrary => encode_type_library(&parse_type_library(value)?),
+            Field::DebugTypes => encode_debug_types(&parse_debug_types(value)?),
             Field::DataType => encode_data_type(&parse_data_type(value)?),
             Field::OperandType => encode_operand_types(&parse_operand_types(value)?),
             _ => Ok(value.to_owned()),
@@ -606,6 +699,7 @@ fn validate_local_value(field: Field, value: &str) -> Result<(), String> {
         Field::LocalType => parse_local_types(value).map(|_| ()),
         Field::TypeHint => parse_type_hints(value).map(|_| ()),
         Field::TypeLibrary => parse_type_library(value).map(|_| ()),
+        Field::DebugTypes => parse_debug_types(value).map(|_| ()),
         Field::DataType => parse_data_type(value).map(|_| ()),
         Field::OperandType => parse_operand_types(value).map(|_| ()),
         _ => Ok(()),
@@ -708,6 +802,7 @@ pub struct Annotations {
     signatures: BTreeMap<u64, String>,
     types: BTreeMap<u64, String>,
     type_library: BTreeMap<u64, String>,
+    debug_types: BTreeMap<u64, String>,
     globals: BTreeMap<u64, String>,
     local_names: BTreeMap<u64, String>,
     local_types: BTreeMap<u64, String>,
@@ -874,6 +969,7 @@ impl Annotations {
 
     fn has_checked_annotations(&self) -> bool {
         !self.type_library.is_empty()
+            || !self.debug_types.is_empty()
             || !self.data_types.is_empty()
             || !self.operand_types.is_empty()
             || !self.type_hints.is_empty()
@@ -904,6 +1000,7 @@ impl Annotations {
             .saturating_add(self.signatures.len())
             .saturating_add(self.types.len())
             .saturating_add(self.type_library.len())
+            .saturating_add(self.debug_types.len())
             .saturating_add(self.globals.len())
             .saturating_add(self.local_names.len())
             .saturating_add(self.local_types.len())
@@ -926,6 +1023,7 @@ impl Annotations {
             .chain(self.signatures.values())
             .chain(self.types.values())
             .chain(self.type_library.values())
+            .chain(self.debug_types.values())
             .chain(self.globals.values())
             .chain(self.local_names.values())
             .chain(self.local_types.values())
@@ -1025,6 +1123,7 @@ impl Annotations {
             signatures: self.signatures.clone(),
             types: self.types.clone(),
             type_library: self.type_library.clone(),
+            debug_types: self.debug_types.clone(),
             globals: self.globals.clone(),
             local_names: self.local_names.clone(),
             local_types: self.local_types.clone(),
@@ -1128,6 +1227,7 @@ impl Annotations {
             self.signatures.clear();
             self.types.clear();
             self.type_library.clear();
+            self.debug_types.clear();
             self.globals.clear();
             self.local_names.clear();
             self.local_types.clear();
@@ -1145,8 +1245,12 @@ impl Annotations {
     fn apply(&mut self, edit: &Edit) {
         self.revision = std::sync::Arc::new(());
         if matches!(edit.field, Field::Types | Field::Signature) {
-            let old = self.field_map(edit.field).get(&edit.address).is_some_and(|text| text.starts_with('!'));
-            let new = edit.value.as_ref().is_some_and(|text| text.starts_with('!'));
+            let managed = |text: &str| {
+                text.starts_with('!')
+                    && (edit.field != Field::Signature || !crate::debug_type_import::is_signature_seal(text))
+            };
+            let old = self.field_map(edit.field).get(&edit.address).is_some_and(|text| managed(text));
+            let new = edit.value.as_ref().is_some_and(|text| managed(text));
             if old != new {
                 if new {
                     self.managed_layouts += 1;
@@ -1187,6 +1291,7 @@ impl Annotations {
             Field::Signature
             | Field::Types
             | Field::TypeLibrary
+            | Field::DebugTypes
             | Field::Global
             | Field::LocalName
             | Field::LocalType
@@ -1197,6 +1302,7 @@ impl Annotations {
                     Field::Signature => &mut self.signatures,
                     Field::Types => &mut self.types,
                     Field::TypeLibrary => &mut self.type_library,
+                    Field::DebugTypes => &mut self.debug_types,
                     Field::LocalName => &mut self.local_names,
                     Field::LocalType => &mut self.local_types,
                     Field::TypeHint => &mut self.type_hints,
@@ -1619,6 +1725,7 @@ impl Annotations {
         for edit in &edits {
             candidate.apply(edit);
         }
+        candidate.validate_local_collections()?;
         validate(&candidate)?;
         let mut applied = Vec::new();
         for edit in edits {
@@ -1732,6 +1839,7 @@ impl Annotations {
                 Field::Signature
                     | Field::Types
                     | Field::TypeLibrary
+                    | Field::DebugTypes
                     | Field::Global
                     | Field::LocalName
                     | Field::LocalType
@@ -1786,6 +1894,7 @@ impl Annotations {
             Field::Signature => &self.signatures,
             Field::Types => &self.types,
             Field::TypeLibrary => &self.type_library,
+            Field::DebugTypes => &self.debug_types,
             Field::Global => &self.globals,
             Field::LocalName => &self.local_names,
             Field::LocalType => &self.local_types,
@@ -1827,6 +1936,10 @@ impl Annotations {
         &self.type_library
     }
 
+    pub fn debug_types(&self) -> &BTreeMap<u64, String> {
+        &self.debug_types
+    }
+
     pub fn globals(&self) -> &BTreeMap<u64, String> {
         &self.globals
     }
@@ -1865,6 +1978,10 @@ impl Annotations {
             validate_project_address(Field::TypeLibrary, address)?;
             parse_type_library(value)?;
         }
+        for (&address, value) in &self.debug_types {
+            validate_project_address(Field::DebugTypes, address)?;
+            parse_debug_types(value)?;
+        }
         for address in self.local_names.keys().chain(self.local_types.keys()) {
             let names =
                 self.local_names.get(address).map(|value| parse_local_names(value)).transpose()?.unwrap_or_default();
@@ -1876,6 +1993,7 @@ impl Annotations {
                 return Err("local override count exceeds 256 per function".to_owned());
             }
         }
+        crate::debug_type_import::validate_retained_proofs(self)?;
         Ok(())
     }
 }
@@ -1887,6 +2005,10 @@ mod local_tests;
 #[cfg(test)]
 #[path = "annotations_type_library_tests.rs"]
 mod type_library_tests;
+
+#[cfg(test)]
+#[path = "annotations_debug_types_tests.rs"]
+pub(crate) mod debug_types_tests;
 
 #[cfg(test)]
 #[path = "annotations_data_types_tests.rs"]
