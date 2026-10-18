@@ -376,6 +376,7 @@ where
                 if let Some(owner) = jump_owners.insert(*target, result.function.address)
                     && owner != result.function.address
                     && !known.contains(target)
+                    && !undecodable.contains(target)
                 {
                     added.insert(*target);
                 }
@@ -1517,6 +1518,42 @@ mod tests {
         let program = run(&[0x06, 0xc3], &[0, 1]);
         assert!(program.function_at(0).is_none());
         assert!(program.function_at(1).is_some());
+    }
+
+    #[test]
+    fn a_shared_undecodable_jump_target_is_not_reintroduced() {
+        let memory = FlatMemory { base: 0, bytes: vec![0xeb, 2, 0xeb, 0, 0x06] };
+        let mut expected = None;
+        for threads in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+            let decoders = std::sync::atomic::AtomicUsize::new(0);
+            let program = pool.install(|| {
+                discover(
+                    &memory,
+                    || {
+                        assert!(
+                            decoders.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 64,
+                            "undecodable shared tail discovery did not converge"
+                        );
+                        decoder_for(Arch::X86_64).unwrap()
+                    },
+                    &[0, 2],
+                )
+            });
+            assert_eq!(program.functions.iter().map(|function| function.address).collect::<Vec<_>>(), [0, 2]);
+            assert_eq!(blocks(&program, 0), [(0, 2)]);
+            assert_eq!(blocks(&program, 2), [(2, 4)]);
+            assert_eq!(
+                program.xrefs_to(4),
+                [Xref { to: 4, from: 0, kind: XrefKind::Jump }, Xref { to: 4, from: 2, kind: XrefKind::Jump }]
+            );
+            assert!(program.noreturn.is_empty());
+            if let Some(expected) = &expected {
+                assert_eq!(&program, expected);
+            } else {
+                expected = Some(program);
+            }
+        }
     }
 
     #[test]
