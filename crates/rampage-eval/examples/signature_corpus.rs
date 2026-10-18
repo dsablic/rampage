@@ -1,4 +1,13 @@
+#[path = "signature_corpus_support/linked_inputs.rs"]
+mod linked_inputs;
+#[path = "signature_corpus_support/ownership.rs"]
+mod ownership;
 mod signature_corpus_support;
+
+#[cfg(test)]
+mod fixture_support {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/pdb/support.rs"));
+}
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
@@ -6,19 +15,43 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use object::{Object, ObjectSymbol};
+use linked_inputs::{LinkedInputs, apply_definitions, frozen_starter};
+use object::{Object, ObjectSection, ObjectSymbol};
 use rampage_eval::{Truth, discovered_extents, proposals, score};
 use rampage_loaders::Binary;
 use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, function_hash_in};
 use serde_json::{Value, json};
 use signature_corpus_support::{digest, verify_twin};
 
+const NEGATIVE_PREFIX: &str = "__rampage_corpus_negative_";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum OwnershipScope {
+    PublicStrong,
+    LinkedArtifact,
+}
+
 #[derive(Parser)]
 struct Arguments {
     #[arg(long)]
     reference: PathBuf,
+    /// Explicit identity-matched reference PDB; required for PE producer procedure sizes.
+    #[arg(long, requires = "target_pdb")]
+    pdb: Option<PathBuf>,
+    /// Explicit identity-matched target PDB; never used by stripped-target discovery.
+    #[arg(long, requires = "pdb")]
+    target_pdb: Option<PathBuf>,
     #[arg(long = "object", required = true)]
     objects: Vec<PathBuf>,
+    #[arg(long, value_enum, default_value = "public-strong")]
+    ownership_scope: OwnershipScope,
+    #[arg(long, required_if_eq("ownership_scope", "linked-artifact"))]
+    reference_map: Option<PathBuf>,
+    #[arg(long, required_if_eq("ownership_scope", "linked-artifact"))]
+    target_map: Option<PathBuf>,
+    /// JSON receipt array or runtime-provenance object with archive_member_receipts.
+    #[arg(long, required_if_eq("ownership_scope", "linked-artifact"))]
+    member_receipts: Option<PathBuf>,
     #[arg(long)]
     target: PathBuf,
     #[arg(long)]
@@ -32,15 +65,41 @@ struct Arguments {
     diagnostic_limit: u16,
 }
 
+impl Arguments {
+    fn linked_paths(&self) -> Result<Option<(&Path, &Path, &Path)>, String> {
+        match (self.ownership_scope, &self.reference_map, &self.target_map, &self.member_receipts) {
+            (OwnershipScope::PublicStrong, None, None, None) => Ok(None),
+            (OwnershipScope::LinkedArtifact, Some(reference), Some(target), Some(receipts)) => {
+                if self.pdb.is_some() || self.target_pdb.is_some() {
+                    return Err("linked-artifact ownership supports ELF Linux/System V only, not PE/PDB".into());
+                }
+                Ok(Some((reference, target, receipts)))
+            }
+            (OwnershipScope::PublicStrong, ..) => {
+                Err("maps/member receipts require --ownership-scope linked-artifact".into())
+            }
+            _ => Err("linked-artifact ownership requires reference-map, target-map and member-receipts".into()),
+        }
+    }
+}
+
 fn read(path: &Path) -> Result<Vec<u8>, String> {
+    read_bounded(path, 256 * 1024 * 1024)
+}
+
+fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    if !std::fs::metadata(path).map_err(|error| error.to_string())?.is_file() {
+        return Err("signature corpus requires regular input files".into());
+    }
     let file = std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let size = file.metadata().map_err(|error| error.to_string())?.len();
-    if size > 256 * 1024 * 1024 {
-        return Err("signature corpus input exceeds 256 MiB".into());
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let size = metadata.len();
+    if !metadata.is_file() || size > limit {
+        return Err(format!("signature corpus input exceeds {} MiB", limit / (1024 * 1024)));
     }
     use std::io::Read;
     let mut bytes = Vec::new();
-    file.take(256 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    file.take(limit + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
     if bytes.len() as u64 != size {
         return Err("signature corpus input changed length while reading".into());
     }
@@ -50,9 +109,10 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
 fn owned_names(
     paths: &[PathBuf],
     architecture: object::Architecture,
+    format: object::BinaryFormat,
 ) -> Result<(BTreeSet<String>, Vec<String>), String> {
-    if paths.is_empty() || paths.len() > 1024 {
-        return Err("signature corpus requires 1..1024 explicit library objects".into());
+    if paths.is_empty() || paths.len() > signature_corpus_support::MAX_LIBRARY_OBJECTS {
+        return Err("signature corpus requires 1..2048 explicit library objects".into());
     }
     let mut names = BTreeSet::new();
     let mut hashes = Vec::new();
@@ -60,18 +120,18 @@ fn owned_names(
         let bytes = read(path)?;
         hashes.push(digest(&bytes));
         let file = object::File::parse(bytes.as_slice()).map_err(|error| error.to_string())?;
-        if file.architecture() != architecture || file.kind() != object::ObjectKind::Relocatable {
-            return Err(format!("{}: expected a same-architecture library object", path.display()));
+        if file.architecture() != architecture
+            || file.kind() != object::ObjectKind::Relocatable
+            || file.format() != format
+        {
+            return Err(format!("{}: expected a same-format, same-architecture library object", path.display()));
         }
         for symbol in file.symbols() {
             if symbol.is_undefined()
                 || symbol.kind() != object::SymbolKind::Text
                 || !symbol.is_global()
                 || symbol.is_weak()
-                || !matches!(
-                    symbol.flags().elf_visibility(),
-                    Some(object::elf::STV_DEFAULT | object::elf::STV_PROTECTED)
-                )
+                || !public_definition(&file, &symbol)
             {
                 continue;
             }
@@ -92,6 +152,62 @@ fn owned_names(
     Ok((names, hashes))
 }
 
+fn public_definition(file: &object::File<'_>, symbol: &object::Symbol<'_, '_>) -> bool {
+    match file.format() {
+        object::BinaryFormat::Elf => {
+            matches!(symbol.flags().elf_visibility(), Some(object::elf::STV_DEFAULT | object::elf::STV_PROTECTED))
+        }
+        object::BinaryFormat::Coff | object::BinaryFormat::Pe => {
+            symbol.section_index().and_then(|index| file.section_by_index(index).ok()).is_some_and(|section| {
+                matches!(section.flags(), object::SectionFlags::Coff { characteristics }
+                    if characteristics.contains(object::pe::IMAGE_SCN_CNT_CODE)
+                        && characteristics.contains(object::pe::IMAGE_SCN_MEM_EXECUTE))
+            })
+        }
+        _ => false,
+    }
+}
+
+struct ProcedureEvidence {
+    provenance: rampage_loaders::pdb::PdbProvenance,
+    public_definitions: BTreeSet<(u64, String)>,
+}
+
+fn procedure_symbols(
+    procedures: Vec<rampage_loaders::pdb::PdbProcedure>,
+) -> (Vec<rampage_loaders::Symbol>, BTreeSet<(u64, String)>) {
+    let public = procedures
+        .iter()
+        .filter(|procedure| procedure.global)
+        .map(|procedure| (procedure.address, procedure.name.clone()))
+        .collect();
+    let symbols = procedures
+        .into_iter()
+        .map(|procedure| rampage_loaders::Symbol {
+            name: procedure.name,
+            address: procedure.address,
+            size: procedure.size,
+            kind: rampage_loaders::SymbolKind::Function,
+        })
+        .collect();
+    (symbols, public)
+}
+
+fn load_procedures(binary: &mut Binary, pdb: Option<&Path>) -> Result<Option<ProcedureEvidence>, String> {
+    if binary.format != rampage_loaders::Format::Pe {
+        if pdb.is_some() {
+            return Err("explicit PDB procedure truth requires a PE image".into());
+        }
+        return Ok(None);
+    }
+    let pdb = pdb.ok_or("PE corpus requires explicit --pdb and --target-pdb producer sizes")?;
+    let (procedures, provenance) =
+        rampage_loaders::pdb::matched_procedures_checked(binary, pdb).map_err(|error| error.to_string())?;
+    let (symbols, public_definitions) = procedure_symbols(procedures);
+    binary.symbols = symbols;
+    Ok(Some(ProcedureEvidence { provenance, public_definitions }))
+}
+
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .create_new(true)
@@ -101,7 +217,35 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes).map_err(|error| error.to_string())
 }
 
-fn retain_owned(binary: &mut Binary, names: &BTreeSet<String>) -> Result<(), String> {
+fn open_image(path: &Path) -> Result<Binary, String> {
+    let bytes = read(path)?;
+    let binary = Binary::open(path).map_err(|error| error.to_string())?;
+    if bytes != binary.image_bytes() {
+        return Err("selected image changed between bounded read and loader admission".into());
+    }
+    Ok(binary)
+}
+
+fn retain_definitions(
+    symbols: &mut Vec<rampage_loaders::Symbol>,
+    names: &BTreeSet<String>,
+    owned: &BTreeSet<(u64, String)>,
+) -> Result<(), String> {
+    let mut addresses = BTreeMap::new();
+    for (address, name) in owned.iter().filter(|(_, name)| names.contains(name)) {
+        if addresses.insert(name, address).is_some_and(|previous| previous != address) {
+            return Err(format!("ambiguous global linked library definition {name}"));
+        }
+    }
+    symbols.retain(|symbol| names.contains(&symbol.name) && owned.contains(&(symbol.address, symbol.name.clone())));
+    Ok(())
+}
+
+fn retain_owned(binary: &mut Binary, names: &BTreeSet<String>, pdb: Option<&ProcedureEvidence>) -> Result<(), String> {
+    if binary.format == rampage_loaders::Format::Pe {
+        let pdb = pdb.ok_or("PE ownership requires explicit PDB procedure binding evidence")?;
+        return retain_definitions(&mut binary.symbols, names, &pdb.public_definitions);
+    }
     let file = object::File::parse(binary.image_bytes()).map_err(|error| error.to_string())?;
     let mut owned = BTreeSet::new();
     for symbol in file.symbols().filter(|symbol| {
@@ -109,7 +253,7 @@ fn retain_owned(binary: &mut Binary, names: &BTreeSet<String>) -> Result<(), Str
             && !symbol.is_weak()
             && !symbol.is_undefined()
             && symbol.kind() == object::SymbolKind::Text
-            && matches!(symbol.flags().elf_visibility(), Some(object::elf::STV_DEFAULT | object::elf::STV_PROTECTED))
+            && public_definition(&file, symbol)
     }) {
         let name = symbol.name().map_err(|error| error.to_string())?;
         if names.contains(name) {
@@ -117,8 +261,25 @@ fn retain_owned(binary: &mut Binary, names: &BTreeSet<String>) -> Result<(), Str
             owned.insert((address, name.to_owned()));
         }
     }
-    binary.symbols.retain(|symbol| owned.contains(&(symbol.address, symbol.name.clone())));
-    Ok(())
+    retain_definitions(&mut binary.symbols, names, &owned)
+}
+
+fn append_collision_evidence(
+    reference: &mut Binary,
+    all_symbols: Vec<rampage_loaders::Symbol>,
+    owned_addresses: &BTreeSet<u64>,
+) {
+    reference.symbols.extend(
+        all_symbols
+            .into_iter()
+            .filter(|symbol| {
+                symbol.kind == rampage_loaders::SymbolKind::Function && !owned_addresses.contains(&symbol.address)
+            })
+            .map(|mut symbol| {
+                symbol.name = format!("{NEGATIVE_PREFIX}{:x}", symbol.address);
+                symbol
+            }),
+    );
 }
 
 fn diagnostic_body(
@@ -150,19 +311,46 @@ fn diagnostic_body(
         "callee_name_input_source":name_source,"match_evidence":evidence})
 }
 
+fn paired_reference<'a>(
+    symbols: &'a [rampage_loaders::Symbol],
+    target: &rampage_loaders::Symbol,
+    ownership: Option<&(ownership::OwnershipReceipt, ownership::OwnershipReceipt)>,
+) -> Option<&'a rampage_loaders::Symbol> {
+    if let Some((reference, linked_target)) = ownership {
+        let source = linked_target.definitions.iter().find(|definition| {
+            definition.address == target.address && definition.raw_name == target.name && definition.size == target.size
+        })?;
+        let original = reference.definitions.iter().find(|definition| {
+            definition.object_index == source.object_index
+                && definition.source_symbol_index == source.source_symbol_index
+        })?;
+        symbols.iter().find(|symbol| {
+            symbol.address == original.address && symbol.name == original.raw_name && symbol.size == original.size
+        })
+    } else {
+        symbols.iter().find(|original| original.name == target.name)
+    }
+}
+
 fn run(arguments: Arguments) -> Result<(), String> {
-    let mut reference = Binary::open(&arguments.reference).map_err(|error| error.to_string())?;
-    let target = Binary::open(&arguments.target).map_err(|error| error.to_string())?;
-    let stripped = Binary::open(&arguments.stripped).map_err(|error| error.to_string())?;
+    let linked_paths = arguments.linked_paths()?;
+    let mut reference = open_image(&arguments.reference)?;
+    let target = open_image(&arguments.target)?;
+    let stripped = open_image(&arguments.stripped)?;
+    let reference_pdb = load_procedures(&mut reference, arguments.pdb.as_deref())?;
     let reference_file = object::File::parse(reference.image_bytes()).map_err(|error| error.to_string())?;
     let architecture = reference_file.architecture();
+    let object_format = match reference_file.format() {
+        object::BinaryFormat::Pe => object::BinaryFormat::Coff,
+        format => format,
+    };
     if digest(reference.image_bytes()) == digest(target.image_bytes()) {
         return Err("reference and target must be different linked programs, not copies of one image".into());
     }
-    let (names, mut object_hashes) = owned_names(&arguments.objects, architecture)?;
     let reference_model = reference.target();
     let target_model = target.target();
-    if reference_model.arch != target_model.arch
+    if reference.format != target.format
+        || reference_model.arch != target_model.arch
         || reference_model.big_endian != target_model.big_endian
         || reference_model.data_big_endian != target_model.data_big_endian
     {
@@ -170,35 +358,45 @@ fn run(arguments: Arguments) -> Result<(), String> {
     }
     let reference_extents = discovered_extents(&reference).map_err(|error| error.to_string())?;
     let all_reference_symbols = reference.symbols.clone();
-    retain_owned(&mut reference, &names)?;
+    let mut target_truth = open_image(&arguments.target)?;
+    let target_pdb = load_procedures(&mut target_truth, arguments.target_pdb.as_deref())?;
+    let linked_inputs = linked_paths
+        .map(|(reference_map, target_map, receipts)| {
+            LinkedInputs::load(&arguments.objects, reference_map, target_map, receipts)
+        })
+        .transpose()?;
+    let (names, mut object_hashes, linked_ownership) = if let Some(inputs) = &linked_inputs {
+        let reference_receipt = inputs.collect(&reference, true)?;
+        let target_receipt = inputs.collect(&target_truth, false)?;
+        let names = reference_receipt.definitions.iter().map(|definition| definition.raw_name.clone()).collect();
+        apply_definitions(&mut reference, &reference_receipt);
+        apply_definitions(&mut target_truth, &target_receipt);
+        (names, inputs.object_hashes(), Some((reference_receipt, target_receipt)))
+    } else {
+        let (names, hashes) = owned_names(&arguments.objects, architecture, object_format)?;
+        retain_owned(&mut reference, &names, reference_pdb.as_ref())?;
+        retain_owned(&mut target_truth, &names, target_pdb.as_ref())?;
+        (names, hashes, None)
+    };
     let owned_symbols = reference.symbols.clone();
     let owned_addresses: BTreeSet<_> = canonical_functions(&reference).keys().copied().collect();
-    const NEGATIVE_PREFIX: &str = "__rampage_corpus_negative_";
     if names.iter().any(|name| name.starts_with(NEGATIVE_PREFIX)) {
         return Err("library name conflicts with the corpus negative-example namespace".into());
     }
-    reference.symbols.extend(
-        all_reference_symbols
-            .into_iter()
-            .filter(|symbol| {
-                symbol.kind == rampage_loaders::SymbolKind::Function && !owned_addresses.contains(&symbol.address)
-            })
-            .map(|mut symbol| {
-                symbol.name = format!("{NEGATIVE_PREFIX}{:x}", symbol.address);
-                symbol
-            }),
-    );
-    let mut target_truth = Binary::open(&arguments.target).map_err(|error| error.to_string())?;
-    retain_owned(&mut target_truth, &names)?;
-    for (role, symbols) in [("reference", &owned_symbols), ("target", &target_truth.symbols)] {
-        let retained: BTreeSet<_> = symbols
-            .iter()
-            .filter(|symbol| symbol.kind == rampage_loaders::SymbolKind::Function && symbol.size > 0)
-            .map(|symbol| symbol.name.clone())
-            .collect();
-        let missing: Vec<_> = names.difference(&retained).take(8).collect();
-        if !missing.is_empty() {
-            return Err(format!("{role} dropped or lost sized library definitions: {missing:?}; disable linker GC"));
+    append_collision_evidence(&mut reference, all_reference_symbols, &owned_addresses);
+    if linked_ownership.is_none() {
+        for (role, symbols) in [("reference", &owned_symbols), ("target", &target_truth.symbols)] {
+            let retained: BTreeSet<_> = symbols
+                .iter()
+                .filter(|symbol| symbol.kind == rampage_loaders::SymbolKind::Function && symbol.size > 0)
+                .map(|symbol| symbol.name.clone())
+                .collect();
+            let missing: Vec<_> = names.difference(&retained).take(8).collect();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "{role} dropped or lost sized library definitions: {missing:?}; disable linker GC"
+                ));
+            }
         }
     }
     let truth = Truth::from_binary(&target_truth);
@@ -212,9 +410,11 @@ fn run(arguments: Arguments) -> Result<(), String> {
         SignatureDb::from_json(&format!("{{\"arch\":\"{}\",\"scheme\":2,\"entries\":{{}}}}", reference.arch))
             .map_err(|error| error.to_string())
     };
-    let baseline_available = rampage_signatures::bundled_counts(reference.arch).is_some();
-    let baseline = match rampage_signatures::bundled(reference.arch) {
-        Some(database) => database,
+    let starter = frozen_starter(reference.arch)?;
+    let baseline_available = starter.is_some();
+    let baseline_source = if baseline_available { "frozen_musl_starter_scheme2" } else { "empty_no_starter" };
+    let baseline = match starter {
+        Some(source) => SignatureDb::from_json(source).map_err(|error| error.to_string())?,
         None => empty()?,
     };
     let baseline_proposals = proposals(&baseline, &stripped).map_err(|error| error.to_string())?;
@@ -247,7 +447,7 @@ fn run(arguments: Arguments) -> Result<(), String> {
         {
             continue;
         }
-        let Some(original) = owned_symbols.iter().find(|original| original.name == symbol.name) else { continue };
+        let Some(original) = paired_reference(&owned_symbols, symbol, linked_ownership.as_ref()) else { continue };
         let original_bytes =
             reference.read(original.address, original.size).ok_or("missing diagnostic reference bytes")?;
         let hash = |binary: &Binary, bytes: &[u8], address| {
@@ -269,10 +469,7 @@ fn run(arguments: Arguments) -> Result<(), String> {
             .map(|(address, symbol)| (address, symbol.name.clone()))
             .collect();
         for symbol in canonical_functions(&target_truth).values().take(usize::from(arguments.diagnostic_limit)) {
-            let original = owned_symbols
-                .iter()
-                .find(|original| original.name == symbol.name)
-                .ok_or("diagnostic reference definition unavailable")?;
+            let Some(original) = paired_reference(&owned_symbols, symbol, linked_ownership.as_ref()) else { continue };
             diagnostic_rows.push(json!({"name":symbol.name,
                 "final_proposal":final_names.get(&symbol.address),
                 "reference_symbol":diagnostic_body(&measured_database,&reference,original.address,
@@ -287,7 +484,7 @@ fn run(arguments: Arguments) -> Result<(), String> {
     }
     let gzip_path = PathBuf::from(format!("{}.gz", arguments.output.display()));
     object_hashes.sort();
-    let report = json!({
+    let mut report = json!({
         "schema_version":1,"measurement":"phase2-1-library-signatures",
         "collector_source_sha256":digest(include_bytes!("signature_corpus.rs")),
         "collector_support_sha256":digest(include_bytes!("signature_corpus_support/mod.rs")),
@@ -307,7 +504,7 @@ fn run(arguments: Arguments) -> Result<(), String> {
         "diagnostic_matrix":diagnostic_rows,"diagnostic_rows_omitted":truth.0.len()-diagnostic_rows.len(),
         "diagnostic_matrix_requested":arguments.diagnostic_limit>0,
         "ownership_scope":concat!(
-            "externally visible strong ELF function definitions only; ",
+            "externally visible strong ELF or public executable COFF function definitions only; ",
             "local, hidden and weak definitions excluded"
         ),
         "nonlibrary_reference_collision_evidence":true,
@@ -324,6 +521,64 @@ fn run(arguments: Arguments) -> Result<(), String> {
                 "static, hidden and weak coverage is not measured.")
         ]
     });
+    report["pe_strip_source_sha256"] = json!(digest(include_bytes!("../src/strip_pe.rs")));
+    let metadata = report.as_object_mut().ok_or("corpus report is not an object")?;
+    metadata.insert(
+        "collector_ownership_sha256".into(),
+        json!(digest(include_bytes!("signature_corpus_support/ownership.rs"))),
+    );
+    metadata.insert(
+        "collector_linked_inputs_sha256".into(),
+        json!(digest(include_bytes!("signature_corpus_support/linked_inputs.rs"))),
+    );
+    report["producer_range_source"] = json!(if reference_pdb.is_some() {
+        "explicit_identity_matched_pdb_procedures"
+    } else {
+        "sized_linked_function_symbols"
+    });
+    report["reference_pdb_sha256"] =
+        json!(reference_pdb.as_ref().map(|pdb| rampage_arch::hex::bytes(pdb.provenance.sha256())));
+    report["target_pdb_sha256"] =
+        json!(target_pdb.as_ref().map(|pdb| rampage_arch::hex::bytes(pdb.provenance.sha256())));
+    report["baseline_source"] = json!(baseline_source);
+    report["baseline_source_sha256"] = json!(starter.map(|source| digest(source.as_bytes())));
+    if reference_pdb.is_some() {
+        report["pe_procedure_ownership"] = json!(concat!(
+            "Only producer-global PDB raw-name/address pairs can enter public-strong truth; ",
+            "local procedures remain synthetic nonlibrary collision negatives; duplicate global names refuse scope"
+        ));
+    }
+    report["ownership_scope_id"] = json!("public_strong");
+    if let (Some(inputs), Some((reference_receipt, target_receipt))) = (&linked_inputs, &linked_ownership) {
+        let metadata = report.as_object_mut().ok_or("corpus report is not an object")?;
+        metadata.insert("ownership_scope".into(), json!("linked_artifact"));
+        metadata.insert("ownership_scope_id".into(), json!("linked_artifact"));
+        metadata.insert("member_receipts_sha256".into(), json!(inputs.receipt_sha256()));
+        metadata.insert(
+            "member_ordinal_basis".into(),
+            json!("zero-based object 0.40 ArchiveFile::members order, after recognized leading ar index/name tables"),
+        );
+        metadata.insert("reference_map_path".into(), json!(arguments.reference_map));
+        metadata.insert("target_map_path".into(), json!(arguments.target_map));
+        metadata.insert("reference_map_sha256".into(), json!(reference_receipt.map_sha256));
+        metadata.insert("target_map_sha256".into(), json!(target_receipt.map_sha256));
+        metadata.insert("member_receipts_path".into(), json!(arguments.member_receipts));
+        metadata.insert("reference_ownership".into(), json!(reference_receipt));
+        metadata.insert("target_ownership".into(), json!(target_receipt));
+        metadata.insert(
+            "producer_range_source".into(),
+            json!("producer_object_symbol_sizes_cross_checked_against_kept_map_and_linked_FUNC_symbols"),
+        );
+        let limitations =
+            metadata.get_mut("limitations").and_then(Value::as_array_mut).ok_or("missing corpus limitations")?;
+        limitations.pop();
+        limitations.extend([
+            json!("Only unambiguous kept ELF native definitions are measured; excluded/unresolved rows are explicit."),
+            json!("Local archive/object receipts are unsigned claims, not publisher or source-release authentication."),
+            json!("Linked native-member subset only; no full SDK/runtime or source-corpus coverage is claimed."),
+            json!("Target symbols are truth/diagnostic-only, never inputs to held-out name lookup."),
+        ]);
+    }
     for path in [&arguments.output, &gzip_path, &arguments.report] {
         if path.try_exists().map_err(|error| error.to_string())? {
             return Err(format!("{}: refusing to overwrite an existing artifact", path.display()));
@@ -333,6 +588,12 @@ fn run(arguments: Arguments) -> Result<(), String> {
     target.validate_backing_source().map_err(|error| error.to_string())?;
     target_truth.validate_backing_source().map_err(|error| error.to_string())?;
     stripped.validate_backing_source().map_err(|error| error.to_string())?;
+    if let Some(inputs) = &linked_inputs {
+        inputs.validate_current()?;
+    }
+    for pdb in [reference_pdb, target_pdb].into_iter().flatten() {
+        pdb.provenance.validate_current().map_err(|error| error.to_string())?;
+    }
     write_new(&arguments.output, serialized.as_bytes())?;
     write_new(&gzip_path, &compressed)?;
     write_new(&arguments.report, &serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?)?;
@@ -356,6 +617,106 @@ fn main() -> std::process::ExitCode {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
+    fn cli() -> Vec<&'static str> {
+        vec![
+            "signature_corpus",
+            "--reference",
+            "reference",
+            "--object",
+            "lib.o",
+            "--target",
+            "target",
+            "--stripped",
+            "stripped",
+            "--output",
+            "db.json",
+            "--report",
+            "report.json",
+        ]
+    }
+
+    #[test]
+    fn linked_scope_requires_explicit_maps_and_receipts_without_changing_default() {
+        let mut missing = cli();
+        missing.extend(["--ownership-scope", "linked-artifact"]);
+        assert!(Arguments::try_parse_from(&missing).is_err());
+        missing.extend([
+            "--reference-map",
+            "reference.map",
+            "--target-map",
+            "target.map",
+            "--member-receipts",
+            "members.json",
+        ]);
+        let arguments = Arguments::try_parse_from(&missing).unwrap();
+        assert_eq!(arguments.ownership_scope, OwnershipScope::LinkedArtifact);
+        assert!(arguments.linked_paths().unwrap().is_some());
+        missing.extend(["--pdb", "ref.pdb", "--target-pdb", "target.pdb"]);
+        assert!(Arguments::try_parse_from(&missing).unwrap().linked_paths().is_err());
+        let mut implicit = cli();
+        implicit.extend(["--reference-map", "reference.map"]);
+        assert!(Arguments::try_parse_from(&implicit).unwrap().linked_paths().is_err());
+    }
+
+    #[test]
+    fn same_named_pdb_local_is_negative_evidence_not_public_truth_and_two_globals_refuse() {
+        use fixture_support::{TempFiles, fixture, module_stream, stream_offset};
+        let mut bytes = read(&fixture("fixture.pdb")).unwrap();
+        let start = stream_offset(&bytes, module_stream(&bytes), 0);
+        let name = bytes[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+        let record = start + name - 39;
+        assert_eq!(&bytes[record + 2..record + 4], &0x110fu16.to_le_bytes());
+        bytes[start + name..start + name + 10].copy_from_slice(b"pdb_mix\0\0\0");
+        let files = TempFiles::new();
+        let path = files.write("local-global.pdb", &bytes);
+        let mut image = Binary::open(fixture("fixture.exe")).unwrap();
+        let evidence = load_procedures(&mut image, Some(&path)).unwrap().unwrap();
+        let all_symbols = image.symbols.clone();
+        assert_eq!(all_symbols.iter().filter(|symbol| symbol.name == "pdb_mix").count(), 2);
+        let names = BTreeSet::from(["pdb_mix".to_owned()]);
+        retain_owned(&mut image, &names, Some(&evidence)).unwrap();
+        assert_eq!(image.symbols.len(), 1);
+        assert_eq!((image.symbols[0].address, image.symbols[0].size), (0x140001000, 30));
+        let owned_addresses = canonical_functions(&image).keys().copied().collect();
+        append_collision_evidence(&mut image, all_symbols, &owned_addresses);
+        assert!(image.symbols.iter().any(|symbol| {
+            symbol.address == 0x140001020 && symbol.size == 15 && symbol.name.starts_with(NEGATIVE_PREFIX)
+        }));
+        bytes[record + 2..record + 4].copy_from_slice(&0x1110u16.to_le_bytes());
+        let path = files.write("two-globals.pdb", &bytes);
+        let evidence = load_procedures(&mut image, Some(&path)).unwrap().unwrap();
+        assert!(retain_owned(&mut image, &names, Some(&evidence)).unwrap_err().contains("ambiguous global"));
+    }
+
+    #[test]
+    fn changed_member_receipt_file_is_refused_before_publication() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin");
+        let files = fixture_support::TempFiles::new();
+        let object = read(&root.join("eval-program-corpus-x86_64.o")).unwrap();
+        let object_path = files.write("lib.o", &object);
+        let mut archive = b"!<arch>\n".to_vec();
+        archive.extend_from_slice(
+            format!("{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n", "lib.o/", 0, 0, 0, 644, object.len()).as_bytes(),
+        );
+        archive.extend_from_slice(&object);
+        if object.len() % 2 != 0 {
+            archive.push(b'\n');
+        }
+        let archive_path = files.write("lib.a", &archive);
+        let map = files.write("link.map", b"             VMA              LMA     Size Align Out     In      Symbol\n");
+        let receipts = serde_json::to_vec(&json!([{
+            "archive_path":archive_path, "archive_sha256":digest(&archive), "member_ordinal":0,
+            "original_name":"lib.o", "object_path":object_path, "object_sha256":digest(&object), "size":object.len(),
+        }]))
+        .unwrap();
+        let receipts_path = files.write("members.json", &receipts);
+        let inputs = LinkedInputs::load(&[object_path], &map, &map, &receipts_path).unwrap();
+        inputs.validate_current().unwrap();
+        std::fs::write(&receipts_path, b"[]\n").unwrap();
+        assert!(inputs.validate_current().unwrap_err().contains("changed before publication"));
+    }
+
     #[test]
     fn corpus_cli_requires_explicit_ownership_and_separate_twins() {
         assert!(Arguments::try_parse_from(["signature_corpus", "--reference", "reference"]).is_err());
@@ -376,21 +737,56 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(arguments.objects, vec![PathBuf::from("lib.o")]);
+        assert_eq!(arguments.ownership_scope, OwnershipScope::PublicStrong);
+        assert!(arguments.linked_paths().unwrap().is_none());
     }
 
     #[test]
     fn library_ownership_excludes_local_data_and_undefined_symbols_in_real_objects() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin");
         let object = root.join("eval-program-corpus-x86_64.o");
-        let (names, hashes) = owned_names(std::slice::from_ref(&object), object::Architecture::X86_64).unwrap();
+        let (names, hashes) =
+            owned_names(std::slice::from_ref(&object), object::Architecture::X86_64, object::BinaryFormat::Elf)
+                .unwrap();
         assert_eq!(names, BTreeSet::from(["main".to_owned()]));
         assert_eq!(hashes, vec![digest(&read(&object).unwrap())]);
-        assert!(owned_names(&[object], object::Architecture::Aarch64).is_err());
+        assert!(
+            owned_names(std::slice::from_ref(&object), object::Architecture::X86_64, object::BinaryFormat::Coff)
+                .is_err()
+        );
+        assert!(owned_names(&[object], object::Architecture::Aarch64, object::BinaryFormat::Elf).is_err());
         let mut image = Binary::open(root.join("eval-ref-x86_64.elf")).unwrap();
         assert!(image.symbols.iter().any(|symbol| symbol.name == "cmp"));
-        retain_owned(&mut image, &BTreeSet::from(["main".into(), "cmp".into(), "sink".into()])).unwrap();
+        retain_owned(&mut image, &BTreeSet::from(["main".into(), "cmp".into(), "sink".into()]), None).unwrap();
         assert_eq!(image.symbols.len(), 1);
         assert_eq!(image.symbols[0].name, "main");
+    }
+
+    #[test]
+    fn coff_public_definitions_require_an_executable_code_section() {
+        let mut bytes = vec![0u8; 83];
+        bytes[..2].copy_from_slice(&0x8664u16.to_le_bytes());
+        bytes[2..4].copy_from_slice(&1u16.to_le_bytes());
+        bytes[8..12].copy_from_slice(&61u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&1u32.to_le_bytes());
+        bytes[20..25].copy_from_slice(b".text");
+        bytes[36..40].copy_from_slice(&1u32.to_le_bytes());
+        bytes[40..44].copy_from_slice(&60u32.to_le_bytes());
+        bytes[56..60].copy_from_slice(&0x60000020u32.to_le_bytes());
+        bytes[60] = 0xc3;
+        bytes[61..66].copy_from_slice(b"owned");
+        bytes[73..75].copy_from_slice(&1u16.to_le_bytes());
+        bytes[75..77].copy_from_slice(&0x20u16.to_le_bytes());
+        bytes[77] = 2;
+        bytes[79..83].copy_from_slice(&4u32.to_le_bytes());
+        let file = object::File::parse(bytes.as_slice()).unwrap();
+        let symbol = file.symbols().next().unwrap();
+        assert!(symbol.is_global() && !symbol.is_weak() && !symbol.is_undefined());
+        assert_eq!(symbol.kind(), object::SymbolKind::Text);
+        assert!(public_definition(&file, &symbol));
+        bytes[56..60].copy_from_slice(&0x40000040u32.to_le_bytes());
+        let file = object::File::parse(bytes.as_slice()).unwrap();
+        assert!(!public_definition(&file, &file.symbols().next().unwrap()));
     }
 
     #[test]
@@ -399,9 +795,15 @@ mod tests {
         let image = root.join("eval-ref-x86_64.elf");
         let error = run(Arguments {
             reference: image.clone(),
+            pdb: None,
+            target_pdb: None,
             target: image.clone(),
             stripped: image.clone(),
             objects: vec![root.join("eval-program-corpus-x86_64.o")],
+            ownership_scope: OwnershipScope::PublicStrong,
+            reference_map: None,
+            target_map: None,
+            member_receipts: None,
             output: image.clone(),
             report: image,
             diagnostic_limit: 0,
@@ -414,7 +816,7 @@ mod tests {
     #[ignore = "requires RAMPAGE_SIGNATURE_LUA_OBJECT pointing to the compiled Lua lstate.c object"]
     fn hidden_library_internals_are_not_mistaken_for_missing_public_definitions() {
         let path = PathBuf::from(std::env::var_os("RAMPAGE_SIGNATURE_LUA_OBJECT").expect("explicit Lua object"));
-        let (names, _) = owned_names(&[path], object::Architecture::X86_64).unwrap();
+        let (names, _) = owned_names(&[path], object::Architecture::X86_64, object::BinaryFormat::Elf).unwrap();
         assert!(names.contains("lua_newstate"));
         assert!(!names.contains("luaE_checkcstack"));
         assert!(!names.contains("close_state"));

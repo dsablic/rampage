@@ -4,6 +4,11 @@ use rampage_loaders::Binary;
 use rampage_signatures::canonical_functions;
 use sha2::{Digest, Sha256};
 
+pub(super) const MAX_LIBRARY_OBJECTS: usize = 2048;
+
+#[path = "../../src/strip_pe.rs"]
+mod strip_pe;
+
 pub(super) fn digest(bytes: &[u8]) -> String {
     rampage_arch::hex::bytes(&Sha256::digest(bytes))
 }
@@ -18,8 +23,14 @@ pub(super) fn verify_twin(symbolized: &Binary, stripped: &Binary, truth: &Truth)
     {
         return Err("stripped twin target differs from symbolized target".into());
     }
+    if symbolized.format == rampage_loaders::Format::Pe && stripped.format == rampage_loaders::Format::Pe {
+        if symbolized.segments != stripped.segments || symbolized.entry != stripped.entry {
+            return Err("PE stripping changed load mappings or entry point".into());
+        }
+        return strip_pe::verify_pe_twin(symbolized.image_bytes(), stripped.image_bytes());
+    }
     if symbolized.format != rampage_loaders::Format::Elf || stripped.format != rampage_loaders::Format::Elf {
-        return Err("this corpus pilot validates ELF stripping only".into());
+        return Err("this corpus validates ELF or exact PE32+ x64 stripping only".into());
     }
     if symbolized.segments != stripped.segments || symbolized.entry != stripped.entry {
         return Err("stripping changed load mappings or entry point".into());
