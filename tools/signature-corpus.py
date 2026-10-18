@@ -24,6 +24,21 @@ VERSIONS = {
     "lz4": "1.10.0",
     "lua": "5.4.7",
     "sqlite": "3.46.1",
+    "zlib-1.2.13": "1.2.13",
+    "lz4-1.9.4": "1.9.4",
+    "lua-5.4.8": "5.4.8",
+    "sqlite-3.45.3": "3.45.3",
+    "zstd-1.5.6": "1.5.6",
+    "mbedtls-2.28.9": "2.28.9",
+}
+HARNESS_FAMILIES = frozenset(("zlib", "lz4", "lua", "sqlite", "zstd", "mbedtls"))
+VERSIONED_FAMILIES = {
+    "zlib-1.2.13": "zlib",
+    "lz4-1.9.4": "lz4",
+    "lua-5.4.8": "lua",
+    "sqlite-3.45.3": "sqlite",
+    "zstd-1.5.6": "zstd",
+    "mbedtls-2.28.9": "mbedtls",
 }
 TARGETS = (
     "x86_64-linux-musl",
@@ -71,6 +86,58 @@ def relative_path(value: str) -> PurePosixPath:
     return path
 
 
+def harness_family(library: str, recipe: dict[str, Any]) -> str:
+    family = recipe.get("harness", library)
+    expected = VERSIONED_FAMILIES.get(library, library)
+    if (
+        library not in VERSIONS
+        or not isinstance(family, str)
+        or family not in HARNESS_FAMILIES
+        or family != expected
+    ):
+        raise CorpusError(f"{library}: unallowlisted harness family {family!r}")
+    return family
+
+
+def archive_root(value: str) -> str:
+    if len(relative_path(value).parts) != 1:
+        raise CorpusError(
+            f"archive root must be a single directory basename: {value!r}"
+        )
+    return value
+
+
+def validate_extract_roots(roots: list[str]) -> None:
+    if not isinstance(roots, list) or not roots:
+        raise CorpusError("extract_roots must be a nonempty list of top-level entries")
+    for entry in roots:
+        if not isinstance(entry, str) or not entry.strip():
+            raise CorpusError("extract_roots entries must be relative top-level names")
+        path = relative_path(entry)
+        if len(path.parts) != 1 or str(path) != entry:
+            raise CorpusError(
+                f"extract_roots entry must be a top-level basename: {entry!r}"
+            )
+    if len(roots) != len(set(roots)):
+        raise CorpusError("extract_roots contains duplicate entries")
+
+
+def recipe_extract_roots(library: str, recipe: dict[str, Any]) -> list[str] | None:
+    if "extract_roots" not in recipe:
+        return None
+    if library != "zstd-1.5.6":
+        raise CorpusError(f"{library}: extract_roots is supported only for zstd-1.5.6")
+    roots = recipe["extract_roots"]
+    validate_extract_roots(roots)
+    for required in [recipe["include"], recipe["license_file"], *recipe["sources"]]:
+        path = relative_path(required)
+        if not path.parts or path.parts[0] not in roots:
+            raise CorpusError(
+                f"{library}: required recipe path outside extract_roots: {required}"
+            )
+    return roots
+
+
 def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -81,15 +148,19 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
         libraries = data["libraries"]
         if set(libraries) != set(VERSIONS):
             raise CorpusError(
-                "only the pinned zlib, lz4, Lua and SQLite recipe roster is supported"
+                "only the ten pinned profiles across six library families are supported"
             )
         for name, recipe in libraries.items():
             if recipe["version"] != VERSIONS[name]:
                 raise CorpusError(f"unallowlisted version for {name}")
+            family = harness_family(name, recipe)
+            if recipe.get("family", family) != family or recipe.get("id", name) != name:
+                raise CorpusError(f"{name}: conflicting profile identity or family")
             if not recipe["url"].startswith("https://"):
                 raise CorpusError(f"{name}: source provenance URL must use HTTPS")
             for field in ("archive", "root", "license_file", "include"):
                 relative_path(recipe[field])
+            archive_root(recipe["root"])
             if len(PurePosixPath(recipe["archive"]).parts) != 1:
                 raise CorpusError(f"{name}: archive must be a cache basename")
             sources = recipe["sources"]
@@ -98,6 +169,7 @@ def load_manifest(path: Path = MANIFEST) -> dict[str, Any]:
             for source in sources:
                 if relative_path(source).suffix != ".c":
                     raise CorpusError(f"{name}: only explicit C sources are allowed")
+            recipe_extract_roots(name, recipe)
             if not all(
                 re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*(=\w+)?", item)
                 for item in recipe["defines"]
@@ -209,30 +281,45 @@ def checked_archive(cache: Path, recipe: dict[str, Any]) -> Path:
     return archive
 
 
-def extract_archive(archive: Path, destination: Path, root: str) -> Path:
+def extract_archive(
+    archive: Path, destination: Path, root: str, roots: list[str] | None = None
+) -> Path:
+    archive_root(root)
+    if roots is not None:
+        validate_extract_roots(roots)
     try:
         with tarfile.open(archive, "r:gz") as source:
             members: list[tarfile.TarInfo] = []
             names: set[str] = set()
             total = 0
             for member in source:
-                members.append(member)
                 path = relative_path(member.name)
-                if (
-                    not path.parts
-                    or path.parts[0] != root
-                    or not (member.isdir() or member.isfile())
-                ):
+                if not path.parts or path.parts[0] != root:
                     raise CorpusError(
-                        f"archive contains an unexpected root, link or special file: {member.name}"
+                        f"archive contains an unexpected root: {member.name}"
                     )
                 normalized = str(path)
                 if normalized in names:
                     raise CorpusError(f"duplicate archive member: {member.name}")
                 names.add(normalized)
+                if member.size < 0:
+                    raise CorpusError(
+                        f"archive member has a negative size: {member.name}"
+                    )
                 total += member.size
-                if total > 128 * 1024 * 1024 or len(members) > 10000:
+                if total > 128 * 1024 * 1024 or len(names) > 10000:
                     raise CorpusError("source archive exceeds bounded extraction size")
+                if (
+                    roots is not None
+                    and len(path.parts) > 1
+                    and path.parts[1] not in roots
+                ):
+                    continue
+                if not (member.isdir() or member.isfile()):
+                    raise CorpusError(
+                        f"archive contains a selected link or special file: {member.name}"
+                    )
+                members.append(member)
             destination.mkdir()
             for member in members:
                 output = destination / member.name
@@ -457,6 +544,14 @@ def build_slice(
     }
     commands = Commands(directory)
     try:
+        family = harness_family(selection.library, recipe)
+        roots = recipe_extract_roots(selection.library, recipe)
+        if roots is not None:
+            result["materialization"] = {
+                "archive_root": recipe["root"],
+                "extract_roots": roots,
+                "basis": "explicit recipe top-level entries; unselected members are not materialized",
+            }
         if selection.target.endswith("windows-gnu"):
             result.update(
                 status="unsupported",
@@ -480,7 +575,7 @@ def build_slice(
         result["zig_version"] = version
         if version != "0.17.0":
             raise CorpusError(f"exact Zig 0.17.0 required, found {version!r}")
-        source = extract_archive(archive, directory / "source", recipe["root"])
+        source = extract_archive(archive, directory / "source", recipe["root"], roots)
         license_path = source / recipe["license_file"]
         result["license_sha256"] = sha256(license_path)
         flags = [
@@ -508,9 +603,7 @@ def build_slice(
         programs: dict[str, Path] = {}
         harness_hashes: dict[str, str] = {}
         for role in ("reference", "target"):
-            harness = (
-                ROOT / f"tests/fixtures/src/signature-{selection.library}-{role}.c"
-            )
+            harness = ROOT / f"tests/fixtures/src/signature-{family}-{role}.c"
             harness_hashes[role] = sha256(harness)
             harness_object = directory / f"{role}.o"
             commands.run(
@@ -620,6 +713,12 @@ def main(argv: list[str] | None = None) -> int:
             for library, recipe in manifest["libraries"].items():
                 pin = recipe["sha256"] or "PENDING_SHA256"
                 print(f"{library} {recipe['version']} sha256={pin}")
+                if "scope" in recipe:
+                    print(f"  scope: {recipe['scope']}")
+            print(
+                f"Roster: {len(HARNESS_FAMILIES)} families, {len(VERSIONS)} profile aliases; "
+                "not a broad Phase 2 coverage claim"
+            )
             print("targets: " + ", ".join(TARGETS))
             print("optimizations: O1, O2; default pilot: zlib / x86_64-linux-musl / O1")
             print(
@@ -656,9 +755,12 @@ def main(argv: list[str] | None = None) -> int:
             "slices": {},
         }
         for selection in select(args):
+            recipe = manifest["libraries"][selection.library]
+            if "scope" in recipe:
+                print(f"{selection.library} scope: {recipe['scope']}", flush=True)
             result = build_slice(
                 selection,
-                manifest["libraries"][selection.library],
+                recipe,
                 args,
                 output / selection.name,
             )

@@ -1,6 +1,6 @@
 # Signature corpus pipeline
 
-The offline pilot builds pinned zlib 1.3.1, LZ4 1.10.0, Lua 5.4.7 and SQLite 3.46.1 references and distinct target
+The offline pilot builds pinned zlib, LZ4, Lua, SQLite, zstd and mbedTLS references and distinct target
 programs. It never executes target code or downloads sources. Generated artifacts go into an empty, explicit
 `target/signature-corpus/RUN` directory; the pilot does not overwrite the bundled databases.
 
@@ -12,7 +12,8 @@ tools/gen-signatures.sh --source-cache target/phase2-1/sources \
   --target x86_64-linux-musl --optimization O1
 ```
 
-Supply the source archives listed by the recipe manifest in the read-only cache. Archive digests and the exact
+Supply archives listed by the recipe manifest in the read-only cache. Profiles select exact versions and
+allowlisted family harnesses; original IDs/defaults remain unchanged. Archive digests and the exact
 Zig 0.17.0 version are checked before compilation. `--only`, `--target` and `--optimization` are repeatable.
 `ZIG`, `RAMPAGE_EVAL` and `RAMPAGE_SIGNATURE_CORPUS` select existing producer executables.
 
@@ -36,6 +37,11 @@ remain required before Phase 2.1 acceptance.
 
 SQLite uses its public-domain amalgamation with thread safety and extension loading disabled. The recipe hashes
 the complete license-containing `sqlite3.c`, not a separate license document; this profile is not full SQLite coverage.
+
+zstd materializes only its declared library/license roots; unrelated test symlinks are not extracted or followed.
+Global archive validation and byte/entry budgets still apply. mbedTLS uses its unmodified default configuration,
+including library self-test entrypoints; that is not typical production-configuration coverage. These profiles
+do not execute compression, crypto, networking, or other target code.
 
 ## Aggregate validation
 
