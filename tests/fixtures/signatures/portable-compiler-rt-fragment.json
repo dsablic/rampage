@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "profile": "llvm-compiler-rt-generic8",
+  "family": "compiler-rt",
+  "version": "22.1.8",
+  "target": "x86_64-linux-musl",
+  "source_class": "public-source-archive",
+  "url": "https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-22.1.8.tar.gz",
+  "archive_file": "compiler-rt-llvmorg-22.1.8.source.tar.gz",
+  "archive_sha256": "ad18b70e287954c3d62bc7e0b86e7b7af2adf87bcfce21c15fe717f101d7aace",
+  "archive_root": "llvm-project-llvmorg-22.1.8",
+  "license": "Apache-2.0 WITH LLVM-exception; retain both original LICENSE.TXT notices",
+  "notice_root": "compiler-rt/LICENSE.TXT",
+  "source_notes": "Pinned official public archive, not independent publisher authentication. Genuine LLVM, not Zig compiler_rt.zig.",
+  "observed_archive": {"compressed_bytes": 258105333, "physical_tar_bytes": 2161899520, "physical_headers": 184827, "maximum_member_bytes": 25784677, "maximum_metadata_bytes": 52},
+  "bounds": {"compressed_bytes": 268435456, "physical_tar_bytes": 2411724800, "physical_headers": 200000, "member_bytes": 33554432, "metadata_bytes": 4096, "selected_bytes": 1048576},
+  "units": [
+    "compiler-rt/lib/builtins/clzdi2.c", "compiler-rt/lib/builtins/ctzdi2.c",
+    "compiler-rt/lib/builtins/paritydi2.c", "compiler-rt/lib/builtins/popcountdi2.c",
+    "compiler-rt/lib/builtins/cmpdi2.c", "compiler-rt/lib/builtins/ucmpdi2.c",
+    "compiler-rt/lib/builtins/muldi3.c", "compiler-rt/lib/builtins/udivmoddi4.c"
+  ],
+  "functions": ["__clzdi2", "__ctzdi2", "__paritydi2", "__popcountdi2", "__cmpdi2", "__ucmpdi2", "__muldi3", "__udivmoddi4"],
+  "weak_aliases": {},
+  "selected_sha256": {
+    "llvm-project-llvmorg-22.1.8/LICENSE.TXT": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/LICENSE.TXT": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/clzdi2.c": "1d8970c43523c1347332ef247dad97fb98946daa3e27d51322a33a547a454967",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/cmpdi2.c": "18cb3b389cd9735b62db41476334e9a8f4cc84960e46c828a30c2e0a3dd7240c",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/ctzdi2.c": "945cd8765de0c267f5ff93d53817687d53365edbfea21529f390318e46597d69",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/int_endianness.h": "ec5175561075845b7b16a92ad5ecdfd42a284de2736dd07e4ca7011b75c37709",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/int_lib.h": "d79f2a9f4756e89fdd7a786fea5361720f40563a6d7c34d078505a236892d28f",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/int_types.h": "bc956eca1626fee5b6242053bafd92bf0b1def230140ee36a9725034aeb02fa8",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/int_util.h": "63d06198ab720a75c20bfd84be895c2746581b129168bae6201e7384bbb0473b",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/muldi3.c": "76a80699855619040b053078ab246adacb060fcc15b4e3431b76ee053032a8b9",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/paritydi2.c": "7dac1a60368bbf47abf5247cb558d1545098434b17026fadf486d0c74e91acbe",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/popcountdi2.c": "9c4e3828d94046d00aa66835dca4158ae097abfca27515de07b732b8fc1c887c",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/ucmpdi2.c": "7ff381dcbdb4d10a93093e39a915c50206c73583d37b9cd2906f58f33982a856",
+    "llvm-project-llvmorg-22.1.8/compiler-rt/lib/builtins/udivmoddi4.c": "e963fd1418909bb0f43603a7846edf568d4c8bae0670bd3b13a3e754a104e2fe"
+  },
+  "header_sha256": {
+    "clang/float.h": "0242ed0a0c17fb6c24ef6953c51d02d28eadb067dfa41d7ef59fe230caee3a10",
+    "clang/__float_header_macro.h": "7ee2302b023d41fd787a326059980800594c6e2cbac134b3167947d0025a72d7",
+    "clang/__float_float.h": "bde8d423099e3bba501018bdde141cf2edea549ba528733d43dc534694181935",
+    "clang/__float_infinity_nan.h": "544272ca97c2ba51fd362d5f35c8d7287e57001e9a8f29d51896b82be253ef72",
+    "clang/limits.h": "6b59cc1b6f86c901bf41ce942b8434530e852eb16e79e6e9287f89441f71efca",
+    "clang/stdbool.h": "48655faf4ebd4ca0af26a1ee8e3e16f8dc68385c9cd550ffb3629320681305b3",
+    "clang/stdint.h": "f43783466c93f77a6464274ebf18f9e4cc46f0d90770ddee2993c6cf39f7514f"
+  },
+  "fixture_sha256": {
+    "tests/fixtures/src/signature-portable-compiler-rt-reference.c": "4104fa7c928945cd818a5fd63b9d77945c89eada79bf6748409d884626a41374",
+    "tests/fixtures/src/signature-portable-compiler-rt-target.c": "c00bf4ddf16ddcffa46b8261a2d0fca0816628c8c645cac64622f3c22d423036"
+  },
+  "ownership_scope": "public-strong; all eight declared definitions, no post-measurement filtering",
+  "coverage_claim": "Fixed generic C eight-unit subset only; not architecture-optimized or whole compiler-rt builtins archive",
+  "publication": "Data-only hashes and provenance; never redistribute native objects or archives in the repository",
+  "integration": "Standalone tools/signature_portable.py; parent roster registration remains separate",
+  "unknowns": []
+}

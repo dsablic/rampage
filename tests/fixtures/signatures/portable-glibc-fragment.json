@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "profile": "glibc-strverscmp-portable",
+  "family": "glibc",
+  "version": "2.40",
+  "target": "x86_64-linux-musl",
+  "source_class": "public-source-archive",
+  "url": "https://ftp.gnu.org/gnu/glibc/glibc-2.40.tar.xz",
+  "archive_file": "glibc-2.40.tar.xz",
+  "archive_sha256": "19a890175e9263d748f627993de6f4b1af9cd21e03f080e4bfb3a1fac10205a2",
+  "archive_root": "glibc-2.40",
+  "license": "LGPL-2.1-or-later for string/strverscmp.c; original COPYING.LIB and LICENSES retained",
+  "notice_root": "COPYING.LIB",
+  "source_notes": "Pinned official public archive, not independent publisher authentication. Original source body unmodified; no musl implementation substituted.",
+  "observed_archive": {"compressed_bytes": 18752204, "physical_tar_bytes": 253890560, "physical_headers": 20541, "maximum_member_bytes": 5822482, "maximum_metadata_bytes": 52},
+  "bounds": {"compressed_bytes": 20971520, "physical_tar_bytes": 268435456, "physical_headers": 22000, "member_bytes": 8388608, "metadata_bytes": 4096, "selected_bytes": 1048576},
+  "units": ["string/strverscmp.c"],
+  "functions": ["__strverscmp"],
+  "weak_aliases": {"strverscmp": "__strverscmp"},
+  "selected_sha256": {
+    "glibc-2.40/COPYING": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "glibc-2.40/COPYING.LIB": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "glibc-2.40/LICENSES": "bba29819a3e938fae92674d6a88533e10605e389da8b51cdcba0a94f6221c5bc",
+    "glibc-2.40/include/libc-symbols.h": "988c40e8041810b000cecb3a9dd30461155b53f68385b7a970c5ba7bbf74886a",
+    "glibc-2.40/string/strverscmp.c": "d83335575644c89e09e4d9bd63fdaf4686ca873da9d1fad66160257291e727e2"
+  },
+  "header_sha256": {
+    "zig/generic-musl/stdint.h": "c5e0ccc2a49869b600050fad26ec1942f570ece82d46b167deb9aad73d9d0c30",
+    "zig/x86_64-linux-musl/bits/alltypes.h": "54aba956a68b48f20910eafaa00261e3344a1675164f7a15cd217fd451468d64",
+    "zig/x86_64-linux-musl/bits/stdint.h": "6869ecc6cc46f86c1a8a669235e6967e510dc9ca0fb7ef88e06d1ced5af9f96a",
+    "zig/generic-musl/string.h": "f633995c4a5a2fc09eef385f8bc9a370523a6cbebc61c46b6e16d33b4cea814f",
+    "zig/generic-musl/features.h": "2251ca4fa4ba92c741fcc89930c2a69aea70e6336fc7dca19ed347c8429c469f",
+    "zig/generic-musl/strings.h": "563aaceca0aed298da5c9e542c99cacf3941fc7370029a28ae5cd42f9597fc86",
+    "zig/generic-musl/ctype.h": "927695dbb4d54e7a9c7c932ec477bea203e467d04f0b9dad37118138836eaef1"
+  },
+  "fixture_sha256": {
+    "tests/fixtures/src/signature-portable-glibc-reference.c": "96b61c48cffa9d314812f259d3960539db538aa35451e624e00d05d2dc2db924",
+    "tests/fixtures/src/signature-portable-glibc-target.c": "c821cc67298ab5f07ca68b70afa5869cfdb2d28a7d5534e9b472abfa1aa6e913",
+    "tests/fixtures/src/signature-portable-glibc-symbols.h": "2a1dd819606dc34aeb1ea11d6720bdec41bc8e0a04b405897d532bfdf144cd54"
+  },
+  "alias_configuration": "Explicit standalone IS_IN(libc)=false equivalent: libc_hidden_def empty, real GNU weak alias retained, unsupported GCC copy attribute omitted. Not generated glibc configuration.",
+  "ownership_scope": "public-strong; __strverscmp only; preserved weak strverscmp alias is not a second truth function",
+  "coverage_claim": "Portable original source unit under normal x86_64 C ABI with pinned target C headers; NOT native configured glibc, distribution libc.a, glibc CRT or whole-libc coverage",
+  "publication": "Data-only hashes and provenance; never redistribute native objects or archives in the repository",
+  "integration": "Standalone tools/signature_portable.py; parent roster registration remains separate",
+  "unknowns": ["Vendored musl target-header revision inside installed Zig 0.17.0 unknown; exact dependency bytes pinned"]
+}
