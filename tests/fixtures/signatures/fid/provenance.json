@@ -1,0 +1,128 @@
+{
+  "license": "Apache-2.0",
+  "fixture_owner": "Rampage test suite",
+  "generator": "tools/fid-fixture/FidExport.java fixture <new-output-path>",
+  "generator_host": {
+    "ghidra_version": "12.1.4",
+    "release": "PUBLIC",
+    "build_date": "2026-Sep-21 2016 GMT"
+  },
+  "source": {
+    "url": "https://github.com/NationalSecurityAgency/ghidra/tree/Ghidra_12.1.4_build/Ghidra/Features/FunctionID/src/main/java/ghidra/feature/fid",
+    "raw_database_source": "https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.1.4_build/Ghidra/Framework/DB/src/main/java/db/buffers/LocalBufferFile.java",
+    "notice": "IP: GHIDRA; licensed under Apache License 2.0; adapted schema, relation and hash definitions",
+    "license_url": "https://www.apache.org/licenses/LICENSE-2.0"
+  },
+  "owned.fidbf": {
+    "sha256": "bcf66849b13c810d3f2d52a66e2641c78f71983f08a97fad7199b891eaa650f7",
+    "description": "Genuine raw Ghidra paged database written by DBHandle.saveAs, not renamed JSON",
+    "raw_header_version": 1,
+    "fid_table_schema_version": 6,
+    "byte_order": "big-endian",
+    "libraries": 1,
+    "functions": 2,
+    "hashes": "Explicitly seeded test records, not claimed hashes of decoded machine instructions",
+    "source_paths": "Untrusted synthetic metadata only; never opened",
+    "contains_upstream_signature_data": false
+  },
+  "owned.export": {
+    "sha256": "fb564d17f4a3dd2a9614fa22bd35820fd8ffc4f09d9033765c67b5dbe8daa13d",
+    "description": "Bounded private RPFID001 bridge transport exported from owned.fidbf; NOT a fidbf",
+    "generator": "tools/fid-fixture/FidExport.java export owned.fidbf"
+  },
+  "negative_fixtures": {
+    "generator": "tools/fid-fixture/FidExportTest.java <explicit-temp-root>",
+    "cases": [
+      "raw magic mismatch and renamed JSON",
+      "unsupported raw header version",
+      "zero block size",
+      "out-of-range and invalid negative free-block pointers",
+      "cyclic free-block list",
+      "allocated physical block with an unknown prefix flag",
+      "missing and wrong function-table indexes",
+      "oversized header parameter count",
+      "truncated raw block",
+      "dangling library reference in a valid database",
+      "unsupported FID table schema version"
+    ],
+    "storage": "Generated privately and deleted by the test"
+  },
+  "native_program_workflow": {
+    "source": "owned-native.c",
+    "compiled_not_executed": true,
+    "compiler": "/usr/bin/clang -target x86_64-unknown-linux-gnu -O2 -ffreestanding -fno-stack-protector -fno-pic -c owned-native.c",
+    "linker": "ld.lld --build-id=none -e _start; heldout uses -DHOLDOUT and ld.lld -s; negative additionally uses -DNEGATIVE",
+    "script": "tools/fid-fixture/FidProgramExport.java",
+    "host": "Explicit installed Ghidra 12.1.4 PUBLIC and host JVM; source-file static analysis only",
+    "analysis_controls": {
+      "launcher": "Direct explicit trusted JVM with ghidra.Ghidra/AnalyzeHeadless, -noanalysis, -loader ElfLoader, -loader-loadLibraries false, -loader-linkExistingProjectLibraries false, fresh private project and absolute owned script path",
+      "failure_boundary": "-noanalysis prevents default and post-script automatic analysis even if the fixed exporter fails to compile; no reliance on a potentially failing pre-script",
+      "allowed_analyzer_classes": [
+        "ghidra.app.plugin.core.disassembler.EntryPointAnalyzer",
+        "ghidra.app.plugin.core.function.ExternalEntryFunctionAnalyzer",
+        "ghidra.app.plugin.core.function.FunctionAnalyzer",
+        "ghidra.app.plugin.core.function.CreateThunkAnalyzer"
+      ],
+      "all_other_analyzers_disabled": "Including DWARF, external symbol resolver, Function ID auto-annotation, demanglers and data archive importers; only the fixed script starts TimeoutTaskMonitor-bounded analysis after setting and checking the allowlist",
+      "input_admission": "Standalone static x86/x86-64 executable ELF; no interpreter, needed libraries, build ID, recognized debug locators (.debug/.zdebug/.gnu_debug/.stab/.note/.gdb/.dwo/.btf/.ctf); unsupported inputs are never stripped or modified",
+      "source_audit": [
+        "https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.1.4_build/Ghidra/Features/Base/src/main/java/ghidra/app/util/headless/HeadlessAnalyzer.java",
+        "https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.1.4_build/Ghidra/Features/Base/src/main/java/ghidra/app/util/opinion/AbstractLibrarySupportLoader.java",
+        "https://github.com/NationalSecurityAgency/ghidra/tree/Ghidra_12.1.4_build/Ghidra/Features/Base/src/main/java/ghidra/app/plugin/core/function",
+        "https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.1.4_build/Ghidra/Features/Base/src/main/java/ghidra/app/plugin/core/disassembler/EntryPointAnalyzer.java"
+      ],
+      "not_a_sandbox": true
+    },
+    "database_training": "Reference producer names only; actual FidService hashes and actual static call-reference relations",
+    "target_features": "RPFPG001 includes exact imported-binary SHA-256, profile, addresses, body ranges, real hash quads and call addresses; no target names",
+    "positive": "2 genuine FID function records match the independently analyzed stripped held-out ELF after a layout shift",
+    "negative": "0 records match the stripped variant changing an included small rotate scalar and the mix scalar",
+    "observed_limitation": "Changing only a large composite-operand scalar left the leaf full/specific hashes unchanged in actual Ghidra; this implementation preserves that algorithm, so FID suggestions are not semantic identity or automatic annotation authority",
+    "native_extents_source": "Independent Rampage MCP list_functions on native-heldout.elf before Ghidra target feature export; production API recomputes native discovery, never seeds it from these ranges",
+    "native_extents": [
+      {"start": "0x201130", "end": "0x201147", "instructions": 7},
+      {"start": "0x201150", "end": "0x201176", "instructions": 13},
+      {"start": "0x201180", "end": "0x2011a2", "instructions": 7}
+    ],
+    "sha256": {
+      "native-reference.elf": "26190d0d3f51507564c24cb5bb67cb2c80537e54f365f247cdc78b7ce16f00d8",
+      "native-heldout.elf": "f80b9e279869f21b78398def8583199ae2575ed4e8677084392053c6c618bae8",
+      "native-negative.elf": "d87ba7b60baa2411d6f80aa55b7daf0a939d7c423f357b532116c74380ac0e5c",
+      "native.fidbf": "0ad6a2b699c501a2ef131a69d152edc2bf45d6e408ef214abd6f572a600612ed",
+      "native.export": "557b725d910d6cc40306210284b264a46b8767c1501e9c886d2cc93d1b86740c",
+      "native-reference.features": "cbc671f7ccc38b940eef51628bc8334058294820abacecc7690c2d14202c6351",
+      "native-heldout.features": "0cc460c06db6fdc7fcbcd3a1472cb3104ae6a5ee84c16499d5263c380df027a3",
+      "native-negative.features": "96a05c507501a80590fa21919e4f5a579262de0fa248ddbc58402151dbf35d56"
+    },
+    "verification": "FidNativeFixtureTest.java: actual raw database/schema and exact SHA-bound held-out feature quads; checks mandatory real callee relation"
+  },
+  "executed_host_configuration": {
+    "java_path": "/opt/homebrew/opt/openjdk/bin/java",
+    "java_version": "OpenJDK Homebrew 27 (2026-09-15)",
+    "ghidra_home": "/opt/homebrew/opt/ghidra/libexec",
+    "temporary_root": "Explicit operator-provided private staging root; never inferred from input metadata",
+    "sha256": {
+      "host-java": "05687a76275264affc701d1cbc005960002295e2da9f2833aa6c0ebfecd77943",
+      "Ghidra/application.properties": "19a74006a0351da7da1a8ee00ea0e864e672b1cb0c6e7132cdd210c9d672868c",
+      "FunctionID.jar": "842fd7d52496d51ee94d2c3410b6ccbc87c73948135bdb0ee9655c117411ac44",
+      "Base.jar": "3d3c7e1d9f1ec546f743ed6907cdceda41d30bfb339a4d8ec15e20e1e4ce23be",
+      "DB.jar": "1e14e301a4d4d731227a6e132db11c6d72de9c831afa51a2d0a51ff98bef0ad8",
+      "SoftwareModeling.jar": "7eeaa6286a36c425eaacfa73a503d286ae4df0fecce1fc9f9d0a84cead2d827f",
+      "Utility.jar": "0a03d2df1aac91910d69087867dfe799437fe56733ce9bcb2a5c9682956c3c0e",
+      "FidProgramExport.java": "7703f4cc3d2c8247608abee6fc061d68395987686c35cf5cf9d4b225aaec3e02",
+      "FidExport.java": "4dd039cb27eeef32b56598d6a2315c674544eba0b663f3fde94be3a30fec168b"
+    },
+    "authentication_limitation": "These hashes record the executed local public tool configuration, not upstream publisher authentication or a sandbox guarantee"
+  },
+  "hash_oracle": {
+    "generator": "tools/fid-fixture/FidHashOracle.java",
+    "implementation": "Actual Ghidra MessageDigestFidHasher with synthetic semantic-feature proxies",
+    "limitation": "Validates digest/mixing only, not any native instruction decoder or architecture adapter",
+    "vectors": [
+      {"scalar": 7, "code_unit_size": 4, "full_hash": "e3ed466ab764cc65", "specific_size": 4, "specific_hash": "05bfbdda5271f50d"},
+      {"scalar": 9, "code_unit_size": 4, "full_hash": "e3ed466ab764cc65", "specific_size": 4, "specific_hash": "e1f396356fad2099"},
+      {"scalar": -256, "code_unit_size": 4, "full_hash": "e3ed466ab764cc65", "specific_size": 4, "specific_hash": "3f1ecd9f96fc5321"},
+      {"scalar": 256, "code_unit_size": 4, "full_hash": "e3ed466ab764cc65", "specific_size": 4, "specific_hash": "4222486c603b49a5"}
+    ]
+  }
+}

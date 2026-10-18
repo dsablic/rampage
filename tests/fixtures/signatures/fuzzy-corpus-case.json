@@ -1,0 +1,14 @@
+{
+  "library": "owned freestanding checksum and runlength corpus",
+  "reference_source": "signature-fuzzy-corpus.c; Clang 22 x86_64-linux freestanding; reference O2 REFERENCE_ONLY=1, calibration O1, heldout Os; exact tool/source/flags/output hashes in build manifest",
+  "reference": "target/phase2-3-first/corpus/reference.elf",
+  "calibration": "target/phase2-3-first/corpus/calibration.stripped.elf",
+  "calibration_gold": "target/phase2-3-first/corpus/calibration.elf",
+  "heldout": "target/phase2-3-first/corpus/heldout.stripped.elf",
+  "heldout_gold": "target/phase2-3-first/corpus/heldout.elf",
+  "source_path": "tests/fixtures/src/signature-fuzzy-corpus.c",
+  "build_manifest": "target/phase2-3-first/corpus/build-manifest.txt",
+  "calibration_snapshot": "target/phase2-3-first/frozen-fuzzy-db-first.json",
+  "prediction_snapshot": "target/phase2-3-first/heldout-predictions-before-gold-first.json",
+  "owned_names": ["corpus_crc32", "corpus_adler32", "corpus_runlength"]
+}

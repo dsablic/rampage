@@ -59,16 +59,8 @@ static CATALOG: [Entry; 4] = [
         include_bytes!("../data/corpus-aarch64.json.gz"),
         include_str!("../data/corpus-aarch64.index.json"),
     ),
-    Entry::new(
-        Arch::X86,
-        include_bytes!("../data/corpus-x86.json.gz"),
-        include_str!("../data/corpus-x86.index.json"),
-    ),
-    Entry::new(
-        Arch::Arm,
-        include_bytes!("../data/corpus-arm.json.gz"),
-        include_str!("../data/corpus-arm.index.json"),
-    ),
+    Entry::new(Arch::X86, include_bytes!("../data/corpus-x86.json.gz"), include_str!("../data/corpus-x86.index.json")),
+    Entry::new(Arch::Arm, include_bytes!("../data/corpus-arm.json.gz"), include_str!("../data/corpus-arm.index.json")),
 ];
 
 fn entry(arch: Arch) -> Option<&'static Entry> {
@@ -149,8 +141,13 @@ mod tests {
         for entry in &CATALOG {
             let database = entry.database().unwrap();
             assert!(database.exact.is_empty(), "{}: raw exact fallbacks must not ship", entry.arch);
-            assert!(database.entries.values().chain(database.calls.values())
-                .all(|name| !name.starts_with("__rampage_corpus_negative_")));
+            assert!(
+                database
+                    .entries
+                    .values()
+                    .chain(database.calls.values())
+                    .all(|name| !name.starts_with("__rampage_corpus_negative_"))
+            );
         }
     }
 

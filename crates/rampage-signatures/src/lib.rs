@@ -41,6 +41,9 @@
 mod bundled;
 mod compressed;
 mod diagnostics;
+pub mod fid;
+pub mod fuzzy;
+mod pat;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -52,6 +55,7 @@ pub use diagnostics::{
     MatchDiagnostics, MatchVia,
 };
 use iced_x86::{ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
+pub use pat::{PatError, PatErrorKind, PatternByte, PatternDb, PatternMatch, PatternName, PatternRecord};
 use rampage_arch::{Arch, Target};
 use rampage_loaders::{Binary, Symbol, SymbolKind};
 use serde::{Deserialize, Serialize};
@@ -731,7 +735,7 @@ fn fingerprint_scheme(
 }
 
 /// A set of function signatures mapping a masked hash to a function name.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SignatureDb {
     /// The architecture the signatures were built for; matches are refused across architectures.
     #[serde(with = "arch_name")]
@@ -764,6 +768,15 @@ pub struct SignatureDb {
     /// Callee-keyed hashes seen with more than one name.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     ambiguous_calls: BTreeSet<String>,
+    /// Optional versioned native-pattern namespace. Omitted for hash-only databases, preserving their
+    /// original JSON bytes. Stores bounded canonical PAT text chunks and withheld record indices;
+    /// loading reparses every constraint rather than trusting an unchecked serialized AST.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pat: Option<PatternDb>,
+    /// Real Ghidra FID records are a separate namespace, never SHA-256 scheme-1/2 keys. Matching
+    /// requires an explicit trusted semantic adapter; v1 rejects mixed native/PAT/FID databases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fid: Option<fid::FidNamespace>,
     /// The exact hashes behind each entry, known for databases built in this process: when a later binary makes the
     /// masked hash ambiguous, the earlier function still gets its exact fallback. Not saved, as it would double
     /// the file for what only building needs; a loaded entry that becomes ambiguous simply stops answering.
@@ -774,6 +787,34 @@ pub struct SignatureDb {
     #[serde(skip)]
     entry_calls: BTreeMap<String, Vec<String>>,
 }
+
+// Deserialize only behind the bounded JSON/gzip admission paths. A public Deserialize implementation
+// would let callers bypass preflight before serde allocates escaped strings and collection nodes.
+#[derive(Deserialize)]
+struct JsonDb {
+    #[serde(with = "arch_name")]
+    arch: Arch,
+    #[serde(default = "legacy_scheme")]
+    scheme: u32,
+    entries: BTreeMap<String, String>,
+    #[serde(default)]
+    exact: BTreeMap<String, String>,
+    #[serde(default)]
+    ambiguous: BTreeSet<String>,
+    #[serde(default)]
+    ambiguous_exact: BTreeSet<String>,
+    #[serde(default)]
+    calls: BTreeMap<String, String>,
+    #[serde(default)]
+    ambiguous_calls: BTreeSet<String>,
+    #[serde(default, deserialize_with = "pat::deserialize_namespace")]
+    pat: Option<PatternDb>,
+    #[serde(default, deserialize_with = "fid::deserialize_namespace")]
+    fid: Option<fid::FidNamespace>,
+}
+
+/// Maximum direct signature-database JSON input, checked before parsing or allocating decoded data.
+pub const MAX_SIGNATURE_DB_BYTES: usize = 64 * 1024 * 1024;
 
 fn legacy_scheme() -> u32 {
     LEGACY_SCHEME
@@ -794,6 +835,36 @@ mod arch_name {
 }
 
 impl SignatureDb {
+    /// Imports user-supplied PAT text under a separate exact-pattern namespace, not fabricated hashes.
+    /// The caller supplies architecture (PAT has no architecture header). Parsing is atomic and bounded
+    /// to 16 MiB, 100,000 physical lines and 4096 fields/bytes per field. See [`PatternDb`] for the v1
+    /// subset and explicit unsupported constraints. JSON/gzip persist every matching constraint.
+    /// File admission and preserving analyst names remain the caller's responsibilities.
+    pub fn from_pat(arch: Arch, bytes: &[u8]) -> Result<Self, PatError> {
+        let patterns = PatternDb::parse(arch, bytes)?;
+        let mut db = Self::empty(arch, CURRENT_SCHEME);
+        db.pat = Some(patterns);
+        Ok(db)
+    }
+
+    /// Number of PAT module-constraint records, including suppressed/ambiguous/unknown records.
+    /// This is not a count of identified functions or public names.
+    pub fn pat_records(&self) -> usize {
+        self.pat.as_ref().map_or(0, |pat| pat.records().len())
+    }
+
+    fn merged_patterns(&self, other: &Self) -> Result<Option<PatternDb>, PatError> {
+        match (&self.pat, &other.pat) {
+            (Some(left), Some(right)) => {
+                let mut patterns = left.clone();
+                patterns.merge(right)?;
+                Ok(Some(patterns))
+            }
+            (Some(patterns), None) | (None, Some(patterns)) => Ok(Some(patterns.clone())),
+            (None, None) => Ok(None),
+        }
+    }
+
     fn empty(arch: Arch, scheme: u32) -> SignatureDb {
         SignatureDb {
             arch,
@@ -804,6 +875,8 @@ impl SignatureDb {
             ambiguous_exact: BTreeSet::new(),
             calls: BTreeMap::new(),
             ambiguous_calls: BTreeSet::new(),
+            pat: None,
+            fid: None,
             entry_exact: BTreeMap::new(),
             entry_calls: BTreeMap::new(),
         }
@@ -944,25 +1017,68 @@ impl SignatureDb {
     /// database can span several libraries. Names collide across binaries exactly as within one: a masked hash
     /// with two names stops answering and the functions behind it fall back to their exact hashes. A binary for
     /// another architecture is ignored.
+    ///
+    /// # Panics
+    /// A FID namespace requires the explicit trusted-host API, not native byte-hash construction.
     pub fn extend_from_binary(&mut self, binary: &Binary) {
         self.extend_from_binary_with_extents(binary, &BTreeMap::new());
     }
 
+    /// Checked native extension without explicit discovery extents.
+    pub fn try_extend_from_binary(&mut self, binary: &Binary) -> Result<(), fid::FidError> {
+        self.try_extend_from_binary_with_extents(binary, &BTreeMap::new())
+    }
+
     /// [`SignatureDb::extend_from_binary`] with discovered extents, as [`SignatureDb::from_binary_with_extents`].
+    ///
+    /// # Panics
+    /// A FID namespace is not a native training database. Use the checked variant for external inputs.
     pub fn extend_from_binary_with_extents(&mut self, binary: &Binary, extents: &BTreeMap<u64, u64>) {
+        self.try_extend_from_binary_with_extents(binary, extents)
+            .expect("FID namespaces do not support native byte-hash construction");
+    }
+
+    /// Checked native construction: incompatible semantic namespaces reject before mutation.
+    pub fn try_extend_from_binary_with_extents(
+        &mut self,
+        binary: &Binary,
+        extents: &BTreeMap<u64, u64>,
+    ) -> Result<(), fid::FidError> {
+        self.ensure_byte_matching_supported()?;
         if binary.arch == self.arch {
             self.add_binary(binary, extents);
         }
+        Ok(())
     }
 
     /// Overlays `other` onto this database, letting `other`'s names win on any shared hash (so a user database
     /// takes precedence over a bundled one); a hash `other` knows to be ambiguous stops answering here too.
     /// Databases for different architectures or hash schemes do not mix (their hashes are not comparable), so a
     /// mismatched `other` is ignored; [`SignatureDb::can_merge`] tells.
+    /// PAT records use collision-safe union instead of name precedence: constraints/negative evidence
+    /// are never discarded. Exceeding PAT composition limits leaves the entire database unchanged.
+    ///
+    /// # Panics
+    /// Unsupported FID composition rejects explicitly. Admission-sensitive callers must use
+    /// [`Self::try_merge`] or collision-safe [`Self::combine`]. Native-only mismatch no-ops are unchanged.
     pub fn merge(&mut self, other: &SignatureDb) {
-        if !self.can_merge(other) {
-            return;
+        let result = self.try_merge(other);
+        if self.requires_fid_adapter() || other.requires_fid_adapter() {
+            result.expect("unsupported FID composition; use SignatureDb::try_merge for external databases");
         }
+    }
+
+    /// Checked user-priority overlay, preserving every namespace constraint and refusing incompatible
+    /// semantic domains, architectures, schemes or composition budgets before mutation.
+    pub fn try_merge(&mut self, other: &SignatureDb) -> Result<(), CombineError> {
+        if self.arch != other.arch {
+            return Err(CombineError::ArchitectureMismatch);
+        }
+        if self.scheme != other.scheme {
+            return Err(CombineError::SchemeMismatch);
+        }
+        let patterns = self.merged_patterns(other).map_err(|_| CombineError::PatLimitExceeded)?;
+        let fid = self.merged_fid(other).map_err(|_| CombineError::UnsupportedFidComposition)?;
         for hash in &other.ambiguous {
             self.entries.remove(hash);
             self.entry_exact.remove(hash);
@@ -997,22 +1113,63 @@ impl SignatureDb {
             self.ambiguous_calls.remove(key);
             self.calls.insert(key.clone(), name.clone());
         }
+        self.pat = patterns;
+        self.fid = fid;
+        Ok(())
     }
 
-    /// Whether [`SignatureDb::merge`] would take `other`'s entries: same architecture and hash scheme.
+    /// Whether [`SignatureDb::merge`] would take `other`'s entries: same architecture/hash scheme and
+    /// combined PAT inputs within their resource limits.
     pub fn can_merge(&self, other: &SignatureDb) -> bool {
-        self.arch == other.arch && self.scheme == other.scheme
+        self.arch == other.arch
+            && self.scheme == other.scheme
+            && self.merged_fid(other).is_ok()
+            && match (&self.pat, &other.pat) {
+                (Some(left), Some(right)) => left.can_merge(right),
+                _ => true,
+            }
     }
 
     /// Selects the names to export after building against all reference functions, including negative
     /// counterexamples. Removes every other masked, exact and callee-key answer and its ephemeral entry
     /// evidence. All ambiguity tombstones remain: removing a conflicting name never restores an answer.
+    /// PAT constraints are retained, with other answers persistently suppressed as negative evidence.
+    /// In a PAT-mixed database, removed native answers and their latent fallback keys also become
+    /// tombstones, so a PAT answer cannot revive a native contradiction after filtering or reload.
+    /// Native-only retention is unchanged.
     pub fn retain_names(&mut self, allowed: &BTreeSet<String>) {
+        if self.pat.is_some() {
+            for (hash, name) in &self.entries {
+                if !allowed.contains(name) {
+                    self.ambiguous.insert(hash.clone());
+                    self.ambiguous_exact.extend(self.entry_exact.get(hash).into_iter().flatten().cloned());
+                    self.ambiguous_calls.extend(self.entry_calls.get(hash).into_iter().flatten().cloned());
+                }
+            }
+            self.ambiguous_exact
+                .extend(self.exact.iter().filter(|(_, name)| !allowed.contains(*name)).map(|(key, _)| key.clone()));
+            self.ambiguous_calls
+                .extend(self.calls.iter().filter(|(_, name)| !allowed.contains(*name)).map(|(key, _)| key.clone()));
+            self.exact.retain(|key, _| !self.ambiguous_exact.contains(key));
+            self.calls.retain(|key, _| !self.ambiguous_calls.contains(key));
+            for keys in self.entry_exact.values_mut() {
+                keys.retain(|key| !self.ambiguous_exact.contains(key));
+            }
+            for keys in self.entry_calls.values_mut() {
+                keys.retain(|key| !self.ambiguous_calls.contains(key));
+            }
+        }
         self.entries.retain(|_, name| allowed.contains(name));
         self.exact.retain(|_, name| allowed.contains(name));
         self.calls.retain(|_, name| allowed.contains(name));
         self.entry_exact.retain(|hash, _| self.entries.contains_key(hash));
         self.entry_calls.retain(|hash, _| self.entries.contains_key(hash));
+        if let Some(patterns) = &mut self.pat {
+            patterns.retain_names(allowed);
+        }
+        if let Some(fid) = &mut self.fid {
+            fid.retain_names(allowed);
+        }
     }
 
     /// The architecture this database's signatures were built for.
@@ -1068,40 +1225,78 @@ impl SignatureDb {
         address: u64,
         callee: impl Fn(u64) -> Option<&'n str>,
     ) -> Lookup<'_> {
-        if self.arch != target.arch {
+        // The legacy Option-returning byte API cannot supply Ghidra semantics. Admission-sensitive
+        // callers must use ensure_byte_matching_supported/identify_in_checked before this path.
+        if self.requires_fid_adapter() {
             return Lookup::Unknown;
         }
-        let Some(print) = fingerprint_scheme(self.scheme, target, image, bytes, address) else {
-            return Lookup::Unknown;
-        };
-        let body = address..address.saturating_add(bytes.len() as u64);
-        let key = (!self.calls.is_empty()).then(|| print.callee_key(body.clone(), callee)).flatten();
-        let keyable = !self.calls.is_empty() && print.callee_key(body, |_| Some("")).is_some();
-        let Some(hash) = print.finish().map(|hash| hex(&hash)) else { return Lookup::Unknown };
-        if let Some(name) = self.entries.get(&hash) {
-            return Lookup::Named(name);
-        }
-        let exact = || function_hash(target, bytes, address);
-        if !self.exact.is_empty()
-            && let Some(name) = exact().and_then(|exact| self.exact.get(&hex(&exact)))
-        {
-            return Lookup::Named(name);
-        }
-        // A callee key is evidence only where the body alone is a known collision.
-        if !self.ambiguous.contains(&hash) {
+        let native = self.lookup_native(target, image, bytes, address, callee);
+        let Some(patterns) = &self.pat else { return native.into_lookup() };
+        if self.scheme != CURRENT_SCHEME || self.arch != target.arch {
             return Lookup::Unknown;
         }
-        match key {
-            Some(key) => self.calls.get(&hex(&key)).map_or(Lookup::Unknown, |name| Lookup::Named(name)),
-            None if keyable => Lookup::AwaitsCallees,
-            None => Lookup::Unknown,
+        match patterns.match_in(target, image, bytes, address) {
+            PatternMatch::NoMatch => native.into_lookup(),
+            PatternMatch::Unique { name: pattern_name, .. } => match native {
+                NativeLookup::Named(name) if name != pattern_name => Lookup::Unknown,
+                NativeLookup::Named(name) => Lookup::Named(name),
+                NativeLookup::AwaitsCallees => Lookup::AwaitsCallees,
+                NativeLookup::Ambiguous => Lookup::Unknown,
+                NativeLookup::Unknown => Lookup::Named(pattern_name),
+            },
+            PatternMatch::Ambiguous { .. } | PatternMatch::RejectedByGate => Lookup::Unknown,
         }
     }
 
-    /// The number of unambiguous function signatures, masked and exact. Callee keys, which name functions those
-    /// cannot tell apart, are counted by [`SignatureDb::callee_keys`].
+    fn lookup_native<'n>(
+        &self,
+        target: &Target,
+        image: &MaskContext,
+        bytes: &[u8],
+        address: u64,
+        callee: impl Fn(u64) -> Option<&'n str>,
+    ) -> NativeLookup<'_> {
+        if self.arch != target.arch {
+            return NativeLookup::Unknown;
+        }
+        let Some(print) = fingerprint_scheme(self.scheme, target, image, bytes, address) else {
+            return NativeLookup::Unknown;
+        };
+        let body = address..address.saturating_add(bytes.len() as u64);
+        let key = (!self.calls.is_empty() || !self.ambiguous_calls.is_empty())
+            .then(|| print.callee_key(body.clone(), callee))
+            .flatten();
+        let keyable = !self.calls.is_empty() && print.callee_key(body, |_| Some("")).is_some();
+        let Some(hash) = print.finish().map(|hash| hex(&hash)) else { return NativeLookup::Unknown };
+        if let Some(name) = self.entries.get(&hash) {
+            return NativeLookup::Named(name);
+        }
+        let exact = (!self.exact.is_empty() || !self.ambiguous_exact.is_empty())
+            .then(|| function_hash(target, bytes, address).map(|hash| hex(&hash)))
+            .flatten();
+        if let Some(name) = exact.as_ref().and_then(|exact| self.exact.get(exact)) {
+            return NativeLookup::Named(name);
+        }
+        let ambiguous = self.ambiguous.contains(&hash)
+            || exact.as_ref().is_some_and(|exact| self.ambiguous_exact.contains(exact))
+            || key.as_ref().is_some_and(|key| self.ambiguous_calls.contains(&hex(key)));
+        // A callee key is evidence only where the body alone is a known collision.
+        if !self.ambiguous.contains(&hash) {
+            return if ambiguous { NativeLookup::Ambiguous } else { NativeLookup::Unknown };
+        }
+        match key {
+            Some(key) => self.calls.get(&hex(&key)).map_or(NativeLookup::Ambiguous, |name| NativeLookup::Named(name)),
+            None if keyable => NativeLookup::AwaitsCallees,
+            None => NativeLookup::Ambiguous,
+        }
+    }
+
+    /// Number of masked/exact hash answers plus PAT module-constraint records (not unique functions).
+    /// PAT records include suppressed/ambiguous/unknown evidence; [`Self::pat_records`] reports that
+    /// portion separately. Callee keys are counted by [`SignatureDb::callee_keys`]. Native-only counts
+    /// and generated bundled indices are unchanged.
     pub fn len(&self) -> usize {
-        self.entries.len() + self.exact.len()
+        self.entries.len() + self.exact.len() + self.pat_records() + self.fid_records()
     }
 
     /// The number of unambiguous callee keys.
@@ -1111,7 +1306,11 @@ impl SignatureDb {
 
     /// Whether the database holds nothing to match: no function signatures and no callee keys.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.exact.is_empty() && self.calls.is_empty()
+        self.entries.is_empty()
+            && self.exact.is_empty()
+            && self.calls.is_empty()
+            && self.pat_records() == 0
+            && self.fid_records() == 0
     }
 
     pub fn to_json(&self) -> String {
@@ -1119,12 +1318,29 @@ impl SignatureDb {
     }
 
     /// Parses a saved database. A hash scheme this version does not know is an error: none of its hashes could
-    /// ever match.
+    /// ever match. Direct JSON is capped at 64 MiB and allocation-driving tokens are preflighted
+    /// before serde runs. Load through this method or [`Self::from_gzip`], not a generic deserializer.
     pub fn from_json(text: &str) -> Result<SignatureDb, serde_json::Error> {
-        let db: SignatureDb = serde_json::from_str(text)?;
+        compressed::preflight_direct_json(text.as_bytes()).map_err(serde::de::Error::custom)?;
+        let wire: JsonDb = serde_json::from_str(text)?;
+        let mut db = Self::empty(wire.arch, wire.scheme);
+        db.entries = wire.entries;
+        db.exact = wire.exact;
+        db.calls = wire.calls;
+        db.ambiguous = wire.ambiguous;
+        db.ambiguous_exact = wire.ambiguous_exact;
+        db.ambiguous_calls = wire.ambiguous_calls;
+        db.pat = wire.pat;
+        db.fid = wire.fid;
+        db.validate_fid_namespace().map_err(serde::de::Error::custom)?;
         if ![LEGACY_SCHEME, CURRENT_SCHEME].contains(&db.scheme) {
             let message = format!("unknown signature hash scheme {} (this version knows 1 and 2)", db.scheme);
             return Err(serde::de::Error::custom(message));
+        }
+        if let Some(patterns) = &db.pat
+            && (patterns.arch() != db.arch || db.scheme != CURRENT_SCHEME)
+        {
+            return Err(serde::de::Error::custom("PAT namespace architecture/scheme mismatch"));
         }
         Ok(db)
     }
@@ -1216,6 +1432,25 @@ enum Lookup<'a> {
     /// The body collides with others here, and its callee key could name it once all its callees are named.
     AwaitsCallees,
     Unknown,
+}
+
+/// Internal native evidence keeps absence separate from a known collision. The production native
+/// priority order is unchanged; PAT may fill an absent key, never a rejected native collision.
+enum NativeLookup<'a> {
+    Named(&'a str),
+    Ambiguous,
+    AwaitsCallees,
+    Unknown,
+}
+
+impl<'a> NativeLookup<'a> {
+    fn into_lookup(self) -> Lookup<'a> {
+        match self {
+            Self::Named(name) => Lookup::Named(name),
+            Self::AwaitsCallees => Lookup::AwaitsCallees,
+            Self::Ambiguous | Self::Unknown => Lookup::Unknown,
+        }
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

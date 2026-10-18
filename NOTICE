@@ -11,6 +11,12 @@ It includes third-party components under their own terms:
   developed by the National Security Agency. Modified files carry a note of the
   change. See crates/rampage-decompiler/vendor/ghidra/LICENSE.
 
+- Ghidra FunctionID schema and hashing definitions (Apache License 2.0).
+  The FID importer and owned host bridges adapt definitions from Ghidra 12.1.4,
+  originally developed by the National Security Agency. Source/version references
+  and adaptation notes accompany the importer and bridges. No upstream FunctionID
+  databases or commercial signature databases are redistributed.
+
 - Arm A-profile machine-readable architecture specification, AARCHMRS
   (BSD 3-Clause License). Copyright Arm Limited or its affiliates.
   The AArch64 and AArch32 instruction decoder tables in crates/rampage-arch are

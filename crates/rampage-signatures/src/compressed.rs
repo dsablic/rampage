@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::{CURRENT_SCHEME, LEGACY_SCHEME, SignatureDb, add_unambiguous};
 
-/// Limits apply to the compressed API only; ordinary JSON loading remains compatible.
+/// Gzip input/output limits; direct JSON has its own early whole-input limit.
 const MAX_COMPRESSED_BYTES: usize = 64 * 1024 * 1024;
 const MAX_JSON_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ENTRIES: usize = 1_000_000;
@@ -41,12 +41,22 @@ pub enum CombineError {
     ArchitectureMismatch,
     #[error("signature database hash schemes differ")]
     SchemeMismatch,
+    #[error("combined PAT namespace exceeds its resource limits")]
+    PatLimitExceeded,
+    #[error("native training-reference curation does not support PAT namespaces")]
+    UnsupportedPatCuration,
+    #[error("FID namespace composition failed or mixed native/PAT/FID namespaces are unsupported")]
+    UnsupportedFidComposition,
+    #[error("native training-reference curation does not support FID namespaces")]
+    UnsupportedFidCuration,
 }
 
 impl SignatureDb {
     /// Reads exactly one gzip member containing a strict data-only database. Rejects trailing bytes,
     /// concatenated members, truncation and checksum failures without returning a partial database.
-    /// Limits: 64 MiB compressed, 256 MiB JSON, one million total keys, 4096 UTF-8 bytes per name.
+    /// Limits: 64 MiB compressed, 256 MiB JSON, one million native keys/PAT/FID function records,
+    /// 4096 UTF-8 bytes per name. FID archives additionally enforce their own relation/wire budgets
+    /// and a 64 MiB direct-JSON round-trip bound.
     /// Hashes must be 64 lowercase hexadecimal digits, fields must be known and keys unique.
     pub fn from_gzip(bytes: &[u8]) -> Result<Self, SignatureDbError> {
         let json = decode_gzip(bytes)?;
@@ -63,6 +73,8 @@ impl SignatureDb {
         db.ambiguous = strict.ambiguous;
         db.ambiguous_exact = strict.ambiguous_exact;
         db.ambiguous_calls = strict.ambiguous_calls;
+        db.pat = strict.pat;
+        db.fid = strict.fid;
         db.validate_compressed()?;
         Ok(db)
     }
@@ -102,6 +114,8 @@ impl SignatureDb {
         if self.scheme != other.scheme {
             return Err(CombineError::SchemeMismatch);
         }
+        let patterns = self.merged_patterns(other).map_err(|_| CombineError::PatLimitExceeded)?;
+        let fid = self.merged_fid(other).map_err(|_| CombineError::UnsupportedFidComposition)?;
 
         let mut incoming = other.clone();
         let mut ambiguous = self.ambiguous.union(&other.ambiguous).cloned().collect::<BTreeSet<_>>();
@@ -151,6 +165,8 @@ impl SignatureDb {
             stored.sort();
             stored.dedup();
         }
+        self.pat = patterns;
+        self.fid = fid;
         Ok(())
     }
 
@@ -166,11 +182,18 @@ impl SignatureDb {
     /// reload and collision-safe [`Self::combine`]; uncontradicted qualified fallbacks remain available.
     /// Returns exported answer keys removed across masked, exact and callee maps, not unique functions or latent
     /// keys. All architecture/scheme checks precede mutation; an empty reference set leaves the candidate intact.
+    /// PAT-bearing candidates/references explicitly reject this native-only policy, before any mutation.
     pub fn reject_reference_conflicts_from<'a>(
         &mut self,
         references: impl IntoIterator<Item = &'a SignatureDb>,
     ) -> Result<usize, CombineError> {
         let references: Vec<_> = references.into_iter().collect();
+        if self.requires_fid_adapter() || references.iter().any(|reference| reference.requires_fid_adapter()) {
+            return Err(CombineError::UnsupportedFidCuration);
+        }
+        if self.pat.is_some() || references.iter().any(|reference| reference.pat.is_some()) {
+            return Err(CombineError::UnsupportedPatCuration);
+        }
         for reference in &references {
             if self.arch != reference.arch {
                 return Err(CombineError::ArchitectureMismatch);
@@ -244,7 +267,23 @@ impl SignatureDb {
     /// Exported exact keys and known latent exact keys become tombstones, preventing their revival by corpus
     /// combination or gzip reload. Future composition requires reapplying this policy for newly introduced keys.
     /// Returns exported exact answer keys removed, excluding latent keys and unique-function counts.
+    ///
+    /// # Panics
+    /// Rejects a PAT namespace, whose reference domain this native corpus policy cannot validate.
+    /// Call [`Self::try_withhold_exact_fallbacks`] for fallible admission of user-supplied databases.
     pub fn withhold_exact_fallbacks(&mut self) -> usize {
+        self.try_withhold_exact_fallbacks().expect("native corpus curation does not support PAT namespaces")
+    }
+
+    /// Fallible native-only version of [`Self::withhold_exact_fallbacks`]. PAT-bearing databases are
+    /// rejected before mutation rather than silently leaving their reference domain unchecked.
+    pub fn try_withhold_exact_fallbacks(&mut self) -> Result<usize, CombineError> {
+        if self.requires_fid_adapter() {
+            return Err(CombineError::UnsupportedFidCuration);
+        }
+        if self.pat.is_some() {
+            return Err(CombineError::UnsupportedPatCuration);
+        }
         let removed = self.exact.len();
         self.ambiguous_exact.extend(self.exact.keys().cloned());
         for keys in self.entry_exact.values() {
@@ -252,19 +291,27 @@ impl SignatureDb {
         }
         self.exact.clear();
         self.entry_exact.clear();
-        removed
+        Ok(removed)
     }
 
     fn validate_compressed(&self) -> Result<(), SignatureDbError> {
+        self.validate_fid_namespace().map_err(|_| SignatureDbError::InvalidDatabase("invalid FID namespace"))?;
         if ![LEGACY_SCHEME, CURRENT_SCHEME].contains(&self.scheme) {
             return Err(SignatureDbError::InvalidDatabase("unknown hash scheme"));
+        }
+        if let Some(patterns) = &self.pat
+            && (patterns.arch() != self.arch || self.scheme != CURRENT_SCHEME)
+        {
+            return Err(SignatureDbError::InvalidDatabase("PAT namespace architecture/scheme mismatch"));
         }
         let total = self.entries.len()
             + self.exact.len()
             + self.calls.len()
             + self.ambiguous.len()
             + self.ambiguous_exact.len()
-            + self.ambiguous_calls.len();
+            + self.ambiguous_calls.len()
+            + self.pat_records()
+            + self.fid_records();
         if total > MAX_ENTRIES {
             return Err(SignatureDbError::LimitExceeded("entries"));
         }
@@ -348,6 +395,66 @@ fn preflight_json(bytes: &[u8]) -> Result<(), SignatureDbError> {
     preflight_json_bounded(bytes, MAX_ENTRIES)
 }
 
+pub(super) fn preflight_direct_json(bytes: &[u8]) -> Result<(), SignatureDbError> {
+    if bytes.len() > crate::MAX_SIGNATURE_DB_BYTES {
+        return Err(SignatureDbError::LimitExceeded("direct JSON bytes"));
+    }
+    preflight_json(bytes)
+}
+
+// Count decoded UTF-8 bytes without constructing serde's escape scratch string. Raw-token bounds
+// alone permit a >4096-byte literal/escaped PAT chunk to allocate before its field visitor rejects it.
+fn preflight_string(bytes: &[u8], start: usize) -> Result<(), SignatureDbError> {
+    fn word(bytes: Option<&[u8]>) -> Result<u16, SignatureDbError> {
+        let text = bytes.and_then(|bytes| std::str::from_utf8(bytes).ok()).ok_or(SignatureDbError::InvalidJson)?;
+        if text.len() != 4 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(SignatureDbError::InvalidJson);
+        }
+        u16::from_str_radix(text, 16).map_err(|_| SignatureDbError::InvalidJson)
+    }
+    let mut at = start;
+    let mut decoded = 0;
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            b'"' => return Ok(()),
+            b'\\' => match bytes.get(at + 1) {
+                Some(b'u') => {
+                    let value = word(bytes.get(at + 2..at + 6))?;
+                    if (0xd800..=0xdbff).contains(&value) {
+                        if bytes.get(at + 6..at + 8) != Some(b"\\u") {
+                            return Err(SignatureDbError::InvalidJson);
+                        }
+                        let low = word(bytes.get(at + 8..at + 12))?;
+                        if !(0xdc00..=0xdfff).contains(&low) {
+                            return Err(SignatureDbError::InvalidJson);
+                        }
+                        decoded += 4;
+                        at += 12;
+                    } else {
+                        let scalar = char::from_u32(u32::from(value)).ok_or(SignatureDbError::InvalidJson)?;
+                        decoded += scalar.len_utf8();
+                        at += 6;
+                    }
+                }
+                Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {
+                    decoded += 1;
+                    at += 2;
+                }
+                _ => return Err(SignatureDbError::InvalidJson),
+            },
+            0..=0x1f => return Err(SignatureDbError::InvalidJson),
+            _ => {
+                decoded += 1;
+                at += 1;
+            }
+        }
+        if decoded > MAX_NAME_BYTES {
+            return Err(SignatureDbError::LimitExceeded("JSON string bytes"));
+        }
+    }
+    Err(SignatureDbError::InvalidJson)
+}
+
 fn preflight_json_bounded(bytes: &[u8], entry_limit: usize) -> Result<(), SignatureDbError> {
     let mut string_start = None;
     let mut escaped = false;
@@ -368,6 +475,7 @@ fn preflight_json_bounded(bytes: &[u8], entry_limit: usize) -> Result<(), Signat
                 string_start = None;
             }
         } else if byte == b'"' {
+            preflight_string(bytes, index + 1)?;
             strings += 1;
             if strings > entry_limit * 2 + 16 {
                 return Err(SignatureDbError::LimitExceeded("JSON strings"));
@@ -420,6 +528,10 @@ struct StrictDb {
     ambiguous_exact: BTreeSet<String>,
     #[serde(default, deserialize_with = "hash_set")]
     ambiguous_calls: BTreeSet<String>,
+    #[serde(default, deserialize_with = "crate::pat::deserialize_namespace")]
+    pat: Option<crate::PatternDb>,
+    #[serde(default, deserialize_with = "crate::fid::deserialize_namespace")]
+    fid: Option<crate::fid::FidNamespace>,
 }
 
 fn hash_map<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error> {
@@ -632,6 +744,20 @@ mod tests {
         );
         assert!(preflight_json_bounded(json.as_bytes(), 3).is_ok());
         assert!(matches!(preflight_json_bounded(json.as_bytes(), 2), Err(SignatureDbError::LimitExceeded("entries"))));
+    }
+
+    #[test]
+    fn preflight_bounds_decoded_utf8_not_escape_spelling_or_scalar_count() {
+        for (escape, width) in [("\\u00E9", 2), ("\\uD83D\\uDE00", 4)] {
+            let at_limit = format!("\"{}\"", escape.repeat(MAX_NAME_BYTES / width));
+            assert_eq!(serde_json::from_str::<String>(&at_limit).unwrap().len(), MAX_NAME_BYTES);
+            assert!(preflight_json(at_limit.as_bytes()).is_ok());
+            let over_limit = format!("\"{}\"", escape.repeat(MAX_NAME_BYTES / width + 1));
+            assert!(matches!(
+                preflight_json(over_limit.as_bytes()),
+                Err(SignatureDbError::LimitExceeded("JSON string bytes"))
+            ));
+        }
     }
 
     #[test]

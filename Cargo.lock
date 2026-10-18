@@ -4745,6 +4745,7 @@ dependencies = [
  "iced-x86",
  "rampage-arch",
  "rampage-loaders",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "sha2 0.11.0",
