@@ -39,11 +39,13 @@
 //! follow, so this matches a stripped target where discovery stops at the same place in both.
 
 mod bundled;
+mod compressed;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-pub use bundled::bundled;
+pub use bundled::{bundled, bundled_counts, bundled_ref};
+pub use compressed::{CombineError, SignatureDbError};
 use iced_x86::{ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
 use rampage_arch::{Arch, Target};
 use rampage_loaders::{Binary, Symbol, SymbolKind};
@@ -720,7 +722,7 @@ fn fingerprint_scheme(
 }
 
 /// A set of function signatures mapping a masked hash to a function name.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignatureDb {
     /// The architecture the signatures were built for; matches are refused across architectures.
     #[serde(with = "arch_name")]
@@ -753,11 +755,11 @@ pub struct SignatureDb {
     /// Callee-keyed hashes seen with more than one name.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     ambiguous_calls: BTreeSet<String>,
-    /// The exact hash behind each entry, known for databases built in this process: when a later binary makes the
+    /// The exact hashes behind each entry, known for databases built in this process: when a later binary makes the
     /// masked hash ambiguous, the earlier function still gets its exact fallback. Not saved, as it would double
     /// the file for what only building needs; a loaded entry that becomes ambiguous simply stops answering.
     #[serde(skip)]
-    entry_exact: BTreeMap<String, String>,
+    entry_exact: BTreeMap<String, BTreeSet<String>>,
     /// The callee keys behind each entry, kept the same way as `entry_exact` for when the masked hash becomes
     /// ambiguous.
     #[serde(skip)]
@@ -808,13 +810,14 @@ impl SignatureDb {
         if !self.ambiguous.contains(&hash) {
             match self.entries.get(&hash) {
                 Some(existing) if existing == name => {
+                    self.entry_exact.entry(hash.clone()).or_default().extend(exact);
                     self.entry_calls.entry(hash).or_default().extend(callees);
                     return;
                 }
                 Some(_) => self.make_ambiguous(hash),
                 None => {
                     if let Some(exact) = exact {
-                        self.entry_exact.insert(hash.clone(), exact);
+                        self.entry_exact.entry(hash.clone()).or_default().insert(exact);
                     }
                     self.entry_calls.entry(hash.clone()).or_default().extend(callees);
                     self.entries.insert(hash, name.to_owned());
@@ -835,7 +838,7 @@ impl SignatureDb {
         let exact = self.entry_exact.remove(&hash);
         let callees = self.entry_calls.remove(&hash).unwrap_or_default();
         if let Some(name) = self.entries.remove(&hash) {
-            if let Some(exact) = exact {
+            for exact in exact.into_iter().flatten() {
                 self.add_exact(exact, name.clone());
             }
             for key in callees {
@@ -964,6 +967,17 @@ impl SignatureDb {
     /// Whether [`SignatureDb::merge`] would take `other`'s entries: same architecture and hash scheme.
     pub fn can_merge(&self, other: &SignatureDb) -> bool {
         self.arch == other.arch && self.scheme == other.scheme
+    }
+
+    /// Selects the names to export after building against all reference functions, including negative
+    /// counterexamples. Removes every other masked, exact and callee-key answer and its ephemeral entry
+    /// evidence. All ambiguity tombstones remain: removing a conflicting name never restores an answer.
+    pub fn retain_names(&mut self, allowed: &BTreeSet<String>) {
+        self.entries.retain(|_, name| allowed.contains(name));
+        self.exact.retain(|_, name| allowed.contains(name));
+        self.calls.retain(|_, name| allowed.contains(name));
+        self.entry_exact.retain(|hash, _| self.entries.contains_key(hash));
+        self.entry_calls.retain(|hash, _| self.entries.contains_key(hash));
     }
 
     /// The architecture this database's signatures were built for.

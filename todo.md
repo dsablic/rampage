@@ -111,11 +111,30 @@ remain explicit preview-only boundaries. The old checked layouts and PDB names c
 - [ ] Genuine live checked import → central C++ struct retype → owner-linked field verification and fresh replay.
 - [ ] Record successful reconstruction call bound N and independent DWARF agreement; execution caps are not N.
 - [ ] Diagnose the model-side failure only with new evidence; keep first attempts and prior publications frozen.
-- [ ] Do not claim full Phase 1 acceptance or start top-level Phase 2 from controlled test success alone.
+- [ ] Do not claim full Phase 1 acceptance from controlled test success alone. The user explicitly authorized
+  proceeding through Phases 2–6 while this live acceptance gate remains open; frozen results are unchanged.
 - [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no class
   rows; symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
 
-### Authorized remaining Phase 1 milestones (start one at a time)
+## Active milestone: Phase 2.1, reproducible signature corpus
+
+- [x] Measure current bundled recognition on cross-program public-library builds, with symbolized twins as truth.
+- [x] Build an offline zlib/LZ4/Lua pilot with pinned sources, explicit ownership, commands and provenance.
+- [x] Add deterministic gzip, lazy builtin architecture loading and collision-safe corpus combination.
+- [x] Preserve reference-only negative collision evidence without exporting runtime/harness names.
+- [x] Disable linker GC and refuse lost public definitions; distinguish public from hidden/local/weak coverage.
+- [ ] Measure serialized artifacts per library/architecture/profile; preserve misses, wrong names and unrun coverage.
+- [ ] Extend the pilot to the roadmap library/version/architecture matrix before declaring 2.1 complete.
+- [ ] Review, validate changed crates/MCP and publish the milestone before starting 2.2.
+
+The pilot is not full 2.1 acceptance. Early GC-enabled linked-subset measurements remain separate from the
+full-retention cohort. Zlib passes the tested x64/AArch64 O1 gate; LZ4 still misses the 80% target. No new pilot
+database is promoted into the default bundle. Earlier Phase 0/1 results and the open live Phase 1 gate are unchanged.
+
+Phases 2–6 are authorized in order. Phase 2.2 import formats, 2.3 fuzzy matching, and top-level Phases 3–6
+remain queued; source-corpus infrastructure is not acceptance of the entire library-recognition phase.
+
+### Implemented Phase 1 milestones
 
 - [x] 1.3 Apply types to data and operands.
 - [x] 1.4 Stack-frame inspection.

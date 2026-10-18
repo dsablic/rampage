@@ -926,6 +926,29 @@ async fn identify_functions_can_leave_out_the_bundled_database() {
     client.cancel().await.unwrap();
 }
 
+#[tokio::test]
+async fn compressed_bundled_databases_keep_read_only_identification_stable_across_architectures() {
+    let client = connect().await;
+    for name in ["musl-static-x86_64.elf", "musl-static-aarch64.elf"] {
+        let path = fixture(name);
+        let before = json_of(&call(&client, "list_annotations", json!({"path":path})).await);
+        let first = json_of(&call(&client, "identify_functions", json!({"path":path,"apply":false})).await);
+        let repeated = json_of(&call(&client, "identify_functions", json!({"path":path,"apply":false})).await);
+        assert_eq!(first, repeated);
+        assert!(
+            first["matches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["name"] == "vfprintf" && item["source"] == "rampage-builtin"),
+            "{first}"
+        );
+        let after = json_of(&call(&client, "list_annotations", json!({"path":path})).await);
+        assert_eq!(before, after);
+    }
+    client.cancel().await.unwrap();
+}
+
 /// Function signatures (masked and exact) and callee keys are counted apart.
 #[tokio::test]
 async fn build_signatures_counts_function_signatures_and_callee_keys_apart() {

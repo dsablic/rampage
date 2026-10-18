@@ -55,6 +55,11 @@ does not imply target execution, and bundled signature results are distinct from
 
 ## Inputs, paging and decompiler tokens
 
+`identify_functions` retains its existing JSON database inputs and read-only default. Builtin signatures are
+cached per architecture from compressed assets; `list_packs` uses count indexes without decoding every bundle.
+The [offline corpus pipeline](signature-corpus.md) measures generated databases separately; its failed or unrun
+profiles are not default recognition coverage.
+
 `import_debug_types` reviews embedded-DWARF or explicitly selected identity-matched PDB types into the project
 library, independently checking retained producer constraints against native measurements. Whole-plan review
 hashes bind atomic library/proof/signature edits; pages do not select writes. Unknown producer alignment and

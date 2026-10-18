@@ -168,6 +168,11 @@ not use them, so a thunk is not named after the function it forwards to. A datab
 build it was generated from, not every version of that library. Regenerate or extend the bundled set with
 `tools/gen-signatures.sh`; see [rampage-signatures](../crates/rampage-signatures).
 
+Bundled databases use deterministic gzip and lazy per-architecture decoding; pack listing does not decode them.
+The [offline corpus pilot](signature-corpus.md) builds pinned public libraries with ownership-filtered truth and
+collision-preserving export. Limits: exact-build pilot only; failed recall/precision gates and unrun coverage
+remain explicit, and no new pilot database is automatically promoted into the bundle.
+
 ## Guided reports and batch analysis
 
 `triage_report`, `find_main`, `network_surface`, `find_crypto`, `persistence_surface`, `string_decoding` and

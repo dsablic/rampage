@@ -771,9 +771,9 @@ fn builtin() -> PackInfo {
     let mut contents: Vec<ContentInfo> = Arch::ALL
         .into_iter()
         .filter_map(|arch| {
-            let database = rampage_signatures::bundled(arch)?;
-            let detail = format!("{} musl libc signatures and {} callee keys", database.len(), database.callee_keys());
-            Some(loaded("signatures", format!("bundled:musl-{arch}.json"), Some(arch.to_string()), detail))
+            let (signatures, callees) = rampage_signatures::bundled_counts(arch)?;
+            let detail = format!("{signatures} musl libc signatures and {callees} callee keys");
+            Some(loaded("signatures", format!("bundled:musl-{arch}.json.gz"), Some(arch.to_string()), detail))
         })
         .collect();
     let tools = rampage_detect::SignatureDb::bundled().signatures.len();

@@ -149,9 +149,9 @@ impl Project {
                     .to_owned(),
             ));
         }
-        let bundled = if bundled { self.bundled_signatures() } else { None };
+        let bundled = if bundled { rampage_signatures::bundled_ref(self.binary.arch) } else { None };
         let user = user.map(|database| (USER_SIGNATURES, database));
-        let bundled = bundled.as_ref().map(|database| (BUILTIN_PACK, database));
+        let bundled = bundled.map(|database| (BUILTIN_PACK, database));
         let databases: Vec<(&str, &SignatureDb)> = user.into_iter().chain(packed).chain(bundled).collect();
         let mut application = self.apply_layered_signatures(&databases, apply)?;
         application.warnings = packs.problems_for("signatures");
