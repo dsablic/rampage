@@ -154,6 +154,90 @@ impl SignatureDb {
         Ok(())
     }
 
+    /// Withholds existing answers contradicted by raw names in full native training-reference databases.
+    /// Pass the complete reference set in ONE batch after corpus combination and before serialization. Every
+    /// reference is checked against the intact candidate, including latent exact/callee evidence, before any
+    /// rejected entry or cache is discarded. Splitting references across calls is not equivalent: discarded
+    /// evidence is unavailable to later batches. Rebuild from the original combined candidate to add references.
+    /// Use original producer names, not synthetic negative labels or held-out target truth. Reference names are
+    /// evidence, not publisher authentication. Serialized references lack latent evidence; use native databases.
+    /// Same-key different names and reference ambiguity reject an answer; same names or absent keys do not.
+    /// No reference answer is imported. Conflicting exported and latent keys persist as tombstones through gzip
+    /// reload and collision-safe [`Self::combine`]; uncontradicted qualified fallbacks remain available.
+    /// Returns exported answer keys removed across masked, exact and callee maps, not unique functions or latent
+    /// keys. All architecture/scheme checks precede mutation; an empty reference set leaves the candidate intact.
+    pub fn reject_reference_conflicts_from<'a>(
+        &mut self,
+        references: impl IntoIterator<Item = &'a SignatureDb>,
+    ) -> Result<usize, CombineError> {
+        let references: Vec<_> = references.into_iter().collect();
+        for reference in &references {
+            if self.arch != reference.arch {
+                return Err(CombineError::ArchitectureMismatch);
+            }
+            if self.scheme != reference.scheme {
+                return Err(CombineError::SchemeMismatch);
+            }
+        }
+        if references.is_empty() {
+            return Ok(0);
+        }
+        let mut rejected = self.ambiguous.clone();
+        let mut rejected_exact = self.ambiguous_exact.clone();
+        let mut rejected_calls = self.ambiguous_calls.clone();
+        for reference in references {
+            let mut exact = reference.exact.clone();
+            let mut calls = reference.calls.clone();
+            let mut ambiguous_exact = reference.ambiguous_exact.clone();
+            let mut ambiguous_calls = reference.ambiguous_calls.clone();
+            for (hash, name) in &reference.entries {
+                for key in reference.entry_exact.get(hash).into_iter().flatten() {
+                    add_unambiguous(&mut exact, &mut ambiguous_exact, key.clone(), name.clone());
+                }
+                for key in reference.entry_calls.get(hash).into_iter().flatten() {
+                    add_unambiguous(&mut calls, &mut ambiguous_calls, key.clone(), name.clone());
+                }
+            }
+            collect_reference_conflicts(&self.entries, &mut rejected, &reference.entries, &reference.ambiguous);
+            collect_reference_conflicts(&self.exact, &mut rejected_exact, &exact, &ambiguous_exact);
+            collect_reference_conflicts(&self.calls, &mut rejected_calls, &calls, &ambiguous_calls);
+            for (hash, keys) in &self.entry_exact {
+                if let Some(name) = self.entries.get(hash) {
+                    for key in keys {
+                        if reference_conflicts(key, name, &exact, &ambiguous_exact) {
+                            rejected_exact.insert(key.clone());
+                        }
+                    }
+                }
+            }
+            for (hash, keys) in &self.entry_calls {
+                if let Some(name) = self.entries.get(hash) {
+                    for key in keys {
+                        if reference_conflicts(key, name, &calls, &ambiguous_calls) {
+                            rejected_calls.insert(key.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let before = self.entries.len() + self.exact.len() + self.calls.len();
+        self.ambiguous = rejected;
+        self.ambiguous_exact = rejected_exact;
+        self.ambiguous_calls = rejected_calls;
+        self.entries.retain(|key, _| !self.ambiguous.contains(key));
+        self.exact.retain(|key, _| !self.ambiguous_exact.contains(key));
+        self.calls.retain(|key, _| !self.ambiguous_calls.contains(key));
+        self.entry_exact.retain(|hash, keys| {
+            keys.retain(|key| !self.ambiguous_exact.contains(key));
+            self.entries.contains_key(hash) && !keys.is_empty()
+        });
+        self.entry_calls.retain(|hash, keys| {
+            keys.retain(|key| !self.ambiguous_calls.contains(key));
+            self.entries.contains_key(hash) && !keys.is_empty()
+        });
+        Ok(before - self.entries.len() - self.exact.len() - self.calls.len())
+    }
+
     fn validate_compressed(&self) -> Result<(), SignatureDbError> {
         if ![LEGACY_SCHEME, CURRENT_SCHEME].contains(&self.scheme) {
             return Err(SignatureDbError::InvalidDatabase("unknown hash scheme"));
@@ -183,6 +267,28 @@ impl SignatureDb {
             }
         }
         Ok(())
+    }
+}
+
+fn reference_conflicts(
+    key: &str,
+    name: &str,
+    reference: &BTreeMap<String, String>,
+    ambiguous: &BTreeSet<String>,
+) -> bool {
+    ambiguous.contains(key) || reference.get(key).is_some_and(|raw_name| raw_name != name)
+}
+
+fn collect_reference_conflicts(
+    answers: &BTreeMap<String, String>,
+    rejected: &mut BTreeSet<String>,
+    reference: &BTreeMap<String, String>,
+    ambiguous: &BTreeSet<String>,
+) {
+    for (key, name) in answers {
+        if reference_conflicts(key, name, reference, ambiguous) {
+            rejected.insert(key.clone());
+        }
     }
 }
 
@@ -689,5 +795,222 @@ mod tests {
         assert_eq!(reference.ambiguous, ambiguous);
         assert_eq!(reference.ambiguous_exact, ambiguous_exact);
         assert_eq!(reference.ambiguous_calls, ambiguous_calls);
+    }
+
+    #[test]
+    fn raw_reference_negatives_reject_later_exports_without_blacklisting_consistent_musl() {
+        let mut reference = db();
+        reference.add([1; 32], Some([11; 32]), Some([21; 32]), "malloc");
+        reference.add([2; 32], Some([12; 32]), Some([22; 32]), "pairscont");
+        reference.add([3; 32], Some([13; 32]), Some([23; 32]), "iter_auxlax");
+        let before = reference.clone();
+        let mut candidate = reference.clone();
+        candidate.retain_names(&BTreeSet::from(["malloc".to_owned()]));
+        let mut later = db();
+        later.add([2; 32], Some([12; 32]), Some([22; 32]), "ZSTD_defaultCLevel");
+        candidate.combine(&later).unwrap();
+        assert_eq!(candidate.entries.get(&key(2)).map(String::as_str), Some("ZSTD_defaultCLevel"));
+
+        assert_eq!(candidate.reject_reference_conflicts_from([&reference]), Ok(1));
+        assert_same_evidence(&reference, &before);
+        assert_eq!(candidate.entries.get(&key(1)).map(String::as_str), Some("malloc"));
+        assert!(!candidate.entries.contains_key(&key(2)));
+        assert!(!candidate.entries.contains_key(&key(3)));
+        assert!(!candidate.ambiguous.contains(&key(1)));
+        assert!(!candidate.ambiguous.contains(&key(3)));
+        assert!(candidate.ambiguous.contains(&key(2)));
+        assert!(!candidate.entry_exact.contains_key(&key(2)));
+        assert!(!candidate.entry_calls.contains_key(&key(2)));
+
+        let mut loaded = SignatureDb::from_gzip(&candidate.to_gzip().unwrap()).unwrap();
+        loaded.combine(&later).unwrap();
+        assert!(!loaded.entries.contains_key(&key(2)));
+        assert!(!loaded.exact.contains_key(&key(12)));
+        assert!(!loaded.calls.contains_key(&key(22)));
+        assert_eq!(loaded.entries.get(&key(1)).map(String::as_str), Some("malloc"));
+        assert_eq!(loaded.reject_reference_conflicts_from([&reference]), Ok(0));
+    }
+
+    #[test]
+    fn raw_reference_filter_handles_all_key_spaces_and_never_imports_reference_names() {
+        let mut candidate = db();
+        let mut reference = db();
+        for (answers, raw, tombstones, base) in [
+            (&mut candidate.entries, &mut reference.entries, &mut reference.ambiguous, 0),
+            (&mut candidate.exact, &mut reference.exact, &mut reference.ambiguous_exact, 10),
+            (&mut candidate.calls, &mut reference.calls, &mut reference.ambiguous_calls, 20),
+        ] {
+            answers.insert(key(base + 1), "exported".into());
+            raw.insert(key(base + 1), "local_function".into());
+            answers.insert(key(base + 2), "consistent".into());
+            raw.insert(key(base + 2), "consistent".into());
+            answers.insert(key(base + 3), "unseen".into());
+            answers.insert(key(base + 4), "ambiguous".into());
+            tombstones.insert(key(base + 4));
+            raw.insert(key(base + 5), "reference_only".into());
+        }
+        let original = candidate.clone();
+        assert_eq!(candidate.reject_reference_conflicts_from([&reference]), Ok(6));
+        for (answers, tombstones, base) in [
+            (&candidate.entries, &candidate.ambiguous, 0),
+            (&candidate.exact, &candidate.ambiguous_exact, 10),
+            (&candidate.calls, &candidate.ambiguous_calls, 20),
+        ] {
+            assert_eq!(answers.get(&key(base + 2)).map(String::as_str), Some("consistent"));
+            assert_eq!(answers.get(&key(base + 3)).map(String::as_str), Some("unseen"));
+            assert_eq!(answers.len(), 2);
+            assert_eq!(tombstones, &BTreeSet::from([key(base + 1), key(base + 4)]));
+        }
+        let mut loaded = SignatureDb::from_gzip(&candidate.to_gzip().unwrap()).unwrap();
+        loaded.combine(&original).unwrap();
+        assert_eq!(loaded.to_json(), candidate.to_json());
+    }
+
+    #[test]
+    fn reference_rejections_remove_latent_fallbacks_before_later_masked_collisions() {
+        let mut candidate = db();
+        candidate.add([1; 32], Some([11; 32]), Some([21; 32]), "exported");
+        candidate.add([2; 32], Some([12; 32]), Some([22; 32]), "malloc");
+        candidate.exact.insert(key(11), "exported".into());
+        candidate.calls.insert(key(21), "exported".into());
+        let original = candidate.clone();
+        let mut reference = db();
+        reference.add([3; 32], Some([11; 32]), Some([21; 32]), "local_function");
+        reference.add([2; 32], Some([12; 32]), Some([22; 32]), "malloc");
+
+        assert_eq!(candidate.reject_reference_conflicts_from([&reference]), Ok(2));
+        assert_eq!(candidate.entries.get(&key(1)).map(String::as_str), Some("exported"));
+        assert!(!candidate.entry_exact.contains_key(&key(1)));
+        assert!(!candidate.entry_calls.contains_key(&key(1)));
+        assert_eq!(candidate.entry_exact.get(&key(2)), Some(&BTreeSet::from([key(12)])));
+        assert_eq!(candidate.entry_calls.get(&key(2)), Some(&vec![key(22)]));
+        let mut later = db();
+        later.add([1; 32], Some([13; 32]), Some([23; 32]), "different_masked_name");
+        candidate.combine(&later).unwrap();
+        assert!(!candidate.exact.contains_key(&key(11)));
+        assert!(!candidate.calls.contains_key(&key(21)));
+        let mut loaded = SignatureDb::from_gzip(&candidate.to_gzip().unwrap()).unwrap();
+        loaded.combine(&original).unwrap();
+        assert!(!loaded.entries.contains_key(&key(1)));
+        assert!(!loaded.exact.contains_key(&key(11)));
+        assert!(!loaded.calls.contains_key(&key(21)));
+        assert!(loaded.ambiguous_exact.contains(&key(11)));
+        assert!(loaded.ambiguous_calls.contains(&key(21)));
+        assert_eq!(loaded.entries.get(&key(2)).map(String::as_str), Some("malloc"));
+    }
+
+    #[test]
+    fn masked_rejections_preserve_existing_uncontradicted_qualified_answers() {
+        let mut candidate = db();
+        candidate.add([1; 32], Some([11; 32]), Some([21; 32]), "exported");
+        candidate.exact.insert(key(11), "exported".into());
+        candidate.calls.insert(key(21), "exported".into());
+        let original = candidate.clone();
+        let mut reference = db();
+        reference.add([1; 32], Some([11; 32]), Some([23; 32]), "local_function");
+        assert_eq!(candidate.reject_reference_conflicts_from([&reference]), Ok(2));
+        assert!(candidate.ambiguous.contains(&key(1)));
+        assert!(candidate.ambiguous_exact.contains(&key(11)));
+        assert!(!candidate.ambiguous_calls.contains(&key(21)));
+        assert_eq!(candidate.calls.get(&key(21)).map(String::as_str), Some("exported"));
+        assert!(!candidate.entry_exact.contains_key(&key(1)));
+        assert!(!candidate.entry_calls.contains_key(&key(1)));
+        candidate.combine(&original).unwrap();
+        assert!(!candidate.entries.contains_key(&key(1)));
+        assert!(!candidate.exact.contains_key(&key(11)));
+        assert_eq!(candidate.calls.get(&key(21)).map(String::as_str), Some("exported"));
+        assert!(!candidate.calls.contains_key(&key(23)));
+    }
+
+    #[test]
+    fn reference_latent_ambiguity_rejects_candidate_fallbacks_but_does_not_count_latent_keys() {
+        let mut candidate = db();
+        candidate.add([1; 32], Some([11; 32]), Some([21; 32]), "exported");
+        let mut reference = db();
+        reference.add([3; 32], Some([11; 32]), Some([21; 32]), "exported");
+        reference.add([4; 32], Some([11; 32]), Some([21; 32]), "different_raw_name");
+        assert_eq!(candidate.reject_reference_conflicts_from([&reference]), Ok(0));
+        assert_eq!(candidate.entries.get(&key(1)).map(String::as_str), Some("exported"));
+        assert!(candidate.ambiguous_exact.contains(&key(11)));
+        assert!(candidate.ambiguous_calls.contains(&key(21)));
+        assert!(candidate.entry_exact.is_empty());
+        assert!(candidate.entry_calls.is_empty());
+        assert_eq!(candidate.reject_reference_conflicts_from([&reference]), Ok(0));
+    }
+
+    #[test]
+    fn reference_batch_checks_intact_latent_evidence_in_every_order_before_pruning() {
+        let mut original = db();
+        original.add([1; 32], Some([11; 32]), Some([21; 32]), "exported");
+        original.add([2; 32], Some([12; 32]), Some([22; 32]), "malloc");
+        let mut masked_conflict = db();
+        masked_conflict.add([1; 32], Some([13; 32]), Some([23; 32]), "different_masked_name");
+        masked_conflict.add([2; 32], Some([12; 32]), Some([22; 32]), "malloc");
+        masked_conflict.add([5; 32], Some([15; 32]), Some([25; 32]), "reference_only");
+        let mut latent_conflict = db();
+        latent_conflict.add([3; 32], Some([11; 32]), Some([21; 32]), "different_latent_name");
+        latent_conflict.add([2; 32], Some([12; 32]), Some([22; 32]), "malloc");
+        let mut expected = None;
+        for references in [
+            vec![&masked_conflict, &latent_conflict],
+            vec![&latent_conflict, &masked_conflict],
+            vec![&masked_conflict, &latent_conflict, &masked_conflict],
+        ] {
+            let mut candidate = original.clone();
+            assert_eq!(candidate.reject_reference_conflicts_from(references), Ok(1));
+            assert!(candidate.ambiguous.contains(&key(1)));
+            assert!(candidate.ambiguous_exact.contains(&key(11)));
+            assert!(candidate.ambiguous_calls.contains(&key(21)));
+            assert!(!candidate.entry_exact.contains_key(&key(1)));
+            assert!(!candidate.entry_calls.contains_key(&key(1)));
+            assert_eq!(candidate.entry_exact.get(&key(2)), Some(&BTreeSet::from([key(12)])));
+            assert_eq!(candidate.entry_calls.get(&key(2)), Some(&vec![key(22)]));
+            assert_eq!(candidate.entries, BTreeMap::from([(key(2), "malloc".to_owned())]));
+            assert_eq!(candidate.ambiguous, BTreeSet::from([key(1)]));
+            assert_eq!(candidate.ambiguous_exact, BTreeSet::from([key(11)]));
+            assert_eq!(candidate.ambiguous_calls, BTreeSet::from([key(21)]));
+            let output = candidate.to_gzip().unwrap();
+            if let Some(previous) = &expected {
+                assert_eq!(&output, previous);
+            } else {
+                expected = Some(output.clone());
+            }
+            let mut loaded = SignatureDb::from_gzip(&output).unwrap();
+            loaded.combine(&original).unwrap();
+            assert!(!loaded.entries.contains_key(&key(1)));
+            assert!(!loaded.exact.contains_key(&key(11)));
+            assert!(!loaded.calls.contains_key(&key(21)));
+            assert_eq!(loaded.to_json(), candidate.to_json());
+        }
+    }
+
+    #[test]
+    fn empty_reference_batch_preserves_all_candidate_evidence() {
+        let mut candidate = corpus_sources()[0].clone();
+        let before = candidate.clone();
+        assert_eq!(candidate.reject_reference_conflicts_from(std::iter::empty::<&SignatureDb>()), Ok(0));
+        assert_same_evidence(&candidate, &before);
+    }
+
+    #[test]
+    fn reference_filter_mismatches_are_atomic_including_ephemeral_evidence() {
+        let mut candidate = corpus_sources()[0].clone();
+        let before = candidate.clone();
+        let mut conflicting = db();
+        conflicting.add([1; 32], Some([10; 32]), Some([20; 32]), "different_raw_name");
+        let mut reference = before.clone();
+        reference.arch = Arch::Aarch64;
+        assert_eq!(
+            candidate.reject_reference_conflicts_from([&conflicting, &reference]),
+            Err(CombineError::ArchitectureMismatch)
+        );
+        assert_same_evidence(&candidate, &before);
+        reference.arch = candidate.arch;
+        reference.scheme = LEGACY_SCHEME;
+        assert_eq!(
+            candidate.reject_reference_conflicts_from([&conflicting, &reference]),
+            Err(CombineError::SchemeMismatch)
+        );
+        assert_same_evidence(&candidate, &before);
     }
 }
