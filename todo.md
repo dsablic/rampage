@@ -135,6 +135,13 @@ full-retention cohort. Pinned slice `198c024`: zlib and Lua pass the tested x64/
 77.9%/65.4% recall, with zero wrong/spurious names. All six results are published in `docs/benchmarks.md`.
 No new pilot database is promoted into the default bundle. Earlier results and the live Phase 1 gate are unchanged.
 
+Further reviewed slices: `5f5a7e4` adds SQLite, aggregate validation and exact-match diagnostics; `1b67d7c` adds
+ARM EHABI candidate starts (Thumb LZ4 2/104 → 73/104, still below gate). `8640ae7` expands the pinned catalog to
+ten profiles/six families, including second versions. `7f58743` fixes large MCP identification replies: all 935
+mbedTLS matches are available in four complete bounded pages instead of truncated JSON. Current source suites,
+targeted large-corpus MCP acceptance, Clippy, Python tests and reviews passed. Remaining roster/recall and
+promotion gates are still open; Phases 3–6 are not started.
+
 The follow-up `5f5a7e4` / `1b67d7c` evidence is pinned in
 `docs/benchmarks/phase2-1-parallel-2026-10-18.json`: SQLite x64 is 243/262; AArch64 is 201/262 and fails.
 Both same-architecture SQLite/LZ4/musl aggregate runs fail overall despite all-named precision 1.0 in every
