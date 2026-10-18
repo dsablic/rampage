@@ -446,7 +446,7 @@ pub fn capture_project_workspace_controlled(
             return Err(invalid("duplicate workspace module ID"));
         }
         configuration_revisions.push(input.project.decompiler_configuration_revision()?);
-        annotation_revisions.push(input.project.annotation_revision()?);
+        annotation_revisions.push(input.project.authoritative_annotation_revision()?);
         let source = open_source(&input.source_path)?;
         total = total.checked_add(source.stamp.length).ok_or_else(|| invalid("source size overflow"))?;
         if total > TOTAL_SOURCE_BYTES {
@@ -521,7 +521,7 @@ pub fn capture_project_workspace_controlled(
         if input.project.decompiler_configuration_revision()? != *revision {
             return Err(invalid("workspace configuration changed during capture"));
         }
-        if !Arc::ptr_eq(&input.project.annotation_revision()?, &annotation_revisions[index]) {
+        if !Arc::ptr_eq(&input.project.authoritative_annotation_revision()?, &annotation_revisions[index]) {
             return Err(invalid("workspace annotations changed during capture"));
         }
         validate_annotation_context(&manifest.modules[index], session)?;
@@ -592,7 +592,8 @@ fn normalized_image(image: Option<ImageAt>) -> Option<ProjectWorkspaceImage> {
 }
 
 fn detached_annotations(project: &Project) -> Result<(crate::annotations::Annotations, Option<PathBuf>), ApiError> {
-    let current = project.annotations();
+    let current = project.annotations.read().expect("annotations lock");
+    project.validate_patch_context(&current)?;
     current.preflight_checked().map_err(invalid)?;
     Ok((current.snapshot(), current.persistent_path().map(Path::to_owned)))
 }
@@ -607,11 +608,7 @@ fn validate_annotation_persistence(
     control: &ProjectWorkspaceTaskControl<'_>,
 ) -> Result<(), ApiError> {
     control.check()?;
-    let empty = current.names().is_empty()
-        && current.comments().is_empty()
-        && current.signatures().is_empty()
-        && current.types().is_empty()
-        && current.globals().is_empty();
+    let empty = current.values_equal(&crate::annotations::Annotations::in_memory());
     let Some(log) = log else {
         return if empty {
             Ok(())
@@ -647,12 +644,7 @@ fn validate_annotation_persistence(
     let persisted =
         crate::annotations::Annotations::open_for_image_checked(log.to_owned(), image_hash).map_err(invalid)?;
     control.check()?;
-    if current.names() != persisted.names()
-        || current.comments() != persisted.comments()
-        || current.signatures() != persisted.signatures()
-        || current.types() != persisted.types()
-        || current.globals() != persisted.globals()
-    {
+    if !current.values_equal(&persisted) {
         return Err(invalid("workspace analyst state differs from its checked local log; refresh before saving"));
     }
     Ok(())

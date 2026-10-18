@@ -62,6 +62,17 @@ enum PacksCommand {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    PatchBytes(args::PatchBytesArgs),
+    #[command(hide = true)]
+    RevertPatch(args::RevertPatchArgs),
+    #[command(hide = true)]
+    ListPatches(args::ListPatchesArgs),
+    #[command(hide = true)]
+    ExportPatched(args::ExportPatchedArgs),
+    /// Assemble a read-only byte proposal; never execute or install the resulting bytes
+    #[command(hide = true)]
+    Assemble(args::AssembleArgs),
     /// Search retained bytes, Unicode text, instructions, immediates or native references
     #[command(hide = true)]
     Search(args::SearchArgs),
@@ -350,7 +361,48 @@ fn main() -> ExitCode {
             commands::pseudocode(&mut out, &file, &at, structured, &options)
         }
         Command::Compare(CompareArgs { file, reference }) => commands::compare(&mut out, &file, &reference, &options),
+        Command::PatchBytes(args) => commands::patch_tool(
+            &mut out,
+            &args.file,
+            "patch_bytes",
+            serde_json::json!({
+                "at": args.at, "original_hex": args.original_hex, "replacement_hex": args.replacement_hex,
+                "allow_data": args.allow_data, "source_sha256": args.review.source_sha256,
+                "expected_revision": args.review.expected_revision,
+            }),
+            &options,
+        ),
+        Command::RevertPatch(args) => commands::patch_tool(
+            &mut out,
+            &args.file,
+            "revert_patch",
+            serde_json::json!({
+                "at": args.at, "source_sha256": args.review.source_sha256,
+                "expected_revision": args.review.expected_revision,
+            }),
+            &options,
+        ),
+        Command::ListPatches(args) => commands::patch_tool(
+            &mut out,
+            &args.file,
+            "list_patches",
+            serde_json::json!({
+                "offset": args.offset, "limit": args.limit,
+            }),
+            &options,
+        ),
+        Command::ExportPatched(args) => commands::patch_tool(
+            &mut out,
+            &args.file,
+            "export_patched",
+            serde_json::json!({
+                "destination": args.destination, "source_sha256": args.review.source_sha256,
+                "expected_revision": args.review.expected_revision,
+            }),
+            &options,
+        ),
         Command::Search(args) => commands::search(&mut out, &args, &options),
+        Command::Assemble(args) => commands::assemble(&mut out, &args, &options),
         Command::Signatures(SignaturesArgs { file, output, fuzzy_request }) => {
             commands::signatures(&mut out, &file, output.as_deref(), fuzzy_request.as_deref(), &options)
         }

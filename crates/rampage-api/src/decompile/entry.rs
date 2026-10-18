@@ -205,7 +205,7 @@ impl Project {
         };
         check("annotation snapshot")?;
         let annotations = {
-            let current = match self.annotations.try_read() {
+            let current = match self.read_annotations_lock().try_read() {
                 Ok(current) => current,
                 Err(TryLockError::Poisoned(error)) => error.into_inner(),
                 Err(TryLockError::WouldBlock) => {
@@ -554,3 +554,7 @@ impl Project {
 #[cfg(test)]
 #[path = "entry_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../effective_annotation_pilot_tests.rs"]
+mod effective_annotation_pilot_tests;

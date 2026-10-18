@@ -7,6 +7,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::sync::Arc;
 
 /// Results longer than this are cut, so that one large answer cannot crowd out the conversation. Workflow reports
 /// and import receipts fit themselves below it instead, preserving valid JSON and whole-operation status.
@@ -15,11 +16,47 @@ const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
 const MAX_PDB_ERROR_BYTES: usize = 1024;
 
+#[cfg(test)]
+mod patch_dispatch_tests;
+mod patch_page;
 pub(crate) mod search_page;
 mod signature_page;
 use signature_page::identify_page;
 
-type Handler = Box<dyn Fn(&Project, Value) -> Result<Value, String> + Send + Sync>;
+type BorrowedHandler = Box<dyn Fn(&Project, Value) -> Result<Value, String> + Send + Sync>;
+type SharedHandler = Box<dyn Fn(&mut Arc<Project>, Value) -> Result<SharedResult, String> + Send + Sync>;
+
+struct SharedResult {
+    value: Value,
+    transition: Option<AnnotationTransition>,
+}
+
+struct AnnotationTransition {
+    before: Arc<()>,
+    after: Arc<()>,
+}
+
+impl SharedResult {
+    fn read(value: Value) -> Self {
+        Self { value, transition: None }
+    }
+
+    fn patch(value: Value, outcome: &crate::PatchOutcome) -> Self {
+        Self {
+            value,
+            transition: Some(AnnotationTransition {
+                before: Arc::clone(&outcome.before_annotation_revision),
+                after: Arc::clone(&outcome.after_annotation_revision),
+            }),
+        }
+    }
+}
+
+enum Handler {
+    Borrowed(BorrowedHandler),
+    /// Annotation handlers in this branch install their returned `PatchOutcome.project` themselves.
+    Shared(SharedHandler),
+}
 
 /// A set of related tools. MCP clients see the core group first and enable the others when they need them, so the
 /// tool list stays short as it grows; the UI's assistant offers every tool of every group that works on the open
@@ -131,6 +168,7 @@ pub enum Effect {
     None,
     Annotations,
     ShowAddress,
+    FileWrite,
 }
 
 /// The JSON schema of a tool taking arguments `A`.
@@ -167,7 +205,7 @@ where
         interactive: false,
         effect: Effect::None,
         reads_annotations: true,
-        handler: Box::new(handler),
+        handler: Handler::Borrowed(Box::new(handler)),
     }
 }
 
@@ -1709,6 +1747,21 @@ pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         tool(
             Group::Core,
+            "assemble",
+            "Assemble literal source into a read-only byte proposal for this binary's current target. \
+             at is a numeric address string or resolvable name; only the base address resolves names. \
+             source is literal assembly, never a filename or shell command: one instruction per nonempty line, \
+             at most 16 KiB, 64 instructions and 4096 output bytes. Supported core subset: x86/x64 register \
+             MOV/CMP, NOP/RET and numeric branches; little-endian AArch64 MOV/MOVZ/CMP, NOP/RET and numeric \
+             branches. Other architectures/modes, labels, comments, directives, memory operands, macros and \
+             symbolic branch targets are refused with line errors. Returns actual target/base, bytes_hex, \
+             original byte array, canonical_disassembly, instruction_count and evidence_profile within 60000 \
+             JSON bytes. Encoding/decoding evidence is NOT execution or behavior verification. No external \
+             assembler, execution, image patches, annotation writes, exports or implicit application.",
+            |project, request: crate::AssemblyRequest| project.assemble(&request),
+        ),
+        tool(
+            Group::Core,
             "search",
             "Read-only unified native search. mode.kind selects bytes (hex/nibble wildcards), text \
              (ascii, utf16_le or utf16_be; literal or Unicode regex), immediate (signed/unsigned numeric value, \
@@ -2061,11 +2114,11 @@ pub fn tools() -> Vec<Tool> {
             interactive: false,
             effect: Effect::None,
             reads_annotations: true,
-            handler: Box::new(|project, input| {
+            handler: Handler::Borrowed(Box::new(|project: &Project, input| {
                 let _: Nothing =
                     serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
                 serde_json::to_value(project.summary()).map_err(|error| error.to_string())
-            }),
+            })),
         },
         tool(
             Group::Core,
@@ -2467,6 +2520,7 @@ pub fn tools() -> Vec<Tool> {
         )
         .annotates(),
     ]);
+    tools.extend(patch_page::tools());
     tools
 }
 
@@ -2485,7 +2539,7 @@ fn workflow_tool(workflow: &'static dyn Workflow) -> Tool {
         interactive: false,
         effect: Effect::None,
         reads_annotations: true,
-        handler: Box::new(handler),
+        handler: Handler::Borrowed(Box::new(handler)),
     }
 }
 
@@ -2501,6 +2555,268 @@ pub fn group_of(name: &str) -> Option<Group> {
 
 /// Runs the tool `name` with `input`, returning its result as text for the model and whether it failed.
 pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (String, bool) {
+    dispatch(tools, name, input, |tool, input| match &tool.handler {
+        Handler::Borrowed(handler) => handler(project, input),
+        Handler::Shared(_) => Err(format!("tool {name} requires shared-project dispatch (call_shared)")),
+    })
+}
+
+/// Runs against the current immutable effective snapshot and replaces it after annotation edits.
+/// A snapshot acquisition failure is an error, never permission to read the old bytes.
+pub fn call_shared(tools: &[Tool], project: &mut Arc<Project>, name: &str, input: Value) -> (String, bool) {
+    call_shared_inner(tools, project, name, input, false, None, &mut None)
+}
+
+/// Like `call_shared`, but refuses to follow a newer snapshot before admitting the handler.
+pub fn call_shared_bound(tools: &[Tool], project: &mut Arc<Project>, name: &str, input: Value) -> (String, bool) {
+    let expected = project.annotation_revision().ok();
+    call_shared_bound_revision(tools, project, name, input, expected.as_ref()).0
+}
+
+/// Compares held byte and annotation identities within one original project's snapshot lineage.
+pub fn same_effective_revision(left: &Project, right: &Project) -> bool {
+    Arc::ptr_eq(&left.patch_revision(), &right.patch_revision())
+        && left
+            .annotation_revision()
+            .ok()
+            .zip(right.annotation_revision().ok())
+            .is_some_and(|(left, right)| Arc::ptr_eq(&left, &right))
+}
+
+/// Includes the exact validated annotation-view identity, not a later read of a live original project's map.
+pub fn call_shared_bound_revision(
+    tools: &[Tool],
+    project: &mut Arc<Project>,
+    name: &str,
+    input: Value,
+    expected_revision: Option<&Arc<()>>,
+) -> ((String, bool), Option<Arc<()>>) {
+    let mut revision = None;
+    let result = call_shared_inner(tools, project, name, input, true, expected_revision, &mut revision);
+    (result, revision)
+}
+
+fn call_shared_inner(
+    tools: &[Tool],
+    project: &mut Arc<Project>,
+    name: &str,
+    input: Value,
+    bound: bool,
+    expected_revision: Option<&Arc<()>>,
+    revision: &mut Option<Arc<()>>,
+) -> (String, bool) {
+    dispatch(tools, name, input, |tool, input| {
+        let current = project.effective_snapshot().map_err(|error| error_chain(&error))?;
+        if bound
+            && (!same_effective_revision(project, &current)
+                || expected_revision.is_some_and(|expected| {
+                    !current.annotation_revision().is_ok_and(|now| Arc::ptr_eq(&now, expected))
+                }))
+        {
+            return Err("assistant snapshot changed before tool admission; no tool dispatched".to_owned());
+        }
+        *project = current;
+        match &tool.handler {
+            Handler::Shared(handler) => {
+                let result = handler(project, input)?;
+                if bound && tool.effect == Effect::Annotations {
+                    if let (Some(expected), Some(transition)) = (expected_revision, &result.transition)
+                        && Arc::ptr_eq(expected, &transition.before)
+                        && project.annotation_revision().is_ok_and(|after| Arc::ptr_eq(&after, &transition.after))
+                    {
+                        *revision = Some(Arc::clone(&transition.after));
+                    }
+                } else {
+                    *revision = project.annotation_revision().ok();
+                }
+                Ok(result.value)
+            }
+            Handler::Borrowed(handler) => {
+                let before = (bound && tool.effect == Effect::Annotations).then(|| {
+                    (
+                        serde_json::to_value(project.annotation_list()).expect("annotation JSON"),
+                        project.patch_revision(),
+                    )
+                });
+                let result = handler(project, input);
+                if tool.effect != Effect::Annotations {
+                    if result.is_ok() {
+                        *revision = project.annotation_revision().ok();
+                    }
+                    return result;
+                }
+                match project.effective_snapshot() {
+                    Ok(current) => {
+                        let stamp = match current.annotation_revision() {
+                            Ok(stamp) => stamp,
+                            Err(error) => {
+                                return result
+                                    .map(|receipt| post_commit_refresh_unavailable(receipt, &error_chain(&error)));
+                            }
+                        };
+                        if let (Some((before, patches)), Ok(receipt)) = (&before, &result) {
+                            let after = serde_json::to_value(current.annotation_list()).expect("annotation JSON");
+                            if !Arc::ptr_eq(patches, &current.patch_revision())
+                                || !exact_edit_transition(before, receipt, &after)
+                                || !current.annotation_revision().is_ok_and(|now| Arc::ptr_eq(&now, &stamp))
+                            {
+                                return result.map(|receipt| {
+                                    post_commit_refresh_unavailable(
+                                        receipt,
+                                        "annotation transition cannot be attributed exclusively to this run",
+                                    )
+                                });
+                            }
+                        }
+                        *revision = Some(stamp);
+                        *project = current;
+                        result
+                    }
+                    Err(error) => result.map(|receipt| post_commit_refresh_unavailable(receipt, &error_chain(&error))),
+                }
+            }
+        }
+    })
+}
+
+fn exact_edit_transition(before: &Value, receipt: &Value, after: &Value) -> bool {
+    if before == after {
+        return true;
+    }
+    let mut expected = before.clone();
+    let edits = receipt.as_array().cloned().unwrap_or_else(|| vec![receipt.clone()]);
+    for edit in edits {
+        let field = match edit["field"].as_str() {
+            Some("name") => "names",
+            Some("comment") => "comments",
+            Some("signature") => "signatures",
+            Some("types") => "types",
+            Some("global") => "globals",
+            _ => return false,
+        };
+        let Some(address) = edit.get("address").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(value) = edit.get("value") else {
+            return false;
+        };
+        let Some(rows) = expected[field].as_array_mut() else {
+            return false;
+        };
+        rows.retain(|row| row["address"] != address);
+        if !value.is_null() {
+            let Some(text) = value.as_str() else {
+                return false;
+            };
+            rows.push(serde_json::json!({ "address": address, "text": text }));
+        }
+        rows.sort_by_key(|row| {
+            row["address"]
+                .as_str()
+                .and_then(|text| text.strip_prefix("0x"))
+                .and_then(|text| u64::from_str_radix(text, 16).ok())
+                .unwrap_or(0)
+        });
+    }
+    expected == *after
+}
+
+fn post_commit_refresh_unavailable(receipt: Value, error: &str) -> Value {
+    let value = serde_json::json!({
+        "result": receipt,
+        "post_commit_refresh": {
+            "status": "unavailable", "handler_succeeded": true,
+            "rollback_performed": false,
+            "error": pdb_bounded_text(error, 256),
+        },
+    });
+    fit_committed_result(value)
+}
+
+fn result_digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    rampage_arch::hex::bytes(&Sha256::digest(bytes))
+}
+
+fn evidence_value(value: &Value) -> Value {
+    let bytes = serde_json::to_vec(value).expect("JSON value serialization");
+    if bytes.len() <= 1024 {
+        value.clone()
+    } else {
+        serde_json::json!({
+            "omitted": true, "json_bytes": bytes.len(), "sha256": result_digest(&bytes),
+        })
+    }
+}
+
+fn fit_committed_result(value: Value) -> Value {
+    let bytes = serde_json::to_vec(&value).expect("JSON value serialization");
+    if bytes.len() <= MAX_RESULT_CHARS {
+        return value;
+    }
+    let original = value.get("result").unwrap_or(&value);
+    let original_bytes = serde_json::to_vec(original).expect("JSON value serialization");
+    let mut evidence = serde_json::Map::new();
+    for field in [
+        "address",
+        "field",
+        "changed",
+        "value",
+        "status",
+        "apply_requested",
+        "whole_apply_succeeded",
+        "applied_total",
+        "preserved_total",
+        "imported_types_total",
+        "receipt",
+        "source_sha256",
+        "effective_sha256",
+        "revision_sha256",
+        "active_ranges",
+        "changed_bytes",
+    ] {
+        if let Some(value) = original.get(field) {
+            evidence.insert(field.to_owned(), evidence_value(value));
+        }
+    }
+    let entries = original.as_array().map(|items| {
+        items
+            .iter()
+            .take(8)
+            .map(|item| {
+                let mut fields = serde_json::Map::new();
+                for field in ["address", "field", "changed", "value"] {
+                    if let Some(value) = item.get(field) {
+                        fields.insert(field.to_owned(), evidence_value(value));
+                    }
+                }
+                Value::Object(fields)
+            })
+            .collect::<Vec<_>>()
+    });
+    serde_json::json!({
+        "handler_succeeded": true, "rollback_performed": false,
+        "post_commit_refresh": value.get("post_commit_refresh").map(evidence_value).unwrap_or(Value::Null),
+        "post_commit_refresh_status": if value["post_commit_refresh"]["status"] == "unavailable" {
+            Value::String("unavailable".to_owned())
+        } else { Value::Null },
+        "result_representation": "commit_evidence_summary",
+        "full_result_omitted": true,
+        "full_result_json_bytes": original_bytes.len(),
+        "full_result_sha256": result_digest(&original_bytes),
+        "commit_evidence": evidence,
+        "result_items": original.as_array().map(Vec::len),
+        "entry_evidence": entries,
+        "entry_evidence_omitted": original.as_array().map(|items| items.len().saturating_sub(8)),
+    })
+}
+
+fn dispatch(
+    tools: &[Tool],
+    name: &str,
+    input: Value,
+    run: impl FnOnce(&Tool, Value) -> Result<Value, String>,
+) -> (String, bool) {
     let Some(tool) = tools.iter().find(|tool| tool.name == name) else {
         return (format!("unknown tool {name}"), true);
     };
@@ -2513,10 +2829,11 @@ pub fn call(tools: &[Tool], project: &Project, name: &str, input: Value) -> (Str
     {
         return (debug_layout_import_error(&error, apply_requested), true);
     }
-    match (tool.handler)(project, input) {
+    match run(tool, input) {
         Ok(value) => {
+            let value = if tool.effect == Effect::Annotations { fit_committed_result(value) } else { value };
             let mut text = value.to_string();
-            if text.len() > MAX_RESULT_CHARS && name != "import_debug_layouts" {
+            if text.len() > MAX_RESULT_CHARS && tool.effect != Effect::Annotations && name != "import_debug_layouts" {
                 let cut = (0..=MAX_RESULT_CHARS).rev().find(|&index| text.is_char_boundary(index)).unwrap_or(0);
                 text.truncate(cut);
                 text.push_str("... (truncated: ask for a narrower range, a smaller count, or a page)");

@@ -339,7 +339,7 @@ impl Project {
     pub fn read_data(&self, query: &TypedDataQuery) -> Result<TypedDataReport, ApiError> {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
-        let annotations = self.annotations.read().expect("annotations lock").checked_read_snapshot()?;
+        let annotations = self.read_annotations_lock().read().expect("annotations lock").checked_read_snapshot()?;
         let bindings = bindings(&annotations)?;
         let containing = bindings.iter().find(|(address, binding)| {
             *address <= query.address && query.address - *address < u64::from(binding.byte_length)

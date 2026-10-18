@@ -389,12 +389,12 @@ impl OperandListingContext {
 
 impl Project {
     pub(crate) fn operand_listing_context(&self) -> Result<Option<OperandListingContext>, ApiError> {
-        if self.annotations.read().expect("annotations lock").operand_types().is_empty() {
+        if self.read_annotations_lock().read().expect("annotations lock").operand_types().is_empty() {
             return Ok(None);
         }
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
-        let annotations = self.annotations.read().expect("annotations lock").checked_read_snapshot()?;
+        let annotations = self.read_annotations_lock().read().expect("annotations lock").checked_read_snapshot()?;
         if annotations.operand_types().is_empty() {
             return Ok(None);
         }

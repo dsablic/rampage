@@ -289,7 +289,7 @@ impl Project {
         }
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| default_options(&self.binary));
-        let annotations = self.annotations.read().expect("annotations lock").checked_read_snapshot()?;
+        let annotations = self.read_annotations_lock().read().expect("annotations lock").checked_read_snapshot()?;
         {
             let units = stored_declarations(&annotations)?;
             let native = self.inspect_types(&state, &options, &annotations, None, &[])?;
@@ -314,7 +314,7 @@ impl Project {
         validate_name(name)?;
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| default_options(&self.binary));
-        let annotations = self.annotations.read().expect("annotations lock").checked_read_snapshot()?;
+        let annotations = self.read_annotations_lock().read().expect("annotations lock").checked_read_snapshot()?;
         {
             let units = stored_declarations(&annotations)?;
             let native = self.inspect_types(&state, &options, &annotations, Some(name), &[])?;

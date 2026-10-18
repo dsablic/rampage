@@ -147,7 +147,7 @@ pub fn capture_function_inventory(
     control.phase(ProjectWorkspacePhase::CapturingInputs, None, 0, 1)?;
     backing(&project)?;
     let analysis = project.cached_analysis().ok_or_else(|| invalid("inventory capture requires completed analysis"))?;
-    let names_revision = background_names_revision(&project, control)?;
+    let names_revision = background_held_names_revision(&project, control)?;
     let key = key::dependency_key(&project, control)?;
     control.phase(ProjectWorkspacePhase::CapturingInventory, None, 0, 1)?;
     backing(&project)?;
@@ -182,7 +182,7 @@ pub fn completed_function_inventory_rows(
 ) -> Result<Vec<FunctionInventoryCacheRow>, ApiError> {
     control.phase(ProjectWorkspacePhase::CapturingInventory, None, 0, 1)?;
     backing(project)?;
-    let names_revision = background_names_revision(project, control)?;
+    let names_revision = background_held_names_revision(project, control)?;
     let rows = project_rows(project, control)?;
     validate_background_binding(project, &names_revision, control)?;
     control.check()?;
@@ -199,7 +199,7 @@ fn project_rows(
     let mut named_bytes = 0usize;
     let mut blocks = 0usize;
     {
-        let annotations = borrow_annotations(project, control)?;
+        let annotations = borrow_held_annotations(project, control)?;
         for function in analysis.program.functions.iter().take(DEFAULT_ROWS) {
             control.check()?;
             blocks = blocks.checked_add(function.blocks.len()).ok_or_else(|| invalid("inventory block budget"))?;
@@ -242,7 +242,10 @@ pub fn read_function_inventory(
     if !background_source_unchanged(&project, control)? {
         return Ok(InventoryCacheReadOutcome::SourceChanged);
     }
-    let names_revision = background_names_revision(&project, control)?;
+    let names_revision = background_held_names_revision(&project, control)?;
+    if !background_binding_unchanged(&project, &names_revision, control)? {
+        return Ok(InventoryCacheReadOutcome::SourceChanged);
+    }
     control.phase(ProjectWorkspacePhase::ReadingCache, None, 0, 1)?;
     let outcome = match crate::debugger_capture::read_private_document(path, DOCUMENT_BYTES) {
         Ok(bytes) => {
@@ -322,7 +325,7 @@ pub fn function_inventory_dependency_key(
     control: &mut ProjectWorkspaceTaskControl<'_>,
 ) -> Result<FunctionInventoryCacheKey, ApiError> {
     control.phase(ProjectWorkspacePhase::ValidatingCache, None, 0, 1)?;
-    let names_revision = background_names_revision(project, control)?;
+    let names_revision = background_held_names_revision(project, control)?;
     let key = key::dependency_key(project, control)?;
     validate_background_binding(project, &names_revision, control)?;
     control.check()?;
@@ -338,13 +341,44 @@ fn parse_document(bytes: &[u8]) -> Result<wire::Document, ApiError> {
 
 fn validate_binding(project: &Project, revision: &Arc<()>) -> Result<(), ApiError> {
     backing(project)?;
-    if !Arc::ptr_eq(revision, &project.names_revision()?) {
-        return Err(invalid("inventory names changed"));
+    let current = match project.annotations.try_read() {
+        Ok(current) => current,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            return Err(ApiError::Unavailable("annotations are busy".into()));
+        }
+    };
+    if !current.patches().is_empty() || !Arc::ptr_eq(revision, &current.names_revision()) {
+        return Err(invalid("inventory names or patch context changed"));
     }
     Ok(())
 }
 
-fn borrow_annotations<'a>(
+fn borrow_held_annotations<'a>(
+    project: &'a Project,
+    control: &ProjectWorkspaceTaskControl<'_>,
+) -> Result<std::sync::RwLockReadGuard<'a, crate::annotations::Annotations>, ApiError> {
+    loop {
+        control.check()?;
+        match project.read_annotations_lock().try_read() {
+            Ok(annotations) => return Ok(annotations),
+            Err(std::sync::TryLockError::Poisoned(error)) => return Ok(error.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }
+        #[cfg(all(test, unix))]
+        contention_tests::annotation_waiting();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn background_held_names_revision(
+    project: &Project,
+    control: &ProjectWorkspaceTaskControl<'_>,
+) -> Result<Arc<()>, ApiError> {
+    Ok(borrow_held_annotations(project, control)?.names_revision())
+}
+
+fn borrow_authoritative_annotations<'a>(
     project: &'a Project,
     control: &ProjectWorkspaceTaskControl<'_>,
 ) -> Result<std::sync::RwLockReadGuard<'a, crate::annotations::Annotations>, ApiError> {
@@ -361,13 +395,6 @@ fn borrow_annotations<'a>(
     }
 }
 
-fn background_names_revision(
-    project: &Project,
-    control: &ProjectWorkspaceTaskControl<'_>,
-) -> Result<Arc<()>, ApiError> {
-    Ok(borrow_annotations(project, control)?.names_revision())
-}
-
 fn background_binding_unchanged(
     project: &Project,
     revision: &Arc<()>,
@@ -376,8 +403,12 @@ fn background_binding_unchanged(
     if !background_source_unchanged(project, control)? {
         return Ok(false);
     }
-    let current = background_names_revision(project, control)?;
-    Ok(background_source_unchanged(project, control)? && Arc::ptr_eq(revision, &current))
+    let names_unchanged = {
+        let current = borrow_authoritative_annotations(project, control)?;
+        // V0 inventories require original mapped bytes, not an older mapping with current patch authority.
+        current.patches().is_empty() && Arc::ptr_eq(revision, &current.names_revision())
+    };
+    Ok(background_source_unchanged(project, control)? && names_unchanged)
 }
 
 fn validate_background_binding(
@@ -386,7 +417,7 @@ fn validate_background_binding(
     control: &ProjectWorkspaceTaskControl<'_>,
 ) -> Result<(), ApiError> {
     if !background_binding_unchanged(project, revision, control)? {
-        return Err(invalid("inventory source or names changed"));
+        return Err(invalid("inventory source, names or patch context changed"));
     }
     Ok(())
 }
@@ -432,5 +463,102 @@ impl std::io::Write for BoundedDocument {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod effective_view_tests {
+    use std::sync::RwLock;
+    use std::sync::atomic::AtomicBool;
+
+    use super::*;
+
+    fn controlled<T>(work: impl FnOnce(&mut ProjectWorkspaceTaskControl<'_>) -> T) -> T {
+        let cancellation = AtomicBool::new(false);
+        let mut observer = |_| {};
+        work(&mut ProjectWorkspaceTaskControl::new(&cancellation, &mut observer))
+    }
+
+    fn project() -> Arc<Project> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+        Arc::new(Project::new(rampage_loaders::Binary::open(path).unwrap()))
+    }
+
+    fn discover(project: &Project) {
+        project.functions(&crate::FunctionsQuery { limit: Some(0), ..Default::default() }).unwrap();
+    }
+
+    fn cached(prepared: &PreparedFunctionInventory) -> CachedFunctionInventory {
+        CachedFunctionInventory {
+            project: Arc::clone(&prepared.project),
+            names_revision: Arc::clone(&prepared.names_revision),
+            document: Box::new(parse_document(&prepared.bytes).unwrap()),
+        }
+    }
+
+    #[test]
+    fn frozen_rows_and_key_keep_their_names_but_capture_and_adoption_reject_new_authority() {
+        let project = project();
+        let main = project.resolve("main").unwrap();
+        project.rename(main, Some("inventory_held_name")).unwrap();
+        discover(&project);
+        let frozen = project.annotations.read().unwrap().read_snapshot();
+        assert!(project.frozen_annotations.set(RwLock::new(frozen)).is_ok());
+        let prepared = controlled(|control| capture_function_inventory(Arc::clone(&project), control)).unwrap();
+        let view = cached(&prepared);
+        view.validate_current_metadata(&project).unwrap();
+        {
+            let _writer = project.annotations.write().unwrap();
+            controlled(|control| {
+                assert_eq!(project_rows(&project, control).unwrap(), prepared.rows());
+                assert_eq!(&key::dependency_key(&project, control).unwrap(), prepared.key());
+            });
+            assert!(matches!(view.validate_current_metadata(&project), Err(ApiError::Unavailable(_))));
+        }
+
+        project.rename(main, Some("inventory_authoritative_name")).unwrap();
+        controlled(|control| {
+            let rows = project_rows(&project, control).unwrap();
+            assert_eq!(rows, prepared.rows());
+            assert!(rows.iter().any(|row| row.name == "inventory_held_name"));
+            assert_eq!(&key::dependency_key(&project, control).unwrap(), prepared.key());
+            assert!(function_inventory_dependency_key(&project, control).is_err());
+            assert!(capture_function_inventory(Arc::clone(&project), control).is_err());
+            let absent = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/absent-inventory.json");
+            assert!(matches!(
+                read_function_inventory(Arc::clone(&project), &absent, control).unwrap(),
+                InventoryCacheReadOutcome::SourceChanged
+            ));
+            assert!(validate_background_binding(&project, &prepared.names_revision, control).is_err());
+        });
+        assert!(view.validate_current_metadata(&project).is_err());
+        assert!(Arc::ptr_eq(&project.names_revision().unwrap(), &prepared.names_revision));
+    }
+
+    #[test]
+    fn patched_owned_inventory_and_stale_original_patch_context_are_not_admitted() {
+        let original = project();
+        let main = original.resolve("main").unwrap();
+        original.rename(main, Some("inventory_before_patch")).unwrap();
+        discover(&original);
+        let prepared = controlled(|control| capture_function_inventory(Arc::clone(&original), control)).unwrap();
+        let view = cached(&prepared);
+        let held = original.patch_bytes(0x100191e, &[0xb8, 5, 0, 0, 0], &[0xb8, 7, 0, 0, 0], false).unwrap().project;
+        assert!(!held.binary.validate_available_backing_source().unwrap());
+        controlled(|control| {
+            // The unchanged names nonce alone must not admit original bytes after a patch publication.
+            assert!(Arc::ptr_eq(&original.names_revision().unwrap(), &prepared.names_revision));
+            assert!(validate_background_binding(&original, &prepared.names_revision, control).is_err());
+            assert!(capture_function_inventory(Arc::clone(&original), control).is_err());
+            assert!(capture_function_inventory(Arc::clone(&held), control).is_err());
+            assert!(function_inventory_dependency_key(&held, control).is_err());
+        });
+        assert!(view.validate_current_metadata(&original).is_err());
+        held.rename(main, Some("inventory_after_patch")).unwrap();
+        assert_eq!(held.function_name(main), "inventory_before_patch");
+        controlled(|control| {
+            assert!(capture_function_inventory(Arc::clone(&held), control).is_err());
+            assert!(completed_function_inventory_rows(&held, control).is_err());
+        });
     }
 }

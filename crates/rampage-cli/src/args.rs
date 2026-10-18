@@ -3,6 +3,72 @@ use std::path::PathBuf;
 use clap::Args;
 
 #[derive(Args)]
+pub(crate) struct PatchReviewArgs {
+    /// Original source SHA-256 from list-patches.receipt
+    #[arg(long)]
+    pub(crate) source_sha256: String,
+    /// Reviewed revision SHA-256 from list-patches.receipt
+    #[arg(long)]
+    pub(crate) expected_revision: String,
+}
+
+#[derive(Args)]
+pub(crate) struct PatchBytesArgs {
+    pub(crate) file: PathBuf,
+    #[arg(long)]
+    pub(crate) at: String,
+    /// Original source bytes, not the current patched bytes; contiguous lowercase hex
+    #[arg(long)]
+    pub(crate) original_hex: String,
+    #[arg(long)]
+    pub(crate) replacement_hex: String,
+    /// Explicit true/false consent to include eligible data payload
+    #[arg(long, required = true, action = clap::ArgAction::Set)]
+    pub(crate) allow_data: bool,
+    #[command(flatten)]
+    pub(crate) review: PatchReviewArgs,
+}
+
+#[derive(Args)]
+pub(crate) struct RevertPatchArgs {
+    pub(crate) file: PathBuf,
+    #[arg(long)]
+    pub(crate) at: String,
+    #[command(flatten)]
+    pub(crate) review: PatchReviewArgs,
+}
+
+#[derive(Args)]
+pub(crate) struct ListPatchesArgs {
+    pub(crate) file: PathBuf,
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..=100))]
+    pub(crate) limit: u64,
+}
+
+#[derive(Args)]
+pub(crate) struct ExportPatchedArgs {
+    pub(crate) file: PathBuf,
+    /// New destination only; existing paths and the original source cannot be overwritten
+    #[arg(long)]
+    pub(crate) destination: PathBuf,
+    #[command(flatten)]
+    pub(crate) review: PatchReviewArgs,
+}
+
+#[derive(Args)]
+pub(crate) struct AssembleArgs {
+    pub(crate) file: PathBuf,
+    /// Numeric address string or resolvable name for the proposal's base address
+    #[arg(long)]
+    pub(crate) at: String,
+    /// Literal assembly, one instruction per line; never a source filename or shell command
+    #[arg(long)]
+    pub(crate) source: String,
+}
+
+#[derive(Args)]
 pub(crate) struct SearchArgs {
     pub(crate) file: PathBuf,
     /// Bounded regular JSON SearchRequest file; see `search` MCP schema for the six typed mode selectors

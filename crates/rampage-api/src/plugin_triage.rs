@@ -357,7 +357,7 @@ fn snapshot_functions(
     project: &Project,
     analysis: &crate::project::Analysis,
 ) -> Result<FunctionNamesSnapshot, ApiError> {
-    let annotations = project.annotations.try_read().map_err(|_| {
+    let annotations = project.read_annotations_lock().try_read().map_err(|_| {
         ApiError::Unavailable("annotations are busy or poisoned during plugin triage preparation".into())
     })?;
     let mut budget = bounds::FactBudget::default();
@@ -385,7 +385,7 @@ fn snapshot_functions(
 }
 
 fn preflight_names(project: &Project) -> Result<Arc<()>, ApiError> {
-    let annotations = project.annotations.try_read().map_err(|_| {
+    let annotations = project.read_annotations_lock().try_read().map_err(|_| {
         ApiError::Unavailable("annotations are busy or poisoned during plugin triage preparation".into())
     })?;
     let mut budget = bounds::FactBudget::default();
@@ -418,8 +418,14 @@ fn checked_primitive<T>(
 }
 
 fn check_names_and_packs(project: &Project, names: &Arc<()>, packs: &Arc<Packs>) -> Result<(), ApiError> {
-    if !Arc::ptr_eq(names, &project.names_revision()?) || !Arc::ptr_eq(packs, &project.packs()) {
-        return Err(invalid("plugin triage names or data-pack configuration changed; prepare again"));
+    let names_unchanged = {
+        let annotations = project.annotations.try_read().map_err(|_| {
+            ApiError::Unavailable("annotations are busy or poisoned during plugin triage validation".into())
+        })?;
+        annotations.patches().is_empty() && Arc::ptr_eq(names, &annotations.names_revision())
+    };
+    if !names_unchanged || !Arc::ptr_eq(packs, &project.packs()) {
+        return Err(invalid("plugin triage names, patch context or data-pack configuration changed; prepare again"));
     }
     Ok(())
 }
@@ -446,4 +452,48 @@ fn digest(project: &Project, control: &ProjectWorkspaceTaskControl<'_>) -> Resul
 
 fn invalid(message: &str) -> ApiError {
     ApiError::Invalid(message.to_owned())
+}
+
+#[cfg(test)]
+mod effective_view_tests {
+    use std::sync::RwLock;
+
+    use super::*;
+
+    #[test]
+    fn held_plugin_names_stay_frozen_but_preparation_and_revalidation_observe_authoritative_changes() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/net-client-x64.elf");
+        let project = Arc::new(Project::new(rampage_loaders::Binary::open(path).unwrap()));
+        let cancellation = AtomicBool::new(false);
+        let mut observer = |_| {};
+        let control = ProjectWorkspaceTaskControl::new(&cancellation, &mut observer);
+        let prepared =
+            prepare_plugin_triage_with_analysis(Arc::clone(&project), ReportLimits::default(), &control).unwrap();
+        let analysis = project.cached_analysis().unwrap();
+        let address = analysis.program.functions[0].address;
+        let frozen = project.annotations.read().unwrap().read_snapshot();
+        assert!(project.frozen_annotations.set(RwLock::new(frozen)).is_ok());
+        let (baseline, rows) = snapshot_functions(&project, analysis).unwrap();
+        prepared.revalidate(&control).unwrap();
+        {
+            let _writer = project.annotations.write().unwrap();
+            assert_eq!(snapshot_functions(&project, analysis).unwrap().1, rows);
+            assert!(Arc::ptr_eq(&baseline, &preflight_names(&project).unwrap()));
+            assert!(matches!(prepared.revalidate(&control), Err(ApiError::Unavailable(_))));
+        }
+
+        project.rename(address, Some("plugin_authoritative_name")).unwrap();
+        let (held, held_rows) = snapshot_functions(&project, analysis).unwrap();
+        assert!(Arc::ptr_eq(&baseline, &held));
+        assert_eq!(rows, held_rows);
+        assert!(Arc::ptr_eq(&baseline, &preflight_names(&project).unwrap()));
+        assert!(matches!(check_names_and_packs(&project, &held, &prepared.packs), Err(ApiError::Invalid(_))));
+        assert!(matches!(prepared.revalidate(&control), Err(ApiError::Invalid(_))));
+        assert!(matches!(
+            prepare_plugin_triage(Arc::clone(&project), ReportLimits::default(), &control),
+            Err(ApiError::Invalid(_))
+        ));
+        project.rename(address, None).unwrap();
+        assert!(matches!(prepared.revalidate(&control), Err(ApiError::Invalid(_))));
+    }
 }

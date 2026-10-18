@@ -2,6 +2,7 @@
 
 pub mod annotations;
 mod archive;
+mod assembly;
 mod batch;
 mod benchmark;
 mod branch_observation;
@@ -32,6 +33,7 @@ mod module_references;
 mod offset;
 mod operand_types;
 pub mod packs;
+mod patches;
 mod plugin_triage;
 mod pointer_compare;
 mod pointer_observation;
@@ -68,6 +70,7 @@ pub use archive::{
     ArchiveMember, ArchiveMemberRef, ArchivePage, ArchiveQuery, ArchiveRef, MAX_ARCHIVE_PAGE, MAX_ARCHIVE_RESULT_BYTES,
     archive_inventory,
 };
+pub use assembly::{AssemblyReport, AssemblyRequest};
 pub use batch::{BatchEntry, BatchOutcome, BatchResult, MAX_BATCH, NameCheck};
 pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use branch_observation::{BranchObservation, BranchSlotStatus};
@@ -137,6 +140,10 @@ pub use module_references::{
 pub use offset::{FileOffset, parse_file_offset};
 pub use operand_types::{ApplyOperandTypeRequest, OperandAnnotationDisplay, OperandTypeEdit};
 pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
+pub use patches::{
+    BytePatch, MAX_ACTIVE_PATCHES, MAX_PATCH_BYTES, MAX_PATCH_SOURCE_BYTES, MAX_TOTAL_PATCH_BYTES, PatchExport,
+    PatchOutcome, PatchReceipt,
+};
 pub use plugin_triage::{
     MAX_PLUGIN_TRIAGE_REPORT_BYTES, MAX_PLUGIN_TRIAGE_SOURCE_BYTES, PluginTriageProvenance, PluginTriageReport,
     PreparedPluginTriage, open_plugin_triage_source, prepare_plugin_triage, prepare_plugin_triage_with_analysis,

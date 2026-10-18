@@ -9,6 +9,11 @@
 //! on that image, and every edit is attributed to the identity line before it, or, in a log begun before identity
 //! lines existed, to the first one. [`Annotations::warnings`] says when some edits were made on another image, or
 //! when none can be attributed yet.
+//!
+//! Every reader caps unread raw bytes at 16 MiB, each line (including a newline-free tail) at 2 MiB, and records
+//! at 8192 before serde. Complete records require exactly one syntactically valid JSON object and no trailing tokens.
+//! Patch-bearing records require valid complete newline-terminated envelopes; torn records and incomplete batches refuse
+//! the refresh instead of silently returning the unpatched image.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions};
@@ -35,6 +40,7 @@ pub enum Field {
     TypeHint,
     DataType,
     OperandType,
+    Patch,
 }
 
 /// An exact named data type or explicitly encoded string at an image address.
@@ -172,7 +178,10 @@ fn canonical_operand_types(entries: &mut [OperandTypeAnnotation]) {
 }
 
 fn checked_annotation_field(field: Field) -> bool {
-    matches!(field, Field::TypeLibrary | Field::DebugTypes | Field::DataType | Field::OperandType | Field::TypeHint)
+    matches!(
+        field,
+        Field::TypeLibrary | Field::DebugTypes | Field::DataType | Field::OperandType | Field::TypeHint | Field::Patch
+    )
 }
 
 /// Function-local names keyed by complete storage selectors, never by generated names.
@@ -688,6 +697,7 @@ fn canonical_local_value(field: Field, value: Option<&str>) -> Result<Option<Str
             Field::DebugTypes => encode_debug_types(&parse_debug_types(value)?),
             Field::DataType => encode_data_type(&parse_data_type(value)?),
             Field::OperandType => encode_operand_types(&parse_operand_types(value)?),
+            Field::Patch => crate::patches::encode_patch(&crate::patches::parse_patch(value)?),
             _ => Ok(value.to_owned()),
         })
         .transpose()
@@ -702,6 +712,7 @@ fn validate_local_value(field: Field, value: &str) -> Result<(), String> {
         Field::DebugTypes => parse_debug_types(value).map(|_| ()),
         Field::DataType => parse_data_type(value).map(|_| ()),
         Field::OperandType => parse_operand_types(value).map(|_| ()),
+        Field::Patch => crate::patches::parse_patch(value).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -794,6 +805,7 @@ impl Refusal {
 pub struct Annotations {
     revision: std::sync::Arc<()>,
     names_revision: std::sync::Arc<()>,
+    patches_revision: std::sync::Arc<()>,
     names: BTreeMap<u64, String>,
     /// Each name's address, for resolving names.
     addresses: HashMap<String, u64>,
@@ -809,6 +821,10 @@ pub struct Annotations {
     type_hints: BTreeMap<u64, String>,
     data_types: BTreeMap<u64, String>,
     operand_types: BTreeMap<u64, String>,
+    patches: BTreeMap<u64, String>,
+    patch_validator: Option<PatchValidator>,
+    patch_freezer: Option<PatchFreezer>,
+    unpatched_view: Option<std::sync::Arc<Annotations>>,
     /// Steps applied in this session, for undo; and undone ones, for redo. A step is the edits one call made,
     /// in order: a single edit, or a whole batch, which undoes and redoes together.
     done: Vec<Vec<Edit>>,
@@ -817,10 +833,13 @@ pub struct Annotations {
     log: Option<Log>,
     /// Whether `locked` holds the log's lock, which edits made inside it must not try to take again.
     held: bool,
-    /// Explicit checked ingestion. Legacy `open` does not retroactively provide an allocation-safe boundary.
+    /// Checked structural/cache/history ingestion, beyond the raw byte limits shared by all log readers.
     checked_reads: bool,
     managed_layouts: usize,
 }
+
+type PatchValidator = std::sync::Arc<dyn Fn(&Annotations) -> Result<(), String> + Send + Sync>;
+type PatchFreezer = std::sync::Arc<dyn Fn(&Annotations) + Send + Sync>;
 
 const CHECKED_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const CHECKED_VALUE_BYTES: usize = 1024 * 1024;
@@ -914,6 +933,68 @@ impl Log {
 }
 
 impl Annotations {
+    #[cfg(test)]
+    pub(crate) fn test_log_cursor(&self) -> Option<u64> {
+        self.log.as_ref().map(|log| log.read)
+    }
+    pub(crate) fn patches_revision(&self) -> std::sync::Arc<()> {
+        std::sync::Arc::clone(&self.patches_revision)
+    }
+
+    pub(crate) fn set_patch_validator(&mut self, validator: PatchValidator) {
+        self.patch_validator = Some(validator);
+    }
+
+    pub(crate) fn set_patch_freezer(&mut self, freezer: PatchFreezer) {
+        self.patch_freezer = Some(freezer);
+    }
+
+    pub(crate) fn read_snapshot(&self) -> Self {
+        let mut snapshot = self.snapshot();
+        snapshot.patch_freezer = None;
+        snapshot.unpatched_view = None;
+        snapshot
+    }
+
+    pub(crate) fn original_read_snapshot(&self) -> Self {
+        if let Some(view) = &self.unpatched_view {
+            return view.read_snapshot();
+        }
+        let mut view = self.read_snapshot();
+        view.patches.clear();
+        view.patches_revision = std::sync::Arc::new(());
+        view.revision = std::sync::Arc::new(());
+        view
+    }
+
+    fn freeze_unpatched_view(&mut self) {
+        if !self.patches.is_empty() {
+            return;
+        }
+        if self.unpatched_view.is_none() {
+            self.unpatched_view = Some(std::sync::Arc::new(self.read_snapshot()));
+        }
+    }
+
+    fn publish_staged(&mut self, mut staged: Self) {
+        if self.patches.is_empty()
+            && !staged.patches.is_empty()
+            && let Some(freeze) = &self.patch_freezer
+        {
+            freeze(self);
+        }
+        staged.patch_freezer = self.patch_freezer.clone();
+        *self = staged;
+    }
+
+    pub(crate) fn validate_patches(&self) -> Result<(), String> {
+        crate::patches::validate_patch_collection(&self.patches)?;
+        if let Some(validate) = &self.patch_validator {
+            validate(self)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn revision(&self) -> std::sync::Arc<()> {
         std::sync::Arc::clone(&self.revision)
     }
@@ -943,7 +1024,7 @@ impl Annotations {
     /// Bounded boundary for logs containing checked layout bundles. Limits apply BEFORE reading/serde:
     /// 16 MiB unread raw bytes, 2 MiB/line, 8192 lines, depth 8 and 65536 structural separators.
     /// Cache/history limits: 8 MiB cumulative text, 1 MiB/value, 8192 counted entries, 1024 undo/redo steps.
-    /// Ordinary legacy `open` remains compatible and is not claimed allocation-safe for hostile old objects.
+    /// Ordinary legacy `open` shares the raw limits while retaining compatibility for ordinary legacy fragments.
     pub fn open_checked(path: PathBuf) -> Result<Self, String> {
         Self::open_for_image_checked(path, None)
     }
@@ -973,6 +1054,7 @@ impl Annotations {
             || !self.data_types.is_empty()
             || !self.operand_types.is_empty()
             || !self.type_hints.is_empty()
+            || !self.patches.is_empty()
     }
 
     fn introduces_checked_state(&self, field: Field, value: Option<&str>) -> bool {
@@ -1007,6 +1089,7 @@ impl Annotations {
             .saturating_add(self.type_hints.len())
             .saturating_add(self.data_types.len())
             .saturating_add(self.operand_types.len())
+            .saturating_add(self.patches.len())
             .saturating_add(self.addresses.len())
             .saturating_add(self.name_owners.len());
         if rows > CHECKED_RECORDS {
@@ -1030,6 +1113,7 @@ impl Annotations {
             .chain(self.type_hints.values())
             .chain(self.data_types.values())
             .chain(self.operand_types.values())
+            .chain(self.patches.values())
             .chain(self.addresses.keys())
             .chain(self.name_owners.keys())
         {
@@ -1116,6 +1200,7 @@ impl Annotations {
         Self {
             revision: std::sync::Arc::clone(&self.revision),
             names_revision: std::sync::Arc::clone(&self.names_revision),
+            patches_revision: std::sync::Arc::clone(&self.patches_revision),
             names: self.names.clone(),
             addresses: self.addresses.clone(),
             name_owners: self.name_owners.clone(),
@@ -1130,6 +1215,10 @@ impl Annotations {
             type_hints: self.type_hints.clone(),
             data_types: self.data_types.clone(),
             operand_types: self.operand_types.clone(),
+            patches: self.patches.clone(),
+            patch_validator: self.patch_validator.clone(),
+            patch_freezer: None,
+            unpatched_view: self.unpatched_view.clone(),
             checked_reads: self.checked_reads,
             managed_layouts: self.managed_layouts,
             ..Self::default()
@@ -1171,10 +1260,30 @@ impl Annotations {
             };
             let changed = staged.refresh_inner(true)?;
             staged.preflight_checked()?;
-            *self = staged;
+            self.publish_staged(staged);
             return Ok(changed);
         }
         self.refresh_inner(false)
+    }
+
+    pub(crate) fn refresh_validated(
+        &mut self,
+        validate: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        if self.checked_reads || self.has_checked_layouts() || self.has_checked_annotations() {
+            self.preflight_checked()?;
+        }
+        let mut staged = Self {
+            done: self.done.clone(),
+            undone: self.undone.clone(),
+            log: self.log.clone(),
+            held: self.held,
+            ..self.snapshot()
+        };
+        let changed = staged.refresh()?;
+        validate(&staged)?;
+        self.publish_staged(staged);
+        Ok(changed)
     }
 
     fn refresh_inner(&mut self, checked: bool) -> Result<bool, String> {
@@ -1199,7 +1308,7 @@ impl Annotations {
             let changed = staged.refresh_inner(true)?;
             staged.preflight_checked()?;
             staged.checked_reads = self.checked_reads;
-            *self = staged;
+            self.publish_staged(staged);
             return Ok(changed);
         }
         for edit in edits.iter().filter(|edit| checked_annotation_field(edit.field)) {
@@ -1213,6 +1322,9 @@ impl Annotations {
             for edit in &edits {
                 budget.edit(edit)?;
             }
+        }
+        if self.patch_freezer.is_some() && edits.iter().any(|edit| edit.field == Field::Patch && edit.value.is_some()) {
+            self.freeze_unpatched_view();
         }
         self.log = Some(next_log);
         if restart {
@@ -1234,16 +1346,27 @@ impl Annotations {
             self.type_hints.clear();
             self.data_types.clear();
             self.operand_types.clear();
+            if !self.patches.is_empty() {
+                self.patches_revision = std::sync::Arc::new(());
+            }
+            self.patches.clear();
             self.managed_layouts = 0;
         }
         for edit in &edits {
             self.apply(edit);
         }
+        self.validate_patches()?;
         Ok(restart || !edits.is_empty())
     }
 
     fn apply(&mut self, edit: &Edit) {
+        if edit.field == Field::Patch && edit.value.is_some() {
+            self.freeze_unpatched_view();
+        }
         self.revision = std::sync::Arc::new(());
+        if edit.field == Field::Patch && self.patches.get(&edit.address) != edit.value.as_ref() {
+            self.patches_revision = std::sync::Arc::new(());
+        }
         if matches!(edit.field, Field::Types | Field::Signature) {
             let managed = |text: &str| {
                 text.starts_with('!')
@@ -1297,7 +1420,8 @@ impl Annotations {
             | Field::LocalType
             | Field::TypeHint
             | Field::DataType
-            | Field::OperandType => {
+            | Field::OperandType
+            | Field::Patch => {
                 let values = match edit.field {
                     Field::Signature => &mut self.signatures,
                     Field::Types => &mut self.types,
@@ -1308,6 +1432,7 @@ impl Annotations {
                     Field::TypeHint => &mut self.type_hints,
                     Field::DataType => &mut self.data_types,
                     Field::OperandType => &mut self.operand_types,
+                    Field::Patch => &mut self.patches,
                     _ => &mut self.globals,
                 };
                 match &edit.value {
@@ -1324,8 +1449,8 @@ impl Annotations {
 
     /// Appends `edits` to the log in one write. Several are written as a batch (see `BatchHeader`), which readers
     /// apply whole or not at all, even if the write is cut short. The appended lines are read back, harmlessly, by
-    /// the next `refresh`. A file left ending mid-line (by an interrupted write) gets a newline first, so the
-    /// fragment becomes a line of its own, which reading skips.
+    /// the next `refresh`. An unterminated tail must be completed by its writer before another edit can append;
+    /// padding an interrupted object with a newline would publish a syntactically invalid physical record.
     fn record(&mut self, edits: &[Edit]) -> Result<(), String> {
         if self.checked_reads
             || self.has_checked_annotations()
@@ -1343,7 +1468,10 @@ impl Annotations {
             file.seek(SeekFrom::Start(len - 1)).map_err(error)?;
             file.read_exact(&mut last).map_err(error)?;
         }
-        let mut lines = if last[0] == b'\n' { String::new() } else { "\n".to_owned() };
+        if last[0] != b'\n' {
+            return Err("unterminated annotation tail; complete the existing record before appending".into());
+        }
+        let mut lines = String::new();
         let mut push = |line: Result<String, serde_json::Error>| -> Result<(), String> {
             lines.push_str(&line.map_err(|error| error.to_string())?);
             lines.push('\n');
@@ -1425,15 +1553,38 @@ impl Annotations {
         {
             return Err(CHECKED_ERROR.to_owned());
         }
+        let append_end = before.len().checked_add(encoded.bytes.len() as u64).ok_or(CHECKED_ERROR)?;
         file.write_all(&encoded.bytes).map_err(|_| CHECKED_ERROR.to_owned())?;
         if new_image.is_some() {
             log.logged_image = new_image;
+        }
+        // A fully refreshed writer already applies this exact append in `commit`; replaying its own bytes on
+        // refresh would manufacture a new authority nonce after the transition witness was returned.
+        if log.read == before.len() {
+            log.read = append_end;
+            log.identity = file_identity(&before);
+            log.attribute_edits();
         }
         Ok(())
     }
 
     fn commit(&mut self, edits: &[Edit]) -> Result<(), String> {
         self.record(edits)?;
+        if self.patches.is_empty() && self.patch_freezer.is_some() {
+            let mut active = std::collections::BTreeSet::new();
+            for edit in edits.iter().filter(|edit| edit.field == Field::Patch) {
+                if edit.value.is_some() {
+                    active.insert(edit.address);
+                } else {
+                    active.remove(&edit.address);
+                }
+            }
+            if !active.is_empty()
+                && let Some(freeze) = &self.patch_freezer
+            {
+                freeze(self);
+            }
+        }
         for edit in edits {
             self.apply(edit);
         }
@@ -1473,7 +1624,7 @@ impl Annotations {
         staged.refresh().map_err(ApiError::Invalid)?;
         let result = work(&mut staged)?;
         staged.held = self.held;
-        *self = staged;
+        self.publish_staged(staged);
         Ok(result)
     }
 
@@ -1520,7 +1671,7 @@ impl Annotations {
         }
         staged.checked_reads = self.checked_reads || staged.has_checked_layouts() || staged.has_checked_annotations();
         staged.held = self.held;
-        *self = staged;
+        self.publish_staged(staged);
         result
     }
 
@@ -1544,7 +1695,7 @@ impl Annotations {
         let result = work(&mut staged)?;
         staged.checked_reads = self.checked_reads || staged.has_checked_layouts() || staged.has_checked_annotations();
         staged.held = self.held;
-        *self = staged;
+        self.publish_staged(staged);
         Ok(result)
     }
 
@@ -1846,6 +1997,7 @@ impl Annotations {
                     | Field::TypeHint
                     | Field::DataType
                     | Field::OperandType
+                    | Field::Patch
             ) || (edit.field == Field::Name && (!candidate.globals().is_empty() || !candidate.data_types().is_empty()))
         });
         if checked {
@@ -1901,6 +2053,7 @@ impl Annotations {
             Field::TypeHint => &self.type_hints,
             Field::DataType => &self.data_types,
             Field::OperandType => &self.operand_types,
+            Field::Patch => &self.patches,
         }
     }
 
@@ -1964,7 +2117,31 @@ impl Annotations {
         &self.operand_types
     }
 
+    pub fn patches(&self) -> &BTreeMap<u64, String> {
+        &self.patches
+    }
+
+    pub(crate) fn values_equal(&self, other: &Self) -> bool {
+        const FIELDS: [Field; 13] = [
+            Field::Name,
+            Field::Comment,
+            Field::Signature,
+            Field::Types,
+            Field::TypeLibrary,
+            Field::DebugTypes,
+            Field::Global,
+            Field::LocalName,
+            Field::LocalType,
+            Field::TypeHint,
+            Field::DataType,
+            Field::OperandType,
+            Field::Patch,
+        ];
+        FIELDS.into_iter().all(|field| self.field_map(field) == other.field_map(field))
+    }
+
     fn validate_local_collections(&self) -> Result<(), String> {
+        self.validate_patches()?;
         for value in self.type_hints.values() {
             parse_type_hints(value)?;
         }
@@ -2034,19 +2211,19 @@ fn checked_full_log(log: &Log, extra: &[Edit]) -> Result<(), String> {
 
 /// Reads the complete lines appended to `log` since it was last read. Returns their edits, and whether the file
 /// was replaced (it shrank or is another file), in which case they are its whole contents and earlier state must be
-/// dropped. Lines that do not parse, such as a fragment an interrupted write left behind, are skipped, as are the
-/// edits of a batch cut short. A batch still incomplete at the end is left to be read again with what follows.
+/// dropped. Ordinary unbatched legacy fragments can be skipped. Patch-bearing malformed/torn records and batches
+/// refuse the whole read; legacy-only incomplete batches remain pending for a later read.
 fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), String> {
     let path = log.path.clone();
     let error = |error: std::io::Error| format!("{}: {error}", path.display());
-    let opened = if checked { checked_log_file(&path) } else { File::open(&path) };
+    let opened = if checked || cfg!(unix) { checked_log_file(&path) } else { File::open(&path) };
     let mut file = match opened {
         Ok(file) => file,
         Err(problem) if problem.kind() == std::io::ErrorKind::NotFound => return Ok((false, Vec::new())),
         Err(problem) => return Err(error(problem)),
     };
     let metadata = file.metadata().map_err(error)?;
-    if checked && (!metadata.is_file() || metadata.len().saturating_sub(log.read) > CHECKED_READ_BYTES as u64) {
+    if !metadata.is_file() || metadata.len().saturating_sub(log.read) > CHECKED_READ_BYTES as u64 {
         return Err(CHECKED_ERROR.to_owned());
     }
     let identity = file_identity(&metadata);
@@ -2058,19 +2235,12 @@ fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), Str
     if metadata.len() == log.read {
         return Ok((restart, Vec::new()));
     }
+    if metadata.len().saturating_sub(log.read) > CHECKED_READ_BYTES as u64 {
+        return Err(CHECKED_ERROR.to_owned());
+    }
     file.seek(SeekFrom::Start(log.read)).map_err(error)?;
-    let mut bytes = Vec::new();
+    let bytes = read_bounded_log(&mut file)?;
     if checked {
-        if metadata.len().saturating_sub(log.read) > CHECKED_READ_BYTES as u64 {
-            return Err(CHECKED_ERROR.to_owned());
-        }
-        (&mut file)
-            .take(CHECKED_READ_BYTES as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| CHECKED_ERROR.to_owned())?;
-        if bytes.len() > CHECKED_READ_BYTES {
-            return Err(CHECKED_ERROR.to_owned());
-        }
         checked_outer_preflight(&bytes)?;
         let after = file.metadata().map_err(|_| CHECKED_ERROR.to_owned())?;
         let pathname = std::fs::symlink_metadata(&path).map_err(|_| CHECKED_ERROR.to_owned())?;
@@ -2080,14 +2250,18 @@ fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), Str
         {
             return Err(CHECKED_ERROR.to_owned());
         }
-    } else {
-        file.read_to_end(&mut bytes).map_err(error)?;
     }
     // Only complete lines: the rest may still be being written.
     let complete = bytes.iter().rposition(|&byte| byte == b'\n').map_or(0, |end| end + 1);
+    let tail = &bytes[complete..];
+    crate::patches::validate_log_record_tail(tail)?;
+    if crate::patches::patch_log_shape(tail).patch {
+        return Err("unterminated patch record: patch records require a complete newline-terminated JSON line".into());
+    }
     let mut lines = Vec::new();
     let mut start = 0;
     for line in bytes[..complete].split_inclusive(|&byte| byte == b'\n') {
+        crate::patches::validate_patch_log_line(line)?;
         lines.push((start, line));
         start += line.len();
     }
@@ -2103,6 +2277,11 @@ fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), Str
                 }
                 let members: Vec<Edit> =
                     lines[index..].iter().take(count).map_while(|(_, line)| batch_member(line, &batch)).collect();
+                if members.len() != count
+                    && lines[index..].iter().take(count).any(|(_, line)| crate::patches::patch_log_shape(line).patch)
+                {
+                    return Err("incomplete or mismatched patch batch; no members were applied".into());
+                }
                 index += members.len();
                 if members.len() == count {
                     log.attribute_edits();
@@ -2112,7 +2291,11 @@ fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), Str
                     break;
                 }
             }
-            Ok(LineKind { batch: Some(_), edits: None, .. }) => {}
+            Ok(LineKind { batch: Some(_), edits: None, .. }) => {
+                if crate::patches::patch_log_shape(line).patch {
+                    return Err("orphan patch batch member; no patch was applied".into());
+                }
+            }
             Ok(LineKind { batch: None, edits: None, image: Some(image) }) => {
                 if checked && image.len() > 128 {
                     return Err(CHECKED_ERROR.to_owned());
@@ -2131,6 +2314,48 @@ fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), Str
     }
     log.read += read as u64;
     Ok((restart, edits))
+}
+
+fn read_bounded_log(file: &mut File) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    let mut line_bytes = 0usize;
+    let mut records = 0usize;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let limit = chunk
+            .len()
+            .min(CHECKED_READ_BYTES - bytes.len() + 1)
+            .min(CHECKED_LINE_BYTES - line_bytes + 1)
+            .min(if records == CHECKED_RECORDS { 1 } else { chunk.len() });
+        let length = file.read(&mut chunk[..limit]).map_err(|_| CHECKED_ERROR.to_owned())?;
+        if length == 0 {
+            break;
+        }
+        if records == CHECKED_RECORDS {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        if bytes.len().checked_add(length).is_none_or(|length| length > CHECKED_READ_BYTES) {
+            return Err(CHECKED_ERROR.to_owned());
+        }
+        for &byte in &chunk[..length] {
+            if records == CHECKED_RECORDS {
+                return Err(CHECKED_ERROR.to_owned());
+            }
+            line_bytes += 1;
+            if line_bytes > CHECKED_LINE_BYTES {
+                return Err(CHECKED_ERROR.to_owned());
+            }
+            if byte == b'\n' {
+                records += 1;
+                if records > CHECKED_RECORDS {
+                    return Err(CHECKED_ERROR.to_owned());
+                }
+                line_bytes = 0;
+            }
+        }
+        bytes.extend_from_slice(&chunk[..length]);
+    }
+    Ok(bytes)
 }
 
 fn checked_log_file(path: &std::path::Path) -> std::io::Result<File> {
@@ -2675,7 +2900,17 @@ mod tests {
         OpenOptions::new().append(true).open(&path).unwrap().write_all(br#"{"field":"name","addr"#).unwrap();
         let mut reopened = Annotations::open(path.clone()).unwrap();
         assert_eq!(reopened.name(0x10), Some("first"));
-        reopened.set(Field::Name, 0x20, Some("second".into())).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(reopened.set(Field::Name, 0x20, Some("second".into())).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"ess\":\"0x20\",\"value\":\"second\",\"previous\":null}\n")
+            .unwrap();
+        assert!(reopened.refresh().unwrap());
+        reopened.set(Field::Name, 0x40, Some("after".into())).unwrap();
         let replayed = Annotations::open(path.clone()).unwrap();
         assert_eq!((replayed.name(0x10), replayed.name(0x20)), (Some("first"), Some("second")));
         cleanup(path);

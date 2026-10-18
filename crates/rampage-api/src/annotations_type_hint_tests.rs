@@ -428,13 +428,19 @@ fn type_hint_maps_history_and_checked_read_snapshots_use_existing_budgets() {
 #[test]
 fn first_type_hint_transition_checks_the_full_legacy_prefix_before_mutation_or_append() {
     for prefix in [
-        "malformed complete legacy line\n".to_owned(),
+        "{\"legacy_fragment\":true}\n".to_owned(),
         format!("{{\"image\":\"{}\"}}\n{{\"image\":\"legacy\"}}\n", "x".repeat(129)),
         "{\"image\":\"legacy\"}\n".repeat(CHECKED_RECORDS + 1),
     ] {
         let log = HintLog::new();
-        std::fs::write(&log.0, prefix).unwrap();
+        std::fs::write(&log.0, &prefix).unwrap();
         log.append(&Edit { field: Field::Comment, address: 1, value: Some("kept".into()), previous: None });
+        if prefix.lines().count() > CHECKED_RECORDS {
+            let before = std::fs::read(&log.0).unwrap();
+            assert!(Annotations::open(log.0.clone()).is_err(), "raw record caps now apply before the first read");
+            assert_eq!(std::fs::read(&log.0).unwrap(), before);
+            continue;
+        }
         let mut annotations = Annotations::open(log.0.clone()).unwrap();
         annotations.set(Field::Comment, 2, Some("history".into())).unwrap();
         annotations.set(Field::Comment, 3, Some("redo history".into())).unwrap();
@@ -504,7 +510,7 @@ fn first_shared_checked_transition_rejects_skipped_legacy_prefix_without_publish
     ];
     for (field, value) in values {
         let log = HintLog::new();
-        std::fs::write(&log.0, b"malformed complete legacy line\n").unwrap();
+        std::fs::write(&log.0, b"{\"legacy_fragment\":true}\n").unwrap();
         log.append(&Edit { field: Field::Comment, address: 1, value: Some("kept".into()), previous: None });
         let mut annotations = Annotations::open_for_image(log.0.clone(), Some([0xab; 32])).unwrap();
         assert_eq!(annotations.comment(1), Some("kept"));

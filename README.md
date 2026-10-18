@@ -105,6 +105,8 @@ Additional focused guides:
 - [Library signature inputs](docs/signature-imports.md): native/PAT databases and explicitly configured FID import.
 - [Fuzzy library candidates](docs/fuzzy-signatures.md): secondary similarity evidence without automatic naming.
 - [Search](docs/search.md): bounded byte/text/regex, instruction and reference queries with native function context.
+- [Checked patches/export](docs/patching.md) and [bounded assembly](docs/assembly.md): annotation-backed effective
+  views, create-new export and static owned-fixture verification without target execution.
 - [Benchmarks](docs/benchmarks.md) and the [decompiler integration corpus](docs/decompiler-corpus.md).
 - [Plugins and extension points](docs/plugins.md): experimental explicit triage components and builtin registries.
 - [Plugin security boundaries](docs/plugin-security.md): admission, resource limits, claim provenance and exclusions.

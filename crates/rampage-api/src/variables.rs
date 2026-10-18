@@ -208,10 +208,11 @@ impl Project {
         validate_request(request)?;
         let address = self.function_containing(function_address)?.unwrap_or(function_address);
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
-        crate::decompile::validate_cached_layout_source(self, &state)?;
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
         let mut annotations = self.annotations.write().expect("annotations lock");
         annotations.locked_staged_checked(|annotations| {
+            self.validate_patch_context(annotations)?;
+            crate::decompile::validate_cached_layout_source(self, &state)?;
             crate::debug_layout_import::validate_replay_source(self, annotations)?;
             let current = self.decompile_annotation_candidate(&state, &options, annotations, address)?;
             let address = current.address;

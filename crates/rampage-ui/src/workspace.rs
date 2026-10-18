@@ -193,6 +193,8 @@ pub struct Workspace {
     pub graph_shown_pass: Option<u64>,
     pub assistant: crate::assistant::Assistant,
     annotations_checked: Instant,
+    snapshot_error: Option<String>,
+    restart_analysis: bool,
 }
 
 impl Workspace {
@@ -258,6 +260,8 @@ impl Workspace {
             path,
             image,
             project,
+            snapshot_error: None,
+            restart_analysis: false,
             blocking,
             functions: Job::Idle,
             strings: Job::Idle,
@@ -299,7 +303,7 @@ impl Workspace {
     }
 
     pub fn start_analysis(&mut self, ctx: &egui::Context) {
-        if !self.deferred {
+        if !self.deferred || self.snapshot_error.is_some() {
             return;
         }
         self.deferred = false;
@@ -323,6 +327,9 @@ impl Workspace {
     }
 
     pub(crate) fn show_entry_window(&mut self, ctx: &egui::Context) {
+        if self.snapshot_error.is_some() {
+            return;
+        }
         let mut entry = std::mem::take(&mut self.entry_ui);
         entry.window(self, ctx, self.blocking);
         self.entry_ui = entry;
@@ -367,6 +374,7 @@ impl Workspace {
     }
 
     pub(crate) fn deactivate(&mut self) {
+        self.assistant.cancel();
         self.entry_ui.invalidate();
         self.instance = Arc::new(());
         self.debug_layout.invalidate();
@@ -376,7 +384,7 @@ impl Workspace {
 
     /// Starts the string scan the first time the strings panel is shown.
     pub fn want_strings(&mut self, ctx: &egui::Context) {
-        if self.deferred {
+        if self.deferred || self.snapshot_error.is_some() {
             return;
         }
         if matches!(self.strings, Job::Idle) {
@@ -387,6 +395,27 @@ impl Workspace {
 
     /// Collects finished background work and edits other clients saved.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        let effects = self.assistant.poll();
+        if effects.pending {
+            ctx.request_repaint_after(Duration::from_millis(10));
+            return;
+        }
+        if effects.stale {
+            match self.project.effective_snapshot() {
+                Ok(project) => {
+                    self.project = project;
+                    self.invalidate_snapshot(None);
+                }
+                Err(error) => self.invalidate_snapshot(Some(text(error))),
+            }
+        }
+        if let Some(project) = effects.project {
+            let changed = !Arc::ptr_eq(&project, &self.project);
+            self.project = project;
+            if changed || effects.annotations_changed {
+                self.invalidate_snapshot_views(None);
+            }
+        }
         let mut entry = std::mem::take(&mut self.entry_ui);
         entry.poll(self);
         self.entry_ui = entry;
@@ -404,27 +433,33 @@ impl Workspace {
         if analyzed {
             self.refresh_cursor_views();
         }
-        let effects = self.assistant.poll();
-        if effects.annotations_changed {
-            self.annotations_changed(None);
-        }
         if let Some(target) = effects.show {
             self.goto_text(&target);
         }
         if !self.blocking {
-            if self.annotations_checked.elapsed() >= ANNOTATION_REFRESH {
+            if !self.assistant.is_running() && self.annotations_checked.elapsed() >= ANNOTATION_REFRESH {
                 self.annotations_checked = Instant::now();
                 match self.project.refresh_annotations() {
                     Ok(changed) => {
                         self.notice = None;
-                        if changed {
+                        if changed || self.snapshot_error.is_some() {
                             self.annotations_changed(None);
+                        } else {
+                            match self.project.effective_snapshot() {
+                                Ok(project) if !Arc::ptr_eq(&project, &self.project) => self.annotations_changed(None),
+                                Ok(_) => {}
+                                Err(error) => self.invalidate_snapshot(Some(text(error))),
+                            }
                         }
                     }
-                    Err(error) => self.notice = Some(error.to_string()),
+                    Err(error) => self.invalidate_snapshot(Some(text(error))),
                 }
             }
             ctx.request_repaint_after(ANNOTATION_REFRESH);
+        }
+        if self.restart_analysis && self.snapshot_error.is_none() {
+            self.restart_analysis = false;
+            self.start_analysis(ctx);
         }
         let mut review = std::mem::take(&mut self.debug_layout);
         review.poll(self);
@@ -432,6 +467,9 @@ impl Workspace {
     }
 
     pub(crate) fn review_debug_layouts(&mut self, ctx: &egui::Context) {
+        if self.snapshot_error.is_some() {
+            return;
+        }
         let mut review = std::mem::take(&mut self.debug_layout);
         review.start(self, ctx, self.blocking);
         self.debug_layout = review;
@@ -522,6 +560,10 @@ impl Workspace {
 
     /// Applies the open dialog; it stays open with an error if the edit is rejected.
     pub fn finish_edit(&mut self) {
+        if let Some(error) = &self.snapshot_error {
+            self.edit_error = Some(error.clone());
+            return;
+        }
         let Some(editing) = &self.editing else { return };
         let text = editing.text.trim();
         let value = (!text.is_empty()).then_some(text);
@@ -545,6 +587,9 @@ impl Workspace {
             )),
             Field::DebugTypes => Err(rampage_api::ApiError::Invalid(
                 "checked debug type edits require the reviewed import_debug_types MCP workflow".to_owned(),
+            )),
+            Field::Patch => Err(rampage_api::ApiError::Invalid(
+                "byte patches require the preimage-aware patch_bytes tool".to_owned(),
             )),
         };
         match result {
@@ -600,14 +645,29 @@ impl Workspace {
 
     /// Refreshes everything that shows names or comments after an edit at `address`, or anywhere.
     pub(crate) fn annotations_changed(&mut self, address: Option<u64>) {
+        match self.project.effective_snapshot() {
+            Ok(project) if !Arc::ptr_eq(&project, &self.project) || self.snapshot_error.is_some() => {
+                self.assistant.cancel();
+                self.project = project;
+                self.invalidate_snapshot(None);
+                if self.blocking && self.restart_analysis {
+                    self.restart_analysis = false;
+                    self.start_analysis(&egui::Context::default());
+                }
+                return;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                self.invalidate_snapshot(Some(text(error)));
+                return;
+            }
+        }
         self.entry_ui.invalidate();
         self.annotations_epoch = Arc::new(());
         self.debug_layout.invalidate();
         self.pseudocode_address = None;
         self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
-        if !self.pseudocode.is_running() {
-            self.pseudocode = Job::Idle;
-        }
+        self.pseudocode = Job::Idle;
         if let Job::Done(Ok(functions)) = &mut self.functions {
             for function in functions.iter_mut().filter(|function| address.is_none_or(|at| at == function.address)) {
                 function.name = self.project.function_name(function.address);
@@ -617,6 +677,45 @@ impl Workspace {
         self.listing = None;
         self.graph = None;
         self.refresh_cursor_views();
+    }
+
+    fn invalidate_snapshot(&mut self, error: Option<String>) {
+        self.assistant.cancel();
+        self.invalidate_snapshot_views(error);
+    }
+
+    fn invalidate_snapshot_views(&mut self, error: Option<String>) {
+        self.entry_ui.invalidate();
+        self.debug_layout.invalidate();
+        self.instance = Arc::new(());
+        self.annotations_epoch = Arc::new(());
+        self.navigation_revision = Arc::new(());
+        self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.pseudocode_address = None;
+        self.functions = Job::Idle;
+        self.strings = Job::Idle;
+        self.triage = Job::Idle;
+        self.pseudocode = Job::Idle;
+        self.listing = None;
+        self.xrefs = None;
+        self.graph = None;
+        self.band = crate::band::Cache::default();
+        self.editing = None;
+        self.function_filter.invalidate();
+        self.string_filter.invalidate();
+        self.import_filter.invalidate();
+        self.export_filter.invalidate();
+        if error.is_none() {
+            self.imports = self.project.imports(&ListQuery::default()).items;
+            self.exports = self.project.exports(&ListQuery::default()).items;
+        } else {
+            self.imports.clear();
+            self.exports.clear();
+        }
+        self.restart_analysis |= !self.deferred;
+        self.deferred = true;
+        self.notice = error.clone();
+        self.snapshot_error = error;
     }
 
     /// Moves the cursor within the current listing without adding to the history.
@@ -630,6 +729,10 @@ impl Workspace {
 
     /// Resolves an address or name typed by the user and goes there.
     pub fn goto_text(&mut self, text: &str) {
+        if let Some(error) = &self.snapshot_error {
+            self.goto_error = Some(error.clone());
+            return;
+        }
         match self.project.resolve(text) {
             Ok(address) => {
                 self.goto_error = None;
@@ -674,7 +777,7 @@ impl Workspace {
     }
 
     fn refresh_cursor_views(&mut self) {
-        if !self.analysis_ready() {
+        if self.snapshot_error.is_some() || !self.analysis_ready() {
             return;
         }
         let in_current = matches!(&self.listing, Some(Ok(listing)) if listing.contains(self.cursor));
@@ -705,6 +808,7 @@ impl Workspace {
 
 impl Drop for Workspace {
     fn drop(&mut self) {
+        self.assistant.cancel();
         self.entry_ui.invalidate();
         self.pseudocode_cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -713,6 +817,31 @@ impl Drop for Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn patch_snapshot_replacement_discards_old_jobs_and_direct_history_rebuilds_views() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+        let project = Arc::new(Project::new(rampage_loaders::Binary::open(&path).unwrap()));
+        project.set_decompiler_worker(None);
+        let ctx = egui::Context::default();
+        let mut workspace = Workspace::from_loaded_project(path, None, Arc::clone(&project), &ctx, true, false);
+        let (sender, receiver) = channel();
+        workspace.strings = Job::Running(receiver);
+        let old_instance = Arc::clone(&workspace.instance);
+        project.patch_bytes(0x100191e, &[0xb8, 5, 0, 0, 0], &[0xb8, 7, 0, 0, 0], false).unwrap();
+        workspace.annotations_changed(None);
+        assert!(!Arc::ptr_eq(&workspace.project, &project));
+        assert!(!Arc::ptr_eq(&workspace.instance, &old_instance));
+        assert!(sender.send(Ok(Vec::new())).is_err(), "old revision receiver must be dropped");
+        assert!(matches!(workspace.strings, Job::Idle));
+        let main = workspace.project.resolve("main").unwrap();
+        assert!(workspace.project.decompile(main).unwrap().code.contains("return 7;"));
+        workspace.undo();
+        assert!(workspace.project.decompile(main).unwrap().code.contains("return 5;"));
+        workspace.redo();
+        assert!(workspace.project.decompile(main).unwrap().code.contains("return 7;"));
+        assert!(project.decompile(main).unwrap().code.contains("return 5;"));
+    }
 
     #[test]
     fn deferred_poll_annotation_refresh_does_not_initialize_backend_analysis_caches() {

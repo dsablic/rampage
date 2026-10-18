@@ -22,6 +22,21 @@ pub struct Options {
     pub packs: Arc<Packs>,
 }
 
+pub fn patch_tool(
+    out: &mut impl Write,
+    path: &Path,
+    name: &str,
+    input: serde_json::Value,
+    options: &Options,
+) -> Result<()> {
+    let mut project = open(path, options)?;
+    let (text, failed) = rampage_api::tools::call_shared(&rampage_api::tools::tools(), &mut project, name, input);
+    anyhow::ensure!(!failed, "{text}");
+    out.write_all(text.as_bytes())?;
+    writeln!(out)?;
+    Ok(())
+}
+
 pub fn inspect_raw(out: &mut impl Write, path: &Path, request: &str, options: &Options) -> Result<()> {
     anyhow::ensure!(request.len() <= 16_384, "raw-code request exceeds input budget");
     let request: rampage_api::RawFileRequest = serde_json::from_str(request)?;
@@ -1561,6 +1576,15 @@ mod pdb_receipt_tests {
         }
         assert!(!text.contains("whole apply succeeded"), "{text}");
     }
+}
+
+pub fn assemble(out: &mut impl Write, args: &crate::args::AssembleArgs, options: &Options) -> Result<()> {
+    let request = rampage_api::AssemblyRequest { at: args.at.clone(), source: args.source.clone() };
+    let report = open(&args.file, options)?.assemble(&request)?;
+    let json = serde_json::to_vec(&report)?;
+    out.write_all(&json)?;
+    writeln!(out)?;
+    Ok(())
 }
 
 pub fn search(out: &mut impl Write, args: &crate::args::SearchArgs, options: &Options) -> Result<()> {

@@ -847,7 +847,7 @@ impl Project {
         crate::decompile::validate_cached_layout_source(self, &state)?;
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
         if !request.apply {
-            let snapshot = self.annotations.read().expect("annotations lock").checked_read_snapshot()?;
+            let snapshot = self.read_annotations_lock().read().expect("annotations lock").checked_read_snapshot()?;
             let (mut result, functions) = self.derive_types(&state, &options, &snapshot, address, request, None)?;
             prepare_hint_receipt(&snapshot, &functions, request.apply, &mut result)?;
             preflight(&result)?;

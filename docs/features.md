@@ -155,6 +155,17 @@ The corresponding MCP tools are `detect_tools`, `yara_scan`, `capa_detect` and `
 constant database finds AES, DES, Blowfish, SHA/MD5, ChaCha, CRC, Deflate, Base64 and curve-parameter tables.
 [Data packs](data-packs.md) extend these heuristic databases with data only.
 
+## Checked patches and assembly
+
+Static ELF64 x86-64/AArch64 patches use the existing annotation log, original identity/preimage checks,
+reviewed revisions and immutable effective projects. Listing, analysis and decompilation consume the same
+effective bytes. Export publishes only a new file; source files and debugger/capture memory remain unchanged.
+Unsupported profiles and incompatible image-sealed metadata reject rather than weakening evidence gates.
+
+The pure assembler supports a documented x86/x64/AArch64 subset and returns verified bytes without applying
+them. See [patching/export contracts](patching.md), [assembly grammar and limits](assembly.md), and the
+[owned real-MCP round trip](benchmarks/phase3-2-patches-2026-10-19.json).
+
 ## Search
 
 The Core `search` tool and `binary search` CLI query mapped bytes, ASCII/Unicode UTF-16 text and regex,

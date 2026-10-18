@@ -7,7 +7,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::{
-    ApiError, FunctionInventoryCacheKey, Project, ProjectWorkspaceTaskControl, backing, borrow_annotations, invalid,
+    ApiError, FunctionInventoryCacheKey, Project, ProjectWorkspaceTaskControl, backing, borrow_held_annotations,
+    invalid,
 };
 
 const INPUT_BYTES: usize = 256 * 1024 * 1024;
@@ -124,7 +125,7 @@ pub(super) fn dependency_key(
         return Err(invalid("inventory source byte budget exceeded"));
     }
     let annotation_names: Vec<_> = {
-        let annotations = borrow_annotations(project, control)?;
+        let annotations = borrow_held_annotations(project, control)?;
         budget.items(annotations.names().len())?;
         for name in annotations.names().values() {
             budget.text(name)?;

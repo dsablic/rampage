@@ -89,7 +89,11 @@ impl PdbPreview<'_> {
 pub struct Project {
     pub binary: Binary,
     names: Names,
-    pub(crate) annotations: RwLock<Annotations>,
+    pub(crate) annotations: Arc<RwLock<Annotations>>,
+    pub(crate) frozen_annotations: Arc<OnceLock<RwLock<Annotations>>>,
+    pub(crate) byte_patches: BTreeMap<u64, String>,
+    pub(crate) patch_origin: Option<Arc<Project>>,
+    pub(crate) patch_source_sha256: OnceLock<[u8; 32]>,
     analysis: OnceLock<Result<Analysis, UnsupportedArch>>,
     triage: OnceLock<Triage>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
@@ -101,6 +105,39 @@ pub struct Project {
     packs: RwLock<Arc<Packs>>,
     /// Go register-ABI prototypes, derived once on first decompilation.
     pub(crate) go_prototypes: OnceLock<crate::decompile::GoPrototypes>,
+}
+
+/// Rechecks the frozen view after acquiring the authority read lock. Selecting a lock before a first patch
+/// transaction finishes must not let a delayed reader observe that transaction's bytes on an original project.
+pub(crate) struct AnnotationReadView<'a> {
+    authority: &'a RwLock<Annotations>,
+    frozen: &'a OnceLock<RwLock<Annotations>>,
+}
+
+impl<'a> AnnotationReadView<'a> {
+    pub(crate) fn read(&self) -> std::sync::LockResult<RwLockReadGuard<'a, Annotations>> {
+        if let Some(frozen) = self.frozen.get() {
+            return frozen.read();
+        }
+        let current = self.authority.read();
+        if let Some(frozen) = self.frozen.get() {
+            drop(current);
+            return frozen.read();
+        }
+        current
+    }
+
+    pub(crate) fn try_read(&self) -> std::sync::TryLockResult<RwLockReadGuard<'a, Annotations>> {
+        if let Some(frozen) = self.frozen.get() {
+            return frozen.try_read();
+        }
+        let current = self.authority.try_read();
+        if let Some(frozen) = self.frozen.get() {
+            drop(current);
+            return frozen.try_read();
+        }
+        current
+    }
 }
 
 pub(crate) struct Analysis {
@@ -122,7 +159,7 @@ struct BlockSpan {
 impl Project {
     /// Process-local names-only identity for Arc::ptr_eq; not serialized authority or source freshness.
     pub fn names_revision(&self) -> Result<Arc<()>, ApiError> {
-        let current = match self.annotations.try_read() {
+        let current = match self.read_annotations_lock().try_read() {
             Ok(current) => current,
             Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => {
@@ -146,7 +183,7 @@ impl Project {
 
     /// Process-local in-memory annotation identity for `Arc::ptr_eq`; not serialized consent or disk freshness.
     pub fn annotation_revision(&self) -> Result<Arc<()>, ApiError> {
-        let current = match self.annotations.try_read() {
+        let current = match self.read_annotations_lock().try_read() {
             Ok(current) => current,
             Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => {
@@ -154,6 +191,18 @@ impl Project {
             }
         };
         Ok(current.revision())
+    }
+
+    /// Refreshed authority nonce, separate from a held snapshot's annotation revision. Every publication or
+    /// replay receives a new identity, including changes that restore an earlier value (no value-based ABA).
+    pub fn authoritative_annotation_revision(&self) -> Result<Arc<()>, ApiError> {
+        let mut annotations =
+            self.annotations.try_write().map_err(|_| ApiError::Unavailable("annotations are busy".into()))?;
+        annotations.preflight_checked().map_err(ApiError::Invalid)?;
+        annotations
+            .refresh_validated(|candidate| self.validate_patch_authority(candidate))
+            .map_err(ApiError::Invalid)?;
+        Ok(annotations.revision())
     }
 
     /// Observes completed cache initialization without starting, waiting for or reconstructing analysis.
@@ -191,12 +240,24 @@ impl Project {
         }
     }
 
-    pub fn with_annotations(binary: Binary, annotations: Annotations) -> Self {
+    pub fn with_annotations(binary: Binary, mut annotations: Annotations) -> Self {
         let names = Names::new(&binary);
+        let frozen_annotations = Arc::new(OnceLock::new());
+        if !annotations.patches().is_empty() {
+            let _ = frozen_annotations.set(RwLock::new(annotations.original_read_snapshot()));
+        }
+        let frozen = Arc::clone(&frozen_annotations);
+        annotations.set_patch_freezer(Arc::new(move |view| {
+            let _ = frozen.set(RwLock::new(view.read_snapshot()));
+        }));
         Self {
             binary,
             names,
-            annotations: RwLock::new(annotations),
+            annotations: Arc::new(RwLock::new(annotations)),
+            frozen_annotations,
+            byte_patches: BTreeMap::new(),
+            patch_origin: None,
+            patch_source_sha256: OnceLock::new(),
             analysis: OnceLock::new(),
             triage: OnceLock::new(),
             strings: OnceLock::new(),
@@ -217,12 +278,21 @@ impl Project {
     }
 
     pub(crate) fn annotations(&self) -> RwLockReadGuard<'_, Annotations> {
-        self.annotations.read().expect("annotations lock")
+        self.read_annotations_lock().read().expect("annotations lock")
     }
 
-    /// Picks up edits other processes have saved beside the binary. Returns whether there were any.
+    pub(crate) fn read_annotations_lock(&self) -> AnnotationReadView<'_> {
+        AnnotationReadView { authority: &self.annotations, frozen: &self.frozen_annotations }
+    }
+
+    /// Refreshes the authoritative annotation writer. Held effective snapshots keep their frozen read view;
+    /// acquire `effective_snapshot` to observe a newer byte or annotation revision.
     pub fn refresh_annotations(&self) -> Result<bool, ApiError> {
-        self.annotations.write().expect("annotations lock").refresh().map_err(ApiError::Invalid)
+        self.annotations
+            .write()
+            .expect("annotations lock")
+            .refresh_validated(|candidate| self.validate_patch_authority(candidate))
+            .map_err(ApiError::Invalid)
     }
 
     /// The name at `address`: the user's, or else a symbol, export, stub or import-slot name.
@@ -286,6 +356,25 @@ impl Project {
                 .map_err(ApiError::Invalid)
         })?;
         Ok(EditResult { address, field: Field::Name, value, changed })
+    }
+
+    pub(crate) fn rename_if_default(&self, address: u64, name: &str) -> Result<bool, ApiError> {
+        check_name(name).map_err(ApiError::Invalid)?;
+        let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
+        self.annotations.write().expect("annotations lock").locked_staged_checked(|current| {
+            self.validate_patch_context(current)?;
+            if !crate::workflows::is_default_name(&self.function_name_in(current, address), address)
+                || self.address_named(current, name).is_some_and(|other| other != address)
+            {
+                return Ok(false);
+            }
+            current
+                .set_validated(Field::Name, address, Some(name.to_owned()), |candidate| {
+                    self.validate_annotation_snapshot(&state, &options, candidate)
+                })
+                .map_err(ApiError::Invalid)
+        })
     }
 
     /// Previews names from an explicit matching PDB, or applies them as one undoable annotation batch.
@@ -482,25 +571,10 @@ impl Project {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
         self.annotations.write().expect("annotations lock").locked_staged_history(false, |annotations| {
+            self.validate_patch_context(annotations)?;
             let previous = crate::type_library::stored_declarations(annotations)?;
             annotations
-                .undo_validated(|candidate| {
-                    self.validate_type_library_transition(&state, &options, &previous, candidate)
-                        .map_err(|error| error.to_string())?;
-                    if candidate.types().is_empty()
-                        && candidate.type_library().is_empty()
-                        && candidate.signatures().is_empty()
-                        && candidate.globals().is_empty()
-                        && candidate.local_names().is_empty()
-                        && candidate.local_types().is_empty()
-                        && candidate.data_types().is_empty()
-                        && candidate.operand_types().is_empty()
-                        && candidate.type_hints().is_empty()
-                    {
-                        return Ok(());
-                    }
-                    self.validate_annotation_snapshot(&state, &options, candidate)
-                })
+                .undo_validated(|candidate| self.validate_history_snapshot(&state, &options, &previous, candidate))
                 .map_err(ApiError::Invalid)
         })
     }
@@ -519,27 +593,32 @@ impl Project {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
         self.annotations.write().expect("annotations lock").locked_staged_history(true, |annotations| {
+            self.validate_patch_context(annotations)?;
             let previous = crate::type_library::stored_declarations(annotations)?;
             annotations
-                .redo_validated(|candidate| {
-                    self.validate_type_library_transition(&state, &options, &previous, candidate)
-                        .map_err(|error| error.to_string())?;
-                    if candidate.types().is_empty()
-                        && candidate.type_library().is_empty()
-                        && candidate.signatures().is_empty()
-                        && candidate.globals().is_empty()
-                        && candidate.local_names().is_empty()
-                        && candidate.local_types().is_empty()
-                        && candidate.data_types().is_empty()
-                        && candidate.operand_types().is_empty()
-                        && candidate.type_hints().is_empty()
-                    {
-                        return Ok(());
-                    }
-                    self.validate_annotation_snapshot(&state, &options, candidate)
-                })
+                .redo_validated(|candidate| self.validate_history_snapshot(&state, &options, &previous, candidate))
                 .map_err(ApiError::Invalid)
         })
+    }
+
+    fn validate_history_snapshot(
+        &self,
+        state: &crate::decompile::DecompilerState,
+        options: &rampage_decompiler::DecompilerOptions,
+        previous: &[crate::annotations::LibraryDeclaration],
+        candidate: &Annotations,
+    ) -> Result<(), String> {
+        candidate.validate_patches()?;
+        if &self.byte_patches != candidate.patches() {
+            let project = self.patch_validation_project(candidate)?;
+            let mut fresh = crate::decompile::DecompilerState::default();
+            fresh.options = Some(options.clone());
+            fresh.worker = state.worker.clone();
+            return project.validate_history_snapshot(&fresh, options, previous, candidate);
+        }
+        self.validate_type_library_transition(state, options, previous, candidate)
+            .map_err(|error| error.to_string())?;
+        self.validate_annotation_snapshot(state, options, candidate)
     }
 
     /// Every user name and comment, by address.

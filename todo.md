@@ -240,13 +240,31 @@ virtual continuity, shared-block context, decoder lookahead/read budgets, cancel
 The owned mechanical MCP comparison is 2 calls → 1 with complete equivalent evidence, but slower and larger
 in that observation. It is not a Phase 0/live-model improvement or the Phase 3 token/call acceptance gate.
 
-## Active milestone: Phase 3.2, checked patch/assemble/export
+## Phase 3.2: checked patch/assemble/export complete
 
-- [ ] Persist bounded identity/preimage-checked patches in the existing annotation log with undo/redo.
-- [ ] Publish immutable effective projects so listing, discovery, strings and decompilation agree on bytes.
-- [ ] Add bounded x86/x64 and AArch64 assembly feeding the same checked patch path.
-- [ ] Export only to a new file; verify original bytes unchanged and export/reopen/decompile round trips.
-- [ ] Review, test and publish patching before measured Phase 3.3 ergonomics.
+- [x] Persist bounded identity/preimage-checked patches in the existing annotation log with undo/redo.
+- [x] Publish immutable effective projects so listing, discovery, strings and decompilation agree on bytes.
+- [x] Add bounded x86/x64 and AArch64 assembly feeding the same checked patch path.
+- [x] Export only to a new file; verify original bytes unchanged and export/reopen/decompile round trips.
+- [x] Finish the final publication audit and publish patching before measured Phase 3.3 ergonomics.
+
+The current API library passed 692 tests with nine ignored. Core, annotation, variable/workspace, migrated
+read, cache/plugin, agent/UI lifecycle and API/CLI/MCP frontend checks passed with their overlapping scopes
+kept separate. Scoped all-targets Clippy passed. The owned x64 MCP round trip verifies exact C returns
+5/7/5/7/7, five fail-closed negative cases and unchanged originals; no target execution occurred.
+The patch profile is static little-endian ELF64 x64/AArch64 only, not universal patch support.
+
+Next: Phase 3.3 measures consistent compact views, name resolution and existing batch ergonomics against
+appropriate frozen tasks. The new mechanical search/patch experiments do not earn Phase 0/live-token credit.
+
+## Active milestone: Phase 3.3, measured agent ergonomics
+
+- [ ] Audit current tools against the frozen Phase 0 transcript and address-taking schemas.
+- [ ] Add consistent summary/code/full views where they preserve required evidence and diagnostics.
+- [ ] Reuse/extend the existing atomic annotation batch API rather than creating a parallel history path.
+- [ ] Measure comparable agent-call/token outcomes with the current provider/model and existing auth;
+  preserve first failures and frozen baselines without regrading or claiming mechanical runs as live results.
+- [ ] Review, validate and publish the supported Phase 3 implementation before Phase 4.
 
 Phase 3.2 follows search: annotation-backed effective bytes, disassembly/decompilation visibility, bounded
 x86/AArch64 assembly, create-new export, and an owned patch/export/reopen/decompile round trip. Phase 3.3 then

@@ -537,7 +537,7 @@ fn first_checked_values() -> Vec<(Field, String)> {
 fn first_checked_write_refuses_a_malformed_complete_legacy_prefix_without_publishing_or_appending() {
     for (field, value) in first_checked_values() {
         let log = TypedLog::new();
-        std::fs::write(&log.0, b"{malformed complete JSON}\n").unwrap();
+        std::fs::write(&log.0, b"{\"legacy_fragment\":true}\n").unwrap();
         log.append(&Edit { field: Field::Comment, address: 1, value: Some("kept".into()), previous: None });
         let mut annotations = Annotations::open_for_image(log.0.clone(), Some([0xab; 32])).unwrap();
         assert_eq!(annotations.comment(1), Some("kept"));
@@ -584,7 +584,7 @@ fn first_checked_write_refuses_a_malformed_complete_legacy_prefix_without_publis
 fn staged_first_checked_write_keeps_unread_shared_refresh_private_on_prefix_refusal() {
     for (field, value) in first_checked_values() {
         let log = TypedLog::new();
-        std::fs::write(&log.0, b"not JSON, but a complete legacy line\n").unwrap();
+        std::fs::write(&log.0, b"{\"legacy_fragment\":true}\n").unwrap();
         log.append(&Edit { field: Field::Comment, address: 1, value: Some("kept".into()), previous: None });
         let mut annotations = Annotations::open(log.0.clone()).unwrap();
         annotations.set(Field::Comment, 2, Some("history".into())).unwrap();
@@ -624,8 +624,14 @@ fn first_checked_write_reads_old_image_headers_and_enforces_the_whole_prefix_bud
             "{\"image\":\"legacy\"}\n".repeat(CHECKED_RECORDS + 1),
         ] {
             let log = TypedLog::new();
-            std::fs::write(&log.0, prefix).unwrap();
+            std::fs::write(&log.0, &prefix).unwrap();
             log.append(&Edit { field: Field::Comment, address: 1, value: Some("kept".into()), previous: None });
+            if prefix.lines().count() > CHECKED_RECORDS {
+                let before = std::fs::read(&log.0).unwrap();
+                assert!(Annotations::open(log.0.clone()).is_err(), "raw record caps now apply before the first read");
+                assert_eq!(std::fs::read(&log.0).unwrap(), before);
+                continue;
+            }
             let mut annotations = Annotations::open(log.0.clone()).unwrap();
             let cursor = annotations.log.clone();
             let revision = annotations.revision();

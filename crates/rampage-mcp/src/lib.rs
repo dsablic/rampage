@@ -359,7 +359,7 @@ impl RampageServer {
                 (None, Some(_)) => return Err("`image_length` needs `image_offset`".to_owned()),
                 (None, None) => None,
             };
-            let project = if tool.reads_annotations {
+            let mut project = if tool.reads_annotations {
                 let project =
                     self.session.open_at(&PathBuf::from(path), arch, image).map_err(|error| error_text(&error))?;
                 // Other clients (the UI, the CLI) may have saved names since the last call.
@@ -371,7 +371,7 @@ impl RampageServer {
                 project.set_packs(self.packs());
                 Arc::new(project)
             };
-            Ok(tools::call(&self.tools, &project, name, Value::Object(arguments)))
+            Ok(tools::call_shared(&self.tools, &mut project, name, Value::Object(arguments)))
         })();
         match outcome {
             Ok((output, false)) => CallToolResult::success(vec![ContentBlock::text(output)]),

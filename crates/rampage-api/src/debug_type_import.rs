@@ -565,7 +565,7 @@ impl Project {
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
         if !request.apply {
-            let snapshot = self.annotations.read().expect("annotations lock").checked_read_snapshot()?;
+            let snapshot = self.read_annotations_lock().read().expect("annotations lock").checked_read_snapshot()?;
             let pending = self.prepare_debug_types(&state, &options, &snapshot, request)?;
             preflight(&pending.receipt)?;
             return Ok(pending.receipt);

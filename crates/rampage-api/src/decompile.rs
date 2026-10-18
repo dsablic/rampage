@@ -255,6 +255,7 @@ impl Project {
         options: &DecompilerOptions,
         candidate: &crate::annotations::Annotations,
     ) -> Result<(), String> {
+        self.validate_patch_context(candidate).map_err(|error| error.to_string())?;
         validate_cached_layout_source(self, state).map_err(|error| error.to_string())?;
         crate::debug_layout_import::validate_replay_source(self, candidate).map_err(|error| error.to_string())?;
         crate::debug_type_import::validate_replay_source(self, candidate).map_err(|error| error.to_string())?;
@@ -319,7 +320,6 @@ impl Project {
     }
     /// Stores one address-bound C signature, including an optional calling convention such as __cdecl.
     pub fn set_signature(&self, address: u64, declaration: Option<&str>) -> Result<crate::EditResult, ApiError> {
-        crate::debug_layout_import::validate_replay_source(self, &self.annotations())?;
         let address = if self.binary.import_slot(address).is_some() {
             address
         } else {
@@ -367,11 +367,15 @@ impl Project {
         let options = state.options.clone().unwrap_or_else(|| default_options(&self.binary));
         let mut annotations = self.annotations.write().expect("annotations lock");
         let value = value.map(str::to_owned);
-        let changed = annotations
-            .set_validated(field, address, value.clone(), |candidate| {
-                self.validate_annotation_snapshot(&state, &options, candidate)
-            })
-            .map_err(ApiError::Invalid)?;
+        let changed = annotations.locked_staged_checked(|current| {
+            self.validate_patch_context(current)?;
+            crate::debug_layout_import::validate_replay_source(self, current)?;
+            current
+                .set_validated(field, address, value.clone(), |candidate| {
+                    self.validate_annotation_snapshot(&state, &options, candidate)
+                })
+                .map_err(ApiError::Invalid)
+        })?;
         Ok(crate::EditResult { address, field, value, changed })
     }
 
@@ -403,6 +407,7 @@ impl Project {
         validate_cached_layout_source(self, &state)?;
         let mut annotations = self.annotations.write().expect("annotations lock");
         annotations.locked_staged_checked(|candidate| {
+            self.validate_patch_context(candidate)?;
             validate_cached_layout_source(self, &state)?;
             crate::debug_layout_import::validate_replay_source(self, candidate)?;
             if !crate::variables::targets(candidate).is_empty() || !candidate.data_types().is_empty() {
@@ -735,6 +740,7 @@ impl Project {
         address: u64,
         context: NativeDecompileContext<'_>,
     ) -> Result<Decompilation, ApiError> {
+        self.validate_patch_context(annotations)?;
         let never_cancelled = std::sync::atomic::AtomicBool::new(false);
         let cancellation = context.cancellation.unwrap_or(&never_cancelled);
         if cancellation.load(std::sync::atomic::Ordering::Relaxed) {

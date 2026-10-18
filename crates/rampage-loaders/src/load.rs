@@ -594,6 +594,26 @@ impl Binary {
         wanted: Option<Arch>,
         recover: bool,
     ) -> Result<Self, LoadError> {
+        Self::load_native(Bytes::Mapped(data), image, slices, wanted, recover)
+    }
+
+    /// Re-parses an owned whole native image without claiming original-file provenance or recovering
+    /// producer-derived Go/Objective-C facts. The caller is responsible for admitting permitted byte changes.
+    pub fn from_owned_native_bytes(data: Vec<u8>, wanted: Arch) -> Result<Self, LoadError> {
+        if data.len() > 256 * 1024 * 1024 {
+            return Err(LoadError::Unsupported("owned native images are limited to 256 MiB".into()));
+        }
+        let length = data.len();
+        Self::load_native(Bytes::Owned(data), 0..length, Vec::new(), Some(wanted), false)
+    }
+
+    fn load_native(
+        data: Bytes,
+        image: Range<usize>,
+        slices: Vec<Arch>,
+        wanted: Option<Arch>,
+        recover: bool,
+    ) -> Result<Self, LoadError> {
         #[cfg(test)]
         note_native_parse_entry();
         let image_bytes = &data[image.clone()];
@@ -766,7 +786,7 @@ impl Binary {
             global_pointer: None,
             got: None,
             rebases,
-            data: Bytes::Mapped(data),
+            data,
             snapshot_source: None,
             provenance: None,
             snapshot_modules: Vec::new(),

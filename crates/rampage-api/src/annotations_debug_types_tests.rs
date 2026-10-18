@@ -559,7 +559,7 @@ fn first_checked_transition_rechecks_malformed_legacy_prefix_without_mutation() 
     let fixture = retained_fixture(1);
     for shared in [false, true] {
         let log = DebugTypesLog::new();
-        std::fs::write(&log.0, b"not json\n").unwrap();
+        std::fs::write(&log.0, b"{\"legacy_fragment\":true}\n").unwrap();
         let mut annotations = Annotations::open(log.0.clone()).unwrap();
         annotations.set(Field::Comment, 1, Some("kept".into())).unwrap();
         annotations.refresh().unwrap();

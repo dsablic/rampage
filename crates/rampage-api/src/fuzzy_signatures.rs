@@ -307,7 +307,7 @@ type NameSnapshot = (BTreeMap<u64, String>, BTreeMap<u64, KnownCallee>);
 /// Snapshot annotations briefly, then release the lock before any matching/decoding. Loader/debug names
 /// preserve existing function labels but are deliberately not accepted as callee feature evidence.
 fn name_snapshot(project: &Project, exact: &BTreeMap<u64, FuzzyExactEvidence>) -> Result<NameSnapshot, ApiError> {
-    let analyst = match project.annotations.try_read() {
+    let analyst = match project.read_annotations_lock().try_read() {
         Ok(annotations) => annotations.names().clone(),
         Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner().names().clone(),
         Err(std::sync::TryLockError::WouldBlock) => return Err(ApiError::Unavailable("annotations are busy".into())),
@@ -489,6 +489,10 @@ pub fn fuzzy_code_identity(binary: &Binary, program: &Program) -> Result<String,
     }
     Ok(hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }
+
+#[cfg(test)]
+#[path = "effective_annotation_batch_tests.rs"]
+mod effective_annotation_batch_tests;
 
 #[cfg(test)]
 mod tests {

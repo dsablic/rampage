@@ -165,7 +165,7 @@ impl Session {
         if let Some(project) = cached
             && can_reuse_ordinary_input(path)?
         {
-            return Ok(project);
+            return project.effective_snapshot();
         }
         let mut binary = match admission {
             Some(admit) => {
@@ -259,8 +259,7 @@ impl Session {
             && (binary.format == Format::Snapshot && project.binary.file_bytes() == binary.file_bytes()
                 || ordinary_source.is_some_and(|source| state.ordinary_sources.get(&key) == Some(&source)))
         {
-            project.refresh_annotations()?;
-            return Ok(Arc::clone(project));
+            return project.effective_snapshot();
         }
         // Identity excludes provenance and registers, so projects stay path-specific and compare the full source.
         if revalidate {
@@ -289,7 +288,7 @@ impl Session {
         let project = state.projects.entry(key).or_insert_with(|| {
             let mut annotations = annotations;
             if let Some(previous) = previous {
-                annotations.inherit_history(&previous.annotations());
+                annotations.inherit_history(&previous.annotations.read().expect("annotations lock"));
             }
             let project = Project::with_annotations(binary, annotations);
             project.set_packs(Arc::clone(&self.packs));
@@ -301,7 +300,7 @@ impl Session {
             }
             Arc::new(project)
         });
-        Ok(Arc::clone(project))
+        project.effective_snapshot()
     }
 }
 

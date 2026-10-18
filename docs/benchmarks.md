@@ -6,6 +6,23 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 3.2 owned patch/export round trip
+
+The [owned x86-64 round trip](benchmarks/phase3-2-patches-2026-10-19.json) uses real MCP transport, a frozen
+host collector and independently verified original bytes. Exact native C bodies verify **5 → reviewed patch 7
+→ undo 5 → redo 7 → fresh exported reopen 7**. Effective disassembly agrees. The exported image matches the
+reviewed bytes, opens in a new server/session with no active patches or sidecar, and leaves originals unchanged.
+
+The experiment made **43 MCP calls: 38 successful and five expected errors, zero unexpected errors**. Stale
+patch consent, wrong preimage/source identity, stale export consent and an existing destination all preserved
+patch receipts, annotations and directory hashes; no partial output or staging residue was published.
+
+All 815 source files / 20,406,057 bytes remained unchanged through build and execution. The collector was
+frozen read-only before measurement. Provider calls are zero and tokens null. **Target instructions were never
+executed.** This is one owned static x86-64 experiment, not AArch64 MCP coverage, Phase 0 regrading, live/N,
+Phase 2 recall, or Phase 3.3 token/call acceptance. Separate core tests cover an explicitly generated static AArch64
+fixture; the existing dynamically linked AArch64 greeting remains unsupported and was not relabelled.
+
 ## Phase 3.1 owned search comparison
 
 The [owned search supplement](benchmarks/phase3-1-search-2026-10-18.json) compares two scripted arms over

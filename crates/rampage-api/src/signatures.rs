@@ -123,7 +123,7 @@ impl Project {
         if apply {
             for candidate in application.matches.iter().filter(|candidate| candidate.unnamed) {
                 // Skip a name already in use elsewhere, so renaming cannot collide.
-                if self.rename(candidate.address, Some(&candidate.name)).is_ok() {
+                if self.rename_if_default(candidate.address, &candidate.name).unwrap_or(false) {
                     application.applied += 1;
                 }
             }

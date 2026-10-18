@@ -75,6 +75,11 @@ pub(crate) enum RootCommand {
 impl RootCommand {
     pub(crate) fn into_action(self) -> Result<Command, &'static str> {
         Ok(match self {
+            Self::Binary(BinaryCommand::PatchBytes(args)) => Command::PatchBytes(args),
+            Self::Binary(BinaryCommand::RevertPatch(args)) => Command::RevertPatch(args),
+            Self::Binary(BinaryCommand::ListPatches(args)) => Command::ListPatches(args),
+            Self::Binary(BinaryCommand::ExportPatched(args)) => Command::ExportPatched(args),
+            Self::Binary(BinaryCommand::Assemble(args)) => Command::Assemble(args),
             Self::Binary(BinaryCommand::Search(args)) => Command::Search(args),
             Self::Binary(BinaryCommand::Inspect(args)) => Command::Info(args),
             Self::Binary(BinaryCommand::InspectData(args)) => Command::InspectData(args),
@@ -142,6 +147,16 @@ impl RootCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum BinaryCommand {
+    /// Persist an explicitly reviewed equal-length original-byte patch; never modify or execute the source
+    PatchBytes(crate::args::PatchBytesArgs),
+    /// Remove one exact-start reviewed byte patch through annotation history
+    RevertPatch(crate::args::RevertPatchArgs),
+    /// Page active patches and obtain source/effective/revision hash receipts
+    ListPatches(crate::args::ListPatchesArgs),
+    /// Export reviewed effective bytes to a new file only, without execution or annotations
+    ExportPatched(crate::args::ExportPatchedArgs),
+    /// Assemble literal source into a read-only proposal, without executing or applying bytes
+    Assemble(crate::args::AssembleArgs),
     /// Search retained bytes, text, instructions, immediates or references using a typed JSON request
     Search(crate::args::SearchArgs),
     /// Show format, architecture, entry point, segments and sections
