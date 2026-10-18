@@ -6,6 +6,42 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 2.1 portable supplement — finite LLVM and glibc source profiles
+
+The [reviewed portable supplement](benchmarks/phase2-1-portable-delivery-2026-10-18.json) passed parent asset tests,
+pack integration, Clippy and independent provenance reconciliation—not release/CI acceptance. It preserves retained
+measurements;
+this documentation update runs no new benchmark. The current x64 pair contains **7,575 masked entries,
+670 callee keys and 34 recorded profiles** in 487,527 compressed bytes. Other architectures are unchanged.
+The current delivery cohort is **87 cases: x64 33 + AArch64 26 + i386 14 + Thumb 14**.
+
+All 33 retained x64 v3 cases have zero wrong/spurious names against full producer-sized twin truth, with
+precision 1.0. **Ten cases still fail the 80% owned-recall gate**: six LZ4, two OpenSSL and two zstd cases.
+The aggregate therefore still fails overall; precision-clean delivery is not complete Phase 2 acceptance.
+
+| Portable source profile | Original per-profile owned result | v3 aggregate owned result |
+| --- | ---: | ---: |
+| LLVM compiler-rt 22.1.8, eight original generic C units | 8/8 | 8/8 |
+| glibc 2.40, original `strverscmp.c`, strong `__strverscmp` | 1/1 | 1/1 |
+
+Both profiles use host Clang 22.1.8 at O2, targeting `x86_64-unknown-linux-musl`, freestanding with no CRT and
+no target execution. LLVM coverage is not Zig runtime or whole compiler-rt. glibc retains the real weak
+`strverscmp` alias under a finite standalone configuration and exact header-byte pins; the vendored musl
+header revision is unknown. This is not native configured glibc, full glibc ABI or whole-library coverage.
+Archive, source, harness, dependency and tool identities are pinned in the supplement and provenance index.
+
+The explicit `--producer-alias-sets` v3 policy admits verified exact native ELF producer aliases for full-target
+grading and unique-strong/weak-alias reference groups, preserving original and selected-definition callee contexts.
+Raw proposals are retained verbatim and original owned gold stays strict; strict behavior remains the default. The new
+glibc 1/1 follows producer facts, not a silent regrade of the frozen strict refusal or v1 glibc 0/1 result.
+All 32 historical profile records remain unchanged; nine signature keys were added and 58 conservatively retired
+by source-context curation. Generic matching, hash schemes, thresholds and PE/PDB alias policy are unchanged.
+Alias metadata does not authenticate a publisher or establish runtime object identity.
+
+The historical 80-case core and 31-case Windows sections below remain frozen. Broader SDK/runtime delivery and
+the remaining Rust/asset validation gate keep **Phase 2.1 open**. The independent live Phase 1 gate is unchanged;
+the requested order remains completion of 2.1, then 2.2 import formats, 2.3 fuzzy matching, and Phases 3–6.
+
 ## Phase 2.1 Windows supplement — explicit PDB truth and a declared CRT subset
 
 The [frozen Windows supplement](benchmarks/phase2-1-windows-delivery-2026-10-18.json) extends x64 delivery to

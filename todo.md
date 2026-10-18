@@ -132,8 +132,11 @@ remain explicit preview-only boundaries. The old checked layouts and PDB names c
 - [x] Enforce a global held-out image split and retain separate cases for byte-identical stripped targets.
 - [x] Deliver reviewed compressed default databases and provenance indexes for the four-architecture ELF cohort.
 - [x] Extend x64 delivery with checked Windows zlib/LZ4 profiles and the declared nine-function MinGW subset.
+- [x] Deliver the bounded LLVM/glibc portable supplement with retained v3 evidence and unchanged historical records.
+- [x] Pass parent portable-asset Rust tests, pack integration, Clippy and independent publication audit;
+  these checks do not imply release/CI acceptance.
 - [ ] Complete remaining SDK/runtime and Windows default coverage; do not ship a precision failure.
-- [ ] Review, validate changed crates/MCP and publish the milestone before starting Phase 3.
+- [ ] Review, validate changed crates/MCP and publish the milestone before starting Phase 2.2.
 
 Status: **2.1 pipeline and four-architecture core/default delivery implemented, including bounded Windows profiles;
 remaining SDK/runtime corpus breadth is incomplete.**
@@ -163,7 +166,22 @@ raw failed attempts and the one invalidated collector-hash-drift attempt remain 
 and broader SDK coverage require fresh measurements. The four lazy-loaded default corpora and their indexes are
 recorded in `docs/benchmarks/phase2-1-delivery-2026-10-18.json`; Phase 2.1 is not yet complete.
 The Windows supplement records 31 precision-clean x64 ELF/PE cases and the declared MinGW `pesect.c` unit at 9/9.
-The current x64 index has 7,624 entries and 670 callee keys; the prior ELF-only publication remains unchanged.
+The current x64 index has 7,575 entries, 670 callee keys and 34 profiles;
+the other architectures are unchanged.
+The reviewed portable supplement is `docs/benchmarks/phase2-1-portable-delivery-2026-10-18.json`; parent asset
+tests, pack integration, Clippy and independent provenance reconciliation passed. Its 33 x64 cases have zero
+wrong/spurious names, LLVM 8/8 and glibc 1/1 owned
+recall, with ten remaining recall failures. The current cohort totals 87 cases:
+x64 33 + AArch64 26 + i386 14 + Thumb 14.
+LLVM 22.1.8 covers eight original generic C units; glibc 2.40 covers only original `strverscmp.c`, with strong
+`__strverscmp` and its real weak alias retained. Both are O2 freestanding x64 Linux-musl builds without CRT or target
+execution, not whole-library or native configured glibc coverage. The finite alias configuration and exact header
+bytes are pinned; the vendored musl header revision remains unknown.
+Opt-in producer-alias policy v3 preserves raw proposals, strict original owned gold, and original/selected callee
+contexts. Strict remains the default; PE/PDB alias policy is unchanged. The prior strict refusal and v1 glibc 0/1
+remain frozen, not regraded. All 32 historical profile records are unchanged; nine signature keys were added and
+58 conservatively retired. Alias metadata is not publisher authentication or runtime object identity. Earlier
+80-case core and 31-case Windows publications remain unchanged; SDK/runtime breadth and the Rust gate remain open.
 
 The follow-up `5f5a7e4` / `1b67d7c` evidence is pinned in
 `docs/benchmarks/phase2-1-parallel-2026-10-18.json`: SQLite x64 is 243/262; AArch64 is 201/262 and fails.
@@ -176,9 +194,9 @@ the final reviewed report omits its matrix. Actual paired MCP metadata receipts 
 binary revision or prove complete boundaries. This is a bounded publication, not full matrix acceptance,
 default promotion, fresh validation, a live model result, or authorization to skip the remaining 2.1 gate.
 
-The latest requested order is to finish 2.1, then proceed directly through top-level Phases 3–6. Phase 2.2
-import formats and 2.3 fuzzy matching remain queued. Source-corpus infrastructure is not acceptance of the
-entire library-recognition phase; the independent live Phase 1 gate also remains open.
+The latest requested order is to finish all of Phase 2: complete 2.1, then 2.2 import formats and 2.3 fuzzy
+matching, before proceeding through top-level Phases 3–6 in order. Source-corpus infrastructure is not acceptance
+of the entire library-recognition phase; the independent live Phase 1 gate also remains open.
 
 ### Implemented Phase 1 milestones
 

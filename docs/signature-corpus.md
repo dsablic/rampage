@@ -5,9 +5,12 @@ compatible builds; a match does not identify a library version, authenticate sou
 
 ## Shipped artifacts
 
+The portable update is **reviewable pending parent asset tests and publication audit**, not release/CI acceptance.
+The counts below describe the prepared current assets; the other three architecture pairs are unchanged.
+
 | Architecture | Masked signature entries | Callee keys | Recorded build profiles |
 | --- | ---: | ---: | ---: |
-| x86-64 | 7,624 | 670 | 32 |
+| x86-64 | 7,575 | 670 | 34 |
 | AArch64 | 7,066 | 404 | 27 |
 | i386 | 2,082 | 90 | 14 |
 | ARM/Thumb | 2,117 | 0 | 14 |
@@ -29,6 +32,14 @@ validated Windows zlib/LZ4 builds and exactly nine GLOBAL functions from MinGW's
 or Windows DLL implementation coverage. The observed MinGW header identity is 15.0.0 alpha, not an attested release
 commit. Broader SDK/runtime coverage remains separately tracked.
 
+The two added x64 profiles are LLVM compiler-rt 22.1.8's eight original generic C units and glibc 2.40's original
+`strverscmp.c` translation unit. Their source archive pins, exact compiler/header/harness identities, finite alias
+configuration and dependency receipts are recorded in the
+[portable supplement](benchmarks/phase2-1-portable-delivery-2026-10-18.json) and the
+[`corpus-x86_64.index.json` provenance index](../crates/rampage-signatures/data/corpus-x86_64.index.json).
+All 32 existing profile records retain their historical witness hashes. The database adds nine signature keys
+and retires 58 through conservative source-callee-context curation; callee keys are unchanged.
+
 ## Recognition policy
 
 Corpus composition uses collision-safe union, not priority overlay. Full named training references supply negative
@@ -42,11 +53,21 @@ layouts, even when their masked bodies are already ambiguous. Masked and callee-
 the generic matcher, hash schemes, and explicitly supplied user databases are unchanged. Withholding creates
 persistent tombstones for known keys. Composition that introduces new keys requires applying the curation policy again.
 
-All 85 current cases used for these four assets have zero wrong/spurious named proposals against full producer-sized
-twin truth after reloading the final gzip. PE truth uses checked PDB procedure ranges, not guessed PUBLIC-name sizes.
-This is bounded corpus evidence, not a universal precision guarantee.
+Current delivery evidence spans **87 cases: x64 33, AArch64 26, i386 14 and Thumb 14**. Each recorded cohort has
+zero wrong/spurious named proposals against full producer-sized twin truth after reloading its final gzip under
+its stated policy; this is not a new cross-architecture rerun. The x64 v3 cohort has LLVM 8/8 and glibc 1/1 owned
+recall, but ten of its 33 cases still fail the 80% recall gate. PE truth uses checked PDB procedure ranges, not
+guessed PUBLIC-name sizes. This is bounded corpus evidence, not a universal precision guarantee.
 Per-library and aggregate recall failures remain recorded. The 80% matched-version recall target belongs to Phase 2
 acceptance; it is not substituted for the precision checks used to select default artifacts.
+
+Strict canonical-name behavior remains the default. Explicit `--producer-alias-sets` enables the x64 supplement's
+`elf-producer-alias-sets-v3` policy: full-target grading accepts only verified exact native ELF same-range aliases;
+reference admission requires a unique default-visible strong definition with only weak default-visible aliases.
+Original source-canonical and selected-definition callee contexts remain separate from answer labels. Original
+strict owned gold and raw proposals are preserved; PE/PDB alias handling, generic matching, hash schemes and
+thresholds are unchanged. Alias metadata is neither publisher authentication nor runtime object identity.
+The earlier strict alias refusal and v1 glibc 0/1 remain frozen; v3's actual 1/1 is separate producer-backed evidence.
 
 Requested O1/O2 variants can produce identical signature databases and stripped images. Those cases remain separate
 measurements but do not establish independent optimizer diversity. Bare compiler flags are not evidence of a
@@ -73,6 +94,17 @@ The default ownership cohort consists of externally visible strong ELF definitio
 definitions with checked global PDB procedure ranges. Local/hidden/weak functions are excluded before scoring.
 PE production requires separate explicit identity-matched PDBs for both programs and recorded native linker replay
 with GC/ICF disabled. Public PDB aliases are not a substitute for sized producer procedure records.
+
+`tools/signature_portable.py` supplies the two finite source profiles through the pinned
+[`portable-compiler-rt-fragment.json`](../tests/fixtures/signatures/portable-compiler-rt-fragment.json) and
+[`portable-glibc-fragment.json`](../tests/fixtures/signatures/portable-glibc-fragment.json) recipes. Host Clang
+22.1.8 compiles original C at O2 for `x86_64-unknown-linux-musl`, freestanding with no CRT; targets are never run.
+LLVM's eight-unit subset is not Zig runtime or whole builtins coverage. glibc owns only strong `__strverscmp`;
+the weak `strverscmp` alias is retained, not counted as a second owned function. Its finite standalone alias
+configuration and exact target-header bytes are pinned, but the Zig-vendored musl header revision is unknown.
+This does not establish native configured glibc, distribution libc.a or full native ABI coverage. Complete upstream
+legal texts and their source/archive/copied digests are retained in the
+[`notices/index.json` notice index](../crates/rampage-signatures/data/notices/index.json).
 
 The installed-runtime producer offers a separate explicit ELF linked-artifact scope. It binds archive members and
 actual kept linker-map inputs to raw names, producer ranges and instruction bytes, allowing only supported native
@@ -146,3 +178,6 @@ signatures derived from private binaries are outside this corpus pipeline.
 Generated native programs, PDBs, archives and runtime captures are evaluation inputs, not bundled outputs. Only
 reviewed hash/name databases and their provenance data belong in the default signature assets. Existing raw attempts
 and frozen baseline reports are not overwritten by a new consumer replay or a later acceptance decision.
+
+Phase 2.1 remains open for broader SDK/runtime delivery and remaining Rust/asset validation. The live Phase 1 gate
+is unchanged. The requested sequence is completion of 2.1, then 2.2 import formats, 2.3 fuzzy matching and Phases 3–6.

@@ -3,10 +3,10 @@
   "arch": "x86_64",
   "scheme": 2,
   "asset": "corpus-x86_64.json.gz",
-  "gzip_sha256": "5c50644f507d4ece767763b9031d218bb0c791d3fd548d37714b31494143c7c1",
-  "compressed_bytes": 487601,
-  "json_bytes": 897557,
-  "signatures": 7624,
+  "gzip_sha256": "29f1a1d7d96346004abd0cf2a7bf3cfe1d78878d74cf4790a0a0281e29825355",
+  "compressed_bytes": 487527,
+  "json_bytes": 897699,
+  "signatures": 7575,
   "callee_keys": 670,
   "recognition": "same_build",
   "profiles": [
@@ -424,6 +424,32 @@
       "source": "https://github.com/facebook/zstd/archive/refs/tags/v1.5.6.tar.gz",
       "source_recipe": "recipe zstd-1.5.6; manifest SHA-256 e766b04b5b97660ed81dd969fe1de6de0b8edab5de5d71260b60ec51c5cb1e25; runner SHA-256 a4e9e3c25bf0349bb204f52349884416e621cc4773098a53f07fb97c711419c8; witness SHA-256 5e5065945b526aabb377c9318573dc94c591bdd3f468c59f6ad9303a68dfa7e6; training-reference conflict filter; raw exact fallback answers withheld",
       "archive_sha256": "30f35f71c1203369dc979ecde0400ffea93c27391bfd2ac5a9715d2173d92ff7",
+      "archive_identity_unavailable": null
+    },
+    {
+      "id": "llvm-compiler-rt-22.1.8-generic8-x86_64-linux-musl-clang-22.1.8-O2-pinned-headers-no-alias",
+      "library": "LLVM compiler-rt (generic eight-unit portable subset)",
+      "version": "22.1.8",
+      "target": "x86_64-linux-musl",
+      "compiler": "Clang 22.1.8; executable SHA-256 5ff8c034eab4eef825e353dbb0d602b5422236e1e2db77fd45933a42c5ccffad; linker Zig 0.17.0 / LLD 22.1.8; executable SHA-256 18fbdb9fb852846f0e91008c5b99c9c18db1115671701c2890bf84a44ddc202d",
+      "optimization": "O2",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "source": "https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-22.1.8.tar.gz",
+      "source_recipe": "llvm-compiler-rt-generic8; recipe fragment SHA-256 231018559d62b35c31fba694fc3f39b9e5e9dab331595585d0631b91fa961ca3; producer SHA-256 f756a97ecd33f70a146d7f1806e711fe13c67692d2472a4265340d7cbeb694d6; producer-inputs SHA-256 b6de314e581dcc7e8f7cd36e9db316a7002eb768ba1597c188ef2ea1c0927756; dependency receipt SHA-256 8ba479f12d007829483eb9230459ea3800a8bb7af95a99560e16b2e075c9f0eb; result SHA-256 9b50d8f3666aed8f328df0ea6f3a7e72115e6cdd833467786cd09726f5c8430a; aggregate witness SHA-256 bf4d161ac3cafea9e0b235b12db0f746ad90910ba4da75e2e0c230c153d89afc; freestanding original C, no CRT, target not executed; exact source/header/harness byte pins and finite alias configuration in recipe; eight generic builtins only, not Zig runtime or whole compiler-rt; Clang 22.1.8 headers byte-pinned; no weak aliases; harness SHA-256 {\"tests/fixtures/src/signature-portable-compiler-rt-reference.c\": \"4104fa7c928945cd818a5fd63b9d77945c89eada79bf6748409d884626a41374\", \"tests/fixtures/src/signature-portable-compiler-rt-target.c\": \"c00bf4ddf16ddcffa46b8261a2d0fca0816628c8c645cac64622f3c22d423036\"}; source callee contexts v3; raw exact fallback answers withheld",
+      "archive_sha256": "ad18b70e287954c3d62bc7e0b86e7b7af2adf87bcfce21c15fe717f101d7aace",
+      "archive_identity_unavailable": null
+    },
+    {
+      "id": "glibc-2.40-strverscmp-x86_64-linux-musl-clang-22.1.8-O2-header-revision-unknown-weak-alias",
+      "library": "glibc (portable strverscmp translation unit)",
+      "version": "2.40",
+      "target": "x86_64-linux-musl",
+      "compiler": "Clang 22.1.8; executable SHA-256 5ff8c034eab4eef825e353dbb0d602b5422236e1e2db77fd45933a42c5ccffad; linker Zig 0.17.0 / LLD 22.1.8; executable SHA-256 18fbdb9fb852846f0e91008c5b99c9c18db1115671701c2890bf84a44ddc202d",
+      "optimization": "O2",
+      "license": "LGPL-2.1-or-later",
+      "source": "https://ftp.gnu.org/gnu/glibc/glibc-2.40.tar.xz",
+      "source_recipe": "glibc-strverscmp-portable; recipe fragment SHA-256 de9261c56f6667e713e238ab0555a4b928d75f4dc8a5412fb87e51feb338f5c9; producer SHA-256 f756a97ecd33f70a146d7f1806e711fe13c67692d2472a4265340d7cbeb694d6; producer-inputs SHA-256 776f5763b8c6ccc39f71f7dc6f25603b16a59291d013600dd59d7ae3818028f3; dependency receipt SHA-256 74318af647c0e4f46ec937bf001ede167165dacc6c46b8b4990c48dfb4eb96ad; result SHA-256 214b3e2f2d7839a07abce8ddf4ab669d2d41e099e020c2ebc449adb32c0f42da; aggregate witness SHA-256 bf4d161ac3cafea9e0b235b12db0f746ad90910ba4da75e2e0c230c153d89afc; freestanding original C, no CRT, target not executed; exact source/header/harness byte pins and finite alias configuration in recipe; strverscmp.c portable TU only, not configured glibc or full native ABI; Zig 0.17.0 vendored musl header revision unknown, exact bytes pinned; Explicit standalone IS_IN(libc)=false equivalent: libc_hidden_def empty, real GNU weak alias retained, unsupported GCC copy attribute omitted. Not generated glibc configuration.; alias header SHA-256 2a1dd819606dc34aeb1ea11d6720bdec41bc8e0a04b405897d532bfdf144cd54; harness SHA-256 {\"tests/fixtures/src/signature-portable-glibc-reference.c\": \"96b61c48cffa9d314812f259d3960539db538aa35451e624e00d05d2dc2db924\", \"tests/fixtures/src/signature-portable-glibc-symbols.h\": \"2a1dd819606dc34aeb1ea11d6720bdec41bc8e0a04b405897d532bfdf144cd54\", \"tests/fixtures/src/signature-portable-glibc-target.c\": \"c821cc67298ab5f07ca68b70afa5869cfdb2d28a7d5534e9b472abfa1aa6e913\"}; source callee contexts v3; raw exact fallback answers withheld",
+      "archive_sha256": "19a890175e9263d748f627993de6f4b1af9cd21e03f080e4bfb3a1fac10205a2",
       "archive_identity_unavailable": null
     }
   ]

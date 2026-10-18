@@ -169,6 +169,56 @@
       "notice": "mingw-runtime-COPYING.txt",
       "notice_sha256": "8cf9580e38caf10bef699107591f9790b1642fc999f55d8f6a1602132b48a751",
       "scope": "complete upstream runtime notice with line-end whitespace normalized; does not imply ownership of all components"
+    },
+    {
+      "profile": "llvm-compiler-rt-22.1.8-generic8-portable",
+      "license_declaration": "Apache-2.0 WITH LLVM-exception",
+      "source_archive_sha256": "ad18b70e287954c3d62bc7e0b86e7b7af2adf87bcfce21c15fe717f101d7aace",
+      "source_notice_path": "llvm-project-llvmorg-22.1.8/LICENSE.TXT",
+      "source_notice_sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+      "notice": "portable-llvm-22.1.8-LICENSE.txt",
+      "notice_sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+      "scope": "complete upstream license file, byte-identical; generic eight-unit portable source subset only"
+    },
+    {
+      "profile": "llvm-compiler-rt-22.1.8-generic8-portable",
+      "license_declaration": "Apache-2.0 WITH LLVM-exception",
+      "source_archive_sha256": "ad18b70e287954c3d62bc7e0b86e7b7af2adf87bcfce21c15fe717f101d7aace",
+      "source_notice_path": "llvm-project-llvmorg-22.1.8/compiler-rt/LICENSE.TXT",
+      "source_notice_sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "notice": "portable-compiler-rt-22.1.8-LICENSE.txt",
+      "notice_sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "scope": "complete upstream license file, byte-identical; includes upstream legacy and third-party notices"
+    },
+    {
+      "profile": "glibc-2.40-strverscmp-portable",
+      "license_declaration": "LGPL-2.1-or-later for strverscmp.c; retained upstream GPL license text is not a whole-profile license assertion",
+      "source_archive_sha256": "19a890175e9263d748f627993de6f4b1af9cd21e03f080e4bfb3a1fac10205a2",
+      "source_notice_path": "glibc-2.40/COPYING",
+      "source_notice_sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "notice": "portable-glibc-2.40-COPYING.txt",
+      "notice_sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "scope": "complete upstream license file, byte-identical; portable strverscmp translation unit only"
+    },
+    {
+      "profile": "glibc-2.40-strverscmp-portable",
+      "license_declaration": "LGPL-2.1-or-later",
+      "source_archive_sha256": "19a890175e9263d748f627993de6f4b1af9cd21e03f080e4bfb3a1fac10205a2",
+      "source_notice_path": "glibc-2.40/COPYING.LIB",
+      "source_notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "notice": "portable-glibc-2.40-COPYING.LIB.txt",
+      "notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "scope": "complete upstream license file, byte-identical; portable strverscmp translation unit only"
+    },
+    {
+      "profile": "glibc-2.40-strverscmp-portable",
+      "license_declaration": "LGPL-2.1-or-later for strverscmp.c; upstream LICENSES includes other components not claimed as shipped code",
+      "source_archive_sha256": "19a890175e9263d748f627993de6f4b1af9cd21e03f080e4bfb3a1fac10205a2",
+      "source_notice_path": "glibc-2.40/LICENSES",
+      "source_notice_sha256": "bba29819a3e938fae92674d6a88533e10605e389da8b51cdcba0a94f6221c5bc",
+      "notice": "portable-glibc-2.40-LICENSES.txt",
+      "notice_sha256": "bba29819a3e938fae92674d6a88533e10605e389da8b51cdcba0a94f6221c5bc",
+      "scope": "complete upstream notices file, byte-identical; no ownership or whole-libc coverage claim"
     }
   ]
 }
