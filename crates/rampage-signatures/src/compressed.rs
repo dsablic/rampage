@@ -238,6 +238,23 @@ impl SignatureDb {
         Ok(before - self.entries.len() - self.exact.len() - self.calls.len())
     }
 
+    /// Opt-in curated-corpus policy: withhold raw exact fallbacks whose image-address hashes are not verified
+    /// across linked layouts. Apply after complete composition and reference-conflict filtering, not as a
+    /// matcher or user-database policy. Masked and callee-qualified answers remain unchanged.
+    /// Exported exact keys and known latent exact keys become tombstones, preventing their revival by corpus
+    /// combination or gzip reload. Future composition requires reapplying this policy for newly introduced keys.
+    /// Returns exported exact answer keys removed, excluding latent keys and unique-function counts.
+    pub fn withhold_exact_fallbacks(&mut self) -> usize {
+        let removed = self.exact.len();
+        self.ambiguous_exact.extend(self.exact.keys().cloned());
+        for keys in self.entry_exact.values() {
+            self.ambiguous_exact.extend(keys.iter().cloned());
+        }
+        self.exact.clear();
+        self.entry_exact.clear();
+        removed
+    }
+
     fn validate_compressed(&self) -> Result<(), SignatureDbError> {
         if ![LEGACY_SCHEME, CURRENT_SCHEME].contains(&self.scheme) {
             return Err(SignatureDbError::InvalidDatabase("unknown hash scheme"));
@@ -990,6 +1007,84 @@ mod tests {
         let before = candidate.clone();
         assert_eq!(candidate.reject_reference_conflicts_from(std::iter::empty::<&SignatureDb>()), Ok(0));
         assert_same_evidence(&candidate, &before);
+    }
+
+    #[test]
+    fn withholding_exact_fallbacks_preserves_masked_callee_and_reference_filter_results() {
+        let mut candidate = db();
+        candidate.add([1; 32], Some([11; 32]), Some([21; 32]), "alpha");
+        candidate.add([1; 32], Some([12; 32]), Some([22; 32]), "beta");
+        candidate.add([2; 32], Some([13; 32]), Some([23; 32]), "masked_answer");
+        candidate.ambiguous_exact.insert(key(90));
+        let original = candidate.clone();
+        let mut reference = db();
+        reference.add([9; 32], Some([19; 32]), Some([29; 32]), "reference_only");
+        assert_eq!(candidate.reject_reference_conflicts_from([&reference]), Ok(0));
+
+        assert_eq!(candidate.withhold_exact_fallbacks(), 2);
+        assert!(candidate.exact.is_empty());
+        assert!(candidate.entry_exact.is_empty());
+        assert_eq!(candidate.ambiguous_exact, BTreeSet::from([key(11), key(12), key(13), key(90)]));
+        assert_eq!(candidate.entries, original.entries);
+        assert_eq!(candidate.calls, original.calls);
+        assert_eq!(candidate.entry_calls, original.entry_calls);
+        assert_eq!(candidate.ambiguous, original.ambiguous);
+        assert_eq!(candidate.ambiguous_calls, original.ambiguous_calls);
+        assert_eq!(candidate.arch, original.arch);
+        assert_eq!(candidate.scheme, original.scheme);
+        assert!(!candidate.entries.contains_key(&key(9)));
+        assert!(!candidate.ambiguous.contains(&key(9)));
+        assert!(!candidate.ambiguous_exact.contains(&key(19)));
+        assert!(!candidate.calls.contains_key(&key(29)));
+        let filtered = candidate.clone();
+        assert_eq!(candidate.withhold_exact_fallbacks(), 0);
+        assert_same_evidence(&candidate, &filtered);
+
+        let mut loaded = SignatureDb::from_gzip(&candidate.to_gzip().unwrap()).unwrap();
+        loaded.combine(&original).unwrap();
+        assert!(loaded.exact.is_empty());
+        assert_eq!(loaded.to_json(), candidate.to_json());
+        assert_eq!(loaded.calls.get(&key(21)).map(String::as_str), Some("alpha"));
+        assert_eq!(loaded.calls.get(&key(22)).map(String::as_str), Some("beta"));
+
+        let mut user_overlay = candidate;
+        user_overlay.merge(&original);
+        assert_eq!(user_overlay.exact, original.exact);
+    }
+
+    #[test]
+    fn withholding_latent_exact_keys_survives_reload_and_later_masked_collision() {
+        let mut original = db();
+        original.add([1; 32], Some([11; 32]), Some([21; 32]), "masked_answer");
+        let mut candidate = original.clone();
+        assert_eq!(candidate.withhold_exact_fallbacks(), 0);
+        assert_eq!(candidate.entries, original.entries);
+        assert_eq!(candidate.entry_calls, original.entry_calls);
+        assert_eq!(candidate.ambiguous_exact, BTreeSet::from([key(11)]));
+        assert!(candidate.entry_exact.is_empty());
+
+        let mut loaded = SignatureDb::from_gzip(&candidate.to_gzip().unwrap()).unwrap();
+        loaded.combine(&original).unwrap();
+        let mut later = db();
+        later.add([1; 32], Some([12; 32]), Some([22; 32]), "new_body_name");
+        loaded.combine(&later).unwrap();
+        assert!(!loaded.exact.contains_key(&key(11)));
+        assert_eq!(loaded.calls.get(&key(21)).map(String::as_str), Some("masked_answer"));
+        assert_eq!(loaded.exact.get(&key(12)).map(String::as_str), Some("new_body_name"));
+        assert_eq!(loaded.withhold_exact_fallbacks(), 1);
+        assert!(loaded.exact.is_empty());
+        assert!(loaded.ambiguous_exact.contains(&key(11)));
+        assert!(loaded.ambiguous_exact.contains(&key(12)));
+        assert_eq!(loaded.withhold_exact_fallbacks(), 0);
+    }
+
+    #[test]
+    fn withholding_empty_exact_space_leaves_legacy_scheme_and_lookup_evidence_unchanged() {
+        let mut legacy = SignatureDb::empty(Arch::X86_64, LEGACY_SCHEME);
+        legacy.add([1; 32], None, None, "legacy_answer");
+        let before = legacy.clone();
+        assert_eq!(legacy.withhold_exact_fallbacks(), 0);
+        assert_same_evidence(&legacy, &before);
     }
 
     #[test]
