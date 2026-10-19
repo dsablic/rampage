@@ -109,6 +109,8 @@ Additional focused guides:
   views, create-new export and static owned-fixture verification without target execution.
 - [Compact views and annotation batches](docs/tool-views.md): complete evidence-aware responses and one-step
   checked annotation transactions, without a parallel patch/history path.
+- [Explicit Sleigh decoding](docs/sleigh-decoding.md): bounded processor-profile windows, raw p-code and
+  conservative seeded discovery; not ordinary-project or C-ABI admission.
 - [Benchmarks](docs/benchmarks.md) and the [decompiler integration corpus](docs/decompiler-corpus.md).
 - [Plugins and extension points](docs/plugins.md): experimental explicit triage components and builtin registries.
 - [Plugin security boundaries](docs/plugin-security.md): admission, resource limits, claim provenance and exclusions.

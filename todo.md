@@ -277,18 +277,32 @@ no call reduction, no causal attribution to compact/batch tools, and no retry. T
 
 ## Active milestone: Phase 4.1, explicit Sleigh-backed processor breadth
 
-- [ ] Inventory existing native/Capstone/Sleigh paths and published processor-spec licensing/provenance.
+- [x] Inventory existing native/Capstone/Sleigh paths and published processor-spec licensing/provenance.
 - [ ] Expose bounded Sleigh instruction/flow/p-code decoding for explicitly selected supported processors.
 - [ ] Add owned per-processor fixtures and record disassembly/discovery comparison limits without executing bytes.
 - [ ] Review, test and publish the finite supported processor set before Phase 4.2 raw/firmware loading.
 
+The first MSP430/AVR8/6502 resource closures are a pilot, not completion of the full 16-family roadmap roster.
+All 16 families now have resource-admitted closures from the pinned local public SDK; only the first three
+have native/oracle coverage so far. Remaining backend selections and oracle checks stay explicit.
+Compiled SLA is materialized, not lazily compiled from SLASPEC. AVR code uses two-byte address units and
+distinct Harvard spaces; 6502 compiler C widths remain unknown rather than defaulting to host values.
+The admission helper's aggregate source-read cap passed tests and independent review. The x86 parser-bounds
+and context-mediated AVR-flow fixes passed source review, 120 decompiler-library tests and a scoped parser
+sanitizer run. The window API passed 27 tests; both manual-seed and call-only discovery recovered 6/6 oracle
+entries and exact extents. API/CLI/MCP frontend checks and independent resource/oracle/measurement audits
+passed; the full API library passed 749 tests with nine ignored. The explicit-window checkpoint is
+implemented at `342084d`, with resources at `e9657d3` and parser safety at `4aa67d2`.
+Ordinary Project backend integration is still missing: its approved migration guide separates optional
+legacy pointer defaults, exact-profile ABI models and code-space coordinates rather than fabricating an
+existing architecture for raw bytes. The explicit-window pilot alone does not complete Phase 4.1.
+
 Phases 4.2–4.4, analysis-depth Phase 5 and scale/persistence Phase 6 follow in roadmap order. Implementation
 completion of earlier phases does not close the independent live/N, library-recall or agent-efficiency gates.
 
-Phase 3.2 follows search: annotation-backed effective bytes, disassembly/decompilation visibility, bounded
-x86/AArch64 assembly, create-new export, and an owned patch/export/reopen/decompile round trip. Phase 3.3 then
-measures compact views/name resolution/batching against the accepted Phase 0 transcript; existing `annotate_batch`
-is reused rather than duplicated. No commercial target execution or in-place binary modification is authorized.
+Earlier Phase 3 delivery implemented annotation-backed effective bytes, bounded assembly, create-new export,
+compact views and batching through existing history. Its mechanical and live measurements retain their separate
+acceptance limits. No commercial target execution or in-place binary modification is authorized.
 
 ### Implemented Phase 1 milestones
 
