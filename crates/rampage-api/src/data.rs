@@ -282,8 +282,8 @@ pub fn resolve_data_address(binary: &Binary, at: &str) -> Result<u64, ApiError> 
     Err(ApiError::NotFound("data address/name not found in retained metadata".into()))
 }
 
-fn partial_pointer_metadata(binary: &Binary, address: u64, width: u8) -> bool {
-    let native = u64::from(binary.arch.pointer_size());
+fn partial_pointer_metadata(binary: &Binary, address: u64, width: u8, pointer_size: u8) -> bool {
+    let native = u64::from(pointer_size);
     let end = address + u64::from(width);
     let overlaps = |slot: u64| {
         slot < end && slot.saturating_add(native) > address && (slot != address || u64::from(width) != native)
@@ -316,19 +316,40 @@ pub fn inspect_native_data(binary: &Binary, query: &DataQuery) -> Result<DataIns
 
 /// Typed views may inspect immutable snapshot storage, without presenting synthetic offsets as file offsets.
 pub(crate) fn inspect_static_data(binary: &Binary, query: &DataQuery) -> Result<DataInspection, ApiError> {
+    // Existing native-image address bounds are independent of C pointer defaults.
+    let code_address_highest = match binary.arch {
+        Arch::X86 | Arch::Arm | Arch::Mips | Arch::PowerPc | Arch::Riscv32 | Arch::Sparc | Arch::M68k => {
+            u64::from(u32::MAX)
+        }
+        Arch::X86_64 | Arch::Aarch64 | Arch::Mips64 | Arch::PowerPc64 | Arch::Riscv64 | Arch::Sparc64 | Arch::S390x => {
+            u64::MAX
+        }
+    };
+    inspect_static_data_with_widths(binary, query, binary.arch.default_pointer_size(), code_address_highest)
+}
+
+fn inspect_static_data_with_widths(
+    binary: &Binary,
+    query: &DataQuery,
+    pointer_size: Option<u8>,
+    code_address_highest: u64,
+) -> Result<DataInspection, ApiError> {
     let snapshot = binary.format == Format::Snapshot;
-    let word_size = query.word_size.unwrap_or_else(|| binary.arch.pointer_size());
+    let word_size = query.word_size.or(pointer_size).ok_or_else(|| {
+        ApiError::Invalid("data inspection has no default pointer width; supply scalar word_size 4 or 8".into())
+    })?;
     if !(1..=MAX_DATA_BYTES).contains(&query.size) || !matches!(word_size, 4 | 8) {
         return Err(ApiError::Invalid("data inspection requires 1..=1024 bytes and word_size 4 or 8".into()));
     }
     let end = query.address.checked_add(query.size as u64).ok_or_else(|| invalid_range("request"))?;
-    if binary.arch.pointer_size() == 4 && end > 0x1_0000_0000 {
-        return Err(invalid_range("32-bit request"));
+    if end - 1 > code_address_highest {
+        return Err(invalid_range("code-space request"));
     }
     let checked =
         binary.validate_available_backing_source().map_err(|error| ApiError::Unavailable(error.to_string()))?;
     let view = View::new(binary)?;
-    let pointer_targets_suppressed = snapshot || !binary.warnings.is_empty();
+    let matching_pointer_width = pointer_size == Some(word_size);
+    let pointer_targets_suppressed = snapshot || !binary.warnings.is_empty() || !matching_pointer_width;
     let (image, _, _) = binary.inventory_source_context();
     let mut spans: Vec<DataSpan> = Vec::new();
     let mut bytes = Vec::with_capacity(query.size);
@@ -373,15 +394,19 @@ pub(crate) fn inspect_static_data(binary: &Binary, query: &DataQuery) -> Result<
             name: display_name(&import.name),
             library: import.library.as_deref().map(display_name),
         });
-        let rebase = (word_size == binary.arch.pointer_size()).then(|| binary.rebase_target(address)).flatten();
+        let rebase = matching_pointer_width.then(|| binary.rebase_target(address)).flatten();
         let (interpretation, target) = if raw_value.is_none() {
             ("unavailable", None)
         } else if snapshot {
             ("snapshot_raw_word", None)
-        } else if pointer_targets_suppressed {
+        } else if !binary.warnings.is_empty() {
             ("loader_warnings_pointer_targets_suppressed", None)
-        } else if partial_pointer_metadata(binary, address, word_size) {
+        } else if pointer_size.is_none() {
+            ("unknown_pointer_width_pointer_targets_suppressed", None)
+        } else if pointer_size.is_some_and(|width| partial_pointer_metadata(binary, address, word_size, width)) {
             ("partial_pointer_metadata", None)
+        } else if !matching_pointer_width {
+            ("scalar_word_pointer_targets_suppressed", None)
         } else if import.is_some() {
             ("import_binding", None)
         } else if let Some(target) = rebase {
@@ -470,6 +495,12 @@ pub(crate) fn inspect_static_data(binary: &Binary, query: &DataQuery) -> Result<
               or truncation.",
         ],
     };
+    if !matching_pointer_width {
+        report.limitations.push(
+            "Scalar grouping does not establish pointer width. Unknown or mismatched defaults suppress all \
+             pointer targets; retained import identity is metadata only.",
+        );
+    }
     if snapshot {
         report.limitations.push("Snapshot words remain raw and are never followed or treated as native relocations.");
     }

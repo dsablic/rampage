@@ -30,6 +30,38 @@ fn inspect(binary: Binary, address: u64, size: usize) -> DataInspection {
 }
 
 #[test]
+fn unknown_width_requires_scalar_grouping_and_never_follows_words_or_imports() {
+    let mut binary = native(false);
+    binary.import_slots.push(rampage_loaders::ImportSlot { address: 0x1000, name: "retained".into(), library: None });
+    let query = DataQuery { address: 0x1000, size: 16, word_size: None };
+    assert!(matches!(
+        inspect_static_data_with_widths(&binary, &query, None, u64::MAX),
+        Err(ApiError::Invalid(message)) if message.contains("no default pointer width")
+    ));
+    for width in [4, 8] {
+        let query = DataQuery { word_size: Some(width), ..query };
+        let report = inspect_static_data_with_widths(&binary, &query, None, u64::MAX).unwrap();
+        assert_eq!(report.word_size, width);
+        assert_eq!(report.words[0].raw_value, Some(0x2000));
+        assert_eq!(report.words[0].import.as_ref().unwrap().name, "retained");
+        assert!(report.pointer_targets_suppressed);
+        assert!(report.words.iter().all(|word| {
+            word.candidate.is_none() && word.interpretation == "unknown_pointer_width_pointer_targets_suppressed"
+        }));
+    }
+    assert!(inspect_static_data_with_widths(&binary, &query, Some(8), 0x1007).is_err());
+}
+
+#[test]
+fn scalar_width_mismatch_cannot_promote_a_mapped_integer_without_pointer_metadata() {
+    let report =
+        inspect_native_data(&native(false), &DataQuery { address: 0x1000, size: 4, word_size: Some(4) }).unwrap();
+    assert_eq!(report.words[0].raw_value, Some(0x2000));
+    assert_eq!(report.words[0].interpretation, "scalar_word_pointer_targets_suppressed");
+    assert!(report.pointer_targets_suppressed && report.words[0].candidate.is_none());
+}
+
+#[test]
 fn data_words_link_code_and_strings_without_analysis_or_pointer_promotion() {
     for big_endian in [false, true] {
         let project = Project::new(native(big_endian));
@@ -386,8 +418,11 @@ fn actual_loader_warning_free_fixups_and_raw_candidates_keep_their_interpretatio
         assert_eq!(word.interpretation, "partial_pointer_metadata");
         assert!(word.candidate.is_none());
     }
-    assert_eq!(report.words[2].interpretation, "raw_word_candidate");
-    assert_eq!(report.words[2].candidate.as_ref().unwrap().address, 0x1200);
+    assert!(report.pointer_targets_suppressed);
+    assert_eq!(report.spans[0].status, DataStatus::Stored);
+    assert_eq!(report.words[2].raw_value, Some(0x1200));
+    assert_eq!(report.words[2].interpretation, "scalar_word_pointer_targets_suppressed");
+    assert!(report.words[2].candidate.is_none());
 }
 
 #[test]

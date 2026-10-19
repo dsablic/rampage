@@ -178,7 +178,7 @@ pub(crate) fn lazy_context(
         return Ok(context);
     }
     lazy_context_with_fingerprint(project, state, options, annotations, address, cancellation, || {
-        source_fingerprint(project, options, annotations)
+        fingerprint_availability(project, options, annotations)
     })
 }
 
@@ -189,7 +189,7 @@ fn lazy_context_with_fingerprint(
     annotations: &Annotations,
     address: u64,
     cancellation: &std::sync::atomic::AtomicBool,
-    fingerprint: impl FnOnce() -> Result<String, ApiError>,
+    fingerprint: impl FnOnce() -> Result<FingerprintAvailability, ApiError>,
 ) -> Result<(Annotations, Vec<String>), ApiError> {
     if annotations.signatures().is_empty()
         && annotations.local_types().is_empty()
@@ -199,7 +199,19 @@ fn lazy_context_with_fingerprint(
     {
         return Ok((annotations.snapshot(), Vec::new()));
     }
-    let fingerprint = fingerprint()?;
+    let fingerprint = match fingerprint()? {
+        FingerprintAvailability::Reviewed(fingerprint) => fingerprint,
+        FingerprintAvailability::NoReviewedCModel(reason) => {
+            state.propagation_cache = None;
+            return Ok((
+                annotations.snapshot(),
+                vec![format!(
+                    "automatic type propagation omitted: {reason}; ordinary explicit typing retained; \
+                     durable derived hints withheld"
+                )],
+            ));
+        }
+    };
     let fresh = state.propagation_cache.as_ref().is_some_and(|cache| {
         cache.address == address
             && cache.fingerprint == fingerprint
@@ -294,17 +306,35 @@ fn validate_automatic_context(
     }
 }
 
+enum FingerprintAvailability {
+    Reviewed(String),
+    NoReviewedCModel(String),
+}
+
 pub(crate) fn source_fingerprint(
     project: &Project,
     options: &DecompilerOptions,
     annotations: &Annotations,
 ) -> Result<String, ApiError> {
+    match fingerprint_availability(project, options, annotations)? {
+        FingerprintAvailability::Reviewed(fingerprint) => Ok(fingerprint),
+        FingerprintAvailability::NoReviewedCModel(reason) => {
+            Err(ApiError::Invalid(format!("type propagation unavailable: {reason}")))
+        }
+    }
+}
+
+fn fingerprint_availability(
+    project: &Project,
+    options: &DecompilerOptions,
+    annotations: &Annotations,
+) -> Result<FingerprintAvailability, ApiError> {
     project
         .binary
         .validate_available_backing_source()
         .map_err(|error| ApiError::Invalid(format!("type propagation source unavailable: {error}")))?;
     let mut hash = Sha256::new();
-    hash.update(b"rampage-type-propagation-v1\0");
+    hash.update(b"rampage-type-propagation-v2\0");
     hash.update(rampage_decompiler::worker::PROTOCOL_VERSION.to_le_bytes());
     hash.update(Sha256::digest(project.binary.image_bytes()));
     if project.binary.format == rampage_loaders::Format::Snapshot {
@@ -341,20 +371,20 @@ pub(crate) fn source_fingerprint(
     let language =
         rampage_decompiler::language_id_with_options(project.binary.arch, project.binary.big_endian, options)
             .map_err(|error| ApiError::Invalid(error.to_string()))?;
-    let pointer = project.binary.arch.pointer_size();
-    let organization = rampage_decompiler::DataOrganization {
-        pointer,
-        int: 4,
-        long: if matches!(language.rsplit(':').next(), Some("windows" | "clangwindows")) { 4 } else { pointer },
-    };
+    let organization = rampage_decompiler::c_data_organization(&language);
+    if let Some(organization) = organization {
+        hash.update(
+            serde_json::to_vec(&(&language, organization)).map_err(|error| ApiError::Invalid(error.to_string()))?,
+        );
+    }
     let posix = crate::decompile::posix_context(annotations, options, &language)?;
     for slot in &project.binary.import_slots {
         if let Some(prototype) = rampage_decompiler::c_prototype(&slot.name) {
             hash.update(prototype.as_bytes());
         }
-        if let Some(prototype) =
+        if let Some(prototype) = organization.and_then(|organization| {
             crate::import_types::import_prototype(&slot.name, options.platform, &language, organization, posix)
-        {
+        }) {
             hash.update(prototype.declaration.as_bytes());
             hash.update(prototype.context.as_bytes());
             hash.update(prototype.source.as_bytes());
@@ -379,7 +409,11 @@ pub(crate) fn source_fingerprint(
         .binary
         .validate_available_backing_source()
         .map_err(|error| ApiError::Invalid(format!("type propagation source unavailable: {error}")))?;
-    Ok(rampage_arch::hex::bytes(&hash.finalize()))
+    // All backing, capture, specification and explicit-input checks above remain fatal even without a C model.
+    Ok(match organization {
+        Some(_) => FingerprintAvailability::Reviewed(rampage_arch::hex::bytes(&hash.finalize())),
+        None => FingerprintAvailability::NoReviewedCModel(format!("no reviewed C data organization for {language}")),
+    })
 }
 
 pub(crate) fn without_hints(annotations: &Annotations) -> Result<Annotations, ApiError> {
@@ -434,7 +468,12 @@ pub(crate) fn replay_hints(
     if annotations.type_hints().is_empty() {
         return Ok((BTreeMap::new(), Vec::new()));
     }
-    let fingerprint = source_fingerprint(project, options, annotations)?;
+    let fingerprint = match fingerprint_availability(project, options, annotations)? {
+        FingerprintAvailability::Reviewed(fingerprint) => fingerprint,
+        FingerprintAvailability::NoReviewedCModel(reason) => {
+            return Ok((BTreeMap::new(), vec![format!("durable derived hints withheld: {reason}")]));
+        }
+    };
     let mut hints = BTreeMap::new();
     let mut limitations = Vec::new();
     let signature_stubs: BTreeSet<_> = annotations

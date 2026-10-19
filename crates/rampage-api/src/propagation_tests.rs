@@ -54,6 +54,141 @@ fn explicit_native_snapshot(project: &Project, address: u64) -> crate::Decompila
 }
 
 #[test]
+fn fingerprints_require_reviewed_exact_c_models_and_distinguish_selected_compilers() {
+    let project = new_project(Annotations::in_memory());
+    let annotations = project.annotations();
+    let default = DecompilerOptions::default();
+    let windows = DecompilerOptions { compiler: Some("windows".into()), ..Default::default() };
+    assert_ne!(
+        source_fingerprint(&project, &default, &annotations).unwrap(),
+        source_fingerprint(&project, &windows, &annotations).unwrap(),
+    );
+    let unknown = DecompilerOptions { compiler: Some("unknown".into()), ..Default::default() };
+    assert!(matches!(
+        source_fingerprint(&project, &unknown, &annotations),
+        Err(ApiError::Invalid(message)) if message.contains("reviewed C data organization")
+    ));
+}
+
+#[test]
+fn unavailable_c_model_skips_only_automatic_context_and_withholds_durable_hints() {
+    let project = new_project(Annotations::in_memory());
+    let options = DecompilerOptions { compiler: Some("golang".into()), ..Default::default() };
+    let mut annotations = Annotations::in_memory();
+    annotations.set(Field::Signature, FACTORY, Some("uint8 owned_factory(uint8 value);".into())).unwrap();
+    let payload = TypeHintAnnotation {
+        source_fingerprint: "0".repeat(64),
+        hints: vec![DerivedTypeHint { target: TypeHintTarget::Return, data_type: "uint8".into(), evidence: vec![] }],
+    };
+    annotations.set(Field::TypeHint, FACTORY, Some(encode_type_hints(&payload).unwrap())).unwrap();
+    let revision = annotations.revision();
+    let mut state = project.decompiler.lock().unwrap();
+    let (ordinary, limitations) = lazy_context_with_fingerprint(
+        &project,
+        &mut state,
+        &options,
+        &annotations,
+        FACTORY,
+        &std::sync::atomic::AtomicBool::new(false),
+        || fingerprint_availability(&project, &options, &annotations),
+    )
+    .unwrap();
+    assert_eq!(ordinary.signatures(), annotations.signatures());
+    assert_eq!(ordinary.type_hints(), annotations.type_hints());
+    assert!(limitations.iter().any(|reason| reason.contains("durable derived hints withheld")));
+    assert!(state.propagation_cache.is_none());
+    let (hints, limitations) = replay_hints(&project, &options, &annotations, Some(FACTORY)).unwrap();
+    assert!(hints.is_empty());
+    assert!(limitations.iter().any(|reason| reason.contains("durable derived hints withheld")));
+    assert!(std::sync::Arc::ptr_eq(&revision, &annotations.revision()));
+    assert!(source_fingerprint(&project, &options, &annotations).is_err());
+}
+
+fn check_go_explicit_typing_without_automatic_c_model(worker: Option<rampage_decompiler::worker::WorkerConfig>) {
+    let log = LogFixture::new();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-go-x64.elf");
+    let project = Project::with_annotations(rampage_loaders::Binary::open(path).unwrap(), log.annotations());
+    project.set_decompiler_worker(worker);
+    let greet = project.resolve("main.greet").unwrap();
+    project.set_signature(greet, Some("int8 greet(int8 who);")).unwrap();
+    let original = project.decompile(greet).unwrap();
+    assert!(original.language_id.ends_with(":golang"));
+    let storage = VariableStorage::try_from(&original.structure.signature.parameters[0].storage).unwrap();
+    project
+        .edit_variable(
+            greet,
+            &crate::VariableEditRequest {
+                storage: Some(storage),
+                data_type: Some("int8".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let data = project
+        .binary
+        .segments
+        .iter()
+        .find(|segment| {
+            segment.perms.read
+                && segment.perms.write
+                && !segment.perms.execute
+                && segment.file_size >= 2
+                && !project.binary.is_code(segment.address)
+        })
+        .unwrap()
+        .address;
+    project.set_global(data, Some("uint1 owned_go_byte;")).unwrap();
+    project
+        .apply_data_type(
+            data + 1,
+            &crate::ApplyDataTypeRequest {
+                encoding: Some(crate::DataStringEncoding::Ascii),
+                byte_length: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let annotations = project.annotations();
+    assert!(!annotations.signatures().is_empty());
+    assert!(!annotations.local_types().is_empty());
+    assert!(!annotations.globals().is_empty());
+    assert!(!annotations.data_types().is_empty());
+    assert!(annotations.type_hints().is_empty());
+    drop(annotations);
+    let before = log.bytes();
+    let revision = project.annotation_revision().unwrap();
+    let output = project.decompile(greet).unwrap();
+    assert!(output.language_id.ends_with(":golang"));
+    assert!(output.code.contains("int8 main.greet(int8 who)"), "{}", output.code);
+    assert!(serde_json::to_string(&output.structure).unwrap().contains("automatic type propagation omitted"));
+    for apply in [false, true] {
+        let error = project
+            .propagate_types_with_preflight(&request(greet, apply), |_| {
+                panic!("unavailable propagation must refuse before preflight or append")
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("no reviewed C data organization"), "{error}");
+        assert_eq!(log.bytes(), before);
+        assert!(project.annotations().type_hints().is_empty());
+        assert!(std::sync::Arc::ptr_eq(&revision, &project.annotation_revision().unwrap()));
+    }
+}
+
+#[test]
+fn go_explicit_typing_without_durable_hints_keeps_direct_decompilation() {
+    check_go_explicit_typing_without_automatic_c_model(None);
+}
+
+#[test]
+fn go_explicit_typing_without_durable_hints_keeps_worker_decompilation() {
+    let Some(executable) = std::env::var_os("RAMPAGE_TEST_DECOMPILER_WORKER") else { return };
+    check_go_explicit_typing_without_automatic_c_model(Some(rampage_decompiler::worker::WorkerConfig {
+        executable: Some(PathBuf::from(executable)),
+        ..Default::default()
+    }));
+}
+
+#[test]
 fn equal_sources_merge_provenance_and_conflicting_sources_remain_distinct() {
     let mut graph = Graph::default();
     let first = graph.node(0x1000, parameter(0), 8, true).unwrap();
@@ -132,7 +267,7 @@ fn automatic_fingerprint_failures_are_fatal_and_do_not_strip_durable_hints_or_pu
         )
         .unwrap();
     let mut state = project.decompiler.lock().unwrap();
-    let options = crate::decompile::default_options(&project.binary);
+    let options = DecompilerOptions { compiler: Some("golang".into()), ..Default::default() };
     let durable = annotations.type_hints().clone();
     let signatures = annotations.signatures().clone();
     for error in [

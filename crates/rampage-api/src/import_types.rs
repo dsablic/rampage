@@ -154,8 +154,8 @@ fn target_model(language_id: &str, organization: DataOrganization) -> Option<Tar
         _ => return None,
     };
     let windows = matches!(compiler, "windows" | "clangwindows");
-    let long = if windows { 4 } else { pointer };
-    if organization != (DataOrganization { pointer, int: 4, long })
+    if rampage_decompiler::c_data_organization(language_id) != Some(organization)
+        || organization.pointer != pointer
         || (matches!(processor, "x86" | "RISCV") && endian != "LE")
         || (windows && (endian != "LE" || !matches!(processor, "x86" | "ARM" | "AARCH64")))
     {

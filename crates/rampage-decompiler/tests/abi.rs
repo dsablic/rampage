@@ -113,6 +113,26 @@ fn a_32_bit_malloc_call_uses_one_size_argument() {
 }
 
 #[test]
+#[ignore = "run in an isolated child with an owned external GHIDRA_INSTALL_DIR containing owned_alias"]
+fn external_custom_compiler_alias_keeps_legacy_native_open_without_automatic_c_facts() {
+    assert!(std::env::var_os("GHIDRA_INSTALL_DIR").is_some());
+    let regions =
+        [MemoryRegion { base: 0x1000, bytes: &[0xc3], size: 1, readable: true, writable: false, executable: true }];
+    let options = DecompilerOptions { compiler: Some("owned_alias".into()), ..Default::default() };
+    let mut engine = Decompiler::open_with_options(Arch::X86_64, false, &regions, &options).unwrap();
+    assert_eq!(engine.language_id(), "x86:LE:64:default:owned_alias");
+    assert_eq!(engine.data_organization(), DataOrganization { pointer: 8, int: 4, long: 8 });
+    assert_eq!(rampage_decompiler::c_data_organization(engine.language_id()), None);
+    engine.add_symbol(0x1000, "owned_entry");
+    engine.parse_c("extern int4 owned_entry(void);").unwrap();
+    assert!(!engine.decompile(0x1000, "owned_entry", false).unwrap().is_empty());
+    assert!(rampage_decompiler::require_verified_bundled_native_context().is_err());
+    drop(engine);
+    let missing = DecompilerOptions { compiler: Some("owned_missing_alias".into()), ..Default::default() };
+    assert!(Decompiler::open_with_options(Arch::X86_64, false, &regions, &missing).is_err());
+}
+
+#[test]
 fn explicit_compiler_ids_override_defaults_and_invalid_ids_are_errors() {
     let regions =
         [MemoryRegion { base: 0x1000, bytes: &[0xc3], size: 1, readable: true, writable: false, executable: true }];
@@ -155,6 +175,10 @@ fn default_c_models_cover_all_bundled_targets_and_powerpc_darwin() {
             decompiler.data_organization(),
             DataOrganization { pointer: width, int: 4, long: width },
             "{arch}/{platform:?}"
+        );
+        assert_eq!(
+            rampage_decompiler::c_data_organization(decompiler.language_id()),
+            Some(decompiler.data_organization()),
         );
         assert!(decompiler.c_prototype("strtol").unwrap().starts_with(&format!("extern int{width} ")));
     }

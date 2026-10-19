@@ -65,6 +65,20 @@ impl Arch {
         all
     };
 
+    /// Legacy architecture default, not a compiler-specific C layout or code-space bound.
+    pub fn default_pointer_size(self) -> Option<u8> {
+        match self {
+            Arch::X86 | Arch::Arm | Arch::Mips | Arch::PowerPc | Arch::Riscv32 | Arch::Sparc | Arch::M68k => Some(4),
+            Arch::X86_64
+            | Arch::Aarch64
+            | Arch::Mips64
+            | Arch::PowerPc64
+            | Arch::Riscv64
+            | Arch::Sparc64
+            | Arch::S390x => Some(8),
+        }
+    }
+
     /// Bytes in a pointer.
     pub fn pointer_size(self) -> u8 {
         match self {
@@ -392,5 +406,20 @@ pub fn decoder(target: &Target) -> Result<Box<dyn Disassembler>, UnsupportedArch
         Arch::Aarch64 => Ok(Box::new(a64::A64Disassembler::default())),
         Arch::Arm => Ok(Box::new(aarch32::Aarch32Disassembler::new(target))),
         _ => cs::CapstoneDisassembler::new(target).map(|decoder| Box::new(decoder) as Box<dyn Disassembler>),
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::Arch;
+
+    #[test]
+    fn optional_defaults_preserve_all_fourteen_legacy_widths() {
+        let expected = [4, 8, 8, 4, 4, 8, 4, 8, 4, 8, 4, 8, 8, 4];
+        assert_eq!(Arch::ALL.len(), expected.len());
+        for (arch, width) in Arch::ALL.into_iter().zip(expected) {
+            assert_eq!(arch.pointer_size(), width, "{arch}");
+            assert_eq!(arch.default_pointer_size(), Some(width), "{arch}");
+        }
     }
 }

@@ -23,7 +23,9 @@ pub use variables::{LocalOverride, VariableStorage, validate_local_name};
 pub mod worker;
 pub use results::{StructuredResult, parse_results};
 
-pub use abi::{DataOrganization, DecompilerOptions, Platform, language_id, language_id_with_options};
+pub use abi::{
+    DataOrganization, DecompilerOptions, Platform, c_data_organization, language_id, language_id_with_options,
+};
 mod named_assertions;
 pub use context::{VerifiedBundledContext, require_verified_bundled_native_context, verify_bundled_specifications};
 pub use specs::sleigh_home;
@@ -572,6 +574,7 @@ impl Decompiler {
     ) -> Result<Decompiler, Error> {
         validate_regions(arch, regions)?;
         let language_id = language_id_with_options(arch, big_endian, options)?;
+        abi::validate_c_admission(arch.default_pointer_size(), &language_id)?;
         let home_path = sleigh_home().ok_or(Error::NoSleighHome)?;
         let home_path = home_path.canonicalize().unwrap_or(home_path);
         let home = CString::new(home_path.as_os_str().to_string_lossy().as_bytes()).map_err(|_| Error::NoSleighHome)?;
@@ -620,9 +623,9 @@ impl Decompiler {
         unsafe {
             rampage_decomp_data_organization(handle, &mut pointer, &mut int, &mut long);
         }
-        let compiler = language_id.rsplit(':').next().expect("compiler field");
         let checked = abi::checked_data_organization([pointer, int, long]).and_then(|organization| {
-            abi::validate_data_organization(arch, compiler, organization).map(|()| organization)
+            abi::validate_data_organization(arch.default_pointer_size(), &language_id, organization)
+                .map(|()| organization)
         });
         let data_organization = match checked {
             Ok(organization) => organization,
