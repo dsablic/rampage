@@ -6,6 +6,23 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 4.1 explicit-window checkpoint
+
+The [frozen three-profile MCP measurement](benchmarks/phase4-1-sleigh-2026-10-19.json) recovers all six
+manual/independent-Java function entries and exact byte extents using caller-only seeds. Its eleven MCP
+requests comprise five successful observations and six expected rejections, with unchanged fixture files
+and no sidecars. AVR retains byte target `0x210` versus word target `0x108`; CPSE and DES are valid
+instructions with explicit conservative unknown-flow gates rather than invalid-opcode claims.
+
+All 259 embedded specification files were bound before/after build and measurement. The parser bounds fix
+has a scoped ASan/UBSan check, not whole-library sanitizer coverage. The full API checkpoint passed 749
+tests with nine ignored. These checks overlap and are not summed into independent investigations.
+
+All sixteen roadmap families have audited resource closures. Only MSP430, AVR8 and 6502 have this native
+window/discovery checkpoint; the additional thirteen have independent Java oracle records, not native
+acceptance. Ordinary `Project` fallback, architecture/width integration and ABI-checked decompilation remain
+pending. **Phase 4.1 is not complete**, and no earlier live/N, recall or efficiency gate is changed.
+
 ## Phase 3.3 compactness and one live helper observation
 
 The [ergonomics supplement](benchmarks/phase3-3-ergonomics-2026-10-19.json) preserves both prescribed first

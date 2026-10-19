@@ -296,6 +296,11 @@ implemented at `342084d`, with resources at `e9657d3` and parser safety at `4aa6
 Ordinary Project backend integration is still missing: its approved migration guide separates optional
 legacy pointer defaults, exact-profile ABI models and code-space coordinates rather than fabricating an
 existing architecture for raw bytes. The explicit-window pilot alone does not complete Phase 4.1.
+The first width/model pilot is implemented at `0d9dbb5`: optional defaults coexist with the unchanged
+fourteen-architecture legacy method, scalar grouping does not invent pointer evidence, and missing reviewed
+C facts do not block existing typed Go/external native routes. Targeted direct/worker, source-failure,
+external-alias and ABI checks passed. Actual small-model native queries, unknown-width Project identities,
+the remaining consumer migration, fallible factories and Raw admission still require their own gates.
 
 Phases 4.2–4.4, analysis-depth Phase 5 and scale/persistence Phase 6 follow in roadmap order. Implementation
 completion of earlier phases does not close the independent live/N, library-recall or agent-efficiency gates.
