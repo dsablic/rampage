@@ -1,6 +1,7 @@
 //! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
+use crate::tool_views::{ToolView, ToolViewKind, project_tool_view};
 use crate::workflows::{WORKFLOWS, Workflow};
 use crate::{ApiError, FunctionsQuery, ListQuery, Packs, Project, StringsQuery, WorkflowReport, XrefQuery};
 use schemars::JsonSchema;
@@ -350,7 +351,10 @@ pub fn file_tools() -> Vec<FileTool> {
                 and unavailable bytes stay explicit. Raw words remain candidates; retained Mach-O chained rebases \
                 and import identities are separate. Partial encoded-pointer words are not followed. Metadata links \
                 and bounded ASCII previews are not proven functions, layouts or execution. Other relocations are \
-                not applied. Whole JSON or explicit refusal; reduce size on output-budget errors. No captures.",
+                 not applied. view=full (default) retains the original JSON; summary omits hex/ASCII previews with \
+                 explicit counts/omission receipts while retaining word interpretations and source/status evidence. \
+                 code is unsupported for metadata. Whole JSON or explicit refusal; reduce size on output-budget errors. \
+                 No captures.",
             input_schema: schema::<InspectDataArgs>(),
             handler: |_, input| {
                 if input.to_string().len() > 16_384 {
@@ -373,7 +377,8 @@ pub fn file_tools() -> Vec<FileTool> {
                     &crate::DataQuery { address, size: args.size.unwrap_or(128), word_size: args.word_size },
                 )
                 .map_err(|error| error_chain(&error))?;
-                serde_json::to_value(report).map_err(|error| error.to_string())
+                let value = serde_json::to_value(report).map_err(|error| error.to_string())?;
+                project_tool_view(value, ToolViewKind::InspectData, args.view).map_err(|error| error_chain(&error))
             },
         },
         FileTool {
@@ -515,14 +520,89 @@ pub struct At {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ViewArgs {
+    /// full (default) preserves original JSON; summary omits named payloads with counts/receipts.
+    /// code keeps code/control evidence but is unsupported for binary_info and inspect_data metadata.
+    #[serde(default)]
+    view: ToolView,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ViewedAt {
+    /// Numeric address string or existing symbol, import, export, analyst or sub_<hex> name.
+    at: String,
+    #[serde(default)]
+    view: ToolView,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct ViewedDisassembleArgs {
+    #[serde(flatten)]
+    listing: DisassembleArgs,
+    #[serde(default)]
+    view: ToolView,
+}
+
+#[derive(Debug, serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AnnotationBatchArgs {
+    /// Atomic checked operations. Every value is required; null explicitly clears the selected annotation.
+    #[schemars(length(max = 1000))]
+    pub entries: Vec<crate::AnnotationBatchEntry>,
+}
+
+pub fn parse_annotation_batch_request(bytes: &[u8]) -> Result<AnnotationBatchArgs, ApiError> {
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err(ApiError::Invalid("annotation batch JSON request exceeds 8 MiB".to_owned()));
+    }
+    serde_json::from_slice(bytes).map_err(|error| ApiError::Invalid(format!("invalid annotation batch: {error}")))
+}
+
+/// Checked regular-file input on platforms with RangeSource; inline JSON is available on other platforms.
+pub fn read_annotation_batch_request(path: &std::path::Path) -> Result<AnnotationBatchArgs, ApiError> {
+    let size = crate::range_source::RangeSource::open(path, 0, 0)?.size();
+    if size > 8 * 1024 * 1024 {
+        return Err(ApiError::Invalid("annotation batch JSON request exceeds 8 MiB".to_owned()));
+    }
+    let source = crate::range_source::RangeSource::open(path, 0, size as usize)?;
+    if source.size() != size {
+        return Err(ApiError::Unavailable("annotation batch request size changed while opening".to_owned()));
+    }
+    let bytes = source.read()?;
+    source.revalidate()?;
+    parse_annotation_batch_request(&bytes)
+}
+
+/// Builds the full transport receipt under the core transaction lock, before publication.
+/// Reserve space for the existing conservative post-commit refresh envelope used by bound assistants.
+pub fn annotation_batch_page(project: &Project, entries: &[crate::AnnotationBatchEntry]) -> Result<Value, ApiError> {
+    let mut receipt = None;
+    project.batch_annotations_with_preflight(entries, |planned| {
+        let value = serde_json::to_value(planned).map_err(|error| ApiError::Invalid(error.to_string()))?;
+        if value.to_string().len() > MAX_RESULT_CHARS - 4096 {
+            return Err(ApiError::Invalid(
+                "complete batch receipt exceeds its reserved 60000-byte transport budget; \
+                 split the batch; no edits persisted"
+                    .to_owned(),
+            ));
+        }
+        receipt = Some(value);
+        Ok(())
+    })?;
+    Ok(receipt.expect("core checks complete batch receipt before publication"))
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 struct DecompileToolArgs {
     /// Exact address or existing name. Default behavior resolves the containing function.
     at: String,
     /// Assert this exact entry and use bounded local context, without whole-program discovery.
     #[serde(default)]
     exact_entry: bool,
-    /// Full includes tokens and structured analysis. Code omits those details but keeps native diagnostics,
-    /// recovery status and exact-entry context; the C text is never truncated.
+    /// full (default) preserves original JSON; code retains complete native C and essential evidence;
+    /// summary omits C text too, with exact counts/omission receipts. Oversized views refuse, never truncate.
     #[serde(default)]
     view: DecompileView,
 }
@@ -545,6 +625,8 @@ struct InspectDataArgs {
     size: Option<usize>,
     /// Word width in bytes, 4 or 8; omitted uses the image architecture's pointer width.
     word_size: Option<u8>,
+    #[serde(default)]
+    view: ToolView,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -572,13 +654,7 @@ struct DecodeFileArgs {
     preview_size: Option<usize>,
 }
 
-#[derive(Default, serde::Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum DecompileView {
-    #[default]
-    Full,
-    Code,
-}
+type DecompileView = ToolView;
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -839,30 +915,8 @@ fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, A
     decompilation_view(value, args.view)
 }
 
-fn decompilation_view(mut value: Value, view: DecompileView) -> Result<Value, ApiError> {
-    if matches!(view, DecompileView::Code) {
-        let object = value.as_object_mut().ok_or_else(|| ApiError::Invalid("decompilation is not an object".into()))?;
-        object.remove("tokens");
-        let structure = object.remove("structure").ok_or_else(|| ApiError::Invalid("missing structure".into()))?;
-        object.insert("diagnostics".into(), structure["diagnostics"].clone());
-        object.insert("omitted_details".into(), serde_json::json!(["tokens", "structure (except diagnostics)"]));
-    }
-    if value.to_string().len() > MAX_RESULT_CHARS {
-        return Err(ApiError::Invalid(
-            match view {
-                DecompileView::Full => {
-                    "decompilation result exceeds the tool JSON byte budget; retry with view=code to omit tokens and \
-                     structured details while retaining native diagnostics and exact-entry context"
-                }
-                DecompileView::Code => {
-                    "decompilation code view exceeds the tool JSON byte budget; \
-                     use the CLI or API for the complete result"
-                }
-            }
-            .to_owned(),
-        ));
-    }
-    Ok(value)
+fn decompilation_view(value: Value, view: DecompileView) -> Result<Value, ApiError> {
+    project_tool_view(value, ToolViewKind::Decompile, view)
 }
 
 fn entry_diagnostics_page(
@@ -1747,6 +1801,21 @@ pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         tool(
             Group::Core,
+            "batch",
+            "Atomically apply heterogeneous checked annotations: entries use operation=rename/comment/signature/\
+             types/global, at as an existing name or numeric address STRING, and a REQUIRED value string or null \
+             (clear). All names resolve against the pre-batch snapshot. One checked transaction and one undo step; \
+             invalid operations, duplicate field/address targets, malformed declarations, conflicts or oversized \
+             complete receipts write nothing. At most 1000 entries; split batches whose full receipt cannot fit \
+             the 60000-byte JSON budget including reserved refresh/cancellation evidence. No patch, raw-field, \
+             export or SSA bypass. annotate_batch retains its separate legacy name/comment shape. A bound \
+             assistant may stop conservatively after a committed batch when exclusive transition attribution is \
+             unavailable; its full outcome is retained and must not be automatically retried.",
+            |project, args: AnnotationBatchArgs| annotation_batch_page(project, &args.entries),
+        )
+        .annotates(),
+        tool(
+            Group::Core,
             "assemble",
             "Assemble literal source into a read-only byte proposal for this binary's current target. \
              at is a numeric address string or resolvable name; only the base address resolves names. \
@@ -1793,8 +1862,15 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "function_summary",
-            "Structural function summary: decoded CFG, named references and explicit limitations. Not a decompiler.",
-            |project, arguments: At| project.function_summary(project.resolve(&arguments.at)?),
+            "Structural function summary, not native recovered C. view=full (default) preserves original JSON; \
+             summary omits instruction/IR rendering with exact counts and omission receipts; code retains native \
+             instructions and labels partial structural pseudocode explicitly. Source/control/diagnostic/type \
+             evidence stays retained. Oversized results refuse; choose a compact view rather than truncated output.",
+            |project, arguments: ViewedAt| {
+                let value = serde_json::to_value(project.function_summary(project.resolve(&arguments.at)?)?)
+                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
+                project_tool_view(value, ToolViewKind::FunctionSummary, arguments.view)
+            },
         ),
         tool(
             Group::Core,
@@ -1803,8 +1879,10 @@ pub fn tools() -> Vec<Tool> {
              containing function and whole-program context. exact_entry=true treats at as an analyst-asserted \
              exact entry with bounded local context and the full mapped image (little-endian x86/x64/AArch64). \
               Entry metadata and successful decoding are not boundary or completeness proof; exact output includes \
-              context counts, omissions and preparation timings. No silent whole-program fallback. view=code omits \
-              tokens and structured details but retains complete C text, diagnostics and exact-entry context.",
+               context counts, omissions and preparation timings. No silent whole-program fallback. view=full \
+               (default) preserves original JSON; code omits token/structure payloads while retaining complete native \
+               C, native diagnostics, recovery/context/specification evidence. summary also omits C text with exact \
+               counts and omission receipts. Oversized views refuse, never truncate strings.",
             decompile_tool,
         ),
         tool(
@@ -2106,20 +2184,19 @@ pub fn tools() -> Vec<Tool> {
             },
         )
         .without_annotations(),
-        Tool {
-            group: Group::Core,
-            name: "binary_info",
-            description: "Format, architecture, entry point, segments and sections of the binary.",
-            input_schema: schema::<Nothing>(),
-            interactive: false,
-            effect: Effect::None,
-            reads_annotations: true,
-            handler: Handler::Borrowed(Box::new(|project: &Project, input| {
-                let _: Nothing =
-                    serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
-                serde_json::to_value(project.summary()).map_err(|error| error.to_string())
-            })),
-        },
+        tool(
+            Group::Core,
+            "binary_info",
+            "Format, architecture, entry point and retained image metadata. view=full (default) preserves original \
+             JSON; summary replaces segment/section/register/module rows with counts and explicit omission receipts \
+             while retaining identity, source, warnings and other evidence. code is unsupported for metadata. \
+             Oversized views refuse with compact-view guidance, never plaintext truncation.",
+            |project, args: ViewArgs| {
+                let value =
+                    serde_json::to_value(project.summary()).map_err(|error| ApiError::Invalid(error.to_string()))?;
+                project_tool_view(value, ToolViewKind::BinaryInfo, args.view)
+            },
+        ),
         tool(
             Group::Core,
             "triage",
@@ -2139,10 +2216,15 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "disassemble",
-            "Disassemble instructions from an address or name, with control flow, references and names.",
-            |project, arguments: DisassembleArgs| {
-                let count = arguments.count.unwrap_or(crate::DEFAULT_INSTRUCTIONS).min(1000);
-                project.disassemble(arguments.at.as_deref(), count)
+            "Disassemble instructions from an address/name with native bytes, control flow and annotations. \
+             view=full (default) and code preserve the original complete listing; summary omits text/bytes with \
+             bounds/counts and explicit omission receipts, retaining non-rendering control/annotation evidence. \
+             Oversized views refuse; reduce count or choose summary. No string truncation.",
+            |project, arguments: ViewedDisassembleArgs| {
+                let count = arguments.listing.count.unwrap_or(crate::DEFAULT_INSTRUCTIONS).min(1000);
+                let value = serde_json::to_value(project.disassemble(arguments.listing.at.as_deref(), count)?)
+                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
+                project_tool_view(value, ToolViewKind::Disassemble, arguments.view)
             },
         ),
         tool(
@@ -2152,8 +2234,14 @@ pub fn tools() -> Vec<Tool> {
              disassembly, and edges (unconditional, taken, not_taken, or switch from a register jump to each case \
              of a bounded switch table) indexing into the blocks. A call that never returns ends its block with no \
              fall-through edge; its line says why in `noreturn`: `listed` (the callee is documented never to \
-             return) or `inferred` (no path through the callee returns).",
-            |project, arguments: At| project.function_graph(project.resolve(&arguments.at)?),
+              return) or `inferred` (no path through the callee returns). view=full (default) preserves original JSON; \
+              code keeps instructions/bytes/labels and control evidence; summary omits line rendering with counts \
+              and explicit omission receipts. Oversized views refuse, never truncate strings.",
+            |project, arguments: ViewedAt| {
+                let value = serde_json::to_value(project.function_graph(project.resolve(&arguments.at)?)?)
+                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
+                project_tool_view(value, ToolViewKind::FunctionGraph, arguments.view)
+            },
         ),
         tool(
             Group::Core,
@@ -2632,7 +2720,7 @@ fn call_shared_inner(
                 Ok(result.value)
             }
             Handler::Borrowed(handler) => {
-                let before = (bound && tool.effect == Effect::Annotations).then(|| {
+                let before = (bound && tool.effect == Effect::Annotations && tool.name != "batch").then(|| {
                     (
                         serde_json::to_value(project.annotation_list()).expect("annotation JSON"),
                         project.patch_revision(),
@@ -2644,6 +2732,15 @@ fn call_shared_inner(
                         *revision = project.annotation_revision().ok();
                     }
                     return result;
+                }
+                if bound && tool.name == "batch" {
+                    return result.map(|receipt| {
+                        post_commit_refresh_unavailable(
+                            receipt,
+                            "batch outcome has no atomic run-attribution witness; \
+                             retain the outcome and stop; do not automatically retry",
+                        )
+                    });
                 }
                 match project.effective_snapshot() {
                     Ok(current) => {
@@ -2852,29 +2949,104 @@ mod tests {
 
     #[test]
     fn code_view_fits_large_details_without_truncating_code_or_hiding_recovery_evidence() {
-        let full = serde_json::json!({
-            "code": "return 7;",
-            "tokens": [{ "text": "x".repeat(MAX_RESULT_CHARS) }],
-            "structure": { "diagnostics": { "bad_data": true, "warnings": ["uncertain boundary"] } },
-            "recovery_status": "incomplete",
-            "context": { "omissions": ["bounded local context"] },
+        use rampage_decompiler::results::{
+            FrameBaseConvention, FrameContext, RecoveryDiagnostics, RecoveryStatus, RecoveryWarning, Storage,
+            StorageKind, StructuredResult, TypeInfo, Variable, VariableKind, WarningKind,
+        };
+
+        let mut structure = StructuredResult::empty();
+        structure.variables = [
+            ("stack_value", StorageKind::Spacebase, "stack", 4, 0xffff_fffc),
+            ("register_value", StorageKind::Processor, "register", 8, 0x10),
+        ]
+        .into_iter()
+        .map(|(name, kind, space, address_size_bytes, address)| Variable {
+            name: name.to_owned(),
+            data_type: TypeInfo { name: "int4".to_owned(), size: 4 },
+            kind: VariableKind::Local,
+            storage: vec![Storage {
+                kind,
+                space: Some(space.to_owned()),
+                address_size_bytes: Some(address_size_bytes),
+                address: Some(address),
+                size: 4,
+                use_ranges: Some(Vec::new()),
+                dynamic_hash: None,
+                symbol_offset: Some(0),
+                is_piece: Some(false),
+                join_logical_size: None,
+                pieces: Vec::new(),
+            }],
+        })
+        .collect();
+        structure.diagnostics = Some(RecoveryDiagnostics {
+            bad_data: true,
+            unimplemented: false,
+            unresolved_calls: 1,
+            unresolved_indirect_jumps: 0,
+            partial_jump_tables: 0,
+            warnings: vec![RecoveryWarning {
+                kind: WarningKind::Body,
+                address: Some(0x1000),
+                message: "uncertain boundary".to_owned(),
+            }],
+        });
+        structure.frame_context = Some(FrameContext {
+            stack_space: "stack".to_owned(),
+            address_size_bytes: 4,
+            base_convention: FrameBaseConvention::Unknown,
+            base_register: None,
+        });
+        let variables = crate::variables::descriptors(&structure);
+        let mut full = serde_json::to_value(crate::Decompilation {
+            address: 0x1000,
+            name: "partial_function".to_owned(),
+            code: "int partial_function(void) { return 7; }".to_owned(),
+            language_id: "AARCH64:LE:64:v8A:default".to_owned(),
+            tokens: vec![crate::decompile::DecompiledToken {
+                text: "x".repeat(MAX_RESULT_CHARS),
+                kind: "comment".to_owned(),
+                address: Some(0x1000),
+                span: None,
+            }],
+            structure,
+            recovery_status: RecoveryStatus::Incomplete,
+            variables,
+        })
+        .unwrap();
+        full["context"] = serde_json::json!({
+            "scope":"exact_entry", "validation":"analyst_asserted", "full_image_mapping":true,
+            "omissions":["bounded local context"],
         });
         let error = decompilation_view(full.clone(), DecompileView::Full).unwrap_err();
         assert!(error.to_string().contains("view=code"));
         let compact = decompilation_view(full.clone(), DecompileView::Code).unwrap();
-        assert_eq!(compact["code"], full["code"]);
-        assert_eq!(compact["context"], full["context"]);
-        assert_eq!(compact["recovery_status"], full["recovery_status"]);
+        for field in ["address", "name", "code", "language_id", "context", "recovery_status", "variables"] {
+            assert_eq!(compact[field], full[field], "code view changed {field}");
+        }
         assert_eq!(compact["diagnostics"], full["structure"]["diagnostics"]);
+        assert_eq!(compact["structure_metadata"]["frame_context"], full["structure"]["frame_context"]);
+        assert_eq!(compact["structure_metadata"]["variables"], full["structure"]["variables"]);
+        assert_eq!(compact["structure_metadata"]["variables"][0]["storage"][0]["address_size_bytes"], 4);
+        assert_eq!(compact["structure_metadata"]["variables"][1]["storage"][0]["address_size_bytes"], 8);
         assert!(compact.to_string().len() <= MAX_RESULT_CHARS);
         for field in ["code", "structure", "context"] {
             let mut oversized = full.clone();
-            oversized[field] = Value::String("\"".repeat(MAX_RESULT_CHARS));
-            if field == "structure" {
-                oversized[field] = serde_json::json!({ "diagnostics": "\"".repeat(MAX_RESULT_CHARS) });
+            match field {
+                "code" => {
+                    oversized["code"] =
+                        serde_json::json!(format!("/*{}*/\nint f(void) {{ return 7; }}", "x".repeat(MAX_RESULT_CHARS)))
+                }
+                "structure" => {
+                    oversized["structure"]["diagnostics"]["warnings"][0]["message"] =
+                        Value::String("\"".repeat(MAX_RESULT_CHARS))
+                }
+                "context" => oversized["context"]["omissions"] = serde_json::json!(["\"".repeat(MAX_RESULT_CHARS)]),
+                _ => unreachable!(),
             }
             let error = decompilation_view(oversized, DecompileView::Code).unwrap_err();
-            assert!(error.to_string().contains("byte budget"));
+            assert!(error.to_string().contains("byte budget"), "{field}: {error}");
+            assert!(!error.to_string().contains("native shape"), "{field}: {error}");
         }
     }
 

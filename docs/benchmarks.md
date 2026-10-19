@@ -6,6 +6,31 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 3.3 compactness and one live helper observation
+
+The [ergonomics supplement](benchmarks/phase3-3-ergonomics-2026-10-19.json) preserves both prescribed first
+experiments. On the owned snapshot, actual MCP full/summary responses contain equivalent selected facts,
+diagnostics and limitations: **3,842 → 2,195 serialized bytes, saving 1,647 bytes (42.9%)**. JSON bodies are
+3,259 → 1,878 bytes. These are byte measurements, not provider-token estimates or the planned 50% target.
+
+One unchanged canonical helper question used the same `github-copilot/gpt-6.1-sol`, `default` route and answered
+`{"return_value":22}` correctly, with zero model/tool errors:
+
+| Metric | Frozen helper baseline | Current first attempt |
+| --- | ---: | ---: |
+| MCP calls | 5 | 5 |
+| Input tokens | 23,904 | 21,518 |
+| Output / reasoning tokens | 500 / 92 | 463 / 122 |
+| Model turns | 4 | 3 |
+| Cache read / creation | 0 / 0 | 0 / 0 |
+
+**Improvement acceptance is withheld.** Both retained catalogs are cut at 32,768 bytes (original sizes
+44,076 and 65,486), failing the predeclared completeness gate. The observed 2,386-input-token decrease is not
+accepted token-efficiency evidence; calls did not fall. The model used no compact view or new batch tool,
+so neither feature receives causal credit. No retry, task/question change, patch-task regrade, provider/auth
+change or target execution occurred. The other 19 tasks remain unmeasured. Phase 1 live/N and Phase 2 recall
+gates are unchanged, and full Phase 3.3 acceptance remains open.
+
 ## Phase 3.2 owned patch/export round trip
 
 The [owned x86-64 round trip](benchmarks/phase3-2-patches-2026-10-19.json) uses real MCP transport, a frozen

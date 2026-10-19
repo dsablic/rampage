@@ -101,6 +101,8 @@ impl RootCommand {
             Self::Function(FunctionCommand::Disassemble(args)) => Command::Disasm(args),
             Self::Function(FunctionCommand::Decompile(args)) => Command::Decompile(args),
             Self::Function(FunctionCommand::Summarize(args)) => Command::Summarize(args),
+            Self::Function(FunctionCommand::Graph(args)) => Command::Graph(args),
+            Self::Function(FunctionCommand::Batch(args)) => Command::AnnotationBatch(args),
             Self::Function(FunctionCommand::Pseudocode(args)) => Command::Pseudocode(args),
             Self::Function(FunctionCommand::Xrefs(args)) => Command::Xrefs(args),
             Self::Function(FunctionCommand::Identify(args)) => Command::Identify(args),
@@ -160,7 +162,7 @@ pub(crate) enum BinaryCommand {
     /// Search retained bytes, text, instructions, immediates or references using a typed JSON request
     Search(crate::args::SearchArgs),
     /// Show format, architecture, entry point, segments and sections
-    Inspect(FileArgs),
+    Inspect(crate::args::ViewedFileArgs),
     /// Inspect bounded image bytes and pointer candidates without discovery or annotation sidecars
     InspectData(InspectDataArgs),
     /// Inspect an explicitly mapped raw-code window using a JSON request; no native header is required
@@ -195,6 +197,10 @@ pub(crate) enum BinaryCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum FunctionCommand {
+    /// Atomically apply checked rename/comment/signature/types/global operations from explicit JSON
+    Batch(crate::args::AnnotationBatchArgs),
+    /// Native control-flow graph with complete instructions or an explicit summary projection
+    Graph(crate::args::ViewedAtArgs),
     /// Discover functions by recursive descent from symbols, exports, the entry point and unwind metadata
     List(FuncsArgs),
     /// Disassemble instructions
@@ -202,7 +208,7 @@ pub(crate) enum FunctionCommand {
     /// Decompile a function to C with bundled Ghidra specifications
     Decompile(DecompileArgs),
     /// Structural CFG and reference summary of a function (not decompiled source)
-    Summarize(AtArgs),
+    Summarize(crate::args::ViewedAtArgs),
     /// Partial ARM64 SSA pseudocode with explicit unknowns (not recovered C source)
     Pseudocode(PseudocodeArgs),
     /// List code and data cross-references to or from an address, symbol or function

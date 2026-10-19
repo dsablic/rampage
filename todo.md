@@ -257,14 +257,33 @@ The patch profile is static little-endian ELF64 x64/AArch64 only, not universal 
 Next: Phase 3.3 measures consistent compact views, name resolution and existing batch ergonomics against
 appropriate frozen tasks. The new mechanical search/patch experiments do not earn Phase 0/live-token credit.
 
-## Active milestone: Phase 3.3, measured agent ergonomics
+## Phase 3.3: ergonomics implementation complete, live improvement gate open
 
-- [ ] Audit current tools against the frozen Phase 0 transcript and address-taking schemas.
-- [ ] Add consistent summary/code/full views where they preserve required evidence and diagnostics.
-- [ ] Reuse/extend the existing atomic annotation batch API rather than creating a parallel history path.
-- [ ] Measure comparable agent-call/token outcomes with the current provider/model and existing auth;
+- [x] Audit current tools against the frozen Phase 0 transcript and address-taking schemas.
+- [x] Add consistent summary/code/full views where they preserve required evidence and diagnostics.
+- [x] Reuse/extend the existing atomic annotation batch API rather than creating a parallel history path.
+- [x] Measure comparable agent-call/token outcomes with the current provider/model and existing auth;
   preserve first failures and frozen baselines without regrading or claiming mechanical runs as live results.
-- [ ] Review, validate and publish the supported Phase 3 implementation before Phase 4.
+- [x] Finish publication audit and publish the supported Phase 3 implementation before Phase 4.
+
+Implementation tests: 721 API library passes/nine ignored; 20 projection tests, nine mixed-batch and nine
+legacy-batch passes, 6/3/3 API/CLI/MCP ergonomics passes, scoped all-targets Clippy green. Views preserve raw
+native storage coordinates and reject malformed shapes; batch declarations reject internal checked-import
+encodings through the same public guard as individual setters.
+Mechanical full/summary MCP responses saved 1,647 serialized bytes (42.9%) on the fixed owned workload.
+One unchanged live helper attempt answered 22 correctly: five calls, 21,518 input tokens versus 23,904 baseline.
+Catalog retention is truncated in both reports, so completeness acceptance fails: no token-improvement credit,
+no call reduction, no causal attribution to compact/batch tools, and no retry. The other 19 tasks remain unrun.
+
+## Active milestone: Phase 4.1, explicit Sleigh-backed processor breadth
+
+- [ ] Inventory existing native/Capstone/Sleigh paths and published processor-spec licensing/provenance.
+- [ ] Expose bounded Sleigh instruction/flow/p-code decoding for explicitly selected supported processors.
+- [ ] Add owned per-processor fixtures and record disassembly/discovery comparison limits without executing bytes.
+- [ ] Review, test and publish the finite supported processor set before Phase 4.2 raw/firmware loading.
+
+Phases 4.2–4.4, analysis-depth Phase 5 and scale/persistence Phase 6 follow in roadmap order. Implementation
+completion of earlier phases does not close the independent live/N, library-recall or agent-efficiency gates.
 
 Phase 3.2 follows search: annotation-backed effective bytes, disassembly/decompilation visibility, bounded
 x86/AArch64 assembly, create-new export, and an owned patch/export/reopen/decompile round trip. Phase 3.3 then

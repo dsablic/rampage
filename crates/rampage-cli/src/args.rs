@@ -2,6 +2,52 @@ use std::path::PathBuf;
 
 use clap::Args;
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum OutputView {
+    Summary,
+    Code,
+    Full,
+}
+
+impl From<OutputView> for rampage_api::ToolView {
+    fn from(view: OutputView) -> Self {
+        match view {
+            OutputView::Summary => Self::Summary,
+            OutputView::Code => Self::Code,
+            OutputView::Full => Self::Full,
+        }
+    }
+}
+
+#[derive(Args)]
+pub(crate) struct ViewedFileArgs {
+    pub(crate) file: PathBuf,
+    /// Select structured JSON: full (default), summary with explicit omissions, or code (not for metadata)
+    #[arg(long, value_enum)]
+    pub(crate) view: Option<OutputView>,
+}
+
+#[derive(Args)]
+pub(crate) struct ViewedAtArgs {
+    pub(crate) file: PathBuf,
+    #[arg(long)]
+    pub(crate) at: String,
+    /// Select full JSON, summary with exact omission receipts, or code with native control evidence
+    #[arg(long, value_enum)]
+    pub(crate) view: Option<OutputView>,
+}
+
+#[derive(Args)]
+pub(crate) struct AnnotationBatchArgs {
+    pub(crate) file: PathBuf,
+    /// Bounded regular JSON request file: {"entries":[{"operation":"rename","at":"name","value":"new"}]}
+    #[arg(long, required_unless_present = "entries_json", conflicts_with = "entries_json")]
+    pub(crate) entries: Option<PathBuf>,
+    /// Inline JSON request; value is required on every operation and null explicitly clears it
+    #[arg(long, required_unless_present = "entries")]
+    pub(crate) entries_json: Option<String>,
+}
+
 #[derive(Args)]
 pub(crate) struct PatchReviewArgs {
     /// Original source SHA-256 from list-patches.receipt
@@ -125,6 +171,9 @@ pub(crate) struct DisasmArgs {
     /// Number of instructions
     #[arg(long, default_value_t = rampage_api::DEFAULT_INSTRUCTIONS)]
     pub(crate) count: usize,
+    /// Structured JSON view; summary omits rendering with counts, code/full retain the complete listing
+    #[arg(long, value_enum)]
+    pub(crate) view: Option<OutputView>,
 }
 
 #[derive(Args)]
@@ -427,6 +476,9 @@ pub(crate) struct InspectDataArgs {
     /// Word width in bytes (4 or 8); otherwise the architecture's pointer width
     #[arg(long)]
     pub(crate) word_size: Option<u8>,
+    /// Structured JSON metadata view: summary or full; code is explicitly unsupported
+    #[arg(long, value_enum)]
+    pub(crate) view: Option<OutputView>,
 }
 
 #[derive(Args)]
@@ -513,6 +565,9 @@ pub(crate) struct DecompileArgs {
     /// Treat --at as an exact entry with bounded local context, not a containing-function query
     #[arg(long)]
     pub(crate) exact_entry: bool,
+    /// Structured JSON: full (default), code with native evidence, or summary with explicit omissions
+    #[arg(long, value_enum)]
+    pub(crate) view: Option<OutputView>,
 }
 
 #[derive(Args)]

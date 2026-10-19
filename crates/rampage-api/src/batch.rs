@@ -1,5 +1,4 @@
-//! Many names and comments in one call, applied all-or-nothing as one undo step, and a read-only pre-flight
-//! check of candidate names.
+//! Atomic annotation batches and a read-only pre-flight check of candidate names.
 
 use std::collections::HashMap;
 
@@ -49,6 +48,80 @@ pub struct BatchResult {
     pub entries: Vec<BatchOutcome>,
 }
 
+/// A checked annotation operation. `value` is required: explicit null clears the annotation.
+/// Addresses and names resolve against the source snapshot, before any operation in the batch.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AnnotationBatchEntry {
+    Rename {
+        at: String,
+        #[serde(deserialize_with = "required_annotation_value")]
+        #[schemars(required, schema_with = "annotation_value_schema")]
+        value: Option<String>,
+    },
+    Comment {
+        at: String,
+        #[serde(deserialize_with = "required_annotation_value")]
+        #[schemars(required, schema_with = "annotation_value_schema")]
+        value: Option<String>,
+    },
+    Signature {
+        at: String,
+        #[serde(deserialize_with = "required_annotation_value")]
+        #[schemars(required, schema_with = "annotation_value_schema")]
+        value: Option<String>,
+    },
+    Types {
+        at: String,
+        #[serde(deserialize_with = "required_annotation_value")]
+        #[schemars(required, schema_with = "annotation_value_schema")]
+        value: Option<String>,
+    },
+    Global {
+        at: String,
+        #[serde(deserialize_with = "required_annotation_value")]
+        #[schemars(required, schema_with = "annotation_value_schema")]
+        value: Option<String>,
+    },
+}
+
+fn required_annotation_value<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(deserializer)
+}
+
+fn annotation_value_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    <Option<String> as schemars::JsonSchema>::json_schema(generator)
+}
+
+impl AnnotationBatchEntry {
+    fn parts(&self) -> (Field, &str, Option<&str>) {
+        let (field, at, value) = match self {
+            Self::Rename { at, value } => (Field::Name, at, value),
+            Self::Comment { at, value } => (Field::Comment, at, value),
+            Self::Signature { at, value } => (Field::Signature, at, value),
+            Self::Types { at, value } => (Field::Types, at, value),
+            Self::Global { at, value } => (Field::Global, at, value),
+        };
+        (field, at, value.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnnotationBatchOutcome {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub field: Field,
+    /// The normalized value; null means the annotation was cleared.
+    pub value: Option<String>,
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnnotationBatchResult {
+    pub changed: usize,
+    pub entries: Vec<AnnotationBatchOutcome>,
+}
+
 /// Whether a candidate name could be given, and what already has it.
 #[derive(Debug, Clone, Serialize)]
 pub struct NameCheck {
@@ -76,6 +149,142 @@ fn check_size(len: usize, what: &str) -> Result<(), ApiError> {
 }
 
 impl Project {
+    /// Validates the complete candidate and appends one atomic, undoable heterogeneous annotation batch.
+    /// Duplicate field/address pairs refuse, including signature addresses normalized to their function entry.
+    pub fn batch_annotations(&self, entries: &[AnnotationBatchEntry]) -> Result<AnnotationBatchResult, ApiError> {
+        self.batch_annotations_with_preflight(entries, |_| Ok(()))
+    }
+
+    /// Checks the complete response under the same authority lock, before any append or history publication.
+    pub fn batch_annotations_with_preflight(
+        &self,
+        entries: &[AnnotationBatchEntry],
+        preflight: impl FnOnce(&AnnotationBatchResult) -> Result<(), ApiError>,
+    ) -> Result<AnnotationBatchResult, ApiError> {
+        check_size(entries.len(), "entries")?;
+        let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
+        let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
+        let mut annotations = self.annotations.write().expect("annotations lock");
+        annotations.locked_staged_checked(|current| {
+            self.validate_patch_context(current)?;
+            crate::decompile::validate_cached_layout_source(self, &state)?;
+            crate::debug_layout_import::validate_replay_source(self, current)?;
+            crate::debug_type_import::validate_replay_source(self, current)?;
+            crate::debug_type_import::validate_options(current, &options)?;
+            let changes = self.annotation_batch_changes(current, entries)?;
+            let outcomes: Vec<_> = changes
+                .iter()
+                .map(|(field, address, value)| {
+                    let previous = match field {
+                        Field::Name => current.names().get(address),
+                        Field::Comment => current.comments().get(address),
+                        Field::Signature => current.signatures().get(address),
+                        Field::Types => current.types().get(address),
+                        Field::Global => current.globals().get(address),
+                        _ => unreachable!("public annotation batch fields"),
+                    };
+                    AnnotationBatchOutcome {
+                        address: *address,
+                        field: *field,
+                        value: value.clone(),
+                        changed: previous != value.as_ref(),
+                    }
+                })
+                .collect();
+            let mut result = AnnotationBatchResult {
+                changed: outcomes.iter().filter(|outcome| outcome.changed).count(),
+                entries: outcomes,
+            };
+            if result.changed == 0 {
+                self.validate_annotation_snapshot(&state, &options, current).map_err(ApiError::Invalid)?;
+                preflight(&result)?;
+                return Ok(result);
+            }
+            let changed = current
+                .set_batch_validated(&changes, |candidate| {
+                    self.validate_annotation_snapshot(&state, &options, candidate)?;
+                    preflight(&result).map_err(|error| error.to_string())
+                })
+                .map_err(ApiError::Invalid)?;
+            for (outcome, changed) in result.entries.iter_mut().zip(changed) {
+                outcome.changed = changed;
+            }
+            result.changed = result.entries.iter().filter(|entry| entry.changed).count();
+            Ok(result)
+        })
+    }
+
+    fn annotation_batch_changes(
+        &self,
+        current: &Annotations,
+        entries: &[AnnotationBatchEntry],
+    ) -> Result<Vec<(Field, u64, Option<String>)>, ApiError> {
+        let mut changes = Vec::with_capacity(entries.len());
+        let mut targets = HashMap::new();
+        let mut renamed = HashMap::new();
+        let mut names = HashMap::new();
+        let mut bytes = 0usize;
+        for (index, entry) in entries.iter().enumerate() {
+            let (field, at, value) = entry.parts();
+            bytes = bytes.saturating_add(at.len()).saturating_add(value.map_or(0, str::len));
+            if at.len() > 4096 || value.is_some_and(|value| value.len() > 1024 * 1024) || bytes > 8 * 1024 * 1024 {
+                return Err(ApiError::Invalid("annotation batch exceeds its bounded input budget".into()));
+            }
+            let mut address = self.resolve_in(current, at)?;
+            if field == Field::Signature && self.binary.import_slot(address).is_none() {
+                address = self.function_containing(address)?.unwrap_or(address);
+            }
+            if let Some(earlier) = targets.insert((field as u8, address), index) {
+                return Err(ApiError::Invalid(format!(
+                    "nothing applied: entry {earlier} and entry {index} both set {field:?} at {address:#x}"
+                )));
+            }
+            let value = if field == Field::Name {
+                if let Some(name) = value {
+                    check_name(name).map_err(ApiError::Invalid)?;
+                    if let Some(other) = names.insert(name, address)
+                        && other != address
+                    {
+                        return Err(ApiError::Invalid(format!("nothing applied: {name:?} is given to two addresses")));
+                    }
+                }
+                renamed.insert(address, index);
+                value
+            } else {
+                value.map(str::trim).filter(|value| !value.is_empty())
+            };
+            if let Some(value) = value {
+                if matches!(field, Field::Signature | Field::Types | Field::Global) {
+                    crate::decompile::validate_declaration_input(value)?;
+                }
+                if field == Field::Signature
+                    && !self.binary.is_code(address)
+                    && self.binary.import_slot(address).is_none()
+                {
+                    return Err(ApiError::Invalid("signature address is neither code nor an import slot".into()));
+                }
+                if field == Field::Global
+                    && (self.binary.is_code(address)
+                        || !self.binary.segments.iter().any(|segment| segment.contains(address)))
+                {
+                    return Err(ApiError::Invalid("global address requires mapped data, not code".into()));
+                }
+            }
+            changes.push((field, address, value.map(str::to_owned)));
+        }
+        for (name, address) in names {
+            let existing = match current.address_of(name) {
+                Some(user) if user == address => None,
+                Some(user) if !renamed.contains_key(&user) => Some(user),
+                _ => self.symbol_address(name).filter(|&symbol| symbol != address),
+            };
+            if let Some(existing) = existing {
+                return Err(ApiError::Invalid(format!("nothing applied: {name:?} already names {existing:#x}")));
+            }
+        }
+        Ok(changes)
+    }
+
     /// Applies every entry's name and comment as one undo step, after checking them all by `rename`'s and
     /// `comment`'s rules (names also unique within the batch). One invalid entry applies nothing; the error lists
     /// each invalid entry by index.
@@ -215,3 +424,7 @@ impl Project {
             .collect())
     }
 }
+
+#[cfg(test)]
+#[path = "batch_tests.rs"]
+mod tests;

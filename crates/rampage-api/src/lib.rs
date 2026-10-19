@@ -52,6 +52,7 @@ mod session;
 mod signature_import;
 mod signatures;
 mod summary;
+pub mod tool_views;
 pub mod tools;
 mod type_headers;
 mod type_library;
@@ -71,7 +72,10 @@ pub use archive::{
     archive_inventory,
 };
 pub use assembly::{AssemblyReport, AssemblyRequest};
-pub use batch::{BatchEntry, BatchOutcome, BatchResult, MAX_BATCH, NameCheck};
+pub use batch::{
+    AnnotationBatchEntry, AnnotationBatchOutcome, AnnotationBatchResult, BatchEntry, BatchOutcome, BatchResult,
+    MAX_BATCH, NameCheck,
+};
 pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use carve::{CarvingPage, MAX_CARVE_PAGE, carve, carve_page};
@@ -198,6 +202,7 @@ pub use session::Session;
 pub use signature_import::load_signature_database;
 pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};
 pub use summary::FunctionSummary;
+pub use tool_views::{ToolView, ToolViewKind, project_tool_view};
 pub use type_headers::{HeaderBundle, HeaderDeclaration, HeaderProvenance, PreparedHeader};
 pub use type_library::{DeclareTypesRequest, TypeLibraryEdit, TypeLibraryEntry, TypeLibraryPage};
 pub use typed_data::{

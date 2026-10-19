@@ -107,6 +107,8 @@ Additional focused guides:
 - [Search](docs/search.md): bounded byte/text/regex, instruction and reference queries with native function context.
 - [Checked patches/export](docs/patching.md) and [bounded assembly](docs/assembly.md): annotation-backed effective
   views, create-new export and static owned-fixture verification without target execution.
+- [Compact views and annotation batches](docs/tool-views.md): complete evidence-aware responses and one-step
+  checked annotation transactions, without a parallel patch/history path.
 - [Benchmarks](docs/benchmarks.md) and the [decompiler integration corpus](docs/decompiler-corpus.md).
 - [Plugins and extension points](docs/plugins.md): experimental explicit triage components and builtin registries.
 - [Plugin security boundaries](docs/plugin-security.md): admission, resource limits, claim provenance and exclusions.

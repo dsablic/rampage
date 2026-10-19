@@ -16,6 +16,10 @@ use std::sync::{Arc, TryLockError};
 
 use crate::{ApiError, Project};
 
+pub(crate) fn validate_declaration_input(text: &str) -> Result<(), ApiError> {
+    types::validate(text)
+}
+
 pub use entry::{
     DecompileEntryOrigin, DecompileEntryRequest, EntryContextCounts, EntryDecompilation, EntryDecompilationContext,
     EntryPreparationPhase, EntryPreparationProgress, EntryPreparationTimings, EntryValidation,
@@ -353,7 +357,7 @@ impl Project {
         use crate::annotations::Field;
         let value = value.map(str::trim).filter(|value| !value.is_empty());
         if let Some(value) = value {
-            types::validate(value)?;
+            validate_declaration_input(value)?;
         }
         if field == Field::Signature
             && value.is_some()

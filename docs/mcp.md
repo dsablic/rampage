@@ -21,7 +21,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
   `assemble`, `patch_bytes`, `revert_patch`, `list_patches`, `export_patched`,
   `function_summary`, `xrefs`, `search`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
-  `annotate_batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `triage_report`,
+  `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `triage_report`,
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
   `decode_file_range`, `inspect_raw_code`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
@@ -152,6 +152,9 @@ and remain non-atomic. See [LLDB queries](lldb-query.md) for request operations,
 Analysis runs once per binary when first needed and is cached for the session. Annotations share the
 [persistent logs](cli-reference.md#persistence-and-shared-edits) used by CLI and UI; the UI reflects incoming edits.
 `annotate_batch` validates all entries before applying one undo step; `check_names` pre-flights candidate names.
+`batch` extends the same transaction/history path with typed name/comment/signature/types/global operations
+and explicit null clears; it does not expose raw patch or export operations. See
+[view and batch contracts](tool-views.md) for required fields, prebatch selectors and receipt bounds.
 Types/signatures/globals also persist, with dependency checks rather than inferred class layouts.
 The explicit [PDB name-import tool](pdb-symbols.md#shared-tool-and-mcp) previews by default and applies eligible
 names as one undoable batch only with `apply: true`. Detail pagination does not restrict the batch's writes.

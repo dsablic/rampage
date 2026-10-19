@@ -113,7 +113,7 @@ async fn decompile_flag_returns_flattened_exact_context_without_replacing_native
             .await,
         );
         let full = if exact_entry { &exact } else { &omitted };
-        for field in ["address", "name", "code", "language_id", "recovery_status"] {
+        for field in ["address", "name", "code", "language_id", "recovery_status", "variables"] {
             assert_eq!(compact[field], full[field], "code view changed {field}");
         }
         assert_eq!(compact["diagnostics"], full["structure"]["diagnostics"]);
@@ -121,7 +121,11 @@ async fn decompile_flag_returns_flattened_exact_context_without_replacing_native
         assert_eq!(compact["context"]["omissions"], full["context"]["omissions"]);
         assert!(compact.get("tokens").is_none());
         assert!(compact.get("structure").is_none());
-        assert!(!compact["omitted_details"].as_array().unwrap().is_empty());
+        assert_eq!(compact["view_projection"]["kind"], "decompile");
+        assert_eq!(compact["view_projection"]["view"], "code");
+        let omissions = compact["view_projection"]["omissions"].as_array().unwrap();
+        assert!(omissions.iter().any(|omission| omission["path"] == "/tokens"));
+        assert_eq!(compact["tokens_count"], json!(full["tokens"].as_array().unwrap().len()));
     }
     let invalid = call(&client, "decompile", json!({ "path": path, "at": "0x1000", "view": "unknown" })).await;
     assert_eq!(invalid.is_error, Some(true));

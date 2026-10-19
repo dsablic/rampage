@@ -113,6 +113,7 @@ pub fn inspect_data(
     at: &str,
     size: usize,
     word_size: Option<u8>,
+    view: Option<crate::args::OutputView>,
     options: &Options,
 ) -> Result<()> {
     let binary = rampage_loaders::Binary::open_image_metadata(path, options.image, options.arch)?;
@@ -120,8 +121,8 @@ pub fn inspect_data(
         &binary,
         &rampage_api::DataQuery { address: rampage_api::resolve_data_address(&binary, at)?, size, word_size },
     )?;
-    if options.json {
-        return write_json(out, &report);
+    if write_tool_view(out, &report, rampage_api::ToolViewKind::InspectData, view, options)? {
+        return Ok(());
     }
     writeln!(
         out,
@@ -420,11 +421,17 @@ pub fn carve(out: &mut impl Write, path: &Path, max_candidates: usize, options: 
     Ok(())
 }
 
-pub fn summarize(out: &mut impl Write, path: &Path, at: &str, options: &Options) -> Result<()> {
+pub fn summarize(
+    out: &mut impl Write,
+    path: &Path,
+    at: &str,
+    view: Option<crate::args::OutputView>,
+    options: &Options,
+) -> Result<()> {
     let project = open(path, options)?;
     let summary = project.function_summary(project.resolve(at)?)?;
-    if options.json {
-        return write_json(out, &summary);
+    if write_tool_view(out, &summary, rampage_api::ToolViewKind::FunctionSummary, view, options)? {
+        return Ok(());
     }
     writeln!(
         out,
@@ -440,33 +447,25 @@ pub fn summarize(out: &mut impl Write, path: &Path, at: &str, options: &Options)
     Ok(())
 }
 
-pub fn decompile(
-    out: &mut impl Write,
-    path: &Path,
-    at: &str,
-    compiler: Option<&str>,
-    isolated: bool,
-    exact_entry: bool,
-    options: &Options,
-) -> Result<()> {
-    let project = open(path, options)?;
-    if isolated {
+pub fn decompile(out: &mut impl Write, args: &crate::args::DecompileArgs, options: &Options) -> Result<()> {
+    let project = open(&args.file, options)?;
+    if args.isolated {
         project.set_decompiler_worker(Some(rampage_api::DecompilerWorkerConfig::default()));
     }
-    if let Some(compiler) = compiler {
+    if let Some(compiler) = args.compiler.as_deref() {
         project.set_decompiler_options(Some(rampage_api::DecompilerOptions {
             compiler: Some(compiler.to_owned()),
             ..Default::default()
         }));
     }
-    let address = project.resolve(at)?;
-    if exact_entry {
+    let address = project.resolve(&args.at)?;
+    if args.exact_entry {
         let result = project.decompile_entry(&rampage_api::DecompileEntryRequest {
             address,
             validation: rampage_api::EntryValidation::AnalystAsserted,
         })?;
-        if options.json {
-            return write_json(out, &result);
+        if write_tool_view(out, &result, rampage_api::ToolViewKind::Decompile, args.view, options)? {
+            return Ok(());
         }
         writeln!(out, "/* Exact-entry analysis: bounded host context, full mapped image; not boundary proof. */")?;
         write!(out, "{}", result.decompilation.code)?;
@@ -477,8 +476,8 @@ pub fn decompile(
         return Ok(());
     }
     let decompilation = project.decompile(address)?;
-    if options.json {
-        return write_json(out, &decompilation);
+    if write_tool_view(out, &decompilation, rampage_api::ToolViewKind::Decompile, args.view, options)? {
+        return Ok(());
     }
     write!(out, "{}", decompilation.code)?;
     if decompilation.recovery_status != rampage_api::RecoveryStatus::NoReportedIssues {
@@ -716,11 +715,45 @@ pub(crate) fn write_json(out: &mut impl Write, value: &impl Serialize) -> Result
     Ok(())
 }
 
-pub fn info(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+fn write_tool_view(
+    out: &mut impl Write,
+    result: &impl Serialize,
+    kind: rampage_api::ToolViewKind,
+    view: Option<crate::args::OutputView>,
+    options: &Options,
+) -> Result<bool> {
+    if !options.json && view.is_none() {
+        return Ok(false);
+    }
+    let result = serde_json::to_value(result)?;
+    let value = rampage_api::project_tool_view(result, kind, view.map(Into::into).unwrap_or_default())?;
+    writeln!(out, "{value}")?;
+    Ok(true)
+}
+
+pub fn graph(
+    out: &mut impl Write,
+    path: &Path,
+    at: &str,
+    view: Option<crate::args::OutputView>,
+    options: &Options,
+) -> Result<()> {
+    let project = open(path, options)?;
+    let graph = project.function_graph(project.resolve(at)?)?;
+    let value = rampage_api::project_tool_view(
+        serde_json::to_value(graph)?,
+        rampage_api::ToolViewKind::FunctionGraph,
+        view.map(Into::into).unwrap_or_default(),
+    )?;
+    writeln!(out, "{value}")?;
+    Ok(())
+}
+
+pub fn info(out: &mut impl Write, path: &Path, view: Option<crate::args::OutputView>, options: &Options) -> Result<()> {
     let project = open(path, options)?;
     let summary = project.summary();
-    if options.json {
-        return write_json(out, &summary);
+    if write_tool_view(out, &summary, rampage_api::ToolViewKind::BinaryInfo, view, options)? {
+        return Ok(());
     }
     writeln!(out, "format    {:?}", summary.format)?;
     writeln!(out, "arch      {}", summary.arch)?;
@@ -755,10 +788,17 @@ pub fn info(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> 
     Ok(())
 }
 
-pub fn disasm(out: &mut impl Write, path: &Path, at: Option<&str>, count: usize, options: &Options) -> Result<()> {
+pub fn disasm(
+    out: &mut impl Write,
+    path: &Path,
+    at: Option<&str>,
+    count: usize,
+    view: Option<crate::args::OutputView>,
+    options: &Options,
+) -> Result<()> {
     let lines = open(path, options)?.disassemble(at, count)?;
-    if options.json {
-        return write_json(out, &lines);
+    if write_tool_view(out, &lines, rampage_api::ToolViewKind::Disassemble, view, options)? {
+        return Ok(());
     }
     for line in &lines {
         if let Some(label) = &line.label {
@@ -1007,6 +1047,22 @@ pub fn comment(out: &mut impl Write, path: &Path, at: &str, text: Option<&str>, 
 
 /// The largest batch file (JSON) `annotate-batch` reads: room for the most entries with long comments.
 const MAX_BATCH_BYTES: u64 = 8 * 1024 * 1024;
+
+pub fn annotation_batch(
+    out: &mut impl Write,
+    args: &crate::args::AnnotationBatchArgs,
+    options: &Options,
+) -> Result<()> {
+    let request = match (&args.entries, &args.entries_json) {
+        (Some(path), None) => rampage_api::tools::read_annotation_batch_request(path)?,
+        (None, Some(json)) => rampage_api::tools::parse_annotation_batch_request(json.as_bytes())?,
+        _ => anyhow::bail!("batch needs exactly one of --entries FILE or --entries-json JSON"),
+    };
+    let project = open(&args.file, options)?;
+    let receipt = rampage_api::tools::annotation_batch_page(&project, &request.entries)?;
+    writeln!(out, "{receipt}")?;
+    Ok(())
+}
 
 pub fn annotate_batch(out: &mut impl Write, path: &Path, entries: &Path, options: &Options) -> Result<()> {
     let text = rampage_api::read_bounded(entries, MAX_BATCH_BYTES, "batch file")?;

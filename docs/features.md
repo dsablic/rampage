@@ -155,6 +155,13 @@ The corresponding MCP tools are `detect_tools`, `yara_scan`, `capa_detect` and `
 constant database finds AES, DES, Blowfish, SHA/MD5, ChaCha, CRC, Deflate, Base64 and curve-parameter tables.
 [Data packs](data-packs.md) extend these heuristic databases with data only.
 
+## Tool views and annotation batching
+
+Six structural/code/data tools share `view: full|summary|code`; metadata tools reject code view explicitly.
+Reduced views retain required identity, diagnostics, source/coordinate and recovery evidence with omission
+receipts; oversized output refuses rather than producing cut JSON. The atomic `batch` tool composes checked
+annotation operations in one existing undo/history step. See [tool views and batches](tool-views.md).
+
 ## Checked patches and assembly
 
 Static ELF64 x86-64/AArch64 patches use the existing annotation log, original identity/preimage checks,

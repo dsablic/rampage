@@ -62,6 +62,12 @@ enum PacksCommand {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Atomically apply a checked heterogeneous annotation batch from explicit JSON
+    #[command(name = "batch", hide = true)]
+    AnnotationBatch(args::AnnotationBatchArgs),
+    /// Native control-flow graph with an explicit full/summary/code JSON view
+    #[command(hide = true)]
+    Graph(args::ViewedAtArgs),
     #[command(hide = true)]
     PatchBytes(args::PatchBytesArgs),
     #[command(hide = true)]
@@ -85,7 +91,7 @@ enum Command {
     Analyze(analyze::AnalyzeArgs),
     /// Show format, architecture, entry point, segments and sections
     #[command(hide = true)]
-    Info(FileArgs),
+    Info(args::ViewedFileArgs),
     /// Disassemble instructions
     #[command(hide = true)]
     Disasm(DisasmArgs),
@@ -133,7 +139,7 @@ enum Command {
     Carve(CarveArgs),
     /// Structural CFG and reference summary of a function (not decompiled source)
     #[command(hide = true)]
-    Summarize(AtArgs),
+    Summarize(args::ViewedAtArgs),
     /// Decompile a function to C with bundled Ghidra specifications
     #[command(hide = true)]
     Decompile(DecompileArgs),
@@ -296,9 +302,9 @@ fn main() -> ExitCode {
         }
         Command::QueryDebugger(args) => debugger_query(&mut out, args),
         Command::Analyze(args) => analyze::analyze(&mut out, &args, &options),
-        Command::Info(FileArgs { file }) => commands::info(&mut out, &file, &options),
-        Command::Disasm(DisasmArgs { file, at, count }) => {
-            commands::disasm(&mut out, &file, at.as_deref(), count, &options)
+        Command::Info(args::ViewedFileArgs { file, view }) => commands::info(&mut out, &file, view, &options),
+        Command::Disasm(DisasmArgs { file, at, count, view }) => {
+            commands::disasm(&mut out, &file, at.as_deref(), count, view, &options)
         }
         Command::Strings(StringsArgs { file, min_len, contains }) => {
             let query = StringsQuery { min_len: Some(min_len), contains, ..StringsQuery::default() };
@@ -353,10 +359,10 @@ fn main() -> ExitCode {
         Command::Carve(CarveArgs { file, max_candidates }) => {
             commands::carve(&mut out, &file, max_candidates, &options)
         }
-        Command::Summarize(AtArgs { file, at }) => commands::summarize(&mut out, &file, &at, &options),
-        Command::Decompile(DecompileArgs { file, at, compiler, isolated, exact_entry }) => {
-            commands::decompile(&mut out, &file, &at, compiler.as_deref(), isolated, exact_entry, &options)
+        Command::Summarize(args::ViewedAtArgs { file, at, view }) => {
+            commands::summarize(&mut out, &file, &at, view, &options)
         }
+        Command::Decompile(args) => commands::decompile(&mut out, &args, &options),
         Command::Pseudocode(PseudocodeArgs { file, at, structured }) => {
             commands::pseudocode(&mut out, &file, &at, structured, &options)
         }
@@ -402,6 +408,8 @@ fn main() -> ExitCode {
             &options,
         ),
         Command::Search(args) => commands::search(&mut out, &args, &options),
+        Command::AnnotationBatch(args) => commands::annotation_batch(&mut out, &args, &options),
+        Command::Graph(args::ViewedAtArgs { file, at, view }) => commands::graph(&mut out, &file, &at, view, &options),
         Command::Assemble(args) => commands::assemble(&mut out, &args, &options),
         Command::Signatures(SignaturesArgs { file, output, fuzzy_request }) => {
             commands::signatures(&mut out, &file, output.as_deref(), fuzzy_request.as_deref(), &options)
@@ -418,8 +426,8 @@ fn main() -> ExitCode {
         Command::JumpTable(JumpTableArgs { file, at, count, relative_base }) => {
             commands::jump_table(&mut out, &file, &at, count, relative_base.as_deref(), &options)
         }
-        Command::InspectData(args::InspectDataArgs { file, at, size, word_size }) => {
-            commands::inspect_data(&mut out, &file, &at, size, word_size, &options)
+        Command::InspectData(args::InspectDataArgs { file, at, size, word_size, view }) => {
+            commands::inspect_data(&mut out, &file, &at, size, word_size, view, &options)
         }
         Command::InspectRaw(args::InspectRawArgs { file, request }) => {
             commands::inspect_raw(&mut out, &file, &request, &options)
