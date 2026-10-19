@@ -301,7 +301,11 @@ The first width/model pilot is implemented at `0d9dbb5`: optional defaults coexi
 fourteen-architecture legacy method, scalar grouping does not invent pointer evidence, and missing reviewed
 C facts do not block existing typed Go/external native routes. Targeted direct/worker, source-failure,
 external-alias and ABI checks passed. Actual small-model native queries, unknown-width Project identities,
-the remaining consumer migration, real-profile factory routing and Raw admission still require their own gates.
+real-profile factory routing and Raw admission still require their own gates. The classified consumer
+migration and checked RTTI result are implemented at `166f30e`: zero production callers depend on the legacy
+total-width API. Its 895 distinct scoped tests and full API run (761 passed, nine ignored) are green.
+The retained legacy definition and five known fixtures remain; new identities and real unknown-width
+Project coverage have not yet been admitted.
 The native roster is implemented at `5708906`: all 104 additional oracle rows match after a narrow CR16
 conditional-flow improvement, with original failures preserved. Hexagon remains helper-gated. The decompiler
 library passed 131 tests with one ignored; this is not a full-ISA or C-ABI claim. Checked factory/gate plumbing
