@@ -284,8 +284,8 @@ no call reduction, no causal attribution to compact/batch tools, and no retry. T
 
 The first MSP430/AVR8/6502 resource closures are a pilot, not completion of the full 16-family roadmap roster.
 All 16 families have resource-admitted closures from the pinned local public SDK and finite native/oracle
-comparison coverage. The standalone MCP/window interface still selects the first three pilots; expanding
-that interface and ordinary Project routing remains separately gated.
+comparison coverage. The standalone MCP/window interface exposes the closed twenty-ID registry (sixteen
+selected families plus four existing x86/AArch64 profiles). Ordinary Project routing remains separately gated.
 Compiled SLA is materialized, not lazily compiled from SLASPEC. AVR code uses two-byte address units and
 distinct Harvard spaces; 6502 compiler C widths remain unknown rather than defaulting to host values.
 The admission helper's aggregate source-read cap passed tests and independent review. The x86 parser-bounds
@@ -307,6 +307,15 @@ conditional-flow improvement, with original failures preserved. Hexagon remains 
 library passed 131 tests with one ignored; this is not a full-ISA or C-ABI claim. Checked factory/gate plumbing
 at `d330163` passed its scoped 402 distinct cases and source review, but real-profile gate projection and
 Raw/ordinary selector/listing/search integration remain pending.
+The combined API regression run after the width, native-roster and factory changes passed 756 tests with
+nine ignored. The reviewed full-roster window/gate integration is the next execution gate; its matrix
+retains both 32-function denominators and reports computed/gated misses rather than assuming full recall.
+The applied full-roster window core passed source review and 30 window tests. Measured manual-seed entry
+retention is 32/32 with 23/32 exact extents; call-only discovery is 27/32 entries and 20/32 exact extents.
+PIC computed calls and context/delay/helper gates remain explicit misses. Native validation passed 133
+tests with one ignored. All eight API/CLI/MCP frontend checks and source re-review passed after aligning
+valid-unknown retention and generating the schema from the central registry. The interface checkpoint is
+`8d52a25`; this is not ordinary Project, packet-helper or C-ABI acceptance.
 
 Phases 4.2–4.4, analysis-depth Phase 5 and scale/persistence Phase 6 follow in roadmap order. Implementation
 completion of earlier phases does not close the independent live/N, library-recall or agent-efficiency gates.

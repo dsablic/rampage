@@ -65,10 +65,23 @@ The CLI route is `binary inspect-sleigh FILE --request REQUEST.json` or `--reque
 document excludes the CLI's positional file path. Numeric addresses and hexadecimal strings describe raw
 coordinates, not resolvable symbols. Unknown fields and arbitrary profile/specification paths reject.
 
-Selected new profiles are `TI_MSP430:LE:16:default`, `avr8:LE:16:default` and `6502:LE:16:default`.
-The same bridge supports its reviewed existing x86/AArch64 profiles. Resource admission of other families
-alone does not make their profiles selectable. The native library's additional thirteen selections have
-passed their finite raw comparison, but are not yet enabled in this window-tool interface.
+The tool schema enumerates the closed registry directly: sixteen selected processor-family profiles and
+four existing x86/AArch64 profiles. It does not enumerate every sibling language in the bundled `.ldefs`.
+Examples include `TI_MSP430:LE:16:default`, `avr8:LE:16:default`, `6502:LE:16:default`,
+`SuperH:BE:32:SH-2`, `CR16C:LE:16:default` and `Loongarch:LE:64:lp64d`. Arbitrary profile/spec paths reject.
+
+The owned sixteen-profile discovery matrix retains all 32 manual functions in each denominator:
+
+| Seed policy | Entries retained/recovered | Exact byte extents |
+| --- | ---: | ---: |
+| Every manual entry supplied | 32/32 | 23/32 |
+| Caller entries only | 27/32 | 20/32 |
+
+Supplying all entries measures retention, not autonomous entry discovery. Computed calls and context,
+delay-slot, user-operation and helper gates explain remaining misses; they are not omitted from the matrix.
+Hexagon helper-gated entries remain valid instructions/functions but do not establish packet or CFG support.
+Transport tests verify the shared interface; the earlier frozen MCP experiment remains a separate three-profile
+measurement rather than being retroactively expanded to this roster.
 
 Explicit windows select an original regular-file range, a bundled language profile and an internal-byte
 base address. There is no executable-header inference, extraction or automatic publication of decoded data.
