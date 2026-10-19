@@ -62,6 +62,9 @@ enum PacksCommand {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect an asserted raw Sleigh window; no executable admission, ABI or execution claim
+    #[command(hide = true)]
+    InspectSleigh(args::InspectSleighArgs),
     /// Atomically apply a checked heterogeneous annotation batch from explicit JSON
     #[command(name = "batch", hide = true)]
     AnnotationBatch(args::AnnotationBatchArgs),
@@ -408,6 +411,7 @@ fn main() -> ExitCode {
             &options,
         ),
         Command::Search(args) => commands::search(&mut out, &args, &options),
+        Command::InspectSleigh(args) => commands::inspect_sleigh(&mut out, &args, &options),
         Command::AnnotationBatch(args) => commands::annotation_batch(&mut out, &args, &options),
         Command::Graph(args::ViewedAtArgs { file, at, view }) => commands::graph(&mut out, &file, &at, view, &options),
         Command::Assemble(args) => commands::assemble(&mut out, &args, &options),

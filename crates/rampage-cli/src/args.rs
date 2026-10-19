@@ -2,6 +2,17 @@ use std::path::PathBuf;
 
 use clap::Args;
 
+#[derive(Args)]
+pub(crate) struct InspectSleighArgs {
+    pub(crate) file: PathBuf,
+    /// Checked regular JSON request file (at most 1 MiB); no native executable header is required
+    #[arg(long, required_unless_present = "request_json", conflicts_with = "request_json")]
+    pub(crate) request: Option<PathBuf>,
+    /// Literal JSON SleighWindowRequest: closed profile, source offset/length, BYTE base and optional seeds/work limits
+    #[arg(long, required_unless_present = "request")]
+    pub(crate) request_json: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub(crate) enum OutputView {
     Summary,

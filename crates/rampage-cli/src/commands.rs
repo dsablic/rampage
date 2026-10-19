@@ -37,6 +37,23 @@ pub fn patch_tool(
     Ok(())
 }
 
+pub fn inspect_sleigh(out: &mut impl Write, args: &crate::args::InspectSleighArgs, options: &Options) -> Result<()> {
+    anyhow::ensure!(
+        options.arch.is_none() && options.image.is_none(),
+        "inspect-sleigh uses an explicit raw-window profile; --arch and image selectors are unsupported"
+    );
+    let request = match (&args.request, &args.request_json) {
+        (Some(path), None) => rampage_api::tools::read_sleigh_window_request(path)?,
+        (None, Some(json)) => rampage_api::tools::parse_sleigh_window_request(json.as_bytes())?,
+        _ => anyhow::bail!("inspect-sleigh needs exactly one of --request FILE or --request-json JSON"),
+    };
+    let report = rampage_api::sleigh_window::inspect_sleigh_file_range(&args.file, &request)?;
+    let json = serde_json::to_vec(&report)?;
+    out.write_all(&json)?;
+    writeln!(out)?;
+    Ok(())
+}
+
 pub fn inspect_raw(out: &mut impl Write, path: &Path, request: &str, options: &Options) -> Result<()> {
     anyhow::ensure!(request.len() <= 16_384, "raw-code request exceeds input budget");
     let request: rampage_api::RawFileRequest = serde_json::from_str(request)?;

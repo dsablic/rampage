@@ -1,0 +1,925 @@
+{
+  "schema_version": 1,
+  "capture_date": "2026-10-19",
+  "network_used": false,
+  "commands": [
+    {
+      "name": "jdk-version",
+      "argv": [
+        "$JDK_BIN/java",
+        "-version"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "api-signatures",
+      "argv": [
+        "$JDK_BIN/javap",
+        "-classpath",
+        "$SDK/Ghidra/Framework/Utility/lib/Utility.jar:$SDK/Ghidra/Framework/Generic/lib/Generic.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar:$SDK/Ghidra/Features/Base/lib/Base.jar:$SDK/Ghidra/Framework/Docking/lib/Docking.jar:$SDK/Ghidra/Framework/Project/lib/Project.jar:$SDK/Ghidra/Framework/DB/lib/DB.jar:$SDK/Ghidra/Framework/Gui/lib/Gui.jar:$SDK/Ghidra/Framework/FileSystem/lib/FileSystem.jar:$SDK/Ghidra/Framework/Graph/lib/Graph.jar:$SDK/Ghidra/Framework/Help/lib/javahelp-2.0.05.jar:$SDK/Ghidra/Framework/Generic/lib/gson-2.13.2.jar:$SDK/Ghidra/Framework/Generic/lib/jdom2-2.0.6.1.jar:$SDK/Ghidra/Framework/Generic/lib/commons-lang3-3.20.0.jar:$SDK/Ghidra/Framework/Generic/lib/commons-collections4-4.6.0.jar:$SDK/Ghidra/Framework/Generic/lib/guava-32.1.3-jre.jar:$SDK/Ghidra/Framework/Generic/lib/failureaccess-1.0.1.jar:$SDK/Ghidra/Framework/Generic/lib/log4j-api-2.26.1.jar:$SDK/Ghidra/Framework/Generic/lib/log4j-core-2.26.1.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/isorelax-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/msv-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/relaxngDatatype-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/xsdlib-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/antlr-runtime-3.5.2.jar",
+        "ghidra.program.model.address.Address",
+        "ghidra.program.model.address.AddressSpace",
+        "ghidra.program.model.lang.Language",
+        "ghidra.program.model.lang.InstructionPrototype",
+        "ghidra.app.util.PseudoInstruction",
+        "ghidra.program.disassemble.Disassembler",
+        "ghidra.app.cmd.function.CreateFunctionCmd"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "compile",
+      "argv": [
+        "$JDK_BIN/javac",
+        "-cp",
+        "$SDK/Ghidra/Framework/Utility/lib/Utility.jar:$SDK/Ghidra/Framework/Generic/lib/Generic.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar:$SDK/Ghidra/Features/Base/lib/Base.jar:$SDK/Ghidra/Framework/Docking/lib/Docking.jar:$SDK/Ghidra/Framework/Project/lib/Project.jar:$SDK/Ghidra/Framework/DB/lib/DB.jar:$SDK/Ghidra/Framework/Gui/lib/Gui.jar:$SDK/Ghidra/Framework/FileSystem/lib/FileSystem.jar:$SDK/Ghidra/Framework/Graph/lib/Graph.jar:$SDK/Ghidra/Framework/Help/lib/javahelp-2.0.05.jar:$SDK/Ghidra/Framework/Generic/lib/gson-2.13.2.jar:$SDK/Ghidra/Framework/Generic/lib/jdom2-2.0.6.1.jar:$SDK/Ghidra/Framework/Generic/lib/commons-lang3-3.20.0.jar:$SDK/Ghidra/Framework/Generic/lib/commons-collections4-4.6.0.jar:$SDK/Ghidra/Framework/Generic/lib/guava-32.1.3-jre.jar:$SDK/Ghidra/Framework/Generic/lib/failureaccess-1.0.1.jar:$SDK/Ghidra/Framework/Generic/lib/log4j-api-2.26.1.jar:$SDK/Ghidra/Framework/Generic/lib/log4j-core-2.26.1.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/isorelax-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/msv-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/relaxngDatatype-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/xsdlib-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/antlr-runtime-3.5.2.jar",
+        "-d",
+        "$STAGE",
+        "$REPO/tools/sleigh-fixture/SleighOracle.java"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "oracle",
+      "argv": [
+        "$JDK_BIN/java",
+        "-Xmx512m",
+        "-Djava.awt.headless=true",
+        "-Duser.home=$STAGE/home",
+        "-Djava.io.tmpdir=$STAGE/tmp",
+        "-cp",
+        "$STAGE:$SDK/Ghidra/Framework/Utility/lib/Utility.jar:$SDK/Ghidra/Framework/Generic/lib/Generic.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar:$SDK/Ghidra/Features/Base/lib/Base.jar:$SDK/Ghidra/Framework/Docking/lib/Docking.jar:$SDK/Ghidra/Framework/Project/lib/Project.jar:$SDK/Ghidra/Framework/DB/lib/DB.jar:$SDK/Ghidra/Framework/Gui/lib/Gui.jar:$SDK/Ghidra/Framework/FileSystem/lib/FileSystem.jar:$SDK/Ghidra/Framework/Graph/lib/Graph.jar:$SDK/Ghidra/Framework/Help/lib/javahelp-2.0.05.jar:$SDK/Ghidra/Framework/Generic/lib/gson-2.13.2.jar:$SDK/Ghidra/Framework/Generic/lib/jdom2-2.0.6.1.jar:$SDK/Ghidra/Framework/Generic/lib/commons-lang3-3.20.0.jar:$SDK/Ghidra/Framework/Generic/lib/commons-collections4-4.6.0.jar:$SDK/Ghidra/Framework/Generic/lib/guava-32.1.3-jre.jar:$SDK/Ghidra/Framework/Generic/lib/failureaccess-1.0.1.jar:$SDK/Ghidra/Framework/Generic/lib/log4j-api-2.26.1.jar:$SDK/Ghidra/Framework/Generic/lib/log4j-core-2.26.1.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/isorelax-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/msv-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/relaxngDatatype-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/xsdlib-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/antlr-runtime-3.5.2.jar",
+        "SleighOracle",
+        "$REPO/tests/fixtures/sleigh",
+        "$STAGE/oracle.json"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "logs": {
+    "api-signatures.stderr": "",
+    "api-signatures.stdout": "Compiled from \"Address.java\"\npublic interface ghidra.program.model.address.Address extends java.lang.Comparable<ghidra.program.model.address.Address> {\n  public static final ghidra.program.model.address.Address NO_ADDRESS;\n  public static final ghidra.program.model.address.Address EXT_FROM_ADDRESS;\n  public static final char SEPARATOR_CHAR;\n  public static final java.lang.String SEPARATOR;\n  public abstract ghidra.program.model.address.Address getAddress(java.lang.String) throws ghidra.program.model.address.AddressFormatException;\n  public abstract ghidra.program.model.address.Address getNewAddress(long);\n  public abstract ghidra.program.model.address.Address getNewAddress(long, boolean) throws ghidra.program.model.address.AddressOutOfBoundsException;\n  public abstract ghidra.program.model.address.Address getNewTruncatedAddress(long, boolean);\n  public abstract int getPointerSize();\n  public abstract ghidra.program.model.address.Address next();\n  public abstract ghidra.program.model.address.Address previous();\n  public abstract long getOffset();\n  public abstract java.math.BigInteger getOffsetAsBigInteger();\n  public abstract long getUnsignedOffset();\n  public abstract long getAddressableWordOffset();\n  public abstract ghidra.program.model.address.AddressSpace getAddressSpace();\n  public abstract boolean hasSameAddressSpace(ghidra.program.model.address.Address);\n  public abstract int getSize();\n  public abstract long subtract(ghidra.program.model.address.Address);\n  public abstract ghidra.program.model.address.Address subtractWrap(long);\n  public abstract ghidra.program.model.address.Address subtractWrapSpace(long);\n  public abstract ghidra.program.model.address.Address subtractNoWrap(long) throws ghidra.program.model.address.AddressOverflowException;\n  public abstract ghidra.program.model.address.Address subtract(long);\n  public abstract ghidra.program.model.address.Address addWrap(long);\n  public abstract ghidra.program.model.address.Address addWrapSpace(long);\n  public abstract ghidra.program.model.address.Address addNoWrap(long) throws ghidra.program.model.address.AddressOverflowException;\n  public abstract ghidra.program.model.address.Address addNoWrap(java.math.BigInteger) throws ghidra.program.model.address.AddressOverflowException;\n  public abstract ghidra.program.model.address.Address add(long) throws ghidra.program.model.address.AddressOutOfBoundsException;\n  public abstract boolean isSuccessor(ghidra.program.model.address.Address);\n  public abstract java.lang.String toString();\n  public abstract java.lang.String toString(java.lang.String);\n  public abstract java.lang.String toString(boolean);\n  public abstract java.lang.String toString(boolean, boolean);\n  public abstract java.lang.String toString(boolean, int);\n  public abstract boolean equals(java.lang.Object);\n  public abstract int hashCode();\n  public abstract ghidra.program.model.address.Address getPhysicalAddress();\n  public abstract boolean isMemoryAddress();\n  public abstract boolean isLoadedMemoryAddress();\n  public abstract boolean isNonLoadedMemoryAddress();\n  public abstract boolean isStackAddress();\n  public abstract boolean isUniqueAddress();\n  public abstract boolean isConstantAddress();\n  public abstract boolean isHashAddress();\n  public abstract boolean isRegisterAddress();\n  public abstract boolean isVariableAddress();\n  public abstract boolean isExternalAddress();\n  public static ghidra.program.model.address.Address min(ghidra.program.model.address.Address, ghidra.program.model.address.Address);\n  public static ghidra.program.model.address.Address max(ghidra.program.model.address.Address, ghidra.program.model.address.Address);\n  static {};\n}\nCompiled from \"AddressSpace.java\"\npublic interface ghidra.program.model.address.AddressSpace extends java.lang.Comparable<ghidra.program.model.address.AddressSpace> {\n  public static final int TYPE_CONSTANT;\n  public static final int TYPE_RAM;\n  public static final int TYPE_CODE;\n  public static final int TYPE_UNIQUE;\n  public static final int TYPE_REGISTER;\n  public static final int TYPE_STACK;\n  public static final int TYPE_JOIN;\n  public static final int TYPE_OTHER;\n  public static final int TYPE_SYMBOL;\n  public static final int TYPE_EXTERNAL;\n  public static final int TYPE_VARIABLE;\n  public static final int TYPE_DELETED;\n  public static final int TYPE_UNKNOWN;\n  public static final int TYPE_NONE;\n  public static final int TYPE_IPTR_CONSTANT;\n  public static final int TYPE_IPTR_INTERNAL;\n  public static final int TYPE_IPTR_SPACEBASE;\n  public static final int ID_SIZE_MASK;\n  public static final int ID_SIZE_SHIFT;\n  public static final int ID_TYPE_MASK;\n  public static final int ID_UNIQUE_SHIFT;\n  public static final ghidra.program.model.address.AddressSpace OTHER_SPACE;\n  public static final ghidra.program.model.address.AddressSpace EXTERNAL_SPACE;\n  public static final ghidra.program.model.address.AddressSpace VARIABLE_SPACE;\n  public static final ghidra.program.model.address.AddressSpace HASH_SPACE;\n  public static final ghidra.program.model.address.AddressSpace DEFAULT_REGISTER_SPACE;\n  public abstract java.lang.String getName();\n  public abstract int getSpaceID();\n  public abstract int getSize();\n  public abstract int getAddressableUnitSize();\n  public abstract long getAddressableWordOffset(long);\n  public abstract int getPointerSize();\n  public abstract int getType();\n  public abstract int getUnique();\n  public abstract ghidra.program.model.address.Address getAddress(java.lang.String) throws ghidra.program.model.address.AddressFormatException;\n  public abstract ghidra.program.model.address.Address getAddress(java.lang.String, boolean) throws ghidra.program.model.address.AddressFormatException;\n  public abstract ghidra.program.model.address.Address getAddress(long) throws ghidra.program.model.address.AddressOutOfBoundsException;\n  public abstract ghidra.program.model.address.Address getAddress(long, boolean) throws ghidra.program.model.address.AddressOutOfBoundsException;\n  public abstract ghidra.program.model.address.Address getTruncatedAddress(long, boolean);\n  public abstract ghidra.program.model.address.Address getAddressInThisSpaceOnly(long) throws ghidra.program.model.address.AddressOutOfBoundsException;\n  public abstract long truncateOffset(long);\n  public abstract long truncateAddressableWordOffset(long);\n  public abstract ghidra.program.model.address.Address getOverlayAddress(ghidra.program.model.address.Address);\n  public abstract long subtract(ghidra.program.model.address.Address, ghidra.program.model.address.Address);\n  public abstract ghidra.program.model.address.Address subtractWrap(ghidra.program.model.address.Address, long);\n  public abstract ghidra.program.model.address.Address subtractWrapSpace(ghidra.program.model.address.Address, long);\n  public abstract ghidra.program.model.address.Address subtractNoWrap(ghidra.program.model.address.Address, long) throws ghidra.program.model.address.AddressOverflowException;\n  public abstract ghidra.program.model.address.Address subtract(ghidra.program.model.address.Address, long);\n  public abstract ghidra.program.model.address.Address addWrap(ghidra.program.model.address.Address, long);\n  public abstract ghidra.program.model.address.Address addWrapSpace(ghidra.program.model.address.Address, long);\n  public abstract ghidra.program.model.address.Address addNoWrap(ghidra.program.model.address.Address, long) throws ghidra.program.model.address.AddressOverflowException;\n  public abstract ghidra.program.model.address.Address addNoWrap(ghidra.program.model.address.GenericAddress, java.math.BigInteger) throws ghidra.program.model.address.AddressOverflowException;\n  public abstract ghidra.program.model.address.Address add(ghidra.program.model.address.Address, long) throws ghidra.program.model.address.AddressOutOfBoundsException;\n  public abstract boolean isValidRange(long, long);\n  public abstract boolean isSuccessor(ghidra.program.model.address.Address, ghidra.program.model.address.Address);\n  public abstract ghidra.program.model.address.Address getMaxAddress();\n  public abstract ghidra.program.model.address.Address getMinAddress();\n  public abstract ghidra.program.model.address.AddressSpace getPhysicalSpace();\n  public abstract long makeValidOffset(long) throws ghidra.program.model.address.AddressOutOfBoundsException;\n  public abstract boolean isMemorySpace();\n  public abstract boolean isLoadedMemorySpace();\n  public abstract boolean isNonLoadedMemorySpace();\n  public abstract boolean isRegisterSpace();\n  public abstract boolean isVariableSpace();\n  public abstract boolean isStackSpace();\n  public abstract boolean isHashSpace();\n  public abstract boolean isExternalSpace();\n  public abstract boolean isUniqueSpace();\n  public abstract boolean isConstantSpace();\n  public abstract boolean hasMappedRegisters();\n  public abstract boolean showSpaceName();\n  public abstract boolean isOverlaySpace();\n  public abstract boolean hasSignedOffset();\n  public static boolean isValidName(java.lang.String);\n  static {};\n}\nCompiled from \"Language.java\"\npublic interface ghidra.program.model.lang.Language {\n  public abstract ghidra.program.model.lang.LanguageID getLanguageID();\n  public abstract ghidra.program.model.lang.LanguageDescription getLanguageDescription();\n  public abstract ghidra.program.model.lang.ParallelInstructionLanguageHelper getParallelInstructionHelper();\n  public abstract ghidra.program.model.lang.Processor getProcessor();\n  public abstract int getVersion();\n  public abstract int getMinorVersion();\n  public abstract ghidra.program.model.address.AddressFactory getAddressFactory();\n  public abstract ghidra.program.model.address.AddressSpace getDefaultSpace();\n  public abstract ghidra.program.model.address.AddressSpace getDefaultDataSpace();\n  public abstract boolean isBigEndian();\n  public abstract int getInstructionAlignment();\n  public abstract boolean supportsPcode();\n  public abstract boolean isVolatile(ghidra.program.model.address.Address);\n  public abstract ghidra.program.model.lang.InstructionPrototype parse(ghidra.program.model.mem.MemBuffer, ghidra.program.model.lang.ProcessorContext, boolean) throws ghidra.program.model.lang.InsufficientBytesException, ghidra.program.model.lang.UnknownInstructionException;\n  public abstract int getNumberOfUserDefinedOpNames();\n  public abstract java.lang.String getUserDefinedOpName(int);\n  public abstract ghidra.program.model.lang.Register[] getRegisters(ghidra.program.model.address.Address);\n  public abstract ghidra.program.model.lang.Register getRegister(ghidra.program.model.address.AddressSpace, long, int);\n  public abstract java.util.List<ghidra.program.model.lang.Register> getRegisters();\n  public abstract java.util.List<java.lang.String> getRegisterNames();\n  public abstract ghidra.program.model.lang.Register getRegister(java.lang.String);\n  public abstract ghidra.program.model.lang.Register getRegister(ghidra.program.model.address.Address, int);\n  public abstract ghidra.program.model.lang.Register getProgramCounter();\n  public abstract ghidra.program.model.lang.Register getContextBaseRegister();\n  public abstract java.util.List<ghidra.program.model.lang.Register> getContextRegisters();\n  public abstract ghidra.app.plugin.processors.generic.MemoryBlockDefinition[] getDefaultMemoryBlocks();\n  public abstract java.util.List<ghidra.program.model.lang.AddressLabelInfo> getDefaultSymbols();\n  public abstract java.lang.String getSegmentedSpace();\n  public abstract ghidra.program.model.address.AddressSetView getVolatileAddresses();\n  public abstract void applyContextSettings(ghidra.program.model.listing.DefaultProgramContext);\n  public abstract void reloadLanguage(ghidra.util.task.TaskMonitor) throws java.io.IOException;\n  public abstract java.util.List<ghidra.program.model.lang.CompilerSpecDescription> getCompatibleCompilerSpecDescriptions();\n  public abstract ghidra.program.model.lang.CompilerSpec getCompilerSpecByID(ghidra.program.model.lang.CompilerSpecID) throws ghidra.program.model.lang.CompilerSpecNotFoundException;\n  public abstract ghidra.program.model.lang.CompilerSpec getDefaultCompilerSpec();\n  public abstract boolean hasProperty(java.lang.String);\n  public abstract int getPropertyAsInt(java.lang.String, int);\n  public abstract boolean getPropertyAsBoolean(java.lang.String, boolean);\n  public abstract java.lang.String getProperty(java.lang.String, java.lang.String);\n  public abstract java.lang.String getProperty(java.lang.String);\n  public abstract java.util.Set<java.lang.String> getPropertyKeys();\n  public abstract boolean hasManual();\n  public abstract ghidra.util.ManualEntry getManualEntry(java.lang.String);\n  public abstract java.util.Set<java.lang.String> getManualInstructionMnemonicKeys();\n  public abstract java.lang.Exception getManualException();\n  public abstract java.util.List<ghidra.program.model.lang.Register> getSortedVectorRegisters();\n  public abstract ghidra.program.model.address.AddressSetView getRegisterAddresses();\n  public abstract java.util.OptionalInt getMaximumInstructionLength();\n}\nCompiled from \"InstructionPrototype.java\"\npublic interface ghidra.program.model.lang.InstructionPrototype {\n  public static final int INVALID_DEPTH_CHANGE;\n  public abstract ghidra.program.model.lang.ParserContext getParserContext(ghidra.program.model.mem.MemBuffer, ghidra.program.model.lang.ProcessorContextView) throws ghidra.program.model.mem.MemoryAccessException;\n  public abstract ghidra.program.model.lang.ParserContext getPseudoParserContext(ghidra.program.model.address.Address, ghidra.program.model.mem.MemBuffer, ghidra.program.model.lang.ProcessorContextView) throws ghidra.program.model.lang.InsufficientBytesException, ghidra.program.model.lang.UnknownInstructionException, ghidra.program.model.lang.UnknownContextException, ghidra.program.model.mem.MemoryAccessException;\n  public abstract boolean hasDelaySlots();\n  public abstract boolean hasCrossBuildDependency();\n  public abstract boolean hasNext2Dependency();\n  public abstract java.lang.String getMnemonic(ghidra.program.model.lang.InstructionContext);\n  public abstract int getLength();\n  public abstract ghidra.program.model.lang.Mask getInstructionMask();\n  public abstract ghidra.program.model.lang.Mask getOperandValueMask(int);\n  public abstract ghidra.program.model.symbol.FlowType getFlowType(ghidra.program.model.lang.InstructionContext);\n  public abstract int getDelaySlotDepth(ghidra.program.model.lang.InstructionContext);\n  public abstract int getDelaySlotByteCount();\n  public abstract boolean isInDelaySlot();\n  public abstract int getNumOperands();\n  public abstract int getOpType(int, ghidra.program.model.lang.InstructionContext);\n  public abstract ghidra.program.model.address.Address getFallThrough(ghidra.program.model.lang.InstructionContext);\n  public abstract int getFallThroughOffset(ghidra.program.model.lang.InstructionContext);\n  public abstract ghidra.program.model.address.Address[] getFlows(ghidra.program.model.lang.InstructionContext);\n  public abstract java.lang.String getSeparator(int);\n  public abstract java.util.ArrayList<java.lang.Object> getOpRepresentationList(int, ghidra.program.model.lang.InstructionContext);\n  public abstract ghidra.program.model.address.Address getAddress(int, ghidra.program.model.lang.InstructionContext);\n  public abstract ghidra.program.model.lang.Register getRegister(int, ghidra.program.model.lang.InstructionContext);\n  public abstract ghidra.program.model.scalar.Scalar getScalar(int, ghidra.program.model.lang.InstructionContext);\n  public abstract java.lang.Object[] getOpObjects(int, ghidra.program.model.lang.InstructionContext);\n  public abstract ghidra.program.model.symbol.RefType getOperandRefType(int, ghidra.program.model.lang.InstructionContext, ghidra.program.model.pcode.PcodeOverride);\n  public abstract boolean hasDelimeter(int);\n  public abstract java.lang.Object[] getInputObjects(ghidra.program.model.lang.InstructionContext);\n  public abstract java.lang.Object[] getResultObjects(ghidra.program.model.lang.InstructionContext);\n  public abstract ghidra.program.model.pcode.PcodeOp[] getPcode(ghidra.program.model.lang.InstructionContext, ghidra.program.model.pcode.PcodeOverride);\n  public abstract void getPcodePacked(ghidra.program.model.pcode.PatchEncoder, ghidra.program.model.lang.InstructionContext, ghidra.program.model.pcode.PcodeOverride) throws java.io.IOException;\n  public abstract ghidra.program.model.pcode.PcodeOp[] getPcode(ghidra.program.model.lang.InstructionContext, int);\n  public abstract ghidra.program.model.lang.Language getLanguage();\n}\nCompiled from \"PseudoInstruction.java\"\npublic class ghidra.app.util.PseudoInstruction extends ghidra.app.util.PseudoCodeUnit implements ghidra.program.model.listing.Instruction,ghidra.program.model.lang.InstructionContext {\n  public ghidra.app.util.PseudoInstruction(ghidra.program.model.listing.Program, ghidra.program.model.address.Address, ghidra.program.model.lang.InstructionPrototype, ghidra.program.model.mem.MemBuffer, ghidra.program.model.lang.ProcessorContext) throws ghidra.program.model.address.AddressOverflowException;\n  public ghidra.app.util.PseudoInstruction(ghidra.program.model.address.AddressFactory, ghidra.program.model.address.Address, ghidra.program.model.lang.InstructionPrototype, ghidra.program.model.mem.MemBuffer, ghidra.program.model.lang.ProcessorContext) throws ghidra.program.model.address.AddressOverflowException;\n  public ghidra.app.util.PseudoInstruction(ghidra.program.model.address.Address, ghidra.program.model.lang.InstructionPrototype, ghidra.program.model.mem.MemBuffer, ghidra.program.model.lang.ProcessorContext) throws ghidra.program.model.address.AddressOverflowException;\n  public synchronized java.lang.Byte getRepeatedByte();\n  public int getParsedLength();\n  public byte[] getParsedBytes() throws ghidra.program.model.mem.MemoryAccessException;\n  public ghidra.program.model.lang.Register getBaseContextRegister();\n  public ghidra.program.model.symbol.Reference[] getOperandReferences(int);\n  public boolean equals(java.lang.Object);\n  public ghidra.program.model.lang.InstructionPrototype getPrototype();\n  public java.lang.String getMnemonicString();\n  public int getNumOperands();\n  public ghidra.program.model.address.Address getAddress(int);\n  public ghidra.program.model.scalar.Scalar getScalar(int);\n  public ghidra.program.model.lang.Register getRegister(int);\n  public java.lang.Object[] getOpObjects(int);\n  public java.lang.Object[] getInputObjects();\n  public java.lang.Object[] getResultObjects();\n  public java.lang.String getDefaultOperandRepresentation(int);\n  public java.util.List<java.lang.Object> getDefaultOperandRepresentationList(int);\n  public int getOperandType(int);\n  public ghidra.program.model.symbol.RefType getOperandRefType(int);\n  public ghidra.program.model.address.Address getFallThrough();\n  public int getDefaultFallThroughOffset();\n  public ghidra.program.model.address.Address getDefaultFallThrough();\n  public ghidra.program.model.address.Address getFallFrom();\n  public ghidra.program.model.address.Address[] getFlows();\n  public ghidra.program.model.address.Address[] getDefaultFlows();\n  public ghidra.program.model.symbol.FlowType getFlowType();\n  public ghidra.program.model.pcode.PcodeOp[] getPcode();\n  public ghidra.program.model.pcode.PcodeOp[] getPcode(boolean);\n  public ghidra.program.model.pcode.PcodeOp[] getPcode(int);\n  public int getDelaySlotDepth();\n  public boolean isInDelaySlot();\n  public ghidra.program.model.listing.Instruction getNext();\n  public ghidra.program.model.listing.Instruction getPrevious();\n  public java.lang.String toString();\n  public void clearFallThroughOverride();\n  public void setFallThrough(ghidra.program.model.address.Address);\n  public ghidra.program.model.listing.FlowOverride getFlowOverride();\n  public void setFlowOverride(ghidra.program.model.listing.FlowOverride);\n  public void setLengthOverride(int);\n  public boolean isLengthOverridden();\n  public boolean isFallThroughOverridden();\n  public boolean hasFallthrough();\n  public boolean isFallthrough();\n  public java.lang.String getSeparator(int);\n  public boolean hasValue(ghidra.program.model.lang.Register);\n  public java.math.BigInteger getValue(ghidra.program.model.lang.Register, boolean);\n  public ghidra.program.model.lang.RegisterValue getRegisterValue(ghidra.program.model.lang.Register);\n  public ghidra.program.model.lang.Register getRegister(java.lang.String);\n  public java.util.List<ghidra.program.model.lang.Register> getRegisters();\n  public void setValue(ghidra.program.model.lang.Register, java.math.BigInteger) throws ghidra.program.model.listing.ContextChangeException;\n  public void setRegisterValue(ghidra.program.model.lang.RegisterValue) throws ghidra.program.model.listing.ContextChangeException;\n  public void clearRegister(ghidra.program.model.lang.Register) throws ghidra.program.model.listing.ContextChangeException;\n  public ghidra.program.model.lang.ProcessorContextView getProcessorContext();\n  public ghidra.program.model.mem.MemBuffer getMemBuffer();\n  public ghidra.program.model.lang.ParserContext getParserContext() throws ghidra.program.model.mem.MemoryAccessException;\n  public ghidra.program.model.lang.ParserContext getParserContext(ghidra.program.model.address.Address) throws ghidra.program.model.lang.UnknownContextException, ghidra.program.model.mem.MemoryAccessException;\n  public ghidra.program.model.lang.InstructionContext getInstructionContext();\n  public void setInstructionBlock(ghidra.program.model.lang.InstructionBlock);\n  public int hashCode();\n  public ghidra.program.model.listing.Program getProgram();\n  public ghidra.program.model.symbol.ReferenceIterator getReferenceIteratorTo();\n  public void removeExternalReference(int);\n  public ghidra.program.model.symbol.ExternalReference getExternalReference(int);\n  public void removeStackReference(int);\n  public ghidra.program.model.symbol.StackReference getStackReference(int);\n  public void setPrimaryMemoryReference(ghidra.program.model.symbol.Reference);\n  public ghidra.program.model.symbol.Reference getPrimaryReference(int);\n  public void setRegisterReference(int, ghidra.program.model.lang.Register, ghidra.program.model.symbol.SourceType, ghidra.program.model.symbol.RefType);\n  public void setStackReference(int, int, ghidra.program.model.symbol.SourceType, ghidra.program.model.symbol.RefType);\n  public void setMemoryReference(int, ghidra.program.model.address.Address, ghidra.program.model.symbol.RefType);\n  public void setExternalReference(ghidra.program.model.symbol.Reference);\n  public ghidra.program.model.symbol.Reference[] getReferencesFrom();\n  public void removeOperandReference(int, ghidra.program.model.address.Address);\n  public void addOperandReference(int, ghidra.program.model.address.Address, ghidra.program.model.symbol.RefType, ghidra.program.model.symbol.SourceType);\n  public void removeMnemonicReference(ghidra.program.model.address.Address);\n  public ghidra.program.model.symbol.Reference[] getMnemonicReferences();\n  public void addMnemonicReference(ghidra.program.model.address.Address, ghidra.program.model.symbol.RefType, ghidra.program.model.symbol.SourceType);\n  public ghidra.program.model.mem.Memory getMemory();\n  public ghidra.program.model.address.Address getAddress();\n  public byte getByte(int) throws ghidra.program.model.mem.MemoryAccessException;\n  public int compareTo(ghidra.program.model.address.Address);\n  public boolean contains(ghidra.program.model.address.Address);\n  public void setComment(ghidra.program.model.listing.CommentType, java.lang.String);\n  public void setCommentAsArray(ghidra.program.model.listing.CommentType, java.lang.String[]);\n  public java.lang.String[] getCommentAsArray(ghidra.program.model.listing.CommentType);\n  public java.lang.String getComment(ghidra.program.model.listing.CommentType);\n  public ghidra.program.model.listing.CodeUnit getPreviousCodeUnit();\n  public ghidra.program.model.listing.CodeUnit getNextCodeUnit();\n  public ghidra.program.model.address.Address getMaxAddress();\n  public ghidra.program.model.address.Address getMinAddress();\n  public ghidra.program.model.symbol.Symbol getPrimarySymbol();\n  public ghidra.program.model.symbol.Symbol[] getSymbols();\n  public java.lang.String getLabel();\n  public void removeProperty(java.lang.String);\n  public java.util.Iterator propertyNames();\n  public boolean getVoidProperty(java.lang.String);\n  public boolean hasProperty(java.lang.String);\n  public int getIntProperty(java.lang.String) throws ghidra.util.exception.NoValueException;\n  public java.lang.String getStringProperty(java.lang.String);\n  public ghidra.util.Saveable getObjectProperty(java.lang.String);\n  public void setProperty(java.lang.String);\n  public void setProperty(java.lang.String, int);\n  public void setProperty(java.lang.String, java.lang.String);\n  public void setProperty(java.lang.String, ghidra.util.Saveable);\n  public java.math.BigInteger getBigInteger(int, int, boolean) throws ghidra.program.model.mem.MemoryAccessException;\n  public long getLong(int) throws ghidra.program.model.mem.MemoryAccessException;\n  public int getInt(int) throws ghidra.program.model.mem.MemoryAccessException;\n  public short getShort(int) throws ghidra.program.model.mem.MemoryAccessException;\n  public boolean isBigEndian();\n  public void getBytesInCodeUnit(byte[], int) throws ghidra.program.model.mem.MemoryAccessException;\n  public int getBytes(byte[], int);\n  public byte[] getBytes() throws ghidra.program.model.mem.MemoryAccessException;\n  public java.lang.String getAddressString(boolean, boolean);\n  public boolean isValid();\n  public void invalidate();\n  static {};\n}\nCompiled from \"Disassembler.java\"\npublic class ghidra.program.disassemble.Disassembler implements ghidra.program.disassemble.DisassemblerConflictHandler {\n  public static final java.lang.String MARK_BAD_INSTRUCTION_PROPERTY;\n  public static final java.lang.String MARK_UNIMPL_PCODE_PROPERTY;\n  public static final java.lang.String RESTRICT_DISASSEMBLY_TO_EXECUTE_MEMORY_PROPERTY;\n  public static final java.lang.String ERROR_BOOKMARK_CATEGORY;\n  public static final java.lang.String UNIMPL_BOOKMARK_CATEGORY;\n  public static final int MAX_REPEAT_PATTERN_LENGTH;\n  protected final ghidra.program.model.lang.Language language;\n  protected final ghidra.program.model.address.AddressFactory addrFactory;\n  protected final ghidra.program.model.lang.Register baseContextRegister;\n  protected final ghidra.program.model.lang.ParallelInstructionLanguageHelper parallelHelper;\n  protected ghidra.program.disassemble.Disassembler$DisassemblerProgramContext disassemblerProgramContext;\n  protected ghidra.program.disassemble.DisassemblerContextImpl disassemblerContext;\n  int instAlignment;\n  protected ghidra.program.model.listing.BookmarkManager bmMgr;\n  protected boolean doMarkBadInstructions;\n  public static ghidra.program.disassemble.Disassembler getDisassembler(ghidra.program.model.listing.Program, ghidra.util.task.TaskMonitor, ghidra.program.disassemble.DisassemblerMessageListener);\n  public static ghidra.program.disassemble.Disassembler getDisassembler(ghidra.program.model.lang.Language, ghidra.program.model.address.AddressFactory, ghidra.util.task.TaskMonitor, ghidra.program.disassemble.DisassemblerMessageListener);\n  public static ghidra.program.disassemble.Disassembler getDisassembler(ghidra.program.model.listing.Program, boolean, boolean, boolean, ghidra.util.task.TaskMonitor, ghidra.program.disassemble.DisassemblerMessageListener);\n  protected ghidra.program.disassemble.Disassembler(ghidra.program.model.listing.Program, ghidra.util.task.TaskMonitor, ghidra.program.disassemble.DisassemblerMessageListener);\n  protected ghidra.program.disassemble.Disassembler(ghidra.program.model.lang.Language, ghidra.program.model.address.AddressFactory, ghidra.util.task.TaskMonitor, ghidra.program.disassemble.DisassemblerMessageListener);\n  protected ghidra.program.disassemble.Disassembler(ghidra.program.model.listing.Program, boolean, boolean, boolean, ghidra.util.task.TaskMonitor, ghidra.program.disassemble.DisassemblerMessageListener);\n  public void setSeedContext(ghidra.program.disassemble.DisassemblerContextImpl);\n  void setInstructionSetSizeLimit(int);\n  public void setRepeatPatternLimit(int);\n  public void setRepeatPatternLimitIgnored(ghidra.program.model.address.AddressSetView);\n  public static boolean isMarkBadDisassemblyOptionEnabled(ghidra.program.model.listing.Program);\n  public static boolean isMarkUnimplementedPcodeOptionEnabled(ghidra.program.model.listing.Program);\n  public static boolean isRestrictToExecuteMemory(ghidra.program.model.listing.Program);\n  public ghidra.program.model.address.AddressSet disassemble(ghidra.program.model.address.AddressSetView, ghidra.program.model.address.AddressSetView, boolean);\n  public ghidra.program.model.address.AddressSet disassemble(ghidra.program.model.address.AddressSetView, ghidra.program.model.address.AddressSetView, ghidra.program.model.lang.RegisterValue, boolean);\n  public ghidra.program.model.address.AddressSet disassemble(ghidra.program.model.address.Address, ghidra.program.model.address.AddressSetView);\n  public ghidra.program.model.address.AddressSet disassemble(ghidra.program.model.address.Address, ghidra.program.model.address.AddressSetView, boolean);\n  public ghidra.program.model.address.AddressSet disassemble(ghidra.program.model.address.Address, ghidra.program.model.address.AddressSetView, ghidra.program.model.lang.RegisterValue, boolean);\n  public void resetDisassemblerContext();\n  public ghidra.program.model.lang.InstructionBlock pseudoDisassembleBlock(ghidra.program.model.address.Address, ghidra.program.model.lang.RegisterValue, int);\n  public ghidra.program.model.lang.InstructionBlock pseudoDisassembleBlock(ghidra.program.model.mem.MemBuffer, ghidra.program.model.lang.RegisterValue, int);\n  protected void disassembleInstructionBlock(ghidra.program.model.lang.InstructionBlock, ghidra.program.model.mem.MemBuffer, ghidra.program.model.address.Address, int, ghidra.program.model.lang.InstructionSet, boolean);\n  protected void blockTerminated(ghidra.program.model.lang.InstructionBlock);\n  protected ghidra.program.model.lang.InstructionPrototype parseInstructionPrototype(ghidra.program.model.mem.MemBuffer, ghidra.program.model.lang.InstructionBlock) throws ghidra.program.model.lang.InsufficientBytesException, ghidra.program.model.lang.UnknownInstructionException;\n  protected ghidra.program.model.lang.ProcessorContext getProcessorContext(ghidra.program.model.address.Address, int, ghidra.program.model.lang.RegisterValue);\n  protected boolean isBlockTerminationOK(ghidra.program.model.listing.Instruction);\n  protected ghidra.program.model.address.Address processInstruction(ghidra.app.util.PseudoInstruction, ghidra.program.model.mem.MemBuffer, ghidra.program.model.lang.InstructionBlock, ghidra.program.model.lang.InstructionSet) throws ghidra.program.model.lang.InsufficientBytesException, ghidra.program.model.lang.UnknownInstructionException, ghidra.program.model.address.AddressOverflowException, ghidra.program.model.lang.NestedDelaySlotException;\n  public void markInstructionError(ghidra.program.model.lang.InstructionError);\n  public static void markUnimplementedPcode(ghidra.program.model.listing.Program, ghidra.program.model.address.AddressSetView, ghidra.util.task.TaskMonitor) throws ghidra.util.exception.CancelledException;\n  public static void clearUnimplementedPcodeWarnings(ghidra.program.model.listing.Program, ghidra.program.model.address.AddressSetView, ghidra.util.task.TaskMonitor) throws ghidra.util.exception.CancelledException;\n  public static void clearBadInstructionErrors(ghidra.program.model.listing.Program, ghidra.program.model.address.AddressSetView, ghidra.util.task.TaskMonitor) throws ghidra.util.exception.CancelledException;\n}\nCompiled from \"CreateFunctionCmd.java\"\npublic class ghidra.app.cmd.function.CreateFunctionCmd extends ghidra.framework.cmd.BackgroundCommand<ghidra.program.model.listing.Program> {\n  public ghidra.app.cmd.function.CreateFunctionCmd(java.lang.String, ghidra.program.model.address.AddressSetView, ghidra.program.model.address.AddressSetView, ghidra.program.model.symbol.SourceType, boolean, boolean);\n  public ghidra.app.cmd.function.CreateFunctionCmd(java.lang.String, ghidra.program.model.address.Address, ghidra.program.model.address.AddressSetView, ghidra.program.model.symbol.SourceType, boolean, boolean);\n  public ghidra.app.cmd.function.CreateFunctionCmd(ghidra.program.model.address.AddressSetView, boolean);\n  public ghidra.app.cmd.function.CreateFunctionCmd(ghidra.program.model.address.AddressSetView);\n  public ghidra.app.cmd.function.CreateFunctionCmd(ghidra.program.model.address.AddressSetView, ghidra.program.model.symbol.SourceType);\n  public ghidra.app.cmd.function.CreateFunctionCmd(java.lang.String, ghidra.program.model.address.Address, ghidra.program.model.address.AddressSetView, ghidra.program.model.symbol.SourceType);\n  ghidra.app.cmd.function.CreateFunctionCmd(ghidra.program.model.address.Address, java.util.List<ghidra.program.model.address.Address>);\n  public ghidra.app.cmd.function.CreateFunctionCmd(ghidra.program.model.address.Address);\n  public ghidra.app.cmd.function.CreateFunctionCmd(ghidra.program.model.address.Address, boolean);\n  public boolean applyTo(ghidra.program.model.listing.Program, ghidra.util.task.TaskMonitor);\n  public ghidra.program.model.listing.Function getFunction();\n  public static ghidra.program.model.address.AddressSetView getFunctionBody(ghidra.util.task.TaskMonitor, ghidra.program.model.listing.Program, ghidra.program.model.address.Address);\n  public static ghidra.program.model.address.AddressSetView getFunctionBody(ghidra.program.model.listing.Program, ghidra.program.model.address.Address);\n  public static ghidra.program.model.address.AddressSetView getFunctionBody(ghidra.program.model.listing.Program, ghidra.program.model.address.Address, ghidra.util.task.TaskMonitor);\n  public static ghidra.program.model.address.AddressSetView getFunctionBody(ghidra.program.model.listing.Program, ghidra.program.model.address.Address, boolean, ghidra.util.task.TaskMonitor);\n  public static boolean fixupFunctionBody(ghidra.program.model.listing.Program, ghidra.program.model.listing.Instruction, ghidra.util.task.TaskMonitor) throws ghidra.util.exception.CancelledException;\n  public static boolean fixupFunctionBody(ghidra.program.model.listing.Program, ghidra.program.model.listing.Function, ghidra.util.task.TaskMonitor) throws ghidra.util.exception.CancelledException;\n  public boolean applyTo(ghidra.framework.model.DomainObject, ghidra.util.task.TaskMonitor);\n}\n",
+    "compile.stderr": "",
+    "compile.stdout": "",
+    "jdk-version.stderr": "openjdk version \"27\" 2026-09-15\nOpenJDK Runtime Environment Homebrew (build 27)\nOpenJDK 64-Bit Server VM Homebrew (build 27, mixed mode, sharing)\n",
+    "jdk-version.stdout": "",
+    "oracle.stderr": "",
+    "oracle.stdout": ""
+  },
+  "inputs_before": {
+    "source/SleighOracle.java": {
+      "bytes": 13809,
+      "sha256": "2e753a65f8ef74218714f8ba0882153e48ec4d91dbd8693649e7aeaa2610046c"
+    },
+    "source/run_oracle.py": {
+      "bytes": 12911,
+      "sha256": "2925a477ea436a02c71769cd3815d1b86a42ec13bb2f5f88d29a8dec17e864f8"
+    },
+    "sdk/Ghidra/Framework/Utility/lib/Utility.jar": {
+      "bytes": 155905,
+      "sha256": "0a03d2df1aac91910d69087867dfe799437fe56733ce9bcb2a5c9682956c3c0e"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/Generic.jar": {
+      "bytes": 914340,
+      "sha256": "5a634b21e4774faeef201d0f4f1615247410496a0440cf5a8fe46ecfa667a98a"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar": {
+      "bytes": 4703160,
+      "sha256": "7eeaa6286a36c425eaacfa73a503d286ae4df0fecce1fc9f9d0a84cead2d827f"
+    },
+    "sdk/Ghidra/Features/Base/lib/Base.jar": {
+      "bytes": 23105938,
+      "sha256": "3d3c7e1d9f1ec546f743ed6907cdceda41d30bfb339a4d8ec15e20e1e4ce23be"
+    },
+    "sdk/Ghidra/Framework/Docking/lib/Docking.jar": {
+      "bytes": 3203263,
+      "sha256": "49dd4e749df9d97b85a3d833034e3551df20860fb7b58950b74dab9473c51fc1"
+    },
+    "sdk/Ghidra/Framework/Project/lib/Project.jar": {
+      "bytes": 1340316,
+      "sha256": "6fea242d67cf4bc4e4931e3c5e8eca0557d8f7a82819e2626d1caf6949a7622e"
+    },
+    "sdk/Ghidra/Framework/DB/lib/DB.jar": {
+      "bytes": 297846,
+      "sha256": "1e14e301a4d4d731227a6e132db11c6d72de9c831afa51a2d0a51ff98bef0ad8"
+    },
+    "sdk/Ghidra/Framework/Gui/lib/Gui.jar": {
+      "bytes": 511280,
+      "sha256": "9684edeb695a9fac0dc574a19af3acc39dcb4f5e910f2449b63936afe9547c92"
+    },
+    "sdk/Ghidra/Framework/FileSystem/lib/FileSystem.jar": {
+      "bytes": 267444,
+      "sha256": "e5cb038806fb16756348e2a13075e18f0695b0d5e7dbc3bfb1bdadc23e2ed4bc"
+    },
+    "sdk/Ghidra/Framework/Graph/lib/Graph.jar": {
+      "bytes": 471054,
+      "sha256": "aba50064c9876a0f0f6740abfaab33770e57a8cee18cff7e89518fa3334e1386"
+    },
+    "sdk/Ghidra/Framework/Help/lib/javahelp-2.0.05.jar": {
+      "bytes": 562749,
+      "sha256": "fcf4922d38ff85184f1d2328317bb60826e14da948abd606ee3d5b8c6a70debd"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/gson-2.13.2.jar": {
+      "bytes": 289901,
+      "sha256": "dd0ce1b55a3ed2080cb70f9c655850cda86c206862310009dcb5e5c95265a5e0"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/jdom2-2.0.6.1.jar": {
+      "bytes": 327806,
+      "sha256": "0b20f45e3a0fd8f0d12cdc5316b06776e902b1365db00118876f9175c60f302c"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/commons-lang3-3.20.0.jar": {
+      "bytes": 713862,
+      "sha256": "69e5c9fa35da7a51a5fd2099dfe56a2d8d32cf233e2f6d770e796146440263f4"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/commons-collections4-4.6.0.jar": {
+      "bytes": 934384,
+      "sha256": "4e0d0896bac5356cead277bac0283f09813e14417e3e84e0c86b573b54d218a3"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/guava-32.1.3-jre.jar": {
+      "bytes": 3043932,
+      "sha256": "6d4e2b5a118aab62e6e5e29d185a0224eed82c85c40ac3d33cf04a270c3b3744"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/failureaccess-1.0.1.jar": {
+      "bytes": 4617,
+      "sha256": "a171ee4c734dd2da837e4b16be9df4661afab72a41adaf31eb84dfdaf936ca26"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/log4j-api-2.26.1.jar": {
+      "bytes": 351428,
+      "sha256": "f1810a4704ccce019d02bba029dc02a4f2ac0c997f647b465e7d409c1927f822"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/log4j-core-2.26.1.jar": {
+      "bytes": 2015459,
+      "sha256": "2ec8c3bf5a6d7c89be8620116a2fc973f7dda1ad0261ad393c4d4726edfd3dcb"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/isorelax-20050913.jar": {
+      "bytes": 192602,
+      "sha256": "3427152431cf7f967f92e69e5cac16147c5d8fb4b4e5a8a72f5291788efcff8c"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/msv-20050913.jar": {
+      "bytes": 667496,
+      "sha256": "14be3a550e508433b4fe10775d540e9eb58b3ef04ed7456bc7c7d285c90c87a2"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/relaxngDatatype-20050913.jar": {
+      "bytes": 19097,
+      "sha256": "4d45a93eb5cdc32631966673c954b83fc9b60a0681bbddcefa2c4976d04cddf2"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/xsdlib-20050913.jar": {
+      "bytes": 146996,
+      "sha256": "6b8efa18ff570c0916da702c46906b9e8a139e1c05dbf1e4d8bdeba244c1b2b3"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/antlr-runtime-3.5.2.jar": {
+      "bytes": 167761,
+      "sha256": "ce3fc8ecb10f39e9a3cddcbb2ce350d272d9cd3d0b1e18e6fe73c3b9389c8734"
+    },
+    "sdk/Ghidra/application.properties": {
+      "bytes": 432,
+      "sha256": "19a74006a0351da7da1a8ee00ea0e864e672b1cb0c6e7132cdd210c9d672868c"
+    },
+    "sdk/LICENSE": {
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling-src.zip": {
+      "bytes": 3407298,
+      "sha256": "84b0fb7f385090f109325977aceb2193f5c6d963077895284b0d79c106715a28"
+    },
+    "sdk/Ghidra/Features/Base/lib/Base-src.zip": {
+      "bytes": 7481132,
+      "sha256": "c951689c9001158cfab8d6b06b896bcd89e4aed762cb3187f231e6e13051ab97"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.cspec": {
+      "bytes": 893,
+      "sha256": "9f60d6f843a9fdd6518d3cd12d1455d08d91b3a174bc611722bbd01eda11a337"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.ldefs": {
+      "bytes": 1049,
+      "sha256": "146fd35e3c457cdecb5e63ae2e8db4566acdffb7e5693d2ccece3f639b70ae42"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.pspec": {
+      "bytes": 604,
+      "sha256": "acf7be1dd5788eb6a800c81c96950512777cfb11219f0aa0d368315d2e9efb9f"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.sla": {
+      "bytes": 5094,
+      "sha256": "6e9528e7f417b815f7dfdaaec357a5ebd975525e31c4d7c456694c1e99743d92"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.slaspec": {
+      "bytes": 8059,
+      "sha256": "d1a81dec7ac95814bd6636a4db27c07c38d3469bf0dd69ff924e56dd15b7d50d"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/65c02.sla": {
+      "bytes": 7060,
+      "sha256": "6995ea3f14fc851009924d69ab06d47fee611dca50614c7e6761f555d8fc5ac1"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/65c02.slaspec": {
+      "bytes": 4419,
+      "sha256": "36b55ba1cc13ed934cdacfaf2661224b6cbb4ef186d36364a99a4456b0a81f08"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/atmega256.pspec": {
+      "bytes": 19072,
+      "sha256": "bf6eaaee6cd3ebd0abb880db1737efb3139bca44dd6f64a5725611fab0972708"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32.opinion": {
+      "bytes": 309,
+      "sha256": "48d6c343347c3d387314e01d3f7491ebaa2ddd83ca5e934f3c54fc573bb210cb"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.cspec": {
+      "bytes": 1474,
+      "sha256": "839608f4393736782f801e474a6f5d31ec946dde7a02c8d274a1e96be67d490c"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.ldefs": {
+      "bytes": 566,
+      "sha256": "88fc21ba3a0167ade6776b28ecc382f2ec2f54e42cb12a23a33a18d7c439cbde"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.pspec": {
+      "bytes": 214,
+      "sha256": "1cef7127bb288d966b1911315e724b02da40374b23f0ae084afd5990392b35a4"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.sla": {
+      "bytes": 68945,
+      "sha256": "9633b6cbeee12b20b65723505bf2dbb70282fe8ab0acfaa25e9600e980334acb"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.slaspec": {
+      "bytes": 21461,
+      "sha256": "ebbf915efce83e896577c726100ed9870076c54406e74f66c61d9805df8cc0e4"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_arithmetic_operations.sinc": {
+      "bytes": 20959,
+      "sha256": "45738533b8eaea832765f42c52e2544064e840b2eaafcb49ebf9b6dfc650b634"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_autogen.sinc": {
+      "bytes": 43214,
+      "sha256": "516bf23cd9a8d5d23a7377646fa6217d30a61e8a1136e55b96bf70bd5d843d9b"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_bit_operations.sinc": {
+      "bytes": 9879,
+      "sha256": "2627e1b97519ca65bb5394694f844f3fce0a31d1b44926642c3936889ce039f9"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_coprocessor_interface.sinc": {
+      "bytes": 19876,
+      "sha256": "5037e1ca39b7249aed0aaec8609bdc905a35ee1a61d41b8b05eb26d3e7499cc3"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_data_transfer.sinc": {
+      "bytes": 40727,
+      "sha256": "ad712d7f713a68a7ad07a3a65da12f927d4eca6910ccb5ca8d19c32519311649"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_dsp_operations.sinc": {
+      "bytes": 43298,
+      "sha256": "21cf6e188f374091963c29fc0001b3dc35e62a24691da19b509af17594ed2f98"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_dsp_operations2.sinc": {
+      "bytes": 10829,
+      "sha256": "dc5cbfb2cca2198183769c7406126275ed7884d5dcf64789577d765129f59ac6"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_instruction_flow.sinc": {
+      "bytes": 7185,
+      "sha256": "f08109284833c186212bd32ef73e2f08ac9855e22db88f617f693f71f9796596"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_logic_operations.sinc": {
+      "bytes": 14048,
+      "sha256": "e0b23dc1de7824248789a6be4400b40682ee5039c6fa5e0fe580b01ef8d9a6e2"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_multiplication_operations.sinc": {
+      "bytes": 5679,
+      "sha256": "c4097d9d8c557dd425fd6cb5b85f7dbbb37bd7193fe1cda095d7309ba40a3cb9"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_shift_operations.sinc": {
+      "bytes": 4417,
+      "sha256": "bd251dc2cf7c9fba4e77a28c326b8c2431a6be3f1085821c9ee70ba5d58a1943"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_simd_operations.sinc": {
+      "bytes": 18819,
+      "sha256": "9b7c975ca1f25151c38e2e4804180d040dea0a768b99418ad8ac079b6604c727"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_system_control.sinc": {
+      "bytes": 2522,
+      "sha256": "342c16d661cb21903023ee622896709f29b6f9ccd5f1b5f5163c4b1fe936b742"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.ldefs": {
+      "bytes": 2403,
+      "sha256": "06f6f113118cd79998c954d7bb3ccdd6e9dcc39ca6968e2a07a5a66106da2d62"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.opinion": {
+      "bytes": 674,
+      "sha256": "fe00caa261416f0e8adb5ae4bb3bbd67ceee8bbd59de563b7ee3d2b1c7bd6030"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.pspec": {
+      "bytes": 7667,
+      "sha256": "d8d5d0f48cc01a4277fd51f924c451703868ab856c0cb00916a944c53be21f05"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.sinc": {
+      "bytes": 36286,
+      "sha256": "cc1c3c6e82fb3a61759dc4e7723307e25a1efa89cbe94126074e975380d25a77"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.sla": {
+      "bytes": 12044,
+      "sha256": "1d40b91a0a7dda1b64d79f7789fd6a1b46104b3c11f39ad8674f5c7091d65096"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.slaspec": {
+      "bytes": 110,
+      "sha256": "177d0eb7edc02e54ec493970234181d344b99d9242148585e91c8eac51242475"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8e.sla": {
+      "bytes": 12183,
+      "sha256": "1edd32e1ee11a0ec426546feac5166c396ea25af278aec562a702bb17743e3fd"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8e.slaspec": {
+      "bytes": 127,
+      "sha256": "c0c27cd95d662043ddee2af52b300e25b53a3d6e7ad87449aacc11f945f3e0d7"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8egcc.cspec": {
+      "bytes": 5116,
+      "sha256": "d3759ac7dd5a8f0fb3f3de4f53f0c242856601fcadf3e2982abd8718f3ffeb7e"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8eind.sla": {
+      "bytes": 12542,
+      "sha256": "029bcee102ac96a0e8d900dff30e350e3f61a06001e7d3a10f7c96af7c2fbca1"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8eind.slaspec": {
+      "bytes": 110,
+      "sha256": "3de9e0c4e1128861e84c4f1c39a841949a6c6afa9f5d674de4c0bc1d9011b31b"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8gcc.cspec": {
+      "bytes": 7825,
+      "sha256": "096951d1bd3e9adf3c204837f16c09f5fd6e85e6184abb8fc5efedda418b953d"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8iarV1.cspec": {
+      "bytes": 1585,
+      "sha256": "5ed81b9d957c64aecdda0d2a72dd43b3504bd05b47e5520f46ce3489592d0011"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8imgCraftV8.cspec": {
+      "bytes": 1194,
+      "sha256": "02a60d1369ced1207359b54600a82b421640663ab3079019c5f6e43cb24183d4"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8xmega.pspec": {
+      "bytes": 73107,
+      "sha256": "a9f794ab6b96b83512ee77e2d8d325200f02f770aeecee66de6cedf12e4c2cbc"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8xmega.sla": {
+      "bytes": 12543,
+      "sha256": "6b601650cba585aa5aa55cfb14114ef3dc103343a9b4e685a77c59d1104de0aa"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8xmega.slaspec": {
+      "bytes": 186,
+      "sha256": "451c950392290acffe5364448ace72178519f7de65be3e1dd99d5bc8c07bf3ba"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI430Common.sinc": {
+      "bytes": 80731,
+      "sha256": "646edf486a550bf28a7b08ab313d61304fb218c414bff6338b57c0c817ec80d8"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI430X.sinc": {
+      "bytes": 137019,
+      "sha256": "4c0e880b8c509214c97e490c223dfab5aafff68342359130f1edd236051c7912"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.cspec": {
+      "bytes": 2910,
+      "sha256": "06a84cbde2f1fdc4f3d3f42616ff2e4209ba4c34a22fd4e8bb0a280280b1df22"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.dwarf": {
+      "bytes": 336,
+      "sha256": "f8e11d8e36001048441fea1ce88a0f45c0ef47e50caa73ba217f2a9e14e043ea"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.ldefs": {
+      "bytes": 1361,
+      "sha256": "5861d8b71ca32d947bff0a407057ae3d9b4c5a5ce0cc7ee24b58156f1cdaddbc"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.pspec": {
+      "bytes": 11022,
+      "sha256": "a4c89cd36473c8f33f01e4db940cca18ceb5c5517141a173a3cc430bda6eae5c"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.sla": {
+      "bytes": 27382,
+      "sha256": "77784a481bffb999760838d0b87d8e308927c16de9c4a2d648f5ab59646ed08a"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.slaspec": {
+      "bytes": 74,
+      "sha256": "44b98bca799ca9d1dc41ee21b14ab5c9028b5954fc5872e3ad160405eeb4942a"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430X.cspec": {
+      "bytes": 2710,
+      "sha256": "de92f9980a7f131a51b2d1e39bc17df721b3f1021a35560cfeb6fca53c145714"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430X.dwarf": {
+      "bytes": 336,
+      "sha256": "6dcc1b16e67732080aba849ec31d26d9537e572a030fc3027a693f307f0bdeb5"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430X.sla": {
+      "bytes": 81818,
+      "sha256": "65a36a43dab22a9cc63d7367bad4963d655e5c21c3988b091c03d79de28b779f"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430X.slaspec": {
+      "bytes": 97,
+      "sha256": "e4123f0cda29f8dadcf4e2d553ef2ea77c9a4efb9a399b254c68ca874b359c0f"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/ti_msp430.opinion": {
+      "bytes": 508,
+      "sha256": "680d204df3731a49e348ad00961abde7b3f54d03e15cf63e1e2fced99c663378"
+    },
+    "fixtures/msp430.bin": {
+      "bytes": 30,
+      "sha256": "efd2c228bb009b88ad8d3d0dc55a709b828a1da3de52ef9e1c9a54d2373d06b9"
+    },
+    "fixtures/msp430.asm": {
+      "bytes": 1058,
+      "sha256": "47d75298aa168eca43d43ae346e8a037c49c2b6ed72535a180999b312e617caa"
+    },
+    "fixtures/avr8.bin": {
+      "bytes": 32,
+      "sha256": "9801b385967017b4c8491e4adcc8f8ad93566f57577d4ca8bdd9adf308e11cbf"
+    },
+    "fixtures/avr8.asm": {
+      "bytes": 1384,
+      "sha256": "e4360e3ad1a2dacd72bc3c2db2ba08ce9a4143077bb0494138445992b39f2e99"
+    },
+    "fixtures/6502.bin": {
+      "bytes": 25,
+      "sha256": "516037ab26a1ae81a1c6a40fa9581b550ca1341477f63c0a8b9e31f279927f81"
+    },
+    "fixtures/6502.asm": {
+      "bytes": 1096,
+      "sha256": "74bea6ee5b39c15cff1af9e6cbe9bc45365be923c1be74be7f64320bb9eff3a8"
+    },
+    "fixtures/truth.json": {
+      "bytes": 5022,
+      "sha256": "cefc15f5e489f7ca0e70c7d0bd9a3ce15caa7f8bd365dc90735e183e66ef29d1"
+    },
+    "jdk/bin/java": {
+      "bytes": 51856,
+      "sha256": "05687a76275264affc701d1cbc005960002295e2da9f2833aa6c0ebfecd77943"
+    },
+    "jdk/bin/javac": {
+      "bytes": 51792,
+      "sha256": "1327db512c9f8aa22b8fd253b7a6a9d4fb9867f02d1df0c0ee3ae6acb525c112"
+    },
+    "jdk/bin/javap": {
+      "bytes": 51792,
+      "sha256": "ece358719e260fc6e77700765d7653fe0bc7965a3ad2ecf919acdafff20af2a6"
+    }
+  },
+  "inputs_after": {
+    "source/SleighOracle.java": {
+      "bytes": 13809,
+      "sha256": "2e753a65f8ef74218714f8ba0882153e48ec4d91dbd8693649e7aeaa2610046c"
+    },
+    "source/run_oracle.py": {
+      "bytes": 12911,
+      "sha256": "2925a477ea436a02c71769cd3815d1b86a42ec13bb2f5f88d29a8dec17e864f8"
+    },
+    "sdk/Ghidra/Framework/Utility/lib/Utility.jar": {
+      "bytes": 155905,
+      "sha256": "0a03d2df1aac91910d69087867dfe799437fe56733ce9bcb2a5c9682956c3c0e"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/Generic.jar": {
+      "bytes": 914340,
+      "sha256": "5a634b21e4774faeef201d0f4f1615247410496a0440cf5a8fe46ecfa667a98a"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar": {
+      "bytes": 4703160,
+      "sha256": "7eeaa6286a36c425eaacfa73a503d286ae4df0fecce1fc9f9d0a84cead2d827f"
+    },
+    "sdk/Ghidra/Features/Base/lib/Base.jar": {
+      "bytes": 23105938,
+      "sha256": "3d3c7e1d9f1ec546f743ed6907cdceda41d30bfb339a4d8ec15e20e1e4ce23be"
+    },
+    "sdk/Ghidra/Framework/Docking/lib/Docking.jar": {
+      "bytes": 3203263,
+      "sha256": "49dd4e749df9d97b85a3d833034e3551df20860fb7b58950b74dab9473c51fc1"
+    },
+    "sdk/Ghidra/Framework/Project/lib/Project.jar": {
+      "bytes": 1340316,
+      "sha256": "6fea242d67cf4bc4e4931e3c5e8eca0557d8f7a82819e2626d1caf6949a7622e"
+    },
+    "sdk/Ghidra/Framework/DB/lib/DB.jar": {
+      "bytes": 297846,
+      "sha256": "1e14e301a4d4d731227a6e132db11c6d72de9c831afa51a2d0a51ff98bef0ad8"
+    },
+    "sdk/Ghidra/Framework/Gui/lib/Gui.jar": {
+      "bytes": 511280,
+      "sha256": "9684edeb695a9fac0dc574a19af3acc39dcb4f5e910f2449b63936afe9547c92"
+    },
+    "sdk/Ghidra/Framework/FileSystem/lib/FileSystem.jar": {
+      "bytes": 267444,
+      "sha256": "e5cb038806fb16756348e2a13075e18f0695b0d5e7dbc3bfb1bdadc23e2ed4bc"
+    },
+    "sdk/Ghidra/Framework/Graph/lib/Graph.jar": {
+      "bytes": 471054,
+      "sha256": "aba50064c9876a0f0f6740abfaab33770e57a8cee18cff7e89518fa3334e1386"
+    },
+    "sdk/Ghidra/Framework/Help/lib/javahelp-2.0.05.jar": {
+      "bytes": 562749,
+      "sha256": "fcf4922d38ff85184f1d2328317bb60826e14da948abd606ee3d5b8c6a70debd"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/gson-2.13.2.jar": {
+      "bytes": 289901,
+      "sha256": "dd0ce1b55a3ed2080cb70f9c655850cda86c206862310009dcb5e5c95265a5e0"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/jdom2-2.0.6.1.jar": {
+      "bytes": 327806,
+      "sha256": "0b20f45e3a0fd8f0d12cdc5316b06776e902b1365db00118876f9175c60f302c"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/commons-lang3-3.20.0.jar": {
+      "bytes": 713862,
+      "sha256": "69e5c9fa35da7a51a5fd2099dfe56a2d8d32cf233e2f6d770e796146440263f4"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/commons-collections4-4.6.0.jar": {
+      "bytes": 934384,
+      "sha256": "4e0d0896bac5356cead277bac0283f09813e14417e3e84e0c86b573b54d218a3"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/guava-32.1.3-jre.jar": {
+      "bytes": 3043932,
+      "sha256": "6d4e2b5a118aab62e6e5e29d185a0224eed82c85c40ac3d33cf04a270c3b3744"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/failureaccess-1.0.1.jar": {
+      "bytes": 4617,
+      "sha256": "a171ee4c734dd2da837e4b16be9df4661afab72a41adaf31eb84dfdaf936ca26"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/log4j-api-2.26.1.jar": {
+      "bytes": 351428,
+      "sha256": "f1810a4704ccce019d02bba029dc02a4f2ac0c997f647b465e7d409c1927f822"
+    },
+    "sdk/Ghidra/Framework/Generic/lib/log4j-core-2.26.1.jar": {
+      "bytes": 2015459,
+      "sha256": "2ec8c3bf5a6d7c89be8620116a2fc973f7dda1ad0261ad393c4d4726edfd3dcb"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/isorelax-20050913.jar": {
+      "bytes": 192602,
+      "sha256": "3427152431cf7f967f92e69e5cac16147c5d8fb4b4e5a8a72f5291788efcff8c"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/msv-20050913.jar": {
+      "bytes": 667496,
+      "sha256": "14be3a550e508433b4fe10775d540e9eb58b3ef04ed7456bc7c7d285c90c87a2"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/relaxngDatatype-20050913.jar": {
+      "bytes": 19097,
+      "sha256": "4d45a93eb5cdc32631966673c954b83fc9b60a0681bbddcefa2c4976d04cddf2"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/xsdlib-20050913.jar": {
+      "bytes": 146996,
+      "sha256": "6b8efa18ff570c0916da702c46906b9e8a139e1c05dbf1e4d8bdeba244c1b2b3"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/antlr-runtime-3.5.2.jar": {
+      "bytes": 167761,
+      "sha256": "ce3fc8ecb10f39e9a3cddcbb2ce350d272d9cd3d0b1e18e6fe73c3b9389c8734"
+    },
+    "sdk/Ghidra/application.properties": {
+      "bytes": 432,
+      "sha256": "19a74006a0351da7da1a8ee00ea0e864e672b1cb0c6e7132cdd210c9d672868c"
+    },
+    "sdk/LICENSE": {
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling-src.zip": {
+      "bytes": 3407298,
+      "sha256": "84b0fb7f385090f109325977aceb2193f5c6d963077895284b0d79c106715a28"
+    },
+    "sdk/Ghidra/Features/Base/lib/Base-src.zip": {
+      "bytes": 7481132,
+      "sha256": "c951689c9001158cfab8d6b06b896bcd89e4aed762cb3187f231e6e13051ab97"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.cspec": {
+      "bytes": 893,
+      "sha256": "9f60d6f843a9fdd6518d3cd12d1455d08d91b3a174bc611722bbd01eda11a337"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.ldefs": {
+      "bytes": 1049,
+      "sha256": "146fd35e3c457cdecb5e63ae2e8db4566acdffb7e5693d2ccece3f639b70ae42"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.pspec": {
+      "bytes": 604,
+      "sha256": "acf7be1dd5788eb6a800c81c96950512777cfb11219f0aa0d368315d2e9efb9f"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.sla": {
+      "bytes": 5094,
+      "sha256": "6e9528e7f417b815f7dfdaaec357a5ebd975525e31c4d7c456694c1e99743d92"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/6502.slaspec": {
+      "bytes": 8059,
+      "sha256": "d1a81dec7ac95814bd6636a4db27c07c38d3469bf0dd69ff924e56dd15b7d50d"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/65c02.sla": {
+      "bytes": 7060,
+      "sha256": "6995ea3f14fc851009924d69ab06d47fee611dca50614c7e6761f555d8fc5ac1"
+    },
+    "sdk/Ghidra/Processors/6502/data/languages/65c02.slaspec": {
+      "bytes": 4419,
+      "sha256": "36b55ba1cc13ed934cdacfaf2661224b6cbb4ef186d36364a99a4456b0a81f08"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/atmega256.pspec": {
+      "bytes": 19072,
+      "sha256": "bf6eaaee6cd3ebd0abb880db1737efb3139bca44dd6f64a5725611fab0972708"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32.opinion": {
+      "bytes": 309,
+      "sha256": "48d6c343347c3d387314e01d3f7491ebaa2ddd83ca5e934f3c54fc573bb210cb"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.cspec": {
+      "bytes": 1474,
+      "sha256": "839608f4393736782f801e474a6f5d31ec946dde7a02c8d274a1e96be67d490c"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.ldefs": {
+      "bytes": 566,
+      "sha256": "88fc21ba3a0167ade6776b28ecc382f2ec2f54e42cb12a23a33a18d7c439cbde"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.pspec": {
+      "bytes": 214,
+      "sha256": "1cef7127bb288d966b1911315e724b02da40374b23f0ae084afd5990392b35a4"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.sla": {
+      "bytes": 68945,
+      "sha256": "9633b6cbeee12b20b65723505bf2dbb70282fe8ab0acfaa25e9600e980334acb"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a.slaspec": {
+      "bytes": 21461,
+      "sha256": "ebbf915efce83e896577c726100ed9870076c54406e74f66c61d9805df8cc0e4"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_arithmetic_operations.sinc": {
+      "bytes": 20959,
+      "sha256": "45738533b8eaea832765f42c52e2544064e840b2eaafcb49ebf9b6dfc650b634"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_autogen.sinc": {
+      "bytes": 43214,
+      "sha256": "516bf23cd9a8d5d23a7377646fa6217d30a61e8a1136e55b96bf70bd5d843d9b"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_bit_operations.sinc": {
+      "bytes": 9879,
+      "sha256": "2627e1b97519ca65bb5394694f844f3fce0a31d1b44926642c3936889ce039f9"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_coprocessor_interface.sinc": {
+      "bytes": 19876,
+      "sha256": "5037e1ca39b7249aed0aaec8609bdc905a35ee1a61d41b8b05eb26d3e7499cc3"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_data_transfer.sinc": {
+      "bytes": 40727,
+      "sha256": "ad712d7f713a68a7ad07a3a65da12f927d4eca6910ccb5ca8d19c32519311649"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_dsp_operations.sinc": {
+      "bytes": 43298,
+      "sha256": "21cf6e188f374091963c29fc0001b3dc35e62a24691da19b509af17594ed2f98"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_dsp_operations2.sinc": {
+      "bytes": 10829,
+      "sha256": "dc5cbfb2cca2198183769c7406126275ed7884d5dcf64789577d765129f59ac6"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_instruction_flow.sinc": {
+      "bytes": 7185,
+      "sha256": "f08109284833c186212bd32ef73e2f08ac9855e22db88f617f693f71f9796596"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_logic_operations.sinc": {
+      "bytes": 14048,
+      "sha256": "e0b23dc1de7824248789a6be4400b40682ee5039c6fa5e0fe580b01ef8d9a6e2"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_multiplication_operations.sinc": {
+      "bytes": 5679,
+      "sha256": "c4097d9d8c557dd425fd6cb5b85f7dbbb37bd7193fe1cda095d7309ba40a3cb9"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_shift_operations.sinc": {
+      "bytes": 4417,
+      "sha256": "bd251dc2cf7c9fba4e77a28c326b8c2431a6be3f1085821c9ee70ba5d58a1943"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_simd_operations.sinc": {
+      "bytes": 18819,
+      "sha256": "9b7c975ca1f25151c38e2e4804180d040dea0a768b99418ad8ac079b6604c727"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr32a_system_control.sinc": {
+      "bytes": 2522,
+      "sha256": "342c16d661cb21903023ee622896709f29b6f9ccd5f1b5f5163c4b1fe936b742"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.ldefs": {
+      "bytes": 2403,
+      "sha256": "06f6f113118cd79998c954d7bb3ccdd6e9dcc39ca6968e2a07a5a66106da2d62"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.opinion": {
+      "bytes": 674,
+      "sha256": "fe00caa261416f0e8adb5ae4bb3bbd67ceee8bbd59de563b7ee3d2b1c7bd6030"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.pspec": {
+      "bytes": 7667,
+      "sha256": "d8d5d0f48cc01a4277fd51f924c451703868ab856c0cb00916a944c53be21f05"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.sinc": {
+      "bytes": 36286,
+      "sha256": "cc1c3c6e82fb3a61759dc4e7723307e25a1efa89cbe94126074e975380d25a77"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.sla": {
+      "bytes": 12044,
+      "sha256": "1d40b91a0a7dda1b64d79f7789fd6a1b46104b3c11f39ad8674f5c7091d65096"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8.slaspec": {
+      "bytes": 110,
+      "sha256": "177d0eb7edc02e54ec493970234181d344b99d9242148585e91c8eac51242475"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8e.sla": {
+      "bytes": 12183,
+      "sha256": "1edd32e1ee11a0ec426546feac5166c396ea25af278aec562a702bb17743e3fd"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8e.slaspec": {
+      "bytes": 127,
+      "sha256": "c0c27cd95d662043ddee2af52b300e25b53a3d6e7ad87449aacc11f945f3e0d7"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8egcc.cspec": {
+      "bytes": 5116,
+      "sha256": "d3759ac7dd5a8f0fb3f3de4f53f0c242856601fcadf3e2982abd8718f3ffeb7e"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8eind.sla": {
+      "bytes": 12542,
+      "sha256": "029bcee102ac96a0e8d900dff30e350e3f61a06001e7d3a10f7c96af7c2fbca1"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8eind.slaspec": {
+      "bytes": 110,
+      "sha256": "3de9e0c4e1128861e84c4f1c39a841949a6c6afa9f5d674de4c0bc1d9011b31b"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8gcc.cspec": {
+      "bytes": 7825,
+      "sha256": "096951d1bd3e9adf3c204837f16c09f5fd6e85e6184abb8fc5efedda418b953d"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8iarV1.cspec": {
+      "bytes": 1585,
+      "sha256": "5ed81b9d957c64aecdda0d2a72dd43b3504bd05b47e5520f46ce3489592d0011"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8imgCraftV8.cspec": {
+      "bytes": 1194,
+      "sha256": "02a60d1369ced1207359b54600a82b421640663ab3079019c5f6e43cb24183d4"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8xmega.pspec": {
+      "bytes": 73107,
+      "sha256": "a9f794ab6b96b83512ee77e2d8d325200f02f770aeecee66de6cedf12e4c2cbc"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8xmega.sla": {
+      "bytes": 12543,
+      "sha256": "6b601650cba585aa5aa55cfb14114ef3dc103343a9b4e685a77c59d1104de0aa"
+    },
+    "sdk/Ghidra/Processors/Atmel/data/languages/avr8xmega.slaspec": {
+      "bytes": 186,
+      "sha256": "451c950392290acffe5364448ace72178519f7de65be3e1dd99d5bc8c07bf3ba"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI430Common.sinc": {
+      "bytes": 80731,
+      "sha256": "646edf486a550bf28a7b08ab313d61304fb218c414bff6338b57c0c817ec80d8"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI430X.sinc": {
+      "bytes": 137019,
+      "sha256": "4c0e880b8c509214c97e490c223dfab5aafff68342359130f1edd236051c7912"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.cspec": {
+      "bytes": 2910,
+      "sha256": "06a84cbde2f1fdc4f3d3f42616ff2e4209ba4c34a22fd4e8bb0a280280b1df22"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.dwarf": {
+      "bytes": 336,
+      "sha256": "f8e11d8e36001048441fea1ce88a0f45c0ef47e50caa73ba217f2a9e14e043ea"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.ldefs": {
+      "bytes": 1361,
+      "sha256": "5861d8b71ca32d947bff0a407057ae3d9b4c5a5ce0cc7ee24b58156f1cdaddbc"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.pspec": {
+      "bytes": 11022,
+      "sha256": "a4c89cd36473c8f33f01e4db940cca18ceb5c5517141a173a3cc430bda6eae5c"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.sla": {
+      "bytes": 27382,
+      "sha256": "77784a481bffb999760838d0b87d8e308927c16de9c4a2d648f5ab59646ed08a"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430.slaspec": {
+      "bytes": 74,
+      "sha256": "44b98bca799ca9d1dc41ee21b14ab5c9028b5954fc5872e3ad160405eeb4942a"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430X.cspec": {
+      "bytes": 2710,
+      "sha256": "de92f9980a7f131a51b2d1e39bc17df721b3f1021a35560cfeb6fca53c145714"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430X.dwarf": {
+      "bytes": 336,
+      "sha256": "6dcc1b16e67732080aba849ec31d26d9537e572a030fc3027a693f307f0bdeb5"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430X.sla": {
+      "bytes": 81818,
+      "sha256": "65a36a43dab22a9cc63d7367bad4963d655e5c21c3988b091c03d79de28b779f"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/TI_MSP430X.slaspec": {
+      "bytes": 97,
+      "sha256": "e4123f0cda29f8dadcf4e2d553ef2ea77c9a4efb9a399b254c68ca874b359c0f"
+    },
+    "sdk/Ghidra/Processors/TI_MSP430/data/languages/ti_msp430.opinion": {
+      "bytes": 508,
+      "sha256": "680d204df3731a49e348ad00961abde7b3f54d03e15cf63e1e2fced99c663378"
+    },
+    "fixtures/msp430.bin": {
+      "bytes": 30,
+      "sha256": "efd2c228bb009b88ad8d3d0dc55a709b828a1da3de52ef9e1c9a54d2373d06b9"
+    },
+    "fixtures/msp430.asm": {
+      "bytes": 1058,
+      "sha256": "47d75298aa168eca43d43ae346e8a037c49c2b6ed72535a180999b312e617caa"
+    },
+    "fixtures/avr8.bin": {
+      "bytes": 32,
+      "sha256": "9801b385967017b4c8491e4adcc8f8ad93566f57577d4ca8bdd9adf308e11cbf"
+    },
+    "fixtures/avr8.asm": {
+      "bytes": 1384,
+      "sha256": "e4360e3ad1a2dacd72bc3c2db2ba08ce9a4143077bb0494138445992b39f2e99"
+    },
+    "fixtures/6502.bin": {
+      "bytes": 25,
+      "sha256": "516037ab26a1ae81a1c6a40fa9581b550ca1341477f63c0a8b9e31f279927f81"
+    },
+    "fixtures/6502.asm": {
+      "bytes": 1096,
+      "sha256": "74bea6ee5b39c15cff1af9e6cbe9bc45365be923c1be74be7f64320bb9eff3a8"
+    },
+    "fixtures/truth.json": {
+      "bytes": 5022,
+      "sha256": "cefc15f5e489f7ca0e70c7d0bd9a3ce15caa7f8bd365dc90735e183e66ef29d1"
+    },
+    "jdk/bin/java": {
+      "bytes": 51856,
+      "sha256": "05687a76275264affc701d1cbc005960002295e2da9f2833aa6c0ebfecd77943"
+    },
+    "jdk/bin/javac": {
+      "bytes": 51792,
+      "sha256": "1327db512c9f8aa22b8fd253b7a6a9d4fb9867f02d1df0c0ee3ae6acb525c112"
+    },
+    "jdk/bin/javap": {
+      "bytes": 51792,
+      "sha256": "ece358719e260fc6e77700765d7653fe0bc7965a3ad2ecf919acdafff20af2a6"
+    }
+  },
+  "unchanged": true,
+  "api_source_archive_members": {
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/program/model/address/Address.java": {
+      "bytes": 17438,
+      "sha256": "b024a4ea4cbad31ceaf14bccbf743609fa579c3edf32ffb1820963e1b1d9bb69"
+    },
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/program/model/address/AddressSpace.java": {
+      "bytes": 20550,
+      "sha256": "1c009f935de164af991749e384089557464f877c8b4c383ce0668ec90e24fe4f"
+    },
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/program/model/address/AbstractAddressSpace.java": {
+      "bytes": 18942,
+      "sha256": "8f2f9cf29623ce3cbb362a263cf4bde1deb7c1a61a7ba1d8ce54592bf4242dab"
+    },
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/program/model/address/GenericAddress.java": {
+      "bytes": 9810,
+      "sha256": "48ec7d720e5bcef9a4715521aa34fb7cfc999b90b6fbc443af1c287bc25cc0c3"
+    },
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/program/model/address/GenericAddressSpace.java": {
+      "bytes": 3143,
+      "sha256": "789e54bb0b76a9984085a62f3f276de94d888c0363a2f6b6b0c81082d228c5d7"
+    },
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/program/model/mem/ByteMemBufferImpl.java": {
+      "bytes": 3381,
+      "sha256": "cbf19c2c49b7bfa092af0d5160d44ae04962c397af91f9ee9fa17a728f7fe952"
+    },
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/app/plugin/processors/sleigh/SleighLanguage.java": {
+      "bytes": 49545,
+      "sha256": "446e49c0ec493eef3605affd3b565a8a0d83a92f4750332f38836362d4701e74"
+    },
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/app/plugin/processors/sleigh/SleighLanguageProvider.java": {
+      "bytes": 15589,
+      "sha256": "ff72b1f61538d95427622cb871d80cfe7f7a2111bd1a9d6703a38499fb497384"
+    },
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/program/disassemble/Disassembler.java": {
+      "bytes": 71183,
+      "sha256": "b989aa664364a80362db5eeb078903bc57f47452a3bfafa6d0a6b6ade79cd1c4"
+    },
+    "Framework/SoftwareModeling/lib/SoftwareModeling-src.zip!/ghidra/app/util/PseudoInstruction.java": {
+      "bytes": 18379,
+      "sha256": "20d71b3b496251156d0123198266bb543ea9b7e7e10d9ff6adaeaa837a0f2f4b"
+    },
+    "Features/Base/lib/Base-src.zip!/ghidra/app/cmd/function/CreateFunctionCmd.java": {
+      "bytes": 26810,
+      "sha256": "91583d5322ca3fb00990a4eb444b97109b99b8469445106e7630494f0c9c17f6"
+    }
+  },
+  "status": "success",
+  "oracle_result_sha256": "8a0cc76f88780d5bf0cb782b0f7e714c83dd5e8786f9d5d49722756f5ccfec48",
+  "stage_removed_after_exit": true,
+  "limits": {
+    "instruction_bytes": 32,
+    "pcode_ops_per_instruction": 128,
+    "text_chars_per_operation": 512,
+    "fixture_bytes": 128,
+    "parser_window_bytes": 65536,
+    "process_timeout_seconds": 120
+  },
+  "authentication_limit": "Installed-byte hashes are not SDK archive or upstream-commit authentication.",
+  "scope": "Static Java Sleigh parse and raw pcode only. No target execution or decompilation.",
+  "analyzers": "No analysis manager or automatic analyzers scheduled; no loader or library import.",
+  "classpath_policy": "Fixed installed framework/Base jars and explicit third-party dependencies only.",
+  "source_policy": "Installed ordinary SLASPEC/SINC files hashed, not compiled by this oracle.",
+  "profile_policy": "Only three hardcoded language/compiler pairs selected; siblings not admitted.",
+  "source_repository": "https://github.com/NationalSecurityAgency/ghidra",
+  "source_tag": "Ghidra_12.1.4_build",
+  "resolved_source_commit": null,
+  "sdk_archive_sha256": null,
+  "snapshot_policy": "Installed language-directory snapshots include unselected siblings; not an I/O trace.",
+  "runtime_limit": "JDK launcher hashes and version pin the host observation, not every dynamic runtime library.",
+  "address_api_facts": [
+    "AddressSpace.getAddressableWordOffset(long byteOffset) documents its input as memory bytes.",
+    "GenericAddress.getAddressableWordOffset delegates using its stored getOffset value.",
+    "Code targets preserve both actual Java getters; no inferred multiplication is serialized.",
+    "Constant-space varnodes are scalar values/local pcode indices, not memory byte addresses."
+  ]
+}

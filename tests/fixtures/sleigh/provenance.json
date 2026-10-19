@@ -1,0 +1,35 @@
+{
+  "schema_version": 2,
+  "kind": "historical_and_current_receipt_index",
+  "historical_receipts": [
+    {
+      "path": "provenance-historical-attempt-jk6eeb8n.json",
+      "sha256": "1856ced136e99fe3314e52ea8b96e76d8efbd5af23d31bca56f70952c5e33487",
+      "attempt": "attempt-jk6eeb8n",
+      "compiled_class_binding": "missing",
+      "tool_source_sha256": "a3614ab947e4bdc9f4320b74cc7bac5b7c22f7cdb018334e283a8cfa1ca55779"
+    },
+    {
+      "path": "provenance-historical-attempt-llzq0p41.json",
+      "sha256": "9afd9575de07926280d4054761b4bd65d43485ae0d389aeacb9da0846329c9b5",
+      "attempt": "attempt-llzq0p41",
+      "compiled_class_binding": "missing",
+      "tool_source_sha256": "2925a477ea436a02c71769cd3815d1b86a42ec13bb2f5f88d29a8dec17e864f8"
+    },
+    {
+      "path": "provenance-historical-original.json",
+      "sha256": "dbc52b9c2e26b4ed52f4930f9deb92e007b9562f53e9be940e02ce4e4b07453f",
+      "kind": "byte_identical_original_public_receipt",
+      "compiled_class_binding": "missing"
+    }
+  ],
+  "historical_binding_limit": "Both previous final runs lack compiled-class hashes. Their before/after records remain historical; the new class binding does not retroactively attest them.",
+  "current_receipt": {
+    "path": "provenance-attempt-p2-cyz3gb1h.json",
+    "sha256": "2f1f41c83874952bd8dc98d9b89600667a0a69cc076c8151ee810b84b7697a18",
+    "attempt": "attempt-p2-cyz3gb1h",
+    "status": "success"
+  },
+  "frozen_oracle_sha256": "8a0cc76f88780d5bf0cb782b0f7e714c83dd5e8786f9d5d49722756f5ccfec48",
+  "claim_limit": "Static Ghidra oracle facts passed; not CPU semantic authentication."
+}

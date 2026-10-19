@@ -484,33 +484,379 @@ public:
     const std::string &str() const { return data; }
 };
 
+void ensureDecompilerStarted(const char *home) {
+    static bool started = false;
+    static bool failed = false;
+    if (failed) throw LowlevelError("Decompiler library initialization failed; restart required");
+    if (started) return;
+    failed = true;
+    startDecompilerLibrary(home);
+    started = true;
+    failed = false;
+}
+
+constexpr size_t decodeMaxOps = 128;
+constexpr size_t decodeMaxInputs = 16;
+constexpr size_t decodeMaxSpaces = 32;
+constexpr size_t decodeMaxWindow = 65536;
+
+struct DecodeSpace {
+    uint32_t id, kind, addressSize, wordSize;
+    uint64_t highest;
+    char name[64];
+};
+
+struct DecodeNode {
+    uint32_t space, size;
+    uint64_t offset;
+    uint32_t selector, selectorSpace;
+};
+
+struct DecodeOp {
+    uint32_t opcode, inputCount, hasOutput;
+    char name[32];
+    uint64_t address;
+    DecodeNode output;
+    DecodeNode inputs[decodeMaxInputs];
+};
+
+struct DecodeResult {
+    uint32_t status, length, extent, opCount, spaceCount, codeSpace;
+    uint32_t contextMediatedFlow;
+    char mnemonic[256];
+    char operands[3840];
+    char error[256];
+    DecodeSpace spaces[decodeMaxSpaces];
+    DecodeOp ops[decodeMaxOps];
+};
+
+struct DecodeLimit : public std::exception {};
+
+template<size_t N> void decodeText(char (&output)[N], const string &text) {
+    if (text.size() >= N) throw DecodeLimit();
+    memcpy(output, text.data(), text.size());
+    output[text.size()] = 0;
+}
+
+// This loader deliberately does not share MemImage's data/zero-fill semantics.
+class DecodeImage : public LoadImage {
+public:
+    AddrSpace *code = nullptr;
+    uintb base = 0;
+    std::vector<uint1> bytes;
+    bool padded = false;
+    DecodeImage() : LoadImage("instruction-window") {}
+
+    void require(int4 size, const Address &address) const {
+        if (address.getSpace() != code || size <= 0 || address.getOffset() < base)
+            throw DataUnavailError("Instruction window is unavailable");
+        uintb offset = address.getOffset() - base;
+        if (offset >= bytes.size() || uintb(size) > bytes.size() - offset)
+            throw DataUnavailError("Instruction extends beyond backed executable bytes");
+    }
+
+    void loadInstruction(uint1 *output, int4 size, const Address &address) override {
+        require(1, address);
+        if (size < 0 || size_t(size) > decodeMaxWindow) throw DecodeLimit();
+        size_t offset = size_t(address.getOffset() - base);
+        size_t amount = std::min<size_t>(size, bytes.size() - offset);
+        memcpy(output, bytes.data() + offset, amount);
+        memset(output + amount, 0, size_t(size) - amount);
+        padded = padded || amount != size_t(size);
+    }
+
+    void validateInstruction(int4 size, const Address &address) override {
+        if (size > 16) throw BadDataError("Instruction exceeds the 16-byte parser buffer");
+        require(size, address);
+    }
+    void loadFill(uint1 *, int4, const Address &) override {
+        throw DataUnavailError("Instruction decoder cannot read data or unrelated address spaces");
+    }
+    string getArchType() const override { return "instruction-window"; }
+    void adjustVma(long) override {}
+};
+
+class DecodeSleigh : public Sleigh {
+public:
+    DecodeSleigh(LoadImage *image, ContextDatabase *context) : Sleigh(image, context) {}
+    bool hasContextCommits(const Address &address) const {
+        return obtainContext(address, ParserContext::disassembly)->hasContextCommits();
+    }
+};
+
+struct DecodeHandle {
+    DecodeImage image;
+    ContextInternal context;
+    std::unique_ptr<DecodeSleigh> sleigh;
+    char error[256]{};
+};
+
+void decodeError(char *output, const char *message) noexcept {
+    if (message == nullptr) message = "Unknown native decoder error";
+    size_t length = 0;
+    while (length < 255 && message[length] != 0) ++length;
+    memcpy(output, message, length);
+    output[length] = 0;
+}
+
+class DecodeAssembly : public AssemblyEmit {
+    DecodeResult &result;
+public:
+    explicit DecodeAssembly(DecodeResult &output) : result(output) {}
+    void dump(const Address &, const string &mnemonic, const string &operands) override {
+        decodeText(result.mnemonic, mnemonic);
+        decodeText(result.operands, operands);
+    }
+};
+
+class DecodePcode : public PcodeEmit {
+    DecodeResult &result;
+    const Sleigh &sleigh;
+
+    uint32_t spaceId(AddrSpace *space) const {
+        for (int4 i = 0; i < sleigh.numSpaces(); ++i) {
+            if (sleigh.getSpace(i) == space) return uint32_t(i);
+        }
+        throw LowlevelError("P-code refers to an unknown address-space identity");
+    }
+
+    DecodeNode node(const VarnodeData &value, bool selector) const {
+        DecodeNode output{};
+        output.space = spaceId(value.space);
+        output.size = value.size;
+        if (selector) {
+            if (value.space != sleigh.getConstantSpace())
+                throw LowlevelError("LOAD/STORE space selector is not a constant");
+            output.selector = 1;
+            output.selectorSpace = spaceId(value.getSpaceFromConst());
+        } else output.offset = value.offset;
+        return output;
+    }
+
+public:
+    DecodePcode(DecodeResult &output, const Sleigh &translator) : result(output), sleigh(translator) {}
+    void dump(const Address &address, OpCode opcode, VarnodeData *output,
+              VarnodeData *inputs, int4 count) override {
+        if (result.opCount >= decodeMaxOps || count < 0 || size_t(count) > decodeMaxInputs)
+            throw DecodeLimit();
+        DecodeOp &op = result.ops[result.opCount++];
+        op.opcode = uint32_t(opcode);
+        decodeText(op.name, get_opname(opcode));
+        op.address = address.getOffset();
+        op.inputCount = uint32_t(count);
+        op.hasOutput = output != nullptr;
+        if (output != nullptr) op.output = node(*output, false);
+        for (int4 i = 0; i < count; ++i)
+            op.inputs[i] = node(inputs[i], i == 0 && (opcode == CPUI_LOAD || opcode == CPUI_STORE));
+    }
+};
+
+void decodeSpaces(const Sleigh &sleigh, DecodeResult &result) {
+    if (sleigh.numSpaces() < 0 || size_t(sleigh.numSpaces()) > decodeMaxSpaces) throw DecodeLimit();
+    result.spaceCount = uint32_t(sleigh.numSpaces());
+    for (int4 i = 0; i < sleigh.numSpaces(); ++i) {
+        AddrSpace *space = sleigh.getSpace(i);
+        if (space == nullptr) continue;
+        DecodeSpace &out = result.spaces[i];
+        out.id = uint32_t(i);
+        out.kind = uint32_t(space->getType());
+        out.addressSize = uint32_t(space->getAddrSize());
+        out.wordSize = uint32_t(space->getWordSize());
+        out.highest = space->getHighest();
+        decodeText(out.name, space->getName());
+        if (space == sleigh.getDefaultCodeSpace()) result.codeSpace = uint32_t(i);
+    }
+}
+
 } // namespace
 
 extern "C" {
+
+size_t rampage_sleigh_result_size() noexcept { return sizeof(DecodeResult); }
+
+// Paths here are private Rust ABI inputs selected only from the verified embedded registry.
+void *rampage_sleigh_open(const char *home, const char *sla, const char *pspec) noexcept {
+    std::unique_ptr<DecodeHandle> handle;
+    try {
+        handle.reset(new DecodeHandle());
+        ensureDecompilerStarted(home);
+        handle->sleigh.reset(new DecodeSleigh(&handle->image, &handle->context));
+        std::ostringstream xml;
+        xml << "<sleigh>";
+        xml_escape(xml, sla);
+        xml << "</sleigh>";
+        std::istringstream source(xml.str());
+        DocumentStorage store;
+        store.registerTag(store.parseDocument(source)->getRoot());
+        handle->sleigh->initialize(store);
+        Document *processor = store.openDocument(pspec);
+        for (const Element *child : processor->getRoot()->getChildren()) {
+            if (child->getName() == "context_data") {
+                XmlDecode decoder(handle->sleigh.get(), child);
+                handle->context.decodeFromSpec(decoder);
+            }
+        }
+        handle->image.code = handle->sleigh->getDefaultCodeSpace();
+        handle->sleigh->allowContextSet(false);
+    } catch (const LowlevelError &error) {
+        if (handle) decodeError(handle->error, error.explain.c_str());
+    } catch (const DecoderError &error) {
+        if (handle) decodeError(handle->error, error.explain.c_str());
+    } catch (const std::exception &error) {
+        if (handle) decodeError(handle->error, error.what());
+    } catch (...) {
+        if (handle) decodeError(handle->error, "Unexpected native decoder initialization exception");
+    }
+    return handle.release();
+}
+
+const char *rampage_sleigh_error(void *pointer) noexcept {
+    DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+    return handle->error[0] == 0 ? nullptr : handle->error;
+}
+
+// Status: valid, invalid, truncated, unavailable, unimplemented, limit, internal, ambiguous tail.
+void rampage_sleigh_decode(void *pointer, uint64_t base, const uint8_t *bytes,
+                          size_t size, DecodeResult *result) noexcept {
+    if (result == nullptr) return;
+    memset(result, 0, sizeof(*result));
+    result->status = 6;
+    DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+    if (handle == nullptr || handle->error[0] != 0 || !handle->sleigh) {
+        decodeError(result->error, "Uninitialized instruction decoder");
+        return;
+    }
+    try {
+        handle->sleigh->clearCache();
+        handle->sleigh->allowContextSet(false);
+        handle->image.bytes.clear();
+        handle->image.padded = false;
+        if (size > decodeMaxWindow) throw DecodeLimit();
+        decodeSpaces(*handle->sleigh, *result);
+        if (size == 0 || bytes == nullptr || base > handle->image.code->getHighest()
+            || size - 1 > handle->image.code->getHighest() - base) {
+            result->status = 3;
+            return;
+        }
+        handle->image.base = base;
+        handle->image.bytes.assign(bytes, bytes + size);
+        Address address(handle->image.code, base);
+        if (base % handle->sleigh->getAlignment() != 0) {
+            result->status = 1;
+            decodeError(result->error, "Instruction address is not aligned");
+            return;
+        }
+        int4 length = handle->sleigh->instructionLength(address);
+        handle->image.require(length, address);
+        result->length = uint32_t(length);
+        result->contextMediatedFlow = handle->sleigh->hasContextCommits(address);
+        DecodeAssembly assembly(*result);
+        if (handle->sleigh->printAssembly(assembly, address) != length)
+            throw LowlevelError("Inconsistent assembly instruction length");
+        DecodePcode pcode(*result, *handle->sleigh);
+        int4 extent = handle->sleigh->oneInstruction(pcode, address);
+        result->contextMediatedFlow |= handle->sleigh->hasContextCommits(address);
+        handle->image.require(extent, address);
+        result->extent = uint32_t(extent);
+        result->status = 0;
+    } catch (const DecodeLimit &) {
+        result->status = 5;
+        decodeError(result->error, "Instruction decoder output or window budget exceeded");
+    } catch (const UnimplError &error) {
+        result->status = 4;
+        if (error.instruction_length > 0) {
+            if (size_t(error.instruction_length) <= handle->image.bytes.size())
+                result->extent = uint32_t(error.instruction_length);
+            else result->status = 2;
+        }
+        decodeError(result->error, error.explain.c_str());
+    } catch (const DataUnavailError &error) {
+        result->status = 2;
+        decodeError(result->error, error.explain.c_str());
+    } catch (const BadDataError &error) {
+        result->status = handle->image.padded ? 7 : 1;
+        decodeError(result->error, error.explain.c_str());
+    } catch (const LowlevelError &error) {
+        result->status = 6;
+        decodeError(result->error, error.explain.c_str());
+    } catch (const DecoderError &error) {
+        result->status = 6;
+        decodeError(result->error, error.explain.c_str());
+    } catch (const std::exception &error) {
+        result->status = 6;
+        decodeError(result->error, error.what());
+    } catch (...) {
+        result->status = 6;
+        decodeError(result->error, "Unexpected native instruction decoder exception");
+    }
+}
+
+void rampage_sleigh_close(void *pointer) noexcept {
+    try { delete static_cast<DecodeHandle *>(pointer); } catch (...) {}
+}
+
+// Private test probe against actual translator space identities, including Harvard code/mem/codebyte.
+uint8_t rampage_sleigh_test_loader_isolation(void *pointer) noexcept {
+    try {
+        DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+        if (handle == nullptr || !handle->sleigh || handle->error[0] != 0) return 0;
+        DecodeImage image;
+        image.code = handle->sleigh->getDefaultCodeSpace();
+        image.bytes.push_back(0xa5);
+        uint1 output[16]{};
+        image.loadInstruction(output, 16, Address(image.code, 0));
+        if (output[0] != 0xa5 || !image.padded) return 0;
+        image.validateInstruction(1, Address(image.code, 0));
+        try {
+            image.validateInstruction(2, Address(image.code, 0));
+            return 0;
+        } catch (const DataUnavailError &) {}
+        for (int4 i = 0; i < handle->sleigh->numSpaces(); ++i) {
+            AddrSpace *space = handle->sleigh->getSpace(i);
+            if (space == nullptr) continue;
+            try {
+                image.loadFill(output, 1, Address(space, 0));
+                return 0;
+            } catch (const DataUnavailError &) {}
+            if (space == image.code) continue;
+            try {
+                image.loadInstruction(output, 1, Address(space, 0));
+                return 0;
+            } catch (const DataUnavailError &) {}
+            try {
+                image.validateInstruction(1, Address(space, 0));
+                return 0;
+            } catch (const DataUnavailError &) {}
+        }
+        return 1;
+    } catch (...) { return 0; }
+}
+
+uint8_t rampage_sleigh_test_parser_read(int32_t start, int32_t size, uint32_t offset,
+                                      uint8_t bits, uint32_t *output) noexcept {
+    if (output == nullptr) return 2;
+    *output = 0;
+    try {
+        ParserContext parser(nullptr, nullptr);
+        for (uint4 i = 0; i < 16; ++i) parser.getBuffer()[i] = uint1(i + 1);
+        *output = bits != 0 ? parser.getInstructionBits(start, size, offset)
+                            : parser.getInstructionBytes(start, size, offset);
+        return 0;
+    } catch (const BadDataError &) { return 1; }
+    catch (...) { return 2; }
+}
 
 // Opens a decompiler over the given segments. `langid` is Ghidra's 5-part id, e.g. "x86:LE:64:default:gcc".
 // Returns an error handle on failure, or null if the handle itself could not be allocated.
 void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nseg, const uint64_t *bases,
                           const uint8_t *const *ptrs, const size_t *lens, const uint64_t *sizes,
                           const uint8_t *readable, const uint8_t *executable, const uint8_t *writable) noexcept {
-    static bool started = false;
-    static bool startupFailed = false;
     std::unique_ptr<Handle> handle;
     std::unique_ptr<MemArchitecture, DeleteArchitecture> arch;
     bool initializing = false;
     try {
         handle.reset(new Handle());
-        if (startupFailed) {
-            setError(handle.get(), "Decompiler library initialization failed; restart required", true);
-            return handle.release();
-        }
-        if (!started) {
-            // Failed initialization may leave process-global registries partially populated.
-            startupFailed = true;
-            startDecompilerLibrary(sleighhome);
-            started = true;
-            startupFailed = false;
-        }
+        ensureDecompilerStarted(sleighhome);
         std::vector<Segment> segments;
         for (size_t i = 0; i < nseg; ++i) {
             Segment seg;

@@ -10,6 +10,7 @@ mod context;
 pub mod layout;
 mod layout_wire;
 pub mod results;
+pub mod sleigh_decode;
 mod specs;
 pub mod type_library;
 pub use type_library::{

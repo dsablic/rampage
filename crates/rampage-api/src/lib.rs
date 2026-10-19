@@ -51,6 +51,7 @@ mod search_request;
 mod session;
 mod signature_import;
 mod signatures;
+pub mod sleigh_window;
 mod summary;
 pub mod tool_views;
 pub mod tools;

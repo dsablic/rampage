@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "origin": "Owned hand-authored encoding ledgers and manual function extents; not Rust discovery output",
+  "license": "Apache-2.0",
+  "source_date": "2026-10-19",
+  "function_truth_policy": "Only main and callee are functions; disconnected diagnostic instructions are not seeds.",
+  "coordinate_policy": "All fixture offsets and extent ends below are bytes; ends are exclusive.",
+  "oracle_policy": "oracle.json is actual independent Ghidra Java output; program_oracle preserves flowed context.",
+  "limitations": [
+    "No target is executed. No decompilation, C ABI, stack correctness or behavior claim.",
+    "6502 C ABI is unknown; the selected default compiler spec is an SDK selection, not ABI proof.",
+    "Branch mnemonics and flow metadata are static language facts, not observed program behavior.",
+    "Ghidra pseudo-decode rows use isolated zero/default context; AVR skip context exists only in program_oracle rows.",
+    "AVR DES pcode has constant-space local branch indices, which are not code-space direct targets.",
+    "Truncated suffixes may receive a longer Java instruction prototype; harness rejection is recorded distinctly.",
+    "Source ledger syntax is explanatory and is not claimed to assemble with any particular assembler."
+  ],
+  "fixtures": [
+    {
+      "name": "msp430",
+      "bytes_file": "msp430.bin",
+      "source_file": "msp430.asm",
+      "language_id": "TI_MSP430:LE:16:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x4400",
+      "base_addressable_word_offset": "0x4400",
+      "addressable_unit_bytes": 1,
+      "window_length_bytes": 30,
+      "entry_seed_offsets_bytes": [0],
+      "functions": [
+        {"name": "main", "entry_offset_bytes": 0, "extent_end_exclusive_bytes": 10},
+        {"name": "callee", "entry_offset_bytes": 16, "extent_end_exclusive_bytes": 20}
+      ],
+      "known_call": {"source_offset_bytes": 0, "target_offset_bytes": 16, "length_bytes": 4},
+      "backward_conditional_branch": {"source_offset_bytes": 6, "target_offset_bytes": 0},
+      "outside_window_branch": {"source_offset_bytes": 10, "target_byte_offset": "0x4420"},
+      "computed_call_offsets_bytes": [20],
+      "computed_jump_offsets_bytes": [22],
+      "return_offsets_bytes": [8, 18],
+      "negative_cases": [{"offset_bytes": 28, "kind": "truncated_immediate_call", "available_bytes": 2}]
+    },
+    {
+      "name": "avr8",
+      "bytes_file": "avr8.bin",
+      "source_file": "avr8.asm",
+      "language_id": "avr8:LE:16:default",
+      "compiler_spec_id": "gcc",
+      "base_byte_offset": "0x200",
+      "base_addressable_word_offset": "0x100",
+      "addressable_unit_bytes": 2,
+      "window_length_bytes": 32,
+      "entry_seed_offsets_bytes": [0],
+      "functions": [
+        {"name": "main", "entry_offset_bytes": 0, "extent_end_exclusive_bytes": 10},
+        {"name": "callee", "entry_offset_bytes": 16, "extent_end_exclusive_bytes": 20}
+      ],
+      "known_call": {
+        "source_offset_bytes": 0,
+        "target_offset_bytes": 16,
+        "length_bytes": 4,
+        "encoded_word_target": "0x108",
+        "java_target_getOffset_bytes": "0x210",
+        "java_target_getAddressableWordOffset_words": "0x108"
+      },
+      "backward_conditional_branch": {"source_offset_bytes": 6, "target_offset_bytes": 0},
+      "boundary_branch": {"source_offset_bytes": 10, "target_offset_bytes": 32},
+      "computed_call_offsets_bytes": [12],
+      "computed_jump_offsets_bytes": [14],
+      "return_offsets_bytes": [8, 18],
+      "skip_context_probe_offsets_bytes": [22, 24],
+      "local_pcode_branch_probe_offset_bytes": 26,
+      "negative_cases": [
+        {"offset_bytes": 28, "kind": "invalid_word", "available_bytes": 4},
+        {"offset_bytes": 30, "kind": "truncated_absolute_call", "available_bytes": 2}
+      ]
+    },
+    {
+      "name": "6502",
+      "bytes_file": "6502.bin",
+      "source_file": "6502.asm",
+      "language_id": "6502:LE:16:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x8000",
+      "base_addressable_word_offset": "0x8000",
+      "addressable_unit_bytes": 1,
+      "window_length_bytes": 25,
+      "entry_seed_offsets_bytes": [0],
+      "functions": [
+        {"name": "main", "entry_offset_bytes": 0, "extent_end_exclusive_bytes": 8},
+        {"name": "callee", "entry_offset_bytes": 16, "extent_end_exclusive_bytes": 18}
+      ],
+      "known_call": {"source_offset_bytes": 0, "target_offset_bytes": 16, "length_bytes": 3},
+      "backward_conditional_branch": {"source_offset_bytes": 5, "target_offset_bytes": 0},
+      "boundary_branch": {"source_offset_bytes": 8, "target_offset_bytes": 25},
+      "computed_call_offsets_bytes": [],
+      "computed_jump_offsets_bytes": [11],
+      "return_offsets_bytes": [7, 17],
+      "negative_cases": [
+        {"offset_bytes": 23, "kind": "invalid_opcode", "available_bytes": 2},
+        {"offset_bytes": 24, "kind": "truncated_absolute_call", "available_bytes": 1}
+      ],
+      "c_abi": "unknown"
+    }
+  ]
+}

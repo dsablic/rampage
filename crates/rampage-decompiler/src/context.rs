@@ -181,6 +181,11 @@ pub fn verify_bundled_specifications() -> Result<VerifiedBundledContext, Error> 
 /// Independent unsafe C ABI initialization outside these Rust wrappers is unsupported by this proof boundary.
 pub fn require_verified_bundled_native_context() -> Result<VerifiedBundledContext, Error> {
     let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    require_verified_bundled_native_context_locked()
+}
+
+// The caller holds FFI_LOCK so checking and native initialization share one serialization boundary.
+pub(crate) fn require_verified_bundled_native_context_locked() -> Result<VerifiedBundledContext, Error> {
     let proof = specs::verify_bundled().map_err(|_| invalid())?;
     let state = NATIVE_CONTEXT.lock().unwrap_or_else(|poison| poison.into_inner());
     if !state.accepts(&proof.home) {

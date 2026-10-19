@@ -13,6 +13,7 @@ use std::sync::Arc;
 /// Results longer than this are cut, so that one large answer cannot crowd out the conversation. Workflow reports
 /// and import receipts fit themselves below it instead, preserving valid JSON and whole-operation status.
 const MAX_RESULT_CHARS: usize = 60_000;
+const MAX_SLEIGH_REQUEST_BYTES: usize = 1024 * 1024;
 const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
 const MAX_PDB_ERROR_BYTES: usize = 1024;
@@ -286,6 +287,39 @@ pub fn file_tools() -> Vec<FileTool> {
     vec![
         FileTool {
             group: Group::Core,
+            name: "inspect_sleigh",
+            description: "Inspect an explicit regular-file raw code window using a closed bundled Sleigh profile; \
+                no native executable admission or Project is required. Finite pilot: TI_MSP430, AVR8, 6502 plus \
+                existing x86/A64 profiles only, not arbitrary architecture aliases, spec paths or compiler specs. \
+                path is the only common selector. profile/offset/length/base_address and optional discover/seeds, \
+                instruction_limit/decode_attempt_limit/handle_open_limit/stop_limit, listing_offset/listing_limit, \
+                include_pcode and timeout_ms are flattened request fields. All source offsets, bases, seeds and \
+                targets use internal BYTE coordinates, even AVR code space word_size=2: never multiply again or \
+                resolve names. The mapping is an analyst assertion; hashes/revalidation are observations, not \
+                authentication or a proven executable mapping. Listing is capped at 64 KiB; discovery at 4 KiB \
+                with explicit seeds and bounded work. Native calls/discovery are noninterruptible; deadlines are \
+                cooperative between operations. Preserve complete spaces/program/stops, including valid instructions \
+                gated for unknown flow (not invalid-opcode verdicts). P-code may require smaller listing pages. \
+                Complete JSON is capped at 60000 bytes or explicitly refused, never string-cut. A C ABI/compiler \
+                specification is not selected or attested by this workflow; C decompilation is unsupported. \
+                Unix checked regular-file sources only; no fallback, execution, \
+                sidecars, annotations, extraction, source publication or arbitrary metadata/spec-path following.",
+            input_schema: sleigh_file_schema(),
+            handler: |_, mut input| {
+                check_sleigh_input_budget(&input)?;
+                let object = input.as_object_mut().ok_or("Sleigh arguments must be an object")?;
+                let path = object
+                    .remove("path")
+                    .and_then(|value| value.as_str().map(std::path::PathBuf::from))
+                    .ok_or("Sleigh path must be a string")?;
+                let request: crate::sleigh_window::SleighWindowRequest = arguments(input)?;
+                let report = crate::sleigh_window::inspect_sleigh_file_range(&path, &request)
+                    .map_err(|error| error_chain(&error))?;
+                serde_json::to_value(report).map_err(|error| error.to_string())
+            },
+        },
+        FileTool {
+            group: Group::Core,
             name: "inspect_raw_code",
             description: "Linearly disassemble an explicit 1..4096-byte original-file window with analyst-supplied \
                 base VA, architecture, mode and instruction/data byte orders. No executable header or guessing. \
@@ -507,6 +541,72 @@ fn raw_file_schema() -> Value {
         serde_json::json!({ "type": "string", "description": "Explicit regular input file; no native loader is used." }));
     value["required"].as_array_mut().expect("required raw mapping fields").push(Value::String("path".into()));
     value
+}
+
+fn sleigh_file_schema() -> Value {
+    let mut schema = schema::<crate::sleigh_window::SleighWindowRequest>();
+    let properties = schema["properties"].as_object_mut().expect("Sleigh request properties");
+    properties.insert(
+        "path".to_owned(),
+        serde_json::json!({
+            "type":"string", "description":"Explicit regular source file; raw bytes, not a native executable selector."
+        }),
+    );
+    properties.get_mut("profile").expect("Sleigh profile property")["enum"] = serde_json::json!([
+        "TI_MSP430:LE:16:default",
+        "avr8:LE:16:default",
+        "6502:LE:16:default",
+        "x86:LE:32:default",
+        "x86:LE:64:default",
+        "AARCH64:LE:64:v8A",
+        "AARCH64:BE:64:v8A"
+    ]);
+    schema["required"].as_array_mut().expect("required Sleigh fields").push(Value::String("path".to_owned()));
+    schema
+}
+
+pub fn parse_sleigh_window_request(bytes: &[u8]) -> Result<crate::sleigh_window::SleighWindowRequest, ApiError> {
+    if bytes.len() > MAX_SLEIGH_REQUEST_BYTES {
+        return Err(ApiError::Invalid("Sleigh request exceeds 1 MiB".to_owned()));
+    }
+    serde_json::from_slice(bytes).map_err(|error| ApiError::Invalid(format!("invalid Sleigh request: {error}")))
+}
+
+/// Checked bounded regular-file request input, without any executable admission or annotation handling.
+pub fn read_sleigh_window_request(
+    path: &std::path::Path,
+) -> Result<crate::sleigh_window::SleighWindowRequest, ApiError> {
+    let size = crate::range_source::RangeSource::open(path, 0, 0)?.size();
+    if size > MAX_SLEIGH_REQUEST_BYTES as u64 {
+        return Err(ApiError::Invalid("Sleigh request exceeds 1 MiB".to_owned()));
+    }
+    let source = crate::range_source::RangeSource::open(path, 0, size as usize)?;
+    if source.size() != size {
+        return Err(ApiError::Unavailable("Sleigh request size changed while opening".to_owned()));
+    }
+    let bytes = source.read()?;
+    source.revalidate()?;
+    parse_sleigh_window_request(&bytes)
+}
+
+fn check_sleigh_input_budget(input: &impl Serialize) -> Result<(), String> {
+    #[derive(Default)]
+    struct Counter {
+        written: usize,
+    }
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > MAX_SLEIGH_REQUEST_BYTES.saturating_sub(self.written) {
+                return Err(std::io::Error::other("Sleigh request exceeds 1 MiB"));
+            }
+            self.written += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(Counter::default(), input).map_err(|_| "Sleigh request exceeds 1 MiB".to_owned())
 }
 
 /// No arguments.
@@ -2946,6 +3046,32 @@ fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sleigh_input_budget_streams_escaped_bytes_and_stops_before_visiting_later_fields() {
+        use serde::ser::SerializeSeq;
+        use std::cell::Cell;
+
+        struct CountedInput<'a> {
+            escaped: &'a str,
+            visits: &'a Cell<usize>,
+        }
+        impl Serialize for CountedInput<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut sequence = serializer.serialize_seq(Some(2))?;
+                self.visits.set(self.visits.get() + 1);
+                sequence.serialize_element(self.escaped)?;
+                self.visits.set(self.visits.get() + 1);
+                sequence.serialize_element("must not be visited after budget refusal")?;
+                sequence.end()
+            }
+        }
+        let escaped = "\"".repeat(MAX_SLEIGH_REQUEST_BYTES / 2 + 1);
+        let visits = Cell::new(0);
+        assert!(check_sleigh_input_budget(&CountedInput { escaped: &escaped, visits: &visits }).is_err());
+        assert_eq!(visits.get(), 1);
+        assert!(check_sleigh_input_budget(&serde_json::json!({"profile":"6502:LE:16:default"})).is_ok());
+    }
 
     #[test]
     fn code_view_fits_large_details_without_truncating_code_or_hiding_recovery_evidence() {

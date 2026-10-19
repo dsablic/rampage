@@ -75,6 +75,7 @@ pub(crate) enum RootCommand {
 impl RootCommand {
     pub(crate) fn into_action(self) -> Result<Command, &'static str> {
         Ok(match self {
+            Self::Binary(BinaryCommand::InspectSleigh(args)) => Command::InspectSleigh(args),
             Self::Binary(BinaryCommand::PatchBytes(args)) => Command::PatchBytes(args),
             Self::Binary(BinaryCommand::RevertPatch(args)) => Command::RevertPatch(args),
             Self::Binary(BinaryCommand::ListPatches(args)) => Command::ListPatches(args),
@@ -149,6 +150,8 @@ impl RootCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum BinaryCommand {
+    /// Inspect a finite raw code window with a closed Sleigh profile and literal BYTE coordinates
+    InspectSleigh(crate::args::InspectSleighArgs),
     /// Persist an explicitly reviewed equal-length original-byte patch; never modify or execute the source
     PatchBytes(crate::args::PatchBytesArgs),
     /// Remove one exact-start reviewed byte patch through annotation history
