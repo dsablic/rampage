@@ -108,6 +108,11 @@ fn request_file_is_explicit_bounded_and_invalid_profiles_coordinates_or_native_f
     let query = owned.0.join("request.json");
     std::fs::write(&query, valid.to_string()).unwrap();
     let before = owned.files();
+    let help = Command::cargo_bin("rampage").unwrap().args(["binary", "inspect-sleigh", "--help"]).assert().success();
+    let help = String::from_utf8_lossy(&help.get_output().stdout);
+    for evidence in ["20 closed", "Hexagon", "SuperH", "packet", "BYTE"] {
+        assert!(help.contains(evidence), "missing {evidence}: {help}");
+    }
     Command::cargo_bin("rampage")
         .unwrap()
         .args(["binary", "inspect-sleigh"])

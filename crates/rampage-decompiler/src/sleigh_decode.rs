@@ -4,7 +4,7 @@
 
 use std::ffi::{CStr, CString, c_char, c_void};
 
-use rampage_arch::{Arch, Disassembler, Flow, Insn, Target};
+use rampage_arch::{Arch, DecodeGate, DecodeGateReason, Disassembler, Flow, Insn, Target};
 use serde::Serialize;
 
 use crate::{Error, FFI_LOCK, context};
@@ -254,39 +254,53 @@ unsafe extern "C" {
     fn rampage_sleigh_test_parser_read(start: i32, size: i32, offset: u32, bits: u8, output: *mut u32) -> u8;
 }
 
-// Closed selectors: adding a profile requires a reviewed bundled asset and its processor defaults.
-fn registered_profile(profile: &str) -> Option<(&'static str, &'static str, &'static str)> {
-    match profile {
-        "x86:LE:32:default" => Some(("x86", "x86", "x86")),
-        "x86:LE:64:default" => Some(("x86", "x86-64", "x86-64")),
-        "AARCH64:LE:64:v8A" => Some(("AARCH64", "AARCH64", "AARCH64")),
-        "AARCH64:BE:64:v8A" => Some(("AARCH64", "AARCH64BE", "AARCH64")),
-        "TI_MSP430:LE:16:default" => Some(("TI_MSP430", "TI_MSP430", "TI_MSP430")),
-        "avr8:LE:16:default" => Some(("Atmel", "avr8", "avr8")),
-        "6502:LE:16:default" => Some(("6502", "6502", "6502")),
-        "8051:BE:16:default" => Some(("8051", "8051", "8051")),
-        "PIC-16:LE:16:PIC-16" => Some(("PIC", "pic16", "pic16")),
-        "SuperH:BE:32:SH-2" => Some(("SuperH", "sh-2", "superh")),
-        "V850:LE:32:default" => Some(("V850", "V850", "V850")),
-        "tricore:LE:32:default" => Some(("tricore", "tricore", "tricore")),
-        "Xtensa:LE:32:default" => Some(("Xtensa", "xtensa_le", "xtensa")),
-        "z80:LE:16:default" => Some(("Z80", "z80", "z80")),
-        "HCS-12:BE:24:default" => Some(("HCS12", "HCS12", "HCS12")),
-        "6805:BE:16:default" => Some(("MC6800", "6805", "6805")),
-        "CR16C:LE:16:default" => Some(("CR16", "CR16C", "CR16")),
-        "eBPF:LE:64:default" => Some(("eBPF", "eBPF_le", "eBPF")),
-        "Loongarch:LE:64:lp64d" => Some(("Loongarch", "loongarch64_f64", "loongarch64")),
-        "Hexagon:LE:32:default" => Some(("Hexagon", "hexagon", "hexagon")),
-        _ => None,
-    }
+struct RegisteredProfile {
+    id: &'static str,
+    family: &'static str,
+    sla: &'static str,
+    pspec: &'static str,
+}
+
+// One closed source of canonical IDs and reviewed resource selectors, never caller-owned static strings.
+static REGISTERED_PROFILES: &[RegisteredProfile] = &[
+    RegisteredProfile { id: "x86:LE:32:default", family: "x86", sla: "x86", pspec: "x86" },
+    RegisteredProfile { id: "x86:LE:64:default", family: "x86", sla: "x86-64", pspec: "x86-64" },
+    RegisteredProfile { id: "AARCH64:LE:64:v8A", family: "AARCH64", sla: "AARCH64", pspec: "AARCH64" },
+    RegisteredProfile { id: "AARCH64:BE:64:v8A", family: "AARCH64", sla: "AARCH64BE", pspec: "AARCH64" },
+    RegisteredProfile { id: "TI_MSP430:LE:16:default", family: "TI_MSP430", sla: "TI_MSP430", pspec: "TI_MSP430" },
+    RegisteredProfile { id: "avr8:LE:16:default", family: "Atmel", sla: "avr8", pspec: "avr8" },
+    RegisteredProfile { id: "6502:LE:16:default", family: "6502", sla: "6502", pspec: "6502" },
+    RegisteredProfile { id: "8051:BE:16:default", family: "8051", sla: "8051", pspec: "8051" },
+    RegisteredProfile { id: "PIC-16:LE:16:PIC-16", family: "PIC", sla: "pic16", pspec: "pic16" },
+    RegisteredProfile { id: "SuperH:BE:32:SH-2", family: "SuperH", sla: "sh-2", pspec: "superh" },
+    RegisteredProfile { id: "V850:LE:32:default", family: "V850", sla: "V850", pspec: "V850" },
+    RegisteredProfile { id: "tricore:LE:32:default", family: "tricore", sla: "tricore", pspec: "tricore" },
+    RegisteredProfile { id: "Xtensa:LE:32:default", family: "Xtensa", sla: "xtensa_le", pspec: "xtensa" },
+    RegisteredProfile { id: "z80:LE:16:default", family: "Z80", sla: "z80", pspec: "z80" },
+    RegisteredProfile { id: "HCS-12:BE:24:default", family: "HCS12", sla: "HCS12", pspec: "HCS12" },
+    RegisteredProfile { id: "6805:BE:16:default", family: "MC6800", sla: "6805", pspec: "6805" },
+    RegisteredProfile { id: "CR16C:LE:16:default", family: "CR16", sla: "CR16C", pspec: "CR16" },
+    RegisteredProfile { id: "eBPF:LE:64:default", family: "eBPF", sla: "eBPF_le", pspec: "eBPF" },
+    RegisteredProfile {
+        id: "Loongarch:LE:64:lp64d",
+        family: "Loongarch",
+        sla: "loongarch64_f64",
+        pspec: "loongarch64",
+    },
+    RegisteredProfile { id: "Hexagon:LE:32:default", family: "Hexagon", sla: "hexagon", pspec: "hexagon" },
+];
+
+fn registered_profile(profile: &str) -> Option<&'static RegisteredProfile> {
+    REGISTERED_PROFILES.iter().find(|descriptor| descriptor.id == profile)
 }
 
 /// One profile, reused across bounded windows. Every decode rebinds bytes/base and clears translation caches.
 /// This does not admit decompilation, ABI/type layouts, executable discovery, or external specification paths.
 pub struct SleighDecoder {
     handle: *mut c_void,
-    profile: String,
+    profile: &'static RegisteredProfile,
     last_unknown_gate: Option<UnknownGate>,
+    last_valid_decode_site: Option<u64>,
     metadata: ProfileMetadata,
 }
 
@@ -294,10 +308,20 @@ pub struct SleighDecoder {
 unsafe impl Send for SleighDecoder {}
 
 impl SleighDecoder {
+    /// Canonical closed registry IDs, without native initialization or resource-path exposure.
+    pub fn registered_profile_ids() -> impl ExactSizeIterator<Item = &'static str> {
+        REGISTERED_PROFILES.iter().map(|descriptor| descriptor.id)
+    }
+
+    /// Closed registry membership only: no paths, aliases, native initialization or source-file I/O.
+    pub fn is_registered_profile(profile: &str) -> bool {
+        registered_profile(profile).is_some()
+    }
+
     /// Selects a reviewed language's SLA and processor defaults, never arbitrary ldefs siblings.
     /// This decoder does not load a compiler specification or assert a C ABI, including for 6502.
     pub fn open(profile: &str) -> Result<Self, Error> {
-        let (family, sla_file, pspec_file) = registered_profile(profile)
+        let descriptor = registered_profile(profile)
             .ok_or_else(|| Error::Ghidra("unregistered bundled decoder profile".to_owned()))?;
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: this reads only the shim's compile-time record size under the native serialization lock.
@@ -306,14 +330,14 @@ impl SleighDecoder {
         }
         let proof = context::require_verified_bundled_native_context_locked()?;
         let home_path = proof.home();
-        let directory = home_path.join("Ghidra/Processors").join(family).join("data/languages");
+        let directory = home_path.join("Ghidra/Processors").join(descriptor.family).join("data/languages");
         let text = |path: &std::path::Path| {
             CString::new(path.as_os_str().as_encoded_bytes())
                 .map_err(|_| Error::Ghidra("invalid bundled decoder path".to_owned()))
         };
         let home = text(home_path)?;
-        let sla = text(&directory.join(format!("{sla_file}.sla")))?;
-        let pspec = text(&directory.join(format!("{pspec_file}.pspec")))?;
+        let sla = text(&directory.join(format!("{}.sla", descriptor.sla)))?;
+        let pspec = text(&directory.join(format!("{}.pspec", descriptor.pspec)))?;
         let before = context::begin_native_attempt(home_path);
         // SAFETY: paths come only from the verified bundle and remain valid during initialization.
         let handle = unsafe { rampage_sleigh_open(home.as_ptr(), sla.as_ptr(), pspec.as_ptr()) };
@@ -334,7 +358,7 @@ impl SleighDecoder {
             unsafe { rampage_sleigh_close(handle) };
             return Err(error);
         }
-        let metadata = match metadata_locked(handle, profile) {
+        let metadata = match metadata_locked(handle, descriptor.id) {
             Ok(metadata) => metadata,
             Err(error) => {
                 // SAFETY: this handle cannot escape when bounded native metadata is unavailable.
@@ -342,7 +366,7 @@ impl SleighDecoder {
                 return Err(error);
             }
         };
-        Ok(Self { handle, profile: profile.to_owned(), last_unknown_gate: None, metadata })
+        Ok(Self { handle, profile: descriptor, last_unknown_gate: None, last_valid_decode_site: None, metadata })
     }
 
     pub fn for_target(target: &Target) -> Result<Self, Error> {
@@ -362,7 +386,7 @@ impl SleighDecoder {
     }
 
     pub fn profile(&self) -> &str {
-        &self.profile
+        self.profile.id
     }
 
     /// The trait adapter uses `Flow::Invalid` as a STOP sentinel because the legacy trait has no unknown flow.
@@ -381,8 +405,11 @@ impl SleighDecoder {
             rampage_sleigh_decode(self.handle, address, bytes.as_ptr(), bytes.len(), output.as_mut_ptr());
         }
         let output = unsafe { output.assume_init() };
-        let decoded = convert(&self.profile, address, &output);
-        self.last_unknown_gate = decoded.unknown_gate.clone();
+        let decoded = convert(self.profile.id, address, &output);
+        self.last_valid_decode_site = (decoded.status == DecodeStatus::Valid).then_some(decoded.address);
+        self.last_unknown_gate = decoded.unknown_gate.clone().filter(|gate| {
+            decoded.status == DecodeStatus::Valid && gate.address == decoded.address && gate.profile == self.profile.id
+        });
         decoded
     }
 }
@@ -644,6 +671,30 @@ fn classify(
 }
 
 impl Disassembler for SleighDecoder {
+    fn decode_gate(&self) -> Option<DecodeGate> {
+        let gate = self.last_unknown_gate.as_ref()?;
+        if self.last_valid_decode_site != Some(gate.address) || gate.profile != self.profile.id {
+            return None;
+        }
+        let reason = match gate.reason {
+            UnknownFlow::IncompletePcode => DecodeGateReason::IncompletePcode,
+            UnknownFlow::InternalPcodeBranch => DecodeGateReason::InternalPcodeBranch,
+            UnknownFlow::MultipleExits => DecodeGateReason::MultipleExits,
+            UnknownFlow::UnsupportedTargetSpace => DecodeGateReason::UnsupportedTargetSpace,
+            UnknownFlow::UserDefinedOperation => DecodeGateReason::UserDefinedOperation,
+            UnknownFlow::DelaySlotAggregation => DecodeGateReason::DelaySlotAggregation,
+            UnknownFlow::MalformedPcode => DecodeGateReason::MalformedPcode,
+            UnknownFlow::ContextMediatedFlow => DecodeGateReason::ContextMediatedFlow,
+            UnknownFlow::ProcessorHelperRequired => DecodeGateReason::ProcessorHelperRequired,
+        };
+        Some(DecodeGate { backend: "sleigh", profile: self.profile.id, address: gate.address, reason })
+    }
+
+    fn reset(&mut self) {
+        self.last_unknown_gate = None;
+        self.last_valid_decode_site = None;
+    }
+
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
         let decoded = self.decode_instruction(&bytes[..bytes.len().min(MAX_WINDOW_BYTES)], address);
         let flow = match decoded.flow {
@@ -674,6 +725,49 @@ impl Disassembler for SleighDecoder {
         } else {
             format!("{} {}", decoded.mnemonic, decoded.operand_text)
         }
+    }
+}
+
+#[cfg(test)]
+mod gate_projection_tests {
+    use super::*;
+
+    #[test]
+    fn helper_gate_uses_canonical_static_profile_and_exact_reason_on_both_decode_entry_points() {
+        let caller_owned = "Hexagon:LE:32:default".to_owned();
+        let mut decoder = SleighDecoder::open(&caller_owned).unwrap();
+        drop(caller_owned);
+        let bytes = include_bytes!("../../../tests/fixtures/sleigh/extended/Hexagon-v2.bin");
+        let decoded = decoder.decode_instruction(bytes, 0x1000);
+        assert_eq!(decoded.status, DecodeStatus::Valid);
+        let gate = decoder.decode_gate().unwrap();
+        assert_eq!(gate.reason, DecodeGateReason::ProcessorHelperRequired);
+        assert_eq!(gate.address, decoded.address);
+        assert_eq!(gate.profile, decoded.profile);
+        assert_eq!(gate.profile, decoder.profile());
+        assert!(std::ptr::eq(gate.profile.as_ptr(), registered_profile(gate.profile).unwrap().id.as_ptr()));
+        assert_eq!(decoder.decode(bytes, 0x1000).flow, Flow::Invalid);
+        assert_eq!(decoder.decode_gate(), Some(gate));
+    }
+
+    #[test]
+    fn stale_wrong_profile_wrong_site_and_nonvalid_results_never_project_a_gate() {
+        let mut decoder = SleighDecoder::open("Hexagon:LE:32:default").unwrap();
+        let bytes = include_bytes!("../../../tests/fixtures/sleigh/extended/Hexagon-v2.bin");
+        decoder.decode_instruction(bytes, 0x1000);
+        let original = decoder.last_unknown_gate.clone().unwrap();
+        decoder.last_unknown_gate.as_mut().unwrap().profile = "6502:LE:16:default".to_owned();
+        assert!(decoder.decode_gate().is_none());
+        decoder.last_unknown_gate = Some(original.clone());
+        decoder.last_unknown_gate.as_mut().unwrap().address += 4;
+        assert!(decoder.decode_gate().is_none());
+        decoder.last_unknown_gate = Some(original);
+        assert!(decoder.decode_gate().is_some());
+        decoder.reset();
+        assert!(decoder.decode_gate().is_none());
+        decoder.decode_instruction(bytes, 0x1000);
+        assert_ne!(decoder.decode_instruction(&[], 0x1000).status, DecodeStatus::Valid);
+        assert!(decoder.decode_gate().is_none());
     }
 }
 

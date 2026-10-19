@@ -324,6 +324,7 @@ pub enum DecodeGateReason {
     DelaySlotAggregation,
     MalformedPcode,
     ContextMediatedFlow,
+    ProcessorHelperRequired,
 }
 
 /// Valid instruction whose successors this backend cannot establish. Not an invalid opcode.

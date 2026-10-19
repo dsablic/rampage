@@ -47,6 +47,25 @@ impl Connection {
         for native_field in ["arch", "image_offset", "image_length"] {
             assert!(tool.input_schema["properties"].get(native_field).is_none());
         }
+        let roster = tool.input_schema["properties"]["profile"]["enum"].as_array().unwrap();
+        assert_eq!(roster.len(), 20);
+        for profile in [
+            "8051:BE:16:default",
+            "PIC-16:LE:16:PIC-16",
+            "SuperH:BE:32:SH-2",
+            "V850:LE:32:default",
+            "tricore:LE:32:default",
+            "Xtensa:LE:32:default",
+            "z80:LE:16:default",
+            "HCS-12:BE:24:default",
+            "6805:BE:16:default",
+            "CR16C:LE:16:default",
+            "eBPF:LE:64:default",
+            "Loongarch:LE:64:lp64d",
+            "Hexagon:LE:32:default",
+        ] {
+            assert!(roster.iter().any(|id| id == profile));
+        }
         assert!(
             !tool.input_schema["properties"]["profile"]["enum"]
                 .as_array()
@@ -123,7 +142,7 @@ impl Drop for Owned {
 }
 
 #[tokio::test]
-async fn raw_profiles_preserve_calls_returns_byte_coordinates_six_manual_functions_and_valid_unknown_gate() {
+async fn raw_profiles_keep_caller_only_six_and_preserve_the_explicit_valid_unknown_entry() {
     timeout(Duration::from_secs(150), async {
         let owned = Owned::new();
         let connection = Connection::connect().await;
@@ -158,12 +177,28 @@ async fn raw_profiles_preserve_calls_returns_byte_coordinates_six_manual_functio
             let mut request = request;
             request["discover"] = json!(true);
             request["listing_limit"] = json!(1);
+            request["seeds"] = json!([base]);
+            let caller_only = body(&connection.call(&path, request.clone()).await);
+            assert_eq!(
+                caller_only["program"]["functions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|function| function["address"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                vec![format!("{base:#x}"), format!("{:#x}", base + 16)]
+            );
             request["seeds"] = if name == "avr8" { json!([base, base + 22]) } else { json!([base]) };
-            let report = body(&connection.call(&path, request).await);
+            let report = body(&connection.call(&path, request.clone()).await);
             let functions = report["program"]["functions"].as_array().unwrap();
-            assert_eq!(functions.len(), 2, "{name}: {report}");
-            assert_eq!(functions[0]["address"], format!("{base:#x}"));
-            assert_eq!(functions[1]["address"], format!("{:#x}", base + 16));
+            let mut expected = vec![format!("{base:#x}"), format!("{:#x}", base + 16)];
+            if name == "avr8" {
+                expected.push("0x216".to_owned());
+            }
+            assert_eq!(
+                functions.iter().map(|function| function["address"].as_str().unwrap()).collect::<Vec<_>>(),
+                expected
+            );
             count += functions.len();
             assert_eq!(report["rows"].as_array().unwrap().len(), 1);
             assert!(report["listing_total"].as_u64().unwrap() > 1);
@@ -185,10 +220,50 @@ async fn raw_profiles_preserve_calls_returns_byte_coordinates_six_manual_functio
                 assert_eq!(gate["unknown_gate"]["address"], 0x216);
                 assert_eq!(gate["unknown_gate"]["reason"], "context_mediated_flow");
                 assert_eq!(gate["reason"], "conservative_unknown_flow_not_invalid_opcode");
+                assert_eq!(gate["context_mediated_flow"], true);
+                let retained = functions.iter().find(|function| function["address"] == "0x216").unwrap();
+                assert_eq!(retained["instruction_count"], 1);
+                assert_eq!(retained["blocks"], json!([{"start":"0x216","end":"0x218"}]));
+                let production = report["program"]["decode_gates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["function"] == "0x216" && entry["gate"]["address"] == "0x216")
+                    .unwrap();
+                assert_eq!(production["len"], 2);
+                assert_eq!(production["gate"]["backend"], "sleigh");
+                assert_eq!(production["gate"]["profile"], profile);
+                assert_eq!(production["gate"]["reason"], "context_mediated_flow");
+                assert!(report["program"]["xrefs"].as_array().unwrap().iter().all(|xref| xref["from"] != "0x216"));
+                for field in ["noreturn", "inferred_noreturn", "noreturn_calls"] {
+                    assert!(
+                        report["program"][field]
+                            .as_array()
+                            .is_none_or(|items| !items.iter().any(|item| item == "0x216"))
+                    );
+                }
+                assert!(
+                    caller_only["program"]["decode_gates"]
+                        .as_array()
+                        .is_none_or(|gates| !gates.iter().any(|gate| gate["gate"]["address"] == "0x216"))
+                );
+                assert!(functions.iter().flat_map(|function| function["blocks"].as_array().unwrap()).all(|block| {
+                    let start =
+                        u64::from_str_radix(block["start"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+                    let end = u64::from_str_radix(block["end"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+                    !(start <= 0x218 && 0x218 < end)
+                }));
+                request["listing_offset"] = json!(report["listing_total"].as_u64().unwrap() - 1);
+                let gate_page = body(&connection.call(&path, request).await);
+                assert_eq!(gate_page["rows"][0]["address"], "0x216");
+                assert_eq!(gate_page["rows"][0]["length"], 2);
+                assert_eq!(gate_page["rows"][0]["status"], "valid");
+                assert_eq!(gate_page["rows"][0]["flow"]["kind"], "unknown");
+                assert_eq!(gate_page["stops"], report["stops"]);
             }
             assert_eq!(owned.files(), before);
         }
-        assert_eq!(count, 6);
+        assert_eq!(count, 7);
         connection.shutdown().await;
     })
     .await

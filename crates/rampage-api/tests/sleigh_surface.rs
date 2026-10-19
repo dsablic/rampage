@@ -59,13 +59,47 @@ fn call(path: &Path, mut args: Value) -> Result<Value, String> {
 }
 
 #[test]
-fn standalone_file_tool_lists_three_owned_profiles_with_nonzero_offsets_and_no_abi_or_native_image_claim() {
+fn standalone_roster_uses_native_metadata_and_keeps_expanded_profiles_gated_without_abi_or_packet_claims() {
     let owned = Owned::new();
     let registry = tools::file_tools();
     let tool = registry.iter().find(|tool| tool.name == "inspect_sleigh").unwrap();
     assert_eq!(tool.group, tools::Group::Core);
     assert!(!tools::tools().iter().any(|tool| tool.name == "inspect_sleigh"));
     assert!(tool.input_schema["properties"].get("arch").is_none());
+    let roster = tool.input_schema["properties"]["profile"]["enum"].as_array().unwrap();
+    assert_eq!(
+        roster.iter().map(|id| id.as_str().unwrap()).collect::<Vec<_>>(),
+        rampage_decompiler::sleigh_decode::SleighDecoder::registered_profile_ids().collect::<Vec<_>>()
+    );
+    assert_eq!(roster.len(), 20);
+    assert_eq!(
+        roster.iter().map(|profile| profile.as_str().unwrap()).collect::<std::collections::BTreeSet<_>>().len(),
+        20
+    );
+    assert!(roster.iter().all(|profile| rampage_decompiler::sleigh_decode::SleighDecoder::is_registered_profile(
+        profile.as_str().unwrap()
+    )));
+    for profile in [
+        "8051:BE:16:default",
+        "PIC-16:LE:16:PIC-16",
+        "SuperH:BE:32:SH-2",
+        "V850:LE:32:default",
+        "tricore:LE:32:default",
+        "Xtensa:LE:32:default",
+        "z80:LE:16:default",
+        "HCS-12:BE:24:default",
+        "6805:BE:16:default",
+        "CR16C:LE:16:default",
+        "eBPF:LE:64:default",
+        "Loongarch:LE:64:lp64d",
+        "Hexagon:LE:32:default",
+    ] {
+        assert!(roster.iter().any(|id| id == profile));
+    }
+    for sibling in ["MIPS:BE:32:default", "68000:BE:32:default", "x86:LE:16:Real Mode", "/tmp/arbitrary.sla"] {
+        assert!(!roster.iter().any(|id| id == sibling));
+        assert!(!rampage_decompiler::sleigh_decode::SleighDecoder::is_registered_profile(sibling));
+    }
     assert!(
         tool.input_schema["properties"]["profile"]["enum"]
             .as_array()
@@ -105,10 +139,73 @@ fn standalone_file_tool_lists_three_owned_profiles_with_nonzero_offsets_and_no_a
         assert_eq!(report["source_range_sha256_after"], hash);
         assert_eq!(owned.files(), before);
     }
+    for (profile, name, seed, gate_address) in
+        [("Hexagon:LE:32:default", "Hexagon-v2", 0x1000, 0x1000), ("SuperH:BE:32:SH-2", "SuperH-v2", 0x1010, 0x1012)]
+    {
+        let bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/fixtures/sleigh/extended/{name}.bin")),
+        )
+        .unwrap();
+        let path = owned.0.join(format!("{name}.raw"));
+        let mut padded = vec![0xab; 7];
+        padded.extend_from_slice(&bytes);
+        std::fs::write(&path, padded).unwrap();
+        let before = owned.files();
+        let mut args = request(profile, 0x1000, bytes.len());
+        args["discover"] = json!(true);
+        args["seeds"] = json!([seed]);
+        args["listing_limit"] = json!(16);
+        let report = call(&path, args).unwrap();
+        let functions = report["program"]["functions"].as_array().unwrap();
+        assert_eq!(
+            functions.iter().map(|function| function["address"].as_str().unwrap()).collect::<Vec<_>>(),
+            vec![format!("{seed:#x}")]
+        );
+        let gate = report["program"]["decode_gates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| {
+                entry["function"] == format!("{seed:#x}") && entry["gate"]["address"] == format!("{gate_address:#x}")
+            })
+            .unwrap();
+        let row = report["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["address"] == format!("{gate_address:#x}"))
+            .unwrap();
+        assert_eq!(row["status"], "valid");
+        assert_eq!(row["flow"]["kind"], "unknown");
+        assert_eq!(gate["len"], row["length"]);
+        assert_eq!(gate["gate"]["reason"], row["unknown_gate"]["reason"]);
+        assert!(report["profile"]["alignment_bytes"].as_u64().unwrap() > 0);
+        assert!(
+            report["program"]["xrefs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|xref| xref["from"] != format!("{gate_address:#x}"))
+        );
+        let seed_address = format!("{seed:#x}");
+        assert!(
+            report["program"]["noreturn"]
+                .as_array()
+                .is_none_or(|items| !items.iter().any(|item| item.as_str() == Some(seed_address.as_str())))
+        );
+        if name == "Hexagon-v2" {
+            assert_eq!(row["processor_helper_required"], true);
+            assert_eq!(gate["gate"]["reason"], "processor_helper_required");
+            assert!(!report["profile"]["required_parallel_helper"].as_str().unwrap().is_empty());
+        } else {
+            assert_eq!(gate["gate"]["reason"], "delay_slot_aggregation");
+        }
+        assert_eq!(owned.files(), before);
+    }
 }
 
 #[test]
-fn paged_discovery_keeps_six_manual_functions_and_avr_unknown_flow_is_not_an_invalid_opcode() {
+fn paged_discovery_keeps_caller_only_six_and_explicit_valid_avr_unknown_entry() {
     let owned = Owned::new();
     let mut total = 0;
     for (name, profile, base, length) in [
@@ -120,12 +217,25 @@ fn paged_discovery_keeps_six_manual_functions_and_avr_unknown_flow_is_not_an_inv
         let before = owned.files();
         let mut args = request(profile, base, length);
         args["discover"] = json!(true);
+        args["seeds"] = json!([base]);
+        let caller_only = call(&path, args.clone()).unwrap();
+        let caller_entries: Vec<_> = caller_only["program"]["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|function| function["address"].as_str().unwrap())
+            .collect();
+        assert_eq!(caller_entries, vec![format!("{base:#x}"), format!("{:#x}", base + 16)]);
         args["seeds"] =
             if name == "avr8" { json!([format!("{base:#x}"), format!("{:#x}", base + 22)]) } else { json!([base]) };
-        let report = call(&path, args).unwrap();
+        let report = call(&path, args.clone()).unwrap();
         let functions = report["program"]["functions"].as_array().unwrap();
         let addresses: Vec<_> = functions.iter().map(|function| function["address"].as_str().unwrap()).collect();
-        assert_eq!(addresses, vec![format!("{base:#x}"), format!("{:#x}", base + 16)]);
+        let mut expected = vec![format!("{base:#x}"), format!("{:#x}", base + 16)];
+        if name == "avr8" {
+            expected.push("0x216".to_owned());
+        }
+        assert_eq!(addresses, expected);
         total += functions.len();
         assert_eq!(report["rows"].as_array().unwrap().len(), 1);
         assert!(report["program"]["xrefs"].as_array().unwrap().iter().any(|xref| xref["kind"] == "call"
@@ -144,10 +254,47 @@ fn paged_discovery_keeps_six_manual_functions_and_avr_unknown_flow_is_not_an_inv
             assert_eq!(gate["flow"]["kind"], "unknown");
             assert_eq!(gate["unknown_gate"]["reason"], "context_mediated_flow");
             assert_eq!(gate["reason"], "conservative_unknown_flow_not_invalid_opcode");
+            assert_eq!(gate["context_mediated_flow"], true);
+            let retained = functions.iter().find(|function| function["address"] == "0x216").unwrap();
+            assert_eq!(retained["instruction_count"], 1);
+            assert_eq!(retained["blocks"], json!([{"start":"0x216","end":"0x218"}]));
+            let production = report["program"]["decode_gates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["function"] == "0x216" && entry["gate"]["address"] == "0x216")
+                .unwrap();
+            assert_eq!(production["len"], 2);
+            assert_eq!(production["gate"]["backend"], "sleigh");
+            assert_eq!(production["gate"]["profile"], profile);
+            assert_eq!(production["gate"]["reason"], "context_mediated_flow");
+            assert!(report["program"]["xrefs"].as_array().unwrap().iter().all(|xref| xref["from"] != "0x216"));
+            for field in ["noreturn", "inferred_noreturn", "noreturn_calls"] {
+                assert!(
+                    report["program"][field].as_array().is_none_or(|items| !items.iter().any(|item| item == "0x216"))
+                );
+            }
+            assert!(
+                caller_only["program"]["decode_gates"]
+                    .as_array()
+                    .is_none_or(|gates| !gates.iter().any(|gate| gate["gate"]["address"] == "0x216"))
+            );
+            assert!(functions.iter().flat_map(|function| function["blocks"].as_array().unwrap()).all(|block| {
+                let start = u64::from_str_radix(block["start"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+                let end = u64::from_str_radix(block["end"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+                !(start <= 0x218 && 0x218 < end)
+            }));
+            args["listing_offset"] = json!(report["listing_total"].as_u64().unwrap() - 1);
+            let gate_page = call(&path, args).unwrap();
+            assert_eq!(gate_page["rows"][0]["address"], "0x216");
+            assert_eq!(gate_page["rows"][0]["length"], 2);
+            assert_eq!(gate_page["rows"][0]["status"], "valid");
+            assert_eq!(gate_page["rows"][0]["flow"]["kind"], "unknown");
+            assert_eq!(gate_page["stops"], report["stops"]);
         }
         assert_eq!(owned.files(), before);
     }
-    assert_eq!(total, 6);
+    assert_eq!(total, 7);
 }
 
 #[test]

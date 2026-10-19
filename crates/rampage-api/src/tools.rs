@@ -289,8 +289,11 @@ pub fn file_tools() -> Vec<FileTool> {
             group: Group::Core,
             name: "inspect_sleigh",
             description: "Inspect an explicit regular-file raw code window using a closed bundled Sleigh profile; \
-                no native executable admission or Project is required. Finite pilot: TI_MSP430, AVR8, 6502 plus \
-                existing x86/A64 profiles only, not arbitrary architecture aliases, spec paths or compiler specs. \
+                no native executable admission or Project is required. The closed runtime roster has 20 language \
+                IDs: 16 reviewed processor profiles plus four x86/A64 variants. This is explicit raw-window \
+                decoding/discovery, not ordinary Project, native-format, C ABI or packet support. No arbitrary \
+                architecture aliases, spec paths or compiler specs. Native profile metadata supplies alignment, \
+                spaces and helper requirements; widths are not inferred from CPU names. \
                 path is the only common selector. profile/offset/length/base_address and optional discover/seeds, \
                 instruction_limit/decode_attempt_limit/handle_open_limit/stop_limit, listing_offset/listing_limit, \
                 include_pcode and timeout_ms are flattened request fields. All source offsets, bases, seeds and \
@@ -299,7 +302,12 @@ pub fn file_tools() -> Vec<FileTool> {
                 authentication or a proven executable mapping. Listing is capped at 64 KiB; discovery at 4 KiB \
                 with explicit seeds and bounded work. Native calls/discovery are noninterruptible; deadlines are \
                 cooperative between operations. Preserve complete spaces/program/stops, including valid instructions \
-                gated for unknown flow (not invalid-opcode verdicts). P-code may require smaller listing pages. \
+                gated for unknown flow (not invalid-opcode verdicts), including explicitly seeded unknown entries \
+                and their bounded instruction extents. Unresolved gates forbid successor following and false \
+                noreturn inference. Hexagon processor-helper requirements do not establish packet CFG support; \
+                SuperH delay aggregation and user-defined/context-mediated operations remain explicit gates. \
+                Entry retention is not exact body coverage or complete transitive call discovery. \
+                P-code may require smaller listing pages. \
                 Complete JSON is capped at 60000 bytes or explicitly refused, never string-cut. A C ABI/compiler \
                 specification is not selected or attested by this workflow; C decompilation is unsupported. \
                 Unix checked regular-file sources only; no fallback, execution, \
@@ -552,15 +560,9 @@ fn sleigh_file_schema() -> Value {
             "type":"string", "description":"Explicit regular source file; raw bytes, not a native executable selector."
         }),
     );
-    properties.get_mut("profile").expect("Sleigh profile property")["enum"] = serde_json::json!([
-        "TI_MSP430:LE:16:default",
-        "avr8:LE:16:default",
-        "6502:LE:16:default",
-        "x86:LE:32:default",
-        "x86:LE:64:default",
-        "AARCH64:LE:64:v8A",
-        "AARCH64:BE:64:v8A"
-    ]);
+    properties.get_mut("profile").expect("Sleigh profile property")["enum"] = serde_json::json!(
+        rampage_decompiler::sleigh_decode::SleighDecoder::registered_profile_ids().collect::<Vec<_>>()
+    );
     schema["required"].as_array_mut().expect("required Sleigh fields").push(Value::String("path".to_owned()));
     schema
 }

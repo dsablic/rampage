@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 
 use rampage_analysis::discover::{Program, discover};
 use rampage_analysis::memory::Memory;
-use rampage_arch::{Disassembler, Flow, Insn};
+use rampage_arch::{DecodeGate, Disassembler, Flow, Insn};
 use rampage_decompiler::sleigh_decode::{
-    DecodeStatus, DecodedInstruction, InstructionFlow, PcodeOp, SleighDecoder, Space, UnknownGate,
+    DecodeStatus, DecodedInstruction, InstructionFlow, PcodeOp, ProfileMetadata, SleighDecoder, Space, UnknownGate,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -99,6 +99,8 @@ pub struct SleighSourceProfile {
     pub abi: &'static str,
     pub code_space: u32,
     pub spaces: Vec<Space>,
+    pub alignment_bytes: u32,
+    pub required_parallel_helper: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -115,6 +117,7 @@ pub struct SleighWindowRow {
     pub operand_text: String,
     pub flow: InstructionFlow,
     pub context_mediated_flow: bool,
+    pub processor_helper_required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unknown_gate: Option<UnknownGate>,
     pub diagnostic: Option<String>,
@@ -130,6 +133,7 @@ pub struct SleighWindowStop {
     pub status: DecodeStatus,
     pub flow: InstructionFlow,
     pub context_mediated_flow: bool,
+    pub processor_helper_required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unknown_gate: Option<UnknownGate>,
     pub reason: &'static str,
@@ -203,12 +207,9 @@ fn invalid(message: &str) -> ApiError {
 }
 
 fn validate(request: &SleighWindowRequest) -> Result<(usize, u64, Vec<u64>), ApiError> {
-    let alignment = match request.profile.as_str() {
-        "x86:LE:32:default" | "x86:LE:64:default" | "6502:LE:16:default" => 1,
-        "TI_MSP430:LE:16:default" | "avr8:LE:16:default" => 2,
-        "AARCH64:LE:64:v8A" | "AARCH64:BE:64:v8A" => 4,
-        _ => return Err(invalid("unregistered Sleigh window profile; select a reviewed bundled language ID")),
-    };
+    if !SleighDecoder::is_registered_profile(&request.profile) {
+        return Err(invalid("unregistered Sleigh window profile; select a reviewed bundled language ID"));
+    }
     let length = usize::try_from(request.length.0).map_err(|_| invalid("Sleigh window exceeds host width"))?;
     if !(1..=MAX_SLEIGH_WINDOW_BYTES).contains(&length) {
         return Err(invalid("Sleigh window length must be 1..=65536 bytes"));
@@ -236,9 +237,6 @@ fn validate(request: &SleighWindowRequest) -> Result<(usize, u64, Vec<u64>), Api
     let base = request.base_address.0;
     let end = base.checked_add(length as u64).ok_or_else(|| invalid("Sleigh code window address overflows"))?;
     request.offset.0.checked_add(length as u64).ok_or_else(|| invalid("Sleigh source range overflows"))?;
-    if !base.is_multiple_of(alignment) {
-        return Err(invalid("Sleigh base is not aligned for the selected profile; no mode bits are stripped"));
-    }
     if request.seeds.len() > MAX_SLEIGH_WINDOW_SEEDS
         || (request.discover && request.seeds.is_empty())
         || (!request.discover && !request.seeds.is_empty())
@@ -246,12 +244,36 @@ fn validate(request: &SleighWindowRequest) -> Result<(usize, u64, Vec<u64>), Api
         return Err(invalid("Sleigh discovery requires 1..=32 explicit seeds; linear mode accepts no seeds"));
     }
     let mut seeds: Vec<u64> = request.seeds.iter().map(|seed| seed.0).collect();
-    if seeds.iter().any(|seed| !(base..end).contains(seed) || !seed.is_multiple_of(alignment)) {
-        return Err(invalid("every Sleigh seed must be an aligned internal byte address within the selected window"));
+    if seeds.iter().any(|seed| !(base..end).contains(seed)) {
+        return Err(invalid("every Sleigh seed must be an internal byte address within the selected window"));
     }
     seeds.sort_unstable();
     seeds.dedup();
     Ok((length, end, seeds))
+}
+
+fn validate_profile_mapping(
+    request: &SleighWindowRequest,
+    end: u64,
+    seeds: &[u64],
+    metadata: &ProfileMetadata,
+) -> Result<(), ApiError> {
+    let alignment = u64::from(metadata.alignment_bytes);
+    if metadata.profile != request.profile || alignment == 0 {
+        return Err(invalid("Sleigh translator metadata does not match the selected profile"));
+    }
+    let code = metadata
+        .spaces
+        .iter()
+        .find(|space| space.id == metadata.code_space)
+        .ok_or_else(|| invalid("Sleigh metadata has no default code space"))?;
+    if end - 1 > code.highest {
+        return Err(invalid("Sleigh window exceeds the selected profile's internal code-space byte range"));
+    }
+    if !request.base_address.0.is_multiple_of(alignment) || seeds.iter().any(|seed| !seed.is_multiple_of(alignment)) {
+        return Err(invalid("Sleigh base and seeds must satisfy the translator's actual byte alignment"));
+    }
+    Ok(())
 }
 
 /// An owned, single code-space source. It exposes neither pointer/data reads nor other Harvard spaces.
@@ -285,6 +307,7 @@ struct Observations {
     failure: Option<String>,
     work_stop_status: Option<DecodeStatus>,
     retained_bytes: usize,
+    gates: BTreeMap<u64, DecodeGate>,
 }
 
 struct CappedCounter {
@@ -334,11 +357,10 @@ fn retained_instruction_bytes(instruction: &DecodedInstruction) -> usize {
 struct InstructionObservation {
     status: DecodeStatus,
     length: u32,
-    code_space: u32,
-    spaces: Vec<Space>,
     instruction: Insn,
     mnemonic: String,
     operand_text: String,
+    gate: Option<DecodeGate>,
 }
 
 impl From<&DecodedInstruction> for InstructionObservation {
@@ -346,11 +368,10 @@ impl From<&DecodedInstruction> for InstructionObservation {
         Self {
             status: decoded.status,
             length: decoded.length,
-            code_space: decoded.code_space,
-            spaces: decoded.spaces.clone(),
             instruction: analysis_instruction(decoded),
             mnemonic: decoded.mnemonic.clone(),
             operand_text: decoded.operand_text.clone(),
+            gate: None,
         }
     }
 }
@@ -389,6 +410,7 @@ struct DiscoveryDecoder {
     work: Arc<WorkCounters>,
     decode_attempt_limit: usize,
     handle_open_limit: usize,
+    last_gate: Option<DecodeGate>,
 }
 
 impl DiscoveryDecoder {
@@ -416,7 +438,9 @@ impl DiscoveryDecoder {
             return None;
         }
         if let Some(instruction) = state.instructions.get(&address) {
-            return Some(InstructionObservation::from(instruction));
+            let mut observation = InstructionObservation::from(instruction);
+            observation.gate = state.gates.get(&address).copied();
+            return Some(observation);
         }
         if state.instructions.len() >= self.instruction_limit {
             state.work_stop_status = Some(DecodeStatus::BudgetExceeded);
@@ -439,6 +463,17 @@ impl DiscoveryDecoder {
         };
         self.work.native_decode_attempts.fetch_add(1, Ordering::Relaxed);
         let mut instruction = decoder.decode_instruction(bytes, address);
+        let gate = decoder.decode_gate();
+        if instruction.status == DecodeStatus::Valid
+            && matches!(instruction.flow, InstructionFlow::Unknown { .. })
+            && !gate.is_some_and(|gate| gate.address == address && gate.profile == instruction.profile.as_str())
+        {
+            state.failure = Some(format!(
+                "Sleigh valid unknown flow at {address:#x} lacks its production discovery gate; \
+                 integration prerequisite unavailable, entire program discarded"
+            ));
+            return None;
+        }
         if matches!(instruction.status, DecodeStatus::BudgetExceeded | DecodeStatus::InternalError) {
             state.failure =
                 Some(format!("Sleigh decoder failed: {:?}: {:?}", instruction.status, instruction.diagnostic));
@@ -454,7 +489,8 @@ impl DiscoveryDecoder {
         if !self.retain_pcode {
             instruction.pcode = Vec::new();
         }
-        let retained = retained_instruction_bytes(&instruction);
+        let retained = retained_instruction_bytes(&instruction)
+            + gate.map_or(0, |_| std::mem::size_of::<DecodeGate>() + std::mem::size_of::<u64>());
         if retained > MAX_SLEIGH_CACHE_BYTES - state.retained_bytes {
             state.work_stop_status = Some(DecodeStatus::BudgetExceeded);
             state.failure = Some(format!(
@@ -465,7 +501,11 @@ impl DiscoveryDecoder {
             return None;
         }
         state.retained_bytes += retained;
-        let observation = InstructionObservation::from(&instruction);
+        let mut observation = InstructionObservation::from(&instruction);
+        observation.gate = gate;
+        if let Some(gate) = gate {
+            state.gates.insert(address, gate);
+        }
         state.instructions.insert(address, instruction);
         Some(observation)
     }
@@ -495,8 +535,15 @@ fn analysis_instruction(decoded: &DecodedInstruction) -> Insn {
 }
 
 impl Disassembler for DiscoveryDecoder {
+    fn decode_gate(&self) -> Option<DecodeGate> {
+        self.last_gate
+    }
+
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
-        self.observation(bytes, address).map(|observation| observation.instruction).unwrap_or(Insn {
+        self.last_gate = None;
+        let observation = self.observation(bytes, address);
+        self.last_gate = observation.as_ref().and_then(|observation| observation.gate);
+        observation.map(|observation| observation.instruction).unwrap_or(Insn {
             address,
             len: 0,
             flow: Flow::Invalid,
@@ -508,9 +555,14 @@ impl Disassembler for DiscoveryDecoder {
     }
 
     fn format(&mut self, bytes: &[u8], address: u64) -> String {
+        self.last_gate = None;
         self.observation(bytes, address)
             .map(|instruction| format!("{} {}", instruction.mnemonic, instruction.operand_text))
             .unwrap_or_default()
+    }
+
+    fn reset(&mut self) {
+        self.last_gate = None;
     }
 }
 
@@ -576,6 +628,7 @@ where
                 work: Arc::clone(work),
                 decode_attempt_limit: request.decode_attempt_limit,
                 handle_open_limit: request.handle_open_limit,
+                last_gate: None,
             }) as Box<dyn Disassembler>
         },
         seeds,
@@ -627,6 +680,8 @@ pub fn inspect_sleigh_file_range(path: &Path, request: &SleighWindowRequest) -> 
     // Validate the profile and verified bundled context before constructing discover's infallible factory.
     let decoder = SleighDecoder::open(&request.profile)
         .map_err(|error| ApiError::Unavailable(format!("Sleigh profile could not be opened: {error}")))?;
+    let metadata = decoder.metadata().clone();
+    validate_profile_mapping(request, end, &seeds, &metadata)?;
     let observations = Arc::new(Mutex::new(Observations::default()));
     let mut initial = DiscoveryDecoder {
         decoder: Some(decoder),
@@ -638,28 +693,17 @@ pub fn inspect_sleigh_file_range(path: &Path, request: &SleighWindowRequest) -> 
         work: Arc::clone(&work),
         decode_attempt_limit: request.decode_attempt_limit,
         handle_open_limit: request.handle_open_limit,
+        last_gate: None,
     };
-    let first_address = seeds.first().copied().unwrap_or(memory.base);
-    let first_bytes =
-        memory.code_from(first_address).ok_or_else(|| invalid("Sleigh first address is outside window"))?;
-    let first = initial.observation(first_bytes, first_address);
-    check_completion(&observations, started, request.timeout_ms)?;
-    let first = first.ok_or_else(|| invalid("Sleigh profile observation unavailable"))?;
-    let code_space = first
-        .spaces
-        .iter()
-        .find(|space| space.id == first.code_space)
-        .ok_or_else(|| invalid("Sleigh decoder did not provide its code-space facts"))?;
-    if end - 1 > code_space.highest {
-        return Err(invalid("Sleigh window exceeds the selected profile's internal code-space byte range"));
-    }
     let profile = SleighSourceProfile {
         language_id: request.profile.clone(),
         provenance: "closed_registry_verified_bundled_sla_and_processor_defaults",
         mapping_validation: "analyst_asserted_code_window_not_native_executable_admission",
         abi: "unknown_not_asserted_no_compiler_specification_or_c_decompilation",
-        code_space: first.code_space,
-        spaces: first.spaces.clone(),
+        code_space: metadata.code_space,
+        spaces: metadata.spaces,
+        alignment_bytes: metadata.alignment_bytes,
+        required_parallel_helper: metadata.required_parallel_helper,
     };
     let mut consumed = 0;
     let (program, completion) = if request.discover {
@@ -675,15 +719,10 @@ pub fn inspect_sleigh_file_range(path: &Path, request: &SleighWindowRequest) -> 
             }
             if observations.lock().unwrap_or_else(|poison| poison.into_inner()).instructions.len()
                 == request.instruction_limit
-                && consumed > 0
             {
                 break SleighWindowCompletion::LinearInstructionLimit;
             }
-            let instruction = if consumed == 0 {
-                Some(first.clone())
-            } else {
-                initial.observation(&memory.bytes[consumed..], memory.base + consumed as u64)
-            };
+            let instruction = initial.observation(&memory.bytes[consumed..], memory.base + consumed as u64);
             check_completion(&observations, started, request.timeout_ms)?;
             let instruction = instruction.ok_or_else(|| invalid("Sleigh instruction observation unavailable"))?;
             if instruction.status != DecodeStatus::Valid {
@@ -733,6 +772,7 @@ pub fn inspect_sleigh_file_range(path: &Path, request: &SleighWindowRequest) -> 
                 status: instruction.status,
                 flow: instruction.flow.clone(),
                 context_mediated_flow: instruction.context_mediated_flow,
+                processor_helper_required: instruction.processor_helper_required,
                 unknown_gate: instruction.unknown_gate.clone(),
                 reason,
                 diagnostic: instruction.diagnostic.clone(),
@@ -762,6 +802,7 @@ pub fn inspect_sleigh_file_range(path: &Path, request: &SleighWindowRequest) -> 
                 operand_text: instruction.operand_text,
                 flow: instruction.flow,
                 context_mediated_flow: instruction.context_mediated_flow,
+                processor_helper_required: instruction.processor_helper_required,
                 unknown_gate: instruction.unknown_gate,
                 diagnostic: instruction.diagnostic,
                 pcode: request.include_pcode.then_some(instruction.pcode),
@@ -813,8 +854,8 @@ pub fn inspect_sleigh_file_range(path: &Path, request: &SleighWindowRequest) -> 
         elapsed_ms: started.elapsed().as_millis(),
         cancellation: "cooperative_between_decodes_native_calls_and_discovery_not_interruptible",
         limitations: vec![
-            "Finite pilot: MSP430, AVR8 and 6502 plus existing x86/A64 profiles; \
-             the remaining 13 planned processor families are deferred.",
+            "Explicit windows support the 16 closed selected processor profiles plus existing x86/A64 bridge profiles. \
+             This does not admit them through ordinary native-image Project loading or assert a full backend.",
             "Profile, base and seeds are analyst assertions. \
              No native executable admission, CPU guessing or ABI proof.",
             "Code-space offsets are internal bytes. \

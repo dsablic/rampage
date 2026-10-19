@@ -150,7 +150,8 @@ impl RootCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum BinaryCommand {
-    /// Inspect a finite raw code window with a closed Sleigh profile and literal BYTE coordinates
+    /// Inspect raw byte windows with 20 closed Sleigh IDs, preserving unresolved flow gates
+    #[command(long_about = crate::args::INSPECT_SLEIGH_ABOUT)]
     InspectSleigh(crate::args::InspectSleighArgs),
     /// Persist an explicitly reviewed equal-length original-byte patch; never modify or execute the source
     PatchBytes(crate::args::PatchBytesArgs),

@@ -62,8 +62,8 @@ enum PacksCommand {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Inspect an asserted raw Sleigh window; no executable admission, ABI or execution claim
-    #[command(hide = true)]
+    /// Inspect raw windows with 20 closed Sleigh IDs, not native-image/ABI/packet support
+    #[command(hide = true, long_about = args::INSPECT_SLEIGH_ABOUT)]
     InspectSleigh(args::InspectSleighArgs),
     /// Atomically apply a checked heterogeneous annotation batch from explicit JSON
     #[command(name = "batch", hide = true)]

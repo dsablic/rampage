@@ -2,6 +2,14 @@ use std::path::PathBuf;
 
 use clap::Args;
 
+pub(crate) const INSPECT_SLEIGH_ABOUT: &str = "Inspect explicit raw BYTE windows using the 20 closed bundled Sleigh IDs \
+    (16 reviewed processor profiles plus four x86/A64 variants). Native metadata supplies code spaces/alignment: \
+    never infer widths from CPU names or multiply AVR byte offsets by word size. This is not ordinary \
+    native-image/Project admission, C ABI attestation, C decompilation or packet support. Hexagon helper \
+    requirements, SuperH delay aggregation, and user-defined/context-mediated flow remain explicit unresolved \
+    gates; valid gated entries are retained without successor/noreturn guesses. No target execution, annotations, \
+    extraction or source writes. Native --arch and image selectors are unsupported; select the raw profile explicitly.";
+
 #[derive(Args)]
 pub(crate) struct InspectSleighArgs {
     pub(crate) file: PathBuf,

@@ -92,7 +92,11 @@ fn seeds_are_bounded_aligned_and_explicit_not_auto_entries() {
         vec![FileOffset(0x1000); MAX_SLEIGH_WINDOW_SEEDS + 1],
     ] {
         request.seeds = seeds;
-        assert!(validate(&request).is_err());
+        let result = validate(&request).and_then(|(_, end, seeds)| {
+            let decoder = SleighDecoder::open(&request.profile).unwrap();
+            validate_profile_mapping(&request, end, &seeds, decoder.metadata())
+        });
+        assert!(result.is_err());
     }
     request.seeds = vec![FileOffset(0x1004), FileOffset(0x1000), FileOffset(0x1004)];
     assert_eq!(validate(&request).unwrap().2, vec![0x1000, 0x1004]);
@@ -214,6 +218,7 @@ fn repeated_cached_decodes_charge_total_work_without_reentering_native_code() {
         work: Arc::clone(&work),
         decode_attempt_limit: 2,
         handle_open_limit: 1,
+        last_gate: None,
     };
     assert!(decoder.observation(&[0x60], 0x1000).is_some());
     assert!(decoder.observation(&[0x60], 0x1000).is_some());
@@ -269,6 +274,7 @@ fn factory_admission_serializes_against_cross_decode_budget_failure() {
                 work: Arc::clone(&work),
                 decode_attempt_limit: 1,
                 handle_open_limit: request.handle_open_limit,
+                last_gate: None,
             };
             decode_waiting.wait();
             decoder.observation(&[0x60], 0x1000).is_none()
@@ -330,6 +336,7 @@ fn retained_cache_budget_refuses_new_native_observations_without_publishing_part
         work: Arc::clone(&work),
         decode_attempt_limit: 1,
         handle_open_limit: 1,
+        last_gate: None,
     };
     assert!(decoder.observation(&[0x60], 0x1000).is_none());
     let state = observations.lock().unwrap();
@@ -476,7 +483,10 @@ fn valid_but_unknown_pcode_flow_is_not_reported_as_an_invalid_opcode() {
     assert_eq!(report.rows[0].status, DecodeStatus::Valid);
     assert!(matches!(report.rows[0].flow, InstructionFlow::Unknown { .. }));
     assert_eq!(report.stops[0].reason, "conservative_unknown_flow_not_invalid_opcode");
-    assert!(report.program.as_ref().unwrap().functions.is_empty());
+    let program = report.program.as_ref().unwrap();
+    assert!(program.function_at(0x1000).unwrap().contains(0x1000));
+    assert!(program.decode_gate_at(0x1000, 0x1000).is_some());
+    assert!(!program.noreturn.contains(&0x1000));
 }
 
 #[test]
@@ -500,7 +510,10 @@ fn avr_context_mediated_skip_stops_discovery_instead_of_claiming_fallthrough() {
     assert_eq!(report.stops[0].address, 0x1000);
     assert_eq!(report.stops[0].reason, "conservative_unknown_flow_not_invalid_opcode");
     assert_eq!(report.stops[0].backed_prefix_hex, "00100895");
-    assert!(report.program.as_ref().unwrap().functions.is_empty());
+    let program = report.program.as_ref().unwrap();
+    assert!(program.function_at(0x1000).unwrap().contains(0x1000));
+    assert!(program.decode_gate_at(0x1000, 0x1000).is_some());
+    assert!(!program.noreturn.contains(&0x1000));
     assert!(report.discovery_coverage.contains("not_complete"));
 }
 
@@ -668,5 +681,220 @@ fn independent_oracle_function_recall_uses_the_same_six_function_denominator_for
     for (denominator, entries, extents) in totals {
         assert_eq!(entries, denominator);
         assert_eq!(extents, denominator);
+    }
+}
+
+#[test]
+fn translator_metadata_validates_word_units_and_unusual_code_space_widths_without_sample_opcodes() {
+    for profile in ["avr8:LE:16:default", "PIC-16:LE:16:PIC-16", "HCS-12:BE:24:default", "CR16C:LE:16:default"] {
+        let decoder = SleighDecoder::open(profile).unwrap();
+        let metadata = decoder.metadata();
+        let code = metadata.spaces.iter().find(|space| space.id == metadata.code_space).unwrap();
+        if profile.starts_with("avr8") || profile.starts_with("PIC-") {
+            assert_eq!(code.word_size, 2);
+        }
+        if profile.starts_with("HCS-") {
+            assert_eq!((code.address_size, code.highest), (3, 0xff_ffff));
+        }
+        if profile.starts_with("CR16") {
+            assert_eq!((code.address_size, code.highest), (4, 0xffff_ffff));
+        }
+        let mut request = request(profile, 1);
+        request.base_address = FileOffset(0);
+        let (_, end, seeds) = validate(&request).unwrap();
+        validate_profile_mapping(&request, end, &seeds, metadata).unwrap();
+        let first_outside = code.highest.checked_add(1).unwrap();
+        request.base_address = FileOffset(first_outside);
+        let (_, end, seeds) = validate(&request).unwrap();
+        assert!(validate_profile_mapping(&request, end, &seeds, metadata).is_err());
+        if metadata.alignment_bytes > 1 {
+            request.base_address = FileOffset(1);
+            let (_, end, seeds) = validate(&request).unwrap();
+            assert!(validate_profile_mapping(&request, end, &seeds, metadata).is_err());
+        }
+    }
+}
+
+#[test]
+fn full_roster_manual_and_call_only_matrix_retains_unknown_entries_and_reports_extent_misses() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/sleigh");
+    let truth: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("truth.json")).unwrap()).unwrap();
+    let extended: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("extended/truth-current.json")).unwrap()).unwrap();
+    let java: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("extended/oracle-current.json")).unwrap()).unwrap();
+    let mut totals = [(0usize, 0usize, 0usize); 2];
+    let mut matrix = Vec::new();
+    for (extended_fixture, fixture) in truth["fixtures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| (false, item))
+        .chain(extended["fixtures"].as_array().unwrap().iter().map(|item| (true, item)))
+    {
+        let name = fixture["name"].as_str().unwrap();
+        let language = fixture["language_id"].as_str().unwrap();
+        let base = crate::parse_file_offset(fixture["base_byte_offset"].as_str().unwrap()).unwrap();
+        let functions = fixture["functions"].as_array().unwrap();
+        let expected: Vec<_> = functions
+            .iter()
+            .map(|function| {
+                let start =
+                    function[if extended_fixture { "start_bytes" } else { "entry_offset_bytes" }].as_u64().unwrap();
+                let end = function[if extended_fixture { "end_exclusive_bytes" } else { "extent_end_exclusive_bytes" }]
+                    .as_u64()
+                    .unwrap();
+                (base + start, base + end)
+            })
+            .collect();
+        if extended_fixture {
+            let independent = java["fixtures"].as_array().unwrap().iter().find(|item| item["name"] == name).unwrap();
+            let java_functions = independent["oracle"]["program_oracle"]["functions"].as_array().unwrap();
+            assert_eq!(java_functions.len(), expected.len());
+            for ((entry, end), gold) in expected.iter().zip(java_functions) {
+                assert_eq!(
+                    *entry,
+                    crate::parse_file_offset(gold["entry"]["getOffset_bytes"].as_str().unwrap()).unwrap()
+                );
+                let ranges = gold["body_ranges"].as_array().unwrap();
+                assert_eq!(
+                    *end,
+                    ranges
+                        .iter()
+                        .map(|range| crate::parse_file_offset(
+                            range["end_inclusive"]["getOffset_bytes"].as_str().unwrap(),
+                        )
+                        .unwrap()
+                            + 1)
+                        .max()
+                        .unwrap()
+                );
+            }
+        }
+        let path = if extended_fixture {
+            root.join("extended").join(format!("{name}.bin"))
+        } else {
+            root.join(fixture["bytes_file"].as_str().unwrap())
+        };
+        let length = std::fs::metadata(&path).unwrap().len() as usize;
+        for (mode, manual) in [true, false].into_iter().enumerate() {
+            let mut request = request(language, length);
+            request.base_address = FileOffset(base);
+            request.discover = true;
+            request.seeds = if manual {
+                expected.iter().map(|(entry, _)| FileOffset(*entry)).collect()
+            } else {
+                vec![FileOffset(base)]
+            };
+            let report = inspect_sleigh_file_range(&path, &request).unwrap();
+            if extended_fixture {
+                assert_eq!(report.source_range_sha256, fixture["input_sha256"].as_str().unwrap());
+                let independent =
+                    java["fixtures"].as_array().unwrap().iter().find(|item| item["name"] == name).unwrap();
+                let expected_address = &independent["oracle"]["standalone_rows"][0]["address"];
+                let code = report.profile.spaces.iter().find(|space| space.id == report.profile.code_space).unwrap();
+                assert_eq!(code.name, expected_address["space"].as_str().unwrap());
+                assert_eq!(u64::from(code.word_size), expected_address["addressableUnitSize_bytes"].as_u64().unwrap());
+            }
+            let program = report.program.as_ref().unwrap();
+            let mut missing = Vec::new();
+            let mut extent_misses = Vec::new();
+            totals[mode].0 += expected.len();
+            for (entry, end) in &expected {
+                if let Some(function) = program.function_at(*entry) {
+                    totals[mode].1 += 1;
+                    let exact_coverage = function.end() == *end
+                        && function.blocks.iter().all(|block| block.start >= *entry && block.end <= *end)
+                        && (*entry..*end).all(|address| function.contains(address));
+                    if exact_coverage {
+                        totals[mode].2 += 1;
+                    } else {
+                        extent_misses.push(serde_json::json!({"entry":entry,"expected_end":end,
+                            "actual_end":function.end(),"blocks":function.blocks}));
+                        assert!(
+                            report.stops.iter().any(|stop| stop.unknown_gate.is_some()
+                                && function.contains(stop.address)
+                                && program.decode_gate_at(*entry, stop.address).is_some()),
+                            "unexplained extent miss {name} manual={manual}: {report:#?}"
+                        );
+                    }
+                } else {
+                    missing.push(*entry);
+                    if manual {
+                        let row = report.rows.iter().find(|row| row.address == *entry).expect(
+                            "every manual seed outcome must be retained, including unsupported decode outcomes",
+                        );
+                        assert_ne!(
+                            row.status,
+                            DecodeStatus::Valid,
+                            "manual VALID unknown seed was dropped: {name} {entry:#x}"
+                        );
+                        assert!(report.stops.iter().any(|stop| stop.address == *entry));
+                        continue;
+                    }
+                    assert!(
+                        report.stops.iter().any(|stop| stop.unknown_gate.is_some())
+                            || report.rows.iter().any(|row| matches!(row.flow, InstructionFlow::IndirectCall)),
+                        "unexplained transitive miss {name}: {report:#?}"
+                    );
+                }
+            }
+            matrix.push(serde_json::json!({"profile":language,"fixture":name,"manual_seeds":manual,
+                "denominator":expected.len(),"missing_entries":missing,"extent_misses":extent_misses,
+                "functions":program.functions,"production_gates":program.decode_gates,"stops":report.stops}));
+        }
+    }
+    assert_eq!(totals[0].0, 32);
+    assert_eq!(totals[1].0, 32);
+    eprintln!(
+        "UNFILTERED FULL ROSTER MATRIX: {}",
+        serde_json::json!({
+            "manual":totals[0],"call_only":totals[1],"outcomes":matrix,
+            "limits":"Explicit raw code windows only; missing gated edges are not implemented backend coverage"
+        })
+    );
+    // Do not force either extent total or transitive recall to 32: PIC's computed call and real gates stay visible.
+    // Valid unknown entries are enforced per-site above; unsupported native outcomes remain visible as misses.
+}
+
+#[test]
+fn hexagon_seed_and_superh_body_unknown_gates_are_retained_by_the_production_program() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/sleigh/extended");
+    for (profile, fixture, seed, gate_address) in [
+        ("Hexagon:LE:32:default", "Hexagon-v2.bin", 0x1000, 0x1000),
+        ("SuperH:BE:32:SH-2", "SuperH-v2.bin", 0x1010, 0x1012),
+    ] {
+        let path = root.join(fixture);
+        let mut request = request(profile, std::fs::metadata(&path).unwrap().len() as usize);
+        request.base_address = FileOffset(0x1000);
+        request.discover = true;
+        request.seeds = vec![FileOffset(seed)];
+        let report = inspect_sleigh_file_range(&path, &request).unwrap();
+        let program = report.program.as_ref().unwrap();
+        let function = program.function_at(seed).expect("valid unknown seed/body must not be erased as invalid opcode");
+        assert!(function.contains(gate_address));
+        let production_gate = program
+            .decode_gate_at(seed, gate_address)
+            .expect("unknown instruction needs a production Program gate, not only a report sidecar");
+        assert_eq!(production_gate.gate.profile, profile);
+        assert!(production_gate.len > 0);
+        assert!(!program.noreturn.contains(&seed));
+        let row = report.rows.iter().find(|row| row.address == gate_address).unwrap();
+        assert_eq!(row.status, DecodeStatus::Valid);
+        assert!(row.unknown_gate.is_some());
+        assert_eq!(
+            serde_json::to_value(production_gate.gate.reason).unwrap(),
+            serde_json::to_value(row.unknown_gate.as_ref().unwrap().reason).unwrap()
+        );
+        assert!(program.xrefs.iter().all(|xref| xref.from != gate_address));
+        assert!(report.rows.iter().all(|row| row.address <= gate_address));
+        if profile.starts_with("Hexagon") {
+            assert!(row.processor_helper_required);
+            assert_eq!(
+                row.unknown_gate.as_ref().unwrap().reason,
+                rampage_decompiler::sleigh_decode::UnknownFlow::ProcessorHelperRequired
+            );
+            assert!(report.profile.required_parallel_helper.is_some());
+        }
     }
 }
