@@ -330,6 +330,26 @@ fn cancelled_report(query: &CodeSearchQuery, limitation: &str) -> CodeSearchRepo
     }
 }
 
+fn native_search_address_bits(
+    width: Option<rampage_arch::TargetWidth>,
+    kind: &CodeSearchKind,
+) -> Result<Option<u16>, ApiError> {
+    let bits = width.map(|width| u16::from(width.bytes()) * 8);
+    if bits.is_none()
+        && matches!(
+            kind,
+            CodeSearchKind::Immediate(CodeImmediate { include_addresses: true, .. })
+                | CodeSearchKind::FunctionsReferencing(CodeReference::Constant(CodeImmediate {
+                    include_addresses: true,
+                    ..
+                }))
+        )
+    {
+        return Err(invalid("code/data address evidence width is unavailable for this native search"));
+    }
+    Ok(bits)
+}
+
 fn search_program(
     project: &Project,
     program: &Program,
@@ -340,6 +360,7 @@ fn search_program(
     if control.cancelled() {
         return Ok(cancelled_report(query, "Cancelled before metadata preparation."));
     }
+    let address_bits = native_search_address_bits(project.binary.arch.native_address_width(), &query.kind)?;
     let mut hits: BTreeMap<u64, CodeSearchHit> = BTreeMap::new();
     let mut decoded = 0;
     let mut decoded_bytes = 0u64;
@@ -547,7 +568,7 @@ fn search_program(
                     {
                         unsupported_operands += 1;
                     }
-                    immediate_evidence(value, &instruction, operands.as_deref(), project.binary.arch.pointer_size())
+                    immediate_evidence(value, &instruction, operands.as_deref(), address_bits)
                 }
                 CodeSearchKind::Instruction { mnemonic, operands } => {
                     let (actual_mnemonic, actual_operands) = assembly_fields(&text);
@@ -766,7 +787,7 @@ fn immediate_evidence(
     query: &CodeImmediate,
     instruction: &Insn,
     operands: Option<&[OperandEvidence]>,
-    pointer_size: u8,
+    address_bits: Option<u16>,
 ) -> Option<CodeSearchEvidence> {
     for operand in operands.unwrap_or_default() {
         if operand.kind == OperandKind::Immediate
@@ -785,12 +806,13 @@ fn immediate_evidence(
         }
     }
     if query.include_addresses {
+        let address_bits = address_bits?;
         let branch = match instruction.flow {
             Flow::Call(target) | Flow::Jump(target) | Flow::ConditionalJump(target) => Some(target),
             _ => None,
         };
         for target in branch.into_iter().chain(instruction.data_ref) {
-            if query.matches(Some(target), i64::try_from(target).ok(), Some(u16::from(pointer_size) * 8)) {
+            if query.matches(Some(target), i64::try_from(target).ok(), Some(address_bits)) {
                 return Some(evidence("address", Some(target), None));
             }
         }
@@ -1184,6 +1206,26 @@ mod tests {
             .unwrap(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn missing_native_address_bits_refuse_address_search_without_disabling_scalar_matching() {
+        let mut value = constant(CodeValue::Unsigned(0x2000));
+        assert_eq!(native_search_address_bits(None, &CodeSearchKind::Immediate(value.clone())).unwrap(), None);
+        value.include_addresses = true;
+        assert!(native_search_address_bits(None, &CodeSearchKind::Immediate(value.clone())).is_err());
+        assert!(
+            native_search_address_bits(
+                None,
+                &CodeSearchKind::FunctionsReferencing(CodeReference::Constant(value.clone()))
+            )
+            .is_err()
+        );
+        assert_eq!(
+            native_search_address_bits(Some(rampage_arch::TargetWidth::Bits32), &CodeSearchKind::Immediate(value))
+                .unwrap(),
+            Some(32)
+        );
     }
 
     fn constant(value: CodeValue) -> CodeImmediate {

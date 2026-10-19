@@ -4,7 +4,8 @@
 //! typeinfo symbols, the compiler-emitted RTTI structures in its data still name the classes and spell out the
 //! inheritance graph. The core is a pure function over a mapped image (byte ranges with virtual addresses,
 //! pointer width and endianness), so it is unit-testable with hand-built little-endian 32- and 64-bit blobs.
-//! [`recover`] adapts a loaded [`Binary`] to that core.
+//! [`recover`] adapts a loaded [`Binary`] to that core, returning a checked limitation when its format,
+//! pointer width or ABI cannot be inspected. An unsupported source is not an examined zero-class result.
 //!
 //! The scan is deliberately conservative to avoid naming non-C++ data: every followed pointer must land in a
 //! mapped range, every type name must demangle through the project's existing demanglers, and the work is
@@ -29,6 +30,32 @@ const MAX_NAME_BYTES: usize = 4096;
 /// A candidate vtable pointer shared by at least this many Itanium records is treated as a typeinfo category
 /// vtable even when it cannot be dereferenced (its target is an unresolved external in a stripped image).
 const MIN_SHARED_VTABLE: usize = 3;
+
+/// Why the top-level native RTTI adapter did not inspect a source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RttiLimitation {
+    UnknownPointerWidth,
+    UnsupportedPointerWidth(u8),
+    UnsupportedFormat(Format),
+    UnsupportedMips64N32Abi,
+}
+
+impl std::fmt::Display for RttiLimitation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownPointerWidth => formatter.write_str("RTTI pointer width is unknown"),
+            Self::UnsupportedPointerWidth(width) => {
+                write!(formatter, "RTTI pointer width {width} bytes is unsupported; expected 4 or 8")
+            }
+            Self::UnsupportedFormat(format) => {
+                write!(formatter, "RTTI recovery is unsupported for {format:?} images")
+            }
+            Self::UnsupportedMips64N32Abi => formatter.write_str("unsupported MIPS64 ELFCLASS32/N32 RTTI pointer ABI"),
+        }
+    }
+}
+
+impl std::error::Error for RttiLimitation {}
 
 /// A recovered class: its demangled name, the raw RTTI name, and the demangled direct base-class edges.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -383,7 +410,7 @@ fn dedup_bases(bases: Vec<String>, own: &str) -> Vec<String> {
 /// Builds a mapped image from a binary's file-backed data sections. RTTI records, type names and the vtables they
 /// point to are data; code and other sections are left out, so they neither cost scan budget nor validate a
 /// pointer.
-fn build_image(binary: &Binary) -> Image<'_> {
+fn build_image(binary: &Binary, pointer_size: u8) -> Image<'_> {
     let mut ranges = Vec::new();
     for section in &binary.sections {
         if !matches!(section.kind, SectionKind::Data | SectionKind::ReadOnlyData) || section.file_offset.is_none() {
@@ -398,23 +425,60 @@ fn build_image(binary: &Binary) -> Image<'_> {
         }
     }
     // PE is always little-endian; Itanium images follow the loaded byte order.
-    Image::new(ranges, binary.arch.pointer_size(), binary.big_endian && binary.format != Format::Pe)
+    Image::new(ranges, pointer_size, binary.big_endian && binary.format != Format::Pe)
 }
 
-/// Recovers classes from the RTTI structures in a stripped binary, independent of symbols.
-pub fn recover(binary: &Binary) -> Vec<RttiClass> {
-    if !matches!(binary.format, Format::Elf | Format::MachO | Format::Pe) {
-        return Vec::new();
+fn checked_pointer_size(format: Format, pointer_size: Option<u8>, mips64_n32: bool) -> Result<u8, RttiLimitation> {
+    if !matches!(format, Format::Elf | Format::MachO | Format::Pe) {
+        return Err(RttiLimitation::UnsupportedFormat(format));
     }
-    if !matches!(binary.arch.pointer_size(), 4 | 8) {
-        return Vec::new();
+    let pointer_size = match pointer_size {
+        None => return Err(RttiLimitation::UnknownPointerWidth),
+        Some(width @ (4 | 8)) => width,
+        Some(width) => return Err(RttiLimitation::UnsupportedPointerWidth(width)),
+    };
+    if mips64_n32 {
+        return Err(RttiLimitation::UnsupportedMips64N32Abi);
     }
-    if crate::classes::is_mips64_n32(binary) {
-        return Vec::new();
+    Ok(pointer_size)
+}
+
+/// Recovers classes from bounded, file-backed RTTI data, independent of symbols.
+///
+/// `Err` means the source was not admitted for inspection. `Ok`, including an empty vector, is a result
+/// over the existing bounded mapped-data view, not completeness or source/layout proof. No eligible ranges
+/// is an empty scan. Existing malformed-record skips and scan budgets are unchanged.
+pub fn recover(binary: &Binary) -> Result<Vec<RttiClass>, RttiLimitation> {
+    let pointer_size =
+        checked_pointer_size(binary.format, binary.arch.default_pointer_size(), crate::classes::is_mips64_n32(binary))?;
+    let image = build_image(binary, pointer_size);
+    Ok(if binary.format == Format::Pe { recover_msvc(&image) } else { recover_itanium(&image) })
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_pointer_width_cannot_inherit_a_machine_address_width() {
+        assert_eq!(checked_pointer_size(Format::Elf, None, false), Err(RttiLimitation::UnknownPointerWidth));
+        for width in [0, 1, 2, 16] {
+            assert_eq!(
+                checked_pointer_size(Format::Elf, Some(width), false),
+                Err(RttiLimitation::UnsupportedPointerWidth(width)),
+            );
+        }
+        assert_eq!(checked_pointer_size(Format::Elf, Some(4), false), Ok(4));
+        assert_eq!(checked_pointer_size(Format::MachO, Some(8), false), Ok(8));
+        assert_eq!(checked_pointer_size(Format::Pe, Some(4), false), Ok(4));
     }
-    let image = build_image(binary);
-    if image.ranges.is_empty() {
-        return Vec::new();
+
+    #[test]
+    fn unsupported_format_and_abi_are_distinct_from_an_empty_scan() {
+        assert_eq!(
+            checked_pointer_size(Format::Snapshot, Some(8), false),
+            Err(RttiLimitation::UnsupportedFormat(Format::Snapshot)),
+        );
+        assert_eq!(checked_pointer_size(Format::Elf, Some(8), true), Err(RttiLimitation::UnsupportedMips64N32Abi),);
     }
-    if binary.format == Format::Pe { recover_msvc(&image) } else { recover_itanium(&image) }
 }

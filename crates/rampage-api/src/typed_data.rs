@@ -124,7 +124,13 @@ fn declaration(project: &Project, annotations: &Annotations, address: u64, bindi
 
 fn validate_extent(project: &Project, address: u64, length: u32) -> Result<(), ApiError> {
     let end = checked_end(address, u64::from(length))?;
-    if project.binary.arch.pointer_size() == 4 && end > 0x1_0000_0000 {
+    let highest = project
+        .binary
+        .arch
+        .native_address_width()
+        .ok_or_else(|| invalid("native typed-data address bounds are unavailable"))?
+        .highest_address();
+    if end != 0 && end - 1 > highest {
         return Err(invalid("typed data range exceeds the target address space"));
     }
     let mut at = address;

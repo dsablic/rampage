@@ -112,18 +112,29 @@ enum Pointer<'a> {
     Import(&'a str),
 }
 
+fn objc_pointer_size(width: Option<u8>, report: &mut ObjcReport) -> Option<u8> {
+    match width.filter(|width| matches!(width, 4 | 8)) {
+        Some(width) => Some(width),
+        None => {
+            WARNINGS.push(
+                &mut report.warnings,
+                "Objective-C metadata not inspected: native pointer width is unavailable or unsupported".to_owned(),
+            );
+            None
+        }
+    }
+}
+
 /// Parses the image's Objective-C metadata. Images without it (or that are not Mach-O) yield an empty report.
 pub fn parse(binary: &Binary) -> ObjcReport {
-    let mut parser = Parser {
-        binary,
-        size: u64::from(binary.arch.pointer_size()),
-        budget: MAX_ENTRIES,
-        names: HashMap::new(),
-        report: ObjcReport::default(),
-    };
-    if binary.format != Format::MachO || !matches!(parser.size, 4 | 8) {
-        return parser.report;
+    let mut report = ObjcReport::default();
+    if binary.format != Format::MachO {
+        return report;
     }
+    let Some(size) = objc_pointer_size(binary.arch.default_pointer_size(), &mut report) else {
+        return report;
+    };
+    let mut parser = Parser { binary, size: u64::from(size), budget: MAX_ENTRIES, names: HashMap::new(), report };
     let mut seen = HashSet::new();
     for class in parser.list_section("__objc_classlist") {
         if seen.insert(class)
@@ -538,5 +549,16 @@ impl<'a> Parser<'a> {
         let bytes = &bytes[..bytes.len().min(MAX_NAME_BYTES + 1)];
         let end = bytes.iter().position(|&byte| byte == 0).filter(|&end| end > 0)?;
         Some(String::from_utf8_lossy(&bytes[..end]).into_owned())
+    }
+}
+
+#[cfg(test)]
+mod pointer_width_tests {
+    #[test]
+    fn unknown_objc_width_is_reported_not_a_complete_empty_parse() {
+        let mut report = super::ObjcReport::default();
+        assert_eq!(super::objc_pointer_size(None, &mut report), None);
+        assert!(!report.warnings.is_empty());
+        assert!(report.classes.is_empty() && report.categories.is_empty());
     }
 }

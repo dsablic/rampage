@@ -2014,6 +2014,10 @@ struct ResolutionReply {
     mapping_permissions: String,
 }
 
+fn native_sdk_width_matches(width: Option<u8>, address_bytes: u64) -> bool {
+    width.filter(|width| matches!(width, 4 | 8)).map(u64::from) == Some(address_bytes)
+}
+
 impl ResolutionReply {
     fn matches_request(&self, request: &DebuggerRequest) -> Result<(), String> {
         let DebuggerRequest::ResolveModuleAddress { expected_token, module_uuid, file_address, .. } = request else {
@@ -2027,7 +2031,7 @@ impl ResolutionReply {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.address_bytes != u64::from(self.architecture.pointer_size())
+        if !native_sdk_width_matches(self.architecture.default_pointer_size(), self.address_bytes)
             || !matches!(self.byte_order.as_str(), "little" | "big")
         {
             return Err("Unsupported module address width or object byte order".into());
@@ -2093,7 +2097,7 @@ impl ResolutionReply {
             return Err("Selected static Mach-O UUID does not match".into());
         }
         if binary.arch != self.architecture
-            || self.address_bytes != u64::from(binary.arch.pointer_size())
+            || !native_sdk_width_matches(binary.arch.default_pointer_size(), self.address_bytes)
             || binary.big_endian != (self.byte_order == "big")
             || destination.architecture != binary.arch
             || destination.big_endian != binary.big_endian
@@ -2248,6 +2252,16 @@ mod tests {
     const TEST_UUID: &str = "01234567-89ab-cdef-0123-456789abcdef";
     const FILE_BASE: u64 = 0x1_0000_0000;
     const FILE_ADDRESS: u64 = FILE_BASE + 0x204;
+
+    #[test]
+    fn native_sdk_width_does_not_admit_unknown_or_non_native_slot_sizes() {
+        assert!(!native_sdk_width_matches(None, 8));
+        assert!(!native_sdk_width_matches(None, 4));
+        assert!(!native_sdk_width_matches(Some(2), 2));
+        assert!(!native_sdk_width_matches(Some(4), 8));
+        assert!(native_sdk_width_matches(Some(4), 4));
+        assert!(native_sdk_width_matches(Some(8), 8));
+    }
 
     fn open_advanced<T>(harness: &mut Harness<'_, T>) {
         harness.get_by_label("Advanced: raw requests and JSON responses").click_accesskit();

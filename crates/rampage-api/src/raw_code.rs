@@ -116,7 +116,12 @@ pub(crate) fn validate_raw_window_size(length: usize, request: &RawCodeRequest) 
         .base_address
         .checked_add(length as u64)
         .ok_or_else(|| invalid("raw-code virtual-address range overflows"))?;
-    if request.arch.pointer_size() == 4 && end > 0x1_0000_0000 {
+    let highest = request
+        .arch
+        .native_address_width()
+        .ok_or_else(|| invalid("native raw-code address bounds are unavailable"))?
+        .highest_address();
+    if end - 1 > highest {
         return Err(invalid("raw-code window exceeds the 32-bit virtual-address range"));
     }
     Ok(end)

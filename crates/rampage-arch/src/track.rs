@@ -7,7 +7,7 @@
 use capstone::arch::{self, ArchOperand};
 use capstone::{Capstone, InsnDetail, RegId};
 
-use crate::{Arch, Got};
+use crate::{Arch, Got, TargetWidth};
 
 /// An operand, reduced to what tracking needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,12 +41,31 @@ pub(crate) struct Found {
 
 pub(crate) struct Tracker {
     arch: Arch,
+    register_width: Option<TargetWidth>,
     known: Vec<(u16, Value)>,
     /// The global-pointer register and its value, when the image has one.
     global_pointer: Option<(u16, u64)>,
     got: Option<Got>,
     /// Instructions left before a call made in a delay slot's shadow forgets every register.
     forget_after: Option<u8>,
+}
+
+fn native_register_width(arch: Arch) -> Option<TargetWidth> {
+    match arch {
+        Arch::X86 | Arch::Arm | Arch::Mips | Arch::PowerPc | Arch::Riscv32 | Arch::Sparc | Arch::M68k => {
+            Some(TargetWidth::Bits32)
+        }
+        Arch::X86_64 | Arch::Aarch64 | Arch::Mips64 | Arch::PowerPc64 | Arch::Riscv64 | Arch::Sparc64 | Arch::S390x => {
+            Some(TargetWidth::Bits64)
+        }
+    }
+}
+
+fn wrap_native(value: u64, width: Option<TargetWidth>) -> Option<u64> {
+    match width? {
+        TargetWidth::Bits32 => Some(value & 0xffff_ffff),
+        TargetWidth::Bits64 => Some(value),
+    }
 }
 
 fn register_named(engine: &Capstone, name: &str) -> Option<u16> {
@@ -60,7 +79,14 @@ impl Tracker {
             Arch::PowerPc64 => register_named(engine, "r2"),
             _ => None,
         };
-        Self { arch, known: Vec::new(), global_pointer: register.zip(global_pointer), got, forget_after: None }
+        Self {
+            arch,
+            register_width: native_register_width(arch),
+            known: Vec::new(),
+            global_pointer: register.zip(global_pointer),
+            got,
+            forget_after: None,
+        }
     }
 
     pub(crate) fn reset(&mut self) {
@@ -69,6 +95,7 @@ impl Tracker {
     }
 
     fn get(&self, register: u16) -> Option<Value> {
+        self.register_width?;
         if let Some((gp, value)) = self.global_pointer
             && gp == register
         {
@@ -78,9 +105,10 @@ impl Tracker {
     }
 
     fn set(&mut self, register: u16, value: Value) {
-        let value = Value { value: self.wrap(value.value), ..value };
         self.clear(register);
-        self.known.push((register, value));
+        if let Some(wrapped) = self.wrap(value.value) {
+            self.known.push((register, Value { value: wrapped, ..value }));
+        }
     }
 
     fn clear(&mut self, register: u16) {
@@ -88,12 +116,12 @@ impl Tracker {
     }
 
     /// Registers are 32 bits wide on 32-bit architectures.
-    fn wrap(&self, value: u64) -> u64 {
-        if self.arch.pointer_size() == 4 { value & 0xffff_ffff } else { value }
+    fn wrap(&self, value: u64) -> Option<u64> {
+        wrap_native(value, self.register_width)
     }
 
     /// Sign-extends a 32-bit result, as 64-bit MIPS, RISC-V and PowerPC do for `lui`, `lis` and `addiw`.
-    fn extend32(&self, value: u64) -> u64 {
+    fn extend32(&self, value: u64) -> Option<u64> {
         self.wrap(value as u32 as i32 as i64 as u64)
     }
 
@@ -107,14 +135,18 @@ impl Tracker {
         address: u64,
         is_call: bool,
     ) -> Found {
+        if self.register_width.is_none() {
+            self.reset();
+            return Found::default();
+        }
         let mut found = Found::default();
         // A load or store through a known base: its address.
         for operand in operands {
             if let Operand::Memory { base, index: 0, disp } = *operand
                 && let Some(base) = self.get(base)
             {
-                found.data_ref = Some(self.wrap(base.value.wrapping_add(disp as u64)));
-                found.accesses = true;
+                found.data_ref = self.wrap(base.value.wrapping_add(disp as u64));
+                found.accesses = found.data_ref.is_some();
             }
         }
         let result = self.result(mnemonic, operands, address, &mut found);
@@ -125,7 +157,7 @@ impl Tracker {
             self.set(register, value);
             // Halves of an address (`lui` and its kin) are not reported.
             if self.complete(mnemonic) {
-                let value_found = Some(self.wrap(value.value));
+                let value_found = self.wrap(value.value);
                 if value.address {
                     found.data_ref = found.data_ref.or(value_found);
                 } else {
@@ -167,7 +199,8 @@ impl Tracker {
         if let Some(got) = &self.got
             && let Some(slot) = found.data_ref
             && LOADS.contains(&mnemonic)
-            && let Some(entry) = got.entry(slot, self.arch.pointer_size()).filter(|&entry| entry != 0)
+            && let Some(width) = self.arch.default_pointer_size().filter(|width| matches!(width, 4 | 8))
+            && let Some(entry) = got.entry(slot, width).filter(|&entry| entry != 0)
         {
             let destination = match self.arch {
                 Arch::Sparc | Arch::Sparc64 => operands.iter().rev().find_map(register),
@@ -177,7 +210,7 @@ impl Tracker {
         }
         match (self.arch, mnemonic, operands) {
             (Arch::Mips | Arch::Mips64, "lui", &[R(rt), I(value)]) => {
-                Some((rt, constant(self.extend32((value as u64) << 16))))
+                Some((rt, constant(self.extend32((value as u64) << 16)?)))
             }
             (Arch::Mips | Arch::Mips64, "addiu" | "daddiu" | "addi" | "daddi", &[R(rt), R(rs), I(value)]) => {
                 Some((rt, offset(self.get(rs)?, value)))
@@ -186,17 +219,17 @@ impl Tracker {
             (Arch::Mips | Arch::Mips64, "move", &[R(rd), R(rs)]) => Some((rd, self.get(rs)?)),
 
             (Arch::Riscv32 | Arch::Riscv64, "auipc", &[R(rd), I(value)]) => {
-                Some((rd, Value { value: address.wrapping_add(self.extend32((value as u64) << 12)), address: true }))
+                Some((rd, Value { value: address.wrapping_add(self.extend32((value as u64) << 12)?), address: true }))
             }
             (Arch::Riscv32 | Arch::Riscv64, "lui" | "c.lui", &[R(rd), I(value)]) => {
-                Some((rd, constant(self.extend32((value as u64) << 12))))
+                Some((rd, constant(self.extend32((value as u64) << 12)?)))
             }
             (Arch::Riscv32 | Arch::Riscv64, "addi", &[R(rd), R(rs), I(value)]) => {
                 Some((rd, offset(self.get(rs)?, value)))
             }
             (Arch::Riscv32 | Arch::Riscv64, "addiw", &[R(rd), R(rs), I(value)]) => {
                 let base = self.get(rs)?;
-                Some((rd, Value { value: self.extend32(base.value.wrapping_add(value as u64)), ..base }))
+                Some((rd, Value { value: self.extend32(base.value.wrapping_add(value as u64))?, ..base }))
             }
             (Arch::Riscv32 | Arch::Riscv64, "addi" | "c.addi", &[R(rd), I(value)]) => {
                 Some((rd, offset(self.get(rd)?, value)))
@@ -221,7 +254,7 @@ impl Tracker {
             }
 
             (Arch::PowerPc | Arch::PowerPc64, "lis", &[R(rd), I(value)]) => {
-                Some((rd, constant(self.extend32(((value as i16) as i64 as u64) << 16))))
+                Some((rd, constant(self.extend32(((value as i16) as i64 as u64) << 16)?)))
             }
             (Arch::PowerPc | Arch::PowerPc64, "addis", &[R(rd), R(ra), I(value)]) => {
                 Some((rd, offset(self.get(ra)?, ((value as i16) as i64) << 16)))
@@ -321,4 +354,48 @@ pub(crate) fn written_registers(arch: Arch, mnemonic: &str, detail: &InsnDetail,
         }));
     }
     written
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    #[test]
+    fn missing_register_width_does_not_preserve_a_guessed_64_bit_value() {
+        assert_eq!(wrap_native(u64::MAX, None), None);
+        assert_eq!(wrap_native(u64::MAX, Some(TargetWidth::Bits32)), Some(u64::from(u32::MAX)));
+        assert_eq!(wrap_native(u64::MAX, Some(TargetWidth::Bits64)), Some(u64::MAX));
+    }
+
+    #[test]
+    fn unknown_register_width_withholds_gp_and_clears_stale_calculations() {
+        let mut tracker = Tracker {
+            arch: Arch::Mips,
+            register_width: None,
+            known: vec![(1, Value { value: 0x1234, address: true })],
+            global_pointer: Some((2, 0x2000)),
+            got: None,
+            forget_after: Some(1),
+        };
+        assert!(tracker.get(1).is_none());
+        assert!(tracker.get(2).is_none());
+        let found = tracker.step("lw", &[Operand::Memory { base: 2, index: 0, disp: 8 }], &[1], 0x1000, false);
+        assert_eq!(found, Found::default());
+        assert!(tracker.known.is_empty());
+        assert_eq!(tracker.forget_after, None);
+    }
+
+    #[test]
+    fn known_native_gp_is_not_truncated_before_the_original_arithmetic() {
+        let tracker = Tracker {
+            arch: Arch::Mips,
+            register_width: Some(TargetWidth::Bits32),
+            known: Vec::new(),
+            global_pointer: Some((2, u64::MAX)),
+            got: None,
+            forget_after: None,
+        };
+        assert_eq!(tracker.get(2).unwrap().value, u64::MAX);
+        assert_eq!(tracker.wrap(u64::MAX), Some(u64::from(u32::MAX)));
+    }
 }

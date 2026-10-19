@@ -181,7 +181,11 @@ fn evidence(
     if symbol.name.len() > MAX_NAME_BYTES {
         return Err("vtable symbol name exceeds the 4096-byte limit");
     }
-    let size = binary.arch.pointer_size();
+    let size = binary
+        .arch
+        .default_pointer_size()
+        .filter(|width| matches!(width, 4 | 8))
+        .ok_or("native named-vtable pointer width is unavailable or unsupported")?;
     let width = u64::from(size);
     if !symbol.address.is_multiple_of(width) {
         return Err("unaligned vtable header");
@@ -298,7 +302,7 @@ pub fn recover_named_bounded(binary: &Binary, max_tables: usize, max_slots: u64)
 pub fn recover(binary: &Binary) -> ClassRecovery {
     let mut result = ClassRecovery {
         classes: Vec::new(),
-        rtti_classes: crate::rtti::recover(binary),
+        rtti_classes: Vec::new(),
         warnings: Vec::new(),
         limitations: vec![
             "`classes` is named Itanium vtable evidence only; no automatic type insertion, complete class \
@@ -340,6 +344,10 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
                 .to_owned(),
         ],
     };
+    match crate::rtti::recover(binary) {
+        Ok(classes) => result.rtti_classes = classes,
+        Err(limitation) => result.warnings.push(format!("Symbol-independent RTTI not inspected: {limitation}.")),
+    }
     recover_named_into(binary, &mut result, MAX_CLASSES, MAX_SLOTS, None);
     let named: std::collections::BTreeSet<&str> = result.classes.iter().map(|class| class.name.as_str()).collect();
     result.rtti_classes.retain(|class| !named.contains(class.name.as_str()));
@@ -359,6 +367,12 @@ fn recover_named_into(
              this format."
                 .to_owned(),
         );
+        return;
+    }
+    if !matches!(binary.arch.default_pointer_size(), Some(4 | 8)) {
+        result
+            .warnings
+            .push("Named vtable evidence unavailable: native pointer width is unknown or unsupported.".to_owned());
         return;
     }
     if is_mips64_n32(binary) {

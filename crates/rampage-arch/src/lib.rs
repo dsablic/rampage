@@ -79,6 +79,22 @@ impl Arch {
         }
     }
 
+    /// Machine address calculation width of the existing native architectures, not a C ABI or profile bound.
+    pub fn native_address_width(self) -> Option<TargetWidth> {
+        match self {
+            Arch::X86 | Arch::Arm | Arch::Mips | Arch::PowerPc | Arch::Riscv32 | Arch::Sparc | Arch::M68k => {
+                Some(TargetWidth::Bits32)
+            }
+            Arch::X86_64
+            | Arch::Aarch64
+            | Arch::Mips64
+            | Arch::PowerPc64
+            | Arch::Riscv64
+            | Arch::Sparc64
+            | Arch::S390x => Some(TargetWidth::Bits64),
+        }
+    }
+
     /// Bytes in a pointer.
     pub fn pointer_size(self) -> u8 {
         match self {
@@ -245,6 +261,22 @@ pub const MAX_JUMP_TABLE_ENTRIES: u64 = 4096;
 pub enum TargetWidth {
     Bits32,
     Bits64,
+}
+
+impl TargetWidth {
+    pub fn bytes(self) -> u8 {
+        match self {
+            Self::Bits32 => 4,
+            Self::Bits64 => 8,
+        }
+    }
+
+    pub fn highest_address(self) -> u64 {
+        match self {
+            Self::Bits32 => u64::from(u32::MAX),
+            Self::Bits64 => u64::MAX,
+        }
+    }
 }
 
 /// A switch jump table a register-indirect jump dispatches through, with the index bound that a comparison and
@@ -443,6 +475,16 @@ pub fn decoder(target: &Target) -> Result<Box<dyn Disassembler>, UnsupportedArch
 #[cfg(test)]
 mod width_tests {
     use super::Arch;
+
+    #[test]
+    fn native_machine_widths_preserve_the_fourteen_address_bounds() {
+        let expected = [4, 8, 8, 4, 4, 8, 4, 8, 4, 8, 4, 8, 8, 4];
+        for (arch, bytes) in Arch::ALL.into_iter().zip(expected) {
+            let width = arch.native_address_width().unwrap();
+            assert_eq!(width.bytes(), bytes);
+            assert_eq!(width.highest_address(), if bytes == 4 { u64::from(u32::MAX) } else { u64::MAX });
+        }
+    }
 
     #[test]
     fn optional_defaults_preserve_all_fourteen_legacy_widths() {

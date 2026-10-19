@@ -804,6 +804,13 @@ impl Binary {
             binary.warnings.extend(warnings);
         }
         binary.global_pointer = binary.find_global_pointer();
+        if binary.sections.iter().any(|section| section.name == ".got")
+            && !matches!(binary.arch.default_pointer_size(), Some(4 | 8))
+        {
+            binary
+                .warnings
+                .push("GOT entries not inspected: native pointer-slot width is unavailable or unsupported".to_owned());
+        }
         binary.got = binary.read_got();
         if let Some(directory) = exception_directory {
             let (starts, warning) = starts::pe(&binary, &directory);
@@ -862,7 +869,7 @@ impl Binary {
     fn read_got(&self) -> Option<rampage_arch::Got> {
         let section = self.sections.iter().find(|section| section.name == ".got")?;
         let bytes = self.read(section.address, section.size)?;
-        let size = usize::from(self.arch.pointer_size());
+        let size = usize::from(self.arch.default_pointer_size().filter(|width| matches!(width, 4 | 8))?);
         let entries = bytes.chunks_exact(size).filter_map(|entry| read_uint(entry, 0, size, self.big_endian)).collect();
         Some(rampage_arch::Got { address: section.address, entries })
     }
@@ -985,12 +992,18 @@ impl Binary {
     pub fn recover_go_symbols(&mut self) -> crate::gopclntab::GoReport {
         #[cfg(test)]
         note_optional_recovery_entry();
-        let report = self.read_gopclntab();
+        let mut report = self.read_gopclntab();
         if report.functions.is_empty() {
             return report;
         }
         self.go_table = report.version;
-        self.go_arguments = self.read_go_arguments(&report);
+        self.go_arguments = match self.read_go_arguments(&report) {
+            Ok(arguments) => arguments,
+            Err(reason) => {
+                report.warn(reason.to_owned());
+                std::collections::BTreeMap::new()
+            }
+        };
         let mut taken: std::collections::HashSet<u64> = self.symbols.iter().map(|symbol| symbol.address).collect();
         for function in &report.functions {
             if !taken.insert(function.address) {
@@ -1023,7 +1036,14 @@ impl Binary {
             report.warn("gopclntab found but no text section to anchor addresses".to_owned());
             return report;
         };
-        let mut report = crate::gopclntab::parse(bytes, text.address, self.arch.pointer_size(), self.big_endian);
+        let width = match go_pointer_size(self.arch.default_pointer_size()) {
+            Ok(width) => width,
+            Err(reason) => {
+                report.warn(reason.to_owned());
+                return report;
+            }
+        };
+        let mut report = crate::gopclntab::parse(bytes, text.address, width, self.big_endian);
         report.table_address = Some(section.address);
         report
     }
@@ -1033,7 +1053,14 @@ impl Binary {
     /// `.data.rel.ro`). A candidate is accepted only once it parses cleanly and all of its recovered addresses
     /// sit in code, so arbitrary data cannot masquerade as a table.
     fn scan_gopclntab(&self, text_base: u64) -> crate::gopclntab::GoReport {
-        let pointer_size = self.arch.pointer_size();
+        let pointer_size = match go_pointer_size(self.arch.default_pointer_size()) {
+            Ok(width) => width,
+            Err(reason) => {
+                let mut report = crate::gopclntab::GoReport::default();
+                report.warn(reason.to_owned());
+                return report;
+            }
+        };
         for section in &self.sections {
             let relro = section.kind == SectionKind::Data && section.name.starts_with(".data.rel.ro");
             if !(section.kind == SectionKind::ReadOnlyData || relro) || section.size == 0 {
@@ -1059,15 +1086,16 @@ impl Binary {
     fn read_go_arguments(
         &self,
         report: &crate::gopclntab::GoReport,
-    ) -> std::collections::BTreeMap<u64, crate::gopclntab::GoArguments> {
+    ) -> Result<std::collections::BTreeMap<u64, crate::gopclntab::GoArguments>, &'static str> {
+        let pointer_size = go_pointer_size(self.arch.default_pointer_size())?;
         let framed: Vec<_> = report
             .functions
             .iter()
             .filter_map(|function| Some((function.address, function.frame?)))
             .filter(|(_, frame)| !frame.assembly)
             .collect();
-        let gofunc = self.find_gofunc(report, &framed);
-        framed
+        let gofunc = self.find_gofunc(report, &framed, pointer_size);
+        Ok(framed
             .into_iter()
             .filter_map(|(address, frame)| {
                 let inputs = match frame.arg_info {
@@ -1077,7 +1105,7 @@ impl Binary {
                 };
                 Some((address, crate::gopclntab::GoArguments { args: frame.args, inputs }))
             })
-            .collect()
+            .collect())
     }
 
     fn arg_info(&self, gofunc: u64, offset: u32) -> Option<Vec<Vec<crate::gopclntab::GoSlot>>> {
@@ -1092,6 +1120,7 @@ impl Binary {
         &self,
         report: &crate::gopclntab::GoReport,
         framed: &[(u64, crate::gopclntab::GoFrame)],
+        pointer_size: u8,
     ) -> Option<u64> {
         const MINPC: usize = 20;
         const GOFUNC_CANDIDATES: std::ops::RangeInclusive<usize> = 36..=48;
@@ -1101,7 +1130,7 @@ impl Binary {
         if sample.is_empty() {
             return None;
         }
-        let pointer = usize::from(self.arch.pointer_size());
+        let pointer = usize::from(pointer_size);
         for section in &self.sections {
             if !matches!(section.kind, SectionKind::Data | SectionKind::ReadOnlyData) {
                 continue;
@@ -1123,6 +1152,12 @@ impl Binary {
         }
         None
     }
+}
+
+fn go_pointer_size(width: Option<u8>) -> Result<u8, &'static str> {
+    width
+        .filter(|width| matches!(width, 4 | 8))
+        .ok_or("Go runtime metadata unavailable: native word width is unknown or unsupported")
 }
 
 /// Maps the file at `path`, or the executable inside the bundle directory it names.
@@ -1661,5 +1696,16 @@ mod tests {
             assert!(is_gopclntab(name), "{name}");
         }
         assert!(!is_gopclntab(".data.rel.ro"));
+    }
+}
+
+#[cfg(test)]
+mod go_width_tests {
+    #[test]
+    fn missing_go_word_width_is_not_a_complete_empty_parse() {
+        assert!(super::go_pointer_size(None).is_err());
+        assert!(super::go_pointer_size(Some(2)).is_err());
+        assert_eq!(super::go_pointer_size(Some(4)).unwrap(), 4);
+        assert_eq!(super::go_pointer_size(Some(8)).unwrap(), 8);
     }
 }

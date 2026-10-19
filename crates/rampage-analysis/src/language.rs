@@ -84,7 +84,13 @@ pub struct Selector {
 }
 
 pub fn metadata(binary: &Binary) -> LanguageMetadata {
+    metadata_with_pointer_size(binary, binary.arch.default_pointer_size())
+}
+
+fn metadata_with_pointer_size(binary: &Binary, pointer_size: Option<u8>) -> LanguageMetadata {
     let mut symbols = Vec::new();
+    let pointer_size = pointer_size.filter(|width| matches!(width, 4 | 8));
+    let mut omitted_vtable_targets = false;
     for symbol in &binary.symbols {
         let display = demangle(&symbol.name);
         let normalized =
@@ -105,8 +111,10 @@ pub fn metadata(binary: &Binary) -> LanguageMetadata {
         // pointer, so function pointers start at index 2. The MSVC vftable layout differs and is not extracted.
         let mut vtable_targets = Vec::new();
         let itanium_vtable = normalized.starts_with("_ZTV");
-        if itanium_vtable && symbol.size >= u64::from(binary.arch.pointer_size()) * 3 {
-            let size = u64::from(binary.arch.pointer_size());
+        if itanium_vtable && pointer_size.is_none() {
+            omitted_vtable_targets = true;
+        }
+        if let Some(size) = pointer_size.map(u64::from).filter(|&size| itanium_vtable && symbol.size >= size * 3) {
             for index in 2..(symbol.size / size).min(130) {
                 let Some(at) = symbol.address.checked_add(index * size) else { break };
                 let Some(pointer) = binary.read_pointer(at, size as u8).filter(|&at| binary.is_code(at)) else { break };
@@ -139,7 +147,7 @@ pub fn metadata(binary: &Binary) -> LanguageMetadata {
             offset += name.len() as u64;
         }
     }
-    LanguageMetadata {
+    let mut metadata = LanguageMetadata {
         symbols,
         selectors,
         objc: rampage_loaders::objc::parse(binary),
@@ -155,7 +163,13 @@ pub fn metadata(binary: &Binary) -> LanguageMetadata {
              extracted."
                 .to_owned(),
         ],
+    };
+    if omitted_vtable_targets {
+        metadata.limitations.push(
+            "Itanium vtable targets were not inspected: native pointer width is unavailable or unsupported.".to_owned(),
+        );
     }
+    metadata
 }
 
 #[cfg(test)]
@@ -170,6 +184,25 @@ mod tests {
         assert_eq!(demangle("_ZN3foo3bar17h0123456789abcdefE").as_deref(), Some("foo::bar"));
         assert_eq!(demangle("main"), None);
         assert_eq!(demangle(&"_Z".repeat(3000)), None);
+    }
+
+    #[test]
+    fn missing_vtable_width_keeps_names_but_marks_targets_unexamined() {
+        let mut binary =
+            Binary::from_snapshot_bytes(include_bytes!("../../../tests/data/runtime-arm64.snapshot.json").to_vec())
+                .unwrap();
+        // Supplied symbol metadata tests reporting, not producer identity or a class-layout assertion.
+        binary.symbols.push(rampage_loaders::Symbol {
+            name: "_ZTV3Foo".to_owned(),
+            address: 0x3000,
+            size: 24,
+            kind: rampage_loaders::SymbolKind::Data,
+        });
+        let metadata = metadata_with_pointer_size(&binary, None);
+        let symbol = metadata.symbols.iter().find(|symbol| symbol.original == "_ZTV3Foo").unwrap();
+        assert_eq!(symbol.class_name.as_deref(), Some("Foo"));
+        assert!(symbol.vtable_targets.is_empty());
+        assert!(metadata.limitations.iter().any(|text| text.contains("vtable targets were not inspected")));
     }
 
     #[test]

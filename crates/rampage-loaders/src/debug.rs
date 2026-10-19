@@ -54,6 +54,17 @@ impl DebugReport {
     }
 }
 
+fn signature_pointer_size(width: Option<u8>, report: &mut DebugReport) -> Option<u8> {
+    match width.filter(|width| matches!(width, 4 | 8)) {
+        Some(width) => Some(width),
+        None => {
+            report
+                .warn("DWARF signature preview unavailable: native pointer width is unknown or unsupported".to_owned());
+            None
+        }
+    }
+}
+
 /// Reads only embedded DWARF. Declarations expand typedefs to exact-width scalar types;
 /// aggregate layouts, external debug files, and source compiler selection are not inferred.
 /// Const qualifiers are erased with a warning; volatile and restrict signatures are rejected.
@@ -149,6 +160,9 @@ pub fn signatures(binary: &Binary) -> Result<DebugReport, LoadError> {
             }
         }
     }
+    let Some(pointer_size) = signature_pointer_size(binary.arch.default_pointer_size(), &mut report) else {
+        return Ok(report);
+    };
     let mut output_bytes = 0;
     for (&offset, node) in &nodes {
         if WARNINGS.is_full(&report.warnings) {
@@ -168,7 +182,7 @@ pub fn signatures(binary: &Binary) -> Result<DebugReport, LoadError> {
             report.warn(format!("skipped DWARF function at {:#x}: address is not mapped code", node.address.unwrap()));
             continue;
         }
-        match declaration(node, args, varargs, &nodes, binary.arch.pointer_size(), &mut report) {
+        match declaration(node, args, varargs, &nodes, pointer_size, &mut report) {
             Ok(signature) => {
                 output_bytes += signature.name.len() + signature.declaration.len();
                 if output_bytes > MAX_DEBUG_BYTES {
@@ -1327,5 +1341,16 @@ mod tests {
         assert!(report.warnings.last().unwrap().contains("diagnostics are truncated"));
         report.warn("later warning".to_owned());
         assert_eq!(report.warnings.len(), MAX_WARNINGS);
+    }
+}
+
+#[cfg(test)]
+mod pointer_width_tests {
+    #[test]
+    fn unknown_signature_pointer_width_keeps_a_warning() {
+        let mut report = super::DebugReport::default();
+        assert_eq!(super::signature_pointer_size(None, &mut report), None);
+        assert!(!report.warnings.is_empty());
+        assert!(report.signatures.is_empty());
     }
 }

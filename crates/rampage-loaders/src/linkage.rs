@@ -331,7 +331,7 @@ impl<'a> PeReader<'a> {
                 | (0x1c0 | 0x1c2 | 0x1c4, Arch::Arm, 4)
                 | (0xaa64, Arch::Aarch64, 8)
         );
-        if !supported || usize::from(arch.pointer_size()) != width {
+        if !supported || arch.default_pointer_size().map(usize::from) != Some(width) {
             return Err(LinkageLimitation::UnsupportedWidth);
         }
         let image_size = u32_at(optional, 56)?;

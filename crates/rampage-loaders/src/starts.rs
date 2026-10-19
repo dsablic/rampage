@@ -175,7 +175,16 @@ pub(crate) fn eh_frame(binary: &Binary) -> (Vec<u64>, Option<String>) {
     };
     let available = binary.read_to_segment_end(section.address).unwrap_or_default();
     let data = &available[..section.size.min(available.len() as u64) as usize];
-    let pointer_size = usize::from(binary.arch.pointer_size());
+    let Some(pointer_size) = binary.arch.default_pointer_size().filter(|width| matches!(width, 4 | 8)) else {
+        return (
+            Vec::new(),
+            Some(format!(
+                "{} not inspected: absolute encoded-address width is unavailable or unsupported",
+                section.name
+            )),
+        );
+    };
+    let pointer_size = usize::from(pointer_size);
     let mut starts = Vec::new();
     let mut cies: std::collections::HashMap<usize, Option<u8>> = std::collections::HashMap::new();
     let mut offset = 0;

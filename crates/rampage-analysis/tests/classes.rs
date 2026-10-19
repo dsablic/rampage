@@ -285,13 +285,18 @@ fn mips64_elfclass32_is_rejected_before_assuming_eight_byte_pointers() {
     assert_eq!(binary.format, Format::Elf);
     assert_eq!(&binary.image_bytes()[..5], b"\x7fELF\x01");
     assert_eq!(binary.symbols[0].name, "_ZTV3Foo");
+    assert_eq!(rtti::recover(&binary), Err(rtti::RttiLimitation::UnsupportedMips64N32Abi));
     let result = recover(&binary);
     assert!(result.classes.is_empty());
     assert!(result.warnings.iter().any(|warning| warning.contains("unsupported MIPS64 ELFCLASS32/N32")));
+    assert!(result.warnings.iter().any(|warning| {
+        warning.starts_with("Symbol-independent RTTI not inspected:") && warning.contains("MIPS64 ELFCLASS32/N32")
+    }));
 
     let binary = mips_elf(true);
     assert_eq!(binary.arch, Arch::Mips64);
     assert_eq!(&binary.image_bytes()[..5], b"\x7fELF\x02");
+    assert!(rtti::recover(&binary).is_ok());
     let result = recover(&binary);
     assert_eq!(result.classes.len(), 1);
     assert!(!result.warnings.iter().any(|warning| warning.contains("N32")));

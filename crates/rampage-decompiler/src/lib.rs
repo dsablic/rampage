@@ -373,10 +373,17 @@ pub struct MemoryRegion<'a> {
     pub executable: bool,
 }
 
+fn native_address_highest(width: Option<rampage_arch::TargetWidth>) -> Result<u64, Error> {
+    width
+        .map(rampage_arch::TargetWidth::highest_address)
+        .ok_or_else(|| Error::Ghidra("native machine address bounds are unavailable".to_owned()))
+}
+
 fn validate_regions(arch: Arch, regions: &[MemoryRegion]) -> Result<(), Error> {
     if regions.len() > 4096 {
         return Err(Error::Ghidra("memory region limit exceeded (4096)".to_owned()));
     }
+    let highest = native_address_highest(arch.native_address_width())?;
     let mut ranges = Vec::with_capacity(regions.len());
     for region in regions {
         if region.size == 0 || region.bytes.len() as u64 > region.size {
@@ -386,7 +393,7 @@ fn validate_regions(arch: Arch, regions: &[MemoryRegion]) -> Result<(), Error> {
             .base
             .checked_add(region.size - 1)
             .ok_or_else(|| Error::Ghidra("memory region overflows address space".to_owned()))?;
-        if arch.pointer_size() == 4 && last > u64::from(u32::MAX) {
+        if last > highest {
             return Err(Error::Ghidra("memory region exceeds the target address space".to_owned()));
         }
         ranges.push((region.base, last));
@@ -490,7 +497,7 @@ impl Decompiler {
         (target != 0).then_some(target)
     }
     fn valid_address(&self, address: u64) -> Result<(), Error> {
-        if self.arch.pointer_size() == 4 && address > u64::from(u32::MAX) {
+        if address > native_address_highest(self.arch.native_address_width())? {
             return Err(Error::Ghidra("address exceeds target width".to_owned()));
         }
         Ok(())
@@ -913,5 +920,18 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod native_width_tests {
+    #[test]
+    fn absent_native_machine_bounds_refuse_instead_of_becoming_64_bit() {
+        assert!(super::native_address_highest(None).is_err());
+        assert_eq!(
+            super::native_address_highest(Some(rampage_arch::TargetWidth::Bits32)).unwrap(),
+            u64::from(u32::MAX),
+        );
+        assert_eq!(super::native_address_highest(Some(rampage_arch::TargetWidth::Bits64)).unwrap(), u64::MAX);
     }
 }

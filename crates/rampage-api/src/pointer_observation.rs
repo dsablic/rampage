@@ -30,6 +30,12 @@ pub struct PointerObservation {
     pub limitations: Vec<String>,
 }
 
+fn observed_pointer_size(width: Option<u8>) -> Result<u8, ApiError> {
+    width
+        .filter(|width| matches!(width, 4 | 8))
+        .ok_or_else(|| ApiError::Invalid("captured pointer-slot width is unavailable or unsupported".to_owned()))
+}
+
 impl Project {
     /// Observes one captured pointer slot without treating it as a proven branch target or changing discovery.
     pub fn observe_pointer(&self, slot: u64) -> Result<PointerObservation, ApiError> {
@@ -38,7 +44,7 @@ impl Project {
         }
         let capture_identity = rampage_analysis::capture_identity::capture_identity(&self.binary)
             .ok_or_else(|| ApiError::Invalid("capture identity unavailable".to_owned()))?;
-        let pointer_size = self.binary.arch.pointer_size();
+        let pointer_size = observed_pointer_size(self.binary.arch.default_pointer_size())?;
         let segment = self.binary.segment_containing(slot);
         let slot_permissions = segment.map(|segment| segment.perms);
         let bytes = segment
@@ -98,5 +104,16 @@ impl Project {
                 "Writable slots remain observations only. No discovery edges, symbols or annotations are inserted.".to_owned(),
                 "Pointer authentication and high-bit tags are not stripped or reconstructed.".to_owned(),
             ] })
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    #[test]
+    fn absent_observation_width_is_a_capability_error_not_unreadable_bytes() {
+        assert!(super::observed_pointer_size(None).is_err());
+        assert!(super::observed_pointer_size(Some(2)).is_err());
+        assert_eq!(super::observed_pointer_size(Some(4)).unwrap(), 4);
+        assert_eq!(super::observed_pointer_size(Some(8)).unwrap(), 8);
     }
 }
