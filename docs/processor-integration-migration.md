@@ -92,12 +92,26 @@ The five pilot units are:
 5. API consumers: explicit Raw admission/identity plus one factory for listing and both search constructions,
    with preserved unknown gates and typed-capability refusals.
 
-These are pilot units, not permission for unrestricted edits. Preserve failures and review each mapping
-with fresh context. If a rule changes, update this guide and re-pilot. Bulk migration starts only after the
-complete pilot passes without further mapping changes. Then use
-compiler errors and a classified caller inventory as the migration queue, not a global textual replacement.
+Pilot gates apply per transformation. Units 1–3 are the representative full-loop pilots for classified
+width/model consumer migration. Once all three pass implementation, fresh-context review, correction and
+verification without outstanding mapping changes, only the classified width-consumer migration may proceed.
+An unmapped case stops pending a guide update and representative re-pilot.
+
+Units 4–5 remain separately reviewed and verified integration gates. Static Raw-draft review is not an
+executed pilot. Their dependencies do not block already-validated width mappings, and width-pilot success
+does not authorize factory/Raw implementation or establish ordinary-backend completion.
+
+Freeze the enumerated production caller inventory before width bulk. Every code-address, C-layout,
+encoded-address and scalar-inspection use requires a classified mapping. Before changing the legacy
+signature or exposing new identities, all production consumers must migrate and pass their checks; search
+must find no remaining production dependency on the total-width API, apart from its retained definition.
+Relevant compilation/tests must preserve existing fourteen defaults and Go/external explicit-typing behavior.
+Use compiler errors and this inventory as the queue, not a global textual replacement.
 
 Completion requires no unclassified pointer/decoder consumers, no new compiler warnings/errors, preserved
 existing-processor behavior, and owned ordinary-project discovery/listing/search agreement. Unknown gates,
 typed-evidence refusals, distinct Raw interpretation identities and Raw patch refusal must be tested.
+Real unknown-flow cases include Hexagon's helper-required gate at an entry and SuperH's aggregated
+delay-slot flow within a body. The three-pilot window experiment probes CPSE/DES separately; it does not
+establish retention of unknown seed instructions in ordinary Project discovery.
 Passing standalone decode tests or shipping resource files alone does not satisfy those conditions.

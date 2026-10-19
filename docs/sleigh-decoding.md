@@ -36,8 +36,11 @@ Language/compiler admission is explicit. Sibling resources retained to close an 
 file's dependencies are not automatically selectable profiles. Unknown ABI facts remain unknown: in particular,
 the reviewed 6502 compiler metadata supplies no C integer/pointer organization, so host widths are not substituted.
 
-The initial MSP430, AVR8 and 6502 profiles are a validation pilot, not completion of the roadmap's entire
-processor roster. Other families require their own resource closure, address/flow review and owned oracle evidence.
+The native library has closed selections for all sixteen resource-admitted roadmap families. The additional
+thirteen profiles were compared against 104 independent Java oracle rows; lengths, mnemonics and raw p-code
+matched. CR16 conditional recovery was improved without changing its comparator or original failure record.
+Hexagon still reports a helper-required gate: matching raw fixture p-code is not general packet support.
+These finite fixtures do not establish full-ISA, C-ABI or ordinary-project acceptance.
 
 ## Window and discovery contract
 
@@ -64,7 +67,8 @@ coordinates, not resolvable symbols. Unknown fields and arbitrary profile/specif
 
 Selected new profiles are `TI_MSP430:LE:16:default`, `avr8:LE:16:default` and `6502:LE:16:default`.
 The same bridge supports its reviewed existing x86/AArch64 profiles. Resource admission of other families
-does not make their profiles selectable before native/oracle review.
+alone does not make their profiles selectable. The native library's additional thirteen selections have
+passed their finite raw comparison, but are not yet enabled in this window-tool interface.
 
 Explicit windows select an original regular-file range, a bundled language profile and an internal-byte
 base address. There is no executable-header inference, extraction or automatic publication of decoded data.

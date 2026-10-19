@@ -283,8 +283,9 @@ no call reduction, no causal attribution to compact/batch tools, and no retry. T
 - [ ] Review, test and publish the finite supported processor set before Phase 4.2 raw/firmware loading.
 
 The first MSP430/AVR8/6502 resource closures are a pilot, not completion of the full 16-family roadmap roster.
-All 16 families now have resource-admitted closures from the pinned local public SDK; only the first three
-have native/oracle coverage so far. Remaining backend selections and oracle checks stay explicit.
+All 16 families have resource-admitted closures from the pinned local public SDK and finite native/oracle
+comparison coverage. The standalone MCP/window interface still selects the first three pilots; expanding
+that interface and ordinary Project routing remains separately gated.
 Compiled SLA is materialized, not lazily compiled from SLASPEC. AVR code uses two-byte address units and
 distinct Harvard spaces; 6502 compiler C widths remain unknown rather than defaulting to host values.
 The admission helper's aggregate source-read cap passed tests and independent review. The x86 parser-bounds
@@ -300,7 +301,12 @@ The first width/model pilot is implemented at `0d9dbb5`: optional defaults coexi
 fourteen-architecture legacy method, scalar grouping does not invent pointer evidence, and missing reviewed
 C facts do not block existing typed Go/external native routes. Targeted direct/worker, source-failure,
 external-alias and ABI checks passed. Actual small-model native queries, unknown-width Project identities,
-the remaining consumer migration, fallible factories and Raw admission still require their own gates.
+the remaining consumer migration, real-profile factory routing and Raw admission still require their own gates.
+The native roster is implemented at `5708906`: all 104 additional oracle rows match after a narrow CR16
+conditional-flow improvement, with original failures preserved. Hexagon remains helper-gated. The decompiler
+library passed 131 tests with one ignored; this is not a full-ISA or C-ABI claim. Checked factory/gate plumbing
+at `d330163` passed its scoped 402 distinct cases and source review, but real-profile gate projection and
+Raw/ordinary selector/listing/search integration remain pending.
 
 Phases 4.2–4.4, analysis-depth Phase 5 and scale/persistence Phase 6 follow in roadmap order. Implementation
 completion of earlier phases does not close the independent live/N, library-recall or agent-efficiency gates.
