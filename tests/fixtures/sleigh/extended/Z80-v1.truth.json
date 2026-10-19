@@ -1,0 +1,137 @@
+{
+  "name": "Z80-v1",
+  "family": "Z80",
+  "version": 1,
+  "language_id": "z80:LE:16:default",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x4000",
+  "byte_length": 10,
+  "input_sha256": "5366cd7fd7012c52bc4bf04d4b83331b9e5a5b3e571f675353d0f30567090934",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 7
+    },
+    {
+      "name": "callee",
+      "start_bytes": 8,
+      "end_exclusive_bytes": 10
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "cd0840",
+      "owned_explanatory_asm": "CALL callee"
+    },
+    {
+      "offset_bytes": 3,
+      "bytes_hex": "00",
+      "owned_explanatory_asm": "NOP"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "20fa",
+      "owned_explanatory_asm": "JR NZ,main"
+    },
+    {
+      "offset_bytes": 6,
+      "bytes_hex": "c9",
+      "owned_explanatory_asm": "RET"
+    },
+    {
+      "offset_bytes": 7,
+      "bytes_hex": "00",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "00",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 9,
+      "bytes_hex": "c9",
+      "owned_explanatory_asm": "RET"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 4,
+  "return_offset_bytes": 6,
+  "constructor_references": [
+    {
+      "source_file": "z80.slaspec",
+      "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+      "search": ":CALL Addr16",
+      "references": [
+        {
+          "line": 1970,
+          "snippet": ":CALL Addr16        is op0_8=0xcd; Addr16 {\n    push16(&:2 inst_next);\n\tcall Addr16;\n}\n\n:CALL cc,Addr16     is op6_2=0x3 & cc & bits0_3=0x4; Addr16 {\n\tif (!cc) goto inst_next;\n    push16(&:2 inst_next);\n\tcall Addr16;\n}"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "z80.slaspec",
+      "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+      "search": ":NOP ",
+      "references": [
+        {
+          "line": 1356,
+          "snippet": ":NOP                is op0_8=0x0 {\n}\n\n:HALT               is op0_8=0x76 {\n\thalt();\n}\n\n:DI                 is op0_8=0xf3 {\n#\tIFF1 = 0;\n#\tIFF2 = 0;"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "z80.slaspec",
+      "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+      "search": ":JR cc2",
+      "references": [
+        {
+          "line": 1944,
+          "snippet": ":JR cc2,RelAddr8    is op6_2=0x0 & cc2 & bits0_3=0x0; RelAddr8 {\n\tif (cc2) goto RelAddr8;\n}\n\n:JP (HL)            is op0_8=0xe9 & HL {\n\toff:2 = (zext(H) << 8) | zext(L);\n\t\n\tJumpToLoc(off);\n\n}"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "z80.slaspec",
+      "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+      "search": ":RET ",
+      "references": [
+        {
+          "line": 1981,
+          "snippet": ":RET                is op0_8=0xc9 {\n\tpop16(PC);\n\tptr:$(PTRSIZE) = PC;\n\treturn [ptr];\n}\n\n:RET cc             is op6_2=0x3 & cc & bits0_3=0x0 {\n\tif (!cc) goto inst_next;\n\tpop16(PC);\n\tptr:$(PTRSIZE) = PC;"
+        },
+        {
+          "line": 1987,
+          "snippet": ":RET cc             is op6_2=0x3 & cc & bits0_3=0x0 {\n\tif (!cc) goto inst_next;\n\tpop16(PC);\n\tptr:$(PTRSIZE) = PC;\n\treturn [ptr];\n}\n\n:RETI               is op0_8=0xed; op0_8=0x4d {\n\tpop16(PC);\n\tptr:$(PTRSIZE) = PC;"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "z80.slaspec",
+      "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+      "search": "RelAddr8:",
+      "references": [
+        {
+          "line": 350,
+          "snippet": "RelAddr8: loc  is simm8  [ loc = inst_next + simm8; ]        { export *:1 loc; }\n\nRstAddr: loc  is bits3_3 [ loc = bits3_3 << 3; ]       { export *:1 loc; }\n@if defined(Z180)\n\nIOAddr8: (imm8)  is imm8       { export *[const]:2 imm8; }\n\nIOAddr8a: (imm8)  is assume8bitIOSpace=0 & imm8        { ptr:2 = (zext(A) << 8) + imm8; export ptr; }\nIOAddr8a: (imm8)  is assume8bitIOSpace=1 & imm8        { export *[const]:2 imm8; }\n"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "RAM code and separate IO space must remain distinct; prefixes are multi-byte instructions, not extra function starts. No eZ80/Z180 substitution."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

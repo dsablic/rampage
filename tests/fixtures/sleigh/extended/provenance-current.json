@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "initial_cohort": "cohort-v1-kp_s2au3",
+  "targeted_retry_cohort": "targeted-v2-0xekzg_g",
+  "initial_records_unchanged": true,
+  "manifest_sha256": "c7e5f028dc7816cf6d895cd4e72db18292175c2e47b7c61f82a461250fe9f384",
+  "profiles": [
+    {
+      "name": "8051-v1",
+      "status": "pass",
+      "receipt": "8051-v1.provenance.json"
+    },
+    {
+      "name": "PIC-v1",
+      "status": "pass",
+      "receipt": "PIC-v1.provenance.json"
+    },
+    {
+      "name": "SuperH-v2",
+      "status": "pass",
+      "receipt": "SuperH-v2.provenance.json"
+    },
+    {
+      "name": "V850-v1",
+      "status": "pass",
+      "receipt": "V850-v1.provenance.json"
+    },
+    {
+      "name": "TriCore-v1",
+      "status": "pass",
+      "receipt": "TriCore-v1.provenance.json"
+    },
+    {
+      "name": "Xtensa-v1",
+      "status": "pass",
+      "receipt": "Xtensa-v1.provenance.json"
+    },
+    {
+      "name": "Z80-v1",
+      "status": "pass",
+      "receipt": "Z80-v1.provenance.json"
+    },
+    {
+      "name": "HCS12-v1",
+      "status": "pass",
+      "receipt": "HCS12-v1.provenance.json"
+    },
+    {
+      "name": "6805-v1",
+      "status": "pass",
+      "receipt": "6805-v1.provenance.json"
+    },
+    {
+      "name": "CR16-v1",
+      "status": "pass",
+      "receipt": "CR16-v1.provenance.json"
+    },
+    {
+      "name": "eBPF-v1",
+      "status": "pass",
+      "receipt": "eBPF-v1.provenance.json"
+    },
+    {
+      "name": "Loongarch-v1",
+      "status": "pass",
+      "receipt": "Loongarch-v1.provenance.json"
+    },
+    {
+      "name": "Hexagon-v2",
+      "status": "pass",
+      "receipt": "Hexagon-v2.provenance.json"
+    }
+  ],
+  "target_execution": false,
+  "native_acceptance": false
+}

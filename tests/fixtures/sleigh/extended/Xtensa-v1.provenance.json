@@ -1,0 +1,1398 @@
+{
+  "schema_version": 1,
+  "attempt": "Xtensa-v1-attempt-ort2wwdp",
+  "capture_date": "2026-10-19",
+  "kind": "extended_independent_static_java_oracle",
+  "fixture": "Xtensa-v1",
+  "verdict": {
+    "status": "pass",
+    "failures": [],
+    "manual_true_functions": 2,
+    "observed_function_count": 2,
+    "true_positive_seeded_entries": 2,
+    "unseeded_function_count": 0,
+    "missing_seeded_entries": 0,
+    "padding_instruction_count": 2,
+    "measurement_limit": "Seeded Ghidra function creation, not autonomous discovery or CPU semantic proof"
+  },
+  "inputs_before": {
+    "source/SleighOracle.java": {
+      "bytes": 13809,
+      "sha256": "2e753a65f8ef74218714f8ba0882153e48ec4d91dbd8693649e7aeaa2610046c",
+      "identity": {
+        "device": 16777232,
+        "inode": 71549249,
+        "size": 13809,
+        "mtime_ns": 1792371765952602035,
+        "ctime_ns": 1792371765952602035
+      }
+    },
+    "source/run_oracle.py": {
+      "bytes": 29041,
+      "sha256": "8b7ec6681e9eaae34df8709f69b9579976d074951f828dd76ca447350b25d127",
+      "identity": {
+        "device": 16777232,
+        "inode": 71550004,
+        "size": 29041,
+        "mtime_ns": 1792372895581559659,
+        "ctime_ns": 1792372895581559659
+      }
+    },
+    "source/ExtendedSleighOracle.java": {
+      "bytes": 13963,
+      "sha256": "e0f1275fdb0e738efd698811355993db4ecc637f1699efad199304574ed6c72b",
+      "identity": {
+        "device": 16777232,
+        "inode": 71620155,
+        "size": 13963,
+        "mtime_ns": 1792374183346836422,
+        "ctime_ns": 1792374183346836422
+      }
+    },
+    "source/run_extended_oracle.py": {
+      "bytes": 23543,
+      "sha256": "46580b6d8741cd5620698d3e8627e5e33effbc0c1946e2f935e23da19d2a025d",
+      "identity": {
+        "device": 16777232,
+        "inode": 71642801,
+        "size": 23543,
+        "mtime_ns": 1792374148558001790,
+        "ctime_ns": 1792374148558001790
+      }
+    },
+    "source/test_run_extended_oracle.py": {
+      "bytes": 4246,
+      "sha256": "b8a2c5d4e1a84032e930c0cffcd001e78e42a84182221cfdeb2f80325f663881",
+      "identity": {
+        "device": 16777232,
+        "inode": 71644607,
+        "size": 4246,
+        "mtime_ns": 1792374093204083139,
+        "ctime_ns": 1792374093204083139
+      }
+    },
+    "sdk/Ghidra/Framework/Utility/lib/Utility.jar": {
+      "bytes": 155905,
+      "sha256": "0a03d2df1aac91910d69087867dfe799437fe56733ce9bcb2a5c9682956c3c0e",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344597,
+        "size": 155905,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146084925591
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/Generic.jar": {
+      "bytes": 914340,
+      "sha256": "5a634b21e4774faeef201d0f4f1615247410496a0440cf5a8fe46ecfa667a98a",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344489,
+        "size": 914340,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145974753906
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar": {
+      "bytes": 4703160,
+      "sha256": "7eeaa6286a36c425eaacfa73a503d286ae4df0fecce1fc9f9d0a84cead2d827f",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344584,
+        "size": 4703160,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146079911771
+      }
+    },
+    "sdk/Ghidra/Features/Base/lib/Base.jar": {
+      "bytes": 23105938,
+      "sha256": "3d3c7e1d9f1ec546f743ed6907cdceda41d30bfb339a4d8ec15e20e1e4ce23be",
+      "identity": {
+        "device": 16777232,
+        "inode": 55343427,
+        "size": 23105938,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145320182277
+      }
+    },
+    "sdk/Ghidra/Framework/Docking/lib/Docking.jar": {
+      "bytes": 3203263,
+      "sha256": "49dd4e749df9d97b85a3d833034e3551df20860fb7b58950b74dab9473c51fc1",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344453,
+        "size": 3203263,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145960012448
+      }
+    },
+    "sdk/Ghidra/Framework/Project/lib/Project.jar": {
+      "bytes": 1340316,
+      "sha256": "6fea242d67cf4bc4e4931e3c5e8eca0557d8f7a82819e2626d1caf6949a7622e",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344555,
+        "size": 1340316,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146050008815
+      }
+    },
+    "sdk/Ghidra/Framework/DB/lib/DB.jar": {
+      "bytes": 297846,
+      "sha256": "1e14e301a4d4d731227a6e132db11c6d72de9c831afa51a2d0a51ff98bef0ad8",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344442,
+        "size": 297846,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145947834816
+      }
+    },
+    "sdk/Ghidra/Framework/Gui/lib/Gui.jar": {
+      "bytes": 511280,
+      "sha256": "9684edeb695a9fac0dc574a19af3acc39dcb4f5e910f2449b63936afe9547c92",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344530,
+        "size": 511280,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146037666559
+      }
+    },
+    "sdk/Ghidra/Framework/FileSystem/lib/FileSystem.jar": {
+      "bytes": 267444,
+      "sha256": "e5cb038806fb16756348e2a13075e18f0695b0d5e7dbc3bfb1bdadc23e2ed4bc",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344479,
+        "size": 267444,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145969937836
+      }
+    },
+    "sdk/Ghidra/Framework/Graph/lib/Graph.jar": {
+      "bytes": 471054,
+      "sha256": "aba50064c9876a0f0f6740abfaab33770e57a8cee18cff7e89518fa3334e1386",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344513,
+        "size": 471054,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146027904337
+      }
+    },
+    "sdk/Ghidra/Framework/Help/lib/javahelp-2.0.05.jar": {
+      "bytes": 562749,
+      "sha256": "fcf4922d38ff85184f1d2328317bb60826e14da948abd606ee3d5b8c6a70debd",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344542,
+        "size": 562749,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146043287751
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/gson-2.13.2.jar": {
+      "bytes": 289901,
+      "sha256": "dd0ce1b55a3ed2080cb70f9c655850cda86c206862310009dcb5e5c95265a5e0",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344500,
+        "size": 289901,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146010399095
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/jdom2-2.0.6.1.jar": {
+      "bytes": 327806,
+      "sha256": "0b20f45e3a0fd8f0d12cdc5316b06776e902b1365db00118876f9175c60f302c",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344502,
+        "size": 327806,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146019162070
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/commons-lang3-3.20.0.jar": {
+      "bytes": 713862,
+      "sha256": "69e5c9fa35da7a51a5fd2099dfe56a2d8d32cf233e2f6d770e796146440263f4",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344497,
+        "size": 713862,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146008772766
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/commons-collections4-4.6.0.jar": {
+      "bytes": 934384,
+      "sha256": "4e0d0896bac5356cead277bac0283f09813e14417e3e84e0c86b573b54d218a3",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344494,
+        "size": 934384,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146001285246
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/guava-32.1.3-jre.jar": {
+      "bytes": 3043932,
+      "sha256": "6d4e2b5a118aab62e6e5e29d185a0224eed82c85c40ac3d33cf04a270c3b3744",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344501,
+        "size": 3043932,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146017628200
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/failureaccess-1.0.1.jar": {
+      "bytes": 4617,
+      "sha256": "a171ee4c734dd2da837e4b16be9df4661afab72a41adaf31eb84dfdaf936ca26",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344499,
+        "size": 4617,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146009515098
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/log4j-api-2.26.1.jar": {
+      "bytes": 351428,
+      "sha256": "f1810a4704ccce019d02bba029dc02a4f2ac0c997f647b465e7d409c1927f822",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344503,
+        "size": 351428,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146020253317
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/log4j-core-2.26.1.jar": {
+      "bytes": 2015459,
+      "sha256": "2ec8c3bf5a6d7c89be8620116a2fc973f7dda1ad0261ad393c4d4726edfd3dcb",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344504,
+        "size": 2015459,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146025130678
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/isorelax-20050913.jar": {
+      "bytes": 192602,
+      "sha256": "3427152431cf7f967f92e69e5cac16147c5d8fb4b4e5a8a72f5291788efcff8c",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344586,
+        "size": 192602,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146081239226
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/msv-20050913.jar": {
+      "bytes": 667496,
+      "sha256": "14be3a550e508433b4fe10775d540e9eb58b3ef04ed7456bc7c7d285c90c87a2",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344587,
+        "size": 667496,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146082858971
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/relaxngDatatype-20050913.jar": {
+      "bytes": 19097,
+      "sha256": "4d45a93eb5cdc32631966673c954b83fc9b60a0681bbddcefa2c4976d04cddf2",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344588,
+        "size": 19097,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146082989304
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/xsdlib-20050913.jar": {
+      "bytes": 146996,
+      "sha256": "6b8efa18ff570c0916da702c46906b9e8a139e1c05dbf1e4d8bdeba244c1b2b3",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344589,
+        "size": 146996,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146083393720
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/antlr-runtime-3.5.2.jar": {
+      "bytes": 167761,
+      "sha256": "ce3fc8ecb10f39e9a3cddcbb2ce350d272d9cd3d0b1e18e6fe73c3b9389c8734",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344585,
+        "size": 167761,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146080792477
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling-src.zip": {
+      "bytes": 3407298,
+      "sha256": "84b0fb7f385090f109325977aceb2193f5c6d963077895284b0d79c106715a28",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344583,
+        "size": 3407298,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146068541387
+      }
+    },
+    "sdk/Ghidra/Features/Base/lib/Base-src.zip": {
+      "bytes": 7481132,
+      "sha256": "c951689c9001158cfab8d6b06b896bcd89e4aed762cb3187f231e6e13051ab97",
+      "identity": {
+        "device": 16777232,
+        "inode": 55343426,
+        "size": 7481132,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145275110448
+      }
+    },
+    "jdk/bin/java": {
+      "bytes": 51856,
+      "sha256": "05687a76275264affc701d1cbc005960002295e2da9f2833aa6c0ebfecd77943",
+      "identity": {
+        "device": 16777232,
+        "inode": 51122242,
+        "size": 51856,
+        "mtime_ns": 1787148370000000000,
+        "ctime_ns": 1790357324564957533
+      }
+    },
+    "jdk/bin/javac": {
+      "bytes": 51792,
+      "sha256": "1327db512c9f8aa22b8fd253b7a6a9d4fb9867f02d1df0c0ee3ae6acb525c112",
+      "identity": {
+        "device": 16777232,
+        "inode": 51122243,
+        "size": 51792,
+        "mtime_ns": 1787148370000000000,
+        "ctime_ns": 1790357324565213740
+      }
+    },
+    "jdk/bin/javap": {
+      "bytes": 51792,
+      "sha256": "ece358719e260fc6e77700765d7653fe0bc7965a3ad2ecf919acdafff20af2a6",
+      "identity": {
+        "device": 16777232,
+        "inode": 51122245,
+        "size": 51792,
+        "mtime_ns": 1787148370000000000,
+        "ctime_ns": 1790357324565492239
+      }
+    },
+    "fixtures/cohort-truth.json": {
+      "bytes": 105454,
+      "sha256": "e9b990b85d06057538329ffd879fc8e76bc4a53e4d73f28410dc14c394a8d0e5",
+      "identity": {
+        "device": 16777232,
+        "inode": 71645446,
+        "size": 105454,
+        "mtime_ns": 1792374188201667666,
+        "ctime_ns": 1792374188201667666
+      }
+    },
+    "inputs/plan.json": {
+      "bytes": 112839,
+      "sha256": "d891f390c535002c4e4d33c95f00b7ff9ba13aebfb562240c676fdb5d5b246b5",
+      "identity": {
+        "device": 16777232,
+        "inode": 71615570,
+        "size": 112839,
+        "mtime_ns": 1792373581856269273,
+        "ctime_ns": 1792373581856269273
+      }
+    },
+    "inputs/admission.json": {
+      "bytes": 294767,
+      "sha256": "c7e5f028dc7816cf6d895cd4e72db18292175c2e47b7c61f82a461250fe9f384",
+      "identity": {
+        "device": 16777232,
+        "inode": 71609969,
+        "size": 294767,
+        "mtime_ns": 1792373194195272774,
+        "ctime_ns": 1792373194195402483
+      }
+    },
+    "source/admit-processor-specs.py": {
+      "bytes": 53220,
+      "sha256": "000c82ff7dbb72dc1051336de7a64680da53da8d6750a6bddeae6d977f665701",
+      "identity": {
+        "device": 16777232,
+        "inode": 71545214,
+        "size": 53220,
+        "mtime_ns": 1792373162625806152,
+        "ctime_ns": 1792373162625806152
+      }
+    },
+    "sdk/Ghidra/application.properties": {
+      "bytes": 432,
+      "sha256": "19a74006a0351da7da1a8ee00ea0e864e672b1cb0c6e7132cdd210c9d672868c",
+      "identity": {
+        "device": 16777232,
+        "inode": 55346016,
+        "size": 432,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146262425125
+      }
+    },
+    "fixtures/Xtensa-v1.bin": {
+      "bytes": 20,
+      "sha256": "563b87fc7d3949e9e633385e3adb64cd4823743d75c83dd66388f4cdfce8c9f2",
+      "identity": {
+        "device": 16777232,
+        "inode": 71645422,
+        "size": 20,
+        "mtime_ns": 1792374188196538118,
+        "ctime_ns": 1792374188196538118
+      }
+    },
+    "fixtures/Xtensa-v1.asm": {
+      "bytes": 651,
+      "sha256": "b4a9252a716e9fc81f9a4b55613ded05dd61ece0e910582e34e241947720098f",
+      "identity": {
+        "device": 16777232,
+        "inode": 71645423,
+        "size": 651,
+        "mtime_ns": 1792374188196626535,
+        "ctime_ns": 1792374188196626535
+      }
+    },
+    "fixtures/Xtensa-v1.truth.json": {
+      "bytes": 8601,
+      "sha256": "3810f63268115e06c0b4768a37685155651debd5fcca9554bfb5119e5411d030",
+      "identity": {
+        "device": 16777232,
+        "inode": 71645424,
+        "size": 8601,
+        "mtime_ns": 1792374188196870619,
+        "ctime_ns": 1792374188196870619
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/cust.sinc": {
+      "bytes": 603,
+      "sha256": "bdc111cfa9a76e7e88ad155d715cf1d8af7c34a58b20077a9203150932c0dde0",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345793,
+        "size": 603,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235171161
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/flix.sinc": {
+      "bytes": 384,
+      "sha256": "e9800437b9b4cc0a72a4af59c0a0967e2890efa2a2767fd60fd0024d2b5cabfc",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345794,
+        "size": 384,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235256411
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa.cspec": {
+      "bytes": 6828,
+      "sha256": "32aa69ea801b595efd6626d09b57b7dff591f7d0b528e87f47f11634f62e00a8",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345795,
+        "size": 6828,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235341035
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa.ldefs": {
+      "bytes": 1469,
+      "sha256": "ca2a7b16fe3ea8e2cf0728a709887d23948bf042a15cc7dba650925ff8e915f5",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345797,
+        "size": 1469,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235516076
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa.pspec": {
+      "bytes": 440,
+      "sha256": "e81f50738d3d14907a99ab90de91a46e7543cc08d632547671a33376d7b42187",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345799,
+        "size": 440,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235698409
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensaArch.sinc": {
+      "bytes": 9151,
+      "sha256": "d84fe4956a17c100dc458ea493956c1091a085b09d96cc3fefc76c406f2219f6",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345800,
+        "size": 9151,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235862117
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensaInstructions.sinc": {
+      "bytes": 55785,
+      "sha256": "d7fcfdc28dd216ba02e5b202c1c4fd61d35885c7b525e6ded7c3ab2dfa40196d",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345801,
+        "size": 55785,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236050950
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensaMain.sinc": {
+      "bytes": 13233,
+      "sha256": "f713284fb1562a754ebf38ead9a195d0f5b1ce85b25426d16b6ed0b047053edf",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345802,
+        "size": 13233,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236159366
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_be.sla": {
+      "bytes": 34777,
+      "sha256": "bc512f883a4e18707884a8240bc8d2decef9a902a50b254c52708b0445682647",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345803,
+        "size": 34777,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236396032
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_be.slaspec": {
+      "bytes": 278,
+      "sha256": "23881857fec36b6932c707e692dd0d35012f6223618ea106db16fa626e46030a",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345804,
+        "size": 278,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236579740
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_depbits.sinc": {
+      "bytes": 471,
+      "sha256": "763629ef918b5e2a1075bf11e7d84c7f8f86900019f9bddc3056dbf444280e6c",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345805,
+        "size": 471,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236678031
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_le.sla": {
+      "bytes": 34808,
+      "sha256": "902615399ba784748969049bf962508362b8b88413a9361f75bc81f657d5dc17",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345806,
+        "size": 34808,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236769281
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_le.slaspec": {
+      "bytes": 282,
+      "sha256": "e480837a5e3004401c9904ee486f9cf42b24cd13eefa47a7f141e995be6e1959",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345807,
+        "size": 282,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236855448
+      }
+    }
+  },
+  "inputs_after": {
+    "source/SleighOracle.java": {
+      "bytes": 13809,
+      "sha256": "2e753a65f8ef74218714f8ba0882153e48ec4d91dbd8693649e7aeaa2610046c",
+      "identity": {
+        "device": 16777232,
+        "inode": 71549249,
+        "size": 13809,
+        "mtime_ns": 1792371765952602035,
+        "ctime_ns": 1792371765952602035
+      }
+    },
+    "source/run_oracle.py": {
+      "bytes": 29041,
+      "sha256": "8b7ec6681e9eaae34df8709f69b9579976d074951f828dd76ca447350b25d127",
+      "identity": {
+        "device": 16777232,
+        "inode": 71550004,
+        "size": 29041,
+        "mtime_ns": 1792372895581559659,
+        "ctime_ns": 1792372895581559659
+      }
+    },
+    "source/ExtendedSleighOracle.java": {
+      "bytes": 13963,
+      "sha256": "e0f1275fdb0e738efd698811355993db4ecc637f1699efad199304574ed6c72b",
+      "identity": {
+        "device": 16777232,
+        "inode": 71620155,
+        "size": 13963,
+        "mtime_ns": 1792374183346836422,
+        "ctime_ns": 1792374183346836422
+      }
+    },
+    "source/run_extended_oracle.py": {
+      "bytes": 23543,
+      "sha256": "46580b6d8741cd5620698d3e8627e5e33effbc0c1946e2f935e23da19d2a025d",
+      "identity": {
+        "device": 16777232,
+        "inode": 71642801,
+        "size": 23543,
+        "mtime_ns": 1792374148558001790,
+        "ctime_ns": 1792374148558001790
+      }
+    },
+    "source/test_run_extended_oracle.py": {
+      "bytes": 4246,
+      "sha256": "b8a2c5d4e1a84032e930c0cffcd001e78e42a84182221cfdeb2f80325f663881",
+      "identity": {
+        "device": 16777232,
+        "inode": 71644607,
+        "size": 4246,
+        "mtime_ns": 1792374093204083139,
+        "ctime_ns": 1792374093204083139
+      }
+    },
+    "sdk/Ghidra/Framework/Utility/lib/Utility.jar": {
+      "bytes": 155905,
+      "sha256": "0a03d2df1aac91910d69087867dfe799437fe56733ce9bcb2a5c9682956c3c0e",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344597,
+        "size": 155905,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146084925591
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/Generic.jar": {
+      "bytes": 914340,
+      "sha256": "5a634b21e4774faeef201d0f4f1615247410496a0440cf5a8fe46ecfa667a98a",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344489,
+        "size": 914340,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145974753906
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar": {
+      "bytes": 4703160,
+      "sha256": "7eeaa6286a36c425eaacfa73a503d286ae4df0fecce1fc9f9d0a84cead2d827f",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344584,
+        "size": 4703160,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146079911771
+      }
+    },
+    "sdk/Ghidra/Features/Base/lib/Base.jar": {
+      "bytes": 23105938,
+      "sha256": "3d3c7e1d9f1ec546f743ed6907cdceda41d30bfb339a4d8ec15e20e1e4ce23be",
+      "identity": {
+        "device": 16777232,
+        "inode": 55343427,
+        "size": 23105938,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145320182277
+      }
+    },
+    "sdk/Ghidra/Framework/Docking/lib/Docking.jar": {
+      "bytes": 3203263,
+      "sha256": "49dd4e749df9d97b85a3d833034e3551df20860fb7b58950b74dab9473c51fc1",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344453,
+        "size": 3203263,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145960012448
+      }
+    },
+    "sdk/Ghidra/Framework/Project/lib/Project.jar": {
+      "bytes": 1340316,
+      "sha256": "6fea242d67cf4bc4e4931e3c5e8eca0557d8f7a82819e2626d1caf6949a7622e",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344555,
+        "size": 1340316,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146050008815
+      }
+    },
+    "sdk/Ghidra/Framework/DB/lib/DB.jar": {
+      "bytes": 297846,
+      "sha256": "1e14e301a4d4d731227a6e132db11c6d72de9c831afa51a2d0a51ff98bef0ad8",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344442,
+        "size": 297846,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145947834816
+      }
+    },
+    "sdk/Ghidra/Framework/Gui/lib/Gui.jar": {
+      "bytes": 511280,
+      "sha256": "9684edeb695a9fac0dc574a19af3acc39dcb4f5e910f2449b63936afe9547c92",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344530,
+        "size": 511280,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146037666559
+      }
+    },
+    "sdk/Ghidra/Framework/FileSystem/lib/FileSystem.jar": {
+      "bytes": 267444,
+      "sha256": "e5cb038806fb16756348e2a13075e18f0695b0d5e7dbc3bfb1bdadc23e2ed4bc",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344479,
+        "size": 267444,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145969937836
+      }
+    },
+    "sdk/Ghidra/Framework/Graph/lib/Graph.jar": {
+      "bytes": 471054,
+      "sha256": "aba50064c9876a0f0f6740abfaab33770e57a8cee18cff7e89518fa3334e1386",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344513,
+        "size": 471054,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146027904337
+      }
+    },
+    "sdk/Ghidra/Framework/Help/lib/javahelp-2.0.05.jar": {
+      "bytes": 562749,
+      "sha256": "fcf4922d38ff85184f1d2328317bb60826e14da948abd606ee3d5b8c6a70debd",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344542,
+        "size": 562749,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146043287751
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/gson-2.13.2.jar": {
+      "bytes": 289901,
+      "sha256": "dd0ce1b55a3ed2080cb70f9c655850cda86c206862310009dcb5e5c95265a5e0",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344500,
+        "size": 289901,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146010399095
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/jdom2-2.0.6.1.jar": {
+      "bytes": 327806,
+      "sha256": "0b20f45e3a0fd8f0d12cdc5316b06776e902b1365db00118876f9175c60f302c",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344502,
+        "size": 327806,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146019162070
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/commons-lang3-3.20.0.jar": {
+      "bytes": 713862,
+      "sha256": "69e5c9fa35da7a51a5fd2099dfe56a2d8d32cf233e2f6d770e796146440263f4",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344497,
+        "size": 713862,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146008772766
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/commons-collections4-4.6.0.jar": {
+      "bytes": 934384,
+      "sha256": "4e0d0896bac5356cead277bac0283f09813e14417e3e84e0c86b573b54d218a3",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344494,
+        "size": 934384,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146001285246
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/guava-32.1.3-jre.jar": {
+      "bytes": 3043932,
+      "sha256": "6d4e2b5a118aab62e6e5e29d185a0224eed82c85c40ac3d33cf04a270c3b3744",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344501,
+        "size": 3043932,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146017628200
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/failureaccess-1.0.1.jar": {
+      "bytes": 4617,
+      "sha256": "a171ee4c734dd2da837e4b16be9df4661afab72a41adaf31eb84dfdaf936ca26",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344499,
+        "size": 4617,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146009515098
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/log4j-api-2.26.1.jar": {
+      "bytes": 351428,
+      "sha256": "f1810a4704ccce019d02bba029dc02a4f2ac0c997f647b465e7d409c1927f822",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344503,
+        "size": 351428,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146020253317
+      }
+    },
+    "sdk/Ghidra/Framework/Generic/lib/log4j-core-2.26.1.jar": {
+      "bytes": 2015459,
+      "sha256": "2ec8c3bf5a6d7c89be8620116a2fc973f7dda1ad0261ad393c4d4726edfd3dcb",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344504,
+        "size": 2015459,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146025130678
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/isorelax-20050913.jar": {
+      "bytes": 192602,
+      "sha256": "3427152431cf7f967f92e69e5cac16147c5d8fb4b4e5a8a72f5291788efcff8c",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344586,
+        "size": 192602,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146081239226
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/msv-20050913.jar": {
+      "bytes": 667496,
+      "sha256": "14be3a550e508433b4fe10775d540e9eb58b3ef04ed7456bc7c7d285c90c87a2",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344587,
+        "size": 667496,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146082858971
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/relaxngDatatype-20050913.jar": {
+      "bytes": 19097,
+      "sha256": "4d45a93eb5cdc32631966673c954b83fc9b60a0681bbddcefa2c4976d04cddf2",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344588,
+        "size": 19097,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146082989304
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/xsdlib-20050913.jar": {
+      "bytes": 146996,
+      "sha256": "6b8efa18ff570c0916da702c46906b9e8a139e1c05dbf1e4d8bdeba244c1b2b3",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344589,
+        "size": 146996,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146083393720
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/antlr-runtime-3.5.2.jar": {
+      "bytes": 167761,
+      "sha256": "ce3fc8ecb10f39e9a3cddcbb2ce350d272d9cd3d0b1e18e6fe73c3b9389c8734",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344585,
+        "size": 167761,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146080792477
+      }
+    },
+    "sdk/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling-src.zip": {
+      "bytes": 3407298,
+      "sha256": "84b0fb7f385090f109325977aceb2193f5c6d963077895284b0d79c106715a28",
+      "identity": {
+        "device": 16777232,
+        "inode": 55344583,
+        "size": 3407298,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146068541387
+      }
+    },
+    "sdk/Ghidra/Features/Base/lib/Base-src.zip": {
+      "bytes": 7481132,
+      "sha256": "c951689c9001158cfab8d6b06b896bcd89e4aed762cb3187f231e6e13051ab97",
+      "identity": {
+        "device": 16777232,
+        "inode": 55343426,
+        "size": 7481132,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703145275110448
+      }
+    },
+    "jdk/bin/java": {
+      "bytes": 51856,
+      "sha256": "05687a76275264affc701d1cbc005960002295e2da9f2833aa6c0ebfecd77943",
+      "identity": {
+        "device": 16777232,
+        "inode": 51122242,
+        "size": 51856,
+        "mtime_ns": 1787148370000000000,
+        "ctime_ns": 1790357324564957533
+      }
+    },
+    "jdk/bin/javac": {
+      "bytes": 51792,
+      "sha256": "1327db512c9f8aa22b8fd253b7a6a9d4fb9867f02d1df0c0ee3ae6acb525c112",
+      "identity": {
+        "device": 16777232,
+        "inode": 51122243,
+        "size": 51792,
+        "mtime_ns": 1787148370000000000,
+        "ctime_ns": 1790357324565213740
+      }
+    },
+    "jdk/bin/javap": {
+      "bytes": 51792,
+      "sha256": "ece358719e260fc6e77700765d7653fe0bc7965a3ad2ecf919acdafff20af2a6",
+      "identity": {
+        "device": 16777232,
+        "inode": 51122245,
+        "size": 51792,
+        "mtime_ns": 1787148370000000000,
+        "ctime_ns": 1790357324565492239
+      }
+    },
+    "fixtures/cohort-truth.json": {
+      "bytes": 105454,
+      "sha256": "e9b990b85d06057538329ffd879fc8e76bc4a53e4d73f28410dc14c394a8d0e5",
+      "identity": {
+        "device": 16777232,
+        "inode": 71645446,
+        "size": 105454,
+        "mtime_ns": 1792374188201667666,
+        "ctime_ns": 1792374188201667666
+      }
+    },
+    "inputs/plan.json": {
+      "bytes": 112839,
+      "sha256": "d891f390c535002c4e4d33c95f00b7ff9ba13aebfb562240c676fdb5d5b246b5",
+      "identity": {
+        "device": 16777232,
+        "inode": 71615570,
+        "size": 112839,
+        "mtime_ns": 1792373581856269273,
+        "ctime_ns": 1792373581856269273
+      }
+    },
+    "inputs/admission.json": {
+      "bytes": 294767,
+      "sha256": "c7e5f028dc7816cf6d895cd4e72db18292175c2e47b7c61f82a461250fe9f384",
+      "identity": {
+        "device": 16777232,
+        "inode": 71609969,
+        "size": 294767,
+        "mtime_ns": 1792373194195272774,
+        "ctime_ns": 1792373194195402483
+      }
+    },
+    "source/admit-processor-specs.py": {
+      "bytes": 53220,
+      "sha256": "000c82ff7dbb72dc1051336de7a64680da53da8d6750a6bddeae6d977f665701",
+      "identity": {
+        "device": 16777232,
+        "inode": 71545214,
+        "size": 53220,
+        "mtime_ns": 1792373162625806152,
+        "ctime_ns": 1792373162625806152
+      }
+    },
+    "sdk/Ghidra/application.properties": {
+      "bytes": 432,
+      "sha256": "19a74006a0351da7da1a8ee00ea0e864e672b1cb0c6e7132cdd210c9d672868c",
+      "identity": {
+        "device": 16777232,
+        "inode": 55346016,
+        "size": 432,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146262425125
+      }
+    },
+    "fixtures/Xtensa-v1.bin": {
+      "bytes": 20,
+      "sha256": "563b87fc7d3949e9e633385e3adb64cd4823743d75c83dd66388f4cdfce8c9f2",
+      "identity": {
+        "device": 16777232,
+        "inode": 71645422,
+        "size": 20,
+        "mtime_ns": 1792374188196538118,
+        "ctime_ns": 1792374188196538118
+      }
+    },
+    "fixtures/Xtensa-v1.asm": {
+      "bytes": 651,
+      "sha256": "b4a9252a716e9fc81f9a4b55613ded05dd61ece0e910582e34e241947720098f",
+      "identity": {
+        "device": 16777232,
+        "inode": 71645423,
+        "size": 651,
+        "mtime_ns": 1792374188196626535,
+        "ctime_ns": 1792374188196626535
+      }
+    },
+    "fixtures/Xtensa-v1.truth.json": {
+      "bytes": 8601,
+      "sha256": "3810f63268115e06c0b4768a37685155651debd5fcca9554bfb5119e5411d030",
+      "identity": {
+        "device": 16777232,
+        "inode": 71645424,
+        "size": 8601,
+        "mtime_ns": 1792374188196870619,
+        "ctime_ns": 1792374188196870619
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/cust.sinc": {
+      "bytes": 603,
+      "sha256": "bdc111cfa9a76e7e88ad155d715cf1d8af7c34a58b20077a9203150932c0dde0",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345793,
+        "size": 603,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235171161
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/flix.sinc": {
+      "bytes": 384,
+      "sha256": "e9800437b9b4cc0a72a4af59c0a0967e2890efa2a2767fd60fd0024d2b5cabfc",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345794,
+        "size": 384,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235256411
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa.cspec": {
+      "bytes": 6828,
+      "sha256": "32aa69ea801b595efd6626d09b57b7dff591f7d0b528e87f47f11634f62e00a8",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345795,
+        "size": 6828,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235341035
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa.ldefs": {
+      "bytes": 1469,
+      "sha256": "ca2a7b16fe3ea8e2cf0728a709887d23948bf042a15cc7dba650925ff8e915f5",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345797,
+        "size": 1469,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235516076
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa.pspec": {
+      "bytes": 440,
+      "sha256": "e81f50738d3d14907a99ab90de91a46e7543cc08d632547671a33376d7b42187",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345799,
+        "size": 440,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235698409
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensaArch.sinc": {
+      "bytes": 9151,
+      "sha256": "d84fe4956a17c100dc458ea493956c1091a085b09d96cc3fefc76c406f2219f6",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345800,
+        "size": 9151,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146235862117
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensaInstructions.sinc": {
+      "bytes": 55785,
+      "sha256": "d7fcfdc28dd216ba02e5b202c1c4fd61d35885c7b525e6ded7c3ab2dfa40196d",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345801,
+        "size": 55785,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236050950
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensaMain.sinc": {
+      "bytes": 13233,
+      "sha256": "f713284fb1562a754ebf38ead9a195d0f5b1ce85b25426d16b6ed0b047053edf",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345802,
+        "size": 13233,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236159366
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_be.sla": {
+      "bytes": 34777,
+      "sha256": "bc512f883a4e18707884a8240bc8d2decef9a902a50b254c52708b0445682647",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345803,
+        "size": 34777,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236396032
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_be.slaspec": {
+      "bytes": 278,
+      "sha256": "23881857fec36b6932c707e692dd0d35012f6223618ea106db16fa626e46030a",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345804,
+        "size": 278,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236579740
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_depbits.sinc": {
+      "bytes": 471,
+      "sha256": "763629ef918b5e2a1075bf11e7d84c7f8f86900019f9bddc3056dbf444280e6c",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345805,
+        "size": 471,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236678031
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_le.sla": {
+      "bytes": 34808,
+      "sha256": "902615399ba784748969049bf962508362b8b88413a9361f75bc81f657d5dc17",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345806,
+        "size": 34808,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236769281
+      }
+    },
+    "sdk/Ghidra/Processors/Xtensa/data/languages/xtensa_le.slaspec": {
+      "bytes": 282,
+      "sha256": "e480837a5e3004401c9904ee486f9cf42b24cd13eefa47a7f141e995be6e1959",
+      "identity": {
+        "device": 16777232,
+        "inode": 55345807,
+        "size": 282,
+        "mtime_ns": 1789121699000000000,
+        "ctime_ns": 1791703146236855448
+      }
+    }
+  },
+  "unchanged": true,
+  "command": {
+    "argv": [
+      "/opt/homebrew/Cellar/openjdk/27/libexec/openjdk.jdk/Contents/Home/bin/java",
+      "-Xmx512m",
+      "-Djava.awt.headless=true",
+      "-Duser.home=$STAGE/home",
+      "-Djava.io.tmpdir=$STAGE/tmp",
+      "-cp",
+      "$REPO/target/phase4-1-oracle-extended-first/cohort-v1-kp_s2au3/compile-stage/classes:$SDK/Ghidra/Framework/Utility/lib/Utility.jar:$SDK/Ghidra/Framework/Generic/lib/Generic.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar:$SDK/Ghidra/Features/Base/lib/Base.jar:$SDK/Ghidra/Framework/Docking/lib/Docking.jar:$SDK/Ghidra/Framework/Project/lib/Project.jar:$SDK/Ghidra/Framework/DB/lib/DB.jar:$SDK/Ghidra/Framework/Gui/lib/Gui.jar:$SDK/Ghidra/Framework/FileSystem/lib/FileSystem.jar:$SDK/Ghidra/Framework/Graph/lib/Graph.jar:$SDK/Ghidra/Framework/Help/lib/javahelp-2.0.05.jar:$SDK/Ghidra/Framework/Generic/lib/gson-2.13.2.jar:$SDK/Ghidra/Framework/Generic/lib/jdom2-2.0.6.1.jar:$SDK/Ghidra/Framework/Generic/lib/commons-lang3-3.20.0.jar:$SDK/Ghidra/Framework/Generic/lib/commons-collections4-4.6.0.jar:$SDK/Ghidra/Framework/Generic/lib/guava-32.1.3-jre.jar:$SDK/Ghidra/Framework/Generic/lib/failureaccess-1.0.1.jar:$SDK/Ghidra/Framework/Generic/lib/log4j-api-2.26.1.jar:$SDK/Ghidra/Framework/Generic/lib/log4j-core-2.26.1.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/isorelax-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/msv-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/relaxngDatatype-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/xsdlib-20050913.jar:$SDK/Ghidra/Framework/SoftwareModeling/lib/antlr-runtime-3.5.2.jar",
+      "ExtendedSleighOracle",
+      "Xtensa-v1",
+      "$REPO/tests/fixtures/sleigh/extended",
+      "$REPO/target/phase4-1-oracle-extended-first/cohort-v1-kp_s2au3/Xtensa-v1-attempt-ort2wwdp/oracle.json"
+    ],
+    "compiled_classes_before_launch": {
+      "ExtendedSleighOracle$Owned.class": {
+        "bytes": 1907,
+        "sha256": "b53f71770713ac09fd5c8fa9a24ebbc2e0a9473e94d9cdd5b031ca0d589291c9",
+        "identity": {
+          "device": 16777232,
+          "inode": 71645622,
+          "size": 1907,
+          "mtime_ns": 1792374189018183688,
+          "ctime_ns": 1792374189018183688
+        }
+      },
+      "ExtendedSleighOracle.class": {
+        "bytes": 19416,
+        "sha256": "eb6478ec97f85d2bdd9dec48f3b8bdc772703cb2960a3e511027fd0fc8a57aa8",
+        "identity": {
+          "device": 16777232,
+          "inode": 71645623,
+          "size": 19416,
+          "mtime_ns": 1792374189028034283,
+          "ctime_ns": 1792374189028034283
+        }
+      },
+      "SleighOracle$Fixture.class": {
+        "bytes": 1784,
+        "sha256": "48fe29a6411cfc928619096f5dbb7ec7ee313614e171223deffc579787ba22bb",
+        "identity": {
+          "device": 16777232,
+          "inode": 71645620,
+          "size": 1784,
+          "mtime_ns": 1792374188950560732,
+          "ctime_ns": 1792374188950560732
+        }
+      },
+      "SleighOracle.class": {
+        "bytes": 19479,
+        "sha256": "00f47237be8cd3353505988adb602118a9b89f648062e9ba598bf027cd037801",
+        "identity": {
+          "device": 16777232,
+          "inode": 71645621,
+          "size": 19479,
+          "mtime_ns": 1792374188966037542,
+          "ctime_ns": 1792374188966037542
+        }
+      }
+    },
+    "status": "starting",
+    "name": "oracle",
+    "timeout_seconds": 120,
+    "exit_code": 0,
+    "compiled_classes_after_execution": {
+      "ExtendedSleighOracle$Owned.class": {
+        "bytes": 1907,
+        "sha256": "b53f71770713ac09fd5c8fa9a24ebbc2e0a9473e94d9cdd5b031ca0d589291c9",
+        "identity": {
+          "device": 16777232,
+          "inode": 71645622,
+          "size": 1907,
+          "mtime_ns": 1792374189018183688,
+          "ctime_ns": 1792374189018183688
+        }
+      },
+      "ExtendedSleighOracle.class": {
+        "bytes": 19416,
+        "sha256": "eb6478ec97f85d2bdd9dec48f3b8bdc772703cb2960a3e511027fd0fc8a57aa8",
+        "identity": {
+          "device": 16777232,
+          "inode": 71645623,
+          "size": 19416,
+          "mtime_ns": 1792374189028034283,
+          "ctime_ns": 1792374189028034283
+        }
+      },
+      "SleighOracle$Fixture.class": {
+        "bytes": 1784,
+        "sha256": "48fe29a6411cfc928619096f5dbb7ec7ee313614e171223deffc579787ba22bb",
+        "identity": {
+          "device": 16777232,
+          "inode": 71645620,
+          "size": 1784,
+          "mtime_ns": 1792374188950560732,
+          "ctime_ns": 1792374188950560732
+        }
+      },
+      "SleighOracle.class": {
+        "bytes": 19479,
+        "sha256": "00f47237be8cd3353505988adb602118a9b89f648062e9ba598bf027cd037801",
+        "identity": {
+          "device": 16777232,
+          "inode": 71645621,
+          "size": 19479,
+          "mtime_ns": 1792374188966037542,
+          "ctime_ns": 1792374188966037542
+        }
+      }
+    },
+    "compiled_classes_unchanged": true
+  },
+  "logs": {
+    "oracle.stderr": "",
+    "oracle.stdout": ""
+  },
+  "oracle_sha256": "a484d0b65431642842bca73fe005c1341fc374ed0f71deddbe2ce7209eae2cef",
+  "planning_source_binding": {
+    "kind": "historical_planning_hash_not_current_helper_attestation",
+    "path": "tools/admit-processor-specs.py",
+    "sha256": "acc1205031072a2c3753b5cb1bd3cadb69d3a60f85e943c770d4d14869e29417"
+  },
+  "current_admission_helper_sha256": "000c82ff7dbb72dc1051336de7a64680da53da8d6750a6bddeae6d977f665701",
+  "released_manifest_sha256": "c7e5f028dc7816cf6d895cd4e72db18292175c2e47b7c61f82a461250fe9f384",
+  "limits": {
+    "file_pre_read_bytes": 33554432,
+    "snapshot_aggregate_bytes_per_pass": 134217728,
+    "snapshot_reason": "Trusted fixed jars/source archives exceed 32 MiB total; per-file cap remains 32 MiB",
+    "before_reserved_bytes": 56271601,
+    "before_actual_read_bytes": 56271601,
+    "after_actual_read_bytes": 56271601,
+    "fixture_bytes": 128,
+    "result_json_bytes": 4194304,
+    "class_file_bytes": 1048576,
+    "class_inventory_aggregate_bytes": 4194304,
+    "class_count": 32,
+    "instruction_bytes": 32,
+    "pcode_ops": 128,
+    "operation_text_chars": 512,
+    "stdout_stderr_each_bytes": 8388608,
+    "process_seconds": 120
+  },
+  "stage_removed": true,
+  "target_execution": false,
+  "network": false,
+  "claim_limit": "SDK static disassembly/flow/raw pcode only; no C ABI, CPU behavior, or native acceptance",
+  "selected_sdk_metadata": {
+    "ldefs_file": "xtensa.ldefs",
+    "language_attributes": {
+      "processor": "Xtensa",
+      "endian": "little",
+      "size": "32",
+      "variant": "default",
+      "version": "4.1",
+      "slafile": "xtensa_le.sla",
+      "processorspec": "xtensa.pspec",
+      "manualindexfile": "../manuals/xtensa.idx",
+      "id": "Xtensa:LE:32:default"
+    },
+    "compiler": {
+      "name": "default",
+      "spec": "xtensa.cspec",
+      "id": "default"
+    }
+  }
+}

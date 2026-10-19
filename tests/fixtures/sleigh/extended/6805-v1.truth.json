@@ -1,0 +1,153 @@
+{
+  "name": "6805-v1",
+  "family": "6805",
+  "version": 1,
+  "language_id": "6805:BE:16:default",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x1000",
+  "byte_length": 10,
+  "input_sha256": "67dc0990cc2371896e717c607912b8a0807241f4a0b36b403487d02e2aa734d1",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 7
+    },
+    {
+      "name": "callee",
+      "start_bytes": 8,
+      "end_exclusive_bytes": 10
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "cd1008",
+      "owned_explanatory_asm": "JSR callee"
+    },
+    {
+      "offset_bytes": 3,
+      "bytes_hex": "9d",
+      "owned_explanatory_asm": "NOP"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "26fa",
+      "owned_explanatory_asm": "BNE main"
+    },
+    {
+      "offset_bytes": 6,
+      "bytes_hex": "81",
+      "owned_explanatory_asm": "RTS"
+    },
+    {
+      "offset_bytes": 7,
+      "bytes_hex": "9d",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "9d",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 9,
+      "bytes_hex": "81",
+      "owned_explanatory_asm": "RTS"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 4,
+  "return_offset_bytes": 6,
+  "constructor_references": [
+    {
+      "source_file": "6805.slaspec",
+      "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+      "search": ":JSR ADDR",
+      "references": [
+        {
+          "line": 380,
+          "snippet": ":JSR ADDR\tis (op=0xBD | op=0xCD) ... & ADDR\n{\n\t*:2 (SP-1) = inst_next;\n\tSP=SP-2; \n\tcall ADDR;\n}\n:JSR ADDRI\tis (op=0xDD | op=0xED | op=0xFD) ... & ADDRI\n{\n\t*:2 (SP-1) = inst_next;\n\tSP=SP-2; "
+        },
+        {
+          "line": 386,
+          "snippet": ":JSR ADDRI\tis (op=0xDD | op=0xED | op=0xFD) ... & ADDRI\n{\n\t*:2 (SP-1) = inst_next;\n\tSP=SP-2; \n\tcall [ADDRI];\n}\n\n:LDA OP1     is (op=0xA6 | op=0xB6 | op=0xC6 | op=0xD6 | op=0xE6 | op=0xF6) ... & OP1\n{ \n\tA = OP1;"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "6805.slaspec",
+      "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+      "search": ":NOP",
+      "references": [
+        {
+          "line": 468,
+          "snippet": ":NOP\t\tis op = 0x9D\n{\n}\n\n:ORA OP1     is (op=0xAA | op=0xBA | op=0xCA | op=0xDA | op=0xEA | op=0xFA) ... & OP1\n{ \n\tA = A | OP1; \n\tZ = (A == 0);\n\tN = (A s< 0);\n}"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "6805.slaspec",
+      "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+      "search": ":BNE ",
+      "references": [
+        {
+          "line": 214,
+          "snippet": ":BNE REL\tis op=0x26;REL\n{\n\tif (Z == 0) goto REL;\n}\n:BPL REL\tis op=0x2A;REL\n{\n\tif (N == 0) goto REL;\n}\n:BRA REL\tis op=0x20;REL\n{"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "6805.slaspec",
+      "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+      "search": ":RTS",
+      "references": [
+        {
+          "line": 565,
+          "snippet": ":RTS\t\tis op = 0x81\n{\n\tSP = SP+1;\n\ttmp:2 = *:2 SP;\n\tSP = SP+1;\n\t\n\treturn [tmp];\n}\n\n:SBC OP1     is (op=0xA2 | op=0xB2 | op=0xC2 | op=0xD2 | op=0xE2 | op=0xF2) ... & OP1"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "6805.slaspec",
+      "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+      "search": "ADDR:",
+      "references": [
+        {
+          "line": 47,
+          "snippet": "ADDR: imm8 \t\t\tis op4_6=3; imm8\t\t{ export *:1 imm8; }\nADDR: imm16 \t\tis op4_6=4; imm16   \t{ export *:1 imm16; }\nADDRI: imm16,X  \tis op4_6=5 & X; imm16 \t{ tmp:2 = imm16 + zext(X); export *:1 tmp; }\nADDRI: imm8,X   \tis op4_6=6 & X; imm8  \t{ tmp:2 = imm8 + zext(X); export *:1 tmp; }\nADDRI: \",\"X\t\t\tis op4_6=7 & X\t\t\t{ tmp:2 = zext(X); export *:1 tmp; }\n\n\nDIRECT: imm8\tis imm8\t\t\t\t\t{ export *:1 imm8; }\n\n:ADC OP1     is (op=0xA9 | op=0xB9 | op=0xC9 | op=0xD9 | op=0xE9 | op=0xF9) ... & OP1"
+        },
+        {
+          "line": 48,
+          "snippet": "ADDR: imm16 \t\tis op4_6=4; imm16   \t{ export *:1 imm16; }\nADDRI: imm16,X  \tis op4_6=5 & X; imm16 \t{ tmp:2 = imm16 + zext(X); export *:1 tmp; }\nADDRI: imm8,X   \tis op4_6=6 & X; imm8  \t{ tmp:2 = imm8 + zext(X); export *:1 tmp; }\nADDRI: \",\"X\t\t\tis op4_6=7 & X\t\t\t{ tmp:2 = zext(X); export *:1 tmp; }\n\n\nDIRECT: imm8\tis imm8\t\t\t\t\t{ export *:1 imm8; }\n\n:ADC OP1     is (op=0xA9 | op=0xB9 | op=0xC9 | op=0xD9 | op=0xE9 | op=0xF9) ... & OP1\n{"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "6805.slaspec",
+      "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+      "search": "REL:",
+      "references": [
+        {
+          "line": 38,
+          "snippet": "REL: reloc\t\tis rel\t[ reloc = inst_next + rel; ] { export *:2 reloc; } \n\nOP1: \"#\"imm8\tis op4_6=2; imm8\t\t{ tmp:1 = imm8; export tmp; }\nOP1: imm8 \t\tis op4_6=3; imm8\t\t{ export *:1 imm8; }\nOP1: imm16 \t\tis op4_6=4; imm16     \t{ export *:1 imm16; }\nOP1: imm16,X  \tis op4_6=5 & X; imm16 \t{ tmp:2 = imm16 + zext(X); export *:1 tmp; }\nOP1: imm8,X   \tis op4_6=6 & X; imm8  \t{ tmp:2 = imm8 + zext(X); export *:1 tmp; }\nOP1: \",\"X\t\t\tis op4_6=7 & X\t\t\t{ tmp:2 = zext(X); export *:1 tmp; }\n\nADDR: imm8 \t\t\tis op4_6=3; imm8\t\t{ export *:1 imm8; }"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "Only selected 6805 source; do not use sibling 6809 opcodes. Big-endian absolute JSR and signed relative branch; no ABI claim."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

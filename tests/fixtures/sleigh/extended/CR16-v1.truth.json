@@ -1,0 +1,168 @@
+{
+  "name": "CR16-v1",
+  "family": "CR16",
+  "version": 1,
+  "language_id": "CR16C:LE:16:default",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x1000",
+  "byte_length": 20,
+  "input_sha256": "a19a77874387d782ea452918512ce2a9f4024fd2e38e1f644f345799234be76e",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 10
+    },
+    {
+      "name": "callee",
+      "start_bytes": 16,
+      "end_exclusive_bytes": 20
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "00c01000",
+      "owned_explanatory_asm": "BAL (RA),callee"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "002c",
+      "owned_explanatory_asm": "NOP"
+    },
+    {
+      "offset_bytes": 6,
+      "bytes_hex": "1d1f",
+      "owned_explanatory_asm": "BRne main"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "ee0a",
+      "owned_explanatory_asm": "JUMP RA ; return alias"
+    },
+    {
+      "offset_bytes": 10,
+      "bytes_hex": "002c",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 12,
+      "bytes_hex": "002c",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 14,
+      "bytes_hex": "002c",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 16,
+      "bytes_hex": "002c",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 18,
+      "bytes_hex": "ee0a",
+      "owned_explanatory_asm": "JUMP RA"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 6,
+  "return_offset_bytes": 8,
+  "constructor_references": [
+    {
+      "source_file": "CR16C.sinc",
+      "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+      "search": ":BAL (RA)",
+      "references": [
+        {
+          "line": 1409,
+          "snippet": ":BAL (RA), disp24b    is dw_hi=0xc0 & disp24b & RA { \n    RA = inst_next >> 1;    # save bits 1 to 23 in link reg RA\n    PC = &disp24b;           # PC = PC + sext25(disp)    TODO: 25 bits?\n    call disp24b;\n}\n:BAL rp_dst4, disp24     is op=0x0010 ; n8=2 & disp24 & rp_dst4 {\n    # rp link is at word2 (4,7)\n    rp_dst4 = inst_next >> 1;   # save bits 1 to 23 in link reg\n    PC = &disp24;                # PC = PC + sext25(disp)    TODO: 25 bits?\n    call disp24;"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "CR16C.sinc",
+      "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+      "search": ":NOP ",
+      "references": [
+        {
+          "line": 524,
+          "snippet": ":NOP                is hi=0x2c & dst=0 & x2=0 {\n\n}\n:ADDUB imm16, dst   is hi=0x2c & x2=11 & dst ; imm16 {\n    tmp:1 = dst:1 + imm16:1;\n    dst = (dst & 0xff00) + zext(tmp);\n}\n:ADDUB src, dst     is hi=0x2d & src & dst {\n    tmp:1 = dst:1 + src:1;\n    dst = (dst & 0xff00) + zext(tmp);"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "CR16C.sinc",
+      "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+      "search": ":BR^COND disp8",
+      "references": [
+        {
+          "line": 1446,
+          "snippet": ":BR^COND disp8  is op4=1 & COND & disp8 {       # BR (conditional)\n    build COND;\n    PC = &disp8;\n    goto disp8;\n}\n:BR disp8       is op4=1 & cond=14 & disp8 {    # BR cond=14 (always)\n    PC = &disp8;\n    goto disp8;\n}\n:BR disp8       is op4=1 & cond=15 & disp8 {    # BR cond=15 (unconditional)"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "CR16C.sinc",
+      "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+      "search": ":JUMP RA",
+      "references": [
+        {
+          "line": 1520,
+          "snippet": ":JUMP RA    is hi=0xa & cond=14 & rp_dst=14 & RA {  # always\n    local tmp = RA << 1;\n    PC = tmp:4;\n    return [PC]; \n}\n:JUSR RA    is hi=0xa & cond=15 & rp_dst=14 & RA {  # unconditional\n    $(U) = 1;\n    local tmp = RA << 1;\n    PC = tmp:4;\n    return [PC]; "
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "CR16C.sinc",
+      "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+      "search": "disp24b:",
+      "references": [
+        {
+          "line": 309,
+          "snippet": "disp24b:\"*\"tmp  is dw_lo & b1_15   \n        [ tmp = (dw_lo << 16) + (b1_15 << 1) + inst_start; ]                { export *[ram]:4 tmp; }\ndisp4c: \"*\"tmp  is x2\n        [ tmp = ((x2 + 1) << 1) + inst_start;  ]        { export *[ram]:4 tmp; }\n\n# disps not relative to PC\ndisp4:  \"*\"tmp  is x3   [ tmp = (x3 << 1); ]    { export *[const]:3 tmp; }\ndisp4b: \"*\"x3   is x3                           { export *[const]:3 x3; }\ndisp16b:\"*\"w2   is w2                           { export *[const]:2 w2; }\ndisp20: \"*\"tmp  is n7 & dw_w2"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "CR16C.sinc",
+      "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+      "search": "disp8:",
+      "references": [
+        {
+          "line": 303,
+          "snippet": "disp8:  \"*\"tmp  is x1 & x3s \n        [ tmp = (x3s << 5) + (x1 << 1) + inst_start; ]  { export *[ram]:4 tmp; }  # fmt 21\ndisp16: \"*\"tmp  is w2_b1_15  \n        [ tmp = (w2_b1_15 << 1) + inst_start; ]         { export *[ram]:4 tmp; }  # fmt 5, 22 \ndisp24: \"*\"tmp  is n5s & n7 & b1_15  \n        [ tmp = (n5s << 20) + (n7 << 16) + (b1_15 << 1) + inst_start; ]     { export *[ram]:4 tmp; }\ndisp24b:\"*\"tmp  is dw_lo & b1_15   \n        [ tmp = (dw_lo << 16) + (b1_15 << 1) + inst_start; ]                { export *[ram]:4 tmp; }\ndisp4c: \"*\"tmp  is x2\n        [ tmp = ((x2 + 1) << 1) + inst_start;  ]        { export *[ram]:4 tmp; }"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "CR16C.sinc",
+      "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+      "search": "COND:",
+      "references": [
+        {
+          "line": 338,
+          "snippet": "COND: cc is cc  { if (!cc) goto inst_next; }\n\ncc2: \"eq\" is n6=0          { local tmp =  $(Z); export tmp; }          \ncc2: \"ne\" is n6=1          { local tmp = !$(Z); export tmp; }          \ncc2: \"cs\" is n6=2          { local tmp =  $(C); export tmp; }          \ncc2: \"cc\" is n6=3          { local tmp = !$(C); export tmp; }          \ncc2: \"hi\" is n6=4          { local tmp =  $(L); export tmp; }          \ncc2: \"ls\" is n6=5          { local tmp = !$(L); export tmp; }          \ncc2: \"gt\" is n6=6          { local tmp =  $(N); export tmp; }          \ncc2: \"le\" is n6=7          { local tmp = !$(N); export tmp; }          "
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "Selected CR16C declares ram size=4 despite language ID size16. RA stores inst_next>>1 and return expands RA<<1; these are link-value semantics, not a claim that ram addressable units are two bytes.",
+    "Split signed displacement fields and return alias must be checked with actual Java getOffset/getAddressableWordOffset; never multiply API target offsets speculatively."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

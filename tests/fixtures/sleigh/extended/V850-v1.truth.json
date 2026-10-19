@@ -1,0 +1,172 @@
+{
+  "name": "V850-v1",
+  "family": "V850",
+  "version": 1,
+  "language_id": "V850:LE:32:default",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x1000",
+  "byte_length": 20,
+  "input_sha256": "45020ee8c8dc88d5e238fd23c09b2906a0c15bd110acd774df939ed17d2f9715",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 10
+    },
+    {
+      "name": "callee",
+      "start_bytes": 16,
+      "end_exclusive_bytes": 20
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "80ff1000",
+      "owned_explanatory_asm": "JARL callee,r31"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP"
+    },
+    {
+      "offset_bytes": 6,
+      "bytes_hex": "dafd",
+      "owned_explanatory_asm": "BNE main"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "7f00",
+      "owned_explanatory_asm": "JMP [r31] ; return alias"
+    },
+    {
+      "offset_bytes": 10,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 12,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 14,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 16,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 18,
+      "bytes_hex": "7f00",
+      "owned_explanatory_asm": "JMP [r31]"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 6,
+  "return_offset_bytes": 8,
+  "constructor_references": [
+    {
+      "source_file": "V850.sinc",
+      "source_sha256": "ffa566fefdb6d37f95205f15ec87a7a56da20fee356c2e7b8305dfc3c481d9ff",
+      "search": "adr22:",
+      "references": [
+        {
+          "line": 621,
+          "snippet": "adr22: res is s0005; op1631 & op1616=0\n[ res = ((s0005 << 16) | op1631) + inst_start; ] \n{ \n\texport *:4 res;\n}\n\nadr22off4: res is s0005; op1631 & op1616=0\n[ res = ((s0005 << 16) | op1631) + inst_start + 4; ] \n{ \n\texport *:4 res;"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "V850.sinc",
+      "source_sha256": "ffa566fefdb6d37f95205f15ec87a7a56da20fee356c2e7b8305dfc3c481d9ff",
+      "search": "adr9:",
+      "references": [
+        {
+          "line": 611,
+          "snippet": "adr9: res is op0406 & s1115\n[ res = ((s1115 << 4) | (op0406 << 1)) + inst_start; ] \n{ \n\texport *:4 res; \n}\nadr17: res is  s0404; s1731\n[ res = ((s0404 << 16) | (s1731 << 1)) + inst_start; ] \n{ \n\texport *:4 res; \n}"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "V850.sinc",
+      "source_sha256": "ffa566fefdb6d37f95205f15ec87a7a56da20fee356c2e7b8305dfc3c481d9ff",
+      "search": "c0003: \"ne\"",
+      "references": [
+        {
+          "line": 566,
+          "snippet": "c0003: \"ne\"\tis op0003=0xA\t{ tmp:1 = ($(Z)) == 0; \t\t\texport tmp; }\nc0003: \"nh\"\tis op0003=0x3\t{ tmp:1 = ($(CY) || $(Z)) == 1; \texport tmp; }\nc0003: \"h\"\tis op0003=0xB\t{ tmp:1 = ($(CY) || $(Z)) == 0; \texport tmp; }\nc0003: \"n\"\tis op0003=0x4\t{ tmp:1 = ($(S)) == 1; \t\t\texport tmp; }\nc0003: \"p\"\tis op0003=0xC\t{ tmp:1 = ($(S)) == 0; \t\t\texport tmp; }\nc0003: \"t\"\tis op0003=0x5\t{ tmp:1 = 1; \t\t\t\texport tmp; }\nc0003: \"sa\"\tis op0003=0xD\t{ tmp:1 = ($(SAT)) == 1; \t\texport tmp; }\nc0003: \"lt\"\tis op0003=0x6\t{ tmp:1 = ($(S) ^^ $(OV)) == 1; \texport tmp; }\nc0003: \"ge\"\tis op0003=0xE\t{ tmp:1 = ($(S) ^^ $(OV)) == 0; \texport tmp; }\nc0003: \"le\"\tis op0003=0x7\t{ tmp:1 = ($(S) ^^ $(OV) || $(Z)) == 1; export tmp; }"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "V850_instructions.sinc",
+      "source_sha256": "0aa96a8c2e1fc7ba595eb9a67da6299749f81ba5495e549b70a3a8d0bc7e38db",
+      "search": ":jarl adr22",
+      "references": [
+        {
+          "line": 578,
+          "snippet": ":jarl adr22, R1115 is (op0610=0x1E & R1115) ... & adr22\n{\n\tR1115 = inst_next;\n\tcall adr22;\n}\n\n# JARL disp32, reg1 - 00000010111RRRRR|ddddddddddddddd0|DDDDDDDDDDDDDDDD\n:jarl adr32, R0004 is op0515=0x017 & R0004; adr32\n{\n\tR0004 = inst_next;"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "V850_instructions.sinc",
+      "source_sha256": "0aa96a8c2e1fc7ba595eb9a67da6299749f81ba5495e549b70a3a8d0bc7e38db",
+      "search": ":nop ",
+      "references": [
+        {
+          "line": 737,
+          "snippet": ":nop is op0015=0x0\n{ }\n\n# PREPARE list12, imm5 - 0000011110iiiiiL|LLLLLLLLLLL00001\n:prepare PrepList, prep0105 is prep0615=0x1E & prep0105 & prep1620=0x1 & PrepList\n{\n\tbuild PrepList;\n\tsp = sp - (prep0105 << 2);\n}\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "V850_instructions.sinc",
+      "source_sha256": "0aa96a8c2e1fc7ba595eb9a67da6299749f81ba5495e549b70a3a8d0bc7e38db",
+      "search": ":jmp [R0004]",
+      "references": [
+        {
+          "line": 592,
+          "snippet": ":jmp [R0004] is op0515=0x03 & R0004 & op0004=0x1F\n{\n\treturn [R0004];\n}\n\n:jmp [R0004] is op0515=0x03 & R0004\n{\n\tgoto [R0004];\n}\n"
+        },
+        {
+          "line": 597,
+          "snippet": ":jmp [R0004] is op0515=0x03 & R0004\n{\n\tgoto [R0004];\n}\n\n# JMP disp32[reg1] - 00000110111RRRRR|ddddddddddddddd0|DDDDDDDDDDDDDDDD\n:jmp adr32i[R0004] is op0515=0x037 & R0004; adr32i\n{\n\tlocal adr = adr32i + R0004;\n\tgoto [adr];"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "V850_instructions.sinc",
+      "source_sha256": "0aa96a8c2e1fc7ba595eb9a67da6299749f81ba5495e549b70a3a8d0bc7e38db",
+      "search": ":b^c0003",
+      "references": [
+        {
+          "line": 567,
+          "snippet": ":b^c0003 adr9 is op0710=0xB & c0003 & adr9\n{\n\tif (c0003) \n\t\tgoto adr9;\n}\n:br adr9 is op0710=0xB & op0003=0x5 & adr9\n{\n\tgoto adr9;\n}\n"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "Variable 16/32-bit instructions; JARL displacement is relative to inst_start and has split fields. JMP [r31] is the SDK return-special case.",
+    "Selected SDK description covers E1/E2/E2M; no stronger CPU subset or ABI claim."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

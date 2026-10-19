@@ -1,0 +1,193 @@
+{
+  "name": "8051-v1",
+  "family": "8051",
+  "version": 1,
+  "language_id": "8051:BE:16:default",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x1000",
+  "byte_length": 10,
+  "input_sha256": "0d801c9417ee56b20e20f2213230f04cbf2700a791ae04456c8a206517fca09f",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 7
+    },
+    {
+      "name": "callee",
+      "start_bytes": 8,
+      "end_exclusive_bytes": 10
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "121008",
+      "owned_explanatory_asm": "LCALL callee"
+    },
+    {
+      "offset_bytes": 3,
+      "bytes_hex": "00",
+      "owned_explanatory_asm": "NOP"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "70fa",
+      "owned_explanatory_asm": "JNZ main"
+    },
+    {
+      "offset_bytes": 6,
+      "bytes_hex": "22",
+      "owned_explanatory_asm": "RET"
+    },
+    {
+      "offset_bytes": 7,
+      "bytes_hex": "00",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "00",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 9,
+      "bytes_hex": "22",
+      "owned_explanatory_asm": "RET"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 4,
+  "return_offset_bytes": 6,
+  "constructor_references": [
+    {
+      "source_file": "8051.slaspec",
+      "source_sha256": "f889919e669165f1f406c6325ec944abc6d0cb8bda1ee2556ae54b7f87d7647a",
+      "search": "@define",
+      "references": [
+        {
+          "line": 1,
+          "snippet": "@define MCS51 \"\"\n\n@include \"8051_main.sinc\""
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "8051.slaspec",
+      "source_sha256": "f889919e669165f1f406c6325ec944abc6d0cb8bda1ee2556ae54b7f87d7647a",
+      "search": "@include",
+      "references": [
+        {
+          "line": 3,
+          "snippet": "@include \"8051_main.sinc\""
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "8051_main.sinc",
+      "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+      "search": "define space CODE",
+      "references": [
+        {
+          "line": 51,
+          "snippet": "define space CODE     type=ram_space      size=$(PTRSIZE)  default;\ndefine space INTMEM   type=ram_space      size=1;\ndefine space EXTMEM   type=ram_space      size=2;\n@if defined(CIP51)\n#\n# CIP-51 allows up to 256 128-byte pages of these, or 32768 bytes, so two address bytes\n# are needed for SFR space.\n#\n# At execution, SFR page selection uses the 8-bit SFRPAGE SFR to provide the page number,\n# which effectively is the upper byte of SFR's full address."
+        },
+        {
+          "line": 113,
+          "snippet": "define space CODE     type=ram_space      size=3  default;\ndefine space INTMEM   type=ram_space      size=1;\ndefine space EXTMEM   type=ram_space      size=3;\ndefine space SFR      type=ram_space      size=1;\ndefine space BITS     type=ram_space      size=1;\n\n@elif defined(MX51)\n\n@define PTRSIZE 3\n@define SP_SIZE 3"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "8051_main.sinc",
+      "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+      "search": ":NOP ",
+      "references": [
+        {
+          "line": 885,
+          "snippet": ":NOP             is $(GROUP1) & ophi=0  & oplo=0\t{ nop(); }\n\n:ORL Areg,rn     is $(GROUP2) & ophi=4 & rnfill=1 & rn & Areg\t\t\t\t\t { ACC = ACC | rn; }\n:ORL Areg,Direct is $(GROUP1) & ophi=4 & oplo=5 & Areg; Direct\t\t { ACC = ACC | Direct; }\n:ORL Areg,Ri     is $(GROUP2) & ophi=4 & Areg & rifill=3 & Ri \t\t\t\t\t { ACC = ACC | Ri; }\n:ORL Areg,Data   is $(GROUP1) & ophi=4 & oplo=4 & Areg; Data\t     { ACC = ACC | Data; }\n:ORL Direct,Areg is $(GROUP1) & ophi=4 & oplo=2 & Areg; Direct\t\t { Direct = Direct | ACC; }\n:ORL Direct,Data is $(GROUP1) & ophi=4 & oplo=3 & Areg; Direct; Data { Direct = Direct | Data; }\n\n:ORL CY,BitAddr  is $(GROUP1) & CY & ophi=7  & oplo=2; BitAddr  & bitaddr57=7 & sfrbit3=0 & sfrbit & BitByteAddr {$(CY)=$(CY)| ((BitByteAddr>>sfrbit)&1); }"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "8051_main.sinc",
+      "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+      "search": ":LCALL Addr16",
+      "references": [
+        {
+          "line": 833,
+          "snippet": ":LCALL Addr16 is $(GROUP1) & ophi=1 & oplo=2; Addr16\t{  ret:2 = inst_next; push16(ret); call Addr16; }\n:LJMP Addr16  is $(GROUP1) & ophi=0 & oplo=2; Addr16\t{ goto Addr16; }\n@else\n:LCALL Addr16 is $(GROUP1) & ophi=1 & oplo=2; Addr16\t{  ret:$(PTRSIZE) = inst_next; push16(ret); call Addr16; }\n:LJMP Addr16  is $(GROUP1) & ophi=0 & oplo=2; Addr16\t{ goto Addr16; }\n@endif\n\n:MOV Areg,rn        is $(GROUP2) & ophi=14 & rnfill=1 & rn & Areg\t\t\t\t\t { ACC = rn; }\n:MOV Areg,Direct    is $(GROUP1) & ophi=14 & oplo=5 & Areg; Direct\t\t { ACC = Direct; }\n:MOV Areg,Ri        is $(GROUP2) & ophi=14 & Areg & rifill=3 & Ri\t\t\t\t\t { ACC = Ri; }"
+        },
+        {
+          "line": 836,
+          "snippet": ":LCALL Addr16 is $(GROUP1) & ophi=1 & oplo=2; Addr16\t{  ret:$(PTRSIZE) = inst_next; push16(ret); call Addr16; }\n:LJMP Addr16  is $(GROUP1) & ophi=0 & oplo=2; Addr16\t{ goto Addr16; }\n@endif\n\n:MOV Areg,rn        is $(GROUP2) & ophi=14 & rnfill=1 & rn & Areg\t\t\t\t\t { ACC = rn; }\n:MOV Areg,Direct    is $(GROUP1) & ophi=14 & oplo=5 & Areg; Direct\t\t { ACC = Direct; }\n:MOV Areg,Ri        is $(GROUP2) & ophi=14 & Areg & rifill=3 & Ri\t\t\t\t\t { ACC = Ri; }\n:MOV Areg,Data      is $(GROUP1) & ophi=7 & oplo=4 & Areg; Data\t         { ACC = Data; }\n:MOV rn,Areg        is $(GROUP2) & ophi=15 & rnfill=1 & rn & Areg\t\t\t\t\t { rn = ACC; }\n:MOV rn,Direct      is $(GROUP2) & ophi=10 & rnfill=1 & rn; Direct\t\t\t\t     { rn = Direct; }"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "8051_main.sinc",
+      "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+      "search": ":JNZ ",
+      "references": [
+        {
+          "line": 826,
+          "snippet": ":JNZ Rel8 is $(GROUP1) & ophi=7 & oplo=0; Rel8\t\t\t\t\t { if (ACC != 0) goto Rel8; }\n:JZ Rel8  is $(GROUP1) & ophi=6 & oplo=0; Rel8\t\t\t\t\t { if (ACC == 0) goto Rel8; }\n\n@if defined(MCS80390)\n:LCALL Addr24 is $(GROUP1) & ophi=1 & oplo=2; Addr24\t{  ret:$(PTRSIZE) = inst_next; push24(ret); call Addr24; }\n:LJMP Addr24  is $(GROUP1) & ophi=0 & oplo=2; Addr24\t{ goto Addr24; }\n@elif defined(MX51)\n:LCALL Addr16 is $(GROUP1) & ophi=1 & oplo=2; Addr16\t{  ret:2 = inst_next; push16(ret); call Addr16; }\n:LJMP Addr16  is $(GROUP1) & ophi=0 & oplo=2; Addr16\t{ goto Addr16; }\n@else"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "8051_main.sinc",
+      "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+      "search": ":RET ",
+      "references": [
+        {
+          "line": 911,
+          "snippet": ":RET  is $(GROUP1) & ophi=2 & oplo=2\t{\n@if defined(MCS251) || defined(MX51)\npc:2 = 0; pop16(pc); pc3:3 = (inst_next & 0xff0000) + zext(pc); return[pc3];\n@elif defined(MCS51) || defined(CIP51)\npc:2 = 0; pop16(pc); return[pc];\n@elif defined(MCS80390)\npc:3 = 0; pop24(pc); return[pc]; \n@endif\n}\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "8051_main.sinc",
+      "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+      "search": "Addr16:",
+      "references": [
+        {
+          "line": 683,
+          "snippet": "Addr16: addr is addr16 [ addr = (inst_next $and 0xff0000) + addr16; ] { export *:1 addr; }\n@elif defined(MCS51)\nAddr11: relAddr is aopaddr & adata [ relAddr =(inst_next $and 0xf800)+(aopaddr*256)+adata; ]  { export *:1 relAddr; }\nAddr16: addr16 is addr16 { export *:1 addr16; }\n@elif defined(MCS80390)\nAddr19: relAddr is aopaddr & adata [ relAddr =(inst_next $and 0xf80000)+(aopaddr*256*256)+adata; ]  { export *:1 relAddr; }\nAddr24: addr24 is addr24 { export *:1 addr24; }\n@endif\n\nRel8:   relAddr is rel8\t\t     [ relAddr=inst_next+rel8; ]      { export *:1 relAddr; }"
+        },
+        {
+          "line": 686,
+          "snippet": "Addr16: addr16 is addr16 { export *:1 addr16; }\n@elif defined(MCS80390)\nAddr19: relAddr is aopaddr & adata [ relAddr =(inst_next $and 0xf80000)+(aopaddr*256*256)+adata; ]  { export *:1 relAddr; }\nAddr24: addr24 is addr24 { export *:1 addr24; }\n@endif\n\nRel8:   relAddr is rel8\t\t     [ relAddr=inst_next+rel8; ]      { export *:1 relAddr; }\nRel16:   relAddr is rel16\t\t     [ relAddr=inst_next+rel16; ] { export *:1 relAddr; }\n\n@if defined(MCS251)"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "8051_main.sinc",
+      "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+      "search": "Rel8:",
+      "references": [
+        {
+          "line": 692,
+          "snippet": "Rel8:   relAddr is rel8\t\t     [ relAddr=inst_next+rel8; ]      { export *:1 relAddr; }\nRel16:   relAddr is rel16\t\t     [ relAddr=inst_next+rel16; ] { export *:1 relAddr; }\n\n@if defined(MCS251)\n# detect A5 prefix\n:^instruction\tis phase=0 & ophi=0xa & oplo=0x5; instruction [ phase=1; A5Prefix=1; ] { }\n:^instruction\tis phase=0 & instruction [ phase=1; A5Prefix=0; ] { }\n@endif\n\n@if defined(MCS80390)"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "Harvard CODE bytes only; RAM/INTMEM/SFR are not alias-backed by code bytes. LCALL absolute operands use big-endian byte order; conditional displacement is signed from inst_next. No ABI claim."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

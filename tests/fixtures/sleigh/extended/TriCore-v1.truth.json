@@ -1,0 +1,161 @@
+{
+  "name": "TriCore-v1",
+  "family": "TriCore",
+  "version": 1,
+  "language_id": "tricore:LE:32:default",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x1000",
+  "byte_length": 20,
+  "input_sha256": "5cdfaf6c81aaca0efdb33b2e460f7bb1ee570db2afacada13fb187eac85849a2",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 8
+    },
+    {
+      "name": "callee",
+      "start_bytes": 16,
+      "end_exclusive_bytes": 20
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "5c08",
+      "owned_explanatory_asm": "CALL callee ; short disp8"
+    },
+    {
+      "offset_bytes": 2,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "eefe",
+      "owned_explanatory_asm": "JNZ d15,main"
+    },
+    {
+      "offset_bytes": 6,
+      "bytes_hex": "0090",
+      "owned_explanatory_asm": "RET"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 10,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 12,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 14,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 16,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 18,
+      "bytes_hex": "0090",
+      "owned_explanatory_asm": "RET"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 4,
+  "return_offset_bytes": 6,
+  "constructor_references": [
+    {
+      "source_file": "tricore.slaspec",
+      "source_sha256": "ca868a4054254cf0ecbf80badc93891ce8d0e7101cdf3fe0d317e8a4f7f0bea7",
+      "search": "TRICORE_V2",
+      "references": [
+        {
+          "line": 7,
+          "snippet": "@define TRICORE_V2 \"\"\n\n#@define TRICORE_VERBOSE \"\"\n\ndefine endian=little;\n\n@include \"tricore.sinc\""
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "tricore.sinc",
+      "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+      "search": "off0815pc8s:",
+      "references": [
+        {
+          "line": 805,
+          "snippet": "off0815pc8s: reloc is PCPMode=0 & sop0815 [ reloc = inst_start + (sop0815 * 2); ] { export *[ram]:4 reloc; }\n\noff1630pc15s: reloc is PCPMode=0 & sop1630 [ reloc = inst_start + (sop1630 * 2); ] { export *[ram]:4 reloc; }\n\n@if defined(TRICORE_V2)\noff0811pc4z16: reloc is PCPMode=0 & op0811 [ reloc = inst_start + ((op0811 + 16) * 2); ] { export *[ram]:4 reloc; }\n@endif\n\nconst0607Z: \"#\"^op0607 is PCPMode=0 & op0607 { local tmp:4 = op0607; export tmp; }\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "tricore.sinc",
+      "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+      "search": ":call off0815",
+      "references": [
+        {
+          "line": 1736,
+          "snippet": ":call off0815pc8s is PCPMode=0 & off0815pc8s & op0007=0x5c\n{\n\t#TODO  call\n\t# if (FCX == 0) trap(FCU);\n\t# if (PSW.CDE) then if(cdc_increment()) then trap(CDO);\n\t# PSW.CDE = 1;\n\t# ret_addr = PC + 2 ;\n\t# tmp_FCX = FCX;\n\t# EA = {FCX.FCXS, 6'b0, FCX.FCXO, 6'b0};\n\t# new_FCX = M(EA, word);"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "tricore.sinc",
+      "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+      "search": ":jnz d15",
+      "references": [
+        {
+          "line": 3071,
+          "snippet": ":jnz d15,off0815pc8s is PCPMode=0 & d15 & off0815pc8s & op0007=0xee\n{\n\tif (d15 != 0) goto off0815pc8s;\n}\n@endif\n\n@if defined(TRICORE_RIDER_B) || defined(TRICORE_RIDER_D) || defined(TRICORE_V2)\n# JNZ D[b], disp4 (SBR)\n:jnz Rd1215,off0811pc4z is PCPMode=0 & Rd1215 & off0811pc4z & op0007=0xf6\n{"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "tricore.sinc",
+      "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+      "search": ":nop  is PCPMode=0 & op0007=0x0",
+      "references": [
+        {
+          "line": 6804,
+          "snippet": ":nop  is PCPMode=0 & op0007=0x0 & op0815=0x0\n{\n\tlocal NOP:1 = 0:1;\n\tNOP = NOP;\n}\n\n# NOP (SYS)\n:nop  is PCPMode=0 & op0007=0xd & op0815=0x0 ; op1631=0x0\n{\n\tlocal NOP:1 = 0:1;"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "tricore.sinc",
+      "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+      "search": ":ret  is PCPMode=0 & op0007=0x0",
+      "references": [
+        {
+          "line": 7093,
+          "snippet": ":ret  is PCPMode=0 & op0007=0x0 & op0815=0x90\n{\n\t#TODO  ret\n\t# if (PSW.CDE) then if (cdc_decrement()) then trap(CDU);\n\t# if (PCXI[19:0] == 0) then trap(CSU);\n\t# if (PCXI.UL == 0) then trap(CTYP);\n\t# PC = {A[11] [31:1], 1\u2019b0};\n\t# EA = {PCXI.PCXS, 6'b0, PCXI.PCXO, 6'b0};\n\t# {new_PCXI, new_PSW, a10,a11,d8,d9,d10,d11,a12,a13,a14,a15,d12,d13,d14,d15} = M(EA, 16 * word);\n\t# M(EA, word) = FCX;"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "Only PCPMode=0 scalar core and selected root TRICORE_V2 macro; PCP is not a sibling profile substitute.",
+    "SDK call/return source contains CSA/state TODOs; planned decode/flow evidence must not authenticate CSA semantics or CPU behavior."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

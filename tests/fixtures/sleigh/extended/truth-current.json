@@ -1,0 +1,2244 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "name": "8051-v1",
+      "family": "8051",
+      "version": 1,
+      "language_id": "8051:BE:16:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x1000",
+      "byte_length": 10,
+      "input_sha256": "0d801c9417ee56b20e20f2213230f04cbf2700a791ae04456c8a206517fca09f",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 7
+        },
+        {
+          "name": "callee",
+          "start_bytes": 8,
+          "end_exclusive_bytes": 10
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "121008",
+          "owned_explanatory_asm": "LCALL callee"
+        },
+        {
+          "offset_bytes": 3,
+          "bytes_hex": "00",
+          "owned_explanatory_asm": "NOP"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "70fa",
+          "owned_explanatory_asm": "JNZ main"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "22",
+          "owned_explanatory_asm": "RET"
+        },
+        {
+          "offset_bytes": 7,
+          "bytes_hex": "00",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "00",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 9,
+          "bytes_hex": "22",
+          "owned_explanatory_asm": "RET"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 4,
+      "return_offset_bytes": 6,
+      "constructor_references": [
+        {
+          "source_file": "8051.slaspec",
+          "source_sha256": "f889919e669165f1f406c6325ec944abc6d0cb8bda1ee2556ae54b7f87d7647a",
+          "search": "@define",
+          "references": [
+            {
+              "line": 1,
+              "snippet": "@define MCS51 \"\"\n\n@include \"8051_main.sinc\""
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "8051.slaspec",
+          "source_sha256": "f889919e669165f1f406c6325ec944abc6d0cb8bda1ee2556ae54b7f87d7647a",
+          "search": "@include",
+          "references": [
+            {
+              "line": 3,
+              "snippet": "@include \"8051_main.sinc\""
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "8051_main.sinc",
+          "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+          "search": "define space CODE",
+          "references": [
+            {
+              "line": 51,
+              "snippet": "define space CODE     type=ram_space      size=$(PTRSIZE)  default;\ndefine space INTMEM   type=ram_space      size=1;\ndefine space EXTMEM   type=ram_space      size=2;\n@if defined(CIP51)\n#\n# CIP-51 allows up to 256 128-byte pages of these, or 32768 bytes, so two address bytes\n# are needed for SFR space.\n#\n# At execution, SFR page selection uses the 8-bit SFRPAGE SFR to provide the page number,\n# which effectively is the upper byte of SFR's full address."
+            },
+            {
+              "line": 113,
+              "snippet": "define space CODE     type=ram_space      size=3  default;\ndefine space INTMEM   type=ram_space      size=1;\ndefine space EXTMEM   type=ram_space      size=3;\ndefine space SFR      type=ram_space      size=1;\ndefine space BITS     type=ram_space      size=1;\n\n@elif defined(MX51)\n\n@define PTRSIZE 3\n@define SP_SIZE 3"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "8051_main.sinc",
+          "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+          "search": ":NOP ",
+          "references": [
+            {
+              "line": 885,
+              "snippet": ":NOP             is $(GROUP1) & ophi=0  & oplo=0\t{ nop(); }\n\n:ORL Areg,rn     is $(GROUP2) & ophi=4 & rnfill=1 & rn & Areg\t\t\t\t\t { ACC = ACC | rn; }\n:ORL Areg,Direct is $(GROUP1) & ophi=4 & oplo=5 & Areg; Direct\t\t { ACC = ACC | Direct; }\n:ORL Areg,Ri     is $(GROUP2) & ophi=4 & Areg & rifill=3 & Ri \t\t\t\t\t { ACC = ACC | Ri; }\n:ORL Areg,Data   is $(GROUP1) & ophi=4 & oplo=4 & Areg; Data\t     { ACC = ACC | Data; }\n:ORL Direct,Areg is $(GROUP1) & ophi=4 & oplo=2 & Areg; Direct\t\t { Direct = Direct | ACC; }\n:ORL Direct,Data is $(GROUP1) & ophi=4 & oplo=3 & Areg; Direct; Data { Direct = Direct | Data; }\n\n:ORL CY,BitAddr  is $(GROUP1) & CY & ophi=7  & oplo=2; BitAddr  & bitaddr57=7 & sfrbit3=0 & sfrbit & BitByteAddr {$(CY)=$(CY)| ((BitByteAddr>>sfrbit)&1); }"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "8051_main.sinc",
+          "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+          "search": ":LCALL Addr16",
+          "references": [
+            {
+              "line": 833,
+              "snippet": ":LCALL Addr16 is $(GROUP1) & ophi=1 & oplo=2; Addr16\t{  ret:2 = inst_next; push16(ret); call Addr16; }\n:LJMP Addr16  is $(GROUP1) & ophi=0 & oplo=2; Addr16\t{ goto Addr16; }\n@else\n:LCALL Addr16 is $(GROUP1) & ophi=1 & oplo=2; Addr16\t{  ret:$(PTRSIZE) = inst_next; push16(ret); call Addr16; }\n:LJMP Addr16  is $(GROUP1) & ophi=0 & oplo=2; Addr16\t{ goto Addr16; }\n@endif\n\n:MOV Areg,rn        is $(GROUP2) & ophi=14 & rnfill=1 & rn & Areg\t\t\t\t\t { ACC = rn; }\n:MOV Areg,Direct    is $(GROUP1) & ophi=14 & oplo=5 & Areg; Direct\t\t { ACC = Direct; }\n:MOV Areg,Ri        is $(GROUP2) & ophi=14 & Areg & rifill=3 & Ri\t\t\t\t\t { ACC = Ri; }"
+            },
+            {
+              "line": 836,
+              "snippet": ":LCALL Addr16 is $(GROUP1) & ophi=1 & oplo=2; Addr16\t{  ret:$(PTRSIZE) = inst_next; push16(ret); call Addr16; }\n:LJMP Addr16  is $(GROUP1) & ophi=0 & oplo=2; Addr16\t{ goto Addr16; }\n@endif\n\n:MOV Areg,rn        is $(GROUP2) & ophi=14 & rnfill=1 & rn & Areg\t\t\t\t\t { ACC = rn; }\n:MOV Areg,Direct    is $(GROUP1) & ophi=14 & oplo=5 & Areg; Direct\t\t { ACC = Direct; }\n:MOV Areg,Ri        is $(GROUP2) & ophi=14 & Areg & rifill=3 & Ri\t\t\t\t\t { ACC = Ri; }\n:MOV Areg,Data      is $(GROUP1) & ophi=7 & oplo=4 & Areg; Data\t         { ACC = Data; }\n:MOV rn,Areg        is $(GROUP2) & ophi=15 & rnfill=1 & rn & Areg\t\t\t\t\t { rn = ACC; }\n:MOV rn,Direct      is $(GROUP2) & ophi=10 & rnfill=1 & rn; Direct\t\t\t\t     { rn = Direct; }"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "8051_main.sinc",
+          "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+          "search": ":JNZ ",
+          "references": [
+            {
+              "line": 826,
+              "snippet": ":JNZ Rel8 is $(GROUP1) & ophi=7 & oplo=0; Rel8\t\t\t\t\t { if (ACC != 0) goto Rel8; }\n:JZ Rel8  is $(GROUP1) & ophi=6 & oplo=0; Rel8\t\t\t\t\t { if (ACC == 0) goto Rel8; }\n\n@if defined(MCS80390)\n:LCALL Addr24 is $(GROUP1) & ophi=1 & oplo=2; Addr24\t{  ret:$(PTRSIZE) = inst_next; push24(ret); call Addr24; }\n:LJMP Addr24  is $(GROUP1) & ophi=0 & oplo=2; Addr24\t{ goto Addr24; }\n@elif defined(MX51)\n:LCALL Addr16 is $(GROUP1) & ophi=1 & oplo=2; Addr16\t{  ret:2 = inst_next; push16(ret); call Addr16; }\n:LJMP Addr16  is $(GROUP1) & ophi=0 & oplo=2; Addr16\t{ goto Addr16; }\n@else"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "8051_main.sinc",
+          "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+          "search": ":RET ",
+          "references": [
+            {
+              "line": 911,
+              "snippet": ":RET  is $(GROUP1) & ophi=2 & oplo=2\t{\n@if defined(MCS251) || defined(MX51)\npc:2 = 0; pop16(pc); pc3:3 = (inst_next & 0xff0000) + zext(pc); return[pc3];\n@elif defined(MCS51) || defined(CIP51)\npc:2 = 0; pop16(pc); return[pc];\n@elif defined(MCS80390)\npc:3 = 0; pop24(pc); return[pc]; \n@endif\n}\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "8051_main.sinc",
+          "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+          "search": "Addr16:",
+          "references": [
+            {
+              "line": 683,
+              "snippet": "Addr16: addr is addr16 [ addr = (inst_next $and 0xff0000) + addr16; ] { export *:1 addr; }\n@elif defined(MCS51)\nAddr11: relAddr is aopaddr & adata [ relAddr =(inst_next $and 0xf800)+(aopaddr*256)+adata; ]  { export *:1 relAddr; }\nAddr16: addr16 is addr16 { export *:1 addr16; }\n@elif defined(MCS80390)\nAddr19: relAddr is aopaddr & adata [ relAddr =(inst_next $and 0xf80000)+(aopaddr*256*256)+adata; ]  { export *:1 relAddr; }\nAddr24: addr24 is addr24 { export *:1 addr24; }\n@endif\n\nRel8:   relAddr is rel8\t\t     [ relAddr=inst_next+rel8; ]      { export *:1 relAddr; }"
+            },
+            {
+              "line": 686,
+              "snippet": "Addr16: addr16 is addr16 { export *:1 addr16; }\n@elif defined(MCS80390)\nAddr19: relAddr is aopaddr & adata [ relAddr =(inst_next $and 0xf80000)+(aopaddr*256*256)+adata; ]  { export *:1 relAddr; }\nAddr24: addr24 is addr24 { export *:1 addr24; }\n@endif\n\nRel8:   relAddr is rel8\t\t     [ relAddr=inst_next+rel8; ]      { export *:1 relAddr; }\nRel16:   relAddr is rel16\t\t     [ relAddr=inst_next+rel16; ] { export *:1 relAddr; }\n\n@if defined(MCS251)"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "8051_main.sinc",
+          "source_sha256": "a514b25d08b85893c9fd96ead444eff856b201d98e0fd62ecf57e4387fd1a009",
+          "search": "Rel8:",
+          "references": [
+            {
+              "line": 692,
+              "snippet": "Rel8:   relAddr is rel8\t\t     [ relAddr=inst_next+rel8; ]      { export *:1 relAddr; }\nRel16:   relAddr is rel16\t\t     [ relAddr=inst_next+rel16; ] { export *:1 relAddr; }\n\n@if defined(MCS251)\n# detect A5 prefix\n:^instruction\tis phase=0 & ophi=0xa & oplo=0x5; instruction [ phase=1; A5Prefix=1; ] { }\n:^instruction\tis phase=0 & instruction [ phase=1; A5Prefix=0; ] { }\n@endif\n\n@if defined(MCS80390)"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "Harvard CODE bytes only; RAM/INTMEM/SFR are not alias-backed by code bytes. LCALL absolute operands use big-endian byte order; conditional displacement is signed from inst_next. No ABI claim."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "PIC-v1",
+      "family": "PIC",
+      "version": 1,
+      "language_id": "PIC-16:LE:16:PIC-16",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x200",
+      "byte_length": 20,
+      "input_sha256": "3e333a32fa40e6f9529f40b7055352c00bc31421dfcc29ed13390a6526c87e19",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 10
+        },
+        {
+          "name": "callee",
+          "start_bytes": 16,
+          "end_exclusive_bytes": 20
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "0821",
+          "owned_explanatory_asm": "CALL 0x108 ; encoded word address, PCLATH context required"
+        },
+        {
+          "offset_bytes": 2,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "201c",
+          "owned_explanatory_asm": "BTFSS 0x20,0"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP ; skip-context consumer"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "0800",
+          "owned_explanatory_asm": "RETURN"
+        },
+        {
+          "offset_bytes": 10,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 12,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 14,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 16,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 18,
+          "bytes_hex": "0800",
+          "owned_explanatory_asm": "RETURN"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 4,
+      "return_offset_bytes": 8,
+      "constructor_references": [
+        {
+          "source_file": "pic16.sinc",
+          "source_sha256": "8e9a7cdb7b9c7b183d8ef5ea6a34aa55b345c86e914662168d7ade11d723c691",
+          "search": "define space CODE",
+          "references": [
+            {
+              "line": 9,
+              "snippet": "define space CODE type=ram_space wordsize=2 size=2 default;\n\n# General Purpose Register Memory consists of 4-banks of 255-bytes for PIC16,\n# or 32-banks of 255 bytes each for PIC_16F.\n# Bank selection occurs using STATUS register bits RP0 & RP1\ndefine space DATA type=ram_space size=2; \n\n# HWSTACK consists of a 8-word by 13-bit RAM and a corresponding to a hidden stack pointer (STKPTR).\ndefine space HWSTACK type=ram_space wordsize=2 size=1;  # WORDSIZE is actually 13-bits\n "
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "pic16.sinc",
+          "source_sha256": "8e9a7cdb7b9c7b183d8ef5ea6a34aa55b345c86e914662168d7ade11d723c691",
+          "search": "define space DATA",
+          "references": [
+            {
+              "line": 14,
+              "snippet": "define space DATA type=ram_space size=2; \n\n# HWSTACK consists of a 8-word by 13-bit RAM and a corresponding to a hidden stack pointer (STKPTR).\ndefine space HWSTACK type=ram_space wordsize=2 size=1;  # WORDSIZE is actually 13-bits\n \ndefine space register type=register_space size=2; \n\n# Program Counter (13-bits) - PC Latch: PCLATH<PC:12-8> / PCL<PC:7-0>\ndefine register offset=0x0000 size=2 [ PC ];\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "pic16.sinc",
+          "source_sha256": "8e9a7cdb7b9c7b183d8ef5ea6a34aa55b345c86e914662168d7ade11d723c691",
+          "search": "define space HWSTACK",
+          "references": [
+            {
+              "line": 17,
+              "snippet": "define space HWSTACK type=ram_space wordsize=2 size=1;  # WORDSIZE is actually 13-bits\n \ndefine space register type=register_space size=2; \n\n# Program Counter (13-bits) - PC Latch: PCLATH<PC:12-8> / PCL<PC:7-0>\ndefine register offset=0x0000 size=2 [ PC ];\n\n# Stack Pointer\ndefine register offset=0x0002 size=1 [ STKPTR ];\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "pic16_instructions.sinc",
+          "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+          "search": "absAddr11:",
+          "references": [
+            {
+              "line": 247,
+              "snippet": "absAddr11: k11\tis k11\t\t\t\t\t\t\t\t\t{\n\taddr:2 = ((zext(PCLATH) & 0x18) << 8) | k11;\n\texport addr; \n}\n\n@if PROCESSOR == \"PIC_16F\"\n\n# Relative address\nrelAddr9: addr\tis sk9\t[ addr = inst_next + sk9; ]\t\t\t\t\t\t\t\t{\n\texport *[CODE]:2 addr;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "pic16_instructions.sinc",
+          "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+          "search": ":CALL absAddr11",
+          "references": [
+            {
+              "line": 628,
+              "snippet": ":CALL absAddr11\t\t\tis op3=0x4 & absAddr11\t\t\t\t\t\t\t{\n\t#  --10 0kkk kkkk kkkk\n\t#  0010 0001 0010 0011\t->\tCALL 0x123\n\t#  0010 0000 0001 0000\t->\tCALL 0x10\n\tpush(&:2 inst_next);\n\tcall [absAddr11];\n}\n\n:CALLW\t\t\t\t\tis op14=0x000a\t\t\t\t\t\t{\n\t#  --00 0000 0000 1010"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "pic16_instructions.sinc",
+          "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+          "search": ":NOP",
+          "references": [
+            {
+              "line": 845,
+              "snippet": ":NOP\t\t\t\t\tis op6=0 & d=0 & l5=0\t\t\t\t{\n\t#  --00 0000 0xx0 0000\n}\n\n:OPTION\t\t\t\t\tis op14=0x0062\t\t\t\t\t\t{\n\t#  --00 0000 0110 0010\n\tOPTION = W;\n}\n\n:RESET is op14=0x0001 {"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "pic16_instructions.sinc",
+          "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+          "search": ":RETURN",
+          "references": [
+            {
+              "line": 876,
+              "snippet": ":RETURN\t\t\t\t\tis op14=0x0008\t\t\t\t\t\t{\n\t#  --00 0000 0000 1000\n\tretAddr:4 = 0;\n\tpop(retAddr);\n\treturn [retAddr];\n}\n\n:RLF srcREG, D\t\tis op6=0x0d & srcREG & D & destREG\t\t\t\t\t{\n\t#  --00 1101 dfff ffff\n\t#  0000 1101 0000 0000\t->\tRLF INDF, 0 "
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "pic16_instructions.sinc",
+          "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+          "search": ":BTFSS srcREG",
+          "references": [
+            {
+              "line": 591,
+              "snippet": ":BTFSS srcREG, bit\t\tis op4=0x7 & bit & srcREG [ possibleSkip = 1; globalset(inst_next,possibleSkip); ] {\n\t#  --01 11bb bfff ffff\n\t#  0001 1110 0000 0000\t->\tBTFSS INDF, #0x4\n\t#  0001 1110 0010 0000\t->\tBTFSS 0x20, #0x4\n\tlocal bitmask = 1 << bit;\n\tlocal tmp = srcREG & bitmask;\n   SkipNext = (tmp != 0);\n}\n\n:BNC absAddr11\tis doPseudo=1 & op4=0x7 & b3=0 & bit & f7=0x3 ; op3=0x5 & absAddr11 {"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "CODE declares wordsize=2; DATA and HWSTACK are distinct spaces. Preserve both Java offset getters when eventually run.",
+        "CALL operand combines PCLATH<4:3> and k11; proposed low-word target 0x108 requires explicit PCLATH=0 context. Selected source uses call [absAddr11], so a direct static target is NOT currently promised.",
+        "BTFSS uses possibleSkip/SkipNext propagation; isolate-only decoding is insufficient for conditional coverage. No PIC16F relative BRA substituted for selected PIC_16."
+      ],
+      "call_target_policy": "context_dependent_computed_PCLATH",
+      "conditional_policy": "flowed_skip_context_on_following_instruction",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "SuperH-v2",
+      "family": "SuperH",
+      "version": 2,
+      "language_id": "SuperH:BE:32:SH-2",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x1000",
+      "byte_length": 22,
+      "input_sha256": "ba6d183415f893a877e051ee06b9023bf5c0c1ce285e2e742326e3fe33b7e569",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 10
+        },
+        {
+          "name": "callee",
+          "start_bytes": 16,
+          "end_exclusive_bytes": 22
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "b006",
+          "owned_explanatory_asm": "BSR callee"
+        },
+        {
+          "offset_bytes": 2,
+          "bytes_hex": "0009",
+          "owned_explanatory_asm": "NOP ; call delay slot"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "89fc",
+          "owned_explanatory_asm": "BT main"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "000b",
+          "owned_explanatory_asm": "RTS"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "0009",
+          "owned_explanatory_asm": "NOP ; return delay slot"
+        },
+        {
+          "offset_bytes": 10,
+          "bytes_hex": "0009",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 12,
+          "bytes_hex": "0009",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 14,
+          "bytes_hex": "0009",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 16,
+          "bytes_hex": "0009",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 18,
+          "bytes_hex": "000b",
+          "owned_explanatory_asm": "RTS"
+        },
+        {
+          "offset_bytes": 20,
+          "bytes_hex": "0009",
+          "owned_explanatory_asm": "NOP ; return delay slot"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 4,
+      "return_offset_bytes": 6,
+      "constructor_references": [
+        {
+          "source_file": "sh-2.slaspec",
+          "source_sha256": "103a477164533ed38c9fbc495c9ec06343ce73291e8217d11345a337f32bd0bf",
+          "search": "@define",
+          "references": [
+            {
+              "line": 1,
+              "snippet": "@define SH_VERSION \"2\"\n\n@include \"superh.sinc\""
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "superh.sinc",
+          "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+          "search": ":bsr ",
+          "references": [
+            {
+              "line": 1632,
+              "snippet": ":bsr    target00_11  is opcode_12_15=0b1011 & target00_11  \n{\n    local _pr:4 = inst_start + 4;\n\n    delayslot(1);\n\n    pr = _pr;\n    call target00_11;\n}\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "superh.sinc",
+          "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+          "search": ":nop ",
+          "references": [
+            {
+              "line": 1850,
+              "snippet": ":nop  is opcode_00_15=0b0000000000001001 \n{\n    # FIXME: intentional nop\n    r0 = r0; # do this to suppress warning\n}\n\n:rte is opcode_00_15=0b0000000000101011 \n{    \n    _pc:4 = *r15;\n    r15 = r15 + 4;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "superh.sinc",
+          "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+          "search": ":bt ",
+          "references": [
+            {
+              "line": 1603,
+              "snippet": ":bt target00_07  is opcode_08_15=0b10001001 & target00_07  \n{\n    if ($(T_FLAG) == 1) goto target00_07;\n}\n\n@if (SH_VERSION == \"2\") || (SH_VERSION == \"2A\")\n:bt\"/s\" target00_07  is opcode_08_15=0b10001101 & target00_07\n{\n    local cond = $(T_FLAG);\n    delayslot(1);"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "superh.sinc",
+          "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+          "search": ":rts ",
+          "references": [
+            {
+              "line": 1675,
+              "snippet": ":rts  is opcode_00_15=0b0000000000001011 \n{\n    local _pc = pr;\n    delayslot(1);\n    pc = _pc;\n    return [pc];\n}\n\n@if SH_VERSION == \"2A\"\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "superh.sinc",
+          "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+          "search": "target00_11:",
+          "references": [
+            {
+              "line": 170,
+              "snippet": "target00_11: target is sdisp_00_11 [ target = (sdisp_00_11 << 1) + inst_start + 4; ] {\n    export *:4 target;\n}\n\n\n#\n# Data Transfer Instructions\n#\n\n:mov rm_04_07,rn_08_11 is opcode_12_15=0b0110 & rn_08_11 & rm_04_07 & opcode_00_03=0b0011 "
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "BSR and RTS each require the following 16-bit delay-slot instruction; preserve whole two-instruction bundles. BT here has no /S delay slot.",
+        "SH-2 only: no SH-2A /N variants or invented SH-4 ABI."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets.",
+      "previous_version": "SuperH-v1",
+      "owned_encoding_changed": false,
+      "correction": {
+        "kind": "SDK_delay_slot_mnemonic_presentation_not_wrong_opcode",
+        "source": "SoftwareModeling-src.zip!/ghidra/app/plugin/processors/sleigh/SleighInstructionPrototype.java",
+        "line": 1335,
+        "fact": "getMnemonic appends an underscore prefix when this.isindelayslot is true",
+        "allowed_presentations": {
+          "2": "_nop",
+          "8": "_nop",
+          "20": "_nop"
+        },
+        "guard": "Only those three source-declared delay slots, and is_in_delay_slot must be true",
+        "assembly_and_manual_function_extents_unchanged": true
+      }
+    },
+    {
+      "name": "V850-v1",
+      "family": "V850",
+      "version": 1,
+      "language_id": "V850:LE:32:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x1000",
+      "byte_length": 20,
+      "input_sha256": "45020ee8c8dc88d5e238fd23c09b2906a0c15bd110acd774df939ed17d2f9715",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 10
+        },
+        {
+          "name": "callee",
+          "start_bytes": 16,
+          "end_exclusive_bytes": 20
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "80ff1000",
+          "owned_explanatory_asm": "JARL callee,r31"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "dafd",
+          "owned_explanatory_asm": "BNE main"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "7f00",
+          "owned_explanatory_asm": "JMP [r31] ; return alias"
+        },
+        {
+          "offset_bytes": 10,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 12,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 14,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 16,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 18,
+          "bytes_hex": "7f00",
+          "owned_explanatory_asm": "JMP [r31]"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 6,
+      "return_offset_bytes": 8,
+      "constructor_references": [
+        {
+          "source_file": "V850.sinc",
+          "source_sha256": "ffa566fefdb6d37f95205f15ec87a7a56da20fee356c2e7b8305dfc3c481d9ff",
+          "search": "adr22:",
+          "references": [
+            {
+              "line": 621,
+              "snippet": "adr22: res is s0005; op1631 & op1616=0\n[ res = ((s0005 << 16) | op1631) + inst_start; ] \n{ \n\texport *:4 res;\n}\n\nadr22off4: res is s0005; op1631 & op1616=0\n[ res = ((s0005 << 16) | op1631) + inst_start + 4; ] \n{ \n\texport *:4 res;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "V850.sinc",
+          "source_sha256": "ffa566fefdb6d37f95205f15ec87a7a56da20fee356c2e7b8305dfc3c481d9ff",
+          "search": "adr9:",
+          "references": [
+            {
+              "line": 611,
+              "snippet": "adr9: res is op0406 & s1115\n[ res = ((s1115 << 4) | (op0406 << 1)) + inst_start; ] \n{ \n\texport *:4 res; \n}\nadr17: res is  s0404; s1731\n[ res = ((s0404 << 16) | (s1731 << 1)) + inst_start; ] \n{ \n\texport *:4 res; \n}"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "V850.sinc",
+          "source_sha256": "ffa566fefdb6d37f95205f15ec87a7a56da20fee356c2e7b8305dfc3c481d9ff",
+          "search": "c0003: \"ne\"",
+          "references": [
+            {
+              "line": 566,
+              "snippet": "c0003: \"ne\"\tis op0003=0xA\t{ tmp:1 = ($(Z)) == 0; \t\t\texport tmp; }\nc0003: \"nh\"\tis op0003=0x3\t{ tmp:1 = ($(CY) || $(Z)) == 1; \texport tmp; }\nc0003: \"h\"\tis op0003=0xB\t{ tmp:1 = ($(CY) || $(Z)) == 0; \texport tmp; }\nc0003: \"n\"\tis op0003=0x4\t{ tmp:1 = ($(S)) == 1; \t\t\texport tmp; }\nc0003: \"p\"\tis op0003=0xC\t{ tmp:1 = ($(S)) == 0; \t\t\texport tmp; }\nc0003: \"t\"\tis op0003=0x5\t{ tmp:1 = 1; \t\t\t\texport tmp; }\nc0003: \"sa\"\tis op0003=0xD\t{ tmp:1 = ($(SAT)) == 1; \t\texport tmp; }\nc0003: \"lt\"\tis op0003=0x6\t{ tmp:1 = ($(S) ^^ $(OV)) == 1; \texport tmp; }\nc0003: \"ge\"\tis op0003=0xE\t{ tmp:1 = ($(S) ^^ $(OV)) == 0; \texport tmp; }\nc0003: \"le\"\tis op0003=0x7\t{ tmp:1 = ($(S) ^^ $(OV) || $(Z)) == 1; export tmp; }"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "V850_instructions.sinc",
+          "source_sha256": "0aa96a8c2e1fc7ba595eb9a67da6299749f81ba5495e549b70a3a8d0bc7e38db",
+          "search": ":jarl adr22",
+          "references": [
+            {
+              "line": 578,
+              "snippet": ":jarl adr22, R1115 is (op0610=0x1E & R1115) ... & adr22\n{\n\tR1115 = inst_next;\n\tcall adr22;\n}\n\n# JARL disp32, reg1 - 00000010111RRRRR|ddddddddddddddd0|DDDDDDDDDDDDDDDD\n:jarl adr32, R0004 is op0515=0x017 & R0004; adr32\n{\n\tR0004 = inst_next;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "V850_instructions.sinc",
+          "source_sha256": "0aa96a8c2e1fc7ba595eb9a67da6299749f81ba5495e549b70a3a8d0bc7e38db",
+          "search": ":nop ",
+          "references": [
+            {
+              "line": 737,
+              "snippet": ":nop is op0015=0x0\n{ }\n\n# PREPARE list12, imm5 - 0000011110iiiiiL|LLLLLLLLLLL00001\n:prepare PrepList, prep0105 is prep0615=0x1E & prep0105 & prep1620=0x1 & PrepList\n{\n\tbuild PrepList;\n\tsp = sp - (prep0105 << 2);\n}\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "V850_instructions.sinc",
+          "source_sha256": "0aa96a8c2e1fc7ba595eb9a67da6299749f81ba5495e549b70a3a8d0bc7e38db",
+          "search": ":jmp [R0004]",
+          "references": [
+            {
+              "line": 592,
+              "snippet": ":jmp [R0004] is op0515=0x03 & R0004 & op0004=0x1F\n{\n\treturn [R0004];\n}\n\n:jmp [R0004] is op0515=0x03 & R0004\n{\n\tgoto [R0004];\n}\n"
+            },
+            {
+              "line": 597,
+              "snippet": ":jmp [R0004] is op0515=0x03 & R0004\n{\n\tgoto [R0004];\n}\n\n# JMP disp32[reg1] - 00000110111RRRRR|ddddddddddddddd0|DDDDDDDDDDDDDDDD\n:jmp adr32i[R0004] is op0515=0x037 & R0004; adr32i\n{\n\tlocal adr = adr32i + R0004;\n\tgoto [adr];"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "V850_instructions.sinc",
+          "source_sha256": "0aa96a8c2e1fc7ba595eb9a67da6299749f81ba5495e549b70a3a8d0bc7e38db",
+          "search": ":b^c0003",
+          "references": [
+            {
+              "line": 567,
+              "snippet": ":b^c0003 adr9 is op0710=0xB & c0003 & adr9\n{\n\tif (c0003) \n\t\tgoto adr9;\n}\n:br adr9 is op0710=0xB & op0003=0x5 & adr9\n{\n\tgoto adr9;\n}\n"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "Variable 16/32-bit instructions; JARL displacement is relative to inst_start and has split fields. JMP [r31] is the SDK return-special case.",
+        "Selected SDK description covers E1/E2/E2M; no stronger CPU subset or ABI claim."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "TriCore-v1",
+      "family": "TriCore",
+      "version": 1,
+      "language_id": "tricore:LE:32:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x1000",
+      "byte_length": 20,
+      "input_sha256": "5cdfaf6c81aaca0efdb33b2e460f7bb1ee570db2afacada13fb187eac85849a2",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 8
+        },
+        {
+          "name": "callee",
+          "start_bytes": 16,
+          "end_exclusive_bytes": 20
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "5c08",
+          "owned_explanatory_asm": "CALL callee ; short disp8"
+        },
+        {
+          "offset_bytes": 2,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "eefe",
+          "owned_explanatory_asm": "JNZ d15,main"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "0090",
+          "owned_explanatory_asm": "RET"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 10,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 12,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 14,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 16,
+          "bytes_hex": "0000",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 18,
+          "bytes_hex": "0090",
+          "owned_explanatory_asm": "RET"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 4,
+      "return_offset_bytes": 6,
+      "constructor_references": [
+        {
+          "source_file": "tricore.slaspec",
+          "source_sha256": "ca868a4054254cf0ecbf80badc93891ce8d0e7101cdf3fe0d317e8a4f7f0bea7",
+          "search": "TRICORE_V2",
+          "references": [
+            {
+              "line": 7,
+              "snippet": "@define TRICORE_V2 \"\"\n\n#@define TRICORE_VERBOSE \"\"\n\ndefine endian=little;\n\n@include \"tricore.sinc\""
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "tricore.sinc",
+          "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+          "search": "off0815pc8s:",
+          "references": [
+            {
+              "line": 805,
+              "snippet": "off0815pc8s: reloc is PCPMode=0 & sop0815 [ reloc = inst_start + (sop0815 * 2); ] { export *[ram]:4 reloc; }\n\noff1630pc15s: reloc is PCPMode=0 & sop1630 [ reloc = inst_start + (sop1630 * 2); ] { export *[ram]:4 reloc; }\n\n@if defined(TRICORE_V2)\noff0811pc4z16: reloc is PCPMode=0 & op0811 [ reloc = inst_start + ((op0811 + 16) * 2); ] { export *[ram]:4 reloc; }\n@endif\n\nconst0607Z: \"#\"^op0607 is PCPMode=0 & op0607 { local tmp:4 = op0607; export tmp; }\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "tricore.sinc",
+          "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+          "search": ":call off0815",
+          "references": [
+            {
+              "line": 1736,
+              "snippet": ":call off0815pc8s is PCPMode=0 & off0815pc8s & op0007=0x5c\n{\n\t#TODO  call\n\t# if (FCX == 0) trap(FCU);\n\t# if (PSW.CDE) then if(cdc_increment()) then trap(CDO);\n\t# PSW.CDE = 1;\n\t# ret_addr = PC + 2 ;\n\t# tmp_FCX = FCX;\n\t# EA = {FCX.FCXS, 6'b0, FCX.FCXO, 6'b0};\n\t# new_FCX = M(EA, word);"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "tricore.sinc",
+          "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+          "search": ":jnz d15",
+          "references": [
+            {
+              "line": 3071,
+              "snippet": ":jnz d15,off0815pc8s is PCPMode=0 & d15 & off0815pc8s & op0007=0xee\n{\n\tif (d15 != 0) goto off0815pc8s;\n}\n@endif\n\n@if defined(TRICORE_RIDER_B) || defined(TRICORE_RIDER_D) || defined(TRICORE_V2)\n# JNZ D[b], disp4 (SBR)\n:jnz Rd1215,off0811pc4z is PCPMode=0 & Rd1215 & off0811pc4z & op0007=0xf6\n{"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "tricore.sinc",
+          "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+          "search": ":nop  is PCPMode=0 & op0007=0x0",
+          "references": [
+            {
+              "line": 6804,
+              "snippet": ":nop  is PCPMode=0 & op0007=0x0 & op0815=0x0\n{\n\tlocal NOP:1 = 0:1;\n\tNOP = NOP;\n}\n\n# NOP (SYS)\n:nop  is PCPMode=0 & op0007=0xd & op0815=0x0 ; op1631=0x0\n{\n\tlocal NOP:1 = 0:1;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "tricore.sinc",
+          "source_sha256": "d184686bf1092ad6bb799102d6ed64b1c8ced07d8b8b4448ac54c939b5e9ccca",
+          "search": ":ret  is PCPMode=0 & op0007=0x0",
+          "references": [
+            {
+              "line": 7093,
+              "snippet": ":ret  is PCPMode=0 & op0007=0x0 & op0815=0x90\n{\n\t#TODO  ret\n\t# if (PSW.CDE) then if (cdc_decrement()) then trap(CDU);\n\t# if (PCXI[19:0] == 0) then trap(CSU);\n\t# if (PCXI.UL == 0) then trap(CTYP);\n\t# PC = {A[11] [31:1], 1\u2019b0};\n\t# EA = {PCXI.PCXS, 6'b0, PCXI.PCXO, 6'b0};\n\t# {new_PCXI, new_PSW, a10,a11,d8,d9,d10,d11,a12,a13,a14,a15,d12,d13,d14,d15} = M(EA, 16 * word);\n\t# M(EA, word) = FCX;"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "Only PCPMode=0 scalar core and selected root TRICORE_V2 macro; PCP is not a sibling profile substitute.",
+        "SDK call/return source contains CSA/state TODOs; planned decode/flow evidence must not authenticate CSA semantics or CPU behavior."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "Xtensa-v1",
+      "family": "Xtensa",
+      "version": 1,
+      "language_id": "Xtensa:LE:32:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x4000",
+      "byte_length": 20,
+      "input_sha256": "563b87fc7d3949e9e633385e3adb64cd4823743d75c83dd66388f4cdfce8c9f2",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 11
+        },
+        {
+          "name": "callee",
+          "start_bytes": 16,
+          "end_exclusive_bytes": 20
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "c50000",
+          "owned_explanatory_asm": "CALL0 callee"
+        },
+        {
+          "offset_bytes": 3,
+          "bytes_hex": "f02000",
+          "owned_explanatory_asm": "NOP"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "3792f6",
+          "owned_explanatory_asm": "BNE a2,a3,main"
+        },
+        {
+          "offset_bytes": 9,
+          "bytes_hex": "0df0",
+          "owned_explanatory_asm": "RET.N"
+        },
+        {
+          "offset_bytes": 11,
+          "bytes_hex": "3df0",
+          "owned_explanatory_asm": "NOP.N padding"
+        },
+        {
+          "offset_bytes": 13,
+          "bytes_hex": "f02000",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 16,
+          "bytes_hex": "3df0",
+          "owned_explanatory_asm": "callee: NOP.N"
+        },
+        {
+          "offset_bytes": 18,
+          "bytes_hex": "0df0",
+          "owned_explanatory_asm": "RET.N"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 6,
+      "return_offset_bytes": 9,
+      "constructor_references": [
+        {
+          "source_file": "xtensaArch.sinc",
+          "source_sha256": "d84fe4956a17c100dc458ea493956c1091a085b09d96cc3fefc76c406f2219f6",
+          "search": "call_o18    = (6,23)",
+          "references": [
+            {
+              "line": 210,
+              "snippet": "    call_o18    = (6,23) signed\n    op1_1_3     = (17,19)\n    op1_0       = (16,16)\n    op_r_3      = (15,15)\n    op_r_2_2    = (14,15)\n    op_r_1_3    = (13,15)\n    op_r_0_2    = (12,13)\n    op_r_0      = (12,12)\n    op_r        = (12,15)\n    op_s        = (8,11)"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "xtensaArch.sinc",
+          "source_sha256": "d84fe4956a17c100dc458ea493956c1091a085b09d96cc3fefc76c406f2219f6",
+          "search": "ri8_si8     = (16,23)",
+          "references": [
+            {
+              "line": 206,
+              "snippet": "    ri8_si8     = (16,23) signed\n    bri12_i12   = (12,23)\n    bri12_si12  = (12,23) signed\n    ri16_i16    = (8,23)\n    call_o18    = (6,23) signed\n    op1_1_3     = (17,19)\n    op1_0       = (16,16)\n    op_r_3      = (15,15)\n    op_r_2_2    = (14,15)\n    op_r_1_3    = (13,15)"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "xtensaArch.sinc",
+          "source_sha256": "d84fe4956a17c100dc458ea493956c1091a085b09d96cc3fefc76c406f2219f6",
+          "search": "bri8_n      = (4,5)",
+          "references": [
+            {
+              "line": 229,
+              "snippet": "    bri8_n      = (4,5)\n    bri8_m      = (6,7)\n;\n\n# Narrow 16-bit instructions; fields are always prefixed with n_.\ndefine token narrowinsn(16)\n    n_ar   = (12,15)\n    n_as   = (8,11)\n    n_at   = (4,7)\n    n_op0  = (0, 3)"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "xtensaMain.sinc",
+          "source_sha256": "f713284fb1562a754ebf38ead9a195d0f5b1ce85b25426d16b6ed0b047053edf",
+          "search": "call_srel_sh2:",
+          "references": [
+            {
+              "line": 197,
+              "snippet": "call_srel_sh2: rel is call_o18 [\n    rel = (inst_start & ~3) + ( call_o18 << 2 ) + 4;\n] { export *:4 rel; }\n\nsrel_oex_sh2: rel is ri16_i16 [\n    rel = ((inst_start + 3) & ~3) + ((ri16_i16 | 0xffff0000) << 2);\n] { export *:4 rel; }\n\n# Immediates split across the instruction.\nu5_8_11_20: tmp is op2_0 & op_s  [ tmp = (op2_0 << 4) | op_s; ] { export *[const]:4 tmp; }"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "xtensaMain.sinc",
+          "source_sha256": "f713284fb1562a754ebf38ead9a195d0f5b1ce85b25426d16b6ed0b047053edf",
+          "search": "ri8_srel:",
+          "references": [
+            {
+              "line": 187,
+              "snippet": "ri8_srel: rel is ri8_si8  [ rel = inst_start + ri8_si8  + 4; ] { export *:4 rel; }\n\nbri12_srel: rel is bri12_si12 [ rel = inst_start + bri12_si12 + 4; ] { export *:4 rel; }\n\nri6_rel: rel is ri6_i6_4_2 & ri6_i6_0_4 [\n    rel = inst_start + ((ri6_i6_4_2 << 4) | ri6_i6_0_4) + 4;\n] { export *:4 rel; }\n\ncall_srel:  rel is call_o18   [ rel = inst_start + call_o18   + 4; ] { export *:4 rel; }\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "xtensaInstructions.sinc",
+          "source_sha256": "d7fcfdc28dd216ba02e5b202c1c4fd61d35885c7b525e6ded7c3ab2dfa40196d",
+          "search": ":call0 ",
+          "references": [
+            {
+              "line": 317,
+              "snippet": ":call0 call_srel_sh2 is call_srel_sh2 & bri8_n = 0 & op0 = 0b0101 {\n\t$(PS_CALLINC) = 0;\n\ta0 = inst_next;\n\tcall call_srel_sh2;\n}\n\n# CALL4 - Call PC-relative, Rotate Window by 4 (CALL), pg. 298.\n:call4 call_srel_sh2 is call_srel_sh2 & Ret4 & bri8_n = 0b01 & op0 = 0b0101 {\n\t$(PS_CALLINC) = 1;\n\ta4 = Ret4;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "xtensaInstructions.sinc",
+          "source_sha256": "d7fcfdc28dd216ba02e5b202c1c4fd61d35885c7b525e6ded7c3ab2dfa40196d",
+          "search": ":nop ",
+          "references": [
+            {
+              "line": 882,
+              "snippet": ":nop is op2 = 0 & op1 = 0 & ar = 0b0010 & as = 0 & at = 0b1111 & op0 = 0 { }\n\n# NOP.N - Narrow No Operation (RRRN), pg. 460.\n:nop.n is n_ar = 0b1111 & n_as = 0 & n_at = 0b0011 & n_op0 = 0b1101 { }\n\n# NSA - Normalization Shift Amount (RRR), pg. 461.\n:nsa at, as is op2 = 0b0100 & op1 = 0 & ar = 0b1110 & as & at & op0 = 0 {\n    at = lzcount(~as);\n}\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "xtensaInstructions.sinc",
+          "source_sha256": "d7fcfdc28dd216ba02e5b202c1c4fd61d35885c7b525e6ded7c3ab2dfa40196d",
+          "search": ":nop.n ",
+          "references": [
+            {
+              "line": 885,
+              "snippet": ":nop.n is n_ar = 0b1111 & n_as = 0 & n_at = 0b0011 & n_op0 = 0b1101 { }\n\n# NSA - Normalization Shift Amount (RRR), pg. 461.\n:nsa at, as is op2 = 0b0100 & op1 = 0 & ar = 0b1110 & as & at & op0 = 0 {\n    at = lzcount(~as);\n}\n\n# NSAU - Normalization Shift Amount Unsigned (RRR), pg. 462. (Count leading zeros)\n:nsau at, as is op2 = 0b0100 & op1 = 0 & ar = 0b1111 & as & at & op0 = 0 {\n    at = lzcount(as);"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "xtensaInstructions.sinc",
+          "source_sha256": "d7fcfdc28dd216ba02e5b202c1c4fd61d35885c7b525e6ded7c3ab2dfa40196d",
+          "search": ":bne ",
+          "references": [
+            {
+              "line": 269,
+              "snippet": ":bne as, at, ri8_srel is ri8_srel & ar = 0b1001 & as & at & op0 = 0b0111 {\n    if (as != at)\n        goto ri8_srel;\n}\n\n# BNEI - Branch if Not EquaL Immediate (BRI8), pg. 289.\n:bnei as, r_b4const, ri8_srel is ri8_srel & r_b4const & as & bri8_m = 0b01 & bri8_n = 0b10 & op0 = 0b0110 {\n    if (as != r_b4const)\n        goto ri8_srel;\n}"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "xtensaInstructions.sinc",
+          "source_sha256": "d7fcfdc28dd216ba02e5b202c1c4fd61d35885c7b525e6ded7c3ab2dfa40196d",
+          "search": ":ret.n ",
+          "references": [
+            {
+              "line": 978,
+              "snippet": ":ret.n is n_ar = 0b1111 & n_as = 0 & n_at = 0 & n_op0 = 0b1101 {\n    return [a0];\n}\n\n# RETW - Windowed Return (CALLX), pg. 480.\n:retw is op2 = 0 & op1 = 0 & ar = 0 & as = 0 & bri8_m = 0b10 & bri8_n = 0b01 & op0 = 0 {\n\tlocal addr:4 = (a0 & 0x3fffffff) | (inst_start & 0xc0000000);\n\trestoreRegWindow();\n\treturn [addr];\n}"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "Only scalar 16/24-bit forms and non-windowed CALL0/RET.N; no FLIX, custom instruction, call4/8/12 window semantics.",
+        "CALL0 target is aligned inst_start plus signed18<<2 plus4; byte/word guesses are not Java API evidence."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "Z80-v1",
+      "family": "Z80",
+      "version": 1,
+      "language_id": "z80:LE:16:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x4000",
+      "byte_length": 10,
+      "input_sha256": "5366cd7fd7012c52bc4bf04d4b83331b9e5a5b3e571f675353d0f30567090934",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 7
+        },
+        {
+          "name": "callee",
+          "start_bytes": 8,
+          "end_exclusive_bytes": 10
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "cd0840",
+          "owned_explanatory_asm": "CALL callee"
+        },
+        {
+          "offset_bytes": 3,
+          "bytes_hex": "00",
+          "owned_explanatory_asm": "NOP"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "20fa",
+          "owned_explanatory_asm": "JR NZ,main"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "c9",
+          "owned_explanatory_asm": "RET"
+        },
+        {
+          "offset_bytes": 7,
+          "bytes_hex": "00",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "00",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 9,
+          "bytes_hex": "c9",
+          "owned_explanatory_asm": "RET"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 4,
+      "return_offset_bytes": 6,
+      "constructor_references": [
+        {
+          "source_file": "z80.slaspec",
+          "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+          "search": ":CALL Addr16",
+          "references": [
+            {
+              "line": 1970,
+              "snippet": ":CALL Addr16        is op0_8=0xcd; Addr16 {\n    push16(&:2 inst_next);\n\tcall Addr16;\n}\n\n:CALL cc,Addr16     is op6_2=0x3 & cc & bits0_3=0x4; Addr16 {\n\tif (!cc) goto inst_next;\n    push16(&:2 inst_next);\n\tcall Addr16;\n}"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "z80.slaspec",
+          "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+          "search": ":NOP ",
+          "references": [
+            {
+              "line": 1356,
+              "snippet": ":NOP                is op0_8=0x0 {\n}\n\n:HALT               is op0_8=0x76 {\n\thalt();\n}\n\n:DI                 is op0_8=0xf3 {\n#\tIFF1 = 0;\n#\tIFF2 = 0;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "z80.slaspec",
+          "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+          "search": ":JR cc2",
+          "references": [
+            {
+              "line": 1944,
+              "snippet": ":JR cc2,RelAddr8    is op6_2=0x0 & cc2 & bits0_3=0x0; RelAddr8 {\n\tif (cc2) goto RelAddr8;\n}\n\n:JP (HL)            is op0_8=0xe9 & HL {\n\toff:2 = (zext(H) << 8) | zext(L);\n\t\n\tJumpToLoc(off);\n\n}"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "z80.slaspec",
+          "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+          "search": ":RET ",
+          "references": [
+            {
+              "line": 1981,
+              "snippet": ":RET                is op0_8=0xc9 {\n\tpop16(PC);\n\tptr:$(PTRSIZE) = PC;\n\treturn [ptr];\n}\n\n:RET cc             is op6_2=0x3 & cc & bits0_3=0x0 {\n\tif (!cc) goto inst_next;\n\tpop16(PC);\n\tptr:$(PTRSIZE) = PC;"
+            },
+            {
+              "line": 1987,
+              "snippet": ":RET cc             is op6_2=0x3 & cc & bits0_3=0x0 {\n\tif (!cc) goto inst_next;\n\tpop16(PC);\n\tptr:$(PTRSIZE) = PC;\n\treturn [ptr];\n}\n\n:RETI               is op0_8=0xed; op0_8=0x4d {\n\tpop16(PC);\n\tptr:$(PTRSIZE) = PC;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "z80.slaspec",
+          "source_sha256": "b37b603585c9fafea48a1690a904e1c454e1d9bc4c83b76ee902ee8202caf005",
+          "search": "RelAddr8:",
+          "references": [
+            {
+              "line": 350,
+              "snippet": "RelAddr8: loc  is simm8  [ loc = inst_next + simm8; ]        { export *:1 loc; }\n\nRstAddr: loc  is bits3_3 [ loc = bits3_3 << 3; ]       { export *:1 loc; }\n@if defined(Z180)\n\nIOAddr8: (imm8)  is imm8       { export *[const]:2 imm8; }\n\nIOAddr8a: (imm8)  is assume8bitIOSpace=0 & imm8        { ptr:2 = (zext(A) << 8) + imm8; export ptr; }\nIOAddr8a: (imm8)  is assume8bitIOSpace=1 & imm8        { export *[const]:2 imm8; }\n"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "RAM code and separate IO space must remain distinct; prefixes are multi-byte instructions, not extra function starts. No eZ80/Z180 substitution."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "HCS12-v1",
+      "family": "HCS12",
+      "version": 1,
+      "language_id": "HCS-12:BE:24:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x2000",
+      "byte_length": 10,
+      "input_sha256": "bc22c245679fd1e30c7e8bb0875a7550dda4d694131578e014c5671c7d4d0788",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 6
+        },
+        {
+          "name": "callee",
+          "start_bytes": 8,
+          "end_exclusive_bytes": 10
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "0706",
+          "owned_explanatory_asm": "BSR callee"
+        },
+        {
+          "offset_bytes": 2,
+          "bytes_hex": "a7",
+          "owned_explanatory_asm": "NOP"
+        },
+        {
+          "offset_bytes": 3,
+          "bytes_hex": "26fb",
+          "owned_explanatory_asm": "BNE main"
+        },
+        {
+          "offset_bytes": 5,
+          "bytes_hex": "3d",
+          "owned_explanatory_asm": "RTS"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "a7",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 7,
+          "bytes_hex": "a7",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "a7",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 9,
+          "bytes_hex": "3d",
+          "owned_explanatory_asm": "RTS"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 3,
+      "return_offset_bytes": 5,
+      "constructor_references": [
+        {
+          "source_file": "HCS_HC12.sinc",
+          "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+          "search": ":BSR ",
+          "references": [
+            {
+              "line": 2014,
+              "snippet": ":BSR rel8                 is Prefix18=0 & op8=0x07; rel8 \n{\n\ttmp:2 = inst_next;\n\tPush2( tmp );\n\t \n\tcall rel8;\n}\n\n@if defined(HCS12X)\n:BTAS  opr8a_8, msk8                 is Prefix18=1 & (op8=0x35); opr8a_8; msk8"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "HCS_HC12.sinc",
+          "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+          "search": ":NOP ",
+          "references": [
+            {
+              "line": 4461,
+              "snippet": ":NOP                     is Prefix18=0 & op8=0xA7\n{\n}\n\n:ORAA iopr8i                 is Prefix18=0 & (op8=0x8A); iopr8i\n{ \n\tA = A | iopr8i; \n\t$(Z) = (A == 0);\n\t$(N) = (A s< 0);\n\tV_equals_0();"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "HCS_HC12.sinc",
+          "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+          "search": ":BNE ",
+          "references": [
+            {
+              "line": 1930,
+              "snippet": ":BNE rel8                 is Prefix18=0 & op8=0x26; rel8\n{\n\tif ($(Z) == 0) goto rel8;\n}\n\n:BPL rel8                 is Prefix18=0 & op8=0x2A; rel8\n{\n\tif ($(N) == 0) goto rel8;\n}\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "HCS_HC12.sinc",
+          "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+          "search": ":RTS ",
+          "references": [
+            {
+              "line": 4939,
+              "snippet": ":RTS                     is Prefix18=0 & op8=0x3D\n{\n\ttmp:2 = 0;\n\tPull2( tmp );\n\t\n\treturn [tmp];\n}\n\n:SBA\t                 is Prefix18=1 & (op8=0x16)\n{ "
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "HCS_HC12.sinc",
+          "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+          "search": "rel8:",
+          "references": [
+            {
+              "line": 747,
+              "snippet": "rel8: reloc is rel    [ reloc = inst_next + rel; ]  { export *:1 reloc; }\n\n# range -256 through +255\nrel9: reloc is sign12_12 & rr7_0   [ reloc = inst_next + ((sign12_12 << 8) | rr7_0); ]  { export *:1 reloc; }\n\n# positive range 0 through +65535\nrel16: reloc is simm16   [ reloc = inst_next + simm16; ]  { export *:1 reloc; }\n\n\nop2_opr16a_8:\topr16a_8\t\tis opr16a_8\t\t\t{ export opr16a_8; }"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "Use unbanked low 0x002000 near-relative BSR, not paged CALL. PPAGE/global translation and 24-bit space behavior remain unobserved until actual Java addresses are recorded.",
+        "Do not substitute HCS12X/XGATE or treat 16-bit stored return values as proof of flat 24-bit ABI."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "6805-v1",
+      "family": "6805",
+      "version": 1,
+      "language_id": "6805:BE:16:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x1000",
+      "byte_length": 10,
+      "input_sha256": "67dc0990cc2371896e717c607912b8a0807241f4a0b36b403487d02e2aa734d1",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 7
+        },
+        {
+          "name": "callee",
+          "start_bytes": 8,
+          "end_exclusive_bytes": 10
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "cd1008",
+          "owned_explanatory_asm": "JSR callee"
+        },
+        {
+          "offset_bytes": 3,
+          "bytes_hex": "9d",
+          "owned_explanatory_asm": "NOP"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "26fa",
+          "owned_explanatory_asm": "BNE main"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "81",
+          "owned_explanatory_asm": "RTS"
+        },
+        {
+          "offset_bytes": 7,
+          "bytes_hex": "9d",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "9d",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 9,
+          "bytes_hex": "81",
+          "owned_explanatory_asm": "RTS"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 4,
+      "return_offset_bytes": 6,
+      "constructor_references": [
+        {
+          "source_file": "6805.slaspec",
+          "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+          "search": ":JSR ADDR",
+          "references": [
+            {
+              "line": 380,
+              "snippet": ":JSR ADDR\tis (op=0xBD | op=0xCD) ... & ADDR\n{\n\t*:2 (SP-1) = inst_next;\n\tSP=SP-2; \n\tcall ADDR;\n}\n:JSR ADDRI\tis (op=0xDD | op=0xED | op=0xFD) ... & ADDRI\n{\n\t*:2 (SP-1) = inst_next;\n\tSP=SP-2; "
+            },
+            {
+              "line": 386,
+              "snippet": ":JSR ADDRI\tis (op=0xDD | op=0xED | op=0xFD) ... & ADDRI\n{\n\t*:2 (SP-1) = inst_next;\n\tSP=SP-2; \n\tcall [ADDRI];\n}\n\n:LDA OP1     is (op=0xA6 | op=0xB6 | op=0xC6 | op=0xD6 | op=0xE6 | op=0xF6) ... & OP1\n{ \n\tA = OP1;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "6805.slaspec",
+          "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+          "search": ":NOP",
+          "references": [
+            {
+              "line": 468,
+              "snippet": ":NOP\t\tis op = 0x9D\n{\n}\n\n:ORA OP1     is (op=0xAA | op=0xBA | op=0xCA | op=0xDA | op=0xEA | op=0xFA) ... & OP1\n{ \n\tA = A | OP1; \n\tZ = (A == 0);\n\tN = (A s< 0);\n}"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "6805.slaspec",
+          "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+          "search": ":BNE ",
+          "references": [
+            {
+              "line": 214,
+              "snippet": ":BNE REL\tis op=0x26;REL\n{\n\tif (Z == 0) goto REL;\n}\n:BPL REL\tis op=0x2A;REL\n{\n\tif (N == 0) goto REL;\n}\n:BRA REL\tis op=0x20;REL\n{"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "6805.slaspec",
+          "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+          "search": ":RTS",
+          "references": [
+            {
+              "line": 565,
+              "snippet": ":RTS\t\tis op = 0x81\n{\n\tSP = SP+1;\n\ttmp:2 = *:2 SP;\n\tSP = SP+1;\n\t\n\treturn [tmp];\n}\n\n:SBC OP1     is (op=0xA2 | op=0xB2 | op=0xC2 | op=0xD2 | op=0xE2 | op=0xF2) ... & OP1"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "6805.slaspec",
+          "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+          "search": "ADDR:",
+          "references": [
+            {
+              "line": 47,
+              "snippet": "ADDR: imm8 \t\t\tis op4_6=3; imm8\t\t{ export *:1 imm8; }\nADDR: imm16 \t\tis op4_6=4; imm16   \t{ export *:1 imm16; }\nADDRI: imm16,X  \tis op4_6=5 & X; imm16 \t{ tmp:2 = imm16 + zext(X); export *:1 tmp; }\nADDRI: imm8,X   \tis op4_6=6 & X; imm8  \t{ tmp:2 = imm8 + zext(X); export *:1 tmp; }\nADDRI: \",\"X\t\t\tis op4_6=7 & X\t\t\t{ tmp:2 = zext(X); export *:1 tmp; }\n\n\nDIRECT: imm8\tis imm8\t\t\t\t\t{ export *:1 imm8; }\n\n:ADC OP1     is (op=0xA9 | op=0xB9 | op=0xC9 | op=0xD9 | op=0xE9 | op=0xF9) ... & OP1"
+            },
+            {
+              "line": 48,
+              "snippet": "ADDR: imm16 \t\tis op4_6=4; imm16   \t{ export *:1 imm16; }\nADDRI: imm16,X  \tis op4_6=5 & X; imm16 \t{ tmp:2 = imm16 + zext(X); export *:1 tmp; }\nADDRI: imm8,X   \tis op4_6=6 & X; imm8  \t{ tmp:2 = imm8 + zext(X); export *:1 tmp; }\nADDRI: \",\"X\t\t\tis op4_6=7 & X\t\t\t{ tmp:2 = zext(X); export *:1 tmp; }\n\n\nDIRECT: imm8\tis imm8\t\t\t\t\t{ export *:1 imm8; }\n\n:ADC OP1     is (op=0xA9 | op=0xB9 | op=0xC9 | op=0xD9 | op=0xE9 | op=0xF9) ... & OP1\n{"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "6805.slaspec",
+          "source_sha256": "86ad7d42274cada6bbad933f029088e9f6852147bee76cd0966e3ff286f6be13",
+          "search": "REL:",
+          "references": [
+            {
+              "line": 38,
+              "snippet": "REL: reloc\t\tis rel\t[ reloc = inst_next + rel; ] { export *:2 reloc; } \n\nOP1: \"#\"imm8\tis op4_6=2; imm8\t\t{ tmp:1 = imm8; export tmp; }\nOP1: imm8 \t\tis op4_6=3; imm8\t\t{ export *:1 imm8; }\nOP1: imm16 \t\tis op4_6=4; imm16     \t{ export *:1 imm16; }\nOP1: imm16,X  \tis op4_6=5 & X; imm16 \t{ tmp:2 = imm16 + zext(X); export *:1 tmp; }\nOP1: imm8,X   \tis op4_6=6 & X; imm8  \t{ tmp:2 = imm8 + zext(X); export *:1 tmp; }\nOP1: \",\"X\t\t\tis op4_6=7 & X\t\t\t{ tmp:2 = zext(X); export *:1 tmp; }\n\nADDR: imm8 \t\t\tis op4_6=3; imm8\t\t{ export *:1 imm8; }"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "Only selected 6805 source; do not use sibling 6809 opcodes. Big-endian absolute JSR and signed relative branch; no ABI claim."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "CR16-v1",
+      "family": "CR16",
+      "version": 1,
+      "language_id": "CR16C:LE:16:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x1000",
+      "byte_length": 20,
+      "input_sha256": "a19a77874387d782ea452918512ce2a9f4024fd2e38e1f644f345799234be76e",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 10
+        },
+        {
+          "name": "callee",
+          "start_bytes": 16,
+          "end_exclusive_bytes": 20
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "00c01000",
+          "owned_explanatory_asm": "BAL (RA),callee"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "002c",
+          "owned_explanatory_asm": "NOP"
+        },
+        {
+          "offset_bytes": 6,
+          "bytes_hex": "1d1f",
+          "owned_explanatory_asm": "BRne main"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "ee0a",
+          "owned_explanatory_asm": "JUMP RA ; return alias"
+        },
+        {
+          "offset_bytes": 10,
+          "bytes_hex": "002c",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 12,
+          "bytes_hex": "002c",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 14,
+          "bytes_hex": "002c",
+          "owned_explanatory_asm": "NOP padding"
+        },
+        {
+          "offset_bytes": 16,
+          "bytes_hex": "002c",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 18,
+          "bytes_hex": "ee0a",
+          "owned_explanatory_asm": "JUMP RA"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 6,
+      "return_offset_bytes": 8,
+      "constructor_references": [
+        {
+          "source_file": "CR16C.sinc",
+          "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+          "search": ":BAL (RA)",
+          "references": [
+            {
+              "line": 1409,
+              "snippet": ":BAL (RA), disp24b    is dw_hi=0xc0 & disp24b & RA { \n    RA = inst_next >> 1;    # save bits 1 to 23 in link reg RA\n    PC = &disp24b;           # PC = PC + sext25(disp)    TODO: 25 bits?\n    call disp24b;\n}\n:BAL rp_dst4, disp24     is op=0x0010 ; n8=2 & disp24 & rp_dst4 {\n    # rp link is at word2 (4,7)\n    rp_dst4 = inst_next >> 1;   # save bits 1 to 23 in link reg\n    PC = &disp24;                # PC = PC + sext25(disp)    TODO: 25 bits?\n    call disp24;"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "CR16C.sinc",
+          "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+          "search": ":NOP ",
+          "references": [
+            {
+              "line": 524,
+              "snippet": ":NOP                is hi=0x2c & dst=0 & x2=0 {\n\n}\n:ADDUB imm16, dst   is hi=0x2c & x2=11 & dst ; imm16 {\n    tmp:1 = dst:1 + imm16:1;\n    dst = (dst & 0xff00) + zext(tmp);\n}\n:ADDUB src, dst     is hi=0x2d & src & dst {\n    tmp:1 = dst:1 + src:1;\n    dst = (dst & 0xff00) + zext(tmp);"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "CR16C.sinc",
+          "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+          "search": ":BR^COND disp8",
+          "references": [
+            {
+              "line": 1446,
+              "snippet": ":BR^COND disp8  is op4=1 & COND & disp8 {       # BR (conditional)\n    build COND;\n    PC = &disp8;\n    goto disp8;\n}\n:BR disp8       is op4=1 & cond=14 & disp8 {    # BR cond=14 (always)\n    PC = &disp8;\n    goto disp8;\n}\n:BR disp8       is op4=1 & cond=15 & disp8 {    # BR cond=15 (unconditional)"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "CR16C.sinc",
+          "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+          "search": ":JUMP RA",
+          "references": [
+            {
+              "line": 1520,
+              "snippet": ":JUMP RA    is hi=0xa & cond=14 & rp_dst=14 & RA {  # always\n    local tmp = RA << 1;\n    PC = tmp:4;\n    return [PC]; \n}\n:JUSR RA    is hi=0xa & cond=15 & rp_dst=14 & RA {  # unconditional\n    $(U) = 1;\n    local tmp = RA << 1;\n    PC = tmp:4;\n    return [PC]; "
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "CR16C.sinc",
+          "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+          "search": "disp24b:",
+          "references": [
+            {
+              "line": 309,
+              "snippet": "disp24b:\"*\"tmp  is dw_lo & b1_15   \n        [ tmp = (dw_lo << 16) + (b1_15 << 1) + inst_start; ]                { export *[ram]:4 tmp; }\ndisp4c: \"*\"tmp  is x2\n        [ tmp = ((x2 + 1) << 1) + inst_start;  ]        { export *[ram]:4 tmp; }\n\n# disps not relative to PC\ndisp4:  \"*\"tmp  is x3   [ tmp = (x3 << 1); ]    { export *[const]:3 tmp; }\ndisp4b: \"*\"x3   is x3                           { export *[const]:3 x3; }\ndisp16b:\"*\"w2   is w2                           { export *[const]:2 w2; }\ndisp20: \"*\"tmp  is n7 & dw_w2"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "CR16C.sinc",
+          "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+          "search": "disp8:",
+          "references": [
+            {
+              "line": 303,
+              "snippet": "disp8:  \"*\"tmp  is x1 & x3s \n        [ tmp = (x3s << 5) + (x1 << 1) + inst_start; ]  { export *[ram]:4 tmp; }  # fmt 21\ndisp16: \"*\"tmp  is w2_b1_15  \n        [ tmp = (w2_b1_15 << 1) + inst_start; ]         { export *[ram]:4 tmp; }  # fmt 5, 22 \ndisp24: \"*\"tmp  is n5s & n7 & b1_15  \n        [ tmp = (n5s << 20) + (n7 << 16) + (b1_15 << 1) + inst_start; ]     { export *[ram]:4 tmp; }\ndisp24b:\"*\"tmp  is dw_lo & b1_15   \n        [ tmp = (dw_lo << 16) + (b1_15 << 1) + inst_start; ]                { export *[ram]:4 tmp; }\ndisp4c: \"*\"tmp  is x2\n        [ tmp = ((x2 + 1) << 1) + inst_start;  ]        { export *[ram]:4 tmp; }"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "CR16C.sinc",
+          "source_sha256": "336823d2d7b38671bb389e0ad6b5747e0927b08b04bbbb7f825afc2c8deb96a5",
+          "search": "COND:",
+          "references": [
+            {
+              "line": 338,
+              "snippet": "COND: cc is cc  { if (!cc) goto inst_next; }\n\ncc2: \"eq\" is n6=0          { local tmp =  $(Z); export tmp; }          \ncc2: \"ne\" is n6=1          { local tmp = !$(Z); export tmp; }          \ncc2: \"cs\" is n6=2          { local tmp =  $(C); export tmp; }          \ncc2: \"cc\" is n6=3          { local tmp = !$(C); export tmp; }          \ncc2: \"hi\" is n6=4          { local tmp =  $(L); export tmp; }          \ncc2: \"ls\" is n6=5          { local tmp = !$(L); export tmp; }          \ncc2: \"gt\" is n6=6          { local tmp =  $(N); export tmp; }          \ncc2: \"le\" is n6=7          { local tmp = !$(N); export tmp; }          "
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "Selected CR16C declares ram size=4 despite language ID size16. RA stores inst_next>>1 and return expands RA<<1; these are link-value semantics, not a claim that ram addressable units are two bytes.",
+        "Split signed displacement fields and return alias must be checked with actual Java getOffset/getAddressableWordOffset; never multiply API target offsets speculatively."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "eBPF-v1",
+      "family": "eBPF",
+      "version": 1,
+      "language_id": "eBPF:LE:64:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x1000",
+      "byte_length": 48,
+      "input_sha256": "574c0756aab1fb59d6defb414abe39195f21e6f189873425df09619f43b1feb1",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 32
+        },
+        {
+          "name": "callee",
+          "start_bytes": 32,
+          "end_exclusive_bytes": 48
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "8510000003000000",
+          "owned_explanatory_asm": "CALL callee ; src=1 pseudo-call, imm=3"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "b700000000000000",
+          "owned_explanatory_asm": "MOV r0,0 ; 64-bit class"
+        },
+        {
+          "offset_bytes": 16,
+          "bytes_hex": "1500fdff00000000",
+          "owned_explanatory_asm": "JEQ r0,0,main ; off=-3"
+        },
+        {
+          "offset_bytes": 24,
+          "bytes_hex": "9500000000000000",
+          "owned_explanatory_asm": "EXIT"
+        },
+        {
+          "offset_bytes": 32,
+          "bytes_hex": "b700000000000000",
+          "owned_explanatory_asm": "callee: MOV r0,0"
+        },
+        {
+          "offset_bytes": 40,
+          "bytes_hex": "9500000000000000",
+          "owned_explanatory_asm": "EXIT"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 16,
+      "return_offset_bytes": 24,
+      "constructor_references": [
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": ":CALL disp32",
+          "references": [
+            {
+              "line": 439,
+              "snippet": ":CALL disp32 is imm & src=1 & op_alu_jmp_opcode=0x8 & op_alu_jmp_source=0 & op_insn_class=0x5 & disp32 {\n    call disp32;\n}\n\n# GCC encoding and LLVM 19.1+ encoding\n:CALLX dst is op_alu_jmp_opcode=0x8 & op_alu_jmp_source=1 & op_insn_class=0x5 & src=0 & imm=0 & dst {\n    call [dst];\n}\n\n# LLVM encoding used until LLVM 19.1"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": "disp32:",
+          "references": [
+            {
+              "line": 437,
+              "snippet": "disp32: reloc is imm [ reloc = inst_next + imm * 8; ] { export *:4 reloc; }\n\n:CALL disp32 is imm & src=1 & op_alu_jmp_opcode=0x8 & op_alu_jmp_source=0 & op_insn_class=0x5 & disp32 {\n    call disp32;\n}\n\n# GCC encoding and LLVM 19.1+ encoding\n:CALLX dst is op_alu_jmp_opcode=0x8 & op_alu_jmp_source=1 & op_insn_class=0x5 & src=0 & imm=0 & dst {\n    call [dst];\n}"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": ":MOV dst, SRC8",
+          "references": [
+            {
+              "line": 72,
+              "snippet": ":MOV dst, SRC8  is SRC8 & dst & off=0 & op_alu_jmp_opcode=0xb & op_insn_class=0x7 { dst = SRC8; }\n:MOVSB dst, src  is src & dst & off=8 & op_alu_jmp_opcode=0xb & op_alu_jmp_source=1 & op_insn_class=0x7 { dst = sext(src:1); }\n:MOVSH dst, src  is src & dst & off=16 & op_alu_jmp_opcode=0xb & op_alu_jmp_source=1 & op_insn_class=0x7 { dst = sext(src:2); }\n:MOVSW dst, src  is src & dst & off=32 & op_alu_jmp_opcode=0xb & op_alu_jmp_source=1 & op_insn_class=0x7 { dst = sext(src:4); }\n\n:ADD dst, SRC8  is SRC8 & dst & op_alu_jmp_opcode=0x0 & op_insn_class=0x7 { dst = dst + SRC8; }\n\n:SUB dst, SRC8  is SRC8 & dst & op_alu_jmp_opcode=0x1 & op_insn_class=0x7 { dst = dst - SRC8; }\n\n:MUL dst, SRC8  is SRC8 & dst & op_alu_jmp_opcode=0x2 & op_insn_class=0x7 { dst = dst * SRC8; }"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": ":EXIT",
+          "references": [
+            {
+              "line": 459,
+              "snippet": ":EXIT is op_alu_jmp_opcode=0x9 & op_alu_jmp_source=0 & op_insn_class=0x5 { return [*:8 R10]; }"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": "off=(16, 31)",
+          "references": [
+            {
+              "line": 23,
+              "snippet": "    off=(16, 31) signed\n    src=(12, 15)\n    dst=(8, 11)\n    op_alu_jmp_opcode=(4, 7)\n    op_alu_jmp_source=(3, 3)\n    op_ld_st_mode=(5, 7)\n    op_ld_st_size=(3, 4)\n    op_insn_class=(0, 2)\n;\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": "src=(12, 15)",
+          "references": [
+            {
+              "line": 24,
+              "snippet": "    src=(12, 15)\n    dst=(8, 11)\n    op_alu_jmp_opcode=(4, 7)\n    op_alu_jmp_source=(3, 3)\n    op_ld_st_mode=(5, 7)\n    op_ld_st_size=(3, 4)\n    op_insn_class=(0, 2)\n;\n\n#We'll need this token to operate with LDDW instruction, which has 64 bit imm value"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": "op_alu_jmp_opcode=(4, 7)",
+          "references": [
+            {
+              "line": 26,
+              "snippet": "    op_alu_jmp_opcode=(4, 7)\n    op_alu_jmp_source=(3, 3)\n    op_ld_st_mode=(5, 7)\n    op_ld_st_size=(3, 4)\n    op_insn_class=(0, 2)\n;\n\n#We'll need this token to operate with LDDW instruction, which has 64 bit imm value\ndefine token immtoken(64)\n    imm2=(32, 63)"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": "joff: reloc",
+          "references": [
+            {
+              "line": 390,
+              "snippet": "joff: reloc  is off [ reloc = inst_next + off * 8; ] { export *:8 reloc; }\njimm: reloc  is imm [ reloc = inst_next + imm * 8; ] { export *:8 reloc; }\n\ncond: \"EQ\" is op_alu_jmp_opcode=0x1 & op_insn_class=0x5 & dst & SRC8 { local cmp = dst  == SRC8; export cmp; }"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": "cond: \"EQ\" is op_alu_jmp_opcode=0x1 & op_insn_class=0x5",
+          "references": [
+            {
+              "line": 393,
+              "snippet": "cond: \"EQ\" is op_alu_jmp_opcode=0x1 & op_insn_class=0x5 & dst & SRC8 { local cmp = dst  == SRC8; export cmp; }\ncond: \"EQ\" is op_alu_jmp_opcode=0x1 & op_insn_class=0x6 & DST4 & SRC4 { local cmp = DST4 == SRC4; export cmp; }\ncond: \"GT\" is op_alu_jmp_opcode=0x2 & op_insn_class=0x5 & dst & SRC8 { local cmp = dst  > SRC8; export cmp; }\ncond: \"GT\" is op_alu_jmp_opcode=0x2 & op_insn_class=0x6 & DST4 & SRC4 { local cmp = DST4 > SRC4; export cmp; }"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "eBPF.sinc",
+          "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+          "search": ":J^cond dst, SRC8",
+          "references": [
+            {
+              "line": 426,
+              "snippet": ":J^cond dst, SRC8, joff  is joff & SRC8 & dst & cond {\n    if (cond) goto joff;\n}\n"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "8-byte base instructions; LDDW consumes two slots and is excluded from this short candidate.",
+        "EXIT is exactly 9500000000000000; b7 is MOV, not EXIT. CALL src=1 is code-relative pseudo-call; src=0 helper uses syscall space and is not an owned callee edge.",
+        "This is static SDK pcode, not kernel verifier or BPF runtime validity."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "Loongarch-v1",
+      "family": "Loongarch",
+      "version": 1,
+      "language_id": "Loongarch:LE:64:lp64d",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x1000",
+      "byte_length": 24,
+      "input_sha256": "ded5442eadc7172b0b0a6c1343540539045f9fd4e873bed807800683a4b71da4",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 16
+        },
+        {
+          "name": "callee",
+          "start_bytes": 16,
+          "end_exclusive_bytes": 24
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "00100054",
+          "owned_explanatory_asm": "BL callee"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "00004003",
+          "owned_explanatory_asm": "NOP ; ANDI zero,zero,0 alias"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "20f8ff5f",
+          "owned_explanatory_asm": "BNE r0,r1,main"
+        },
+        {
+          "offset_bytes": 12,
+          "bytes_hex": "2000004c",
+          "owned_explanatory_asm": "RET ; JIRL r0,r1,0 alias"
+        },
+        {
+          "offset_bytes": 16,
+          "bytes_hex": "00004003",
+          "owned_explanatory_asm": "callee: NOP"
+        },
+        {
+          "offset_bytes": 20,
+          "bytes_hex": "2000004c",
+          "owned_explanatory_asm": "RET"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 8,
+      "return_offset_bytes": 12,
+      "constructor_references": [
+        {
+          "source_file": "loongarch_main.sinc",
+          "source_sha256": "b2af5ed683b8e0b3c350e0128e5fa65758ee0fe52ca2971b847de39992afe655",
+          "search": "Rel26:",
+          "references": [
+            {
+              "line": 462,
+              "snippet": "Rel26: reloc  is imm10_16 & simm0_10 [ reloc = inst_start + (((simm0_10 << 16) | imm10_16) << 2); ] { export *:$(ADDRSIZE) reloc; }\n\nRelJ16: RJsrc, simm10_16  is RJsrc & simm10_16 { local tmp:$(ADDRSIZE) = RJsrc + (simm10_16 << 2); export tmp; }\n\nsimm12i: immed  is simm5_20  [immed = simm5_20  << 12; ] { export *[const]:$(REGSIZE) immed; }\n\nsimm32i: immed  is simm5_20  [immed = simm5_20  << 32; ] { export *[const]:$(REGSIZE) immed; }\n\nsimm52i: immed  is simm10_12 [immed = simm10_12 << 52; ] { export *[const]:$(REGSIZE) immed; }\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "loongarch_main.sinc",
+          "source_sha256": "b2af5ed683b8e0b3c350e0128e5fa65758ee0fe52ca2971b847de39992afe655",
+          "search": "Rel16:",
+          "references": [
+            {
+              "line": 460,
+              "snippet": "Rel16: reloc  is simm10_16            [ reloc = inst_start + (simm10_16 << 2); ]                               { export *:$(ADDRSIZE) reloc; }\nRel21: reloc  is imm10_16 & simm0_5  [ reloc = inst_start + (((simm0_5 << 16) + imm10_16) << 2); ]   { export *:$(ADDRSIZE) reloc; }\nRel26: reloc  is imm10_16 & simm0_10 [ reloc = inst_start + (((simm0_10 << 16) | imm10_16) << 2); ] { export *:$(ADDRSIZE) reloc; }\n\nRelJ16: RJsrc, simm10_16  is RJsrc & simm10_16 { local tmp:$(ADDRSIZE) = RJsrc + (simm10_16 << 2); export tmp; }\n\nsimm12i: immed  is simm5_20  [immed = simm5_20  << 12; ] { export *[const]:$(REGSIZE) immed; }\n\nsimm32i: immed  is simm5_20  [immed = simm5_20  << 32; ] { export *[const]:$(REGSIZE) immed; }\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "loongarch32_instructions.sinc",
+          "source_sha256": "9a0cdeeb12b00142be106935ad07f63f04ac990595b64b157dbe8e553cf2188c",
+          "search": ":bl  Rel26",
+          "references": [
+            {
+              "line": 578,
+              "snippet": ":bl  Rel26                     is op26_31=0x15 & Rel26 {\n\tra = inst_next;\n\tcall Rel26;\n}\n\n:bl  Rel26                     is op26_31=0x15 & Rel26 & imm10_16=1 & simm0_10=0 {\n\tra = inst_next;\n\tgoto Rel26;\n}\n"
+            },
+            {
+              "line": 583,
+              "snippet": ":bl  Rel26                     is op26_31=0x15 & Rel26 & imm10_16=1 & simm0_10=0 {\n\tra = inst_next;\n\tgoto Rel26;\n}\n\n#la-base-32.txt beq mask=0x58000000\t[@orig_fmt=JDSk16ps2, @la32, @primary, @qemu]\n#0x58000000\t0xfc000000\tr5:5,r0:5,sb10:16<<2\t['reg5_5_s0', 'reg0_5_s0', 'sbranch10_16_s0']\n:beq  RDsrc, RJsrc, Rel16      is op26_31=0x16 & RDsrc & RJsrc & Rel16 {\n\tif(RJsrc == RDsrc) goto Rel16;\n}"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "loongarch32_instructions.sinc",
+          "source_sha256": "9a0cdeeb12b00142be106935ad07f63f04ac990595b64b157dbe8e553cf2188c",
+          "search": ":bne ",
+          "references": [
+            {
+              "line": 644,
+              "snippet": ":bne  RDsrc, RJsrc, Rel16      is op26_31=0x17 & RDsrc & RJsrc & Rel16 {\n\tif(RJsrc != RDsrc) goto Rel16;\n}\n\n#la-base-32.txt bnez mask=0x44000000\t[@orig_fmt=JSd5k16ps2, @la32]\n#0x44000000\t0xfc000000\tr5:5,sb0:5|10:16<<2\t['reg5_5_s0', 'sbranch0_0_s2']\n:bnez  RJsrc, Rel21            is op26_31=0x11 & RJsrc & Rel21 {\n\tif (RJsrc != 0) goto Rel21;\n}\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "loongarch32_instructions.sinc",
+          "source_sha256": "9a0cdeeb12b00142be106935ad07f63f04ac990595b64b157dbe8e553cf2188c",
+          "search": ":nop ",
+          "references": [
+            {
+              "line": 47,
+              "snippet": ":nop                           is op22_31=0xd & rD=0 & rJ=0 & imm10_12=0 {\n}\n\n#la-base-32.txt andn mask=0x00168000\t[@la32, @primary, @qemu]\n#0x00168000\t0xffff8000\tr0:5,r5:5,r10:5\t['reg0_5_s0', 'reg5_5_s0', 'reg10_5_s0']\n:andn  RD, RJsrc, RKsrc        is op15_31=0x2d & RD & RJsrc & RKsrc {\n\tRD = RJsrc & ~(RKsrc);\n}\n\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "loongarch32_instructions.sinc",
+          "source_sha256": "9a0cdeeb12b00142be106935ad07f63f04ac990595b64b157dbe8e553cf2188c",
+          "search": ":ret ",
+          "references": [
+            {
+              "line": 663,
+              "snippet": ":ret                           is op26_31=0x13 & rD=0x0 & rJ=0x1 & RJsrc & simm10_16=0 {\n\tlocal retAddr = RJsrc;\n\treturn [retAddr];\n}\n\n# alias of jirl zero, rj, 0\n:jr RJsrc                      is op26_31=0x13 & rD=0x0 & RJsrc & simm10_16=0 {\n\tpc = RJsrc;\n\tgoto [pc];\n}"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "Selected lp64d root only; scalar 4-byte forms. RET alias source matches word0x4c000020 (bytes2000004c). No LSX/LASX/privileged/ABI proof.",
+        "BL has a specialized SDK branch-alias case when imm10_16=1; proposed call uses4, deliberately avoiding that case."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+    },
+    {
+      "name": "Hexagon-v2",
+      "family": "Hexagon",
+      "version": 2,
+      "language_id": "Hexagon:LE:32:default",
+      "compiler_spec_id": "default",
+      "base_byte_offset": "0x1000",
+      "byte_length": 24,
+      "input_sha256": "85e4202feb7fdb823b9d9a35fb6362b9a44d0b4e33a0a99bc8d1c5050f77fa5c",
+      "functions": [
+        {
+          "name": "main",
+          "start_bytes": 0,
+          "end_exclusive_bytes": 16
+        },
+        {
+          "name": "callee",
+          "start_bytes": 16,
+          "end_exclusive_bytes": 24
+        }
+      ],
+      "instruction_ledger": [
+        {
+          "offset_bytes": 0,
+          "bytes_hex": "08c0005a",
+          "owned_explanatory_asm": "{ CALL callee } ; one-word packet"
+        },
+        {
+          "offset_bytes": 4,
+          "bytes_hex": "00c0007f",
+          "owned_explanatory_asm": "{ NOP } ; one-word packet"
+        },
+        {
+          "offset_bytes": 8,
+          "bytes_hex": "fce0df5c",
+          "owned_explanatory_asm": "{ IF (p0) JUMP main } ; one-word packet, no extender"
+        },
+        {
+          "offset_bytes": 12,
+          "bytes_hex": "00c09f52",
+          "owned_explanatory_asm": "{ JUMPR r31 } ; return packet"
+        },
+        {
+          "offset_bytes": 16,
+          "bytes_hex": "00c0007f",
+          "owned_explanatory_asm": "callee: { NOP }"
+        },
+        {
+          "offset_bytes": 20,
+          "bytes_hex": "00c09f52",
+          "owned_explanatory_asm": "{ JUMPR r31 }"
+        }
+      ],
+      "call_offset_bytes": 0,
+      "conditional_offset_bytes": 8,
+      "return_offset_bytes": 12,
+      "constructor_references": [
+        {
+          "source_file": "hexagon.slaspec",
+          "source_sha256": "e75b1723ac06a437a5f0ef5262d4b58bd9faec18d1f27521f7ca52db0918e809",
+          "search": "parse\t\t\t= (14,15)",
+          "references": [
+            {
+              "line": 296,
+              "snippet": "  parse\t\t\t= (14,15)  # packet/loop bits (01/10-not end of packet, 11-end of packet, 00-EE instruction)\n  parse_0       = (14,14)\n  parse_1       = (15,15)\n  \n  op2627\t\t= (26,27)\n  op2527\t\t= (25,27)\n  op2427\t\t= (24,27)\n  op2426\t\t= (24,26)\n  op2327\t\t= (23,27)\n  op2326\t\t= (23,26)"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "hexagon.sinc",
+          "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+          "search": "RelDest22x:",
+          "references": [
+            {
+              "line": 263,
+              "snippet": "RelDest22x: val\tis s1624 & i0113 & immexted=0 [ val = (((s1624 << 13) | i0113) << 2) + $(PKT_START); ] { export *[ram]:4 val; }\nRelDest22x: val\tis i0306  & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; }\n\n@define r15_2_val \"((s2223 << 13) | (i1620 << 8) | (i13 << 7) | i0107)\"\nRelDest15x: val  is i0107 & i13 & i1620 & s2223 & immexted=0 [ val = ($(r15_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\"\nRelDest13: val  is i0111 & op13 & s21 [ val = ($(r13_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \n"
+            },
+            {
+              "line": 264,
+              "snippet": "RelDest22x: val\tis i0306  & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; }\n\n@define r15_2_val \"((s2223 << 13) | (i1620 << 8) | (i13 << 7) | i0107)\"\nRelDest15x: val  is i0107 & i13 & i1620 & s2223 & immexted=0 [ val = ($(r15_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\"\nRelDest13: val  is i0111 & op13 & s21 [ val = ($(r13_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \n\nRelDest9x: val  is i0107 & s2021 & immexted=0 [ val = (((s2021 << 7) | i0107) << 2) + $(PKT_START); ] { export *[ram]:4 val; } "
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "hexagon.sinc",
+          "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+          "search": "RelDest15x:",
+          "references": [
+            {
+              "line": 267,
+              "snippet": "RelDest15x: val  is i0107 & i13 & i1620 & s2223 & immexted=0 [ val = ($(r15_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\"\nRelDest13: val  is i0111 & op13 & s21 [ val = ($(r13_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \n\nRelDest9x: val  is i0107 & s2021 & immexted=0 [ val = (((s2021 << 7) | i0107) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest9x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n#"
+            },
+            {
+              "line": 268,
+              "snippet": "RelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\"\nRelDest13: val  is i0111 & op13 & s21 [ val = ($(r13_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \n\nRelDest9x: val  is i0107 & s2021 & immexted=0 [ val = (((s2021 << 7) | i0107) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest9x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n#\n# Non-extended Immediates"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "hexagon.sinc",
+          "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+          "search": "FlowCondUU:",
+          "references": [
+            {
+              "line": 467,
+              "snippet": "FlowCondUU: \".if(\"pu0809name\")\"\t\tis op21=0 & pu0809name & pu0809 { \n\tcondition:1 = (pu0809 & 1);  \n <<FLOW>>\n\tConditionReg = condition;\t\n}\nFlowCondUU: \".if(!\"pu0809name\")\"\tis op21=1 & pu0809name & pu0809 { \n\tcondition:1 = !(pu0809 & 1); \n <<FLOW>>\n\tConditionReg = condition;\t\n}"
+            },
+            {
+              "line": 472,
+              "snippet": "FlowCondUU: \".if(!\"pu0809name\")\"\tis op21=1 & pu0809name & pu0809 { \n\tcondition:1 = !(pu0809 & 1); \n <<FLOW>>\n\tConditionReg = condition;\t\n}\n\n# .new Predicate Register Condition for jump/call (least significant bit only)\nFlowCondNewUU: \".if(\"pu0809name\".new)\"\tis op21=0 & pu0809name & pu0809 { \n <<FLOW>>\n\tConditionReg = (pu0809 & 1); # predicate will already be committed"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "hexagon.sinc",
+          "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+          "search": "@define PKT_START",
+          "references": [
+            {
+              "line": 261,
+              "snippet": "@define PKT_START \"inst_start - (4 * packetOffset)\"\n\nRelDest22x: val\tis s1624 & i0113 & immexted=0 [ val = (((s1624 << 13) | i0113) << 2) + $(PKT_START); ] { export *[ram]:4 val; }\nRelDest22x: val\tis i0306  & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; }\n\n@define r15_2_val \"((s2223 << 13) | (i1620 << 8) | (i13 << 7) | i0107)\"\nRelDest15x: val  is i0107 & i13 & i1620 & s2223 & immexted=0 [ val = ($(r15_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\""
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "hexagon.sinc",
+          "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+          "search": ":call RelDest22x",
+          "references": [
+            {
+              "line": 4057,
+              "snippet": ":call RelDest22x EndPacket \tis iclass=5 & op2527=5 & op0=0 & RelDest22x & $(END_PACKET) {\n\tbuild EndPacket;\n <<FLOW>>\n\tLR = ReturnAddr;\n\tcall RelDest22x;\n}\n\n# (v2,5) call  --  \"if ( Pu4 ) call #r15:2x\"\n#  _________________________________________________________________________________________________\n#  |31|30|29|28|27|26|25|24|23|22|21|20|19|18|17|16|15|14|13|12|11|10|09|08|07|06|05|04|03|02|01|00|"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "hexagon.sinc",
+          "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+          "search": ":nop EndPacket",
+          "references": [
+            {
+              "line": 13114,
+              "snippet": ":nop EndPacket\t\tis iclass=0x7 & op2427=0xf & $(END_PACKET) { \n\tbuild EndPacket; \n}\n\n# (v2,8) normamt  --  \"Rd32 = normamt ( Rs32 )\"\n#  _________________________________________________________________________________________________\n#  |31|30|29|28|27|26|25|24|23|22|21|20|19|18|17|16|15|14|13|12|11|10|09|08|07|06|05|04|03|02|01|00|\n#    1  0  0  0  1  1  0  0  0  0  0  s  s  s  s  s  P  P  -  -  -  -  -  -  1  1  1  d  d  d  d  d  \n\n:normamt Rd5,rs5 EndPacket\tis iclass=0x8 & op2127=0x60 & op0507=0x7 & Rd5 & rs5 & $(END_PACKET)"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "hexagon.sinc",
+          "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+          "search": ":jump^FlowCondUU RelDest15x",
+          "references": [
+            {
+              "line": 6092,
+              "snippet": ":jump^FlowCondUU RelDest15x EndPacket\tis iclass=5 & op2427=0xc & op1112=0 & FlowCondUU & RelDest15x & $(END_PACKET) {\n\tbuild FlowCondUU;\n\tbuild EndPacket;\n <<FLOW>>\n\tbuild FlowCondUU;\n\tif (ConditionReg == 0) goto <non_flow>;\n\tgoto RelDest15x;\n  <non_flow>\n}\n"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "hexagon.sinc",
+          "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+          "search": ":jumpr LR EndPacket",
+          "references": [
+            {
+              "line": 6525,
+              "snippet": ":jumpr LR EndPacket\tis iclass=5 & op2127=0x14 & op1620=31 & op0013=0 & LR & $(END_PACKET) {\n\tdest:4 = LR;\n\tbuild EndPacket;\n <<FLOW>>\n\treturn [dest];\n}\n\n# jumprh  --  \"jumprh Rs32\"\n#  _________________________________________________________________________________________________\n#  |31|30|29|28|27|26|25|24|23|22|21|20|19|18|17|16|15|14|13|12|11|10|09|08|07|06|05|04|03|02|01|00|"
+            }
+          ],
+          "status": "referenced"
+        },
+        {
+          "source_file": "hexagon.sinc",
+          "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+          "search": "EndPacket: EndOfLoop",
+          "references": [
+            {
+              "line": 1909,
+              "snippet": "EndPacket: EndOfLoop\tis (parse=0 | parse=3) & CrossBuild & EndOfLoop { # EndOfLoop will propogate useLoopCfg if needed\n\tbuild CrossBuild;\n\tbuild EndOfLoop;\n}\n\n# End of First/Left packed 'EE' instruction helper\nEndPackedLeft: \"; \"^instruction\tis instruction [ phase = 5; ] { build instruction; }\n\n# End of Second/Left packed 'EE' instruction helper\nEndPackedRight:\t\tis EndPacket [ phase = 6; ] { build EndPacket; } # resume EndPacket processing"
+            }
+          ],
+          "status": "referenced"
+        }
+      ],
+      "limits": [
+        "CPU version remains unspecified by selected default language: no v73, HVX, hardware packet or ABI acceptance claim.",
+        "All proposed words set parse bits14:15=3 and form separate one-word packets; no duplex, extenders, loops, .new predicates, multi-slot hazards, or packet splitting.",
+        "RelDest uses packet start, not necessarily instruction start; proposed offsets assume packetOffset=0. Future oracle must use fresh ProgramDB flow context and real EndPacket/crossbuild semantics, never just isolated pseudo rows.",
+        "Conditional branch/local pcode labels and packet commit order remain acceptance blockers until independently observed."
+      ],
+      "call_target_policy": "direct_owned_callee",
+      "conditional_policy": "conditional_jump",
+      "c_model_and_abi": "unknown_not_authenticated",
+      "cpu_boundary": "SDK selection only, no CPU execution",
+      "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+      "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets.",
+      "previous_version": "Hexagon-v1",
+      "owned_encoding_changed": false,
+      "correction": {
+        "kind": "fixed_trusted_installed_host_module_dependency_missing_in_v1",
+        "dependency": "Ghidra/Processors/Hexagon/lib/Hexagon.jar",
+        "sha256": "fb31ffa9ca8e25d86271b131bdff216a6a2aaf0d7040a32a811c34c97b4c75fd",
+        "pspec_class": "ghidra.app.util.viewer.field.HexagonParallelInstructionHelper",
+        "source_archive": "Ghidra/Processors/Hexagon/lib/Hexagon-src.zip",
+        "source_archive_sha256": "56f6c77a3dbaa0bf369705bceeeebd32e6fc2f906accc41b6750f2f55c57f68a",
+        "assembly_and_manual_function_extents_unchanged": true,
+        "cpu_version": "unspecified_by_default_language_no_HVX_or_v73_authentication"
+      }
+    }
+  ]
+}

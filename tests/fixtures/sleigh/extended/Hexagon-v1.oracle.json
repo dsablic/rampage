@@ -1,0 +1,26 @@
+{
+  "name": "Hexagon-v1",
+  "family": "Hexagon",
+  "language_id": "Hexagon:LE:32:default",
+  "verdict": {
+    "status": "technical_failure",
+    "failures": [
+      "ghidra.app.plugin.processors.sleigh.SleighException: Failed to instantiate parallelInstructionHelperClass (ghidra.app.util.viewer.field.HexagonParallelInstructionHelper): /opt/homebrew/opt/ghidra/libexec/Ghidra/Processors/Hexagon/data/languages/hexagon.pspec"
+    ],
+    "manual_true_functions": 2,
+    "observed_function_count": null
+  },
+  "oracle": {
+    "schema_version": 1,
+    "fixture": "Hexagon-v1",
+    "language_id": "Hexagon:LE:32:default",
+    "target_execution": false,
+    "decompilation": false,
+    "standalone_context_origin": "program default context before flowed disassembly",
+    "standalone_rows": [],
+    "program_oracle": {
+      "status": "technical_failure",
+      "error": "ghidra.app.plugin.processors.sleigh.SleighException: Failed to instantiate parallelInstructionHelperClass (ghidra.app.util.viewer.field.HexagonParallelInstructionHelper): /opt/homebrew/opt/ghidra/libexec/Ghidra/Processors/Hexagon/data/languages/hexagon.pspec"
+    }
+  }
+}

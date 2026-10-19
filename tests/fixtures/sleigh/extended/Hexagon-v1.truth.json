@@ -1,0 +1,203 @@
+{
+  "name": "Hexagon-v1",
+  "family": "Hexagon",
+  "version": 1,
+  "language_id": "Hexagon:LE:32:default",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x1000",
+  "byte_length": 24,
+  "input_sha256": "85e4202feb7fdb823b9d9a35fb6362b9a44d0b4e33a0a99bc8d1c5050f77fa5c",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 16
+    },
+    {
+      "name": "callee",
+      "start_bytes": 16,
+      "end_exclusive_bytes": 24
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "08c0005a",
+      "owned_explanatory_asm": "{ CALL callee } ; one-word packet"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "00c0007f",
+      "owned_explanatory_asm": "{ NOP } ; one-word packet"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "fce0df5c",
+      "owned_explanatory_asm": "{ IF (p0) JUMP main } ; one-word packet, no extender"
+    },
+    {
+      "offset_bytes": 12,
+      "bytes_hex": "00c09f52",
+      "owned_explanatory_asm": "{ JUMPR r31 } ; return packet"
+    },
+    {
+      "offset_bytes": 16,
+      "bytes_hex": "00c0007f",
+      "owned_explanatory_asm": "callee: { NOP }"
+    },
+    {
+      "offset_bytes": 20,
+      "bytes_hex": "00c09f52",
+      "owned_explanatory_asm": "{ JUMPR r31 }"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 8,
+  "return_offset_bytes": 12,
+  "constructor_references": [
+    {
+      "source_file": "hexagon.slaspec",
+      "source_sha256": "e75b1723ac06a437a5f0ef5262d4b58bd9faec18d1f27521f7ca52db0918e809",
+      "search": "parse\t\t\t= (14,15)",
+      "references": [
+        {
+          "line": 296,
+          "snippet": "  parse\t\t\t= (14,15)  # packet/loop bits (01/10-not end of packet, 11-end of packet, 00-EE instruction)\n  parse_0       = (14,14)\n  parse_1       = (15,15)\n  \n  op2627\t\t= (26,27)\n  op2527\t\t= (25,27)\n  op2427\t\t= (24,27)\n  op2426\t\t= (24,26)\n  op2327\t\t= (23,27)\n  op2326\t\t= (23,26)"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "hexagon.sinc",
+      "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+      "search": "RelDest22x:",
+      "references": [
+        {
+          "line": 263,
+          "snippet": "RelDest22x: val\tis s1624 & i0113 & immexted=0 [ val = (((s1624 << 13) | i0113) << 2) + $(PKT_START); ] { export *[ram]:4 val; }\nRelDest22x: val\tis i0306  & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; }\n\n@define r15_2_val \"((s2223 << 13) | (i1620 << 8) | (i13 << 7) | i0107)\"\nRelDest15x: val  is i0107 & i13 & i1620 & s2223 & immexted=0 [ val = ($(r15_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\"\nRelDest13: val  is i0111 & op13 & s21 [ val = ($(r13_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \n"
+        },
+        {
+          "line": 264,
+          "snippet": "RelDest22x: val\tis i0306  & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; }\n\n@define r15_2_val \"((s2223 << 13) | (i1620 << 8) | (i13 << 7) | i0107)\"\nRelDest15x: val  is i0107 & i13 & i1620 & s2223 & immexted=0 [ val = ($(r15_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\"\nRelDest13: val  is i0111 & op13 & s21 [ val = ($(r13_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \n\nRelDest9x: val  is i0107 & s2021 & immexted=0 [ val = (((s2021 << 7) | i0107) << 2) + $(PKT_START); ] { export *[ram]:4 val; } "
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "hexagon.sinc",
+      "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+      "search": "RelDest15x:",
+      "references": [
+        {
+          "line": 267,
+          "snippet": "RelDest15x: val  is i0107 & i13 & i1620 & s2223 & immexted=0 [ val = ($(r15_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\"\nRelDest13: val  is i0111 & op13 & s21 [ val = ($(r13_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \n\nRelDest9x: val  is i0107 & s2021 & immexted=0 [ val = (((s2021 << 7) | i0107) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest9x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n#"
+        },
+        {
+          "line": 268,
+          "snippet": "RelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\"\nRelDest13: val  is i0111 & op13 & s21 [ val = ($(r13_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \n\nRelDest9x: val  is i0107 & s2021 & immexted=0 [ val = (((s2021 << 7) | i0107) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest9x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n#\n# Non-extended Immediates"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "hexagon.sinc",
+      "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+      "search": "FlowCondUU:",
+      "references": [
+        {
+          "line": 467,
+          "snippet": "FlowCondUU: \".if(\"pu0809name\")\"\t\tis op21=0 & pu0809name & pu0809 { \n\tcondition:1 = (pu0809 & 1);  \n <<FLOW>>\n\tConditionReg = condition;\t\n}\nFlowCondUU: \".if(!\"pu0809name\")\"\tis op21=1 & pu0809name & pu0809 { \n\tcondition:1 = !(pu0809 & 1); \n <<FLOW>>\n\tConditionReg = condition;\t\n}"
+        },
+        {
+          "line": 472,
+          "snippet": "FlowCondUU: \".if(!\"pu0809name\")\"\tis op21=1 & pu0809name & pu0809 { \n\tcondition:1 = !(pu0809 & 1); \n <<FLOW>>\n\tConditionReg = condition;\t\n}\n\n# .new Predicate Register Condition for jump/call (least significant bit only)\nFlowCondNewUU: \".if(\"pu0809name\".new)\"\tis op21=0 & pu0809name & pu0809 { \n <<FLOW>>\n\tConditionReg = (pu0809 & 1); # predicate will already be committed"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "hexagon.sinc",
+      "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+      "search": "@define PKT_START",
+      "references": [
+        {
+          "line": 261,
+          "snippet": "@define PKT_START \"inst_start - (4 * packetOffset)\"\n\nRelDest22x: val\tis s1624 & i0113 & immexted=0 [ val = (((s1624 << 13) | i0113) << 2) + $(PKT_START); ] { export *[ram]:4 val; }\nRelDest22x: val\tis i0306  & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; }\n\n@define r15_2_val \"((s2223 << 13) | (i1620 << 8) | (i13 << 7) | i0107)\"\nRelDest15x: val  is i0107 & i13 & i1620 & s2223 & immexted=0 [ val = ($(r15_2_val) << 2) + $(PKT_START); ] { export *[ram]:4 val; } \nRelDest15x: val  is i0306 & immexted=1 [ val = ((simmext << 6) | (i0306 << 2)) + $(PKT_START); ] { export *[ram]:4 val; } \n\n@define r13_2_val     \"((s21 << 12) | (op13 << 11) | i0111)\""
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "hexagon.sinc",
+      "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+      "search": ":call RelDest22x",
+      "references": [
+        {
+          "line": 4057,
+          "snippet": ":call RelDest22x EndPacket \tis iclass=5 & op2527=5 & op0=0 & RelDest22x & $(END_PACKET) {\n\tbuild EndPacket;\n <<FLOW>>\n\tLR = ReturnAddr;\n\tcall RelDest22x;\n}\n\n# (v2,5) call  --  \"if ( Pu4 ) call #r15:2x\"\n#  _________________________________________________________________________________________________\n#  |31|30|29|28|27|26|25|24|23|22|21|20|19|18|17|16|15|14|13|12|11|10|09|08|07|06|05|04|03|02|01|00|"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "hexagon.sinc",
+      "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+      "search": ":nop EndPacket",
+      "references": [
+        {
+          "line": 13114,
+          "snippet": ":nop EndPacket\t\tis iclass=0x7 & op2427=0xf & $(END_PACKET) { \n\tbuild EndPacket; \n}\n\n# (v2,8) normamt  --  \"Rd32 = normamt ( Rs32 )\"\n#  _________________________________________________________________________________________________\n#  |31|30|29|28|27|26|25|24|23|22|21|20|19|18|17|16|15|14|13|12|11|10|09|08|07|06|05|04|03|02|01|00|\n#    1  0  0  0  1  1  0  0  0  0  0  s  s  s  s  s  P  P  -  -  -  -  -  -  1  1  1  d  d  d  d  d  \n\n:normamt Rd5,rs5 EndPacket\tis iclass=0x8 & op2127=0x60 & op0507=0x7 & Rd5 & rs5 & $(END_PACKET)"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "hexagon.sinc",
+      "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+      "search": ":jump^FlowCondUU RelDest15x",
+      "references": [
+        {
+          "line": 6092,
+          "snippet": ":jump^FlowCondUU RelDest15x EndPacket\tis iclass=5 & op2427=0xc & op1112=0 & FlowCondUU & RelDest15x & $(END_PACKET) {\n\tbuild FlowCondUU;\n\tbuild EndPacket;\n <<FLOW>>\n\tbuild FlowCondUU;\n\tif (ConditionReg == 0) goto <non_flow>;\n\tgoto RelDest15x;\n  <non_flow>\n}\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "hexagon.sinc",
+      "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+      "search": ":jumpr LR EndPacket",
+      "references": [
+        {
+          "line": 6525,
+          "snippet": ":jumpr LR EndPacket\tis iclass=5 & op2127=0x14 & op1620=31 & op0013=0 & LR & $(END_PACKET) {\n\tdest:4 = LR;\n\tbuild EndPacket;\n <<FLOW>>\n\treturn [dest];\n}\n\n# jumprh  --  \"jumprh Rs32\"\n#  _________________________________________________________________________________________________\n#  |31|30|29|28|27|26|25|24|23|22|21|20|19|18|17|16|15|14|13|12|11|10|09|08|07|06|05|04|03|02|01|00|"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "hexagon.sinc",
+      "source_sha256": "f8de9182cf0e3d4729240a88dca589d9124fa6193c29f1cbcf5a4d179d7baa19",
+      "search": "EndPacket: EndOfLoop",
+      "references": [
+        {
+          "line": 1909,
+          "snippet": "EndPacket: EndOfLoop\tis (parse=0 | parse=3) & CrossBuild & EndOfLoop { # EndOfLoop will propogate useLoopCfg if needed\n\tbuild CrossBuild;\n\tbuild EndOfLoop;\n}\n\n# End of First/Left packed 'EE' instruction helper\nEndPackedLeft: \"; \"^instruction\tis instruction [ phase = 5; ] { build instruction; }\n\n# End of Second/Left packed 'EE' instruction helper\nEndPackedRight:\t\tis EndPacket [ phase = 6; ] { build EndPacket; } # resume EndPacket processing"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "CPU version remains unspecified by selected default language: no v73, HVX, hardware packet or ABI acceptance claim.",
+    "All proposed words set parse bits14:15=3 and form separate one-word packets; no duplex, extenders, loops, .new predicates, multi-slot hazards, or packet splitting.",
+    "RelDest uses packet start, not necessarily instruction start; proposed offsets assume packetOffset=0. Future oracle must use fresh ProgramDB flow context and real EndPacket/crossbuild semantics, never just isolated pseudo rows.",
+    "Conditional branch/local pcode labels and packet commit order remain acceptance blockers until independently observed."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "profiles": [
+    {
+      "name": "8051-v1",
+      "instructions": 7,
+      "functions": 2,
+      "padding_instructions": 1,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "5cff9ec22e0402516f8265721afcfb42c37a4bff736828a233c83b6f1369deb7",
+      "attempt": "8051-v1-attempt-34w8rldi"
+    },
+    {
+      "name": "PIC-v1",
+      "instructions": 10,
+      "functions": 2,
+      "padding_instructions": 3,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "f7ee02c7985e201f8e44d4517e9cca044f62f8de53a6eb9a162f3dffdc661eb8",
+      "attempt": "PIC-v1-attempt-_moyl2un"
+    },
+    {
+      "name": "SuperH-v2",
+      "instructions": 11,
+      "functions": 2,
+      "padding_instructions": 3,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "30820592c7f806c967c6384856275513a9b818aecc807d55dee203f6767ae240",
+      "attempt": "SuperH-v2-attempt-mob3wovi"
+    },
+    {
+      "name": "V850-v1",
+      "instructions": 9,
+      "functions": 2,
+      "padding_instructions": 3,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "5c4cbc8638777ab55186c4611712c510f5707a1aae6a959b126bffd6aa7e21b9",
+      "attempt": "V850-v1-attempt-k0a8jc8p"
+    },
+    {
+      "name": "TriCore-v1",
+      "instructions": 10,
+      "functions": 2,
+      "padding_instructions": 4,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "6a616b03c709c5bca592448d9be05eaa23672e1d9fe866cfcbca54bde2b6f78d",
+      "attempt": "TriCore-v1-attempt-o4jhfugu"
+    },
+    {
+      "name": "Xtensa-v1",
+      "instructions": 8,
+      "functions": 2,
+      "padding_instructions": 2,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "a484d0b65431642842bca73fe005c1341fc374ed0f71deddbe2ce7209eae2cef",
+      "attempt": "Xtensa-v1-attempt-ort2wwdp"
+    },
+    {
+      "name": "Z80-v1",
+      "instructions": 7,
+      "functions": 2,
+      "padding_instructions": 1,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "339bc9ce2e67bd2d576477c1b9b1cf85f4b6026f9222074a80f7d8aad2778af2",
+      "attempt": "Z80-v1-attempt-uji3v_t5"
+    },
+    {
+      "name": "HCS12-v1",
+      "instructions": 8,
+      "functions": 2,
+      "padding_instructions": 2,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "55ef8a9a9021e4db4e37491dffdd8499724b880bee07a06ff010326434b80c05",
+      "attempt": "HCS12-v1-attempt-q79migaz"
+    },
+    {
+      "name": "6805-v1",
+      "instructions": 7,
+      "functions": 2,
+      "padding_instructions": 1,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "ffcad06e3cc1a0ea202507a2db5068d3bc00cbb9decb4284fc88b7c0abe5fe4b",
+      "attempt": "6805-v1-attempt-jfb43usj"
+    },
+    {
+      "name": "CR16-v1",
+      "instructions": 9,
+      "functions": 2,
+      "padding_instructions": 3,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "ce37ad91a8ccdf5189d942c7d3225a601bf851748ad490b88af7793d418ec1b7",
+      "attempt": "CR16-v1-attempt-_cwbz0tn"
+    },
+    {
+      "name": "eBPF-v1",
+      "instructions": 6,
+      "functions": 2,
+      "padding_instructions": 0,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "2cd01a611eb396d87dd2ab1f577c63ed960bde20bbf3c6bbce577203f4d1b5c4",
+      "attempt": "eBPF-v1-attempt-aqcopj8m"
+    },
+    {
+      "name": "Loongarch-v1",
+      "instructions": 6,
+      "functions": 2,
+      "padding_instructions": 0,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "7858c4adab99feb419d650f95fdfd8fc318206296d1c466090b2540ae12fdbe3",
+      "attempt": "Loongarch-v1-attempt-ten_lr1m"
+    },
+    {
+      "name": "Hexagon-v2",
+      "instructions": 6,
+      "functions": 2,
+      "padding_instructions": 0,
+      "false_positive_seeded_functions": 0,
+      "standalone_technical_rows": 0,
+      "oracle_sha256": "536a0f6b16bb789bbf2d6d1378770ba08307a10580c2cba6ebd3698432e5f3e2",
+      "attempt": "Hexagon-v2-attempt-71yid47m"
+    }
+  ],
+  "function_count": 26,
+  "largest_observed_instruction_bytes": 8,
+  "largest_observed_pcode_ops": 35,
+  "compiled_class_sha256": {
+    "ExtendedSleighOracle$Owned.class": [
+      "b53f71770713ac09fd5c8fa9a24ebbc2e0a9473e94d9cdd5b031ca0d589291c9"
+    ],
+    "ExtendedSleighOracle.class": [
+      "eb6478ec97f85d2bdd9dec48f3b8bdc772703cb2960a3e511027fd0fc8a57aa8"
+    ],
+    "SleighOracle$Fixture.class": [
+      "48fe29a6411cfc928619096f5dbb7ec7ee313614e171223deffc579787ba22bb"
+    ],
+    "SleighOracle.class": [
+      "00f47237be8cd3353505988adb602118a9b89f648062e9ba598bf027cd037801"
+    ],
+    "ExtendedSleighOracleRetry.class": [
+      "5f7e9c09a6bfda52b5c0b9fe45d21a1f0c49864b3e9e130bef0c7c909e3d9afb"
+    ]
+  },
+  "current_oracle_sha256": "c2aac865169789675accdd501e26201d02812cf03986658cc4e6064add522e49",
+  "current_truth_sha256": "2c9af180384d87f8078f27f7012c3d97e3facb91dac4d25723ddb2aa5e7a9450",
+  "pilot_input_and_tool_hashes_unchanged": true,
+  "java_profile_executions": 15,
+  "execution_distribution": "One v1 attempt for each of 13 profiles; targeted SuperH/Hexagon v2 only",
+  "python_tests": 31,
+  "python_test_logs": "target/phase4-1-oracle-extended-first/final-python-tests-ej8t4kqn",
+  "claim_limit": "Static SDK oracle observations; not autonomous discovery, native acceptance, C ABI or CPU authentication"
+}

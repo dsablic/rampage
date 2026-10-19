@@ -1,0 +1,181 @@
+{
+  "name": "SuperH-v2",
+  "family": "SuperH",
+  "version": 2,
+  "language_id": "SuperH:BE:32:SH-2",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x1000",
+  "byte_length": 22,
+  "input_sha256": "ba6d183415f893a877e051ee06b9023bf5c0c1ce285e2e742326e3fe33b7e569",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 10
+    },
+    {
+      "name": "callee",
+      "start_bytes": 16,
+      "end_exclusive_bytes": 22
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "b006",
+      "owned_explanatory_asm": "BSR callee"
+    },
+    {
+      "offset_bytes": 2,
+      "bytes_hex": "0009",
+      "owned_explanatory_asm": "NOP ; call delay slot"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "89fc",
+      "owned_explanatory_asm": "BT main"
+    },
+    {
+      "offset_bytes": 6,
+      "bytes_hex": "000b",
+      "owned_explanatory_asm": "RTS"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "0009",
+      "owned_explanatory_asm": "NOP ; return delay slot"
+    },
+    {
+      "offset_bytes": 10,
+      "bytes_hex": "0009",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 12,
+      "bytes_hex": "0009",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 14,
+      "bytes_hex": "0009",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 16,
+      "bytes_hex": "0009",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 18,
+      "bytes_hex": "000b",
+      "owned_explanatory_asm": "RTS"
+    },
+    {
+      "offset_bytes": 20,
+      "bytes_hex": "0009",
+      "owned_explanatory_asm": "NOP ; return delay slot"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 4,
+  "return_offset_bytes": 6,
+  "constructor_references": [
+    {
+      "source_file": "sh-2.slaspec",
+      "source_sha256": "103a477164533ed38c9fbc495c9ec06343ce73291e8217d11345a337f32bd0bf",
+      "search": "@define",
+      "references": [
+        {
+          "line": 1,
+          "snippet": "@define SH_VERSION \"2\"\n\n@include \"superh.sinc\""
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "superh.sinc",
+      "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+      "search": ":bsr ",
+      "references": [
+        {
+          "line": 1632,
+          "snippet": ":bsr    target00_11  is opcode_12_15=0b1011 & target00_11  \n{\n    local _pr:4 = inst_start + 4;\n\n    delayslot(1);\n\n    pr = _pr;\n    call target00_11;\n}\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "superh.sinc",
+      "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+      "search": ":nop ",
+      "references": [
+        {
+          "line": 1850,
+          "snippet": ":nop  is opcode_00_15=0b0000000000001001 \n{\n    # FIXME: intentional nop\n    r0 = r0; # do this to suppress warning\n}\n\n:rte is opcode_00_15=0b0000000000101011 \n{    \n    _pc:4 = *r15;\n    r15 = r15 + 4;"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "superh.sinc",
+      "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+      "search": ":bt ",
+      "references": [
+        {
+          "line": 1603,
+          "snippet": ":bt target00_07  is opcode_08_15=0b10001001 & target00_07  \n{\n    if ($(T_FLAG) == 1) goto target00_07;\n}\n\n@if (SH_VERSION == \"2\") || (SH_VERSION == \"2A\")\n:bt\"/s\" target00_07  is opcode_08_15=0b10001101 & target00_07\n{\n    local cond = $(T_FLAG);\n    delayslot(1);"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "superh.sinc",
+      "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+      "search": ":rts ",
+      "references": [
+        {
+          "line": 1675,
+          "snippet": ":rts  is opcode_00_15=0b0000000000001011 \n{\n    local _pc = pr;\n    delayslot(1);\n    pc = _pc;\n    return [pc];\n}\n\n@if SH_VERSION == \"2A\"\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "superh.sinc",
+      "source_sha256": "ee67283aaa37072124a153bc09761c8e0ea45df6fab1b49d1a2ae7da01318dca",
+      "search": "target00_11:",
+      "references": [
+        {
+          "line": 170,
+          "snippet": "target00_11: target is sdisp_00_11 [ target = (sdisp_00_11 << 1) + inst_start + 4; ] {\n    export *:4 target;\n}\n\n\n#\n# Data Transfer Instructions\n#\n\n:mov rm_04_07,rn_08_11 is opcode_12_15=0b0110 & rn_08_11 & rm_04_07 & opcode_00_03=0b0011 "
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "BSR and RTS each require the following 16-bit delay-slot instruction; preserve whole two-instruction bundles. BT here has no /S delay slot.",
+    "SH-2 only: no SH-2A /N variants or invented SH-4 ABI."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets.",
+  "previous_version": "SuperH-v1",
+  "owned_encoding_changed": false,
+  "correction": {
+    "kind": "SDK_delay_slot_mnemonic_presentation_not_wrong_opcode",
+    "source": "SoftwareModeling-src.zip!/ghidra/app/plugin/processors/sleigh/SleighInstructionPrototype.java",
+    "line": 1335,
+    "fact": "getMnemonic appends an underscore prefix when this.isindelayslot is true",
+    "allowed_presentations": {
+      "2": "_nop",
+      "8": "_nop",
+      "20": "_nop"
+    },
+    "guard": "Only those three source-declared delay slots, and is_in_delay_slot must be true",
+    "assembly_and_manual_function_extents_unchanged": true
+  }
+}

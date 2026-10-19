@@ -1,0 +1,190 @@
+{
+  "name": "eBPF-v1",
+  "family": "eBPF",
+  "version": 1,
+  "language_id": "eBPF:LE:64:default",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x1000",
+  "byte_length": 48,
+  "input_sha256": "574c0756aab1fb59d6defb414abe39195f21e6f189873425df09619f43b1feb1",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 32
+    },
+    {
+      "name": "callee",
+      "start_bytes": 32,
+      "end_exclusive_bytes": 48
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "8510000003000000",
+      "owned_explanatory_asm": "CALL callee ; src=1 pseudo-call, imm=3"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "b700000000000000",
+      "owned_explanatory_asm": "MOV r0,0 ; 64-bit class"
+    },
+    {
+      "offset_bytes": 16,
+      "bytes_hex": "1500fdff00000000",
+      "owned_explanatory_asm": "JEQ r0,0,main ; off=-3"
+    },
+    {
+      "offset_bytes": 24,
+      "bytes_hex": "9500000000000000",
+      "owned_explanatory_asm": "EXIT"
+    },
+    {
+      "offset_bytes": 32,
+      "bytes_hex": "b700000000000000",
+      "owned_explanatory_asm": "callee: MOV r0,0"
+    },
+    {
+      "offset_bytes": 40,
+      "bytes_hex": "9500000000000000",
+      "owned_explanatory_asm": "EXIT"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 16,
+  "return_offset_bytes": 24,
+  "constructor_references": [
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": ":CALL disp32",
+      "references": [
+        {
+          "line": 439,
+          "snippet": ":CALL disp32 is imm & src=1 & op_alu_jmp_opcode=0x8 & op_alu_jmp_source=0 & op_insn_class=0x5 & disp32 {\n    call disp32;\n}\n\n# GCC encoding and LLVM 19.1+ encoding\n:CALLX dst is op_alu_jmp_opcode=0x8 & op_alu_jmp_source=1 & op_insn_class=0x5 & src=0 & imm=0 & dst {\n    call [dst];\n}\n\n# LLVM encoding used until LLVM 19.1"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": "disp32:",
+      "references": [
+        {
+          "line": 437,
+          "snippet": "disp32: reloc is imm [ reloc = inst_next + imm * 8; ] { export *:4 reloc; }\n\n:CALL disp32 is imm & src=1 & op_alu_jmp_opcode=0x8 & op_alu_jmp_source=0 & op_insn_class=0x5 & disp32 {\n    call disp32;\n}\n\n# GCC encoding and LLVM 19.1+ encoding\n:CALLX dst is op_alu_jmp_opcode=0x8 & op_alu_jmp_source=1 & op_insn_class=0x5 & src=0 & imm=0 & dst {\n    call [dst];\n}"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": ":MOV dst, SRC8",
+      "references": [
+        {
+          "line": 72,
+          "snippet": ":MOV dst, SRC8  is SRC8 & dst & off=0 & op_alu_jmp_opcode=0xb & op_insn_class=0x7 { dst = SRC8; }\n:MOVSB dst, src  is src & dst & off=8 & op_alu_jmp_opcode=0xb & op_alu_jmp_source=1 & op_insn_class=0x7 { dst = sext(src:1); }\n:MOVSH dst, src  is src & dst & off=16 & op_alu_jmp_opcode=0xb & op_alu_jmp_source=1 & op_insn_class=0x7 { dst = sext(src:2); }\n:MOVSW dst, src  is src & dst & off=32 & op_alu_jmp_opcode=0xb & op_alu_jmp_source=1 & op_insn_class=0x7 { dst = sext(src:4); }\n\n:ADD dst, SRC8  is SRC8 & dst & op_alu_jmp_opcode=0x0 & op_insn_class=0x7 { dst = dst + SRC8; }\n\n:SUB dst, SRC8  is SRC8 & dst & op_alu_jmp_opcode=0x1 & op_insn_class=0x7 { dst = dst - SRC8; }\n\n:MUL dst, SRC8  is SRC8 & dst & op_alu_jmp_opcode=0x2 & op_insn_class=0x7 { dst = dst * SRC8; }"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": ":EXIT",
+      "references": [
+        {
+          "line": 459,
+          "snippet": ":EXIT is op_alu_jmp_opcode=0x9 & op_alu_jmp_source=0 & op_insn_class=0x5 { return [*:8 R10]; }"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": "off=(16, 31)",
+      "references": [
+        {
+          "line": 23,
+          "snippet": "    off=(16, 31) signed\n    src=(12, 15)\n    dst=(8, 11)\n    op_alu_jmp_opcode=(4, 7)\n    op_alu_jmp_source=(3, 3)\n    op_ld_st_mode=(5, 7)\n    op_ld_st_size=(3, 4)\n    op_insn_class=(0, 2)\n;\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": "src=(12, 15)",
+      "references": [
+        {
+          "line": 24,
+          "snippet": "    src=(12, 15)\n    dst=(8, 11)\n    op_alu_jmp_opcode=(4, 7)\n    op_alu_jmp_source=(3, 3)\n    op_ld_st_mode=(5, 7)\n    op_ld_st_size=(3, 4)\n    op_insn_class=(0, 2)\n;\n\n#We'll need this token to operate with LDDW instruction, which has 64 bit imm value"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": "op_alu_jmp_opcode=(4, 7)",
+      "references": [
+        {
+          "line": 26,
+          "snippet": "    op_alu_jmp_opcode=(4, 7)\n    op_alu_jmp_source=(3, 3)\n    op_ld_st_mode=(5, 7)\n    op_ld_st_size=(3, 4)\n    op_insn_class=(0, 2)\n;\n\n#We'll need this token to operate with LDDW instruction, which has 64 bit imm value\ndefine token immtoken(64)\n    imm2=(32, 63)"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": "joff: reloc",
+      "references": [
+        {
+          "line": 390,
+          "snippet": "joff: reloc  is off [ reloc = inst_next + off * 8; ] { export *:8 reloc; }\njimm: reloc  is imm [ reloc = inst_next + imm * 8; ] { export *:8 reloc; }\n\ncond: \"EQ\" is op_alu_jmp_opcode=0x1 & op_insn_class=0x5 & dst & SRC8 { local cmp = dst  == SRC8; export cmp; }"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": "cond: \"EQ\" is op_alu_jmp_opcode=0x1 & op_insn_class=0x5",
+      "references": [
+        {
+          "line": 393,
+          "snippet": "cond: \"EQ\" is op_alu_jmp_opcode=0x1 & op_insn_class=0x5 & dst & SRC8 { local cmp = dst  == SRC8; export cmp; }\ncond: \"EQ\" is op_alu_jmp_opcode=0x1 & op_insn_class=0x6 & DST4 & SRC4 { local cmp = DST4 == SRC4; export cmp; }\ncond: \"GT\" is op_alu_jmp_opcode=0x2 & op_insn_class=0x5 & dst & SRC8 { local cmp = dst  > SRC8; export cmp; }\ncond: \"GT\" is op_alu_jmp_opcode=0x2 & op_insn_class=0x6 & DST4 & SRC4 { local cmp = DST4 > SRC4; export cmp; }"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "eBPF.sinc",
+      "source_sha256": "7b69ca1e901dca162bae29a8f18819c5f84afc3195296cf1662e39d86bbf5a34",
+      "search": ":J^cond dst, SRC8",
+      "references": [
+        {
+          "line": 426,
+          "snippet": ":J^cond dst, SRC8, joff  is joff & SRC8 & dst & cond {\n    if (cond) goto joff;\n}\n"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "8-byte base instructions; LDDW consumes two slots and is excluded from this short candidate.",
+    "EXIT is exactly 9500000000000000; b7 is MOV, not EXIT. CALL src=1 is code-relative pseudo-call; src=0 helper uses syscall space and is not an owned callee edge.",
+    "This is static SDK pcode, not kernel verifier or BPF runtime validity."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

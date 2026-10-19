@@ -1,0 +1,139 @@
+{
+  "name": "HCS12-v1",
+  "family": "HCS12",
+  "version": 1,
+  "language_id": "HCS-12:BE:24:default",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x2000",
+  "byte_length": 10,
+  "input_sha256": "bc22c245679fd1e30c7e8bb0875a7550dda4d694131578e014c5671c7d4d0788",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 6
+    },
+    {
+      "name": "callee",
+      "start_bytes": 8,
+      "end_exclusive_bytes": 10
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "0706",
+      "owned_explanatory_asm": "BSR callee"
+    },
+    {
+      "offset_bytes": 2,
+      "bytes_hex": "a7",
+      "owned_explanatory_asm": "NOP"
+    },
+    {
+      "offset_bytes": 3,
+      "bytes_hex": "26fb",
+      "owned_explanatory_asm": "BNE main"
+    },
+    {
+      "offset_bytes": 5,
+      "bytes_hex": "3d",
+      "owned_explanatory_asm": "RTS"
+    },
+    {
+      "offset_bytes": 6,
+      "bytes_hex": "a7",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 7,
+      "bytes_hex": "a7",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "a7",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 9,
+      "bytes_hex": "3d",
+      "owned_explanatory_asm": "RTS"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 3,
+  "return_offset_bytes": 5,
+  "constructor_references": [
+    {
+      "source_file": "HCS_HC12.sinc",
+      "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+      "search": ":BSR ",
+      "references": [
+        {
+          "line": 2014,
+          "snippet": ":BSR rel8                 is Prefix18=0 & op8=0x07; rel8 \n{\n\ttmp:2 = inst_next;\n\tPush2( tmp );\n\t \n\tcall rel8;\n}\n\n@if defined(HCS12X)\n:BTAS  opr8a_8, msk8                 is Prefix18=1 & (op8=0x35); opr8a_8; msk8"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "HCS_HC12.sinc",
+      "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+      "search": ":NOP ",
+      "references": [
+        {
+          "line": 4461,
+          "snippet": ":NOP                     is Prefix18=0 & op8=0xA7\n{\n}\n\n:ORAA iopr8i                 is Prefix18=0 & (op8=0x8A); iopr8i\n{ \n\tA = A | iopr8i; \n\t$(Z) = (A == 0);\n\t$(N) = (A s< 0);\n\tV_equals_0();"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "HCS_HC12.sinc",
+      "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+      "search": ":BNE ",
+      "references": [
+        {
+          "line": 1930,
+          "snippet": ":BNE rel8                 is Prefix18=0 & op8=0x26; rel8\n{\n\tif ($(Z) == 0) goto rel8;\n}\n\n:BPL rel8                 is Prefix18=0 & op8=0x2A; rel8\n{\n\tif ($(N) == 0) goto rel8;\n}\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "HCS_HC12.sinc",
+      "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+      "search": ":RTS ",
+      "references": [
+        {
+          "line": 4939,
+          "snippet": ":RTS                     is Prefix18=0 & op8=0x3D\n{\n\ttmp:2 = 0;\n\tPull2( tmp );\n\t\n\treturn [tmp];\n}\n\n:SBA\t                 is Prefix18=1 & (op8=0x16)\n{ "
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "HCS_HC12.sinc",
+      "source_sha256": "e6ac41ddc5bdec6456b80719305506e288b4b79e607583abadc0649cf3ee99a4",
+      "search": "rel8:",
+      "references": [
+        {
+          "line": 747,
+          "snippet": "rel8: reloc is rel    [ reloc = inst_next + rel; ]  { export *:1 reloc; }\n\n# range -256 through +255\nrel9: reloc is sign12_12 & rr7_0   [ reloc = inst_next + ((sign12_12 << 8) | rr7_0); ]  { export *:1 reloc; }\n\n# positive range 0 through +65535\nrel16: reloc is simm16   [ reloc = inst_next + simm16; ]  { export *:1 reloc; }\n\n\nop2_opr16a_8:\topr16a_8\t\tis opr16a_8\t\t\t{ export opr16a_8; }"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "Use unbanked low 0x002000 near-relative BSR, not paged CALL. PPAGE/global translation and 24-bit space behavior remain unobserved until actual Java addresses are recorded.",
+    "Do not substitute HCS12X/XGATE or treat 16-bit stored return values as proof of flat 24-bit ABI."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

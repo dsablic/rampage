@@ -1,0 +1,145 @@
+{
+  "name": "Loongarch-v1",
+  "family": "Loongarch",
+  "version": 1,
+  "language_id": "Loongarch:LE:64:lp64d",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x1000",
+  "byte_length": 24,
+  "input_sha256": "ded5442eadc7172b0b0a6c1343540539045f9fd4e873bed807800683a4b71da4",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 16
+    },
+    {
+      "name": "callee",
+      "start_bytes": 16,
+      "end_exclusive_bytes": 24
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "00100054",
+      "owned_explanatory_asm": "BL callee"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "00004003",
+      "owned_explanatory_asm": "NOP ; ANDI zero,zero,0 alias"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "20f8ff5f",
+      "owned_explanatory_asm": "BNE r0,r1,main"
+    },
+    {
+      "offset_bytes": 12,
+      "bytes_hex": "2000004c",
+      "owned_explanatory_asm": "RET ; JIRL r0,r1,0 alias"
+    },
+    {
+      "offset_bytes": 16,
+      "bytes_hex": "00004003",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 20,
+      "bytes_hex": "2000004c",
+      "owned_explanatory_asm": "RET"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 8,
+  "return_offset_bytes": 12,
+  "constructor_references": [
+    {
+      "source_file": "loongarch_main.sinc",
+      "source_sha256": "b2af5ed683b8e0b3c350e0128e5fa65758ee0fe52ca2971b847de39992afe655",
+      "search": "Rel26:",
+      "references": [
+        {
+          "line": 462,
+          "snippet": "Rel26: reloc  is imm10_16 & simm0_10 [ reloc = inst_start + (((simm0_10 << 16) | imm10_16) << 2); ] { export *:$(ADDRSIZE) reloc; }\n\nRelJ16: RJsrc, simm10_16  is RJsrc & simm10_16 { local tmp:$(ADDRSIZE) = RJsrc + (simm10_16 << 2); export tmp; }\n\nsimm12i: immed  is simm5_20  [immed = simm5_20  << 12; ] { export *[const]:$(REGSIZE) immed; }\n\nsimm32i: immed  is simm5_20  [immed = simm5_20  << 32; ] { export *[const]:$(REGSIZE) immed; }\n\nsimm52i: immed  is simm10_12 [immed = simm10_12 << 52; ] { export *[const]:$(REGSIZE) immed; }\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "loongarch_main.sinc",
+      "source_sha256": "b2af5ed683b8e0b3c350e0128e5fa65758ee0fe52ca2971b847de39992afe655",
+      "search": "Rel16:",
+      "references": [
+        {
+          "line": 460,
+          "snippet": "Rel16: reloc  is simm10_16            [ reloc = inst_start + (simm10_16 << 2); ]                               { export *:$(ADDRSIZE) reloc; }\nRel21: reloc  is imm10_16 & simm0_5  [ reloc = inst_start + (((simm0_5 << 16) + imm10_16) << 2); ]   { export *:$(ADDRSIZE) reloc; }\nRel26: reloc  is imm10_16 & simm0_10 [ reloc = inst_start + (((simm0_10 << 16) | imm10_16) << 2); ] { export *:$(ADDRSIZE) reloc; }\n\nRelJ16: RJsrc, simm10_16  is RJsrc & simm10_16 { local tmp:$(ADDRSIZE) = RJsrc + (simm10_16 << 2); export tmp; }\n\nsimm12i: immed  is simm5_20  [immed = simm5_20  << 12; ] { export *[const]:$(REGSIZE) immed; }\n\nsimm32i: immed  is simm5_20  [immed = simm5_20  << 32; ] { export *[const]:$(REGSIZE) immed; }\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "loongarch32_instructions.sinc",
+      "source_sha256": "9a0cdeeb12b00142be106935ad07f63f04ac990595b64b157dbe8e553cf2188c",
+      "search": ":bl  Rel26",
+      "references": [
+        {
+          "line": 578,
+          "snippet": ":bl  Rel26                     is op26_31=0x15 & Rel26 {\n\tra = inst_next;\n\tcall Rel26;\n}\n\n:bl  Rel26                     is op26_31=0x15 & Rel26 & imm10_16=1 & simm0_10=0 {\n\tra = inst_next;\n\tgoto Rel26;\n}\n"
+        },
+        {
+          "line": 583,
+          "snippet": ":bl  Rel26                     is op26_31=0x15 & Rel26 & imm10_16=1 & simm0_10=0 {\n\tra = inst_next;\n\tgoto Rel26;\n}\n\n#la-base-32.txt beq mask=0x58000000\t[@orig_fmt=JDSk16ps2, @la32, @primary, @qemu]\n#0x58000000\t0xfc000000\tr5:5,r0:5,sb10:16<<2\t['reg5_5_s0', 'reg0_5_s0', 'sbranch10_16_s0']\n:beq  RDsrc, RJsrc, Rel16      is op26_31=0x16 & RDsrc & RJsrc & Rel16 {\n\tif(RJsrc == RDsrc) goto Rel16;\n}"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "loongarch32_instructions.sinc",
+      "source_sha256": "9a0cdeeb12b00142be106935ad07f63f04ac990595b64b157dbe8e553cf2188c",
+      "search": ":bne ",
+      "references": [
+        {
+          "line": 644,
+          "snippet": ":bne  RDsrc, RJsrc, Rel16      is op26_31=0x17 & RDsrc & RJsrc & Rel16 {\n\tif(RJsrc != RDsrc) goto Rel16;\n}\n\n#la-base-32.txt bnez mask=0x44000000\t[@orig_fmt=JSd5k16ps2, @la32]\n#0x44000000\t0xfc000000\tr5:5,sb0:5|10:16<<2\t['reg5_5_s0', 'sbranch0_0_s2']\n:bnez  RJsrc, Rel21            is op26_31=0x11 & RJsrc & Rel21 {\n\tif (RJsrc != 0) goto Rel21;\n}\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "loongarch32_instructions.sinc",
+      "source_sha256": "9a0cdeeb12b00142be106935ad07f63f04ac990595b64b157dbe8e553cf2188c",
+      "search": ":nop ",
+      "references": [
+        {
+          "line": 47,
+          "snippet": ":nop                           is op22_31=0xd & rD=0 & rJ=0 & imm10_12=0 {\n}\n\n#la-base-32.txt andn mask=0x00168000\t[@la32, @primary, @qemu]\n#0x00168000\t0xffff8000\tr0:5,r5:5,r10:5\t['reg0_5_s0', 'reg5_5_s0', 'reg10_5_s0']\n:andn  RD, RJsrc, RKsrc        is op15_31=0x2d & RD & RJsrc & RKsrc {\n\tRD = RJsrc & ~(RKsrc);\n}\n\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "loongarch32_instructions.sinc",
+      "source_sha256": "9a0cdeeb12b00142be106935ad07f63f04ac990595b64b157dbe8e553cf2188c",
+      "search": ":ret ",
+      "references": [
+        {
+          "line": 663,
+          "snippet": ":ret                           is op26_31=0x13 & rD=0x0 & rJ=0x1 & RJsrc & simm10_16=0 {\n\tlocal retAddr = RJsrc;\n\treturn [retAddr];\n}\n\n# alias of jirl zero, rj, 0\n:jr RJsrc                      is op26_31=0x13 & rD=0x0 & RJsrc & simm10_16=0 {\n\tpc = RJsrc;\n\tgoto [pc];\n}"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "Selected lp64d root only; scalar 4-byte forms. RET alias source matches word0x4c000020 (bytes2000004c). No LSX/LASX/privileged/ABI proof.",
+    "BL has a specialized SDK branch-alias case when imm10_16=1; proposed call uses4, deliberately avoiding that case."
+  ],
+  "call_target_policy": "direct_owned_callee",
+  "conditional_policy": "conditional_jump",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

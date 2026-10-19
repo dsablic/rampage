@@ -1,0 +1,186 @@
+{
+  "name": "PIC-v1",
+  "family": "PIC",
+  "version": 1,
+  "language_id": "PIC-16:LE:16:PIC-16",
+  "compiler_spec_id": "default",
+  "base_byte_offset": "0x200",
+  "byte_length": 20,
+  "input_sha256": "3e333a32fa40e6f9529f40b7055352c00bc31421dfcc29ed13390a6526c87e19",
+  "functions": [
+    {
+      "name": "main",
+      "start_bytes": 0,
+      "end_exclusive_bytes": 10
+    },
+    {
+      "name": "callee",
+      "start_bytes": 16,
+      "end_exclusive_bytes": 20
+    }
+  ],
+  "instruction_ledger": [
+    {
+      "offset_bytes": 0,
+      "bytes_hex": "0821",
+      "owned_explanatory_asm": "CALL 0x108 ; encoded word address, PCLATH context required"
+    },
+    {
+      "offset_bytes": 2,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP"
+    },
+    {
+      "offset_bytes": 4,
+      "bytes_hex": "201c",
+      "owned_explanatory_asm": "BTFSS 0x20,0"
+    },
+    {
+      "offset_bytes": 6,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP ; skip-context consumer"
+    },
+    {
+      "offset_bytes": 8,
+      "bytes_hex": "0800",
+      "owned_explanatory_asm": "RETURN"
+    },
+    {
+      "offset_bytes": 10,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 12,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 14,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "NOP padding"
+    },
+    {
+      "offset_bytes": 16,
+      "bytes_hex": "0000",
+      "owned_explanatory_asm": "callee: NOP"
+    },
+    {
+      "offset_bytes": 18,
+      "bytes_hex": "0800",
+      "owned_explanatory_asm": "RETURN"
+    }
+  ],
+  "call_offset_bytes": 0,
+  "conditional_offset_bytes": 4,
+  "return_offset_bytes": 8,
+  "constructor_references": [
+    {
+      "source_file": "pic16.sinc",
+      "source_sha256": "8e9a7cdb7b9c7b183d8ef5ea6a34aa55b345c86e914662168d7ade11d723c691",
+      "search": "define space CODE",
+      "references": [
+        {
+          "line": 9,
+          "snippet": "define space CODE type=ram_space wordsize=2 size=2 default;\n\n# General Purpose Register Memory consists of 4-banks of 255-bytes for PIC16,\n# or 32-banks of 255 bytes each for PIC_16F.\n# Bank selection occurs using STATUS register bits RP0 & RP1\ndefine space DATA type=ram_space size=2; \n\n# HWSTACK consists of a 8-word by 13-bit RAM and a corresponding to a hidden stack pointer (STKPTR).\ndefine space HWSTACK type=ram_space wordsize=2 size=1;  # WORDSIZE is actually 13-bits\n "
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "pic16.sinc",
+      "source_sha256": "8e9a7cdb7b9c7b183d8ef5ea6a34aa55b345c86e914662168d7ade11d723c691",
+      "search": "define space DATA",
+      "references": [
+        {
+          "line": 14,
+          "snippet": "define space DATA type=ram_space size=2; \n\n# HWSTACK consists of a 8-word by 13-bit RAM and a corresponding to a hidden stack pointer (STKPTR).\ndefine space HWSTACK type=ram_space wordsize=2 size=1;  # WORDSIZE is actually 13-bits\n \ndefine space register type=register_space size=2; \n\n# Program Counter (13-bits) - PC Latch: PCLATH<PC:12-8> / PCL<PC:7-0>\ndefine register offset=0x0000 size=2 [ PC ];\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "pic16.sinc",
+      "source_sha256": "8e9a7cdb7b9c7b183d8ef5ea6a34aa55b345c86e914662168d7ade11d723c691",
+      "search": "define space HWSTACK",
+      "references": [
+        {
+          "line": 17,
+          "snippet": "define space HWSTACK type=ram_space wordsize=2 size=1;  # WORDSIZE is actually 13-bits\n \ndefine space register type=register_space size=2; \n\n# Program Counter (13-bits) - PC Latch: PCLATH<PC:12-8> / PCL<PC:7-0>\ndefine register offset=0x0000 size=2 [ PC ];\n\n# Stack Pointer\ndefine register offset=0x0002 size=1 [ STKPTR ];\n"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "pic16_instructions.sinc",
+      "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+      "search": "absAddr11:",
+      "references": [
+        {
+          "line": 247,
+          "snippet": "absAddr11: k11\tis k11\t\t\t\t\t\t\t\t\t{\n\taddr:2 = ((zext(PCLATH) & 0x18) << 8) | k11;\n\texport addr; \n}\n\n@if PROCESSOR == \"PIC_16F\"\n\n# Relative address\nrelAddr9: addr\tis sk9\t[ addr = inst_next + sk9; ]\t\t\t\t\t\t\t\t{\n\texport *[CODE]:2 addr;"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "pic16_instructions.sinc",
+      "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+      "search": ":CALL absAddr11",
+      "references": [
+        {
+          "line": 628,
+          "snippet": ":CALL absAddr11\t\t\tis op3=0x4 & absAddr11\t\t\t\t\t\t\t{\n\t#  --10 0kkk kkkk kkkk\n\t#  0010 0001 0010 0011\t->\tCALL 0x123\n\t#  0010 0000 0001 0000\t->\tCALL 0x10\n\tpush(&:2 inst_next);\n\tcall [absAddr11];\n}\n\n:CALLW\t\t\t\t\tis op14=0x000a\t\t\t\t\t\t{\n\t#  --00 0000 0000 1010"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "pic16_instructions.sinc",
+      "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+      "search": ":NOP",
+      "references": [
+        {
+          "line": 845,
+          "snippet": ":NOP\t\t\t\t\tis op6=0 & d=0 & l5=0\t\t\t\t{\n\t#  --00 0000 0xx0 0000\n}\n\n:OPTION\t\t\t\t\tis op14=0x0062\t\t\t\t\t\t{\n\t#  --00 0000 0110 0010\n\tOPTION = W;\n}\n\n:RESET is op14=0x0001 {"
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "pic16_instructions.sinc",
+      "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+      "search": ":RETURN",
+      "references": [
+        {
+          "line": 876,
+          "snippet": ":RETURN\t\t\t\t\tis op14=0x0008\t\t\t\t\t\t{\n\t#  --00 0000 0000 1000\n\tretAddr:4 = 0;\n\tpop(retAddr);\n\treturn [retAddr];\n}\n\n:RLF srcREG, D\t\tis op6=0x0d & srcREG & D & destREG\t\t\t\t\t{\n\t#  --00 1101 dfff ffff\n\t#  0000 1101 0000 0000\t->\tRLF INDF, 0 "
+        }
+      ],
+      "status": "referenced"
+    },
+    {
+      "source_file": "pic16_instructions.sinc",
+      "source_sha256": "143979caa22a95530fd6cdd3f01d830a6eb2fb563e8e9ec47cb09a081acbb3c2",
+      "search": ":BTFSS srcREG",
+      "references": [
+        {
+          "line": 591,
+          "snippet": ":BTFSS srcREG, bit\t\tis op4=0x7 & bit & srcREG [ possibleSkip = 1; globalset(inst_next,possibleSkip); ] {\n\t#  --01 11bb bfff ffff\n\t#  0001 1110 0000 0000\t->\tBTFSS INDF, #0x4\n\t#  0001 1110 0010 0000\t->\tBTFSS 0x20, #0x4\n\tlocal bitmask = 1 << bit;\n\tlocal tmp = srcREG & bitmask;\n   SkipNext = (tmp != 0);\n}\n\n:BNC absAddr11\tis doPseudo=1 & op4=0x7 & b3=0 & bit & f7=0x3 ; op3=0x5 & absAddr11 {"
+        }
+      ],
+      "status": "referenced"
+    }
+  ],
+  "limits": [
+    "CODE declares wordsize=2; DATA and HWSTACK are distinct spaces. Preserve both Java offset getters when eventually run.",
+    "CALL operand combines PCLATH<4:3> and k11; proposed low-word target 0x108 requires explicit PCLATH=0 context. Selected source uses call [absAddr11], so a direct static target is NOT currently promised.",
+    "BTFSS uses possibleSkip/SkipNext propagation; isolate-only decoding is insufficient for conditional coverage. No PIC16F relative BRA substituted for selected PIC_16."
+  ],
+  "call_target_policy": "context_dependent_computed_PCLATH",
+  "conditional_policy": "flowed_skip_context_on_following_instruction",
+  "c_model_and_abi": "unknown_not_authenticated",
+  "cpu_boundary": "SDK selection only, no CPU execution",
+  "function_truth_origin": "manual hand-owned source extent frozen before ProgramDB creation",
+  "function_bound_policy": "Half-open byte ranges; SuperH includes intrinsic return/call delay slots; Hexagon consists only of complete one-word packets."
+}

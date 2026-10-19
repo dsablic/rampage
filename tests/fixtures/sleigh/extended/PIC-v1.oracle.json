@@ -1,0 +1,2975 @@
+{
+  "name": "PIC-v1",
+  "family": "PIC",
+  "language_id": "PIC-16:LE:16:PIC-16",
+  "verdict": {
+    "status": "pass",
+    "failures": [],
+    "manual_true_functions": 2,
+    "observed_function_count": 2,
+    "true_positive_seeded_entries": 2,
+    "unseeded_function_count": 0,
+    "missing_seeded_entries": 0,
+    "padding_instruction_count": 3,
+    "measurement_limit": "Seeded Ghidra function creation, not autonomous discovery or CPU semantic proof"
+  },
+  "oracle": {
+    "schema_version": 1,
+    "fixture": "PIC-v1",
+    "language_id": "PIC-16:LE:16:PIC-16",
+    "target_execution": false,
+    "decompilation": false,
+    "standalone_context_origin": "program default context before flowed disassembly",
+    "standalone_rows": [
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0100",
+          "space": "CODE",
+          "getOffset_raw": "0x200",
+          "getAddressableWordOffset_raw": "0x100",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x200",
+          "getAddressableWordOffset_words": "0x100"
+        },
+        "fixture_offset_bytes": 0,
+        "length_bytes": 2,
+        "mnemonic": "CALL",
+        "operands": [
+          "0x108"
+        ],
+        "flow": {
+          "name": "COMPUTED_CALL",
+          "is_call": true,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": true,
+          "is_terminal": false
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": {
+          "display": "CODE:0101",
+          "space": "CODE",
+          "getOffset_raw": "0x202",
+          "getAddressableWordOffset_raw": "0x101",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x202",
+          "getAddressableWordOffset_words": "0x101"
+        },
+        "raw_pcode": [
+          {
+            "sequence_time": 0,
+            "opcode": 17,
+            "mnemonic": "INT_ZEXT",
+            "text": "(unique, 0x5e00, 2) INT_ZEXT (DATA, 0xa, 1)",
+            "output": {
+              "address": {
+                "display": "unique:00005e00",
+                "space": "unique",
+                "getOffset_raw": "0x5e00",
+                "getAddressableWordOffset_raw": "0x5e00",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 2,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "DATA:000a",
+                  "space": "DATA",
+                  "getOffset_raw": "0xa",
+                  "getAddressableWordOffset_raw": "0xa",
+                  "addressableUnitSize_bytes": 1,
+                  "getOffset_bytes": "0xa",
+                  "getAddressableWordOffset_words": "0xa"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 1,
+            "opcode": 27,
+            "mnemonic": "INT_AND",
+            "text": "(unique, 0x5f00, 2) INT_AND (unique, 0x5e00, 2) , (const, 0x18, 2)",
+            "output": {
+              "address": {
+                "display": "unique:00005f00",
+                "space": "unique",
+                "getOffset_raw": "0x5f00",
+                "getAddressableWordOffset_raw": "0x5f00",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 2,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:00005e00",
+                  "space": "unique",
+                  "getOffset_raw": "0x5e00",
+                  "getAddressableWordOffset_raw": "0x5e00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              {
+                "address": {
+                  "display": "const:00000018",
+                  "space": "const",
+                  "getOffset_raw": "0x18",
+                  "getAddressableWordOffset_raw": "0x18",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 2,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 2,
+            "opcode": 29,
+            "mnemonic": "INT_LEFT",
+            "text": "(unique, 0x6000, 2) INT_LEFT (unique, 0x5f00, 2) , (const, 0x8, 4)",
+            "output": {
+              "address": {
+                "display": "unique:00006000",
+                "space": "unique",
+                "getOffset_raw": "0x6000",
+                "getAddressableWordOffset_raw": "0x6000",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 2,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:00005f00",
+                  "space": "unique",
+                  "getOffset_raw": "0x5f00",
+                  "getAddressableWordOffset_raw": "0x5f00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              {
+                "address": {
+                  "display": "const:00000008",
+                  "space": "const",
+                  "getOffset_raw": "0x8",
+                  "getAddressableWordOffset_raw": "0x8",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 4,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 3,
+            "opcode": 28,
+            "mnemonic": "INT_OR",
+            "text": "(unique, 0x6200, 2) INT_OR (unique, 0x6000, 2) , (const, 0x108, 2)",
+            "output": {
+              "address": {
+                "display": "unique:00006200",
+                "space": "unique",
+                "getOffset_raw": "0x6200",
+                "getAddressableWordOffset_raw": "0x6200",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 2,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:00006000",
+                  "space": "unique",
+                  "getOffset_raw": "0x6000",
+                  "getAddressableWordOffset_raw": "0x6000",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              {
+                "address": {
+                  "display": "const:00000108",
+                  "space": "const",
+                  "getOffset_raw": "0x108",
+                  "getAddressableWordOffset_raw": "0x108",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 2,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 4,
+            "opcode": 3,
+            "mnemonic": "STORE",
+            "text": " ---  STORE (const, 0x281, 8) , (register, 0x2, 1) , (const, 0x202, 2)",
+            "output": null,
+            "inputs": [
+              {
+                "address": {
+                  "display": "const:00000281",
+                  "space": "const",
+                  "getOffset_raw": "0x281",
+                  "getAddressableWordOffset_raw": "0x281",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 8,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              },
+              {
+                "address": {
+                  "display": "register:0002",
+                  "space": "register",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              },
+              {
+                "address": {
+                  "display": "const:00000202",
+                  "space": "const",
+                  "getOffset_raw": "0x202",
+                  "getAddressableWordOffset_raw": "0x202",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 2,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 5,
+            "opcode": 19,
+            "mnemonic": "INT_ADD",
+            "text": "(register, 0x2, 1) INT_ADD (register, 0x2, 1) , (const, 0x2, 1)",
+            "output": {
+              "address": {
+                "display": "register:0002",
+                "space": "register",
+                "getOffset_raw": "0x2",
+                "getAddressableWordOffset_raw": "0x2",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 1,
+              "is_constant": false,
+              "is_register": true,
+              "is_unique": false
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "register:0002",
+                  "space": "register",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              },
+              {
+                "address": {
+                  "display": "const:00000002",
+                  "space": "const",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 1,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 6,
+            "opcode": 8,
+            "mnemonic": "CALLIND",
+            "text": " ---  CALLIND (unique, 0x6200, 2)",
+            "output": null,
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:00006200",
+                  "space": "unique",
+                  "getOffset_raw": "0x6200",
+                  "getAddressableWordOffset_raw": "0x6200",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0101",
+          "space": "CODE",
+          "getOffset_raw": "0x202",
+          "getAddressableWordOffset_raw": "0x101",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x202",
+          "getAddressableWordOffset_words": "0x101"
+        },
+        "fixture_offset_bytes": 2,
+        "length_bytes": 2,
+        "mnemonic": "NOP",
+        "operands": [],
+        "flow": {
+          "name": "FALL_THROUGH",
+          "is_call": false,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": false,
+          "is_terminal": false
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": {
+          "display": "CODE:0102",
+          "space": "CODE",
+          "getOffset_raw": "0x204",
+          "getAddressableWordOffset_raw": "0x102",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x204",
+          "getAddressableWordOffset_words": "0x102"
+        },
+        "raw_pcode": []
+      },
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0102",
+          "space": "CODE",
+          "getOffset_raw": "0x204",
+          "getAddressableWordOffset_raw": "0x102",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x204",
+          "getAddressableWordOffset_words": "0x102"
+        },
+        "fixture_offset_bytes": 4,
+        "length_bytes": 2,
+        "mnemonic": "BTFSS",
+        "operands": [
+          "0x20",
+          "#0x0"
+        ],
+        "flow": {
+          "name": "FALL_THROUGH",
+          "is_call": false,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": false,
+          "is_terminal": false
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": {
+          "display": "CODE:0103",
+          "space": "CODE",
+          "getOffset_raw": "0x206",
+          "getAddressableWordOffset_raw": "0x103",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x206",
+          "getAddressableWordOffset_words": "0x103"
+        },
+        "raw_pcode": [
+          {
+            "sequence_time": 0,
+            "opcode": 17,
+            "mnemonic": "INT_ZEXT",
+            "text": "(unique, 0x4300, 2) INT_ZEXT (register, 0x8, 1)",
+            "output": {
+              "address": {
+                "display": "unique:00004300",
+                "space": "unique",
+                "getOffset_raw": "0x4300",
+                "getAddressableWordOffset_raw": "0x4300",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 2,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "register:0008",
+                  "space": "register",
+                  "getOffset_raw": "0x8",
+                  "getAddressableWordOffset_raw": "0x8",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 1,
+            "opcode": 29,
+            "mnemonic": "INT_LEFT",
+            "text": "(unique, 0x4400, 2) INT_LEFT (unique, 0x4300, 2) , (const, 0x7, 4)",
+            "output": {
+              "address": {
+                "display": "unique:00004400",
+                "space": "unique",
+                "getOffset_raw": "0x4400",
+                "getAddressableWordOffset_raw": "0x4400",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 2,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:00004300",
+                  "space": "unique",
+                  "getOffset_raw": "0x4300",
+                  "getAddressableWordOffset_raw": "0x4300",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              {
+                "address": {
+                  "display": "const:00000007",
+                  "space": "const",
+                  "getOffset_raw": "0x7",
+                  "getAddressableWordOffset_raw": "0x7",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 4,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 2,
+            "opcode": 19,
+            "mnemonic": "INT_ADD",
+            "text": "(unique, 0x4600, 2) INT_ADD (unique, 0x4400, 2) , (const, 0x20, 2)",
+            "output": {
+              "address": {
+                "display": "unique:00004600",
+                "space": "unique",
+                "getOffset_raw": "0x4600",
+                "getAddressableWordOffset_raw": "0x4600",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 2,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:00004400",
+                  "space": "unique",
+                  "getOffset_raw": "0x4400",
+                  "getAddressableWordOffset_raw": "0x4400",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              {
+                "address": {
+                  "display": "const:00000020",
+                  "space": "const",
+                  "getOffset_raw": "0x20",
+                  "getAddressableWordOffset_raw": "0x20",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 2,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 3,
+            "opcode": 29,
+            "mnemonic": "INT_LEFT",
+            "text": "(unique, 0xe900, 1) INT_LEFT (const, 0x1, 1) , (const, 0x0, 1)",
+            "output": {
+              "address": {
+                "display": "unique:0000e900",
+                "space": "unique",
+                "getOffset_raw": "0xe900",
+                "getAddressableWordOffset_raw": "0xe900",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 1,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "const:00000001",
+                  "space": "const",
+                  "getOffset_raw": "0x1",
+                  "getAddressableWordOffset_raw": "0x1",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 1,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              },
+              {
+                "address": {
+                  "display": "const:00000000",
+                  "space": "const",
+                  "getOffset_raw": "0x0",
+                  "getAddressableWordOffset_raw": "0x0",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 1,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 4,
+            "opcode": 2,
+            "mnemonic": "LOAD",
+            "text": "(unique, 0x4700, 1) LOAD (const, 0x211, 4) , (unique, 0x4600, 2)",
+            "output": {
+              "address": {
+                "display": "unique:00004700",
+                "space": "unique",
+                "getOffset_raw": "0x4700",
+                "getAddressableWordOffset_raw": "0x4700",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 1,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "const:00000211",
+                  "space": "const",
+                  "getOffset_raw": "0x211",
+                  "getAddressableWordOffset_raw": "0x211",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 4,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              },
+              {
+                "address": {
+                  "display": "unique:00004600",
+                  "space": "unique",
+                  "getOffset_raw": "0x4600",
+                  "getAddressableWordOffset_raw": "0x4600",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              }
+            ]
+          },
+          {
+            "sequence_time": 5,
+            "opcode": 27,
+            "mnemonic": "INT_AND",
+            "text": "(unique, 0xeb00, 1) INT_AND (unique, 0x4700, 1) , (unique, 0xe900, 1)",
+            "output": {
+              "address": {
+                "display": "unique:0000eb00",
+                "space": "unique",
+                "getOffset_raw": "0xeb00",
+                "getAddressableWordOffset_raw": "0xeb00",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 1,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:00004700",
+                  "space": "unique",
+                  "getOffset_raw": "0x4700",
+                  "getAddressableWordOffset_raw": "0x4700",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              {
+                "address": {
+                  "display": "unique:0000e900",
+                  "space": "unique",
+                  "getOffset_raw": "0xe900",
+                  "getAddressableWordOffset_raw": "0xe900",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              }
+            ]
+          },
+          {
+            "sequence_time": 6,
+            "opcode": 12,
+            "mnemonic": "INT_NOTEQUAL",
+            "text": "(register, 0x4, 1) INT_NOTEQUAL (unique, 0xeb00, 1) , (const, 0x0, 1)",
+            "output": {
+              "address": {
+                "display": "register:0004",
+                "space": "register",
+                "getOffset_raw": "0x4",
+                "getAddressableWordOffset_raw": "0x4",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 1,
+              "is_constant": false,
+              "is_register": true,
+              "is_unique": false
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:0000eb00",
+                  "space": "unique",
+                  "getOffset_raw": "0xeb00",
+                  "getAddressableWordOffset_raw": "0xeb00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              {
+                "address": {
+                  "display": "const:00000000",
+                  "space": "const",
+                  "getOffset_raw": "0x0",
+                  "getAddressableWordOffset_raw": "0x0",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 1,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0103",
+          "space": "CODE",
+          "getOffset_raw": "0x206",
+          "getAddressableWordOffset_raw": "0x103",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x206",
+          "getAddressableWordOffset_words": "0x103"
+        },
+        "fixture_offset_bytes": 6,
+        "length_bytes": 2,
+        "mnemonic": "NOP",
+        "operands": [],
+        "flow": {
+          "name": "FALL_THROUGH",
+          "is_call": false,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": false,
+          "is_terminal": false
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": {
+          "display": "CODE:0104",
+          "space": "CODE",
+          "getOffset_raw": "0x208",
+          "getAddressableWordOffset_raw": "0x104",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x208",
+          "getAddressableWordOffset_words": "0x104"
+        },
+        "raw_pcode": []
+      },
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0104",
+          "space": "CODE",
+          "getOffset_raw": "0x208",
+          "getAddressableWordOffset_raw": "0x104",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x208",
+          "getAddressableWordOffset_words": "0x104"
+        },
+        "fixture_offset_bytes": 8,
+        "length_bytes": 2,
+        "mnemonic": "RETURN",
+        "operands": [],
+        "flow": {
+          "name": "TERMINATOR",
+          "is_call": false,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": false,
+          "is_terminal": true
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": null,
+        "raw_pcode": [
+          {
+            "sequence_time": 0,
+            "opcode": 1,
+            "mnemonic": "COPY",
+            "text": "(unique, 0x11d00, 4) COPY (const, 0x0, 4)",
+            "output": {
+              "address": {
+                "display": "unique:00011d00",
+                "space": "unique",
+                "getOffset_raw": "0x11d00",
+                "getAddressableWordOffset_raw": "0x11d00",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 4,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "const:00000000",
+                  "space": "const",
+                  "getOffset_raw": "0x0",
+                  "getAddressableWordOffset_raw": "0x0",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 4,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 1,
+            "opcode": 20,
+            "mnemonic": "INT_SUB",
+            "text": "(register, 0x2, 1) INT_SUB (register, 0x2, 1) , (const, 0x2, 1)",
+            "output": {
+              "address": {
+                "display": "register:0002",
+                "space": "register",
+                "getOffset_raw": "0x2",
+                "getAddressableWordOffset_raw": "0x2",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 1,
+              "is_constant": false,
+              "is_register": true,
+              "is_unique": false
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "register:0002",
+                  "space": "register",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              },
+              {
+                "address": {
+                  "display": "const:00000002",
+                  "space": "const",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 1,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 2,
+            "opcode": 2,
+            "mnemonic": "LOAD",
+            "text": "(unique, 0x11d00, 4) LOAD (const, 0x281, 8) , (register, 0x2, 1)",
+            "output": {
+              "address": {
+                "display": "unique:00011d00",
+                "space": "unique",
+                "getOffset_raw": "0x11d00",
+                "getAddressableWordOffset_raw": "0x11d00",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 4,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "const:00000281",
+                  "space": "const",
+                  "getOffset_raw": "0x281",
+                  "getAddressableWordOffset_raw": "0x281",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 8,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              },
+              {
+                "address": {
+                  "display": "register:0002",
+                  "space": "register",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 3,
+            "opcode": 10,
+            "mnemonic": "RETURN",
+            "text": " ---  RETURN (unique, 0x11d00, 4)",
+            "output": null,
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:00011d00",
+                  "space": "unique",
+                  "getOffset_raw": "0x11d00",
+                  "getAddressableWordOffset_raw": "0x11d00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 4,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0105",
+          "space": "CODE",
+          "getOffset_raw": "0x20a",
+          "getAddressableWordOffset_raw": "0x105",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x20a",
+          "getAddressableWordOffset_words": "0x105"
+        },
+        "fixture_offset_bytes": 10,
+        "length_bytes": 2,
+        "mnemonic": "NOP",
+        "operands": [],
+        "flow": {
+          "name": "FALL_THROUGH",
+          "is_call": false,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": false,
+          "is_terminal": false
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": {
+          "display": "CODE:0106",
+          "space": "CODE",
+          "getOffset_raw": "0x20c",
+          "getAddressableWordOffset_raw": "0x106",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x20c",
+          "getAddressableWordOffset_words": "0x106"
+        },
+        "raw_pcode": []
+      },
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0106",
+          "space": "CODE",
+          "getOffset_raw": "0x20c",
+          "getAddressableWordOffset_raw": "0x106",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x20c",
+          "getAddressableWordOffset_words": "0x106"
+        },
+        "fixture_offset_bytes": 12,
+        "length_bytes": 2,
+        "mnemonic": "NOP",
+        "operands": [],
+        "flow": {
+          "name": "FALL_THROUGH",
+          "is_call": false,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": false,
+          "is_terminal": false
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": {
+          "display": "CODE:0107",
+          "space": "CODE",
+          "getOffset_raw": "0x20e",
+          "getAddressableWordOffset_raw": "0x107",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x20e",
+          "getAddressableWordOffset_words": "0x107"
+        },
+        "raw_pcode": []
+      },
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0107",
+          "space": "CODE",
+          "getOffset_raw": "0x20e",
+          "getAddressableWordOffset_raw": "0x107",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x20e",
+          "getAddressableWordOffset_words": "0x107"
+        },
+        "fixture_offset_bytes": 14,
+        "length_bytes": 2,
+        "mnemonic": "NOP",
+        "operands": [],
+        "flow": {
+          "name": "FALL_THROUGH",
+          "is_call": false,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": false,
+          "is_terminal": false
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": {
+          "display": "CODE:0108",
+          "space": "CODE",
+          "getOffset_raw": "0x210",
+          "getAddressableWordOffset_raw": "0x108",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x210",
+          "getAddressableWordOffset_words": "0x108"
+        },
+        "raw_pcode": []
+      },
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0108",
+          "space": "CODE",
+          "getOffset_raw": "0x210",
+          "getAddressableWordOffset_raw": "0x108",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x210",
+          "getAddressableWordOffset_words": "0x108"
+        },
+        "fixture_offset_bytes": 16,
+        "length_bytes": 2,
+        "mnemonic": "NOP",
+        "operands": [],
+        "flow": {
+          "name": "FALL_THROUGH",
+          "is_call": false,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": false,
+          "is_terminal": false
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": {
+          "display": "CODE:0109",
+          "space": "CODE",
+          "getOffset_raw": "0x212",
+          "getAddressableWordOffset_raw": "0x109",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x212",
+          "getAddressableWordOffset_words": "0x109"
+        },
+        "raw_pcode": []
+      },
+      {
+        "status": "decoded",
+        "address": {
+          "display": "CODE:0109",
+          "space": "CODE",
+          "getOffset_raw": "0x212",
+          "getAddressableWordOffset_raw": "0x109",
+          "addressableUnitSize_bytes": 2,
+          "getOffset_bytes": "0x212",
+          "getAddressableWordOffset_words": "0x109"
+        },
+        "fixture_offset_bytes": 18,
+        "length_bytes": 2,
+        "mnemonic": "RETURN",
+        "operands": [],
+        "flow": {
+          "name": "TERMINATOR",
+          "is_call": false,
+          "is_jump": false,
+          "is_conditional": false,
+          "is_computed": false,
+          "is_terminal": true
+        },
+        "delay_slot_depth": 0,
+        "is_in_delay_slot": false,
+        "direct_flow_targets": [],
+        "fallthrough": null,
+        "raw_pcode": [
+          {
+            "sequence_time": 0,
+            "opcode": 1,
+            "mnemonic": "COPY",
+            "text": "(unique, 0x11d00, 4) COPY (const, 0x0, 4)",
+            "output": {
+              "address": {
+                "display": "unique:00011d00",
+                "space": "unique",
+                "getOffset_raw": "0x11d00",
+                "getAddressableWordOffset_raw": "0x11d00",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 4,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "const:00000000",
+                  "space": "const",
+                  "getOffset_raw": "0x0",
+                  "getAddressableWordOffset_raw": "0x0",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 4,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 1,
+            "opcode": 20,
+            "mnemonic": "INT_SUB",
+            "text": "(register, 0x2, 1) INT_SUB (register, 0x2, 1) , (const, 0x2, 1)",
+            "output": {
+              "address": {
+                "display": "register:0002",
+                "space": "register",
+                "getOffset_raw": "0x2",
+                "getAddressableWordOffset_raw": "0x2",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 1,
+              "is_constant": false,
+              "is_register": true,
+              "is_unique": false
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "register:0002",
+                  "space": "register",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              },
+              {
+                "address": {
+                  "display": "const:00000002",
+                  "space": "const",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 1,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 2,
+            "opcode": 2,
+            "mnemonic": "LOAD",
+            "text": "(unique, 0x11d00, 4) LOAD (const, 0x281, 8) , (register, 0x2, 1)",
+            "output": {
+              "address": {
+                "display": "unique:00011d00",
+                "space": "unique",
+                "getOffset_raw": "0x11d00",
+                "getAddressableWordOffset_raw": "0x11d00",
+                "addressableUnitSize_bytes": 1,
+                "offset_semantics": "non-memory storage-space offset"
+              },
+              "size_bytes": 4,
+              "is_constant": false,
+              "is_register": false,
+              "is_unique": true
+            },
+            "inputs": [
+              {
+                "address": {
+                  "display": "const:00000281",
+                  "space": "const",
+                  "getOffset_raw": "0x281",
+                  "getAddressableWordOffset_raw": "0x281",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "constant scalar, not a byte address"
+                },
+                "size_bytes": 8,
+                "is_constant": true,
+                "is_register": false,
+                "is_unique": false
+              },
+              {
+                "address": {
+                  "display": "register:0002",
+                  "space": "register",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              }
+            ]
+          },
+          {
+            "sequence_time": 3,
+            "opcode": 10,
+            "mnemonic": "RETURN",
+            "text": " ---  RETURN (unique, 0x11d00, 4)",
+            "output": null,
+            "inputs": [
+              {
+                "address": {
+                  "display": "unique:00011d00",
+                  "space": "unique",
+                  "getOffset_raw": "0x11d00",
+                  "getAddressableWordOffset_raw": "0x11d00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 4,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "program_oracle": {
+      "status": "observed",
+      "language_id": "PIC-16:LE:16:PIC-16",
+      "compiler_spec_id": "default",
+      "base": {
+        "display": "CODE:0100",
+        "space": "CODE",
+        "getOffset_raw": "0x200",
+        "getAddressableWordOffset_raw": "0x100",
+        "addressableUnitSize_bytes": 2,
+        "getOffset_bytes": "0x200",
+        "getAddressableWordOffset_words": "0x100"
+      },
+      "window_end_exclusive": {
+        "display": "CODE:010a",
+        "space": "CODE",
+        "getOffset_raw": "0x214",
+        "getAddressableWordOffset_raw": "0x10a",
+        "addressableUnitSize_bytes": 2,
+        "getOffset_bytes": "0x214",
+        "getAddressableWordOffset_words": "0x10a"
+      },
+      "memory_space": "CODE",
+      "byte_backed": true,
+      "execute": true,
+      "overlay": false,
+      "rows": [
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0100",
+            "space": "CODE",
+            "getOffset_raw": "0x200",
+            "getAddressableWordOffset_raw": "0x100",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x200",
+            "getAddressableWordOffset_words": "0x100"
+          },
+          "fixture_offset_bytes": 0,
+          "length_bytes": 2,
+          "mnemonic": "CALL",
+          "operands": [
+            "0x108"
+          ],
+          "flow": {
+            "name": "COMPUTED_CALL",
+            "is_call": true,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": true,
+            "is_terminal": false
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": {
+            "display": "CODE:0101",
+            "space": "CODE",
+            "getOffset_raw": "0x202",
+            "getAddressableWordOffset_raw": "0x101",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x202",
+            "getAddressableWordOffset_words": "0x101"
+          },
+          "raw_pcode": [
+            {
+              "sequence_time": 0,
+              "opcode": 17,
+              "mnemonic": "INT_ZEXT",
+              "text": "(unique, 0x5e00, 2) INT_ZEXT (DATA, 0xa, 1)",
+              "output": {
+                "address": {
+                  "display": "unique:00005e00",
+                  "space": "unique",
+                  "getOffset_raw": "0x5e00",
+                  "getAddressableWordOffset_raw": "0x5e00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "DATA:000a",
+                    "space": "DATA",
+                    "getOffset_raw": "0xa",
+                    "getAddressableWordOffset_raw": "0xa",
+                    "addressableUnitSize_bytes": 1,
+                    "getOffset_bytes": "0xa",
+                    "getAddressableWordOffset_words": "0xa"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 1,
+              "opcode": 27,
+              "mnemonic": "INT_AND",
+              "text": "(unique, 0x5f00, 2) INT_AND (unique, 0x5e00, 2) , (const, 0x18, 2)",
+              "output": {
+                "address": {
+                  "display": "unique:00005f00",
+                  "space": "unique",
+                  "getOffset_raw": "0x5f00",
+                  "getAddressableWordOffset_raw": "0x5f00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:00005e00",
+                    "space": "unique",
+                    "getOffset_raw": "0x5e00",
+                    "getAddressableWordOffset_raw": "0x5e00",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                },
+                {
+                  "address": {
+                    "display": "const:00000018",
+                    "space": "const",
+                    "getOffset_raw": "0x18",
+                    "getAddressableWordOffset_raw": "0x18",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 2,
+              "opcode": 29,
+              "mnemonic": "INT_LEFT",
+              "text": "(unique, 0x6000, 2) INT_LEFT (unique, 0x5f00, 2) , (const, 0x8, 4)",
+              "output": {
+                "address": {
+                  "display": "unique:00006000",
+                  "space": "unique",
+                  "getOffset_raw": "0x6000",
+                  "getAddressableWordOffset_raw": "0x6000",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:00005f00",
+                    "space": "unique",
+                    "getOffset_raw": "0x5f00",
+                    "getAddressableWordOffset_raw": "0x5f00",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                },
+                {
+                  "address": {
+                    "display": "const:00000008",
+                    "space": "const",
+                    "getOffset_raw": "0x8",
+                    "getAddressableWordOffset_raw": "0x8",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 4,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 3,
+              "opcode": 28,
+              "mnemonic": "INT_OR",
+              "text": "(unique, 0x6200, 2) INT_OR (unique, 0x6000, 2) , (const, 0x108, 2)",
+              "output": {
+                "address": {
+                  "display": "unique:00006200",
+                  "space": "unique",
+                  "getOffset_raw": "0x6200",
+                  "getAddressableWordOffset_raw": "0x6200",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:00006000",
+                    "space": "unique",
+                    "getOffset_raw": "0x6000",
+                    "getAddressableWordOffset_raw": "0x6000",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                },
+                {
+                  "address": {
+                    "display": "const:00000108",
+                    "space": "const",
+                    "getOffset_raw": "0x108",
+                    "getAddressableWordOffset_raw": "0x108",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 4,
+              "opcode": 3,
+              "mnemonic": "STORE",
+              "text": " ---  STORE (const, 0x281, 8) , (register, 0x2, 1) , (const, 0x202, 2)",
+              "output": null,
+              "inputs": [
+                {
+                  "address": {
+                    "display": "const:00000281",
+                    "space": "const",
+                    "getOffset_raw": "0x281",
+                    "getAddressableWordOffset_raw": "0x281",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 8,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "register:0002",
+                    "space": "register",
+                    "getOffset_raw": "0x2",
+                    "getAddressableWordOffset_raw": "0x2",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": true,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "const:00000202",
+                    "space": "const",
+                    "getOffset_raw": "0x202",
+                    "getAddressableWordOffset_raw": "0x202",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 5,
+              "opcode": 19,
+              "mnemonic": "INT_ADD",
+              "text": "(register, 0x2, 1) INT_ADD (register, 0x2, 1) , (const, 0x2, 1)",
+              "output": {
+                "address": {
+                  "display": "register:0002",
+                  "space": "register",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "register:0002",
+                    "space": "register",
+                    "getOffset_raw": "0x2",
+                    "getAddressableWordOffset_raw": "0x2",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": true,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "const:00000002",
+                    "space": "const",
+                    "getOffset_raw": "0x2",
+                    "getAddressableWordOffset_raw": "0x2",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 6,
+              "opcode": 8,
+              "mnemonic": "CALLIND",
+              "text": " ---  CALLIND (unique, 0x6200, 2)",
+              "output": null,
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:00006200",
+                    "space": "unique",
+                    "getOffset_raw": "0x6200",
+                    "getAddressableWordOffset_raw": "0x6200",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                }
+              ]
+            }
+          ],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x00000000 value=0x00000000"
+            }
+          ]
+        },
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0101",
+            "space": "CODE",
+            "getOffset_raw": "0x202",
+            "getAddressableWordOffset_raw": "0x101",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x202",
+            "getAddressableWordOffset_words": "0x101"
+          },
+          "fixture_offset_bytes": 2,
+          "length_bytes": 2,
+          "mnemonic": "NOP",
+          "operands": [],
+          "flow": {
+            "name": "FALL_THROUGH",
+            "is_call": false,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": false,
+            "is_terminal": false
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": {
+            "display": "CODE:0102",
+            "space": "CODE",
+            "getOffset_raw": "0x204",
+            "getAddressableWordOffset_raw": "0x102",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x204",
+            "getAddressableWordOffset_words": "0x102"
+          },
+          "raw_pcode": [],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x00000000 value=0x00000000"
+            }
+          ]
+        },
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0102",
+            "space": "CODE",
+            "getOffset_raw": "0x204",
+            "getAddressableWordOffset_raw": "0x102",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x204",
+            "getAddressableWordOffset_words": "0x102"
+          },
+          "fixture_offset_bytes": 4,
+          "length_bytes": 2,
+          "mnemonic": "BTFSS",
+          "operands": [
+            "0x20",
+            "#0x0"
+          ],
+          "flow": {
+            "name": "FALL_THROUGH",
+            "is_call": false,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": false,
+            "is_terminal": false
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": {
+            "display": "CODE:0103",
+            "space": "CODE",
+            "getOffset_raw": "0x206",
+            "getAddressableWordOffset_raw": "0x103",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x206",
+            "getAddressableWordOffset_words": "0x103"
+          },
+          "raw_pcode": [
+            {
+              "sequence_time": 0,
+              "opcode": 17,
+              "mnemonic": "INT_ZEXT",
+              "text": "(unique, 0x4300, 2) INT_ZEXT (register, 0x8, 1)",
+              "output": {
+                "address": {
+                  "display": "unique:00004300",
+                  "space": "unique",
+                  "getOffset_raw": "0x4300",
+                  "getAddressableWordOffset_raw": "0x4300",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "register:0008",
+                    "space": "register",
+                    "getOffset_raw": "0x8",
+                    "getAddressableWordOffset_raw": "0x8",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": true,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 1,
+              "opcode": 29,
+              "mnemonic": "INT_LEFT",
+              "text": "(unique, 0x4400, 2) INT_LEFT (unique, 0x4300, 2) , (const, 0x7, 4)",
+              "output": {
+                "address": {
+                  "display": "unique:00004400",
+                  "space": "unique",
+                  "getOffset_raw": "0x4400",
+                  "getAddressableWordOffset_raw": "0x4400",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:00004300",
+                    "space": "unique",
+                    "getOffset_raw": "0x4300",
+                    "getAddressableWordOffset_raw": "0x4300",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                },
+                {
+                  "address": {
+                    "display": "const:00000007",
+                    "space": "const",
+                    "getOffset_raw": "0x7",
+                    "getAddressableWordOffset_raw": "0x7",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 4,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 2,
+              "opcode": 19,
+              "mnemonic": "INT_ADD",
+              "text": "(unique, 0x4600, 2) INT_ADD (unique, 0x4400, 2) , (const, 0x20, 2)",
+              "output": {
+                "address": {
+                  "display": "unique:00004600",
+                  "space": "unique",
+                  "getOffset_raw": "0x4600",
+                  "getAddressableWordOffset_raw": "0x4600",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 2,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:00004400",
+                    "space": "unique",
+                    "getOffset_raw": "0x4400",
+                    "getAddressableWordOffset_raw": "0x4400",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                },
+                {
+                  "address": {
+                    "display": "const:00000020",
+                    "space": "const",
+                    "getOffset_raw": "0x20",
+                    "getAddressableWordOffset_raw": "0x20",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 3,
+              "opcode": 29,
+              "mnemonic": "INT_LEFT",
+              "text": "(unique, 0xe900, 1) INT_LEFT (const, 0x1, 1) , (const, 0x0, 1)",
+              "output": {
+                "address": {
+                  "display": "unique:0000e900",
+                  "space": "unique",
+                  "getOffset_raw": "0xe900",
+                  "getAddressableWordOffset_raw": "0xe900",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "const:00000001",
+                    "space": "const",
+                    "getOffset_raw": "0x1",
+                    "getAddressableWordOffset_raw": "0x1",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "const:00000000",
+                    "space": "const",
+                    "getOffset_raw": "0x0",
+                    "getAddressableWordOffset_raw": "0x0",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 4,
+              "opcode": 2,
+              "mnemonic": "LOAD",
+              "text": "(unique, 0x4700, 1) LOAD (const, 0x211, 4) , (unique, 0x4600, 2)",
+              "output": {
+                "address": {
+                  "display": "unique:00004700",
+                  "space": "unique",
+                  "getOffset_raw": "0x4700",
+                  "getAddressableWordOffset_raw": "0x4700",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "const:00000211",
+                    "space": "const",
+                    "getOffset_raw": "0x211",
+                    "getAddressableWordOffset_raw": "0x211",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 4,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "unique:00004600",
+                    "space": "unique",
+                    "getOffset_raw": "0x4600",
+                    "getAddressableWordOffset_raw": "0x4600",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                }
+              ]
+            },
+            {
+              "sequence_time": 5,
+              "opcode": 27,
+              "mnemonic": "INT_AND",
+              "text": "(unique, 0xeb00, 1) INT_AND (unique, 0x4700, 1) , (unique, 0xe900, 1)",
+              "output": {
+                "address": {
+                  "display": "unique:0000eb00",
+                  "space": "unique",
+                  "getOffset_raw": "0xeb00",
+                  "getAddressableWordOffset_raw": "0xeb00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:00004700",
+                    "space": "unique",
+                    "getOffset_raw": "0x4700",
+                    "getAddressableWordOffset_raw": "0x4700",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                },
+                {
+                  "address": {
+                    "display": "unique:0000e900",
+                    "space": "unique",
+                    "getOffset_raw": "0xe900",
+                    "getAddressableWordOffset_raw": "0xe900",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                }
+              ]
+            },
+            {
+              "sequence_time": 6,
+              "opcode": 12,
+              "mnemonic": "INT_NOTEQUAL",
+              "text": "(register, 0x4, 1) INT_NOTEQUAL (unique, 0xeb00, 1) , (const, 0x0, 1)",
+              "output": {
+                "address": {
+                  "display": "register:0004",
+                  "space": "register",
+                  "getOffset_raw": "0x4",
+                  "getAddressableWordOffset_raw": "0x4",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:0000eb00",
+                    "space": "unique",
+                    "getOffset_raw": "0xeb00",
+                    "getAddressableWordOffset_raw": "0xeb00",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                },
+                {
+                  "address": {
+                    "display": "const:00000000",
+                    "space": "const",
+                    "getOffset_raw": "0x0",
+                    "getAddressableWordOffset_raw": "0x0",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            }
+          ],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x00000000 value=0x00000000"
+            }
+          ]
+        },
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0103",
+            "space": "CODE",
+            "getOffset_raw": "0x206",
+            "getAddressableWordOffset_raw": "0x103",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x206",
+            "getAddressableWordOffset_words": "0x103"
+          },
+          "fixture_offset_bytes": 6,
+          "length_bytes": 2,
+          "mnemonic": "NOP",
+          "operands": [],
+          "flow": {
+            "name": "FALL_THROUGH",
+            "is_call": false,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": false,
+            "is_terminal": false
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": {
+            "display": "CODE:0104",
+            "space": "CODE",
+            "getOffset_raw": "0x208",
+            "getAddressableWordOffset_raw": "0x104",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x208",
+            "getAddressableWordOffset_words": "0x104"
+          },
+          "raw_pcode": [
+            {
+              "sequence_time": 0,
+              "opcode": 5,
+              "mnemonic": "CBRANCH",
+              "text": " ---  CBRANCH (CODE, 0x208, 2) , (register, 0x4, 1)",
+              "output": null,
+              "inputs": [
+                {
+                  "address": {
+                    "display": "CODE:0104",
+                    "space": "CODE",
+                    "getOffset_raw": "0x208",
+                    "getAddressableWordOffset_raw": "0x104",
+                    "addressableUnitSize_bytes": 2,
+                    "getOffset_bytes": "0x208",
+                    "getAddressableWordOffset_words": "0x104"
+                  },
+                  "size_bytes": 2,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "register:0004",
+                    "space": "register",
+                    "getOffset_raw": "0x4",
+                    "getAddressableWordOffset_raw": "0x4",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": true,
+                  "is_unique": false
+                }
+              ]
+            }
+          ],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0xc0000000 value=0x40000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x40000000 value=0x40000000"
+            }
+          ]
+        },
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0104",
+            "space": "CODE",
+            "getOffset_raw": "0x208",
+            "getAddressableWordOffset_raw": "0x104",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x208",
+            "getAddressableWordOffset_words": "0x104"
+          },
+          "fixture_offset_bytes": 8,
+          "length_bytes": 2,
+          "mnemonic": "RETURN",
+          "operands": [],
+          "flow": {
+            "name": "TERMINATOR",
+            "is_call": false,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": false,
+            "is_terminal": true
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": null,
+          "raw_pcode": [
+            {
+              "sequence_time": 0,
+              "opcode": 1,
+              "mnemonic": "COPY",
+              "text": "(unique, 0x11d00, 4) COPY (const, 0x0, 4)",
+              "output": {
+                "address": {
+                  "display": "unique:00011d00",
+                  "space": "unique",
+                  "getOffset_raw": "0x11d00",
+                  "getAddressableWordOffset_raw": "0x11d00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 4,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "const:00000000",
+                    "space": "const",
+                    "getOffset_raw": "0x0",
+                    "getAddressableWordOffset_raw": "0x0",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 4,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 1,
+              "opcode": 20,
+              "mnemonic": "INT_SUB",
+              "text": "(register, 0x2, 1) INT_SUB (register, 0x2, 1) , (const, 0x2, 1)",
+              "output": {
+                "address": {
+                  "display": "register:0002",
+                  "space": "register",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "register:0002",
+                    "space": "register",
+                    "getOffset_raw": "0x2",
+                    "getAddressableWordOffset_raw": "0x2",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": true,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "const:00000002",
+                    "space": "const",
+                    "getOffset_raw": "0x2",
+                    "getAddressableWordOffset_raw": "0x2",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 2,
+              "opcode": 2,
+              "mnemonic": "LOAD",
+              "text": "(unique, 0x11d00, 4) LOAD (const, 0x281, 8) , (register, 0x2, 1)",
+              "output": {
+                "address": {
+                  "display": "unique:00011d00",
+                  "space": "unique",
+                  "getOffset_raw": "0x11d00",
+                  "getAddressableWordOffset_raw": "0x11d00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 4,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "const:00000281",
+                    "space": "const",
+                    "getOffset_raw": "0x281",
+                    "getAddressableWordOffset_raw": "0x281",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 8,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "register:0002",
+                    "space": "register",
+                    "getOffset_raw": "0x2",
+                    "getAddressableWordOffset_raw": "0x2",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": true,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 3,
+              "opcode": 10,
+              "mnemonic": "RETURN",
+              "text": " ---  RETURN (unique, 0x11d00, 4)",
+              "output": null,
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:00011d00",
+                    "space": "unique",
+                    "getOffset_raw": "0x11d00",
+                    "getAddressableWordOffset_raw": "0x11d00",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 4,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                }
+              ]
+            }
+          ],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x00000000 value=0x00000000"
+            }
+          ]
+        },
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0105",
+            "space": "CODE",
+            "getOffset_raw": "0x20a",
+            "getAddressableWordOffset_raw": "0x105",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x20a",
+            "getAddressableWordOffset_words": "0x105"
+          },
+          "fixture_offset_bytes": 10,
+          "length_bytes": 2,
+          "mnemonic": "NOP",
+          "operands": [],
+          "flow": {
+            "name": "FALL_THROUGH",
+            "is_call": false,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": false,
+            "is_terminal": false
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": {
+            "display": "CODE:0106",
+            "space": "CODE",
+            "getOffset_raw": "0x20c",
+            "getAddressableWordOffset_raw": "0x106",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x20c",
+            "getAddressableWordOffset_words": "0x106"
+          },
+          "raw_pcode": [],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x00000000 value=0x00000000"
+            }
+          ]
+        },
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0106",
+            "space": "CODE",
+            "getOffset_raw": "0x20c",
+            "getAddressableWordOffset_raw": "0x106",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x20c",
+            "getAddressableWordOffset_words": "0x106"
+          },
+          "fixture_offset_bytes": 12,
+          "length_bytes": 2,
+          "mnemonic": "NOP",
+          "operands": [],
+          "flow": {
+            "name": "FALL_THROUGH",
+            "is_call": false,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": false,
+            "is_terminal": false
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": {
+            "display": "CODE:0107",
+            "space": "CODE",
+            "getOffset_raw": "0x20e",
+            "getAddressableWordOffset_raw": "0x107",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x20e",
+            "getAddressableWordOffset_words": "0x107"
+          },
+          "raw_pcode": [],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x00000000 value=0x00000000"
+            }
+          ]
+        },
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0107",
+            "space": "CODE",
+            "getOffset_raw": "0x20e",
+            "getAddressableWordOffset_raw": "0x107",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x20e",
+            "getAddressableWordOffset_words": "0x107"
+          },
+          "fixture_offset_bytes": 14,
+          "length_bytes": 2,
+          "mnemonic": "NOP",
+          "operands": [],
+          "flow": {
+            "name": "FALL_THROUGH",
+            "is_call": false,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": false,
+            "is_terminal": false
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": {
+            "display": "CODE:0108",
+            "space": "CODE",
+            "getOffset_raw": "0x210",
+            "getAddressableWordOffset_raw": "0x108",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x210",
+            "getAddressableWordOffset_words": "0x108"
+          },
+          "raw_pcode": [],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x00000000 value=0x00000000"
+            }
+          ]
+        },
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0108",
+            "space": "CODE",
+            "getOffset_raw": "0x210",
+            "getAddressableWordOffset_raw": "0x108",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x210",
+            "getAddressableWordOffset_words": "0x108"
+          },
+          "fixture_offset_bytes": 16,
+          "length_bytes": 2,
+          "mnemonic": "NOP",
+          "operands": [],
+          "flow": {
+            "name": "FALL_THROUGH",
+            "is_call": false,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": false,
+            "is_terminal": false
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": {
+            "display": "CODE:0109",
+            "space": "CODE",
+            "getOffset_raw": "0x212",
+            "getAddressableWordOffset_raw": "0x109",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x212",
+            "getAddressableWordOffset_words": "0x109"
+          },
+          "raw_pcode": [],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x00000000 value=0x00000000"
+            }
+          ]
+        },
+        {
+          "status": "decoded",
+          "address": {
+            "display": "CODE:0109",
+            "space": "CODE",
+            "getOffset_raw": "0x212",
+            "getAddressableWordOffset_raw": "0x109",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x212",
+            "getAddressableWordOffset_words": "0x109"
+          },
+          "fixture_offset_bytes": 18,
+          "length_bytes": 2,
+          "mnemonic": "RETURN",
+          "operands": [],
+          "flow": {
+            "name": "TERMINATOR",
+            "is_call": false,
+            "is_jump": false,
+            "is_conditional": false,
+            "is_computed": false,
+            "is_terminal": true
+          },
+          "delay_slot_depth": 0,
+          "is_in_delay_slot": false,
+          "direct_flow_targets": [],
+          "fallthrough": null,
+          "raw_pcode": [
+            {
+              "sequence_time": 0,
+              "opcode": 1,
+              "mnemonic": "COPY",
+              "text": "(unique, 0x11d00, 4) COPY (const, 0x0, 4)",
+              "output": {
+                "address": {
+                  "display": "unique:00011d00",
+                  "space": "unique",
+                  "getOffset_raw": "0x11d00",
+                  "getAddressableWordOffset_raw": "0x11d00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 4,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "const:00000000",
+                    "space": "const",
+                    "getOffset_raw": "0x0",
+                    "getAddressableWordOffset_raw": "0x0",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 4,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 1,
+              "opcode": 20,
+              "mnemonic": "INT_SUB",
+              "text": "(register, 0x2, 1) INT_SUB (register, 0x2, 1) , (const, 0x2, 1)",
+              "output": {
+                "address": {
+                  "display": "register:0002",
+                  "space": "register",
+                  "getOffset_raw": "0x2",
+                  "getAddressableWordOffset_raw": "0x2",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 1,
+                "is_constant": false,
+                "is_register": true,
+                "is_unique": false
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "register:0002",
+                    "space": "register",
+                    "getOffset_raw": "0x2",
+                    "getAddressableWordOffset_raw": "0x2",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": true,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "const:00000002",
+                    "space": "const",
+                    "getOffset_raw": "0x2",
+                    "getAddressableWordOffset_raw": "0x2",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 2,
+              "opcode": 2,
+              "mnemonic": "LOAD",
+              "text": "(unique, 0x11d00, 4) LOAD (const, 0x281, 8) , (register, 0x2, 1)",
+              "output": {
+                "address": {
+                  "display": "unique:00011d00",
+                  "space": "unique",
+                  "getOffset_raw": "0x11d00",
+                  "getAddressableWordOffset_raw": "0x11d00",
+                  "addressableUnitSize_bytes": 1,
+                  "offset_semantics": "non-memory storage-space offset"
+                },
+                "size_bytes": 4,
+                "is_constant": false,
+                "is_register": false,
+                "is_unique": true
+              },
+              "inputs": [
+                {
+                  "address": {
+                    "display": "const:00000281",
+                    "space": "const",
+                    "getOffset_raw": "0x281",
+                    "getAddressableWordOffset_raw": "0x281",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "constant scalar, not a byte address"
+                  },
+                  "size_bytes": 8,
+                  "is_constant": true,
+                  "is_register": false,
+                  "is_unique": false
+                },
+                {
+                  "address": {
+                    "display": "register:0002",
+                    "space": "register",
+                    "getOffset_raw": "0x2",
+                    "getAddressableWordOffset_raw": "0x2",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 1,
+                  "is_constant": false,
+                  "is_register": true,
+                  "is_unique": false
+                }
+              ]
+            },
+            {
+              "sequence_time": 3,
+              "opcode": 10,
+              "mnemonic": "RETURN",
+              "text": " ---  RETURN (unique, 0x11d00, 4)",
+              "output": null,
+              "inputs": [
+                {
+                  "address": {
+                    "display": "unique:00011d00",
+                    "space": "unique",
+                    "getOffset_raw": "0x11d00",
+                    "getAddressableWordOffset_raw": "0x11d00",
+                    "addressableUnitSize_bytes": 1,
+                    "offset_semantics": "non-memory storage-space offset"
+                  },
+                  "size_bytes": 4,
+                  "is_constant": false,
+                  "is_register": false,
+                  "is_unique": true
+                }
+              ]
+            }
+          ],
+          "context_trace": [
+            {
+              "register": "contextreg",
+              "value": "RegisterValue(contextreg): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "doPseudo",
+              "value": "RegisterValue(doPseudo): mask=0x80000000 value=0x00000000"
+            },
+            {
+              "register": "possibleSkip",
+              "value": "RegisterValue(possibleSkip): mask=0x00000000 value=0x00000000"
+            }
+          ]
+        }
+      ],
+      "functions": [
+        {
+          "manual_seed_offset_bytes": 0,
+          "status": "created",
+          "entry": {
+            "display": "CODE:0100",
+            "space": "CODE",
+            "getOffset_raw": "0x200",
+            "getAddressableWordOffset_raw": "0x100",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x200",
+            "getAddressableWordOffset_words": "0x100"
+          },
+          "body_ranges": [
+            {
+              "start": {
+                "display": "CODE:0100",
+                "space": "CODE",
+                "getOffset_raw": "0x200",
+                "getAddressableWordOffset_raw": "0x100",
+                "addressableUnitSize_bytes": 2,
+                "getOffset_bytes": "0x200",
+                "getAddressableWordOffset_words": "0x100"
+              },
+              "end_inclusive": {
+                "display": "CODE:0104.1",
+                "space": "CODE",
+                "getOffset_raw": "0x209",
+                "getAddressableWordOffset_raw": "0x104",
+                "addressableUnitSize_bytes": 2,
+                "getOffset_bytes": "0x209",
+                "getAddressableWordOffset_words": "0x104"
+              }
+            }
+          ]
+        },
+        {
+          "manual_seed_offset_bytes": 16,
+          "status": "created",
+          "entry": {
+            "display": "CODE:0108",
+            "space": "CODE",
+            "getOffset_raw": "0x210",
+            "getAddressableWordOffset_raw": "0x108",
+            "addressableUnitSize_bytes": 2,
+            "getOffset_bytes": "0x210",
+            "getAddressableWordOffset_words": "0x108"
+          },
+          "body_ranges": [
+            {
+              "start": {
+                "display": "CODE:0108",
+                "space": "CODE",
+                "getOffset_raw": "0x210",
+                "getAddressableWordOffset_raw": "0x108",
+                "addressableUnitSize_bytes": 2,
+                "getOffset_bytes": "0x210",
+                "getAddressableWordOffset_words": "0x108"
+              },
+              "end_inclusive": {
+                "display": "CODE:0109.1",
+                "space": "CODE",
+                "getOffset_raw": "0x213",
+                "getAddressableWordOffset_raw": "0x109",
+                "addressableUnitSize_bytes": 2,
+                "getOffset_bytes": "0x213",
+                "getAddressableWordOffset_words": "0x109"
+              }
+            }
+          ]
+        }
+      ],
+      "messages": [],
+      "initial_flow_instruction_offsets": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        16,
+        18
+      ],
+      "observed_function_count": 2,
+      "padding_instruction_count": 3,
+      "all_instruction_count": 10
+    }
+  }
+}
