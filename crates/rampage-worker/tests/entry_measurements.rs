@@ -229,6 +229,7 @@ fn failure_category(error: &ApiError) -> Failure {
     match error {
         ApiError::Load { .. } => "api_load",
         ApiError::Unsupported(_) => "api_unsupported",
+        ApiError::DecoderInitialization(_) => "api_decoder_initialization",
         ApiError::NotFound(_) => "api_not_found",
         ApiError::Invalid(_) => "api_invalid",
         ApiError::Unavailable(_) => "api_unavailable",
@@ -521,6 +522,7 @@ fn failure_records_never_publish_api_message_or_private_path_text() {
         ApiError::Invalid(private.into()),
         ApiError::Unavailable(private.into()),
         ApiError::NativeTypeHintUnsupported(private.into()),
+        ApiError::DecoderInitialization(std::sync::Arc::new(rampage_decompiler::Error::Ghidra(private.into()))),
     ];
     let mut bytes = Vec::new();
     let mut total = 0;
@@ -542,7 +544,14 @@ fn failure_records_never_publish_api_message_or_private_path_text() {
         .collect();
     assert_eq!(
         categories,
-        ["api_load", "api_not_found", "api_invalid", "api_unavailable", "api_native_type_hint_unsupported"]
+        [
+            "api_load",
+            "api_not_found",
+            "api_invalid",
+            "api_unavailable",
+            "api_native_type_hint_unsupported",
+            "api_decoder_initialization",
+        ]
     );
 }
 

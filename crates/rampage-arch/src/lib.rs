@@ -313,7 +313,37 @@ impl RegisterFacts {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecodeGateReason {
+    IncompletePcode,
+    InternalPcodeBranch,
+    MultipleExits,
+    UnsupportedTargetSpace,
+    UserDefinedOperation,
+    DelaySlotAggregation,
+    MalformedPcode,
+    ContextMediatedFlow,
+}
+
+/// Valid instruction whose successors this backend cannot establish. Not an invalid opcode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct DecodeGate {
+    pub backend: &'static str,
+    pub profile: &'static str,
+    #[serde(serialize_with = "crate::hex::address")]
+    pub address: u64,
+    pub reason: DecodeGateReason,
+}
+
 pub trait Disassembler {
+    /// Metadata for the last decoded valid instruction, even if its legacy flow is `Invalid`.
+    /// Copy immediately after decode: another decode, format, reset or join may replace it.
+    /// A gate forbids successors and noreturn inference; absence does not prove typed operands.
+    fn decode_gate(&self) -> Option<DecodeGate> {
+        None
+    }
+
     /// Decoder-native evidence for exactly one complete instruction, without changing decoder state.
     /// `bytes` must contain the whole instruction and no trailing bytes. `None` means invalid,
     /// incomplete, or unsupported evidence, not proof that the instruction has no operands.

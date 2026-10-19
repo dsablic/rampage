@@ -16,6 +16,7 @@ pub(crate) mod debug_type_import;
 mod debugger;
 mod debugger_capture;
 mod decode_content;
+mod decoder;
 mod decompile;
 pub mod derived_cache;
 mod detect;
@@ -107,6 +108,7 @@ pub use decode_content::{
     ContentCodec, DecodeFileRequest, DecodePreview, DecodeReceipt, DecodedContent, MAX_DECODE_INPUT_BYTES,
     MAX_DECODE_OUTPUT_BYTES, MAX_DECODE_PREVIEW_BYTES, decode_file_range,
 };
+pub use decoder::DecoderInitializationError;
 pub use decompile::{
     Decompilation, DecompileEntryOrigin, DecompileEntryRequest, DecompilerConfigurationRevision, EntryContextCounts,
     EntryDecompilation, EntryDecompilationContext, EntryPreparationPhase, EntryPreparationProgress,
@@ -225,6 +227,8 @@ pub enum ApiError {
     Load { path: PathBuf, source: LoadError },
     #[error(transparent)]
     Unsupported(#[from] UnsupportedArch),
+    #[error("instruction decoder: {0}")]
+    DecoderInitialization(#[source] std::sync::Arc<rampage_decompiler::Error>),
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]

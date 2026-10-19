@@ -5,8 +5,8 @@ use rampage_arch::{Flow, UnsupportedArch};
 use rampage_loaders::{Binary, Format, SectionKind, SymbolKind};
 use serde::Serialize;
 
-use crate::discover::{Program, discover_with_noreturn};
-use crate::noreturn::return_facts;
+use crate::discover::{Program, try_discover_with_noreturn};
+use crate::noreturn::return_facts_with_stub_names;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Function {
@@ -55,26 +55,34 @@ pub fn from_symbols(binary: &Binary) -> Vec<Function> {
 /// Discovers functions by recursive descent from every metadata seed, with the callees named in
 /// [`crate::noreturn`] known not to return.
 pub fn analyze(binary: &Binary) -> Result<Program, UnsupportedArch> {
-    binary.decoder()?;
+    analyze_with_factory(binary, || binary.decoder())
+}
+
+pub fn analyze_with_factory<F, E>(binary: &Binary, new_decoder: F) -> Result<Program, E>
+where
+    F: Fn() -> Result<Box<dyn rampage_arch::Disassembler>, E> + Sync,
+    E: Send,
+{
+    let stubs = try_stub_names(binary, &new_decoder)?;
     let mut seeds: Vec<u64> = from_symbols(binary).iter().map(|function| function.address).collect();
     seeds.extend(&binary.function_starts);
-    seeds.extend(stub_seeds(binary));
+    seeds.extend(stub_seeds(binary, &stubs));
     seeds.extend(thunk_seeds(binary));
-    let decoder = || binary.decoder().expect("architecture checked above");
-    Ok(discover_with_noreturn(binary, decoder, &seeds, &return_facts(binary)))
+    let facts = return_facts_with_stub_names(binary, stubs);
+    try_discover_with_noreturn(binary, new_decoder, &seeds, &facts)
 }
 
 /// Function entries in the stub sections: each section's first stub (the ELF PLT[0] resolver) and every named
 /// import stub. These are real functions even when nothing in the discovered code calls them directly, such as
 /// the resolver or a lazily-bound or otherwise unreferenced stub, so seeding them improves discovery recall.
-fn stub_seeds(binary: &Binary) -> Vec<u64> {
+fn stub_seeds(binary: &Binary, stubs: &[(u64, String)]) -> Vec<u64> {
     let mut seeds: Vec<u64> = binary
         .sections
         .iter()
         .filter(|section| STUB_SECTIONS.contains(&section.name.as_str()) && section.size > 0)
         .map(|section| section.address)
         .collect();
-    seeds.extend(stub_names(binary).into_iter().map(|(address, _)| address));
+    seeds.extend(stubs.iter().map(|(address, _)| *address));
     seeds
 }
 
@@ -90,7 +98,14 @@ fn is_padding(code: &[u8], text: &str) -> bool {
 /// Names the stubs in stub sections (Mach-O `__stubs`, ELF `.plt`) after the import whose slot each one jumps
 /// through. A stub runs from just after the previous one's final jump (skipping NOP padding) to its own.
 pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
-    let Ok(mut decoder) = binary.decoder() else { return Vec::new() };
+    try_stub_names(binary, &|| binary.decoder()).unwrap_or_default()
+}
+
+pub fn try_stub_names<F, E>(binary: &Binary, new_decoder: &F) -> Result<Vec<(u64, String)>, E>
+where
+    F: Fn() -> Result<Box<dyn rampage_arch::Disassembler>, E>,
+{
+    let mut decoder = new_decoder()?;
     let slot_name = |address| binary.import_slot(address).map(|slot| slot.name.as_str());
     let mut names = Vec::new();
     for section in binary.sections.iter().filter(|section| STUB_SECTIONS.contains(&section.name.as_str())) {
@@ -102,6 +117,10 @@ pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
         while address < end {
             let Some(bytes) = binary.code_from(address) else { break };
             let insn = decoder.decode(bytes, address);
+            let gate = decoder.decode_gate();
+            if gate.is_some() {
+                break;
+            }
             let next = address + u64::from(insn.len.max(1));
             if stub_start == address
                 && is_padding(&bytes[..usize::from(insn.len).min(bytes.len())], &decoder.format(bytes, address))
@@ -122,7 +141,7 @@ pub fn stub_names(binary: &Binary) -> Vec<(u64, String)> {
             address = next;
         }
     }
-    names
+    Ok(names)
 }
 
 /// Names PE import thunks outside stub sections after their import: `jmp [slot]` instructions in code

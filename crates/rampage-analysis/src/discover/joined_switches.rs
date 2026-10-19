@@ -29,15 +29,16 @@ const VISITS_PER_BLOCK: usize = 32;
 
 /// For each function in `results`, the tables of the register-indirect jumps it left unresolved, and of the jumps
 /// it resolved by assuming `assumed`, that its register facts prove on every path through its current blocks.
-pub(super) fn resolve<M, F>(
+pub(super) fn resolve<M, F, E>(
     memory: &M,
     new_decoder: &F,
     results: &BTreeMap<u64, Explored>,
     assumed: &Assumed,
-) -> Assumed
+) -> Result<Assumed, E>
 where
     M: Memory,
-    F: Fn() -> Box<dyn Disassembler> + Sync,
+    F: Fn() -> Result<Box<dyn Disassembler>, E> + Sync,
+    E: Send,
 {
     let pending: Vec<(&Explored, Vec<u64>)> = results
         .values()
@@ -48,23 +49,35 @@ where
             (!jumps.is_empty()).then_some((result, jumps))
         })
         .collect();
-    if pending.is_empty() || new_decoder().facts().is_none() {
-        return Assumed::new();
+    if pending.is_empty() {
+        return Ok(Assumed::new());
+    }
+    if new_decoder()?.facts().is_none() {
+        return Ok(Assumed::new());
     }
     let mut entries: HashMap<u64, Vec<u64>> = HashMap::new();
     for xref in results.values().flat_map(|result| &result.xrefs).filter(|xref| xref.kind == XrefKind::Jump) {
         entries.entry(xref.to).or_default().push(xref.from);
     }
-    pending
+    let tables: Result<Vec<Vec<_>>, E> = pending
         .par_iter()
-        .map_init(new_decoder, |decoder, (result, jumps)| {
-            function_tables(memory, decoder.as_mut(), result, jumps, &entries)
-                .into_iter()
-                .map(|(jump, table)| ((result.function.address, jump), table))
-                .collect::<Vec<_>>()
-        })
-        .flatten()
-        .collect()
+        .map_init(
+            || None::<Box<dyn Disassembler>>,
+            |cached, (result, jumps)| {
+                let mut decoder = match cached.take() {
+                    Some(decoder) => decoder,
+                    None => new_decoder()?,
+                };
+                let tables = function_tables(memory, decoder.as_mut(), result, jumps, &entries)
+                    .into_iter()
+                    .map(|(jump, table)| ((result.function.address, jump), table))
+                    .collect();
+                *cached = Some(decoder);
+                Ok(tables)
+            },
+        )
+        .collect();
+    Ok(tables?.into_iter().flatten().collect())
 }
 
 /// How the last instruction of a block leaves it.
@@ -99,6 +112,11 @@ fn function_tables(
         while address < block.end {
             let Some(bytes) = memory.code_from(address) else { break };
             let insn = decoder.decode(bytes, address);
+            let gate = decoder.decode_gate();
+            if gate.is_some() {
+                instructions.insert(address);
+                break;
+            }
             if insn.flow == Flow::Invalid {
                 break;
             }
@@ -136,6 +154,10 @@ fn function_tables(
                 decoder.join();
             }
             let insn = decoder.decode_with_memory(bytes, address, &read);
+            let gate = decoder.decode_gate();
+            if gate.is_some() {
+                break;
+            }
             if insn.flow == Flow::Invalid {
                 break;
             }

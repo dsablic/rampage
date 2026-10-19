@@ -463,7 +463,7 @@ impl Project {
                 }
                 return Ok((None, names));
             }
-            Err(error @ ApiError::Unavailable(_)) => return Err(error),
+            Err(error @ (ApiError::Unavailable(_) | ApiError::DecoderInitialization(_))) => return Err(error),
             Err(error) if !replace => return Err(error),
             Err(_) => {}
         }
@@ -472,7 +472,7 @@ impl Project {
                 Ok(names) if unit.names.iter().all(|name| names.contains(name)) => {
                     return Ok((Some(index), names));
                 }
-                Err(error @ ApiError::Unavailable(_)) => return Err(error),
+                Err(error @ (ApiError::Unavailable(_) | ApiError::DecoderInitialization(_))) => return Err(error),
                 _ => {}
             }
         }

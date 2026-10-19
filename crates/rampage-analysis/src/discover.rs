@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use joined_switches::Assumed;
-use rampage_arch::{Disassembler, Flow, JumpTable, MAX_JUMP_TABLE_ENTRIES};
+use rampage_arch::{DecodeGate, Disassembler, Flow, JumpTable, MAX_JUMP_TABLE_ENTRIES};
 use rampage_loaders::Binary;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -111,6 +111,9 @@ pub struct Program {
     pub code_modes: Vec<(u64, bool)>,
     #[serde(skip)]
     pub resolved_flows: Vec<ResolvedFlow>,
+    /// Valid instructions with unresolved exits, sorted by owning function and instruction address.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub decode_gates: Vec<InstructionGate>,
     /// Functions, import stubs and import slots known by name or inferred never to return, sorted.
     #[serde(skip_serializing_if = "Vec::is_empty", serialize_with = "rampage_arch::hex::addresses")]
     pub noreturn: Vec<u64>,
@@ -139,7 +142,22 @@ pub struct ResolvedFlow {
     pub flow: Flow,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InstructionGate {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub function: u64,
+    pub gate: DecodeGate,
+    pub len: u8,
+    pub text: String,
+}
+
 impl Program {
+    pub fn decode_gate_at(&self, function: u64, address: u64) -> Option<&InstructionGate> {
+        let key = (function, address);
+        let index = self.decode_gates.binary_search_by_key(&key, |gate| (gate.function, gate.gate.address)).ok()?;
+        Some(&self.decode_gates[index])
+    }
+
     pub fn function_at(&self, address: u64) -> Option<&DiscoveredFunction> {
         let index = self.functions.binary_search_by_key(&address, |function| function.address).ok()?;
         Some(&self.functions[index])
@@ -211,13 +229,41 @@ where
     M: Memory,
     F: Fn() -> Box<dyn Disassembler> + Sync,
 {
+    let result = try_discover_with_noreturn(memory, || Ok::<_, std::convert::Infallible>(new_decoder()), seeds, facts);
+    match result {
+        Ok(program) => program,
+        Err(never) => match never {},
+    }
+}
+
+pub fn try_discover<M, F, E>(memory: &M, new_decoder: F, seeds: &[u64]) -> Result<Program, E>
+where
+    M: Memory,
+    F: Fn() -> Result<Box<dyn Disassembler>, E> + Sync,
+    E: Send,
+{
+    try_discover_with_noreturn(memory, new_decoder, seeds, &ReturnFacts::default())
+}
+
+pub fn try_discover_with_noreturn<M, F, E>(
+    memory: &M,
+    new_decoder: F,
+    seeds: &[u64],
+    facts: &ReturnFacts,
+) -> Result<Program, E>
+where
+    M: Memory,
+    F: Fn() -> Result<Box<dyn Disassembler>, E> + Sync,
+    E: Send,
+{
+    drop(new_decoder()?);
     let mut noreturn = facts.noreturn.clone();
     loop {
-        let (mut program, inferred) = discover_round(memory, &new_decoder, seeds, &noreturn, &facts.returns);
+        let (mut program, inferred) = discover_round(memory, &new_decoder, seeds, &noreturn, &facts.returns)?;
         if inferred.is_subset(&noreturn) {
             program.inferred_noreturn = noreturn.difference(&facts.noreturn).copied().collect();
             program.noreturn = noreturn.into_iter().collect();
-            return program;
+            return Ok(program);
         }
         noreturn.extend(inferred);
     }
@@ -225,16 +271,17 @@ where
 
 /// One discovery with the callees in `noreturn` known not to return. Returns it with `noreturn` and every function
 /// inferred from it; when nothing new is inferred the discovery is exact for `noreturn`.
-fn discover_round<M, F>(
+fn discover_round<M, F, E>(
     memory: &M,
     new_decoder: &F,
     seeds: &[u64],
     noreturn: &BTreeSet<u64>,
     returns: &BTreeSet<u64>,
-) -> (Program, BTreeSet<u64>)
+) -> Result<(Program, BTreeSet<u64>), E>
 where
     M: Memory,
-    F: Fn() -> Box<dyn Disassembler> + Sync,
+    F: Fn() -> Result<Box<dyn Disassembler>, E> + Sync,
+    E: Send,
 {
     let explore_with = |starts: &[u64],
                         known: &BTreeSet<u64>,
@@ -242,13 +289,22 @@ where
                         modes: &[(u64, bool)],
                         noreturn: &BTreeSet<u64>,
                         assumed: &Assumed|
-     -> Vec<Explored> {
+     -> Result<Vec<Explored>, E> {
         starts
             .par_iter()
-            .map_init(new_decoder, |decoder, &start| {
-                decoder.set_code_modes(modes);
-                explore(memory, decoder.as_mut(), known, branch_targets, noreturn, assumed, start)
-            })
+            .map_init(
+                || None::<Box<dyn Disassembler>>,
+                |cached, &start| {
+                    let mut decoder = match cached.take() {
+                        Some(decoder) => decoder,
+                        None => new_decoder()?,
+                    };
+                    decoder.set_code_modes(modes);
+                    let result = explore(memory, decoder.as_mut(), known, branch_targets, noreturn, assumed, start);
+                    *cached = Some(decoder);
+                    Ok(result)
+                },
+            )
             .collect()
     };
     let explore_all =
@@ -279,7 +335,7 @@ where
         let modes: Vec<_> = code_modes.iter().map(|(&at, &thumb)| (at, thumb)).collect();
         while !pending.is_empty() {
             let mut next = BTreeSet::new();
-            for result in explore_all(&pending, &known, None, &modes, &Assumed::new()) {
+            for result in explore_all(&pending, &known, None, &modes, &Assumed::new())? {
                 contributions.extend(result.mode_hints);
                 instruction_owners
                     .extend(result.instruction_modes.iter().map(|&(at, _)| (at, result.function.address)));
@@ -367,7 +423,7 @@ where
         let mut targets = branch_targets.clone();
         let mut jump_owners = HashMap::new();
         let modes: Vec<_> = code_modes.iter().map(|(&at, &thumb)| (at, thumb)).collect();
-        for result in explore_all(&starts, &known, Some(&branch_targets), &modes, &assumed) {
+        for result in explore_all(&starts, &known, Some(&branch_targets), &modes, &assumed)? {
             if result.function.blocks.is_empty() {
                 undecodable.insert(result.function.address);
                 continue;
@@ -399,7 +455,7 @@ where
         targets.dedup();
         let explored = known.len();
         known.retain(|start| !undecodable.contains(start));
-        let mut proven = joined_switches::resolve(memory, new_decoder, &results, &assumed);
+        let mut proven = joined_switches::resolve(memory, new_decoder, &results, &assumed)?;
         rejected.extend(assumed.iter().filter(|&(jump, table)| proven.get(jump) != Some(table)).map(|(&jump, _)| jump));
         proven.retain(|jump, _| !rejected.contains(jump));
         if added.is_empty() && targets == branch_targets && known.len() == explored && proven == assumed {
@@ -422,14 +478,16 @@ where
         noreturn.extend(&newly);
         let affected: Vec<u64> =
             results.values().filter(|result| result.reaches(&newly)).map(|result| result.function.address).collect();
-        for result in explore_with(&affected, &known, Some(&branch_targets), &modes, &noreturn, &assumed) {
+        for result in explore_with(&affected, &known, Some(&branch_targets), &modes, &noreturn, &assumed)? {
             results.insert(result.function.address, result);
         }
     }
 
     let mut functions = Vec::with_capacity(results.len());
     let (mut xrefs, mut resolved_flows, mut noreturn_calls) = (Vec::new(), Vec::new(), Vec::new());
+    let mut decode_gates = Vec::new();
     for result in results.into_values() {
+        decode_gates.extend(result.decode_gates);
         xrefs.extend(result.xrefs);
         resolved_flows.extend(result.resolved_flows);
         noreturn_calls.extend(result.noreturn_calls);
@@ -441,11 +499,15 @@ where
     noreturn_calls.sort_unstable();
     noreturn_calls.dedup();
     let code_modes = code_modes.into_iter().collect();
-    let program = Program { functions, xrefs, code_modes, resolved_flows, noreturn_calls, ..Program::default() };
-    (program, noreturn)
+    decode_gates.sort_by_key(|gate| (gate.function, gate.gate.address));
+    decode_gates.dedup_by_key(|gate| (gate.function, gate.gate.address));
+    let program =
+        Program { functions, xrefs, code_modes, resolved_flows, noreturn_calls, decode_gates, ..Program::default() };
+    Ok((program, noreturn))
 }
 
 struct Explored {
+    decode_gates: Vec<InstructionGate>,
     resolved_flows: Vec<ResolvedFlow>,
     mode_hints: Vec<(u64, u64, bool)>,
     instruction_modes: Vec<(u64, bool)>,
@@ -527,6 +589,7 @@ fn explore(
     let mut resolved_flows = Vec::new();
     let mut switches = Vec::new();
     let mut unresolved_jumps = Vec::new();
+    let mut decode_gates = Vec::new();
     let mut worklist = vec![start];
     // A conditional branch's fall-through is explored next; it keeps the decoder state only when no branch joins
     // it there.
@@ -578,6 +641,17 @@ fn explore(
                 decoder.join();
             }
             let insn = decoder.decode_with_memory(bytes, address, &|at, size| memory.read_pointer(at, size));
+            let gate = decoder.decode_gate();
+            if let Some(gate) = gate {
+                instructions.insert(address);
+                exits.returns = true;
+                let text = decoder.format(bytes, address);
+                decode_gates.push(InstructionGate { function: start, gate, len: insn.len, text });
+                if let Some(next) = address.checked_add(u64::from(insn.len)) {
+                    address = next;
+                }
+                break;
+            }
             let resolved = decoder.resolved_flow();
             if let Some(flow) = resolved {
                 resolved_flows.push(ResolvedFlow { function: start, address, flow });
@@ -600,15 +674,30 @@ fn explore(
             // MIPS and SPARC execute the instruction after a branch before the branch takes effect: it belongs to
             // the branch's block, and execution falls through past it.
             if delay_slots > 0 && !matches!(insn.flow, Flow::Next | Flow::Invalid | Flow::Halt) {
+                let mut gated_slot = false;
                 for _ in 0..delay_slots {
                     let Some(bytes) = memory.code_from(next) else { break };
                     let slot = decoder.decode_with_memory(bytes, next, &|at, size| memory.read_pointer(at, size));
+                    let gate = decoder.decode_gate();
+                    if let Some(gate) = gate {
+                        instructions.insert(next);
+                        exits.returns = true;
+                        let text = decoder.format(bytes, next);
+                        decode_gates.push(InstructionGate { function: start, gate, len: slot.len, text });
+                        next = next.saturating_add(u64::from(slot.len));
+                        gated_slot = true;
+                        break;
+                    }
                     if slot.flow == Flow::Invalid {
                         break;
                     }
                     instructions.insert(next);
                     record_refs(&slot, &mut xrefs, &mut code_refs);
                     next = next.saturating_add(u64::from(slot.len));
+                }
+                if gated_slot {
+                    address = next;
+                    break;
                 }
             }
             record_refs(&insn, &mut xrefs, &mut code_refs);
@@ -722,6 +811,7 @@ fn explore(
     let CodeRefs { pointers, accessed } = code_refs;
     new_seeds.extend(pointers.into_iter().filter(|&target| !is_local_jump_base(target) && !accessed.contains(&target)));
     Explored {
+        decode_gates,
         function,
         xrefs,
         new_seeds,
@@ -774,7 +864,9 @@ fn switch_targets(memory: &impl Memory, decoder: &mut dyn Disassembler, table: &
             let raw = memory.read_constant(table.slot(index)?, table.entry_size)?;
             let target = table.target(raw)?;
             let bytes = memory.code_from(target)?;
-            (decoder.decode(bytes, target).flow != Flow::Invalid).then_some(target)
+            let instruction = decoder.decode(bytes, target);
+            let gate = decoder.decode_gate();
+            (gate.is_some() || instruction.flow != Flow::Invalid).then_some(target)
         })
         .collect::<Option<Vec<_>>>()
 }
@@ -790,6 +882,7 @@ fn split_block(blocks: &mut BTreeMap<u64, u64>, address: u64) {
 #[cfg(test)]
 mod tests {
     mod a64_switch;
+    mod factory_gate;
     mod joined_switch;
     mod literal_pools;
     mod x86_switch;

@@ -6,7 +6,6 @@ use rampage_analysis::discover::Program;
 use rampage_analysis::functions::{self, Names};
 use rampage_analysis::strings::{self, FoundString};
 use rampage_analysis::triage::{self, Triage};
-use rampage_arch::UnsupportedArch;
 use rampage_loaders::{Binary, Export, ImageAt, LoadError};
 use sha2::{Digest, Sha256};
 
@@ -15,7 +14,7 @@ use crate::rows::{
     Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Matcher, Page,
     StringsQuery, Summary,
 };
-use crate::{ApiError, Packs};
+use crate::{ApiError, DecoderInitializationError, Packs};
 
 /// The shortest string listed unless a query asks for shorter ones.
 const DEFAULT_STRING_LENGTH: usize = 4;
@@ -94,7 +93,7 @@ pub struct Project {
     pub(crate) byte_patches: BTreeMap<u64, String>,
     pub(crate) patch_origin: Option<Arc<Project>>,
     pub(crate) patch_source_sha256: OnceLock<[u8; 32]>,
-    analysis: OnceLock<Result<Analysis, UnsupportedArch>>,
+    analysis: OnceLock<Result<Analysis, DecoderInitializationError>>,
     triage: OnceLock<Triage>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
     strings: OnceLock<Vec<FoundString>>,
@@ -668,7 +667,8 @@ impl Project {
 
     pub(crate) fn analysis(&self) -> Result<&Analysis, ApiError> {
         let analysis = self.analysis.get_or_init(|| {
-            let program = functions::analyze(&self.binary)?;
+            let program =
+                functions::analyze_with_factory(&self.binary, || crate::decoder::decoder_for_project(&self.binary))?;
             let mut blocks: Vec<BlockSpan> = program
                 .functions
                 .iter()
@@ -691,7 +691,7 @@ impl Project {
             xrefs_by_source.sort_unstable_by_key(|&index| (program.xrefs[index].from, program.xrefs[index].to));
             Ok(Analysis { program, xrefs_by_source, blocks })
         });
-        analysis.as_ref().map_err(|&error| ApiError::Unsupported(error))
+        analysis.as_ref().map_err(DecoderInitializationError::to_api_error)
     }
 
     /// Parses `0x` hex or decimal, or looks up a name: the user's, a symbol, export or stub name, an import name
@@ -841,6 +841,41 @@ mod tests {
     use rampage_analysis::discover::{Block, DiscoveredFunction};
     use rampage_arch::Arch;
 
+    #[test]
+    fn an_initialized_discovery_worker_error_is_retained_for_repeated_analysis_reads() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");
+        let project = Project::new(Binary::open(path).unwrap());
+        let cause = Arc::new(rampage_decompiler::Error::Ghidra("controlled worker initialization failure".into()));
+        let opens = AtomicUsize::new(0);
+        let memory = rampage_analysis::memory::FlatMemory { base: 0, bytes: vec![0xc3] };
+        let initialized = project.analysis.get_or_init(|| {
+            let program = rampage_analysis::discover::try_discover(
+                &memory,
+                || {
+                    if opens.fetch_add(1, Ordering::SeqCst) == 0 {
+                        rampage_arch::decoder_for(rampage_arch::Arch::X86_64)
+                            .map_err(DecoderInitializationError::Unsupported)
+                    } else {
+                        Err(DecoderInitializationError::Sleigh(Arc::clone(&cause)))
+                    }
+                },
+                &[0],
+            )?;
+            Ok(Analysis { program, xrefs_by_source: Vec::new(), blocks: Vec::new() })
+        });
+        assert!(matches!(initialized, Err(DecoderInitializationError::Sleigh(error)) if Arc::ptr_eq(error, &cause)));
+        for _ in 0..2 {
+            match project.analysis() {
+                Err(ApiError::DecoderInitialization(error)) => assert!(Arc::ptr_eq(&error, &cause)),
+                _ => panic!("initialized worker error became a different result"),
+            }
+            assert!(project.cached_analysis().is_none());
+            assert!(project.analysis_cache_status().program);
+        }
+        assert_eq!(opens.load(Ordering::SeqCst), 2);
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[allow(dead_code)]
     mod pdb_support {

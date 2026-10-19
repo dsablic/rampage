@@ -177,11 +177,14 @@ fn matches(pattern: &str, name: &str) -> bool {
 /// ones [`is_noreturn_name`] (or, for imports, [`is_noreturn_import`]) lists never do, nor does a call through a
 /// listed slot, and the ones that resume their caller through a saved context are never inferred noreturn.
 pub fn return_facts(binary: &Binary) -> ReturnFacts {
+    return_facts_with_stub_names(binary, stub_names(binary))
+}
+
+pub(crate) fn return_facts_with_stub_names(binary: &Binary, stubs: Vec<(u64, String)>) -> ReturnFacts {
     let symbols = binary.symbols.iter().map(|symbol| (symbol.address, symbol.name.clone(), false));
     let exports = binary.exports.iter().map(|export| (export.address, export.name.clone(), false));
     let code = symbols.chain(exports).filter(|&(address, _, _)| binary.is_code(address));
-    let imports =
-        stub_names(binary).into_iter().chain(thunk_names(binary)).map(|(address, name)| (address, name, true));
+    let imports = stubs.into_iter().chain(thunk_names(binary)).map(|(address, name)| (address, name, true));
     let mut facts = ReturnFacts::default();
     for (address, name, import) in code.chain(imports) {
         if if import { is_noreturn_import(&name) } else { is_noreturn_name(&name) } {
