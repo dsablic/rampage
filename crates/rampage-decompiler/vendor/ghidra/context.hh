@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: expose pending context-commit evidence without applying or changing context.
 #ifndef __CONTEXT_HH__
 #define __CONTEXT_HH__
 
@@ -108,6 +109,7 @@ public:
   void setCalladdr(const Address &ad) { calladdr = ad; }
   void addCommit(TripleSymbol *sym,int4 num,uintm mask,bool flow,ConstructState *point);
   void clearCommits(void) { contextcommit.clear(); }
+  bool hasContextCommits(void) const { return !contextcommit.empty(); }
   void applyCommits(void);
   const Address &getAddr(void) const { return addr; }
   const Address &getNaddr(void) const { return naddr; }

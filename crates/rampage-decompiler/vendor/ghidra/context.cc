@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: bound parser-buffer byte/bit reads and zero-extend partial pattern lookahead.
 #include "context.hh"
 #include "slghsymbol.hh"
 #include "translate.hh"
@@ -62,14 +63,17 @@ uintm ParserContext::getInstructionBytes(int4 bytestart,int4 size,uint4 off) con
 
 {				// Get bytes from the instruction stream into a intm
 				// (assuming big endian format)
-  off += bytestart;
-  if (off >=16)
-    throw BadDataError("Instruction is using more than 16 bytes"); 
-  const uint1 *ptr = buf + off;
+  if (bytestart < 0 || size <= 0 || size > sizeof(uintm))
+    throw BadDataError("Invalid instruction byte extraction range");
+  uintb start = uintb(off) + uintb(bytestart);
+  if (start >= sizeof(buf))
+    throw BadDataError("Instruction is using more than 16 bytes");
   uintm res = 0;
   for(int4 i=0;i<size;++i) {
     res <<= 8;
-    res |= ptr[i];
+    // PatternBlock compares whole uintm words even when only their leading bytes are significant.
+    if (uintb(i) < sizeof(buf) - start)
+      res |= buf[start + i];
   }
   return res;
 }
@@ -77,19 +81,18 @@ uintm ParserContext::getInstructionBytes(int4 bytestart,int4 size,uint4 off) con
 uintm ParserContext::getInstructionBits(int4 startbit,int4 size,uint4 off) const
 
 {
-  off += (startbit/8);
-  if (off >= 16)
+  if (startbit < 0 || size <= 0 || size > 8*sizeof(uintm))
+    throw BadDataError("Invalid instruction bit extraction range");
+  uintb start = uintb(off)*8 + uintb(startbit);
+  if (start >= 8*sizeof(buf))
     throw BadDataError("Instruction is using more than 16 bytes");
-  const uint1 *ptr = buf + off;
-  startbit = startbit % 8;
-  int4 bytesize = (startbit+size-1)/8 + 1;
   uintm res = 0;
-  for(int4 i=0;i<bytesize;++i) {
-    res <<= 8;
-    res |= ptr[i];
+  for(int4 i=0;i<size;++i) {
+    res <<= 1;
+    uintb bit = start + uintb(i);
+    if (bit < 8*sizeof(buf))
+      res |= (buf[bit/8] >> (7 - bit%8)) & 1;
   }
-  res <<= 8*(sizeof(uintm)-bytesize)+startbit; // Move starting bit to highest position
-  res >>= 8*sizeof(uintm)-size;	// Shift to bottom of intm
   return res;
 }
 
