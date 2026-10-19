@@ -70,6 +70,7 @@ pub enum UnknownFlow {
     DelaySlotAggregation,
     MalformedPcode,
     ContextMediatedFlow,
+    ProcessorHelperRequired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -108,9 +109,85 @@ pub struct DecodedInstruction {
     pub pcode: Vec<PcodeOp>,
     /// A pending global context commit was observed before `allowContextSet(false)` suppressed storage.
     pub context_mediated_flow: bool,
+    pub processor_helper_required: bool,
     /// Valid instruction with unsupported flow: a conservative discovery stop, not an invalid opcode.
     pub unknown_gate: Option<UnknownGate>,
     pub diagnostic: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileMetadata {
+    pub profile: String,
+    pub alignment_bytes: u32,
+    pub code_space: u32,
+    pub spaces: Vec<Space>,
+    /// Trusted processor-spec Java helper requirement, not an assertion that C++ implements that helper.
+    pub required_parallel_helper: Option<String>,
+}
+
+#[repr(C)]
+struct NativeMetadata {
+    status: u32,
+    alignment: u32,
+    space_count: u32,
+    code_space: u32,
+    error: [c_char; 256],
+    processor_helper: [c_char; 256],
+    spaces: [NativeSpace; MAX_SPACES],
+}
+
+fn metadata_locked(handle: *mut c_void, profile: &str) -> Result<ProfileMetadata, Error> {
+    // SAFETY: the caller holds FFI_LOCK; this query neither decodes bytes nor changes the translator.
+    if unsafe { rampage_sleigh_metadata_size() } != std::mem::size_of::<NativeMetadata>() {
+        return Err(Error::Ghidra("decoder metadata ABI record size mismatch".to_owned()));
+    }
+    let mut output = Box::<NativeMetadata>::new_uninit();
+    // SAFETY: C initializes the entire fixed-size record and retains no output pointer.
+    unsafe { rampage_sleigh_metadata(handle, output.as_mut_ptr()) };
+    let output = unsafe { output.assume_init() };
+    if output.status != 0 {
+        let message = text(&output.error);
+        return Err(Error::Ghidra(if message.is_empty() {
+            "native metadata query failed".to_owned()
+        } else {
+            message
+        }));
+    }
+    if output.alignment == 0
+        || output.space_count == 0
+        || output.space_count as usize > MAX_SPACES
+        || output.code_space >= output.space_count
+    {
+        return Err(Error::Ghidra("malformed native decoder metadata".to_owned()));
+    }
+    let mut spaces = Vec::new();
+    for (index, native) in output.spaces[..output.space_count as usize].iter().enumerate() {
+        if native.address_size == 0 {
+            continue;
+        }
+        if native.id as usize != index || native.word_size == 0 || !native.name.contains(&0) {
+            return Err(Error::Ghidra("malformed native address-space metadata".to_owned()));
+        }
+        spaces.push(Space {
+            id: native.id,
+            name: text(&native.name),
+            kind: native.kind,
+            address_size: native.address_size,
+            word_size: native.word_size,
+            highest: native.highest,
+        });
+    }
+    if !spaces.iter().any(|space| space.id == output.code_space) || !output.processor_helper.contains(&0) {
+        return Err(Error::Ghidra("malformed native default-code-space metadata".to_owned()));
+    }
+    let helper = text(&output.processor_helper);
+    Ok(ProfileMetadata {
+        profile: profile.to_owned(),
+        alignment_bytes: output.alignment,
+        code_space: output.code_space,
+        spaces,
+        required_parallel_helper: (!helper.is_empty()).then_some(helper),
+    })
 }
 
 #[repr(C)]
@@ -155,6 +232,7 @@ struct NativeResult {
     space_count: u32,
     code_space: u32,
     context_mediated_flow: u32,
+    processor_helper_required: u32,
     mnemonic: [c_char; 256],
     operands: [c_char; 3840],
     error: [c_char; 256],
@@ -164,6 +242,8 @@ struct NativeResult {
 
 unsafe extern "C" {
     fn rampage_sleigh_result_size() -> usize;
+    fn rampage_sleigh_metadata_size() -> usize;
+    fn rampage_sleigh_metadata(handle: *mut c_void, output: *mut NativeMetadata);
     fn rampage_sleigh_open(home: *const c_char, sla: *const c_char, pspec: *const c_char) -> *mut c_void;
     fn rampage_sleigh_error(handle: *mut c_void) -> *const c_char;
     fn rampage_sleigh_decode(handle: *mut c_void, base: u64, bytes: *const u8, size: usize, result: *mut NativeResult);
@@ -184,6 +264,19 @@ fn registered_profile(profile: &str) -> Option<(&'static str, &'static str, &'st
         "TI_MSP430:LE:16:default" => Some(("TI_MSP430", "TI_MSP430", "TI_MSP430")),
         "avr8:LE:16:default" => Some(("Atmel", "avr8", "avr8")),
         "6502:LE:16:default" => Some(("6502", "6502", "6502")),
+        "8051:BE:16:default" => Some(("8051", "8051", "8051")),
+        "PIC-16:LE:16:PIC-16" => Some(("PIC", "pic16", "pic16")),
+        "SuperH:BE:32:SH-2" => Some(("SuperH", "sh-2", "superh")),
+        "V850:LE:32:default" => Some(("V850", "V850", "V850")),
+        "tricore:LE:32:default" => Some(("tricore", "tricore", "tricore")),
+        "Xtensa:LE:32:default" => Some(("Xtensa", "xtensa_le", "xtensa")),
+        "z80:LE:16:default" => Some(("Z80", "z80", "z80")),
+        "HCS-12:BE:24:default" => Some(("HCS12", "HCS12", "HCS12")),
+        "6805:BE:16:default" => Some(("MC6800", "6805", "6805")),
+        "CR16C:LE:16:default" => Some(("CR16", "CR16C", "CR16")),
+        "eBPF:LE:64:default" => Some(("eBPF", "eBPF_le", "eBPF")),
+        "Loongarch:LE:64:lp64d" => Some(("Loongarch", "loongarch64_f64", "loongarch64")),
+        "Hexagon:LE:32:default" => Some(("Hexagon", "hexagon", "hexagon")),
         _ => None,
     }
 }
@@ -194,6 +287,7 @@ pub struct SleighDecoder {
     handle: *mut c_void,
     profile: String,
     last_unknown_gate: Option<UnknownGate>,
+    metadata: ProfileMetadata,
 }
 
 // SAFETY: every native operation, including destruction, holds the process-wide FFI_LOCK.
@@ -240,7 +334,15 @@ impl SleighDecoder {
             unsafe { rampage_sleigh_close(handle) };
             return Err(error);
         }
-        Ok(Self { handle, profile: profile.to_owned(), last_unknown_gate: None })
+        let metadata = match metadata_locked(handle, profile) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                // SAFETY: this handle cannot escape when bounded native metadata is unavailable.
+                unsafe { rampage_sleigh_close(handle) };
+                return Err(error);
+            }
+        };
+        Ok(Self { handle, profile: profile.to_owned(), last_unknown_gate: None, metadata })
     }
 
     pub fn for_target(target: &Target) -> Result<Self, Error> {
@@ -252,6 +354,11 @@ impl SleighDecoder {
             _ => return Err(Error::UnsupportedArch(target.arch)),
         };
         Self::open(profile)
+    }
+
+    /// Actual translator metadata captured under the open lock without sample bytes or instruction parsing.
+    pub fn metadata(&self) -> &ProfileMetadata {
+        &self.metadata
     }
 
     pub fn profile(&self) -> &str {
@@ -310,6 +417,7 @@ fn convert(profile: &str, address: u64, value: &NativeResult) -> DecodedInstruct
         || value.space_count as usize > MAX_SPACES
         || value.status > 7
         || value.context_mediated_flow > 1
+        || value.processor_helper_required > 1
         || value.ops[..value.op_count as usize]
             .iter()
             .any(|op| op.input_count as usize > MAX_INPUTS || op.has_output > 1)
@@ -348,10 +456,12 @@ fn convert(profile: &str, address: u64, value: &NativeResult) -> DecodedInstruct
             inputs: op.inputs[..op.input_count as usize].iter().copied().map(|value| node(value, &spaces)).collect(),
         })
         .collect::<Vec<_>>();
-    let flow = if status == DecodeStatus::Valid && value.context_mediated_flow != 0 {
+    let flow = if status == DecodeStatus::Valid && value.processor_helper_required != 0 {
+        InstructionFlow::Unknown { reason: UnknownFlow::ProcessorHelperRequired }
+    } else if status == DecodeStatus::Valid && value.context_mediated_flow != 0 {
         InstructionFlow::Unknown { reason: UnknownFlow::ContextMediatedFlow }
     } else {
-        classify(status, value.length, value.extent, value.code_space, &spaces, &pcode)
+        classify(status, address, value.length, value.extent, value.code_space, &spaces, &pcode)
     };
     let unknown_gate = match (&flow, status) {
         (InstructionFlow::Unknown { reason }, DecodeStatus::Valid) => {
@@ -378,6 +488,7 @@ fn convert(profile: &str, address: u64, value: &NativeResult) -> DecodedInstruct
         spaces,
         pcode,
         context_mediated_flow: value.context_mediated_flow != 0,
+        processor_helper_required: value.processor_helper_required != 0,
         unknown_gate,
         diagnostic,
     }
@@ -397,13 +508,82 @@ fn malformed_record(profile: &str, address: u64) -> DecodedInstruction {
         spaces: Vec::new(),
         pcode: Vec::new(),
         context_mediated_flow: false,
+        processor_helper_required: false,
         unknown_gate: None,
         diagnostic: Some("malformed native instruction decoder record".to_owned()),
     }
 }
 
+fn defined_pcode_opcode(opcode: u32) -> bool {
+    // Pinned Ghidra 12.1.4 OpCode: slot 45 is unused; CPUI_MAX (75) is not an operation.
+    matches!(opcode, 1..=44 | 46..=74)
+}
+
+fn conditional_fallthrough_recovery(
+    address: u64,
+    length: u32,
+    code_space: u32,
+    spaces: &[Space],
+    pcode: &[PcodeOp],
+    branches: &[&PcodeOp],
+) -> Option<u64> {
+    let [conditional, branch] = branches else { return None };
+    if length == 0
+        || conditional.opcode != 5
+        || branch.opcode != 4
+        || conditional.output.is_some()
+        || branch.output.is_some()
+        || conditional.inputs.len() != 2
+        || branch.inputs.len() != 1
+        || pcode.iter().any(|op| op.address != address || op.opcode == 9 || !defined_pcode_opcode(op.opcode))
+    {
+        return None;
+    }
+    let code = spaces.iter().find(|space| space.id == code_space)?;
+    if code.kind != 1 || !(1..=8).contains(&code.address_size) || code.word_size == 0 {
+        return None;
+    }
+    // Both Address offsets and instruction lengths are already bytes, even for word-addressed code spaces.
+    let next = address.checked_add(u64::from(length))?;
+    if address > code.highest || next > code.highest {
+        return None;
+    }
+    let target = |node: &Varnode| {
+        (node.space == code_space
+            && node.size == code.address_size
+            && node.address_size == code.address_size
+            && node.word_size == code.word_size
+            && node.selected_space.is_none())
+        .then_some(node.offset)
+        .flatten()
+        .filter(|offset| *offset <= code.highest)
+    };
+    let first = target(&conditional.inputs[0])?;
+    let second = target(&branch.inputs[0])?;
+    let condition = &conditional.inputs[1];
+    let condition_space = spaces.iter().find(|space| space.id == condition.space)?;
+    if !matches!(condition_space.kind, 1 | 3)
+        || condition.space == code_space
+        || condition.size != 1
+        || condition.address_size != condition_space.address_size
+        || condition.word_size != condition_space.word_size
+        || condition_space.address_size == 0
+        || condition_space.word_size == 0
+        || condition.selected_space.is_some()
+        || !condition.offset.is_some_and(|offset| offset <= condition_space.highest)
+    {
+        return None;
+    }
+    match (first == next, second == next) {
+        (true, false) => Some(second),
+        (false, true) => Some(first),
+        _ => None,
+    }
+}
+
 fn classify(
     status: DecodeStatus,
+    address: u64,
     length: u32,
     extent: u32,
     code_space: u32,
@@ -417,8 +597,14 @@ fn classify(
     if length != extent {
         return unknown(UnknownFlow::DelaySlotAggregation);
     }
+    if pcode.iter().any(|op| !defined_pcode_opcode(op.opcode)) {
+        return unknown(UnknownFlow::MalformedPcode);
+    }
     let branches: Vec<_> = pcode.iter().filter(|op| matches!(op.opcode, 4..=8 | 10)).collect();
     if branches.len() > 1 {
+        if let Some(target) = conditional_fallthrough_recovery(address, length, code_space, spaces, pcode, &branches) {
+            return InstructionFlow::ConditionalBranch { target };
+        }
         return unknown(UnknownFlow::MultipleExits);
     }
     if pcode.iter().any(|op| op.opcode == 9) {
@@ -490,6 +676,14 @@ impl Disassembler for SleighDecoder {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sleigh_decode_conditional.rs"]
+mod conditional_fallthrough_tests;
+
+#[cfg(test)]
+#[path = "sleigh_decode_extended_oracle.rs"]
+mod extended_oracle_tests;
 
 #[cfg(test)]
 #[path = "sleigh_decode_oracle.rs"]
@@ -711,20 +905,20 @@ mod tests {
             }],
         };
         assert_eq!(
-            classify(DecodeStatus::Valid, 4, 4, 1, &spaces, std::slice::from_ref(&branch)),
+            classify(DecodeStatus::Valid, 0x1000, 4, 4, 1, &spaces, std::slice::from_ref(&branch)),
             InstructionFlow::Unknown { reason: UnknownFlow::InternalPcodeBranch }
         );
         let indirect = PcodeOp { opcode: 6, name: "BRANCHIND".to_owned(), ..branch.clone() };
         assert_eq!(
-            classify(DecodeStatus::Valid, 4, 4, 1, &spaces, &[branch, indirect]),
+            classify(DecodeStatus::Valid, 0x1000, 4, 4, 1, &spaces, &[branch, indirect]),
             InstructionFlow::Unknown { reason: UnknownFlow::MultipleExits }
         );
         assert_eq!(
-            classify(DecodeStatus::Valid, 4, 8, 1, &spaces, &[]),
+            classify(DecodeStatus::Valid, 0x1000, 4, 8, 1, &spaces, &[]),
             InstructionFlow::Unknown { reason: UnknownFlow::DelaySlotAggregation }
         );
         assert_eq!(
-            classify(DecodeStatus::UnimplementedPcode, 4, 4, 1, &spaces, &[]),
+            classify(DecodeStatus::UnimplementedPcode, 0x1000, 4, 4, 1, &spaces, &[]),
             InstructionFlow::Unknown { reason: UnknownFlow::IncompletePcode }
         );
     }

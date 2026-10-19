@@ -197,6 +197,7 @@ fn repeated_cached_decodes_charge_total_work_without_reentering_native_code() {
         spaces: Vec::new(),
         pcode: Vec::new(),
         context_mediated_flow: false,
+        processor_helper_required: false,
         unknown_gate: None,
         diagnostic: None,
     };

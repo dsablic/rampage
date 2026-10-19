@@ -506,6 +506,13 @@ struct DecodeSpace {
     char name[64];
 };
 
+struct DecodeMetadata {
+    uint32_t status, alignment, spaceCount, codeSpace;
+    char error[256];
+    char processorHelper[256];
+    DecodeSpace spaces[decodeMaxSpaces];
+};
+
 struct DecodeNode {
     uint32_t space, size;
     uint64_t offset;
@@ -523,6 +530,7 @@ struct DecodeOp {
 struct DecodeResult {
     uint32_t status, length, extent, opCount, spaceCount, codeSpace;
     uint32_t contextMediatedFlow;
+    uint32_t processorHelperRequired;
     char mnemonic[256];
     char operands[3840];
     char error[256];
@@ -589,6 +597,7 @@ struct DecodeHandle {
     ContextInternal context;
     std::unique_ptr<DecodeSleigh> sleigh;
     char error[256]{};
+    std::string processorHelper;
 };
 
 void decodeError(char *output, const char *message) noexcept {
@@ -651,7 +660,7 @@ public:
     }
 };
 
-void decodeSpaces(const Sleigh &sleigh, DecodeResult &result) {
+template<typename Result> void decodeSpaces(const Sleigh &sleigh, Result &result) {
     if (sleigh.numSpaces() < 0 || size_t(sleigh.numSpaces()) > decodeMaxSpaces) throw DecodeLimit();
     result.spaceCount = uint32_t(sleigh.numSpaces());
     for (int4 i = 0; i < sleigh.numSpaces(); ++i) {
@@ -674,6 +683,36 @@ extern "C" {
 
 size_t rampage_sleigh_result_size() noexcept { return sizeof(DecodeResult); }
 
+size_t rampage_sleigh_metadata_size() noexcept { return sizeof(DecodeMetadata); }
+
+void rampage_sleigh_metadata(void *pointer, DecodeMetadata *result) noexcept {
+    if (result == nullptr) return;
+    memset(result, 0, sizeof(*result));
+    result->status = 1;
+    DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+    if (handle == nullptr || handle->error[0] != 0 || !handle->sleigh) {
+        decodeError(result->error, "Uninitialized instruction decoder");
+        return;
+    }
+    try {
+        int4 alignment = handle->sleigh->getAlignment();
+        if (alignment <= 0) throw LowlevelError("Invalid instruction alignment");
+        decodeSpaces(*handle->sleigh, *result);
+        result->alignment = uint32_t(alignment);
+        decodeText(result->processorHelper, handle->processorHelper);
+        result->status = 0;
+    } catch (const DecodeLimit &) {
+        decodeError(result->error, "Decoder metadata budget exceeded");
+    } catch (const LowlevelError &error) {
+        decodeError(result->error, error.explain.c_str());
+    } catch (const std::exception &error) {
+        decodeError(result->error, error.what());
+    } catch (...) {
+        decodeError(result->error, "Unexpected native decoder metadata exception");
+    }
+}
+
+
 // Paths here are private Rust ABI inputs selected only from the verified embedded registry.
 void *rampage_sleigh_open(const char *home, const char *sla, const char *pspec) noexcept {
     std::unique_ptr<DecodeHandle> handle;
@@ -691,6 +730,13 @@ void *rampage_sleigh_open(const char *home, const char *sla, const char *pspec) 
         handle->sleigh->initialize(store);
         Document *processor = store.openDocument(pspec);
         for (const Element *child : processor->getRoot()->getChildren()) {
+            if (child->getName() == "properties") {
+                for (const Element *property : child->getChildren()) {
+                    if (property->getName() == "property"
+                        && property->getAttributeValue("key") == "parallelInstructionHelperClass")
+                        handle->processorHelper = property->getAttributeValue("value");
+                }
+            }
             if (child->getName() == "context_data") {
                 XmlDecode decoder(handle->sleigh.get(), child);
                 handle->context.decodeFromSpec(decoder);
@@ -733,6 +779,7 @@ void rampage_sleigh_decode(void *pointer, uint64_t base, const uint8_t *bytes,
         handle->image.padded = false;
         if (size > decodeMaxWindow) throw DecodeLimit();
         decodeSpaces(*handle->sleigh, *result);
+        result->processorHelperRequired = !handle->processorHelper.empty();
         if (size == 0 || bytes == nullptr || base > handle->image.code->getHighest()
             || size - 1 > handle->image.code->getHighest() - base) {
             result->status = 3;
