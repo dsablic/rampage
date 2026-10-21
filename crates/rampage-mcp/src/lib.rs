@@ -3,11 +3,11 @@
 //! the groups it was started with (by default only core) and an `enable_tools` meta-tool that adds the others.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rampage_api::tools::{self, FileTool, Group, Tool};
-use rampage_api::{FileOffset, Packs, Project, Session};
+use rampage_api::{FileOffset, Packs, Project, RawProjectRequest, Session};
 use rampage_arch::Arch;
 use rampage_loaders::ImageAt;
 use rmcp::model::{
@@ -67,7 +67,10 @@ native-image admission or target following. inspect_data provides bounded native
 bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
 decode_file_range instead accepts an explicit regular-file range and codec without an executable header. \
 Its transient decoded preview uses decoded offsets, not source offsets or load addresses; supplied sizes and \
-successful decoding do not authenticate content or prove stream boundaries.
+successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
+object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \
+(never with arch/image_offset/image_length); its addresses are internal code-space byte offsets and its \
+annotations are memory-only for this server and interpretation.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
@@ -147,8 +150,8 @@ pub fn initial_groups(all_tools: bool, env: Option<&str>) -> Result<BTreeSet<Gro
 }
 
 /// A tool's schema with the arguments every tool takes besides its own: which binary, which slice of a universal
-/// one, and where in the file an embedded one starts.
-fn with_binary_arguments(schema: &Value) -> Map<String, Value> {
+/// one, and where in the file an embedded one starts; raw-capable tools also take the `raw` selector.
+fn with_binary_arguments(name: &str, schema: &Value) -> Map<String, Value> {
     let mut schema = schema.as_object().cloned().unwrap_or_default();
     let properties = schema.entry("properties").or_insert_with(|| json!({}));
     if let Some(properties) = properties.as_object_mut() {
@@ -180,12 +183,33 @@ fn with_binary_arguments(schema: &Value) -> Map<String, Value> {
                                 to the extent its header tables give, which leaves out bytes after it (an overlay)."
             }),
         );
+        if tools::raw_capable(name) {
+            let mut raw = tools::raw_selector_schema();
+            if let Some(Value::String(description)) = raw.get_mut("description") {
+                description.push_str(
+                    " `path` names the source file. Excludes arch, image_offset and image_length; null means absent.",
+                );
+            }
+            raw["type"] = json!(["object", "null"]);
+            properties.insert(RAW.to_owned(), raw);
+        }
     }
     let required = schema.entry("required").or_insert_with(|| json!([]));
     if let Some(required) = required.as_array_mut() {
         required.push(json!("path"));
     }
     schema
+}
+
+/// The optional selector that opens a Raw Project in place of a native binary on raw-capable tools.
+const RAW: &str = "raw";
+
+/// The explicit refusal of a `raw` selector on a tool that cannot serve Raw Projects.
+fn raw_refusal(name: &str) -> String {
+    format!(
+        "tool {name} does not accept Raw projects; nothing was run. Raw-capable tools: {}",
+        tools::RAW_CAPABLE_TOOLS.join(", ")
+    )
 }
 
 fn enable_tools_schema() -> Map<String, Value> {
@@ -326,7 +350,11 @@ impl RampageServer {
 
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
     fn run(&self, name: &str, mut arguments: Map<String, Value>) -> CallToolResult {
+        let raw = arguments.remove(RAW).filter(|raw| !raw.is_null());
         if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
+            if raw.is_some() {
+                return CallToolResult::error(vec![ContentBlock::text(raw_refusal(name))]);
+            }
             return match tool.call(&self.packs(), Value::Object(arguments)) {
                 Ok(output) if name == "query_debugger" && output.get("ok") == Some(&Value::Bool(false)) => {
                     CallToolResult::error(vec![ContentBlock::text(output.to_string())])
@@ -347,6 +375,10 @@ impl RampageServer {
                 tools::validate_debug_layout_arguments(&Value::Object(arguments.clone()))?;
             }
             let path = path.as_ref().and_then(Value::as_str).ok_or("`path` is required")?;
+            if let Some(raw) = raw {
+                let mut project = self.open_raw(name, Path::new(path), raw, [&arch, &image_offset, &image_length])?;
+                return Ok(tools::call_shared(&self.tools, &mut project, name, Value::Object(arguments)));
+            }
             let arch = match arch.as_ref() {
                 None | Some(Value::Null) => None,
                 Some(Value::String(arch)) => Some(arch.parse::<Arch>()?),
@@ -386,6 +418,32 @@ impl RampageServer {
             Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
         }
     }
+
+    /// The session's Raw Project for the `raw` selector of a call to `name`, refused for tools that cannot serve one
+    /// and when combined with a native image selector.
+    fn open_raw(
+        &self,
+        name: &str,
+        path: &Path,
+        raw: Value,
+        selectors: [&Option<Value>; 3],
+    ) -> Result<Arc<Project>, String> {
+        if !tools::raw_capable(name) {
+            return Err(raw_refusal(name));
+        }
+        for (selector, value) in ["arch", "image_offset", "image_length"].into_iter().zip(selectors) {
+            if value.as_ref().is_some_and(|value| !value.is_null()) {
+                return Err(format!(
+                    "`raw` cannot be combined with `{selector}`: a Raw project's profile and range select the code; \
+                     nothing was run"
+                ));
+            }
+        }
+        let request: RawProjectRequest =
+            serde_json::from_value(raw).map_err(|error| format!("`raw`: invalid Raw project selector: {error}"))?;
+        // Raw annotations are memory-only and shared through the session, so there is no log to refresh.
+        self.session.open_raw(path, &request).map_err(|error| format!("`raw`: {}", error_text(&error)))
+    }
 }
 
 /// An `image_offset` or `image_length` argument (see [`FileOffset`]); `null` means none.
@@ -423,10 +481,9 @@ impl ServerHandler for RampageServer {
     ) -> Result<ListToolsResult, ErrorData> {
         let enabled = self.enabled();
         let meta = rmcp::model::Tool::new(ENABLE_TOOLS, ENABLE_TOOLS_DESCRIPTION, enable_tools_schema());
-        let tools =
-            self.tools.iter().filter(|tool| enabled.contains(&tool.group)).map(|tool| {
-                rmcp::model::Tool::new(tool.name, tool.description, with_binary_arguments(&tool.input_schema))
-            });
+        let tools = self.tools.iter().filter(|tool| enabled.contains(&tool.group)).map(|tool| {
+            rmcp::model::Tool::new(tool.name, tool.description, with_binary_arguments(tool.name, &tool.input_schema))
+        });
         let file_tools = self.file_tools.iter().filter(|tool| enabled.contains(&tool.group)).map(|tool| {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
             rmcp::model::Tool::new(tool.name, tool.description, schema)
