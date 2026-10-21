@@ -488,6 +488,8 @@ pub async fn serve_stdio(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[test]
@@ -517,6 +519,38 @@ mod tests {
             assert!(server.catalog().any(|entry| entry == (workflow.group(), name)), "{name} is not served");
             assert!(text.contains(name), "{name} is missing from the instructions");
         }
+    }
+
+    /// docs/mcp.md's "Tool groups" list is the published tool catalog: every served tool appears once, under the
+    /// group that serves it.
+    #[test]
+    fn the_documented_tool_groups_match_the_served_catalog() {
+        let doc = include_str!("../../../docs/mcp.md");
+        let start = doc.find("## Tool groups").expect("docs/mcp.md has a Tool groups section");
+        let section = &doc[start..];
+        let section = &section[..section.find("\nCalling `enable_tools`").expect("the group list ends")];
+        let mut documented = BTreeMap::<String, Vec<String>>::new();
+        let mut current = None;
+        for line in section.lines() {
+            let line = line.trim();
+            let names: Vec<String> = line.split('`').skip(1).step_by(2).map(str::to_owned).collect();
+            if let Some(rest) = line.strip_prefix("- `") {
+                let group = rest.split('`').next().unwrap().to_owned();
+                documented.entry(group.clone()).or_default().extend(names.into_iter().skip(1));
+                current = Some(group);
+            } else if let Some(group) = &current {
+                documented.get_mut(group).unwrap().extend(names);
+            }
+        }
+        let server = RampageServer::default();
+        let mut served = BTreeMap::<String, Vec<String>>::new();
+        for (group, name) in server.catalog() {
+            served.entry(group.name().to_owned()).or_default().push(name.to_owned());
+        }
+        for names in documented.values_mut().chain(served.values_mut()) {
+            names.sort();
+        }
+        assert_eq!(documented, served);
     }
 
     #[test]

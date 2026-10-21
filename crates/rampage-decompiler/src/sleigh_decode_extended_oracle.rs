@@ -246,11 +246,13 @@ fn thirteen_profiles_preserve_all_native_outcomes_and_compare_unmodified_java_ro
     }
     let report = json!({"schema_version":1,"phase":"extended_native_comparison_not_acceptance",
         "profile_outcomes":outcomes,"total_rows":total_rows,"failed_rows":failures});
-    let path = std::env::var_os("SLEIGH_EXTENDED_REPORT").expect("set a fresh create-only outcome report path");
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path).expect("new report");
     let encoded = serde_json::to_vec_pretty(&report).unwrap();
     assert!(encoded.len() <= 32 * 1024 * 1024, "bounded native outcome report");
-    std::io::Write::write_all(&mut file, &encoded).unwrap();
+    // The comparison always runs; only publishing the outcome report is opt-in, to a fresh create-only path.
+    if let Some(path) = std::env::var_os("SLEIGH_EXTENDED_REPORT") {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path).expect("new report");
+        std::io::Write::write_all(&mut file, &encoded).unwrap();
+    }
     assert_eq!(total_rows, 104);
     assert_eq!(report["profile_outcomes"].as_array().unwrap().len(), 13);
     assert_eq!(

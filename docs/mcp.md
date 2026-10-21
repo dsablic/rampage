@@ -26,13 +26,13 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
   `decode_file_range`, `inspect_raw_code`, `inspect_sleigh`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
-- `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_pdb_names`, `class_evidence`,
-  `language_metadata`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`,
+- `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_debug_layouts`,
+  `import_pdb_names`, `class_evidence`, `language_metadata`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`,
   `apply_data_type`, `read_data`, `apply_enum`, `apply_offset`, `function_frame`, `propagate_types`,
   `import_debug_types`.
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
   `query_debugger`.
-- `diagnostics`: `analysis_diagnostics`, `inspect_jump_table`.
+- `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `carve`: `carve`, `archive_inventory`.
 
