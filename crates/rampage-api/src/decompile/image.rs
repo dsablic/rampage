@@ -5,10 +5,7 @@ use crate::ApiError;
 
 /// Raw profiles with a reviewed exact-pair C model; the decompiler rechecks the pair and translator bounds.
 fn has_reviewed_c_model(profile: RawProfile) -> bool {
-    match profile {
-        RawProfile::Msp430 | RawProfile::Avr8 => true,
-        RawProfile::Mos6502 => false,
-    }
+    matches!(profile, RawProfile::Msp430 | RawProfile::Avr8)
 }
 
 /// One read-only RX mapping of exactly the admitted Raw code range. Nothing else, in no other space, is mapped.

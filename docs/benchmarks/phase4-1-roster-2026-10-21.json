@@ -1,0 +1,1084 @@
+{
+  "schema_version": 1,
+  "admission_path": "ordinary Raw Project (Binary::from_raw_code + rampage_api::Project), not the window path",
+  "fixtures": 16,
+  "totals": {
+    "truth_entries": 32,
+    "manual": {
+      "retained": 32,
+      "exact_extents": 23
+    },
+    "call_only": {
+      "retained": 27,
+      "exact_extents": 20
+    },
+    "decompile_ok": [
+      "msp430",
+      "avr8"
+    ]
+  },
+  "rows": [
+    {
+      "fixture": "msp430",
+      "language_id": "TI_MSP430:LE:16:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/msp430.bin",
+          "sha256": "efd2c228bb009b88ad8d3d0dc55a709b828a1da3de52ef9e1c9a54d2373d06b9"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/truth.json",
+          "sha256": "cefc15f5e489f7ca0e70c7d0bd9a3ce15caa7f8bd365dc90735e183e66ef29d1"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/oracle.json",
+          "sha256": "8a0cc76f88780d5bf0cb782b0f7e714c83dd5e8786f9d5d49722756f5ccfec48"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/provenance.json",
+          "sha256": "a08e9b71de7fee44856ff6464dcf9633afa5ec6708fa825f2c8c0964d161be7f"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x4400",
+        "status": "ok",
+        "language_id": "TI_MSP430:LE:16:default:default",
+        "c_bytes": 129
+      }
+    },
+    {
+      "fixture": "avr8",
+      "language_id": "avr8:LE:16:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/avr8.bin",
+          "sha256": "9801b385967017b4c8491e4adcc8f8ad93566f57577d4ca8bdd9adf308e11cbf"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/truth.json",
+          "sha256": "cefc15f5e489f7ca0e70c7d0bd9a3ce15caa7f8bd365dc90735e183e66ef29d1"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/oracle.json",
+          "sha256": "8a0cc76f88780d5bf0cb782b0f7e714c83dd5e8786f9d5d49722756f5ccfec48"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/provenance.json",
+          "sha256": "a08e9b71de7fee44856ff6464dcf9633afa5ec6708fa825f2c8c0964d161be7f"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x200",
+        "status": "ok",
+        "language_id": "avr8:LE:16:default:gcc",
+        "c_bytes": 119
+      }
+    },
+    {
+      "fixture": "6502",
+      "language_id": "6502:LE:16:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/6502.bin",
+          "sha256": "516037ab26a1ae81a1c6a40fa9581b550ca1341477f63c0a8b9e31f279927f81"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/truth.json",
+          "sha256": "cefc15f5e489f7ca0e70c7d0bd9a3ce15caa7f8bd365dc90735e183e66ef29d1"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/oracle.json",
+          "sha256": "8a0cc76f88780d5bf0cb782b0f7e714c83dd5e8786f9d5d49722756f5ccfec48"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/provenance.json",
+          "sha256": "a08e9b71de7fee44856ff6464dcf9633afa5ec6708fa825f2c8c0964d161be7f"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x8000",
+        "status": "refused",
+        "reason": "no reviewed C model for 6502:LE:16:default"
+      }
+    },
+    {
+      "fixture": "8051-v1",
+      "language_id": "8051:BE:16:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/8051-v1.bin",
+          "sha256": "0d801c9417ee56b20e20f2213230f04cbf2700a791ae04456c8a206517fca09f"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/8051-v1.truth.json",
+          "sha256": "90378c5fa983b7cace3dc9010be749e2e71d6992ca4c3d2ab1420577770c19cb"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/8051-v1.oracle.json",
+          "sha256": "d99e9bee85769b8b0249e118bfb31027d732ebad836e8c70d8b2e476e5995375"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/8051-v1.provenance.json",
+          "sha256": "ff01f44f61f54032736aa7dc76a10dc31c8a6a5911773bc9d68b8766a8c39ac7"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 0,
+        "misses_by_gate_reason": {
+          "user_defined_operation": 2
+        },
+        "misses": [
+          {
+            "entry": "0x1000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          },
+          {
+            "entry": "0x1008",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x1000",
+            "address": "0x1003",
+            "reason": "user_defined_operation"
+          },
+          {
+            "function": "0x1008",
+            "address": "0x1008",
+            "reason": "user_defined_operation"
+          }
+        ]
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 0,
+        "misses_by_gate_reason": {
+          "user_defined_operation": 2
+        },
+        "misses": [
+          {
+            "entry": "0x1000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          },
+          {
+            "entry": "0x1008",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x1000",
+            "address": "0x1003",
+            "reason": "user_defined_operation"
+          },
+          {
+            "function": "0x1008",
+            "address": "0x1008",
+            "reason": "user_defined_operation"
+          }
+        ]
+      },
+      "decompile": {
+        "entry": "0x1000",
+        "status": "refused",
+        "reason": "no reviewed C model for 8051:BE:16:default"
+      }
+    },
+    {
+      "fixture": "PIC-v1",
+      "language_id": "PIC-16:LE:16:PIC-16",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/PIC-v1.bin",
+          "sha256": "3e333a32fa40e6f9529f40b7055352c00bc31421dfcc29ed13390a6526c87e19"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/PIC-v1.truth.json",
+          "sha256": "77a28d8c4c952af153700edb939426df78a7ef891556f95e84274c7c3cb24d6c"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/PIC-v1.oracle.json",
+          "sha256": "0cf977d1e06f400b054dc53cc8bcc67fc8c6542eb3f8fbe33e8c6594fca2ac9d"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/PIC-v1.provenance.json",
+          "sha256": "05c8a922ad77a22a49620d13ca4f2a6203aa8dda6d4939ba83fd6fd98572287e"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 1,
+        "misses_by_gate_reason": {
+          "context_mediated_flow": 1
+        },
+        "misses": [
+          {
+            "entry": "0x200",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "context_mediated_flow"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x200",
+            "address": "0x204",
+            "reason": "context_mediated_flow"
+          }
+        ]
+      },
+      "call_only": {
+        "retained": 1,
+        "exact_extents": 0,
+        "misses_by_gate_reason": {
+          "context_mediated_flow": 2
+        },
+        "misses": [
+          {
+            "entry": "0x200",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "context_mediated_flow"
+            ]
+          },
+          {
+            "entry": "0x210",
+            "kind": "not_retained",
+            "gate_reasons": [
+              "context_mediated_flow"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x200",
+            "address": "0x204",
+            "reason": "context_mediated_flow"
+          }
+        ]
+      },
+      "decompile": {
+        "entry": "0x200",
+        "status": "refused",
+        "reason": "no reviewed C model for PIC-16:LE:16:PIC-16"
+      }
+    },
+    {
+      "fixture": "SuperH-v2",
+      "language_id": "SuperH:BE:32:SH-2",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/SuperH-v2.bin",
+          "sha256": "ba6d183415f893a877e051ee06b9023bf5c0c1ce285e2e742326e3fe33b7e569"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/SuperH-v2.truth.json",
+          "sha256": "aa31be23838c465957877941db9c82b3549e6d232beacbc7ec8a2c8a8d0bd02e"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/SuperH-v2.oracle.json",
+          "sha256": "84b2890e543c6ffd54b09d478d61f1800e2e9251d53493d667a25aec1241546e"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/SuperH-v2.provenance.json",
+          "sha256": "45d782adec2e8288267011bc10d6594e6d7bb45eb411012be2801f7a9a054804"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 0,
+        "misses_by_gate_reason": {
+          "delay_slot_aggregation": 2
+        },
+        "misses": [
+          {
+            "entry": "0x1000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "delay_slot_aggregation"
+            ]
+          },
+          {
+            "entry": "0x1010",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "delay_slot_aggregation"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x1000",
+            "address": "0x1000",
+            "reason": "delay_slot_aggregation"
+          },
+          {
+            "function": "0x1010",
+            "address": "0x1012",
+            "reason": "delay_slot_aggregation"
+          }
+        ]
+      },
+      "call_only": {
+        "retained": 1,
+        "exact_extents": 0,
+        "misses_by_gate_reason": {
+          "delay_slot_aggregation": 2
+        },
+        "misses": [
+          {
+            "entry": "0x1000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "delay_slot_aggregation"
+            ]
+          },
+          {
+            "entry": "0x1010",
+            "kind": "not_retained",
+            "gate_reasons": [
+              "delay_slot_aggregation"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x1000",
+            "address": "0x1000",
+            "reason": "delay_slot_aggregation"
+          }
+        ]
+      },
+      "decompile": {
+        "entry": "0x1000",
+        "status": "refused",
+        "reason": "no reviewed C model for SuperH:BE:32:SH-2"
+      }
+    },
+    {
+      "fixture": "V850-v1",
+      "language_id": "V850:LE:32:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/V850-v1.bin",
+          "sha256": "45020ee8c8dc88d5e238fd23c09b2906a0c15bd110acd774df939ed17d2f9715"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/V850-v1.truth.json",
+          "sha256": "1a40e287627764be3ba1cb26870c628d6039465f52f6c51ab87415b8ad1cec65"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/V850-v1.oracle.json",
+          "sha256": "2118ce4b5e1308732d10dc2178a4f745cd98d48ab791780ce8e67483cf45a149"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/V850-v1.provenance.json",
+          "sha256": "7f542d2aebb401e7bd8b7d9885f983ef183119917e3564c97e8abb642fd8db51"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x1000",
+        "status": "refused",
+        "reason": "no reviewed C model for V850:LE:32:default"
+      }
+    },
+    {
+      "fixture": "TriCore-v1",
+      "language_id": "tricore:LE:32:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/TriCore-v1.bin",
+          "sha256": "5cdfaf6c81aaca0efdb33b2e460f7bb1ee570db2afacada13fb187eac85849a2"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/TriCore-v1.truth.json",
+          "sha256": "a744a4b7a02726f619b1786b4fc1a3a8ed35fd24cd3548d163712e02a4a5a9cb"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/TriCore-v1.oracle.json",
+          "sha256": "98b7018217cad673008a11d785b21fc9d4839ad8a309df3f7c634194ea736030"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/TriCore-v1.provenance.json",
+          "sha256": "d33f2196d70bdac83b72063fa10be6efd8f6f0ae357f7f933970c2a2359bbeb8"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 1,
+        "misses_by_gate_reason": {
+          "user_defined_operation": 1
+        },
+        "misses": [
+          {
+            "entry": "0x1000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x1000",
+            "address": "0x1000",
+            "reason": "user_defined_operation"
+          },
+          {
+            "function": "0x1010",
+            "address": "0x1012",
+            "reason": "user_defined_operation"
+          }
+        ]
+      },
+      "call_only": {
+        "retained": 1,
+        "exact_extents": 0,
+        "misses_by_gate_reason": {
+          "user_defined_operation": 2
+        },
+        "misses": [
+          {
+            "entry": "0x1000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          },
+          {
+            "entry": "0x1010",
+            "kind": "not_retained",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x1000",
+            "address": "0x1000",
+            "reason": "user_defined_operation"
+          }
+        ]
+      },
+      "decompile": {
+        "entry": "0x1000",
+        "status": "refused",
+        "reason": "no reviewed C model for tricore:LE:32:default"
+      }
+    },
+    {
+      "fixture": "Xtensa-v1",
+      "language_id": "Xtensa:LE:32:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/Xtensa-v1.bin",
+          "sha256": "563b87fc7d3949e9e633385e3adb64cd4823743d75c83dd66388f4cdfce8c9f2"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/Xtensa-v1.truth.json",
+          "sha256": "3810f63268115e06c0b4768a37685155651debd5fcca9554bfb5119e5411d030"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/Xtensa-v1.oracle.json",
+          "sha256": "bbed8ab793b302359e2b45986d320beaaaa9c12f1926c674666b75c1e649b1bc"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/Xtensa-v1.provenance.json",
+          "sha256": "dced0c88caf32503f4f1ccc55b8f39aeb5764fffe1ab481f877a82b52ba2b798"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x4000",
+        "status": "refused",
+        "reason": "no reviewed C model for Xtensa:LE:32:default"
+      }
+    },
+    {
+      "fixture": "Z80-v1",
+      "language_id": "z80:LE:16:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/Z80-v1.bin",
+          "sha256": "5366cd7fd7012c52bc4bf04d4b83331b9e5a5b3e571f675353d0f30567090934"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/Z80-v1.truth.json",
+          "sha256": "8538236e3d423730aa204587396e3adbaf978ca8ec1730266365160777be242f"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/Z80-v1.oracle.json",
+          "sha256": "0d9431020593654bf40211e87e563e43afc64dc3f3afc0ea2550f11867cfa567"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/Z80-v1.provenance.json",
+          "sha256": "e33efec40c15170e8f18244202f9a7ecbb03c4097bb15a1725a36bb09f32d32c"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x4000",
+        "status": "refused",
+        "reason": "no reviewed C model for z80:LE:16:default"
+      }
+    },
+    {
+      "fixture": "HCS12-v1",
+      "language_id": "HCS-12:BE:24:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/HCS12-v1.bin",
+          "sha256": "bc22c245679fd1e30c7e8bb0875a7550dda4d694131578e014c5671c7d4d0788"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/HCS12-v1.truth.json",
+          "sha256": "a40f042b66cda771f03576e793ef1aaab57b7f1e8ab24a3db7c893ef1c1e59db"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/HCS12-v1.oracle.json",
+          "sha256": "141df13abd5024108c9e927bf3db3711222f5e7cbf1956d496e71dbde647d2b3"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/HCS12-v1.provenance.json",
+          "sha256": "bded7027630c91371866205a976ff60b4c11b65a681532a138067360a2ec2307"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 1,
+        "misses_by_gate_reason": {
+          "user_defined_operation": 1
+        },
+        "misses": [
+          {
+            "entry": "0x2000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x2000",
+            "address": "0x2000",
+            "reason": "user_defined_operation"
+          },
+          {
+            "function": "0x2008",
+            "address": "0x2009",
+            "reason": "user_defined_operation"
+          }
+        ]
+      },
+      "call_only": {
+        "retained": 1,
+        "exact_extents": 0,
+        "misses_by_gate_reason": {
+          "user_defined_operation": 2
+        },
+        "misses": [
+          {
+            "entry": "0x2000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          },
+          {
+            "entry": "0x2008",
+            "kind": "not_retained",
+            "gate_reasons": [
+              "user_defined_operation"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x2000",
+            "address": "0x2000",
+            "reason": "user_defined_operation"
+          }
+        ]
+      },
+      "decompile": {
+        "entry": "0x2000",
+        "status": "refused",
+        "reason": "no reviewed C model for HCS-12:BE:24:default"
+      }
+    },
+    {
+      "fixture": "6805-v1",
+      "language_id": "6805:BE:16:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/6805-v1.bin",
+          "sha256": "67dc0990cc2371896e717c607912b8a0807241f4a0b36b403487d02e2aa734d1"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/6805-v1.truth.json",
+          "sha256": "dacbce0f6ccd96f5d321dac73c2642903048505b6974105bf12962539d66b114"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/6805-v1.oracle.json",
+          "sha256": "c30d1d7a7665116c20322f857fba8db0cb8fbbaccae760fc5a97ee3708009619"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/6805-v1.provenance.json",
+          "sha256": "dc388f808789f208ad4283700af88a880a80afbec981033ffda7d982cc30bedc"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x1000",
+        "status": "refused",
+        "reason": "no reviewed C model for 6805:BE:16:default"
+      }
+    },
+    {
+      "fixture": "CR16-v1",
+      "language_id": "CR16C:LE:16:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/CR16-v1.bin",
+          "sha256": "a19a77874387d782ea452918512ce2a9f4024fd2e38e1f644f345799234be76e"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/CR16-v1.truth.json",
+          "sha256": "adb4777f9d3e69caf1802504e19cc0018ac9f1bff6a10110fff63e8d698d30f0"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/CR16-v1.oracle.json",
+          "sha256": "cb0ae0e4c6039da58bb97d9c4567a82cb624833836b79ba39add55b86303c061"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/CR16-v1.provenance.json",
+          "sha256": "22d360ec1b7c57afcf27343af254d8e784f69a03e945fb2d69e0b05ecbf23b59"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x1000",
+        "status": "refused",
+        "reason": "no reviewed C model for CR16C:LE:16:default"
+      }
+    },
+    {
+      "fixture": "eBPF-v1",
+      "language_id": "eBPF:LE:64:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/eBPF-v1.bin",
+          "sha256": "574c0756aab1fb59d6defb414abe39195f21e6f189873425df09619f43b1feb1"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/eBPF-v1.truth.json",
+          "sha256": "8d740818cc793046a713c7438a48fb94d6d0ae694652d0111512e74fdb223f0b"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/eBPF-v1.oracle.json",
+          "sha256": "038cd58e9f3115f732f631809f2beb09b9ee1dff39c96f0ddc9f0e0b737e7f8a"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/eBPF-v1.provenance.json",
+          "sha256": "5de46330d88d42519086020df9ee1d2c4fb88ea2f9181d9e39ea8714c7c54e48"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x1000",
+        "status": "refused",
+        "reason": "no reviewed C model for eBPF:LE:64:default"
+      }
+    },
+    {
+      "fixture": "Loongarch-v1",
+      "language_id": "Loongarch:LE:64:lp64d",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/Loongarch-v1.bin",
+          "sha256": "ded5442eadc7172b0b0a6c1343540539045f9fd4e873bed807800683a4b71da4"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/Loongarch-v1.truth.json",
+          "sha256": "eea76d8e72d9175aa699b6a868074358b2f3f8b667bffd0d89ad332e9e58d84e"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/Loongarch-v1.oracle.json",
+          "sha256": "bc4557e1da3c0ab21b035083fae71698fea7b433eef1eef8e2d381b6e585e44e"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/Loongarch-v1.provenance.json",
+          "sha256": "66f88a19fba50c35590e9c3d66197f61fb3dad7fcbe0ebb76342c2856cd11018"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "call_only": {
+        "retained": 2,
+        "exact_extents": 2,
+        "misses_by_gate_reason": {},
+        "misses": [],
+        "gates": []
+      },
+      "decompile": {
+        "entry": "0x1000",
+        "status": "refused",
+        "reason": "no reviewed C model for Loongarch:LE:64:lp64d"
+      }
+    },
+    {
+      "fixture": "Hexagon-v2",
+      "language_id": "Hexagon:LE:32:default",
+      "admission": "project",
+      "files": [
+        {
+          "role": "bytes",
+          "path": "tests/fixtures/sleigh/extended/Hexagon-v2.bin",
+          "sha256": "85e4202feb7fdb823b9d9a35fb6362b9a44d0b4e33a0a99bc8d1c5050f77fa5c"
+        },
+        {
+          "role": "truth",
+          "path": "tests/fixtures/sleigh/extended/Hexagon-v2.truth.json",
+          "sha256": "72b49d4b3e8a6f3540d0bb912e17f11d63b9353a8702181d965d6a3bf4678091"
+        },
+        {
+          "role": "oracle",
+          "path": "tests/fixtures/sleigh/extended/Hexagon-v2.oracle.json",
+          "sha256": "a69bc8a736c069f81e2195694a7a88eeec6d0442d1d4295af359baa4b346b50d"
+        },
+        {
+          "role": "provenance",
+          "path": "tests/fixtures/sleigh/extended/Hexagon-v2.provenance.json",
+          "sha256": "7673f7c4492aebcf0007232a49ae393df0d22ab39fafde56baac129203d80930"
+        }
+      ],
+      "truth_entries": 2,
+      "ghidra_seeded_functions": 2,
+      "manual": {
+        "retained": 2,
+        "exact_extents": 0,
+        "misses_by_gate_reason": {
+          "processor_helper_required": 2
+        },
+        "misses": [
+          {
+            "entry": "0x1000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "processor_helper_required"
+            ]
+          },
+          {
+            "entry": "0x1010",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "processor_helper_required"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x1000",
+            "address": "0x1000",
+            "reason": "processor_helper_required"
+          },
+          {
+            "function": "0x1010",
+            "address": "0x1010",
+            "reason": "processor_helper_required"
+          }
+        ]
+      },
+      "call_only": {
+        "retained": 1,
+        "exact_extents": 0,
+        "misses_by_gate_reason": {
+          "processor_helper_required": 2
+        },
+        "misses": [
+          {
+            "entry": "0x1000",
+            "kind": "extent_mismatch",
+            "gate_reasons": [
+              "processor_helper_required"
+            ]
+          },
+          {
+            "entry": "0x1010",
+            "kind": "not_retained",
+            "gate_reasons": [
+              "processor_helper_required"
+            ]
+          }
+        ],
+        "gates": [
+          {
+            "function": "0x1000",
+            "address": "0x1000",
+            "reason": "processor_helper_required"
+          }
+        ]
+      },
+      "decompile": {
+        "entry": "0x1000",
+        "status": "refused",
+        "reason": "no reviewed C model for Hexagon:LE:32:default"
+      }
+    }
+  ],
+  "limits": [
+    "Ghidra oracle = seeded function creation; Ghidra autonomous auto-analysis not run",
+    "fixtures are hand-assembled byte ledgers; no cross-compilers available",
+    "manual seeds supply every truth entry and measure retention and extents, not autonomous entry discovery",
+    "call_only seeds supply only the base entry; callees count only when reached by followed calls",
+    "decompilation support is one bounded attempt at the first truth entry, not a C correctness verdict"
+  ]
+}
