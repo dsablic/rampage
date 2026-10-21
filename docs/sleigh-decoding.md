@@ -42,28 +42,65 @@ matched. CR16 conditional recovery was improved without changing its comparator 
 Hexagon still reports a helper-required gate: matching raw fixture p-code is not general packet support.
 These finite fixtures do not establish full-ISA, C-ABI or ordinary-project acceptance.
 
-## Ordinary Raw Projects (library pilot)
+## Ordinary Raw Projects
 
-`Binary::from_raw_code(bytes, RawCodeOptions { profile, base, entry, seeds })` admits one owned RX code
-image for exactly three profiles: `TI_MSP430:LE:16:default`, `avr8:LE:16:default` and `6502:LE:16:default`
-(`Arch::Msp430`, `Arch::Avr8`, `Arch::Mos6502`). Input is 1..=128 KiB with at most 8192 seeds. Base, entry and
-seeds must be aligned to the profile and backed by code bytes. The last byte must stay within the profile's
-code-space highest byte. Header-driven `Binary::open` never falls back to Raw or infers an entry.
+A Raw Project is one explicit, headerless code image analysed like an ordinary binary. MCP opens one through the
+`raw` selector of raw-capable tools ([MCP Raw projects](mcp.md#raw-projects)); the CLI uses
+`--raw-json`/`--raw-request` ([CLI reference](cli-reference.md#raw-projects)); the library entry point is
+`Binary::from_raw_code(bytes, RawCodeOptions { profile, base, entry, seeds })`. Input is 1..=128 KiB with at most
+8192 seeds. Base, entry and seeds must be aligned to the profile and backed by code bytes, and the last byte must
+stay within the profile's code-space highest byte. Header-driven `Binary::open` never falls back to Raw or infers
+an entry.
 
-A Raw `Project` routes discovery, listing and code search through one Sleigh decoder factory. That factory
-checks the admitted code-space facts against the verified native translator before use. Valid instructions
-with unknown successors serialize `flow: "unknown"` with a `decode_gate`. They stop successor discovery and
-are never reported as fall-through, return or noreturn. The cached analysis is bound to a
-`rampage-raw-interpretation-v1` identity covering bytes, profile, mapping, entry and seeds. Edited loader
-fields or a failed specification recheck refuse the cache instead of serving it stale.
+### Published processor set
 
-Raw Projects refuse immediate/constant code search (no typed operands) and native decompiler memory images
-(no translator-space binding yet). They also refuse patch V1, capture identity and backing-source proofs.
-Annotations are memory-only, even when a persistent log is supplied. The three pilot architectures have no
-legacy pointer width (`pointer_size()` is `None`) and no native/Capstone decoder. MCP exposes Raw Projects
-through the `raw` selector of raw-capable tools ([MCP Raw projects](mcp.md#raw-projects)); the CLI uses
-`--raw-json`/`--raw-request` ([CLI reference](cli-reference.md#raw-projects)). Multi-region maps, HEX/SREC and
-vector seeding remain Phase 4.2 work.
+All sixteen selected families are admitted. Each row's code-space facts and byte order are checked against the
+verified native translator before any decoder is used. Recall is measured on owned fixtures through the ordinary
+Project path (`rampage-eval processor-roster`, [benchmarks](benchmarks.md)): each fixture has two truth functions;
+"manual" seeds every truth entry, "caller" seeds only the base entry.
+
+| Profile | Byte order | Entries manual / caller | Exact extents manual / caller | Gates on misses | C |
+| --- | --- | ---: | ---: | --- | --- |
+| `TI_MSP430:LE:16:default` | LE | 2/2 / 2/2 | 2/2 / 2/2 | — | yes |
+| `avr8:LE:16:default` | LE | 2/2 / 2/2 | 2/2 / 2/2 | — | yes |
+| `6502:LE:16:default` | LE | 2/2 / 2/2 | 2/2 / 2/2 | — | no |
+| `8051:BE:16:default` | BE | 2/2 / 2/2 | 0/2 / 0/2 | user-defined operation | no |
+| `PIC-16:LE:16:PIC-16` | LE | 2/2 / 1/2 | 1/2 / 0/2 | context-mediated flow | no |
+| `SuperH:BE:32:SH-2` | BE | 2/2 / 1/2 | 0/2 / 0/2 | delay-slot aggregation | no |
+| `V850:LE:32:default` | LE | 2/2 / 2/2 | 2/2 / 2/2 | — | no |
+| `tricore:LE:32:default` | LE | 2/2 / 1/2 | 1/2 / 0/2 | user-defined operation | no |
+| `Xtensa:LE:32:default` | LE | 2/2 / 2/2 | 2/2 / 2/2 | — | no |
+| `z80:LE:16:default` | LE | 2/2 / 2/2 | 2/2 / 2/2 | — | no |
+| `HCS-12:BE:24:default` | BE | 2/2 / 1/2 | 1/2 / 0/2 | user-defined operation | no |
+| `6805:BE:16:default` | BE | 2/2 / 2/2 | 2/2 / 2/2 | — | no |
+| `CR16C:LE:16:default` | LE | 2/2 / 2/2 | 2/2 / 2/2 | — | no |
+| `eBPF:LE:64:default` | LE | 2/2 / 2/2 | 2/2 / 2/2 | — | no |
+| `Loongarch:LE:64:lp64d` | LE | 2/2 / 2/2 | 2/2 / 2/2 | — | no |
+| `Hexagon:LE:32:default` | LE | 2/2 / 1/2 | 0/2 / 0/2 | processor helper required | no |
+
+Totals: manual 32/32 entries and 23/32 exact extents; caller-only 27/32 entries and 20/32 exact extents. Every
+miss is attributed to a decode gate. Limits: fixtures are hand-assembled byte ledgers (no cross-compilers were
+available); the Ghidra oracle is seeded function creation, and Ghidra's autonomous auto-analysis recall per
+processor is not measured. Hexagon is admitted only with its declared parallel-instruction helper, whose gate is
+reported on every instruction.
+
+### Behaviour
+
+Discovery, listing and code search use one Sleigh decoder factory. Valid instructions with unknown successors
+serialize `flow: "unknown"` with a `decode_gate`; they stop successor discovery and are never reported as
+fall-through, return or noreturn. A helper-gated Hexagon entry stays a valid function with an unresolved exit;
+SuperH's delay-slot gate inside a body stops successors there. Cached analysis and decompiler engines are bound to
+a `rampage-raw-interpretation-v2` identity covering bytes, profile, byte order, mapping, entry and seeds; edited
+loader fields or a failed specification recheck refuse the cache instead of serving it stale.
+
+Decompilation is available for profiles with a reviewed C model: MSP430 (`default`) and AVR8 (`gcc`). It maps
+exactly one read-only RX code region, bounded by the translator's code space; AVR data, register and I/O spaces are
+never served from the code mapping. Every other profile refuses with "no reviewed C model for <profile>".
+
+Raw Projects also refuse immediate/constant code search (no typed operands), patch V1, capture identity and
+backing-source proofs. Annotations are memory-only, even when a persistent log is supplied. The sixteen
+architectures have no legacy pointer width (`pointer_size()` is `None`) and no native/Capstone decoder.
+Multi-region maps, MMIO, HEX/SREC and vector seeding remain Phase 4.2 work.
 
 ## Window and discovery contract
 

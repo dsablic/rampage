@@ -217,13 +217,18 @@ disassembler backend, used for any processor without a native or Capstone decode
 processor specs (Apache-2.0): AVR8, 8051, MSP430, PIC, SuperH, V850, TriCore, Xtensa, 6502, Z80, HCS12, 6805,
 CR16, eBPF, Loongarch, Hexagon where present in the vendored Ghidra version. Keep spec size in check: compile
 `.sla` lazily into the HOME cache as today. Flow information from Sleigh feeds the existing discovery.
-This single step brings breadth to IDA's range and gives decompilation for every added processor.
+This single step brings breadth to IDA's range. Decompilation follows per processor once its C model is
+reviewed; processors without one are disassembly/discovery only and refuse C explicitly.
+*Status (2026-10-21): complete.* Sixteen families decode through `inspect_sleigh` and open as ordinary Raw
+Projects through MCP (`raw` selector) and CLI, with per-processor recall in the scorecard
+(`docs/benchmarks/phase4-1-roster-2026-10-21.json`) and the published set in `docs/sleigh-decoding.md`. MSP430
+and AVR8 decompile; the other fourteen refuse C until their models are reviewed.
 
 **4.2 Raw and firmware loader.** Explicit base address/arch/endianness/entry points; multiple memory regions
 (flash/RAM/MMIO) from a small TOML memory map; Intel HEX and Motorola SREC; vector-table-based entry seeding for
 Cortex-M. This also completes the "raw-code windows" slice of the unknown-firmware track in `todo.md`.
-*Status (2026-10-21):* a library-only single-image Raw pilot is in place for MSP430/AVR8/6502 ordinary
-Projects (see `docs/sleigh-decoding.md`). It has no MCP tool yet, and the memory-map/HEX/SREC/vector work is open.
+*Status (2026-10-21):* the single-image Raw slice (explicit base, profile, entry and seeds for one code region)
+shipped with 4.1. Multi-region memory maps, Intel HEX/SREC and vector-table seeding are open.
 
 **4.3 Object files and archives.** ELF relocatable `.o`, COFF `.obj`, `.a`/`.lib` archives with relocation
 application (also improves signature building: relocations give exact masks, fixing MIPS HI/LO masking).

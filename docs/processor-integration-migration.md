@@ -118,10 +118,11 @@ Passing standalone decode tests or shipping resource files alone does not satisf
 
 ## Status (2026-10-21)
 
-The second width stage and units 4–5 are implemented. `pointer_size()` returns `Option<u8>`, and the three
-pilot identities exist with `None` widths and no native decoders. Raw admission, interpretation identity and
-cache binding are in place. One project decoder factory serves discovery, listing and code search, with
-serialized unknown gates and typed immediate-search refusal. Raw patch, capture, native-memory and
-persistent-annotation refusals are tested. The decompiler measures exact pilot organizations after
-memimage space isolation. Hexagon/SuperH real-unknown ordinary-Project cases and MCP/CLI exposure are not
-yet covered.
+Complete for Phase 4.1. `pointer_size()` returns `Option<u8>`; sixteen Raw identities exist with `None` widths and
+no native decoders, admitted per profile against the verified translator (including byte order and Hexagon's
+declared helper). Raw admission, the v2 interpretation identity and cache binding are in place. One project
+decoder factory serves discovery, listing and code search with serialized unknown gates and typed
+immediate-search refusal. The real unknown-flow cases required above are covered in ordinary Projects
+(`crates/rampage-api/tests/raw_roster.rs`): Hexagon's helper-gated entry and SuperH's delay-slot gate inside a
+body. MSP430 and AVR8 decompile through one code-space-isolated region; other profiles refuse C. Raw Projects are
+exposed through MCP and CLI. Raw patch, capture, persistent-annotation and missing-C-model refusals are tested.

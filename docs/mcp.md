@@ -175,7 +175,7 @@ Raw projects". Tools that cannot answer on Raw code refuse explicitly (immediate
 profile except MSP430 and AVR8, which have reviewed C models). Annotations are memory-only for the server session and the exact
 interpretation (bytes, profile, mapping, entry, seed set): no sidecar or log is written, changed seeds or bytes
 give a fresh project, and at most 32 interpretations are retained. Each tool's `raw` schema is a compact shape
-(about 0.5 KB); the field meanings and profile list appear once in the server instructions to keep the catalog small. See [explicit Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects-library-pilot).
+(about 0.5 KB); the field meanings and profile list appear once in the server instructions to keep the catalog small. See [explicit Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects).
 
 ## Edits and session state
 
