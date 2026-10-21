@@ -138,6 +138,8 @@ pub struct DecompiledToken {
 pub(crate) struct DecompilerState {
     pub(crate) options: Option<DecompilerOptions>,
     engine: Option<Decompiler>,
+    /// Raw interpretation the cached engine maps; other interpretations never reuse its image or C.
+    engine_interpretation: Option<String>,
     names: std::collections::BTreeMap<u64, String>,
     signatures: std::collections::BTreeMap<u64, String>,
     types: std::collections::BTreeMap<u64, String>,
@@ -493,7 +495,12 @@ impl Project {
         if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(ApiError::Unavailable("decompilation cancelled".to_owned()));
         }
-        if slot.names != *annotations.names() {
+        let interpretation = self
+            .binary
+            .raw_interpretation_identity()
+            .map_err(|error| ApiError::Invalid(format!("decompilation Raw identity unavailable: {error}")))?
+            .map(|identity| format!("{}:{}", identity.schema, identity.sha256));
+        if slot.engine_interpretation != interpretation || slot.names != *annotations.names() {
             slot.engine = None;
         }
         if slot.signatures != *annotations.signatures()
@@ -518,6 +525,7 @@ impl Project {
             slot.engine =
                 Some(self.build_decompiler_with_operations(&options, &annotations, &[], Some(start), None)?);
             slot.hint_address = Some(start);
+            slot.engine_interpretation = interpretation;
             slot.names = annotations.names().clone();
             slot.signatures = annotations.signatures().clone();
             slot.types = annotations.types().clone();

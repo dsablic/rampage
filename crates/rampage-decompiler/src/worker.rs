@@ -1108,11 +1108,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
     if request.decompile.name.contains('\0') {
         return Err("function name contains NUL".to_owned());
     }
-    let highest = arch
-        .native_address_width()
-        .ok_or_else(|| "native worker address bounds are unavailable".to_owned())?
-        .highest_address();
-    if request.decompile.address > highest {
+    if request.decompile.address > engine.address_highest() {
         return Err("function address exceeds target width".to_owned());
     }
     let query_only = request.type_query.is_some();

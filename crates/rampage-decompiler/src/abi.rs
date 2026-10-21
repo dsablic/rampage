@@ -184,39 +184,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_selection_keeps_native_machine_region_admission_checked() {
-        for (arch, bytes) in
-            [(Arch::Msp430, &[0x30, 0x41][..]), (Arch::Avr8, &[0x08, 0x95][..]), (Arch::Mos6502, &[0x60][..])]
-        {
-            let options = DecompilerOptions::default();
-            let language = language_id_with_options(arch, false, &options).unwrap();
-            let regions = [crate::MemoryRegion {
-                base: 0x1000,
-                bytes,
-                size: bytes.len() as u64,
-                readable: true,
-                writable: false,
-                executable: true,
-            }];
-            let error = match crate::Decompiler::open_with_options(arch, false, &regions, &options) {
-                Err(error) => error,
-                Ok(_) => panic!("model selection must not enable a native region admission for {arch}"),
-            };
-            assert!(error.to_string().contains("native machine address bounds are unavailable"), "{error}");
-            println!(
-                "SELECTED_MODEL_NATIVE_CTOR_REFUSAL {}",
-                serde_json::json!({
-                    "architecture": arch, "language": language,
-                    "architecture_pointer_default": arch.default_pointer_size(),
-                    "reviewed_model": c_data_organization(&language),
-                    "native_constructor_error": error.to_string(),
-                    "target_execution": false,
-                })
-            );
-        }
-    }
-
-    #[test]
     fn pilots_reject_implicit_darwin_without_changing_explicit_override_or_native_defaults() {
         for (arch, expected, compiler) in [
             (Arch::Msp430, "TI_MSP430:LE:16:default:default", "default"),
