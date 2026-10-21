@@ -173,6 +173,9 @@ struct RunArgs {
     /// Additional non-type targets: decompile the first N sorted truth entries, 1..64; not a random sample.
     #[arg(long, requires = "suite", value_parser = clap::value_parser!(u64).range(1..=64))]
     health_sample: Option<u64>,
+    /// Skip measuring the processor roster; the report records it as unmeasured instead.
+    #[arg(long, requires = "suite")]
+    skip_processor_roster: bool,
     /// Graph provenance/binding request; compare actual exports as a separate scorecard workload.
     #[arg(long, requires_all = ["suite", "rampage_graph", "ghidra_graph"])]
     graph_request: Option<PathBuf>,

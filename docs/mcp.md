@@ -167,14 +167,15 @@ Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_gra
 }
 ```
 
-`profile` is a closed Raw language ID; `offset`/`length` select original-file bytes (1..=131072); `base_address`,
+`profile` is a closed Raw language ID, listed in the server instructions; `offset`/`length` select original-file bytes (1..=131072); `base_address`,
 `entry` and `seeds` (at most 8192) are internal code-space byte offsets, also for word-addressed processors, and
 tool addresses use the same coordinates. The mapping is an analyst assertion, not header admission. `raw` cannot
 be combined with `arch`, `image_offset` or `image_length`, and other tools refuse it with "tool X does not accept
-Raw projects". Tools that cannot answer on Raw code refuse explicitly (immediate search; decompilation where the
-profile has no decompiler memory binding). Annotations are memory-only for the server session and the exact
+Raw projects". Tools that cannot answer on Raw code refuse explicitly (immediate search; decompilation for every
+profile except MSP430 and AVR8, which have reviewed C models). Annotations are memory-only for the server session and the exact
 interpretation (bytes, profile, mapping, entry, seed set): no sidecar or log is written, changed seeds or bytes
-give a fresh project, and at most 32 interpretations are retained. See [explicit Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects-library-pilot).
+give a fresh project, and at most 32 interpretations are retained. Each tool's `raw` schema is a compact shape
+(about 0.5 KB); the field meanings and profile list appear once in the server instructions to keep the catalog small. See [explicit Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects-library-pilot).
 
 ## Edits and session state
 

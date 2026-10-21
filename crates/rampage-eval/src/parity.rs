@@ -198,7 +198,26 @@ pub(super) fn run(args: RunArgs) -> Result<ExitCode, String> {
         .as_ref()
         .map(|path| serde_json::from_str::<Value>(&read(path)?).map_err(|error| format!("{}: {error}", path.display())))
         .transpose()?;
-    let processor_roster = rampage_eval::parity_processors::measure(&root)?;
+    let processor_roster =
+        if args.skip_processor_roster { None } else { Some(rampage_eval::parity_processors::measure(&root)?) };
+    let unmeasured = [
+        if graph_agreement.is_some() {
+            "whole-corpus CFG/call-graph agreement coverage"
+        } else {
+            "CFG/call-graph agreement"
+        },
+        "whole-corpus decompiler health/time coverage",
+        if provider_tasks_started == 0 {
+            "fixed-model MCP task success/tool calls/tokens/wall time"
+        } else {
+            "suite-wide fixed-model benchmarking (recorded pilot attempts are reported separately)"
+        },
+        "Ghidra MCP comparison",
+        "autonomous Ghidra discovery recall per processor",
+    ]
+    .into_iter()
+    .chain(args.skip_processor_roster.then_some("processor roster (skipped by request)"))
+    .collect::<Vec<_>>();
     let mut report = json!({
         "schema_version": 1, "suite": "parity", "scope": "phase0_pilot", "phase0_complete": false,
         "evaluator": evaluator_observation(&root),
@@ -227,11 +246,7 @@ pub(super) fn run(args: RunArgs) -> Result<ExitCode, String> {
             "limits": "Only provider-backed MCP/model attempts count; \
                        scripted contracts and inventory are not AI task success."
         },
-        "unmeasured": [if graph_agreement.is_some() { "whole-corpus CFG/call-graph agreement coverage" }
-            else { "CFG/call-graph agreement" }, "whole-corpus decompiler health/time coverage",
-            if provider_tasks_started == 0 { "fixed-model MCP task success/tool calls/tokens/wall time" }
-            else { "suite-wide fixed-model benchmarking (recorded pilot attempts are reported separately)" },
-            "Ghidra MCP comparison", "autonomous Ghidra discovery recall per processor"],
+        "unmeasured": unmeasured,
         "scorecard_wall_time_ms": started.elapsed().as_millis(),
         "limits": ["Static gates are existing slice gates, not overall parity acceptance.",
             "Unavailable or failed corpus selections are not successes; optional inventory is retained verbatim.",

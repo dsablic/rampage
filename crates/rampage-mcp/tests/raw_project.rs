@@ -99,19 +99,19 @@ async fn raw_selector_is_offered_only_on_raw_capable_tools() {
         assert_eq!(selector.is_some(), RAW_CAPABLE_TOOLS.contains(&tool.name.as_ref()), "{}", tool.name);
         if let Some(selector) = selector {
             assert_eq!(selector["additionalProperties"], false);
-            assert!(
-                selector["properties"]["profile"]["enum"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&json!("TI_MSP430:LE:16:default"))
-            );
+            assert_eq!(selector["properties"]["profile"]["type"], "string");
+            // Repeated on every raw-capable tool, so it stays compact; the instructions describe it once.
             let text = selector.to_string();
-            assert!(!text.contains("$ref") && text.len() < 8_000, "{text}");
+            assert!(!text.contains("$ref") && text.len() < 600, "{} bytes: {text}", text.len());
             let required = tool.input_schema["required"].as_array().unwrap();
             assert!(!required.contains(&json!("raw")) && required.contains(&json!("path")));
         }
     }
     assert!(tools.iter().any(|tool| tool.name == "list_functions"));
+    let instructions = client.peer_info().unwrap().instructions.clone().unwrap();
+    for profile in rampage_loaders::RawProfile::ALL {
+        assert!(instructions.contains(profile.language_id()), "{}", profile.language_id());
+    }
     client.cancel().await.unwrap();
 }
 

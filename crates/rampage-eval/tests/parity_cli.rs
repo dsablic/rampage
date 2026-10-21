@@ -117,7 +117,7 @@ fn empty_static_baselines_are_not_vacuous_passes() {
     let scratch = Scratch::new();
     let path = scratch.0.join("empty.json");
     std::fs::write(&path, "{\"slices\":{}}").unwrap();
-    let output = eval().args(["run", "--suite", "parity", "--manifest"]).arg(path).output().unwrap();
+    let output = eval().args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"]).arg(path).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("nonempty"));
@@ -127,7 +127,7 @@ fn empty_static_baselines_are_not_vacuous_passes() {
 fn completion_gate_rejects_a_valid_but_partial_static_run() {
     let scratch = Scratch::new();
     let output = eval()
-        .args(["run", "--suite", "parity", "--require-complete", "--manifest"])
+        .args(["run", "--suite", "parity", "--skip-processor-roster", "--require-complete", "--manifest"])
         .arg(scratch.manifest())
         .output()
         .unwrap();
@@ -158,7 +158,7 @@ fn empty_type_truth_retains_zero_coverage_without_reporting_measured_health() {
         .to_string(),
     )
     .unwrap();
-    let output = eval().args(["run", "--suite", "parity", "--manifest"]).arg(path).output().unwrap();
+    let output = eval().args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"]).arg(path).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["decompiler_health"]["status"], "not_run");
@@ -170,7 +170,7 @@ fn empty_type_truth_retains_zero_coverage_without_reporting_measured_health() {
 fn health_sampling_measures_discovery_only_targets_with_a_bounded_explicit_sample() {
     let scratch = Scratch::new();
     let output = eval()
-        .args(["run", "--suite", "parity", "--manifest"])
+        .args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"])
         .arg(scratch.manifest())
         .args(["--health-sample", "2"])
         .output()
@@ -200,7 +200,7 @@ fn health_sample_is_shared_across_path_aliases_without_losing_source_paths() {
     )
     .unwrap();
     let output = eval()
-        .args(["run", "--suite", "parity", "--manifest"])
+        .args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"])
         .arg(manifest)
         .args(["--health-sample", "2"])
         .output()
@@ -221,7 +221,7 @@ fn multiple_corpora_share_one_scorecard_without_silently_overwriting_slices() {
     std::fs::write(&second, input.replace("pilot-discovery", "second-discovery")).unwrap();
     let run = || {
         eval()
-            .args(["run", "--suite", "parity", "--manifest"])
+            .args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"])
             .arg(&first)
             .arg("--manifest")
             .arg(&second)
@@ -248,7 +248,7 @@ fn fixture_preflight_failure_is_not_presented_as_an_agent_attempt() {
     let task = include_str!("../tasks/arithmetic-arm64-elf.toml").replace("b47331c6", "a47331c6");
     std::fs::write(directory.join("task.toml"), task).unwrap();
     let output = eval()
-        .args(["run", "--suite", "parity", "--manifest"])
+        .args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"])
         .arg(scratch.manifest())
         .arg("--tasks")
         .arg(directory)
@@ -268,7 +268,7 @@ fn explicit_live_request_without_credentials_stays_unmeasured_and_does_not_call_
     let scratch = Scratch::new();
     let output = eval()
         .env_remove("ANTHROPIC_API_KEY")
-        .args(["run", "--suite", "parity", "--manifest"])
+        .args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"])
         .arg(scratch.manifest())
         .args(["--agent-model", "explicit-pinned-test-model", "--agent-task", "arithmetic-arm64-elf"])
         .output()
@@ -322,7 +322,7 @@ fn graph_exports_are_bound_before_the_scorecard_attaches_their_agreement() {
     .unwrap();
     let run = || {
         eval()
-            .args(["run", "--suite", "parity", "--manifest"])
+            .args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"])
             .arg(scratch.manifest())
             .arg("--graph-request")
             .arg(&request)

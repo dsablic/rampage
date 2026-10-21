@@ -69,8 +69,10 @@ decode_file_range instead accepts an explicit regular-file range and codec witho
 Its transient decoded preview uses decoded offsets, not source offsets or load addresses; supplied sizes and \
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
 object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \
-(never with arch/image_offset/image_length); its addresses are internal code-space byte offsets and its \
-annotations are memory-only for this server and interpretation.
+(never with arch/image_offset/image_length; null means absent). `raw` fields: profile (one of the Raw profiles \
+listed below), offset and length (original-file bytes, length up to 128 KiB), base_address, optional entry and up to \
+8192 seeds (internal code-space byte coordinates, even for word-addressed processors; hex strings or integers). \
+The mapping is an analyst assertion; annotations are memory-only for this server and interpretation.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
@@ -119,6 +121,8 @@ fn instructions(packs: &Packs) -> String {
     let groups: String =
         Group::ALL.iter().map(|group| format!("\n- {}: {}", group.name(), group.description())).collect();
     let mut text = format!("{INSTRUCTIONS_INTRO}{groups}\n\n{INSTRUCTIONS_USAGE}");
+    let profiles: Vec<_> = rampage_loaders::RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
+    text.push_str(&format!("\n\nRaw profiles: {}.", profiles.join(", ")));
     // Only a server given packs loads them here; the problem count must be known before any tool runs.
     if packs.configured() {
         let problems = packs.problems().len();
@@ -184,14 +188,7 @@ fn with_binary_arguments(name: &str, schema: &Value) -> Map<String, Value> {
             }),
         );
         if tools::raw_capable(name) {
-            let mut raw = tools::raw_selector_schema();
-            if let Some(Value::String(description)) = raw.get_mut("description") {
-                description.push_str(
-                    " `path` names the source file. Excludes arch, image_offset and image_length; null means absent.",
-                );
-            }
-            raw["type"] = json!(["object", "null"]);
-            properties.insert(RAW.to_owned(), raw);
+            properties.insert(RAW.to_owned(), compact_raw_selector());
         }
     }
     let required = schema.entry("required").or_insert_with(|| json!([]));
@@ -203,6 +200,49 @@ fn with_binary_arguments(name: &str, schema: &Value) -> Map<String, Value> {
 
 /// The optional selector that opens a Raw Project in place of a native binary on raw-capable tools.
 const RAW: &str = "raw";
+
+/// The `raw` selector as repeated on every raw-capable tool: its shape without per-field prose or the profile
+/// enum, which the server instructions state once. The server still parses it as a closed `RawProjectRequest`.
+fn compact_raw_selector() -> Value {
+    /// The member types of a union of plain typed schemas, flattening nested unions; None for anything richer.
+    fn union_types(members: &[Value]) -> Option<Vec<Value>> {
+        let mut types = Vec::new();
+        for member in members {
+            let object = member.as_object()?;
+            if let Some(Value::Array(nested)) = object.get("anyOf") {
+                types.extend(union_types(nested)?);
+            } else if object.keys().all(|key| key == "type" || key == "minimum") {
+                types.push(object.get("type")?.clone());
+            } else {
+                return None;
+            }
+        }
+        Some(types)
+    }
+    fn strip(value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                for key in ["description", "title", "examples", "enum"] {
+                    object.remove(key);
+                }
+                if let Some(types) =
+                    object.get("anyOf").and_then(Value::as_array).and_then(|members| union_types(members))
+                {
+                    object.remove("anyOf");
+                    object.insert("type".to_owned(), Value::Array(types));
+                }
+                object.values_mut().for_each(strip);
+            }
+            Value::Array(entries) => entries.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut raw = tools::raw_selector_schema();
+    strip(&mut raw);
+    raw["type"] = json!(["object", "null"]);
+    raw["description"] = json!("Headerless Raw project of path's byte range; see the server instructions.");
+    raw
+}
 
 /// The explicit refusal of a `raw` selector on a tool that cannot serve Raw Projects.
 fn raw_refusal(name: &str) -> String {
