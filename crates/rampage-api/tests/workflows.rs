@@ -59,10 +59,38 @@ fn triage_report_on_a_mingw_pe_names_the_toolchain_and_imports() {
     assert!(has_observation(imports, "api-ms-win-crt-runtime-l1-1-0.dll"), "{:?}", observations(imports));
     assert!(report.summary.iter().any(|line| line.contains("MinGW-w64")), "{:?}", report.summary);
     assert!(report.next_steps.iter().any(|step| step.tool == "find_main"));
+    // The curated default corpus withholds the generic stub hash the frozen musl database names `__lctrans`.
+    let functions = section(&report, "Functions");
+    assert!(!has_observation(functions, "__lctrans"), "{:?}", observations(functions));
+}
+
+#[test]
+fn triage_report_reports_shared_hash_signature_matches_as_likely_stubs() {
+    // The frozen musl database still names a generic MinGW stub hash `__lctrans`, so a pack supplying it reproduces
+    // a name proposed at several addresses.
+    let directory = std::env::temp_dir().join(format!("rampage-api-shared-hash-pack-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("x86_64.json"), include_str!("../../rampage-signatures/data/musl-x86_64.json"))
+        .unwrap();
+    std::fs::write(
+        directory.join("rampage-pack.toml"),
+        "name = \"legacy-musl\"\nversion = \"1.0.0\"\nlicense = \"MIT\"\nsource = \"https://example.com/legacy-musl\"\n\
+         description = \"Test pack\"\n[[contents]]\nkind = \"signatures\"\npath = \"x86_64.json\"\narch = \"x86_64\"\n",
+    )
+    .unwrap();
+    let packs = rampage_api::Packs::load(std::slice::from_ref(&directory));
+    let project = Session::default().with_packs(Arc::new(packs)).open(&fixture("hello-x64.exe"), None);
+    let report = project.unwrap().triage_report(ReportLimits::default());
+    std::fs::remove_dir_all(&directory).unwrap();
+    let report = report.unwrap();
+    assert_well_formed(&report);
     // Shared-hash signature matches are reported as likely stubs, never as a confident identification.
     let functions = section(&report, "Functions");
-    let shared = functions.findings.iter().find(|finding| finding.observation.contains("__lctrans")).unwrap();
+    let shared = functions.findings.iter().find(|finding| finding.observation.contains("__lctrans"));
+    let shared = shared.unwrap_or_else(|| panic!("{:?}", observations(functions)));
     assert_eq!(shared.confidence, FindingConfidence::Low);
+    assert!(shared.observation.contains("share the masked hash"), "{}", shared.observation);
 }
 
 #[test]

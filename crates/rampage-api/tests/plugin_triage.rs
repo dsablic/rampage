@@ -156,7 +156,7 @@ fn fresh_pe_open_uses_checked_sidecars_and_refuses_embedded_selection() {
     rampage_api::open_plugin_triage_source(&session, &source.0, None, None).unwrap();
     std::fs::write(source.sidecar(), b"not-json\n").unwrap();
     let error = rampage_api::open_plugin_triage_source(&session, &source.0, None, None).err().unwrap();
-    assert!(error.to_string().contains("checked annotation"));
+    assert!(error.to_string().contains("annotation records require an object root"), "{error}");
     std::fs::remove_file(source.sidecar()).unwrap();
     let image = rampage_loaders::ImageAt::new(0, Some(std::fs::metadata(&source.0).unwrap().len()));
     let error = rampage_api::open_plugin_triage_source(&session, &source.0, None, Some(image)).err().unwrap();
@@ -281,7 +281,7 @@ fn checked_plugin_open_does_not_reuse_legacy_cached_bad_sidecar_ingestion() {
     std::fs::write(source.sidecar(), b"not-json\n").unwrap();
     // Ordinary opening may reuse its old project. Plugin opening must ingest this sidecar freshly and reject it.
     let error = rampage_api::open_plugin_triage_source(&session, &source.0, None, None).err().unwrap();
-    assert!(error.to_string().contains("checked annotation"));
+    assert!(error.to_string().contains("annotation records require an object root"), "{error}");
 }
 
 #[test]
