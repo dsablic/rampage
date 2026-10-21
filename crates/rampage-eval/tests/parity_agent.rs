@@ -56,8 +56,19 @@ fn task() -> ParityTask {
     ParityTask::from_toml(include_str!("../tasks/arithmetic-arm64-elf.toml")).unwrap()
 }
 
-fn missing_capability_task() -> ParityTask {
+/// A tool name the server does not register; the unsupported tests assert its absence from the actual catalog.
+const ABSENT_TOOL: &str = "rebase_image";
+
+fn frozen_patch_export_task() -> ParityTask {
     ParityTask::from_toml(include_str!("../tasks/capability-patch-export.toml")).unwrap()
+}
+
+/// The frozen patch/export probe keeps its capability-task shape, but patch_bytes and export_patched are now served,
+/// so the unsupported plumbing needs a required name that is genuinely absent. The definition file is unchanged.
+fn missing_capability_task() -> ParityTask {
+    let mut task = frozen_patch_export_task();
+    task.required_capabilities = vec![ABSENT_TOOL.into()];
+    task
 }
 
 fn fixture() -> PathBuf {
@@ -408,6 +419,29 @@ async fn scripted_retention_is_bounded_and_truncation_is_visible_to_model_and_ev
 }
 
 #[tokio::test]
+async fn scripted_default_bounds_retain_every_full_catalog_untruncated() {
+    let client = connect().await;
+    let (script, _) = Script::new(vec![
+        tool("enable_tools", json!({ "groups": ["all"] })),
+        final_answer(json!({ "status": "unknown", "reason": "scripted catalog retention check" })),
+    ]);
+    let bounds = config();
+    let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &fixture(), &bounds).await;
+    assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+    assert_eq!(run.catalogs.len(), 2);
+    // The all-group catalog is larger than any per-record bound, so this proves catalogs use their own bound.
+    assert!(run.catalogs[1].original_bytes > 65_536, "{}", run.catalogs[1].original_bytes);
+    for (catalog, names) in run.catalogs.iter().zip(&run.catalog_tool_names) {
+        assert!(!catalog.truncated);
+        assert_eq!(catalog.text.len(), catalog.original_bytes);
+        let tools: Vec<Value> = serde_json::from_str(&catalog.text).unwrap();
+        let retained: Vec<_> = tools.iter().map(|tool| tool["name"].as_str().unwrap()).collect();
+        assert_eq!(&retained, names);
+    }
+    assert!(run.calls[0].output.text.len() <= bounds.max_record_bytes);
+}
+
+#[tokio::test]
 async fn scripted_unsupported_requires_successful_all_group_discovery_and_catalog_refresh() {
     let unsupported = final_answer(json!({ "status": "unsupported", "reason": "scripted missing capability" }));
     let client = connect().await;
@@ -425,12 +459,24 @@ async fn scripted_unsupported_requires_successful_all_group_discovery_and_catalo
         assert_eq!(run.catalog_requests, 2);
     }
 
-    let (script, _) = Script::new(vec![tool("enable_tools", json!({ "groups": ["all"] })), unsupported]);
+    let (script, _) = Script::new(vec![tool("enable_tools", json!({ "groups": ["all"] })), unsupported.clone()]);
     let run = run_task(&client, Some(script), ModelSource::Scripted, &task, &fixture(), &config()).await;
     assert!(matches!(run.disposition, AgentDisposition::Unsupported { .. }), "{run:?}");
     assert_eq!(run.catalog_requests, 2);
+    assert!(run.catalog_tool_names.iter().all(|names| !names.iter().any(|name| name == ABSENT_TOOL)));
     assert_eq!(run.task_attempt(), TaskAttempt::Unmeasured);
     assert!(matches!(run.contract_attempt(), TaskAttempt::Unsupported { .. }));
+
+    // The unchanged frozen definition now names served tools, so the same claim is rejected rather than accepted.
+    let client = connect().await;
+    let (script, _) = Script::new(vec![tool("enable_tools", json!({ "groups": ["all"] })), unsupported]);
+    let frozen = frozen_patch_export_task();
+    let run = run_task(&client, Some(script), ModelSource::Scripted, &frozen, &fixture(), &config()).await;
+    assert!(
+        matches!(&run.disposition, AgentDisposition::Failed { reason }
+        if reason.contains("all required tool names are present")),
+        "{run:?}"
+    );
 }
 
 #[tokio::test]

@@ -41,6 +41,14 @@ in-memory server, isolates fixture copies and restricts read-only inspection. Re
 provider usage, errors and truncation are retained. Limits: scripted-model tests are plumbing checks, not AI
 success. Anthropic retains its existing transport; OpenCode uses the metered route below.
 
+Each discovered catalog snapshot is retained up to the discovery bound (1,000,000 serialized bytes, beyond which
+discovery fails rather than truncating), not the 32,768-byte default per-record bound that still applies to tool
+inputs/outputs and model turns. Catalogs draw from the same total retained budget (default 512,000 bytes), so a
+report stays bounded and a catalog cut by that budget is still marked `truncated`. The earlier per-record cut
+truncated every catalog: the current core catalog is 70,736 bytes and the all-group catalog 146,583 (77 tools),
+above even the 65,536-byte maximum per-record setting. With default bounds, a core-plus-all-groups run now
+retains both untruncated. Earlier reports, including the Phase 3.3 supplement, keep their truncated records.
+
 `--agent-provider opencode --agent-model github-copilot/gpt-6.1-sol` reuses the local authenticated OpenCode API,
 with the explicit `default` variant. A temporary, one-step agent has host tools disabled; generated JSON intents
 are executed only by the benchmark's real MCP client. Actual returned model, reported input/output/reasoning/cache

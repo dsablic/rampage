@@ -93,8 +93,9 @@ impl Group {
     pub fn description(self) -> &'static str {
         match self {
             Group::Core => {
-                "Layout, functions, disassembly, decompilation, xrefs, strings, imports, exports, annotations with \
-                 undo/redo, and the guided workflows (triage_report, find_main, network_surface, \
+                "Layout, functions, disassembly, decompilation, xrefs, search, strings, imports, exports, \
+                 annotations with undo/redo and batches, assembly and checked byte patches, raw/Sleigh decode \
+                 inspection, and the guided workflows (triage_report, find_main, network_surface, \
                  persistence_surface, string_decoding, diff_builds)."
             }
             Group::Detection => {

@@ -317,7 +317,8 @@ pub struct AgentRun {
     pub tool_errors: usize,
     pub catalog_requests: usize,
     pub catalog_tool_count: usize,
-    /// One snapshot per discovery/refresh, serialized actual MCP tool definitions.
+    /// One snapshot per discovery/refresh, serialized actual MCP tool definitions. Only the total retained budget can
+    /// truncate one; the per-record bound applies to tool I/O and model turns.
     pub catalogs: Vec<RetainedText>,
     /// Complete ordered names per successful discovery, within catalog bounds and independent of retention/policy.
     #[serde(default)]
@@ -380,6 +381,9 @@ impl AgentRun {
     }
 }
 
+/// Discovery refuses a catalog whose serialized tools/list pages exceed this many bytes.
+const MAX_CATALOG_BYTES: usize = 1_000_000;
+
 struct Retention {
     remaining: usize,
     per_record: usize,
@@ -387,8 +391,19 @@ struct Retention {
 
 impl Retention {
     fn keep(&mut self, text: String) -> RetainedText {
+        let per_record = self.per_record;
+        self.keep_within(text, per_record)
+    }
+
+    /// A catalog snapshot is bounded by discovery itself ([`MAX_CATALOG_BYTES`]), not by the per-record limit for
+    /// tool I/O and model turns, so a complete catalog is never cut short; it still draws from the total budget.
+    fn keep_catalog(&mut self, text: String) -> RetainedText {
+        self.keep_within(text, MAX_CATALOG_BYTES)
+    }
+
+    fn keep_within(&mut self, text: String, per_record: usize) -> RetainedText {
         let original_bytes = text.len();
-        let mut end = text.len().min(self.remaining).min(self.per_record);
+        let mut end = text.len().min(self.remaining).min(per_record);
         while !text.is_char_boundary(end) {
             end -= 1;
         }
@@ -449,7 +464,7 @@ async fn discover(
             return Err("MCP tools/list returned an unexpected response".into());
         };
         bytes += serde_json::to_string(&page).map_err(|error| error.to_string())?.len();
-        if bytes > 1_000_000 || tools.len() + page.tools.len() > 256 {
+        if bytes > MAX_CATALOG_BYTES || tools.len() + page.tools.len() > 256 {
             return Err("MCP catalog exceeds benchmark bounds; catalog not silently truncated".into());
         }
         for tool in page.tools {
@@ -462,7 +477,7 @@ async fn discover(
         if cursor.is_none() {
             let snapshot = serde_json::to_string(&tools).map_err(|error| error.to_string())?;
             run.catalog_tool_names.push(tools.iter().map(|tool| tool.name.to_string()).collect());
-            run.catalogs.push(retention.keep(snapshot));
+            run.catalogs.push(retention.keep_catalog(snapshot));
             return Ok(tools);
         }
     }
