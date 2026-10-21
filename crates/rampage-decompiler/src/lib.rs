@@ -13,6 +13,7 @@ mod layout_wire;
 #[path = "pilot_native_abi_measurements.rs"]
 mod pilot_native_abi_measurements;
 mod raw_bounds;
+pub use raw_bounds::has_reviewed_raw_c_model;
 pub mod results;
 pub mod sleigh_decode;
 mod specs;

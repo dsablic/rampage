@@ -1,13 +1,7 @@
-use rampage_decompiler::MemoryRegion;
-use rampage_loaders::{Binary, Format, RawProfile};
+use rampage_decompiler::{MemoryRegion, has_reviewed_raw_c_model};
+use rampage_loaders::{Binary, Format};
 
 use crate::ApiError;
-
-/// Raw profiles with a reviewed exact-pair C model; the decompiler rechecks the pair and translator bounds.
-/// Every other admitted profile is disassembly/discovery only until its C model is reviewed.
-fn has_reviewed_c_model(profile: RawProfile) -> bool {
-    matches!(profile, RawProfile::Msp430 | RawProfile::Avr8)
-}
 
 /// One read-only RX mapping of exactly the admitted Raw code range. Nothing else, in no other space, is mapped.
 fn raw_region(binary: &Binary) -> Result<MemoryRegion<'_>, ApiError> {
@@ -17,7 +11,7 @@ fn raw_region(binary: &Binary) -> Result<MemoryRegion<'_>, ApiError> {
         .filter(|_| identity.is_some())
         .ok_or_else(|| ApiError::Invalid("Raw native memory requires retained admission facts".into()))?;
     let profile = raw.profile();
-    if !has_reviewed_c_model(profile) {
+    if !has_reviewed_raw_c_model(profile.language_id()) {
         return Err(ApiError::Unavailable(format!("no reviewed C model for {}", profile.language_id())));
     }
     let bytes = binary.image_bytes();

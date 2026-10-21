@@ -151,14 +151,24 @@ async fn raw_projects_list_disassemble_annotate_and_refuse_explicitly() {
     let (text, failed) = call(&client, "list_annotations", json!({ "path": path, "raw": raw(&["0x4400"]) })).await;
     assert!(!failed && !text.contains("reset"), "{text}");
 
-    // Decompilation of Raw MSP430 is refused for now; a later slice enables it. Accept either C or that refusal.
+    // MSP430 has a reviewed C model: Raw decompilation returns C that calls the seeded callee.
     let (text, failed) = call(&client, "decompile", json!({ "path": path, "raw": seeded, "at": "0x4400" })).await;
-    if failed {
-        assert!(text.contains("Raw native memory admission"), "explicit Raw decompile refusal: {text}");
-    } else {
-        let output: Value = serde_json::from_str(&text).unwrap();
-        assert!(output.to_string().contains('{'), "{text}");
-    }
+    assert!(!failed, "{text}");
+    serde_json::from_str::<Value>(&text).unwrap();
+    assert!(text.contains("sub_4410()"), "{text}");
+
+    // 6502 is discovery-only: decompilation refuses explicitly instead of guessing a C model.
+    let mos6502 = fixtures().join("6502.bin");
+    let raw6502 = json!({
+        "profile": "6502:LE:16:default",
+        "offset": 0,
+        "length": std::fs::metadata(&mos6502).unwrap().len(),
+        "base_address": "0x8000",
+        "entry": "0x8000",
+        "seeds": ["0x8000", "0x8010"],
+    });
+    let (text, failed) = call(&client, "decompile", json!({ "path": mos6502, "raw": raw6502, "at": "0x8000" })).await;
+    assert!(failed && text.contains("no reviewed C model for 6502:LE:16:default"), "{text}");
 
     let (text, failed) = call(&client, "list_functions", json!({ "path": path, "raw": seeded, "arch": "x86" })).await;
     assert!(failed && text.contains("`raw` cannot be combined with `arch`"), "{text}");

@@ -8,6 +8,7 @@ use rampage_loaders::{MAX_RAW_BYTES, RawProfile};
 use serde_json::{Value, json};
 
 const MSP430: &[u8] = include_bytes!("../../../tests/fixtures/sleigh/msp430.bin");
+const MOS6502: &[u8] = include_bytes!("../../../tests/fixtures/sleigh/6502.bin");
 
 struct OwnedDirectory(PathBuf);
 
@@ -201,7 +202,7 @@ fn the_selector_schema_is_closed_and_self_contained() {
 }
 
 #[test]
-fn every_raw_capable_tool_answers_or_refuses_explicitly() {
+fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
     let owned = OwnedDirectory::new();
     let path = owned.file("code.bin", MSP430);
     let session = Session::default();
@@ -230,13 +231,11 @@ fn every_raw_capable_tool_answers_or_refuses_explicitly() {
     for (name, input) in inputs {
         assert!(raw_capable(name));
         let (text, failed) = call_shared(&registry, &mut project, name, input);
-        assert!(!text.is_empty(), "{name}");
-        assert!(!text.contains("invalid arguments") && !text.contains("unknown tool"), "{name}: {text}");
         assert!(!failed, "{name}: {text}");
         serde_json::from_str::<Value>(&text).unwrap_or_else(|error| panic!("{name}: {error}: {text}"));
-        outcomes.push((name, failed, text));
+        outcomes.push((name, text));
     }
-    let outcome = |name: &str| &outcomes.iter().find(|(tool, ..)| *tool == name).unwrap().2;
+    let outcome = |name: &str| &outcomes.iter().find(|(tool, _)| *tool == name).unwrap().1;
     assert!(outcome("list_functions").contains("0x4410") || outcome("list_functions").contains("17424"));
     assert!(outcome("list_annotations").contains("callee"));
     // MSP430 has a reviewed C model, so Raw decompilation returns C that uses the analyst's name.
@@ -246,4 +245,40 @@ fn every_raw_capable_tool_answers_or_refuses_explicitly() {
     let reopened = session.open_raw(&path, &msp430(&["0x4400", "0x4410"])).unwrap();
     assert_eq!(reopened.comment_at(0x4404).as_deref(), Some("nop"), "redo restored the batch");
     assert_eq!(owned.names(), ["code.bin"]);
+}
+
+#[test]
+fn raw_capable_tools_refuse_unsupported_raw_questions_explicitly() {
+    let owned = OwnedDirectory::new();
+    let registry = tools();
+    let session = Session::default();
+
+    let path = owned.file("code.bin", MSP430);
+    let mut project = session.open_raw(&path, &msp430(&["0x4400", "0x4410"])).unwrap();
+    let immediate = json!({ "value": { "kind": "unsigned", "value": 0 } });
+    for mode in [
+        json!({ "kind": "immediate", "immediate": immediate }),
+        json!({ "kind": "functions_referencing", "reference": { "kind": "constant", "immediate": immediate } }),
+    ] {
+        let (text, failed) = call_shared(&registry, &mut project, "search", json!({ "mode": mode }));
+        assert!(failed, "{mode}: {text}");
+        assert!(text.contains("no typed operand evidence; immediate search is unsupported"), "{mode}: {text}");
+    }
+
+    let path = owned.file("6502.bin", MOS6502);
+    let mos6502 = request(json!({
+        "profile": "6502:LE:16:default",
+        "offset": 0,
+        "length": MOS6502.len(),
+        "base_address": "0x8000",
+        "entry": "0x8000",
+        "seeds": ["0x8000", "0x8010"],
+    }));
+    let mut project = session.open_raw(&path, &mos6502).unwrap();
+    let (text, failed) = call_shared(&registry, &mut project, "list_functions", json!({}));
+    assert!(!failed && text.contains("0x8010"), "6502 discovery still answers: {text}");
+    let (text, failed) = call_shared(&registry, &mut project, "decompile", json!({ "at": "0x8000" }));
+    assert!(failed, "{text}");
+    assert!(text.contains("no reviewed C model for 6502:LE:16:default"), "{text}");
+    assert_eq!(owned.names(), ["6502.bin", "code.bin"]);
 }

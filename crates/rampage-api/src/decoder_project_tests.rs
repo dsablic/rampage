@@ -283,6 +283,23 @@ fn reviewed_raw_profiles_decompile_fixture_functions_directly_and_through_the_wo
     }
 }
 
+/// AVR code is word-addressed in Ghidra, but Raw coordinates are bytes: the analyst names the callee at byte 0x210
+/// (word 0x108) and the caller's C must call it by that name, not a default or a word/byte-confused symbol.
+#[test]
+fn avr_raw_rename_at_a_byte_address_reaches_the_callers_c() {
+    for worker in decompiler_workers() {
+        let project = project(RawProfile::Avr8, AVR8_FIXTURE, 0x200, Some(0x200), vec![0x200, 0x210]);
+        project.set_decompiler_worker(worker);
+        project.rename(0x210, Some("blink_led")).unwrap();
+        let main = project.decompile(0x200).unwrap().code;
+        println!("AVR_RENAMED_C\n{main}");
+        assert!(main.contains("blink_led()"), "{main}");
+        assert!(!main.contains("sub_210") && !main.contains("108"), "{main}");
+        let callee = project.decompile(0x210).unwrap().code;
+        assert!(callee.contains("blink_led(void)"), "{callee}");
+    }
+}
+
 #[test]
 fn raw_without_a_reviewed_c_model_refuses_directly_and_through_the_worker() {
     for worker in [None, Some(rampage_decompiler::worker::WorkerConfig::default())] {
