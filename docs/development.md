@@ -8,7 +8,7 @@ instead of starting competing variants of the whole dependency graph.
 
 ```sh
 cargo build --locked -p rampage-cli -p rampage-worker -p rampage-ui
-cargo test --locked --workspace
+cargo nextest run --locked --workspace   # or: cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
@@ -21,6 +21,16 @@ Development and test profiles disable debug information and incremental compilat
 checks and panic behavior retain their normal development/test settings. This reduces storage but sacrifices
 debug-information backtraces and incremental rebuild speed. Controlled debug fixtures generate their own debug
 information independently of these Rust profile settings. Release optimization settings are unchanged.
+
+Third-party dependencies and `rampage-decompiler` (including its embedded Ghidra C++) build at `opt-level = 2` in
+the development/test profiles; workspace crates stay unoptimized so edits rebuild quickly. Tests decompile heavily,
+so this cut workspace test execution roughly threefold; it costs a one-time dependency rebuild.
+
+Prefer [`cargo-nextest`](https://nexte.st) (`brew install cargo-nextest`) for local runs. `cargo test` executes the
+~200 test binaries one at a time, and the `rampage-api` library binary alone took about 400 s; nextest runs every
+test in its own process across all binaries in parallel. Measured on a 10-core M1 Max (2026-10-21), workspace test
+execution was about 734 s with `cargo test` at `opt-level = 0`, 170 s with nextest, and 92 s with nextest plus the
+optimized dependencies. A rebuild after editing `rampage-api` takes about one minute, mostly test-binary linking.
 
 If debugging Rust code requires symbols, temporarily override `CARGO_PROFILE_DEV_DEBUG=2` or
 `CARGO_PROFILE_TEST_DEBUG=2`. That produces a different build variant; return to the normal configuration after

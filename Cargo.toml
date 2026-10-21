@@ -64,3 +64,10 @@ incremental = false
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Tests decompile constantly; an unoptimized embedded Ghidra decompiler dominates their runtime.
+[profile.dev.package.rampage-decompiler]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 2
