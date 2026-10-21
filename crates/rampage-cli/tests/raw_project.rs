@@ -115,11 +115,13 @@ fn raw_rejects_native_selectors_and_each_other() {
 fn raw_rejects_commands_that_are_not_raw_capable() {
     let fixture = Fixture::new();
     let raw = request().to_string();
-    // Annotation edits are raw-capable over MCP, but a one-shot CLI process would discard memory-only annotations.
+    // Annotations are raw-capable over MCP, but a one-shot CLI process would discard memory-only edits and could
+    // only ever list nothing.
     for (command, extra) in [
         (&["binary", "triage"][..], &[][..]),
         (&["string", "list"], &[]),
         (&["annotation", "rename"], &["0x4400", "entry"]),
+        (&["annotation", "list"], &[]),
     ] {
         rampage(command, &fixture.binary())
             .args(extra)

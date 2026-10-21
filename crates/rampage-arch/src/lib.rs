@@ -74,13 +74,13 @@ const NAMES: [(Arch, &[&str]); 30] = [
     (Arch::Mc6805, &["mc6805", "6805"]),
     (Arch::I8051, &["i8051", "8051", "mcs51"]),
     (Arch::Pic16, &["pic16", "pic-16"]),
-    (Arch::Sh2, &["sh2", "sh-2", "superh"]),
+    (Arch::Sh2, &["sh2", "sh-2"]),
     (Arch::V850, &["v850"]),
     (Arch::Tricore, &["tricore"]),
     (Arch::Xtensa, &["xtensa"]),
     (Arch::Z80, &["z80"]),
     (Arch::Hcs12, &["hcs12", "hcs-12"]),
-    (Arch::Cr16c, &["cr16c", "cr16"]),
+    (Arch::Cr16c, &["cr16c"]),
     (Arch::Ebpf, &["ebpf", "bpf"]),
     (Arch::Loongarch64, &["loongarch64", "loongarch"]),
     (Arch::Hexagon, &["hexagon"]),
@@ -591,10 +591,12 @@ mod width_tests {
             big.big_endian = true;
             assert!(super::decoder(&big).is_err());
         }
-        for (alias, arch) in
-            [("6502", Arch::Mos6502), ("8051", Arch::I8051), ("superh", Arch::Sh2), ("cr16", Arch::Cr16c)]
-        {
+        for (alias, arch) in [("6502", Arch::Mos6502), ("8051", Arch::I8051), ("sh-2", Arch::Sh2)] {
             assert_eq!(alias.parse::<Arch>().unwrap(), arch);
+        }
+        // Family names cover several distinct translators, so they never pick one silently.
+        for family in ["superh", "cr16"] {
+            assert!(family.parse::<Arch>().is_err(), "{family}");
         }
     }
 }

@@ -576,8 +576,7 @@ const MAX_RAW_REQUEST_BYTES: u64 = 1024 * 1024;
 
 /// The commands [`raw_tool`] admits, as `--help` names them.
 const RAW_COMMANDS: &str = "binary inspect, binary audit, binary capabilities, binary search, function list, \
-                            function disassemble, function graph, function xrefs, function decompile and annotation \
-                            list";
+                            function disassemble, function graph, function xrefs and function decompile";
 
 fn raw_request(json: Option<&str>, path: Option<&std::path::Path>) -> anyhow::Result<Option<RawProjectRequest>> {
     let text = match (json, path) {
@@ -594,9 +593,9 @@ fn raw_request(json: Option<&str>, path: Option<&std::path::Path>) -> anyhow::Re
     Ok(Some(request))
 }
 
-/// The raw-capable project tool a command runs, for the commands that may open a Raw Project. Annotation edits are
-/// left out: Raw annotations are memory-only, so a one-shot CLI process would discard them (the MCP server keeps
-/// them for its session).
+/// The raw-capable project tool a command runs, for the commands that may open a Raw Project. Annotation commands
+/// are left out: Raw annotations are memory-only, so a one-shot CLI process would discard edits and could only ever
+/// list nothing (the MCP server keeps them for its session).
 fn raw_tool(command: &Command) -> Option<&'static str> {
     let tool = match command {
         Command::Info(..) => "binary_info",
@@ -608,7 +607,6 @@ fn raw_tool(command: &Command) -> Option<&'static str> {
         Command::Audit(args) if args.entries => "entry_diagnostics",
         Command::Audit(..) => "analysis_diagnostics",
         Command::Capabilities(..) => "capabilities",
-        Command::Annotations(..) => "list_annotations",
         Command::Decompile(..) => "decompile",
         _ => return None,
     };

@@ -21,6 +21,12 @@ fn reviewed(language: &str) -> Option<&'static CodeSpace> {
     CODE_SPACES.iter().find(|space| space.language == language)
 }
 
+/// Whether a 4-part Raw language ID (no compiler part) has a reviewed C model. This is the single source of
+/// truth for Raw C admission; the decompiler still rechecks the exact pair and the translator bounds.
+pub fn has_reviewed_raw_c_model(language: &str) -> bool {
+    reviewed(language).is_some()
+}
+
 /// Highest code-space byte for a 5-part language/compiler ID, after the translator agrees with the table.
 pub(crate) fn verified_code_highest(language_id: &str) -> Result<u64, Error> {
     let (language, _) = language_id
@@ -79,6 +85,21 @@ mod tests {
         assert_eq!(verified_code_highest("avr8:LE:16:default:gcc").unwrap(), 0x1ffff);
         for language in ["6502:LE:16:default:default", "avr8:LE:16:extended:gcc", "TI_MSP430X:LE:32:default:default"] {
             assert!(verified_code_highest(language).is_err(), "{language}");
+        }
+    }
+
+    #[test]
+    fn reviewed_raw_c_models_are_exactly_the_code_space_table_with_a_c_data_model() {
+        assert!(has_reviewed_raw_c_model("TI_MSP430:LE:16:default"));
+        assert!(has_reviewed_raw_c_model("avr8:LE:16:default"));
+        for language in ["6502:LE:16:default", "TI_MSP430:LE:16:default:default", "avr8:LE:16:extended"] {
+            assert!(!has_reviewed_raw_c_model(language), "{language}");
+        }
+        for space in CODE_SPACES {
+            let modeled = ["default", "gcc"]
+                .iter()
+                .any(|compiler| crate::c_data_organization(&format!("{}:{compiler}", space.language)).is_some());
+            assert!(modeled, "{} has bounds but no reviewed C data organization", space.language);
         }
     }
 
