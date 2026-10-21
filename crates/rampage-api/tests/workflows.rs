@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rampage_api::{FindingConfidence, Project, ReportLimits, Section, Session, WorkflowReport};
 use rampage_loaders::LoadError;
@@ -10,6 +11,30 @@ fn fixture(name: &str) -> PathBuf {
 
 fn local_fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+}
+
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// A fresh directory under the canonical temp dir, removed on drop (including when a test panics).
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(prefix: &str) -> Self {
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn open(path: PathBuf) -> Arc<Project> {
@@ -68,9 +93,8 @@ fn triage_report_on_a_mingw_pe_names_the_toolchain_and_imports() {
 fn triage_report_reports_shared_hash_signature_matches_as_likely_stubs() {
     // The frozen musl database still names a generic MinGW stub hash `__lctrans`, so a pack supplying it reproduces
     // a name proposed at several addresses.
-    let directory = std::env::temp_dir().join(format!("rampage-api-shared-hash-pack-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).unwrap();
+    let scratch = Scratch::new("rampage-api-shared-hash-pack");
+    let directory = scratch.0.clone();
     std::fs::write(directory.join("x86_64.json"), include_str!("../../rampage-signatures/data/musl-x86_64.json"))
         .unwrap();
     std::fs::write(
@@ -82,7 +106,7 @@ fn triage_report_reports_shared_hash_signature_matches_as_likely_stubs() {
     let packs = rampage_api::Packs::load(std::slice::from_ref(&directory));
     let project = Session::default().with_packs(Arc::new(packs)).open(&fixture("hello-x64.exe"), None);
     let report = project.unwrap().triage_report(ReportLimits::default());
-    std::fs::remove_dir_all(&directory).unwrap();
+    drop(scratch);
     let report = report.unwrap();
     assert_well_formed(&report);
     // Shared-hash signature matches are reported as likely stubs, never as a confident identification.

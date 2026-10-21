@@ -908,6 +908,23 @@ struct Log {
 }
 
 impl Log {
+    /// Advances the cursor past a writer's own append, which `commit` already applies, so a fully refreshed writer
+    /// does not replay its own bytes on refresh (which would manufacture a new authority nonce after the transition
+    /// witness was returned). Only an append observed to land exactly at the read end of the same file is skipped:
+    /// the cursor must equal the pre-write length, the file identity must match, and the post-write length must be
+    /// exactly the pre-write length plus the bytes written. Anything else, such as a lock-ignoring appender racing
+    /// the write, leaves the cursor in place so the next `refresh` reads the appended lines back.
+    fn adopt_own_append(&mut self, before: u64, identity: Option<(u64, u64)>, written: u64, after: Option<u64>) {
+        if self.read == before
+            && self.identity.is_none_or(|known| Some(known) == identity)
+            && after.is_some_and(|after| before.checked_add(written) == Some(after))
+        {
+            self.read = before + written;
+            self.identity = identity;
+            self.attribute_edits();
+        }
+    }
+
     /// Attributes edits just read to the image they were made on.
     fn attribute_edits(&mut self) {
         match &self.logged_image {
@@ -1498,18 +1515,7 @@ impl Annotations {
         if new_image.is_some() {
             log.logged_image = new_image;
         }
-        // As in `record_checked`: `commit` already applies this append, so a fully refreshed writer skips its own
-        // bytes rather than replaying them into a new authority nonce. Only an append observed to land exactly at
-        // the read end of the same file is skipped; anything else is still read back by the next `refresh`.
-        let identity = file_identity(&before);
-        if log.read == len
-            && log.identity.is_none_or(|known| Some(known) == identity)
-            && after == len + lines.len() as u64
-        {
-            log.read = after;
-            log.identity = identity;
-            log.attribute_edits();
-        }
+        log.adopt_own_append(len, file_identity(&before), lines.len() as u64, Some(after));
         Ok(())
     }
 
@@ -1568,18 +1574,13 @@ impl Annotations {
         {
             return Err(CHECKED_ERROR.to_owned());
         }
-        let append_end = before.len().checked_add(encoded.bytes.len() as u64).ok_or(CHECKED_ERROR)?;
+        before.len().checked_add(encoded.bytes.len() as u64).ok_or(CHECKED_ERROR)?;
         file.write_all(&encoded.bytes).map_err(|_| CHECKED_ERROR.to_owned())?;
         if new_image.is_some() {
             log.logged_image = new_image;
         }
-        // A fully refreshed writer already applies this exact append in `commit`; replaying its own bytes on
-        // refresh would manufacture a new authority nonce after the transition witness was returned.
-        if log.read == before.len() {
-            log.read = append_end;
-            log.identity = file_identity(&before);
-            log.attribute_edits();
-        }
+        let after = file.metadata().ok().map(|metadata| metadata.len());
+        log.adopt_own_append(before.len(), file_identity(&before), encoded.bytes.len() as u64, after);
         Ok(())
     }
 
@@ -2269,14 +2270,16 @@ fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), Str
     // Only complete lines: the rest may still be being written.
     let complete = bytes.iter().rposition(|&byte| byte == b'\n').map_or(0, |end| end + 1);
     let tail = &bytes[complete..];
-    crate::patches::validate_log_record_tail(tail)?;
+    // Checked ingestion keeps its errors opaque; only legacy reads report the detailed record-shape problem.
+    let shape_error = |problem: String| if checked { CHECKED_ERROR.to_owned() } else { problem };
+    crate::patches::validate_log_record_tail(tail).map_err(shape_error)?;
     if crate::patches::patch_log_shape(tail).patch {
         return Err("unterminated patch record: patch records require a complete newline-terminated JSON line".into());
     }
     let mut lines = Vec::new();
     let mut start = 0;
     for line in bytes[..complete].split_inclusive(|&byte| byte == b'\n') {
-        crate::patches::validate_patch_log_line(line)?;
+        crate::patches::validate_patch_log_line(line).map_err(shape_error)?;
         lines.push((start, line));
         start += line.len();
     }
@@ -2740,6 +2743,66 @@ mod tests {
         assert_eq!(Annotations::open_checked(path.clone()).err().unwrap(), CHECKED_ERROR);
         assert_eq!(Annotations::open(path.clone()).unwrap().comment(1), Some("kept"));
         cleanup(path);
+    }
+
+    fn append_foreign_comment(path: &std::path::Path, address: u64, value: &str) {
+        let edit = Edit { field: Field::Comment, address, value: Some(value.to_owned()), previous: None };
+        let mut line = serde_json::to_string(&edit).unwrap();
+        line.push('\n');
+        OpenOptions::new().append(true).open(path).unwrap().write_all(line.as_bytes()).unwrap();
+    }
+
+    fn own_comment(annotations: &Annotations, address: u64, value: &str) -> Edit {
+        Edit {
+            field: Field::Comment,
+            address,
+            value: Some(value.to_owned()),
+            previous: annotations.comment(address).map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn unchecked_writer_adopts_its_own_append_at_the_read_end() {
+        let files = CheckedLogFiles(temporary_log("unchecked-own-append"));
+        let mut annotations = Annotations::open(files.0.clone()).unwrap();
+        annotations.set(Field::Comment, 1, Some("own".to_owned())).unwrap();
+        assert_eq!(annotations.test_log_cursor(), Some(std::fs::metadata(&files.0).unwrap().len()));
+        assert!(!annotations.refresh().unwrap());
+        assert_eq!(annotations.comment(1), Some("own"));
+    }
+
+    #[test]
+    fn unchecked_writer_behind_the_read_end_reads_its_append_back_in_disk_order() {
+        let files = CheckedLogFiles(temporary_log("unchecked-behind-read-end"));
+        let mut annotations = Annotations::open(files.0.clone()).unwrap();
+        annotations.set(Field::Comment, 2, Some("first".to_owned())).unwrap();
+        let cursor = annotations.test_log_cursor();
+        append_foreign_comment(&files.0, 1, "foreign");
+        let edit = own_comment(&annotations, 1, "own");
+        annotations.commit(std::slice::from_ref(&edit)).unwrap();
+        assert_eq!(annotations.test_log_cursor(), cursor);
+        assert!(annotations.refresh().unwrap());
+        assert_eq!(annotations.test_log_cursor(), Some(std::fs::metadata(&files.0).unwrap().len()));
+        assert_eq!(annotations.comment(1), Some("own"));
+        assert_eq!(Annotations::open(files.0.clone()).unwrap().comment(1), Some("own"));
+    }
+
+    #[test]
+    fn checked_writer_behind_the_read_end_reads_its_append_back_in_disk_order() {
+        let files = CheckedLogFiles(temporary_log("checked-behind-read-end"));
+        let mut annotations = Annotations::open_checked(files.0.clone()).unwrap();
+        annotations.set(Field::Comment, 2, Some("first".to_owned())).unwrap();
+        assert_eq!(annotations.test_log_cursor(), Some(std::fs::metadata(&files.0).unwrap().len()));
+        assert!(!annotations.refresh().unwrap());
+        let cursor = annotations.test_log_cursor();
+        append_foreign_comment(&files.0, 1, "foreign");
+        let edit = own_comment(&annotations, 1, "own");
+        annotations.commit(std::slice::from_ref(&edit)).unwrap();
+        assert_eq!(annotations.test_log_cursor(), cursor);
+        assert!(annotations.refresh().unwrap());
+        assert_eq!(annotations.test_log_cursor(), Some(std::fs::metadata(&files.0).unwrap().len()));
+        assert_eq!(annotations.comment(1), Some("own"));
+        assert_eq!(Annotations::open_checked(files.0.clone()).unwrap().comment(1), Some("own"));
     }
 
     fn temporary_log(name: &str) -> PathBuf {
