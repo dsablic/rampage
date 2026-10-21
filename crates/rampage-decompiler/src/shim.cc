@@ -513,6 +513,8 @@ struct DecodeSpace {
 
 struct DecodeMetadata {
     uint32_t status, alignment, spaceCount, codeSpace;
+    // Translator data byte order and default code space byte order, as loaded from the SLA.
+    uint32_t bigEndian, codeBigEndian;
     char error[256];
     char processorHelper[256];
     DecodeSpace spaces[decodeMaxSpaces];
@@ -703,6 +705,10 @@ void rampage_sleigh_metadata(void *pointer, DecodeMetadata *result) noexcept {
         int4 alignment = handle->sleigh->getAlignment();
         if (alignment <= 0) throw LowlevelError("Invalid instruction alignment");
         decodeSpaces(*handle->sleigh, *result);
+        AddrSpace *code = handle->sleigh->getDefaultCodeSpace();
+        if (code == nullptr) throw LowlevelError("Missing default code space");
+        result->bigEndian = handle->sleigh->isBigEndian() ? 1 : 0;
+        result->codeBigEndian = code->isBigEndian() ? 1 : 0;
         result->alignment = uint32_t(alignment);
         decodeText(result->processorHelper, handle->processorHelper);
         result->status = 0;

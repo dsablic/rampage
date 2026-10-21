@@ -37,7 +37,26 @@ fn engine(arch: Arch, big_endian: bool) -> Option<Capstone> {
         Arch::Sparc64 => Capstone::new().sparc().mode(arch::sparc::ArchMode::V9).detail(true).build(),
         Arch::S390x => Capstone::new().sysz().mode(arch::sysz::ArchMode::Default).detail(true).build(),
         Arch::M68k => Capstone::new().m68k().mode(arch::m68k::ArchMode::M68k040).detail(true).build(),
-        Arch::X86 | Arch::X86_64 | Arch::Aarch64 | Arch::Arm | Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => {
+        Arch::X86
+        | Arch::X86_64
+        | Arch::Aarch64
+        | Arch::Arm
+        | Arch::Msp430
+        | Arch::Avr8
+        | Arch::Mos6502
+        | Arch::Mc6805
+        | Arch::I8051
+        | Arch::Pic16
+        | Arch::Sh2
+        | Arch::V850
+        | Arch::Tricore
+        | Arch::Xtensa
+        | Arch::Z80
+        | Arch::Hcs12
+        | Arch::Cr16c
+        | Arch::Ebpf
+        | Arch::Loongarch64
+        | Arch::Hexagon => {
             return None;
         }
     };

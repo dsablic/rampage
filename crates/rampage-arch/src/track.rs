@@ -58,7 +58,22 @@ fn native_register_width(arch: Arch) -> Option<TargetWidth> {
         Arch::X86_64 | Arch::Aarch64 | Arch::Mips64 | Arch::PowerPc64 | Arch::Riscv64 | Arch::Sparc64 | Arch::S390x => {
             Some(TargetWidth::Bits64)
         }
-        Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => None,
+        Arch::Msp430
+        | Arch::Avr8
+        | Arch::Mos6502
+        | Arch::Mc6805
+        | Arch::I8051
+        | Arch::Pic16
+        | Arch::Sh2
+        | Arch::V850
+        | Arch::Tricore
+        | Arch::Xtensa
+        | Arch::Z80
+        | Arch::Hcs12
+        | Arch::Cr16c
+        | Arch::Ebpf
+        | Arch::Loongarch64
+        | Arch::Hexagon => None,
     }
 }
 
@@ -363,7 +378,7 @@ mod width_tests {
 
     #[test]
     fn real_pilots_have_no_capstone_native_register_facts() {
-        for arch in [Arch::Msp430, Arch::Avr8, Arch::Mos6502] {
+        for arch in Arch::ALL.into_iter().skip(14) {
             let width = native_register_width(arch);
             assert_eq!(width, None, "{arch}");
             assert_eq!(wrap_native(u64::MAX, width), None);

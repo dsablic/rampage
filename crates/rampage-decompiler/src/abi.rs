@@ -152,7 +152,25 @@ pub fn language_id_with_options(arch: Arch, big_endian: bool, options: &Decompil
         Arch::Msp430 if !big_endian => ("TI_MSP430:LE:16:default".to_owned(), "default"),
         Arch::Avr8 if !big_endian => ("avr8:LE:16:default".to_owned(), "gcc"),
         Arch::Mos6502 if !big_endian => ("6502:LE:16:default".to_owned(), "default"),
-        Arch::S390x | Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => return Err(Error::UnsupportedArch(arch)),
+        Arch::S390x
+        | Arch::Msp430
+        | Arch::Avr8
+        | Arch::Mos6502
+        | Arch::Mc6805
+        | Arch::I8051
+        | Arch::Pic16
+        | Arch::Sh2
+        | Arch::V850
+        | Arch::Tricore
+        | Arch::Xtensa
+        | Arch::Z80
+        | Arch::Hcs12
+        | Arch::Cr16c
+        | Arch::Ebpf
+        | Arch::Loongarch64
+        | Arch::Hexagon => {
+            return Err(Error::UnsupportedArch(arch));
+        }
     };
     if options.arm_be8 && (arch != Arch::Arm || !big_endian) {
         return Err(Error::Ghidra("BE8 requires ARM with big-endian data".to_owned()));

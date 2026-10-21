@@ -8,71 +8,150 @@ use crate::{LoadError, Perms, Section, SectionKind, Segment};
 
 pub const MAX_RAW_BYTES: usize = 128 * 1024;
 pub const MAX_RAW_SEEDS: usize = 8192;
-const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v1";
+const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v2";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Closed set of Raw ordinary-Project profiles, admitted family by family on Project-level evidence.
+/// Every row must equal the verified native translator's metadata; the decoder factory checks this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RawProfile {
-    #[serde(rename = "TI_MSP430:LE:16:default")]
     Msp430,
-    #[serde(rename = "avr8:LE:16:default")]
     Avr8,
-    #[serde(rename = "6502:LE:16:default")]
     Mos6502,
+    I8051,
+    Pic16,
+    SuperH2,
+    V850,
+    Tricore,
+    Xtensa,
+    Z80,
+    Hcs12,
+    Mc6805,
+    Cr16c,
+    Ebpf,
+    Loongarch64,
+    Hexagon,
 }
 
+struct RawProfileFacts {
+    profile: RawProfile,
+    language_id: &'static str,
+    arch: Arch,
+    big_endian: bool,
+    code_big_endian: bool,
+    code_space: RawCodeSpace,
+    parallel_helper: Option<&'static str>,
+}
+
+const fn space(
+    name: &'static str,
+    address_size: u8,
+    word_size: u8,
+    highest_byte: u64,
+    instruction_alignment: u8,
+) -> RawCodeSpace {
+    RawCodeSpace { name, address_size, word_size, highest_byte, instruction_alignment }
+}
+
+const fn facts(
+    profile: RawProfile,
+    language_id: &'static str,
+    arch: Arch,
+    big_endian: bool,
+    code_space: RawCodeSpace,
+) -> RawProfileFacts {
+    RawProfileFacts {
+        profile,
+        language_id,
+        arch,
+        big_endian,
+        code_big_endian: big_endian,
+        code_space,
+        parallel_helper: None,
+    }
+}
+
+const HEXAGON_PARALLEL_HELPER: &str = "ghidra.app.util.viewer.field.HexagonParallelInstructionHelper";
+
+// Indexed by discriminant. Encoded address size and word units are not C-pointer defaults or cross-translator
+// space IDs; alignments are the SLA's declared instruction alignment, not the shortest encoding.
+const PROFILE_FACTS: [RawProfileFacts; 16] = [
+    facts(RawProfile::Msp430, "TI_MSP430:LE:16:default", Arch::Msp430, false, space("RAM", 2, 1, 0xffff, 2)),
+    facts(RawProfile::Avr8, "avr8:LE:16:default", Arch::Avr8, false, space("code", 2, 2, 0x1ffff, 2)),
+    facts(RawProfile::Mos6502, "6502:LE:16:default", Arch::Mos6502, false, space("RAM", 2, 1, 0xffff, 1)),
+    facts(RawProfile::I8051, "8051:BE:16:default", Arch::I8051, true, space("CODE", 2, 1, 0xffff, 1)),
+    facts(RawProfile::Pic16, "PIC-16:LE:16:PIC-16", Arch::Pic16, false, space("CODE", 2, 2, 0x1ffff, 2)),
+    facts(RawProfile::SuperH2, "SuperH:BE:32:SH-2", Arch::Sh2, true, space("ram", 4, 1, 0xffff_ffff, 1)),
+    facts(RawProfile::V850, "V850:LE:32:default", Arch::V850, false, space("ram", 4, 1, 0xffff_ffff, 2)),
+    facts(RawProfile::Tricore, "tricore:LE:32:default", Arch::Tricore, false, space("ram", 4, 1, 0xffff_ffff, 2)),
+    facts(RawProfile::Xtensa, "Xtensa:LE:32:default", Arch::Xtensa, false, space("ram", 4, 1, 0xffff_ffff, 1)),
+    facts(RawProfile::Z80, "z80:LE:16:default", Arch::Z80, false, space("ram", 2, 1, 0xffff, 1)),
+    facts(RawProfile::Hcs12, "HCS-12:BE:24:default", Arch::Hcs12, true, space("RAM", 3, 1, 0xff_ffff, 1)),
+    facts(RawProfile::Mc6805, "6805:BE:16:default", Arch::Mc6805, true, space("RAM", 2, 1, 0xffff, 1)),
+    facts(RawProfile::Cr16c, "CR16C:LE:16:default", Arch::Cr16c, false, space("ram", 4, 1, 0xffff_ffff, 2)),
+    facts(RawProfile::Ebpf, "eBPF:LE:64:default", Arch::Ebpf, false, space("ram", 8, 1, u64::MAX, 1)),
+    facts(RawProfile::Loongarch64, "Loongarch:LE:64:lp64d", Arch::Loongarch64, false, space("ram", 8, 1, u64::MAX, 4)),
+    RawProfileFacts {
+        parallel_helper: Some(HEXAGON_PARALLEL_HELPER),
+        ..facts(RawProfile::Hexagon, "Hexagon:LE:32:default", Arch::Hexagon, false, space("ram", 4, 1, 0xffff_ffff, 4))
+    },
+];
+
 impl RawProfile {
-    pub fn from_language_id(language: &str) -> Result<Self, LoadError> {
-        match language {
-            "TI_MSP430:LE:16:default" => Ok(Self::Msp430),
-            "avr8:LE:16:default" => Ok(Self::Avr8),
-            "6502:LE:16:default" => Ok(Self::Mos6502),
-            _ => Err(LoadError::Unsupported(format!("Raw pilot profile {language:?}"))),
+    pub const ALL: [RawProfile; PROFILE_FACTS.len()] = {
+        let mut all = [RawProfile::Msp430; PROFILE_FACTS.len()];
+        let mut index = 0;
+        while index < PROFILE_FACTS.len() {
+            all[index] = PROFILE_FACTS[index].profile;
+            index += 1;
         }
+        all
+    };
+
+    fn facts(self) -> &'static RawProfileFacts {
+        &PROFILE_FACTS[self as usize]
+    }
+
+    pub fn from_language_id(language: &str) -> Result<Self, LoadError> {
+        PROFILE_FACTS
+            .iter()
+            .find(|facts| facts.language_id == language)
+            .map(|facts| facts.profile)
+            .ok_or_else(|| LoadError::Unsupported(format!("Raw profile {language:?}")))
     }
 
     pub fn language_id(self) -> &'static str {
-        match self {
-            Self::Msp430 => "TI_MSP430:LE:16:default",
-            Self::Avr8 => "avr8:LE:16:default",
-            Self::Mos6502 => "6502:LE:16:default",
-        }
+        self.facts().language_id
     }
 
-    pub(crate) fn arch(self) -> Arch {
-        // Prerequisite: real identities after the classified optional-width migration, not legacy aliases.
-        match self {
-            Self::Msp430 => Arch::Msp430,
-            Self::Avr8 => Arch::Avr8,
-            Self::Mos6502 => Arch::Mos6502,
-        }
+    /// Real identity without a legacy pointer width or native decoder, never an existing-architecture alias.
+    pub fn arch(self) -> Arch {
+        self.facts().arch
+    }
+
+    /// Translator data byte order.
+    pub fn big_endian(self) -> bool {
+        self.facts().big_endian
+    }
+
+    /// Default code-space byte order.
+    pub fn code_big_endian(self) -> bool {
+        self.facts().code_big_endian
+    }
+
+    /// Declared processor-spec parallel helper; helper-gated instructions still serialize unknown flow.
+    pub fn parallel_helper(self) -> Option<&'static str> {
+        self.facts().parallel_helper
     }
 
     /// Closed profile facts. The decoder factory must check these against its verified translator.
-    /// Encoded address size and word units are not C-pointer defaults or cross-translator space IDs.
     pub fn code_space(self) -> RawCodeSpace {
-        match self {
-            Self::Msp430 => RawCodeSpace {
-                name: "RAM",
-                address_size: 2,
-                word_size: 1,
-                highest_byte: 0xffff,
-                instruction_alignment: 2,
-            },
-            Self::Avr8 => RawCodeSpace {
-                name: "code",
-                address_size: 2,
-                word_size: 2,
-                highest_byte: 0x1ffff,
-                instruction_alignment: 2,
-            },
-            Self::Mos6502 => RawCodeSpace {
-                name: "RAM",
-                address_size: 2,
-                word_size: 1,
-                highest_byte: 0xffff,
-                instruction_alignment: 1,
-            },
-        }
+        self.facts().code_space
+    }
+}
+
+impl Serialize for RawProfile {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.language_id())
     }
 }
 
@@ -203,7 +282,8 @@ impl RawCodeImage {
         text(&mut hash, space.name);
         hash.update([space.address_size, space.word_size, space.instruction_alignment]);
         hash.update(space.highest_byte.to_be_bytes());
-        // Schema v1 is exactly one RX code mapping, offset zero, no zero-fill or additional address spaces.
+        hash.update([u8::from(self.profile.big_endian()), u8::from(self.profile.code_big_endian())]);
+        // Schema v2 is exactly one RX code mapping, offset zero, no zero-fill or additional address spaces.
         hash.update([1, 0, 1]);
         for value in [self.base, self.length, self.end, 0_u64] {
             hash.update(value.to_be_bytes());
@@ -234,7 +314,20 @@ fn checked_code_end(base: u64, length: u64, highest: u64) -> Result<u64, LoadErr
 
 #[cfg(test)]
 mod tests {
-    use super::checked_code_end;
+    use super::{PROFILE_FACTS, RawProfile, checked_code_end};
+
+    #[test]
+    fn profile_table_is_indexed_by_discriminant_with_unique_languages_and_arches() {
+        for (index, profile) in RawProfile::ALL.into_iter().enumerate() {
+            assert_eq!(profile as usize, index);
+            assert_eq!(PROFILE_FACTS[index].profile, profile);
+            assert_eq!(RawProfile::from_language_id(profile.language_id()).unwrap(), profile);
+            assert_eq!(serde_json::to_value(profile).unwrap(), profile.language_id());
+            assert_eq!(profile.arch().pointer_size(), None);
+            assert_eq!(profile.arch().native_address_width(), None);
+            assert!(RawProfile::ALL[..index].iter().all(|other| other.arch() != profile.arch()));
+        }
+    }
 
     #[test]
     fn checked_ranges_refuse_both_kinds_of_overflow_and_empty_input() {

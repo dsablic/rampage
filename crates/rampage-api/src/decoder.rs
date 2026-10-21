@@ -81,7 +81,8 @@ fn validate_raw_metadata(
     raw: &rampage_loaders::RawCodeImage,
     metadata: &rampage_decompiler::sleigh_decode::ProfileMetadata,
 ) -> Result<(), DecoderInitializationError> {
-    let expected = raw.profile().code_space();
+    let profile = raw.profile();
+    let expected = profile.code_space();
     let code = metadata.spaces.iter().find(|space| space.id == metadata.code_space);
     let matches = code.is_some_and(|space| {
         space.kind == 1
@@ -90,10 +91,13 @@ fn validate_raw_metadata(
             && space.word_size == u32::from(expected.word_size)
             && space.highest == expected.highest_byte
     });
+    // A translator helper is admitted only when the profile declares exactly that helper; its gates stay unknown.
     if !matches
-        || metadata.profile != raw.profile().language_id()
+        || metadata.profile != profile.language_id()
         || metadata.alignment_bytes != u32::from(expected.instruction_alignment)
-        || metadata.required_parallel_helper.is_some()
+        || metadata.big_endian != profile.big_endian()
+        || metadata.code_big_endian != profile.code_big_endian()
+        || metadata.required_parallel_helper.as_deref() != profile.parallel_helper()
     {
         return Err(initialization("Raw admission facts disagree with the verified native translator"));
     }

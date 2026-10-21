@@ -107,7 +107,10 @@ fn profile_highest_bytes_are_byte_scaled_and_inclusive() {
 }
 
 #[test]
-fn only_exact_pilot_languages_are_admitted() {
+fn only_exact_roster_languages_are_admitted() {
+    for profile in RawProfile::ALL {
+        assert_eq!(RawProfile::from_language_id(profile.language_id()).unwrap(), profile);
+    }
     for language in [
         "avr8:LE:16:extended",
         "TI_MSP430X:LE:32:default",
@@ -115,8 +118,13 @@ fn only_exact_pilot_languages_are_admitted() {
         "avr8:LE:16:default:gcc",
         "6502",
         "../../profile.sla",
+        "SuperH:BE:32:SH-4",
+        "8051:LE:16:default",
+        "Hexagon:LE:32:default:default",
+        "x86:LE:64:default",
+        "AARCH64:BE:64:v8A",
     ] {
-        assert!(RawProfile::from_language_id(language).is_err());
+        assert!(RawProfile::from_language_id(language).is_err(), "{language}");
     }
     let profile = RawProfile::from_language_id("avr8:LE:16:default").unwrap();
     let input = RawCodeOptions { profile, base: 0x10000, entry: None, seeds: vec![] };
@@ -126,6 +134,56 @@ fn only_exact_pilot_languages_are_admitted() {
     assert!(Binary::from_raw_code(vec![0x08, 0x95], unaligned).is_err());
     let full = RawCodeOptions { profile, base: 0, entry: None, seeds: vec![] };
     assert!(Binary::from_raw_code(vec![0; MAX_RAW_BYTES], full).is_ok());
+}
+
+#[test]
+fn every_profile_admits_its_inclusive_highest_byte_and_alignment() {
+    for profile in RawProfile::ALL {
+        let space = profile.code_space();
+        let alignment = u64::from(space.instruction_alignment);
+        let length = alignment.max(2);
+        let base = space.highest_byte - (length - 1);
+        let input = RawCodeOptions { profile, base, entry: Some(base), seeds: vec![base] };
+        if space.highest_byte == u64::MAX {
+            // The exclusive end must still be representable, so the 64-bit top byte is never backed.
+            assert!(Binary::from_raw_code(vec![0; length as usize], input).is_err(), "{profile:?}");
+            let base = base - alignment;
+            let input = RawCodeOptions { profile, base, entry: Some(base), seeds: vec![base] };
+            assert!(Binary::from_raw_code(vec![0; length as usize], input).is_ok(), "{profile:?}");
+            continue;
+        }
+        let binary = Binary::from_raw_code(vec![0; length as usize], input.clone()).unwrap();
+        assert_eq!(binary.arch, profile.arch());
+        assert_eq!(binary.big_endian, profile.big_endian());
+        assert!(Binary::from_raw_code(vec![0; length as usize + 1], input).is_err(), "{profile:?}");
+        if alignment > 1 {
+            let input = RawCodeOptions { profile, base: 0x1000 + 1, entry: None, seeds: vec![] };
+            assert!(Binary::from_raw_code(vec![0; 4], input).is_err(), "{profile:?}");
+        }
+    }
+}
+
+#[test]
+fn identities_separate_every_profile_and_include_byte_order() {
+    let identities: std::collections::BTreeSet<_> = RawProfile::ALL
+        .into_iter()
+        .map(|profile| identity(vec![0; 4], RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] }))
+        .collect();
+    assert_eq!(identities.len(), RawProfile::ALL.len());
+    assert!(RawProfile::ALL.into_iter().any(RawProfile::big_endian));
+    assert!(RawProfile::ALL.into_iter().any(|profile| !profile.big_endian()));
+    for profile in RawProfile::ALL {
+        let input = RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] };
+        let binary = Binary::from_raw_code(vec![0; 4], input.clone()).unwrap();
+        assert_eq!(binary.big_endian, profile.big_endian());
+        assert!(binary.raw_interpretation_identity().unwrap().is_some());
+        let mut data = Binary::from_raw_code(vec![0; 4], input.clone()).unwrap();
+        data.big_endian = !profile.big_endian();
+        assert!(data.raw_interpretation_identity().is_err(), "{profile:?}");
+        let mut code = Binary::from_raw_code(vec![0; 4], input).unwrap();
+        code.arch = rampage_arch::Arch::X86;
+        assert!(code.raw_interpretation_identity().is_err(), "{profile:?}");
+    }
 }
 
 #[test]
