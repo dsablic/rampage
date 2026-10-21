@@ -320,6 +320,18 @@ PIC computed calls and context/delay/helper gates remain explicit misses. Native
 tests with one ignored. All eight API/CLI/MCP frontend checks and source re-review passed after aligning
 valid-unknown retention and generating the schema from the central registry. The interface checkpoint is
 `8d52a25`; this is not ordinary Project, packet-helper or C-ABI acceptance.
+The ordinary-Project Raw pilot (migration units 4–5) is implemented as a library-only slice.
+`Arch::Msp430/Avr8/Mos6502` are real identities with `pointer_size() == None`. `Binary::from_raw_code` admits
+one owned code image with a `rampage-raw-interpretation-v1` identity. A single Sleigh project-decoder factory
+serves discovery, listing and code search. Valid unknown flow serializes as `unknown` with a `decode_gate`.
+Cached analysis is bound to the interpretation and refuses drift. Immediate search, native memory images,
+patch V1, capture identity and persistent annotations refuse Raw. Exact pilot native organizations are measured
+after memimage space isolation. API library: 780 passed, nine ignored. Decompiler library: 137 passed.
+The workspace has 3571 passing tests and clean all-targets Clippy. Nine pre-existing failures reproduce
+unchanged at `2b2ead1`: derived-cache refresh, plugin sidecars, MinGW triage, the extended oracle report path,
+the parity agent, the MCP tool list and UI workspace capture. Contention tests need a non-symlinked `TMPDIR`.
+- [ ] Expose Raw Projects through MCP/CLI and cover real unknown-flow ordinary-Project cases.
+- [ ] Triage the nine pre-existing workspace test failures listed above.
 
 Phases 4.2–4.4, analysis-depth Phase 5 and scale/persistence Phase 6 follow in roadmap order. Implementation
 completion of earlier phases does not close the independent live/N, library-recall or agent-efficiency gates.

@@ -15,6 +15,21 @@ fn code(binary: Binary) -> String {
 }
 
 #[test]
+fn observed_runtime_readonly_bytes_fold_without_inventing_an_uncaptured_terminator() {
+    let source = include_bytes!("../../../tests/data/runtime-x64-string-boundary.snapshot.json");
+    let mut capture: serde_json::Value = serde_json::from_slice(source).unwrap();
+    capture["regions"][2]["bytes"] = serde_json::json!("61626300");
+    let observed = Binary::from_snapshot_bytes(serde_json::to_vec(&capture).unwrap()).unwrap();
+    assert_eq!(observed.format, Format::Snapshot);
+    assert_eq!(observed.read(0x3000, 4), Some(&b"abc\0"[..]));
+    assert!(code(observed).contains("\"abc\""));
+    let mut unobserved_tail = binary();
+    unobserved_tail.segments[2].size = 4;
+    assert_eq!(unobserved_tail.read_to_segment_end(0x3000).unwrap(), b"abc");
+    assert!(!code(unobserved_tail).contains("\"abc\""));
+}
+
+#[test]
 fn uncaptured_snapshot_tails_are_not_zero_fill() {
     let mut binary = binary();
     binary.segments[2].size = 4;

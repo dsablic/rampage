@@ -7,6 +7,7 @@ pub enum Format {
     Pe,
     MachO,
     Snapshot,
+    Raw,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]

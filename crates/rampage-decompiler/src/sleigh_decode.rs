@@ -252,6 +252,8 @@ unsafe extern "C" {
     fn rampage_sleigh_test_loader_isolation(handle: *mut c_void) -> u8;
     #[cfg(test)]
     fn rampage_sleigh_test_parser_read(start: i32, size: i32, offset: u32, bits: u8, output: *mut u32) -> u8;
+    #[cfg(test)]
+    fn rampage_memimage_test_space_isolation(handle: *mut c_void) -> u8;
 }
 
 struct RegisteredProfile {
@@ -731,6 +733,28 @@ impl Disassembler for SleighDecoder {
 #[cfg(test)]
 mod gate_projection_tests {
     use super::*;
+
+    #[test]
+    fn native_memimage_uses_translator_space_identity_not_a_numeric_offset() {
+        for profile in ["x86:LE:64:default", "TI_MSP430:LE:16:default", "avr8:LE:16:default"] {
+            let decoder = SleighDecoder::open(profile).unwrap();
+            if profile.starts_with("avr8:") {
+                for name in ["code", "mem", "register", "codebyte"] {
+                    assert!(decoder.metadata().spaces.iter().any(|space| space.name == name), "{name}");
+                }
+            }
+            let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+            // SAFETY: this probe uses the live translator's spaces under FFI_LOCK and retains no pointers.
+            let status = unsafe { rampage_memimage_test_space_isolation(decoder.handle) };
+            println!(
+                "MEMIMAGE_SPACE_ISOLATION {}",
+                serde_json::json!({
+                    "profile": profile, "metadata": decoder.metadata(), "native_probe_status": status,
+                })
+            );
+            assert_eq!(status, 1, "{profile}");
+        }
+    }
 
     #[test]
     fn helper_gate_uses_canonical_static_profile_and_exact_reason_on_both_decode_entry_points() {

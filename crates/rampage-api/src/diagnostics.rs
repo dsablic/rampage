@@ -26,7 +26,7 @@ impl Project {
         &self,
         include_discovery: bool,
     ) -> Result<rampage_analysis::diagnostics::Diagnostics, ApiError> {
-        let analysis = if include_discovery { Some(self.analysis()?) } else { self.cached_analysis() };
+        let analysis = if include_discovery { Some(self.analysis()?) } else { self.cached_analysis_checked()? };
         let modes = analysis.map_or(&[][..], |analysis| analysis.program.code_modes.as_slice());
         let mut diagnostics = rampage_analysis::diagnostics::diagnostics_with_modes(&self.binary, modes);
         if let Some(analysis) = analysis {
@@ -73,6 +73,18 @@ mod tests {
         std::fs::copy(source, &owned.0).unwrap();
         let project = Project::new(Binary::open(&owned.0).unwrap());
         (owned, project)
+    }
+
+    #[test]
+    fn metadata_diagnostics_refuse_a_changed_cached_native_source_without_rediscovery() {
+        let (image, project) = copied_image();
+        assert!(project.analysis_diagnostics(true).unwrap().discovery.is_some());
+        let replacement = OwnedFile(image.0.with_extension("replacement"));
+        std::fs::copy(&image.0, &replacement.0).unwrap();
+        std::fs::rename(&replacement.0, &image.0).unwrap();
+        let error = project.analysis_diagnostics(false).unwrap_err();
+        assert!(error.to_string().contains("cached analysis source"), "{error}");
+        assert!(project.analysis_cache_status().program);
     }
 
     #[test]

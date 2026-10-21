@@ -9,6 +9,9 @@ mod abi;
 mod context;
 pub mod layout;
 mod layout_wire;
+#[cfg(test)]
+#[path = "pilot_native_abi_measurements.rs"]
+mod pilot_native_abi_measurements;
 pub mod results;
 pub mod sleigh_decode;
 mod specs;

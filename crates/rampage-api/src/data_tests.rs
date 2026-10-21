@@ -163,7 +163,8 @@ fn compiled_stripped_descriptor_links_have_independent_source_ground_truth() {
     let path = std::env::var_os("RAMPAGE_DATA_FIXTURE").expect("set RAMPAGE_DATA_FIXTURE to the owned dylib");
     let project = Project::new(Binary::open(path).unwrap());
     let table = project.resolve("_owned_blocks").unwrap();
-    let size = usize::from(project.binary.arch.pointer_size());
+    let width = project.binary.arch.pointer_size().expect("owned native dylib fixture pointer width");
+    let size = usize::from(width);
     let report = project.inspect_data(&DataQuery { address: table, size, word_size: None }).unwrap();
     let descriptor = report.words[0].candidate.as_ref().unwrap();
     assert!(!descriptor.code_range);

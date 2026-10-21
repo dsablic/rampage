@@ -67,6 +67,51 @@ fn expected() -> PlainStructLayout {
 }
 
 #[test]
+fn unified_readonly_and_writable_data_backing_preserves_tracked_native_layout() {
+    let code = [0x8b, 0x05, 0xfa, 0x0f, 0x00, 0x00, 0xc3];
+    let value = 42_u32.to_le_bytes();
+    for writable in [false, true] {
+        let regions = [
+            MemoryRegion {
+                base: 0x1000,
+                bytes: &code,
+                size: code.len() as u64,
+                readable: true,
+                writable: false,
+                executable: true,
+            },
+            MemoryRegion {
+                base: 0x2000,
+                bytes: &value,
+                size: value.len() as u64,
+                readable: true,
+                writable,
+                executable: false,
+            },
+        ];
+        let mut engine =
+            Decompiler::open_with_options(Arch::X86_64, false, &regions, &DecompilerOptions::default()).unwrap();
+        engine.parse_c(DECLARATION).unwrap();
+        engine.assert_plain_struct_layout(&expected()).unwrap();
+        engine.add_global(0x2000, "int4 observed_value;").unwrap();
+        engine.set_symbol(0x1000, "read_constant").unwrap();
+        engine.apply_prototype(0x1000, false, "int4 read_constant(void);").unwrap();
+        let text = engine.decompile(0x1000, "read_constant", false).unwrap();
+        assert!(text.contains("return observed_value;"), "{text}");
+        assert_eq!(engine.structured_result().unwrap().signature.return_type.size, 4);
+        assert_eq!(engine.inspect_plain_struct("layout_flat").unwrap(), expected());
+        engine.assert_plain_struct_layout(&expected()).unwrap();
+        let mut unsupported = expected();
+        unsupported.organization.pointer_size = 2;
+        unsupported.organization.int_size = 2;
+        unsupported.organization.long_size = 4;
+        assert!(unsupported.validate().is_err());
+        assert!(engine.assert_plain_struct_layout(&unsupported).is_err());
+        engine.assert_plain_struct_layout(&expected()).unwrap();
+    }
+}
+
+#[test]
 fn natural_flat_struct_is_inspected_and_asserted_with_tail_padding() {
     let mut engine = open(&[0x31, 0xc0, 0xc3]);
     engine.parse_c(DECLARATION).unwrap();

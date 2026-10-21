@@ -42,6 +42,27 @@ matched. CR16 conditional recovery was improved without changing its comparator 
 Hexagon still reports a helper-required gate: matching raw fixture p-code is not general packet support.
 These finite fixtures do not establish full-ISA, C-ABI or ordinary-project acceptance.
 
+## Ordinary Raw Projects (library pilot)
+
+`Binary::from_raw_code(bytes, RawCodeOptions { profile, base, entry, seeds })` admits one owned RX code
+image for exactly three profiles: `TI_MSP430:LE:16:default`, `avr8:LE:16:default` and `6502:LE:16:default`
+(`Arch::Msp430`, `Arch::Avr8`, `Arch::Mos6502`). Input is 1..=128 KiB with at most 8192 seeds. Base, entry and
+seeds must be aligned to the profile and backed by code bytes. The last byte must stay within the profile's
+code-space highest byte. Header-driven `Binary::open` never falls back to Raw or infers an entry.
+
+A Raw `Project` routes discovery, listing and code search through one Sleigh decoder factory. That factory
+checks the admitted code-space facts against the verified native translator before use. Valid instructions
+with unknown successors serialize `flow: "unknown"` with a `decode_gate`. They stop successor discovery and
+are never reported as fall-through, return or noreturn. The cached analysis is bound to a
+`rampage-raw-interpretation-v1` identity covering bytes, profile, mapping, entry and seeds. Edited loader
+fields or a failed specification recheck refuse the cache instead of serving it stale.
+
+Raw Projects refuse immediate/constant code search (no typed operands) and native decompiler memory images
+(no translator-space binding yet). They also refuse patch V1, capture identity and backing-source proofs.
+Annotations are memory-only, even when a persistent log is supplied. The three pilot architectures have no
+legacy pointer width (`pointer_size()` is `None`) and no native/Capstone decoder. Raw Projects are not yet
+exposed through MCP or CLI. Multi-region maps, HEX/SREC and vector seeding remain Phase 4.2 work.
+
 ## Window and discovery contract
 
 The standalone Core tool is `inspect_sleigh`; it does not open a native executable project first.

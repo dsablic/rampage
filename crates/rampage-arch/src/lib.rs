@@ -34,10 +34,13 @@ pub enum Arch {
     Sparc64,
     S390x,
     M68k,
+    Msp430,
+    Avr8,
+    Mos6502,
 }
 
 /// Each architecture's name, followed by the other spellings it is known by.
-const NAMES: [(Arch, &[&str]); 14] = [
+const NAMES: [(Arch, &[&str]); 17] = [
     (Arch::X86, &["x86", "i386", "i686"]),
     (Arch::X86_64, &["x86_64", "x64", "amd64"]),
     (Arch::Aarch64, &["aarch64", "arm64"]),
@@ -52,11 +55,14 @@ const NAMES: [(Arch, &[&str]); 14] = [
     (Arch::Sparc64, &["sparc64", "sparcv9"]),
     (Arch::S390x, &["s390x", "systemz"]),
     (Arch::M68k, &["m68k"]),
+    (Arch::Msp430, &["msp430"]),
+    (Arch::Avr8, &["avr8"]),
+    (Arch::Mos6502, &["mos6502", "6502"]),
 ];
 
 impl Arch {
-    pub const ALL: [Arch; 14] = {
-        let mut all = [Arch::X86; 14];
+    pub const ALL: [Arch; 17] = {
+        let mut all = [Arch::X86; 17];
         let mut index = 0;
         while index < NAMES.len() {
             all[index] = NAMES[index].0;
@@ -76,6 +82,7 @@ impl Arch {
             | Arch::Riscv64
             | Arch::Sparc64
             | Arch::S390x => Some(8),
+            Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => None,
         }
     }
 
@@ -92,15 +99,13 @@ impl Arch {
             | Arch::Riscv64
             | Arch::Sparc64
             | Arch::S390x => Some(TargetWidth::Bits64),
+            Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => None,
         }
     }
 
-    /// Bytes in a pointer.
-    pub fn pointer_size(self) -> u8 {
-        match self {
-            Arch::X86 | Arch::Arm | Arch::Mips | Arch::PowerPc | Arch::Riscv32 | Arch::Sparc | Arch::M68k => 4,
-            _ => 8,
-        }
+    /// Optional legacy default, not a compiler-specific C layout or a code-space bound.
+    pub fn pointer_size(self) -> Option<u8> {
+        self.default_pointer_size()
     }
 
     /// Instructions executed after a branch before it takes effect (MIPS and SPARC delay slots).
@@ -479,7 +484,7 @@ mod width_tests {
     #[test]
     fn native_machine_widths_preserve_the_fourteen_address_bounds() {
         let expected = [4, 8, 8, 4, 4, 8, 4, 8, 4, 8, 4, 8, 8, 4];
-        for (arch, bytes) in Arch::ALL.into_iter().zip(expected) {
+        for (arch, bytes) in Arch::ALL.into_iter().take(14).zip(expected) {
             let width = arch.native_address_width().unwrap();
             assert_eq!(width.bytes(), bytes);
             assert_eq!(width.highest_address(), if bytes == 4 { u64::from(u32::MAX) } else { u64::MAX });
@@ -489,10 +494,23 @@ mod width_tests {
     #[test]
     fn optional_defaults_preserve_all_fourteen_legacy_widths() {
         let expected = [4, 8, 8, 4, 4, 8, 4, 8, 4, 8, 4, 8, 8, 4];
-        assert_eq!(Arch::ALL.len(), expected.len());
-        for (arch, width) in Arch::ALL.into_iter().zip(expected) {
-            assert_eq!(arch.pointer_size(), width, "{arch}");
+        assert_eq!(Arch::ALL.len(), 17);
+        for (arch, width) in Arch::ALL.into_iter().take(14).zip(expected) {
+            assert_eq!(arch.pointer_size(), Some(width), "{arch}");
             assert_eq!(arch.default_pointer_size(), Some(width), "{arch}");
         }
+    }
+
+    #[test]
+    fn pilots_are_real_identities_without_legacy_widths_or_native_decoders() {
+        for (arch, name) in [(Arch::Msp430, "msp430"), (Arch::Avr8, "avr8"), (Arch::Mos6502, "mos6502")] {
+            assert_eq!(name.parse::<Arch>().unwrap(), arch);
+            assert_eq!(arch.to_string(), name);
+            assert_eq!(arch.pointer_size(), None);
+            assert_eq!(arch.default_pointer_size(), None);
+            assert_eq!(arch.native_address_width(), None);
+            assert!(super::decoder_for(arch).is_err());
+        }
+        assert_eq!("6502".parse::<Arch>().unwrap(), Arch::Mos6502);
     }
 }

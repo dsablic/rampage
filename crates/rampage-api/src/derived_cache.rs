@@ -146,7 +146,8 @@ pub fn capture_function_inventory(
 ) -> Result<PreparedFunctionInventory, ApiError> {
     control.phase(ProjectWorkspacePhase::CapturingInputs, None, 0, 1)?;
     backing(&project)?;
-    let analysis = project.cached_analysis().ok_or_else(|| invalid("inventory capture requires completed analysis"))?;
+    let analysis =
+        project.cached_analysis_checked()?.ok_or_else(|| invalid("inventory capture requires completed analysis"))?;
     let names_revision = background_held_names_revision(&project, control)?;
     let key = key::dependency_key(&project, control)?;
     control.phase(ProjectWorkspacePhase::CapturingInventory, None, 0, 1)?;
@@ -193,8 +194,9 @@ fn project_rows(
     project: &Project,
     control: &ProjectWorkspaceTaskControl<'_>,
 ) -> Result<Vec<FunctionInventoryCacheRow>, ApiError> {
-    let analysis =
-        project.cached_analysis().ok_or_else(|| invalid("inventory projection requires completed analysis"))?;
+    let analysis = project
+        .cached_analysis_checked()?
+        .ok_or_else(|| invalid("inventory projection requires completed analysis"))?;
     let mut rows = Vec::with_capacity(analysis.program.functions.len().min(DEFAULT_ROWS));
     let mut named_bytes = 0usize;
     let mut blocks = 0usize;

@@ -345,6 +345,15 @@ fn fingerprint_availability(
                 .map_err(|error| ApiError::Invalid(error.to_string()))?,
         );
     }
+    if let Some(raw) = project
+        .binary
+        .raw_interpretation_identity()
+        .map_err(|error| ApiError::Invalid(format!("type propagation Raw identity unavailable: {error}")))?
+    {
+        hash.update(
+            serde_json::to_vec(&(raw.schema, raw.sha256)).map_err(|error| ApiError::Invalid(error.to_string()))?,
+        );
+    }
     hash.update(crate::debug_layout_import::current_specification_digest()?.as_bytes());
     let image_context = serde_json::to_vec(&(
         project

@@ -131,6 +131,8 @@ pub struct Binary {
     /// Register-ABI Go functions' argument layouts by entry address, set by [`Binary::recover_go_symbols`].
     #[serde(skip)]
     pub go_arguments: std::collections::BTreeMap<u64, crate::gopclntab::GoArguments>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    raw: Option<crate::RawCodeImage>,
     #[serde(skip)]
     image: Range<usize>,
 }
@@ -235,6 +237,100 @@ fn note_native_parse_entry() {
 }
 
 impl Binary {
+    /// Owns one explicitly interpreted code image. No header parsing, entry inference or filesystem access.
+    /// All addresses are internal byte offsets; this is not a C data-space or capture mapping.
+    pub fn from_raw_code(data: Vec<u8>, options: crate::RawCodeOptions) -> Result<Self, LoadError> {
+        let raw = crate::RawCodeImage::admit(data.len(), options)?;
+        let arch = raw.profile().arch();
+        let len = data.len();
+        Ok(Self {
+            format: Format::Raw,
+            arch,
+            entry: raw.entry(),
+            segments: vec![raw.segment()],
+            sections: vec![raw.section()],
+            symbols: Vec::new(),
+            imports: Vec::new(),
+            import_slots: Vec::new(),
+            exports: Vec::new(),
+            function_starts: raw.seeds().to_vec(),
+            slices: vec![arch],
+            warnings: Vec::new(),
+            details: Details::None,
+            big_endian: false,
+            thumb: Vec::new(),
+            overlay: None,
+            code_big_endian: false,
+            code_ranges: vec![raw.range()],
+            global_pointer: None,
+            got: None,
+            rebases: Vec::new(),
+            data: Bytes::Owned(data),
+            snapshot_source: None,
+            provenance: None,
+            snapshot_modules: Vec::new(),
+            snapshot_registers: Vec::new(),
+            snapshot_target: None,
+            embedded: None,
+            go_table: None,
+            go_arguments: std::collections::BTreeMap::new(),
+            raw: Some(raw),
+            image: 0..len,
+        })
+    }
+
+    /// Retained admission facts, not translator-verified facts or source authority.
+    pub fn raw_code_image(&self) -> Option<&crate::RawCodeImage> {
+        self.raw.as_ref()
+    }
+
+    /// Content-and-interpretation identity, not a mapped-file freshness or producer/capture proof.
+    /// Public loader fields can be edited; refuse interpretation drift instead of returning a stale key.
+    pub fn raw_interpretation_identity(&self) -> Result<Option<crate::RawInterpretationIdentity>, LoadError> {
+        let Some(raw) = &self.raw else {
+            return if self.format == Format::Raw {
+                Err(LoadError::Malformed("Raw has no retained admission facts".into()))
+            } else {
+                Ok(None)
+            };
+        };
+        if self.format != Format::Raw
+            || !self.symbols.is_empty()
+            || !self.imports.is_empty()
+            || !self.import_slots.is_empty()
+            || !self.exports.is_empty()
+            || !self.warnings.is_empty()
+            || !matches!(&self.details, Details::None)
+            || self.overlay.is_some()
+            || self.global_pointer.is_some()
+            || self.got.is_some()
+            || self.go_table.is_some()
+            || !self.go_arguments.is_empty()
+            || self.arch != raw.profile().arch()
+            || self.entry != raw.entry()
+            || self.function_starts != raw.seeds()
+            || self.segments != [raw.segment()]
+            || self.sections != [raw.section()]
+            || self.slices != [self.arch]
+            || self.big_endian
+            || self.code_big_endian
+            || !self.thumb.is_empty()
+            || self.code_ranges != [raw.range()]
+            || self.image != (0..self.data.len())
+            || self.data.len() as u64 != raw.length()
+            || !matches!(&self.data, Bytes::Owned(_))
+            || self.snapshot_source.is_some()
+            || self.provenance.is_some()
+            || !self.snapshot_modules.is_empty()
+            || !self.snapshot_registers.is_empty()
+            || self.snapshot_target.is_some()
+            || self.embedded.is_some()
+        {
+            return Err(LoadError::Malformed("Raw interpretation differs from retained admission facts".into()));
+        }
+        Ok(Some(raw.identity(self.image_bytes())))
+    }
+
     /// Bounded linkage evidence from this retained image, without opening dependency paths.
     pub fn linkage_metadata(&self, limits: crate::LinkageLimits) -> Result<crate::LinkageMetadata, LoadError> {
         crate::linkage_metadata(self, limits)
@@ -324,6 +420,7 @@ impl Binary {
             embedded: None,
             go_table: None,
             go_arguments: std::collections::BTreeMap::new(),
+            raw: None,
         })
     }
 
@@ -795,6 +892,7 @@ impl Binary {
             embedded: None,
             go_table: None,
             go_arguments: std::collections::BTreeMap::new(),
+            raw: None,
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);

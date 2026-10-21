@@ -4,7 +4,8 @@
 
 `capture_function_inventory(Arc<Project>, &mut ProjectWorkspaceTaskControl)` returns
 `Result<PreparedFunctionInventory, ApiError>`. It requires already completed successful
-`Project::cached_analysis()`. It never initializes analysis, scans for functions or calls native code.
+`Project::cached_analysis_checked()`, with current backing/interpretation checks and typed cached errors.
+It never initializes analysis, scans for functions or initializes a native decoder.
 
 `read_function_inventory(Arc<Project>, &Path, &mut control)` returns
 `Result<InventoryCacheReadOutcome, ApiError>`, with these outcomes:

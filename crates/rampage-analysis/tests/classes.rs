@@ -38,7 +38,7 @@ fn fixture_with_code(arch: Arch, big_endian: bool, words: &[u64], thumb: bool, c
     let mut bytes = String::new();
     for &word in words {
         let encoded = if big_endian { word.to_be_bytes() } else { word.to_le_bytes() };
-        let width = usize::from(arch.pointer_size());
+        let width = usize::from(arch.pointer_size().expect("native class fixture pointer width"));
         let encoded = if big_endian { &encoded[8 - width..] } else { &encoded[..width] };
         for byte in encoded {
             write!(bytes, "{byte:02x}").unwrap();
@@ -67,7 +67,7 @@ fn fixture_with_code(arch: Arch, big_endian: bool, words: &[u64], thumb: bool, c
         Symbol {
             name: "_ZTV3Foo".to_owned(),
             address: 0x3000,
-            size: (words.len() * usize::from(arch.pointer_size())) as u64,
+            size: (words.len() * usize::from(arch.pointer_size().expect("native class fixture pointer width"))) as u64,
             kind: SymbolKind::Data,
         },
         Symbol { name: "_ZTI3Foo".to_owned(), address: 0x4000, size: 8, kind: SymbolKind::Data },
@@ -94,7 +94,8 @@ fn named_headers_preserve_signed_offsets_endianness_and_sources() {
         assert_eq!(class.rtti_candidate.classification, RttiClassification::KnownSymbol);
         assert_eq!(class.rtti_candidate.symbol.as_deref(), Some("_ZTI3Foo"));
         assert_eq!(class.slots.iter().map(|slot| slot.target).collect::<Vec<_>>(), [Some(0x1000), Some(0x1004)]);
-        assert_eq!(class.slots[0].address, 0x3000 + 2 * u64::from(arch.pointer_size()));
+        let width = arch.pointer_size().expect("native class fixture pointer width");
+        assert_eq!(class.slots[0].address, 0x3000 + 2 * u64::from(width));
         assert_eq!(class.slots[1].index, 1);
         assert_eq!(class.source, "named_itanium_vtable_symbol");
         assert_eq!(class.confidence, "raw_named_vtable_evidence");

@@ -303,12 +303,17 @@ fn interpret(
 
 fn instruction(project: &Project, address: u64) -> Result<(String, Vec<OperandEvidence>), ApiError> {
     project.binary.validate_available_backing_source().map_err(|error| invalid(error.to_string()))?;
-    let mut decoder = project.binary.decoder()?;
+    let mut decoder = crate::decoder::project_decoder(project)?;
     let code = project
         .binary
         .code_from(address)
         .ok_or_else(|| invalid(format!("address {address:#x} is not file-backed code")))?;
     let insn = decoder.decode(code, address);
+    if decoder.decode_gate().is_some() {
+        return Err(ApiError::Unavailable(
+            "structured operand evidence is unavailable for this valid unknown-flow instruction".into(),
+        ));
+    }
     let len = usize::from(insn.len);
     if insn.flow == Flow::Invalid || len == 0 || len > 32 || len > code.len() {
         return Err(invalid("instruction is invalid, truncated, or exceeds 32 bytes"));

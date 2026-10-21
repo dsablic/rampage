@@ -705,6 +705,17 @@ fn identity_controlled(
     control: &ProjectWorkspaceTaskControl<'_>,
 ) -> Result<ProjectWorkspaceIdentity, ApiError> {
     control.check()?;
+    let format = match binary.format {
+        Format::Elf => "elf",
+        Format::Pe => "pe",
+        Format::MachO => "macho",
+        Format::Snapshot => "snapshot",
+        Format::Raw => {
+            return Err(invalid(
+                "Raw workspace persistence is unsupported: interpretation-bound workspace identity is not implemented",
+            ));
+        }
+    };
     if binary.file_bytes().len() as u64 > SOURCE_BYTES {
         return Err(invalid("workspace source exceeds 128 MiB"));
     }
@@ -715,13 +726,7 @@ fn identity_controlled(
         source_sha256: source_sha256.clone(),
         image_sha256: digest_controlled(binary.image_bytes(), control)?,
         source_bytes: binary.file_bytes().len() as u64,
-        format: match binary.format {
-            Format::Elf => "elf",
-            Format::Pe => "pe",
-            Format::MachO => "macho",
-            Format::Snapshot => "snapshot",
-        }
-        .to_owned(),
+        format: format.to_owned(),
         architecture: binary.arch.to_string(),
         data_big_endian: target.data_big_endian,
         code_big_endian: target.big_endian,
@@ -1078,4 +1083,43 @@ fn digest(bytes: &[u8]) -> String {
 
 fn invalid(message: impl Into<String>) -> ApiError {
     ApiError::Invalid(message.into())
+}
+
+#[cfg(test)]
+mod raw_tests {
+    use std::sync::atomic::AtomicBool;
+
+    use rampage_loaders::{Binary, RawCodeOptions, RawProfile};
+
+    use super::{ProjectWorkspaceTaskControl, identity_controlled, uncontrolled};
+    use crate::ApiError;
+
+    #[test]
+    fn raw_cannot_acquire_a_legacy_workspace_identity() {
+        for profile in [RawProfile::Msp430, RawProfile::Avr8, RawProfile::Mos6502] {
+            let options = RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] };
+            let binary = Binary::from_raw_code(vec![0; 4], options).unwrap();
+            let result = uncontrolled(|control| identity_controlled(&binary, control));
+            assert!(
+                matches!(result, Err(ApiError::Invalid(ref message))
+                if message.contains("Raw workspace persistence is unsupported")),
+                "{result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_keeps_its_unavailable_classification_before_raw_workspace_refusal() {
+        let options = RawCodeOptions { profile: RawProfile::Avr8, base: 0x1000, entry: None, seeds: vec![] };
+        let binary = Binary::from_raw_code(vec![0; 4], options).unwrap();
+        let cancelled = AtomicBool::new(true);
+        let mut observer = |_| {};
+        let control = ProjectWorkspaceTaskControl::new(&cancelled, &mut observer);
+        let result = identity_controlled(&binary, &control);
+        assert!(
+            matches!(result, Err(ApiError::Unavailable(ref message))
+            if message.contains("cancellation")),
+            "{result:?}"
+        );
+    }
 }

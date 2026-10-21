@@ -239,14 +239,11 @@ pub struct CodeSearchEvidence {
     pub source_encoding: Option<SourceStringEncoding>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct CodeSearchHit {
     /// Sort/pagination key: the instruction site, or the function entry in reference mode.
-    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
-    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub site: u64,
-    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub function: u64,
     pub function_name: String,
     pub function_name_truncated: bool,
@@ -255,6 +252,28 @@ pub struct CodeSearchHit {
     pub text_truncated: bool,
     pub flow: Flow,
     pub evidence: CodeSearchEvidence,
+    pub decode_gate: Option<rampage_arch::DecodeGate>,
+}
+
+impl Serialize for CodeSearchHit {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        for (key, address) in [("address", self.address), ("site", self.site), ("function", self.function)] {
+            map.serialize_entry(key, &format!("{address:#x}"))?;
+        }
+        map.serialize_entry("function_name", &self.function_name)?;
+        map.serialize_entry("function_name_truncated", &self.function_name_truncated)?;
+        map.serialize_entry("bytes", &self.bytes)?;
+        map.serialize_entry("text", &self.text)?;
+        map.serialize_entry("text_truncated", &self.text_truncated)?;
+        map.serialize_entry("flow", &crate::listing::presented_flow(self.flow, self.decode_gate))?;
+        map.serialize_entry("evidence", &self.evidence)?;
+        if let Some(gate) = self.decode_gate {
+            map.serialize_entry("decode_gate", &gate)?;
+        }
+        map.end()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -299,6 +318,16 @@ impl Project {
             return Ok(cancelled_report(query, "Cancelled before native analysis initialization."));
         }
         let analysis = self.analysis()?;
+        if self.binary.raw_code_image().is_some()
+            && matches!(
+                &query.kind,
+                CodeSearchKind::Immediate(_) | CodeSearchKind::FunctionsReferencing(CodeReference::Constant(_))
+            )
+        {
+            return Err(ApiError::Unavailable(
+                "selected Sleigh Project decoder has no typed operand evidence; immediate search is unsupported".into(),
+            ));
+        }
         // Analysis initialization is not interruptible; preparation below must not inherit that exception.
         if control.cancelled() {
             return Ok(cancelled_report(query, "Cancelled immediately after native analysis initialization."));
@@ -373,6 +402,7 @@ fn search_program(
     let mut unsupported_operands = 0;
     let mut unresolved_flows = 0;
     let mut source_bytes = 0;
+    let mut unknown_gates = 0;
     let mut source_truncated = false;
     let mut source_cache = BTreeMap::new();
     let mut references_read = 0;
@@ -395,7 +425,8 @@ fn search_program(
             stop_reason = reason;
         }
     }
-    let mut decoder = if incomplete { None } else { Some(project.binary.decoder()?) };
+    let mut decoder = if incomplete { None } else { Some(crate::decoder::project_decoder(project)?) };
+    let mut preview_decoder: Option<Box<dyn rampage_arch::Disassembler>> = None;
     if let Some(decoder) = &mut decoder {
         decoder.set_code_modes(&program.code_modes);
     }
@@ -423,7 +454,8 @@ fn search_program(
         };
         decoder.begin_run();
         let mut offset = 0;
-        while offset < bytes.len() {
+        let mut gated = false;
+        while offset < bytes.len() && !gated {
             if control.cancelled() {
                 incomplete = true;
                 stop_reason = SearchStopReason::Cancelled;
@@ -467,15 +499,43 @@ fn search_program(
             source_bytes += window;
             inspected_code_bytes += window as u64;
             let mut decode_bytes = &bytes[offset..offset + window];
-            let semantic_limit =
-                match semantic_lookahead(project, decoder.as_ref(), decode_bytes, address, query, control, &mut work) {
-                    Ok(limit) => limit,
-                    Err(reason) => {
-                        incomplete = true;
-                        stop_reason = reason;
-                        break 'blocks;
-                    }
-                };
+            if preview_decoder.is_none()
+                && matches!(
+                    project.binary.arch,
+                    rampage_arch::Arch::X86
+                        | rampage_arch::Arch::X86_64
+                        | rampage_arch::Arch::Mips
+                        | rampage_arch::Arch::Mips64
+                        | rampage_arch::Arch::PowerPc
+                        | rampage_arch::Arch::PowerPc64
+                        | rampage_arch::Arch::Sparc
+                        | rampage_arch::Arch::Sparc64
+                )
+            {
+                if let Err(reason) = charge_work(query, control, &mut work, project.binary.thumb.len() as u64) {
+                    incomplete = true;
+                    stop_reason = reason;
+                    break 'blocks;
+                }
+                preview_decoder = Some(crate::decoder::project_decoder(project)?);
+            }
+            let semantic_limit = match semantic_lookahead(
+                project,
+                decoder.as_ref(),
+                preview_decoder.as_deref_mut(),
+                decode_bytes,
+                address,
+                query,
+                control,
+                &mut work,
+            ) {
+                Ok(limit) => limit,
+                Err(reason) => {
+                    incomplete = true;
+                    stop_reason = reason;
+                    break 'blocks;
+                }
+            };
             if let Some(limit) = semantic_limit.filter(|&limit| limit > window) {
                 // Production get-PC classification reads following instructions, potentially past this
                 // discovered block. code_from stops at the original code range/file-backed segment end.
@@ -517,6 +577,8 @@ fn search_program(
             let mut instruction = decoder.decode_with_memory(decode_bytes, address, &|at, size| {
                 pointer_state.borrow_mut().read(project, query, control, decoded_bytes, at, size)
             });
+            let decode_gate = decoder.decode_gate();
+            gated = decode_gate.is_some();
             let pointer_state = pointer_state.into_inner();
             source_bytes = pointer_state.source_bytes;
             work = pointer_state.work;
@@ -530,10 +592,13 @@ fn search_program(
             if size == 0
                 || size > decode_bytes.len()
                 || size > bytes.len() - offset
-                || instruction.flow == Flow::Invalid
+                || (instruction.flow == Flow::Invalid && decode_gate.is_none())
             {
                 invalid_blocks += 1;
                 break;
+            }
+            if gated {
+                unknown_gates += 1;
             }
             source_bytes -= size;
             decoded_bytes += size as u64;
@@ -544,9 +609,10 @@ fn search_program(
                 stop_reason = reason;
                 break 'blocks;
             }
-            if let Ok(index) = program
-                .resolved_flows
-                .binary_search_by_key(&(function, address), |resolved| (resolved.function, resolved.address))
+            if decode_gate.is_none()
+                && let Ok(index) = program
+                    .resolved_flows
+                    .binary_search_by_key(&(function, address), |resolved| (resolved.function, resolved.address))
             {
                 instruction.flow = program.resolved_flows[index].flow;
             }
@@ -556,7 +622,21 @@ fn search_program(
             if query.range.as_ref().is_some_and(|range| !range.contains(&address)) {
                 continue;
             }
-            let text = decoder.format(native, address);
+            let text = if decode_gate.is_some() {
+                if let Err(reason) = charge_work(query, control, &mut work, tree_work(program.decode_gates.len())) {
+                    incomplete = true;
+                    stop_reason = reason;
+                    break 'blocks;
+                }
+                let retained_gate =
+                    program.decode_gate_at(function, address).filter(|retained| Some(retained.gate) == decode_gate);
+                match retained_gate {
+                    Some(retained) => retained.text.clone(),
+                    None => decoder.format(decode_bytes, address),
+                }
+            } else {
+                decoder.format(native, address)
+            };
             let evidence = match &query.kind {
                 CodeSearchKind::Immediate(value)
                 | CodeSearchKind::FunctionsReferencing(CodeReference::Constant(value)) => {
@@ -705,11 +785,12 @@ fn search_program(
                     text_truncated,
                     flow: instruction.flow,
                     evidence,
+                    decode_gate,
                 },
             );
         }
     }
-    let scan_complete = !incomplete && invalid_blocks == 0;
+    let scan_complete = !incomplete && invalid_blocks == 0 && unsupported_operands == 0 && unknown_gates == 0;
     let mut limitations = vec![
         "Only production-discovered blocks and retained xrefs are searched; undiscovered code, unresolved indirect \
          references, and runtime-generated/decoded strings are not covered. No target code is executed."
@@ -733,6 +814,12 @@ fn search_program(
         limitations.push(format!(
             "{unsupported_operands} instructions had absent/partial native operand evidence; their unsupported \
              operands were not guessed from text."
+        ));
+    }
+    if unknown_gates != 0 {
+        limitations.push(format!(
+            "{unknown_gates} valid instructions have unknown successors; their gate/text/length are retained, \
+             their legacy Invalid flow is a STOP sentinel, and no successor or complete-search claim is made."
         ));
     }
     if unresolved_flows != 0 {
@@ -880,9 +967,11 @@ fn tree_work(entries: usize) -> u64 {
 /// Only get-PC candidates need semantic context beyond the ordinary instruction window. All bytes
 /// passed here have already been charged. Link-register decoders probe four following instructions;
 /// x86 probes one following instruction. Preview decoders are independent, never the live run's state.
+#[allow(clippy::too_many_arguments)]
 fn semantic_lookahead(
     project: &Project,
     decoder: &dyn rampage_arch::Disassembler,
+    mut preview: Option<&mut (dyn rampage_arch::Disassembler + 'static)>,
     bytes: &[u8],
     address: u64,
     query: &CodeSearchQuery,
@@ -915,7 +1004,8 @@ fn semantic_lookahead(
                 return Ok(None);
             }
             charge_work(query, control, work, bytes.len() as u64)?;
-            let mut preview = rampage_arch::decoder_for(arch).expect("x86 has a native decoder");
+            let preview = preview.as_mut().ok_or(SearchStopReason::IncompleteEvidence)?;
+            preview.begin_run();
             let instruction = preview.decode(bytes, address);
             Ok((instruction.flow == Flow::Call(address.wrapping_add(u64::from(instruction.len))))
                 .then_some(usize::from(instruction.len) + 15))
@@ -927,7 +1017,8 @@ fn semantic_lookahead(
         | rampage_arch::Arch::Sparc
         | rampage_arch::Arch::Sparc64 => {
             charge_work(query, control, work, bytes.len() as u64 + project.binary.thumb.len() as u64)?;
-            let mut preview = project.binary.decoder().map_err(|_| SearchStopReason::IncompleteEvidence)?;
+            let preview = preview.as_mut().ok_or(SearchStopReason::IncompleteEvidence)?;
+            preview.begin_run();
             let instruction = preview.decode(bytes, address);
             let next = address.wrapping_add(u64::from(instruction.len) * (1 + u64::from(arch.delay_slots())));
             Ok((instruction.flow == Flow::Call(next)).then_some(usize::from(instruction.len) + 16))

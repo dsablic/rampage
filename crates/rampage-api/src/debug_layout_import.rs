@@ -167,7 +167,7 @@ fn validate_native_source_work(project: &Project, work: ReplayWork) -> Result<()
     }
     // Entry replay's function-resolution work is bounded by its actual plan, not a prior discovery request.
     if matches!(work, ReplayWork::WholeProgram)
-        && project.cached_analysis().is_some_and(|analysis| {
+        && project.cached_analysis_checked()?.is_some_and(|analysis| {
             analysis.program.functions.len() > 16_384
                 || analysis.program.functions.len().saturating_mul(binary.symbols.len().max(1)) > 262_144
         })

@@ -149,7 +149,10 @@ pub fn language_id_with_options(arch: Arch, big_endian: bool, options: &Decompil
         Arch::Sparc => ("sparc:BE:32:default".to_owned(), "default"),
         Arch::Sparc64 => ("sparc:BE:64:default".to_owned(), "default"),
         Arch::M68k => ("68000:BE:32:default".to_owned(), "default"),
-        Arch::S390x => return Err(Error::UnsupportedArch(arch)),
+        Arch::Msp430 if !big_endian => ("TI_MSP430:LE:16:default".to_owned(), "default"),
+        Arch::Avr8 if !big_endian => ("avr8:LE:16:default".to_owned(), "gcc"),
+        Arch::Mos6502 if !big_endian => ("6502:LE:16:default".to_owned(), "default"),
+        Arch::S390x | Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => return Err(Error::UnsupportedArch(arch)),
     };
     if options.arm_be8 && (arch != Arch::Arm || !big_endian) {
         return Err(Error::Ghidra("BE8 requires ARM with big-endian data".to_owned()));
@@ -167,6 +170,9 @@ pub fn language_id_with_options(arch: Arch, big_endian: bool, options: &Decompil
             }
             (Platform::Darwin, Arch::PowerPc | Arch::PowerPc64, true) => "macosx",
             (Platform::Darwin, Arch::Aarch64, false) => "apple",
+            (Platform::Darwin, Arch::Msp430 | Arch::Avr8 | Arch::Mos6502, _) => {
+                return Err(Error::Ghidra(format!("no Darwin compiler default for {arch}")));
+            }
             (Platform::Default | Platform::Darwin, _, _) => default_compiler,
         }
     };
@@ -176,6 +182,76 @@ pub fn language_id_with_options(arch: Arch, big_endian: bool, options: &Decompil
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_selection_keeps_native_machine_region_admission_checked() {
+        for (arch, bytes) in
+            [(Arch::Msp430, &[0x30, 0x41][..]), (Arch::Avr8, &[0x08, 0x95][..]), (Arch::Mos6502, &[0x60][..])]
+        {
+            let options = DecompilerOptions::default();
+            let language = language_id_with_options(arch, false, &options).unwrap();
+            let regions = [crate::MemoryRegion {
+                base: 0x1000,
+                bytes,
+                size: bytes.len() as u64,
+                readable: true,
+                writable: false,
+                executable: true,
+            }];
+            let error = match crate::Decompiler::open_with_options(arch, false, &regions, &options) {
+                Err(error) => error,
+                Ok(_) => panic!("model selection must not enable a native region admission for {arch}"),
+            };
+            assert!(error.to_string().contains("native machine address bounds are unavailable"), "{error}");
+            println!(
+                "SELECTED_MODEL_NATIVE_CTOR_REFUSAL {}",
+                serde_json::json!({
+                    "architecture": arch, "language": language,
+                    "architecture_pointer_default": arch.default_pointer_size(),
+                    "reviewed_model": c_data_organization(&language),
+                    "native_constructor_error": error.to_string(),
+                    "target_execution": false,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn pilots_reject_implicit_darwin_without_changing_explicit_override_or_native_defaults() {
+        for (arch, expected, compiler) in [
+            (Arch::Msp430, "TI_MSP430:LE:16:default:default", "default"),
+            (Arch::Avr8, "avr8:LE:16:default:gcc", "gcc"),
+        ] {
+            assert_eq!(language_id_with_options(arch, false, &DecompilerOptions::default()).unwrap(), expected);
+            let implicit = DecompilerOptions { platform: Platform::Darwin, ..Default::default() };
+            assert!(language_id_with_options(arch, false, &implicit).is_err());
+            for platform in [Platform::Default, Platform::Darwin, Platform::Windows] {
+                let explicit = DecompilerOptions { platform, compiler: Some(compiler.into()), ..Default::default() };
+                assert_eq!(language_id_with_options(arch, false, &explicit).unwrap(), expected);
+                assert!(language_id_with_options(arch, true, &explicit).is_err());
+            }
+            let unreviewed = DecompilerOptions {
+                platform: Platform::Darwin,
+                compiler: Some("unreviewed".into()),
+                ..Default::default()
+            };
+            let language = language_id_with_options(arch, false, &unreviewed).unwrap();
+            assert_eq!(c_data_organization(&language), None);
+            assert!(validate_c_admission(None, &language).is_err());
+        }
+        for (arch, endian, expected) in [
+            (Arch::X86, false, "x86:LE:32:default:gcc"),
+            (Arch::X86_64, false, "x86:LE:64:default:gcc"),
+            (Arch::Aarch64, false, "AARCH64:LE:64:v8A:apple"),
+            (Arch::PowerPc, true, "PowerPC:BE:32:default:macosx"),
+        ] {
+            let options = DecompilerOptions { platform: Platform::Darwin, ..Default::default() };
+            assert_eq!(language_id_with_options(arch, endian, &options).unwrap(), expected);
+        }
+        let implicit = DecompilerOptions { platform: Platform::Darwin, ..Default::default() };
+        assert!(language_id_with_options(Arch::Mos6502, false, &implicit).is_err());
+        assert_eq!(c_data_organization("6502:LE:16:default:default"), None);
+    }
 
     #[test]
     fn pilot_c_models_are_exact_and_unknown_pairs_do_not_inherit_widths() {

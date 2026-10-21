@@ -40,6 +40,9 @@ impl Project {
         let references = self.xrefs(XrefQuery::From(graph.address), None, Some(1000))?;
         let mut ir = Vec::new();
         for line in graph.blocks.iter().flat_map(|block| &block.lines) {
+            if self.binary.raw_code_image().is_some() {
+                continue;
+            }
             let bytes: Vec<_> = line
                 .bytes
                 .as_bytes()
@@ -65,6 +68,19 @@ impl Project {
             "Unknown indirect transfers and runtime-generated code are not reconstructed.".to_owned(),
             "No source-level types, variable recovery or complete instruction semantics.".to_owned(),
         ];
+        let gates =
+            graph.blocks.iter().flat_map(|block| &block.lines).filter(|line| line.decode_gate.is_some()).count();
+        if self.binary.raw_code_image().is_some() {
+            limitations.push(
+                "Selected Sleigh Project profiles have structural flow only; native IR/SSA is unavailable.".into(),
+            );
+        }
+        if gates != 0 {
+            limitations.push(format!(
+                "{gates} valid instructions have unknown successor flow; \
+                 retained gates forbid successor and noreturn inference."
+            ));
+        }
         let ssa = if self.binary.arch == rampage_arch::Arch::Aarch64 {
             let mut offset = 0;
             let blocks: Vec<_> = graph
@@ -115,37 +131,37 @@ impl Project {
                 None
             }
         };
-        let validated_indirect_targets = dataflow
-            .as_ref()
-            .map(|data| {
-                data.indirect_targets
-                    .iter()
-                    .filter_map(|evidence| {
-                        if evidence.target == 0
-                            || evidence.target % 4 != 0
-                            || !self.binary.is_code(evidence.target)
-                            || self
-                                .binary
-                                .segment_containing(evidence.target)
-                                .is_none_or(|segment| !segment.perms.execute || !segment.perms.read)
-                        {
-                            return None;
-                        }
-                        let bytes = self.binary.code_from(evidence.target)?.get(..4)?;
-                        let instruction = self.binary.decoder().ok()?.decode(bytes, evidence.target);
-                        if instruction.flow == rampage_arch::Flow::Invalid {
-                            return None;
-                        }
-                        Some(rampage_analysis::dataflow::IndirectTarget {
-                            address: evidence.address,
-                            target: evidence.target,
-                            call: evidence.call,
-                            input_definitions: evidence.input_definitions.clone(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut validated_indirect_targets = Vec::new();
+        if let Some(data) = &dataflow {
+            let mut decoder = crate::decoder::project_decoder(self)?;
+            for evidence in &data.indirect_targets {
+                if evidence.target == 0
+                    || evidence.target % 4 != 0
+                    || !self.binary.is_code(evidence.target)
+                    || self
+                        .binary
+                        .segment_containing(evidence.target)
+                        .is_none_or(|segment| !segment.perms.execute || !segment.perms.read)
+                {
+                    continue;
+                }
+                let Some(bytes) = self.binary.code_from(evidence.target).and_then(|bytes| bytes.get(..4)) else {
+                    continue;
+                };
+                decoder.begin_run();
+                let instruction = decoder.decode(bytes, evidence.target);
+                let gate = decoder.decode_gate();
+                if gate.is_some() || instruction.flow == rampage_arch::Flow::Invalid {
+                    continue;
+                }
+                validated_indirect_targets.push(rampage_analysis::dataflow::IndirectTarget {
+                    address: evidence.address,
+                    target: evidence.target,
+                    call: evidence.call,
+                    input_definitions: evidence.input_definitions.clone(),
+                });
+            }
+        }
         let edges: Vec<_> = graph.edges.iter().map(|edge| (edge.from, edge.to)).collect();
         let control = match ssa.as_ref().map(|ssa| rampage_analysis::control::analyze(ssa, &edges)).transpose() {
             Ok(control) => control,

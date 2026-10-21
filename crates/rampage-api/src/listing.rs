@@ -8,39 +8,77 @@ use serde::Serialize;
 use crate::operand_types::{OperandAnnotationDisplay, OperandListingContext};
 use crate::{ApiError, Project};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct DisassemblyLine {
-    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub bytes: String,
     pub text: String,
     pub flow: Flow,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
+    /// Present for a valid instruction with unknown successors. `flow == Invalid` is then a legacy STOP
+    /// sentinel in Rust only; serialized flow is `unknown`. No fall-through or noreturn claim is permitted.
+    pub decode_gate: Option<rampage_arch::DecodeGate>,
     pub data_ref: Option<u64>,
     /// The instruction loads from or stores to `data_ref` rather than forming it, so it is data, not code.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub accesses: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub immediate: Option<u64>,
     /// Symbol or function name at this address, when there is one.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// What the instruction refers to: the name of its branch target or data reference, or the string there.
     /// For an immediate it is a guess: the number may only happen to equal an address.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
     /// The user's comment on this instruction.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     /// In a function's listing, a call that never returns ends its block, and this says why: its callee is
     /// `listed` by name as never returning, or discovery `inferred` it.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub noreturn: Option<NoreturnEvidence>,
     /// Analyst-selected operand interpretations; raw instruction text, bytes and flow remain unchanged.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub operand_annotations: Vec<OperandAnnotationDisplay>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(crate) enum PresentedFlow {
+    Known(Flow),
+    Unknown { kind: &'static str },
+}
+
+pub(crate) fn presented_flow(flow: Flow, gate: Option<rampage_arch::DecodeGate>) -> PresentedFlow {
+    if gate.is_some() { PresentedFlow::Unknown { kind: "unknown" } } else { PresentedFlow::Known(flow) }
+}
+
+impl Serialize for DisassemblyLine {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("address", &format!("{:#x}", self.address))?;
+        map.serialize_entry("bytes", &self.bytes)?;
+        map.serialize_entry("text", &self.text)?;
+        map.serialize_entry("flow", &presented_flow(self.flow, self.decode_gate))?;
+        if let Some(gate) = self.decode_gate {
+            map.serialize_entry("decode_gate", &gate)?;
+        }
+        if let Some(address) = self.data_ref {
+            map.serialize_entry("data_ref", &format!("{address:#x}"))?;
+        }
+        if self.accesses {
+            map.serialize_entry("accesses", &true)?;
+        }
+        if let Some(address) = self.immediate {
+            map.serialize_entry("immediate", &format!("{address:#x}"))?;
+        }
+        for (key, value) in [("label", &self.label), ("comment", &self.comment), ("note", &self.note)] {
+            if let Some(value) = value {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        if let Some(evidence) = self.noreturn {
+            map.serialize_entry("noreturn", &evidence)?;
+        }
+        if !self.operand_annotations.is_empty() {
+            map.serialize_entry("operand_annotations", &self.operand_annotations)?;
+        }
+        map.end()
+    }
 }
 
 /// A function's instructions grouped by basic block, in address order.
@@ -89,6 +127,9 @@ impl Project {
         let program = &self.analysis()?.program;
         let flows = &program.resolved_flows;
         for line in blocks.iter_mut().flatten() {
+            if line.decode_gate.is_some() {
+                continue;
+            }
             if let Ok(index) = flows.binary_search_by_key(&(start, line.address), |flow| (flow.function, flow.address))
             {
                 line.flow = flows[index].flow;
@@ -118,7 +159,7 @@ impl Project {
         count: usize,
         operands: Option<&OperandListingContext>,
     ) -> Result<Vec<DisassemblyLine>, ApiError> {
-        let mut decoder = self.binary.decoder()?;
+        let mut decoder = crate::decoder::project_decoder(self)?;
         if self.binary.arch == rampage_arch::Arch::Arm {
             decoder.set_code_modes(&self.analysis()?.program.code_modes);
         }
@@ -134,6 +175,7 @@ impl Project {
             let address = start + offset as u64;
             let insn =
                 decoder.decode_with_memory(&code[offset..], address, &|at, size| self.binary.read_pointer(at, size));
+            let decode_gate = decoder.decode_gate();
             let bytes = &code[offset..(offset + usize::from(insn.len)).min(code.len())];
             let operand_annotations =
                 operands.map(|context| context.display(self, address, bytes)).transpose()?.unwrap_or_default();
@@ -141,9 +183,14 @@ impl Project {
             lines.push(DisassemblyLine {
                 address,
                 bytes: rampage_arch::hex::bytes(bytes),
-                text: decoder.format(bytes, address),
+                text: if decode_gate.is_some() {
+                    decoder.format(&code[offset..], address)
+                } else {
+                    decoder.format(bytes, address)
+                },
                 flow: insn.flow,
                 data_ref: insn.data_ref,
+                decode_gate,
                 accesses: insn.accesses,
                 immediate: insn.immediate,
                 label: self.name_at(address),
@@ -153,6 +200,9 @@ impl Project {
                 operand_annotations,
             });
             offset += usize::from(insn.len.max(1));
+            if decode_gate.is_some() {
+                break;
+            }
         }
         Ok(lines)
     }

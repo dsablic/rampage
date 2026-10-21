@@ -94,6 +94,7 @@ pub struct Project {
     pub(crate) patch_origin: Option<Arc<Project>>,
     pub(crate) patch_source_sha256: OnceLock<[u8; 32]>,
     analysis: OnceLock<Result<Analysis, DecoderInitializationError>>,
+    analysis_binding: OnceLock<Option<String>>,
     triage: OnceLock<Triage>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
     strings: OnceLock<Vec<FoundString>>,
@@ -213,8 +214,29 @@ impl Project {
         }
     }
 
+    /// Tests may observe cache occupancy without conferring authority on its contents.
+    #[cfg(test)]
     pub(crate) fn cached_analysis(&self) -> Option<&Analysis> {
         self.analysis.get().and_then(|analysis| analysis.as_ref().ok())
+    }
+
+    /// Never initializes discovery or a decoder. A cached failure retains its original typed cause.
+    pub(crate) fn cached_analysis_checked(&self) -> Result<Option<&Analysis>, ApiError> {
+        let Some(cached) = self.analysis.get() else { return Ok(None) };
+        let analysis = cached.as_ref().map_err(DecoderInitializationError::to_api_error)?;
+        self.validate_cached_analysis_binding()?;
+        Ok(Some(analysis))
+    }
+
+    fn validate_cached_analysis_binding(&self) -> Result<(), ApiError> {
+        self.binary
+            .validate_available_backing_source()
+            .map_err(|error| ApiError::Unavailable(format!("cached analysis source: {error}")))?;
+        let binding = crate::decoder::analysis_binding(&self.binary).map_err(|error| error.to_api_error())?;
+        if binding.is_some() && self.analysis_binding.get() != Some(&binding) {
+            return Err(ApiError::Unavailable("cached analysis belongs to another Raw decoder interpretation".into()));
+        }
+        Ok(())
     }
     /// A project whose annotations live in memory only.
     pub fn new(binary: Binary) -> Self {
@@ -239,7 +261,11 @@ impl Project {
         }
     }
 
+    /// Raw projects retain supplied annotation values in memory only, detached from any persistent log.
     pub fn with_annotations(binary: Binary, mut annotations: Annotations) -> Self {
+        if binary.format == rampage_loaders::Format::Raw {
+            annotations = annotations.snapshot();
+        }
         let names = Names::new(&binary);
         let frozen_annotations = Arc::new(OnceLock::new());
         if !annotations.patches().is_empty() {
@@ -258,6 +284,7 @@ impl Project {
             patch_origin: None,
             patch_source_sha256: OnceLock::new(),
             analysis: OnceLock::new(),
+            analysis_binding: OnceLock::new(),
             triage: OnceLock::new(),
             strings: OnceLock::new(),
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
@@ -667,8 +694,15 @@ impl Project {
 
     pub(crate) fn analysis(&self) -> Result<&Analysis, ApiError> {
         let analysis = self.analysis.get_or_init(|| {
+            let binding = crate::decoder::analysis_binding(&self.binary)?;
             let program =
                 functions::analyze_with_factory(&self.binary, || crate::decoder::decoder_for_project(&self.binary))?;
+            if crate::decoder::analysis_binding(&self.binary)? != binding {
+                return Err(DecoderInitializationError::Sleigh(Arc::new(rampage_decompiler::Error::Ghidra(
+                    "Project decoder interpretation changed during discovery".into(),
+                ))));
+            }
+            self.analysis_binding.get_or_init(|| binding);
             let mut blocks: Vec<BlockSpan> = program
                 .functions
                 .iter()
@@ -691,7 +725,9 @@ impl Project {
             xrefs_by_source.sort_unstable_by_key(|&index| (program.xrefs[index].from, program.xrefs[index].to));
             Ok(Analysis { program, xrefs_by_source, blocks })
         });
-        analysis.as_ref().map_err(DecoderInitializationError::to_api_error)
+        let analysis = analysis.as_ref().map_err(DecoderInitializationError::to_api_error)?;
+        self.validate_cached_analysis_binding()?;
+        Ok(analysis)
     }
 
     /// Parses `0x` hex or decimal, or looks up a name: the user's, a symbol, export or stub name, an import name
@@ -841,6 +877,67 @@ mod tests {
     use rampage_analysis::discover::{Block, DiscoveredFunction};
     use rampage_arch::Arch;
 
+    fn raw_cache_fixture() -> Project {
+        Project::new(
+            Binary::from_raw_code(
+                vec![0x60, 0x60],
+                rampage_loaders::RawCodeOptions {
+                    profile: rampage_loaders::RawProfile::Mos6502,
+                    base: 0x1000,
+                    entry: None,
+                    seeds: vec![0x1000],
+                },
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn metadata_diagnostics_leave_a_cold_raw_analysis_uninitialized() {
+        let project = raw_cache_fixture();
+        assert!(project.cached_analysis_checked().unwrap().is_none());
+        assert!(project.analysis_diagnostics(false).unwrap().discovery.is_none());
+        assert!(!project.analysis_cache_status().program);
+    }
+
+    #[test]
+    fn metadata_diagnostics_refuse_stale_raw_entry_mapping_and_seeds_without_rebuilding() {
+        for dimension in 0..3 {
+            let mut project = raw_cache_fixture();
+            project.analysis().unwrap();
+            assert!(project.analysis_diagnostics(false).unwrap().discovery.is_some());
+            match dimension {
+                0 => project.binary.entry = Some(0x1000),
+                1 => project.binary.segments[0].address += 1,
+                2 => project.binary.function_starts.push(0x1001),
+                _ => unreachable!(),
+            }
+            assert!(project.cached_analysis_checked().is_err());
+            assert!(project.analysis_diagnostics(false).is_err());
+            assert!(project.analysis_cache_status().program);
+        }
+    }
+
+    #[test]
+    fn metadata_diagnostics_propagate_a_failed_raw_specification_recheck() {
+        let project = raw_cache_fixture();
+        project.analysis().unwrap();
+        crate::decoder::with_failed_analysis_binding(|| {
+            assert!(matches!(project.analysis_diagnostics(false), Err(ApiError::DecoderInitialization(error))
+                if error.to_string().contains("injected specification revalidation failure")));
+        });
+        assert!(project.cached_analysis_checked().unwrap().is_some());
+    }
+
+    #[test]
+    fn a_cold_checked_accessor_does_not_even_request_raw_specification_revalidation() {
+        let project = raw_cache_fixture();
+        crate::decoder::with_failed_analysis_binding(|| {
+            assert!(project.cached_analysis_checked().unwrap().is_none());
+        });
+        assert!(!project.analysis_cache_status().program);
+    }
+
     #[test]
     fn an_initialized_discovery_worker_error_is_retained_for_repeated_analysis_reads() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -872,6 +969,14 @@ mod tests {
                 _ => panic!("initialized worker error became a different result"),
             }
             assert!(project.cached_analysis().is_none());
+            let reads =
+                [project.cached_analysis_checked().map(|_| ()), project.analysis_diagnostics(false).map(|_| ())];
+            for result in reads {
+                match result {
+                    Err(ApiError::DecoderInitialization(error)) => assert!(Arc::ptr_eq(&error, &cause)),
+                    _ => panic!("non-initializing cached read lost the original initialization failure"),
+                }
+            }
             assert!(project.analysis_cache_status().program);
         }
         assert_eq!(opens.load(Ordering::SeqCst), 2);

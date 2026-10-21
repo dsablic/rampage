@@ -6,6 +6,7 @@ pub mod linkage;
 mod load;
 mod macho;
 mod model;
+mod raw;
 mod slots;
 pub mod snapshot;
 mod starts;
@@ -22,6 +23,9 @@ pub use linkage::{
 };
 pub use load::{Binary, Embedded, ImageAt, InventorySourceContext, LoadError};
 pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
+pub use raw::{
+    MAX_RAW_BYTES, MAX_RAW_SEEDS, RawCodeImage, RawCodeOptions, RawCodeSpace, RawInterpretationIdentity, RawProfile,
+};
 mod checked_snapshot;
 pub mod debug;
 pub mod debug_types;

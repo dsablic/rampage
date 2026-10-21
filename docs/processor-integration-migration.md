@@ -115,3 +115,13 @@ Real unknown-flow cases include Hexagon's helper-required gate at an entry and S
 delay-slot flow within a body. The three-pilot window experiment probes CPSE/DES separately; it does not
 establish retention of unknown seed instructions in ordinary Project discovery.
 Passing standalone decode tests or shipping resource files alone does not satisfy those conditions.
+
+## Status (2026-10-21)
+
+The second width stage and units 4–5 are implemented. `pointer_size()` returns `Option<u8>`, and the three
+pilot identities exist with `None` widths and no native decoders. Raw admission, interpretation identity and
+cache binding are in place. One project decoder factory serves discovery, listing and code search, with
+serialized unknown gates and typed immediate-search refusal. Raw patch, capture, native-memory and
+persistent-annotation refusals are tested. The decompiler measures exact pilot organizations after
+memimage space isolation. Hexagon/SuperH real-unknown ordinary-Project cases and MCP/CLI exposure are not
+yet covered.

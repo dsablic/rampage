@@ -309,9 +309,15 @@ fn indirect_target_instruction_must_fit_entirely_inside_code() {
         put64(&mut bytes, at + 48, 1);
     }
     let path = std::env::temp_dir().join(format!("rampage-code-range-{}.elf", std::process::id()));
+    struct OwnedImage(std::path::PathBuf);
+    impl Drop for OwnedImage {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _owned = OwnedImage(path.clone());
     std::fs::write(&path, bytes).unwrap();
     let result = Binary::open(&path);
-    std::fs::remove_file(&path).unwrap();
     let binary = result.unwrap();
     assert!(binary.read(0x2000, 4).is_some());
     assert_eq!(binary.code_from(0x2000).unwrap().len(), 2);

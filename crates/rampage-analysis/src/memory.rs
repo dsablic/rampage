@@ -27,10 +27,16 @@ const MIN_IMAGE_BASE_FOR_IMMEDIATES: u64 = 0x10000;
 
 impl Memory for Binary {
     fn read_pointer(&self, address: u64, size: u8) -> Option<u64> {
+        if self.format == rampage_loaders::Format::Raw {
+            return None;
+        }
         Binary::read_pointer(self, address, size)
     }
 
     fn read_constant(&self, address: u64, size: u8) -> Option<u64> {
+        if self.format == rampage_loaders::Format::Raw {
+            return None;
+        }
         Binary::read_constant(self, address, size)
     }
 
@@ -51,6 +57,9 @@ impl Memory for Binary {
     }
 
     fn immediates_may_be_addresses(&self) -> bool {
+        if self.format == rampage_loaders::Format::Raw {
+            return false;
+        }
         let lowest_code =
             self.segments.iter().filter(|segment| segment.perms.execute).map(|segment| segment.address).min();
         lowest_code.is_some_and(|address| address >= MIN_IMAGE_BASE_FOR_IMMEDIATES)

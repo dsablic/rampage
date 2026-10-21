@@ -58,6 +58,7 @@ fn native_register_width(arch: Arch) -> Option<TargetWidth> {
         Arch::X86_64 | Arch::Aarch64 | Arch::Mips64 | Arch::PowerPc64 | Arch::Riscv64 | Arch::Sparc64 | Arch::S390x => {
             Some(TargetWidth::Bits64)
         }
+        Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => None,
     }
 }
 
@@ -359,6 +360,15 @@ pub(crate) fn written_registers(arch: Arch, mnemonic: &str, detail: &InsnDetail,
 #[cfg(test)]
 mod width_tests {
     use super::*;
+
+    #[test]
+    fn real_pilots_have_no_capstone_native_register_facts() {
+        for arch in [Arch::Msp430, Arch::Avr8, Arch::Mos6502] {
+            let width = native_register_width(arch);
+            assert_eq!(width, None, "{arch}");
+            assert_eq!(wrap_native(u64::MAX, width), None);
+        }
+    }
 
     #[test]
     fn missing_register_width_does_not_preserve_a_guessed_64_bit_value() {

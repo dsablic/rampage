@@ -581,9 +581,19 @@ fn validate_instruction(value: &Value, path: &str) -> Result<(), ApiError> {
             ("note", String),
             ("noreturn", String),
             ("operand_annotations", Array),
+            ("decode_gate", Object),
         ],
     )?;
-    fields(&value["flow"], &format!("{path}/flow"), &[("kind", String)], &[("target", String)])
+    fields(&value["flow"], &format!("{path}/flow"), &[("kind", String)], &[("target", String)])?;
+    if let Some(gate) = value.get("decode_gate") {
+        fields(
+            gate,
+            &format!("{path}/decode_gate"),
+            &[("backend", String), ("profile", String), ("address", String), ("reason", String)],
+            &[],
+        )?;
+    }
+    Ok(())
 }
 
 fn derived(object: &mut Map<String, Value>, key: &str, value: Value) -> Result<(), ApiError> {
@@ -831,6 +841,7 @@ mod tests {
             comment: None,
             note: None,
             noreturn: None,
+            decode_gate: None,
             operand_annotations: Vec::new(),
         }
     }

@@ -109,7 +109,7 @@ pub fn prepare_plugin_triage(
         return Err(invalid("configured data packs are not admitted by source-only plugin triage"));
     }
     bounds::preflight_source(&project, control)?;
-    let analysis = project.cached_analysis().ok_or_else(|| {
+    let analysis = project.cached_analysis_checked()?.ok_or_else(|| {
         ApiError::Unavailable("plugin triage requires explicitly completed successful native analysis".into())
     })?;
     bounds::preflight_analysis(&project, analysis, control)?;

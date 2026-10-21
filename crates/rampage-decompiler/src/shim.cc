@@ -50,6 +50,7 @@ class MemImage : public LoadImage {
 
     int4 readPrefix(uint1 *output, int4 size, const Address &address, bool instruction) const {
         if (size <= 0) return 0;
+        if (spaceid == nullptr || address.getSpace() != spaceid) return 0;
         uintb start = address.getOffset();
         int4 copied = 0;
         while (copied < size) {
@@ -94,7 +95,9 @@ public:
         const Segment *segment = segmentAt(address);
         return segment != nullptr && segment->executable && address - segment->base < segment->bytes.size();
     }
-    bool dataRange(uintb address, uintb size) const {
+    bool dataRange(const Address &where, uintb size) const {
+        if (spaceid == nullptr || where.getSpace() != spaceid) return false;
+        uintb address = where.getOffset();
         if (size == 0 || size - 1 > UINT64_MAX - address) return false;
         uintb copied = 0;
         while (copied < size) {
@@ -183,7 +186,9 @@ public:
     }
 
     bool mapped(uintb address) const { return image->mapped(address); }
-    bool dataRange(uintb address, uintb size) const { return image->dataRange(address, size); }
+    bool dataRange(uintb address, uintb size) const {
+        return image->dataRange(Address(getDefaultDataSpace(), address), size);
+    }
     bool backedCode(uintb address) const { return image->backedCode(address); }
 
     // Until buildLoader hands the image to `loader` (which the base destructor frees), we still own it. This
@@ -876,6 +881,59 @@ uint8_t rampage_sleigh_test_loader_isolation(void *pointer) noexcept {
             } catch (const DataUnavailError &) {}
         }
         return 1;
+    } catch (...) { return 0; }
+}
+
+uint8_t rampage_memimage_test_space_isolation(void *pointer) noexcept {
+    try {
+        DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+        if (handle == nullptr || !handle->sleigh || handle->error[0] != 0) return 0;
+        AddrSpace *code = handle->sleigh->getDefaultCodeSpace();
+        Segment segment{0, {0xa5}, 2, true, true, false};
+        Segment writable{0x10, {0xb6}, 1, true, false, true};
+        Segment unreadable{0x20, {0xc7}, 1, false, false, false};
+        Segment readonlyData{0x30, {0xd8}, 2, true, false, false};
+        MemImage image({segment, writable, unreadable, readonlyData});
+        RangeList unattached;
+        image.getReadonly(unattached);
+        if (!unattached.empty()) return 0;
+        image.attachToSpace(code);
+        RangeList readonly;
+        image.getReadonly(readonly);
+        if (readonly.numRanges() != 2) return 0;
+        for (const Range &range : readonly) {
+            if (range.getSpace() != code) return 0;
+        }
+        if (!readonly.inRange(Address(code, 0), 2)
+            || !readonly.inRange(Address(code, 0x30), 2)
+            || readonly.inRange(Address(code, 0x10), 1)
+            || readonly.inRange(Address(code, 0x20), 1)) return 0;
+        if (!image.dataRange(Address(code, 0x30), 2)
+            || image.dataRange(Address(code, 0), 1)) return 0;
+        uint1 output[2]{};
+        image.loadFill(output, 2, Address(code, 0));
+        if (output[0] != 0xa5 || output[1] != 0) return 0;
+        image.loadInstruction(output, 1, Address(code, 0));
+        image.validateInstruction(1, Address(code, 0));
+        if (image.loadString(output, 1, Address(code, 0)) != 1 || output[0] != 0xa5) return 0;
+        int4 rejected = 0;
+        for (int4 i = 0; i < handle->sleigh->numSpaces(); ++i) {
+            AddrSpace *space = handle->sleigh->getSpace(i);
+            if (space == nullptr || space == code) continue;
+            ++rejected;
+            if (readonly.inRange(Address(space, 0), 1)
+                || readonly.inRange(Address(space, 0x30), 1)
+                || image.dataRange(Address(space, 0x30), 2)) return 0;
+            try { image.loadFill(output, 1, Address(space, 0)); return 0; }
+            catch (const DataUnavailError &) {}
+            try { image.loadInstruction(output, 1, Address(space, 0)); return 0; }
+            catch (const DataUnavailError &) {}
+            try { image.validateInstruction(1, Address(space, 0)); return 0; }
+            catch (const DataUnavailError &) {}
+            try { image.loadString(output, 1, Address(space, 0)); return 0; }
+            catch (const DataUnavailError &) {}
+        }
+        return rejected > 0 ? 1 : 0;
     } catch (...) { return 0; }
 }
 

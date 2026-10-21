@@ -159,6 +159,7 @@ pub(crate) fn default_options(binary: &rampage_loaders::Binary) -> DecompilerOpt
         rampage_loaders::Format::Pe => Platform::Windows,
         rampage_loaders::Format::MachO => Platform::Darwin,
         rampage_loaders::Format::Elf | rampage_loaders::Format::Snapshot => Platform::Default,
+        rampage_loaders::Format::Raw => Platform::Default,
     };
     let (platform, compiler) = binary.snapshot_target.as_ref().map_or((platform, None), |context| {
         let platform = match context.platform {

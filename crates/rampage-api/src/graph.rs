@@ -80,6 +80,9 @@ impl Project {
         let mut edges = Vec::new();
         for (from, block) in blocks.iter().enumerate() {
             let Some(last) = block.lines.last() else { continue };
+            if last.decode_gate.is_some() {
+                continue;
+            }
             // With delay slots, the branch sits before its slot at the end of the block, unless the slot is a
             // branch target and so starts a block of its own.
             let branches = |line: &&DisassemblyLine| !matches!(line.flow, Flow::Next | Flow::Invalid);
