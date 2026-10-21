@@ -14,7 +14,10 @@ impl Sources {
     fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let token = NEXT.fetch_add(1, Ordering::Relaxed);
-        let directory = std::env::temp_dir().join(format!("rampage-workspace-jobs-{}-{token}", std::process::id()));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("rampage-workspace-jobs-{}-{token}", std::process::id()));
         std::fs::create_dir(&directory).unwrap();
         #[cfg(unix)]
         {

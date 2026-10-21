@@ -24,7 +24,7 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "function-inventory-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed),
@@ -246,10 +246,11 @@ fn first_comment_log_creation_and_empty_name_restart_preserve_the_current_view()
         assert!(!log.exists());
         fresh.comment(address, Some("first comment creates the log")).unwrap();
         assert!(log.exists());
-        let before_replay = fresh.annotation_revision().unwrap();
-        assert!(fresh.refresh_annotations().unwrap());
+        let before_refresh = fresh.annotation_revision().unwrap();
+        // The writer's cursor already covers its own append, so refresh adopts nothing and keeps the authority nonce.
+        assert!(!fresh.refresh_annotations().unwrap());
         assert_eq!(fresh.comment_at(address).as_deref(), Some("first comment creates the log"));
-        assert!(!Arc::ptr_eq(&before_replay, &fresh.annotation_revision().unwrap()));
+        assert!(Arc::ptr_eq(&before_refresh, &fresh.annotation_revision().unwrap()));
         assert!(Arc::ptr_eq(&names_revision, &fresh.names_revision().unwrap()));
         view.validate_current_metadata(&fresh).unwrap();
 
@@ -287,9 +288,9 @@ fn identical_name_replay_preserves_the_view_but_real_rename_aba_does_not() {
         publish(&original, &output);
         let log = scratch.join("annotations.jsonl");
         let mut annotations = if checked {
-            rampage_api::annotations::Annotations::open_checked(log)
+            rampage_api::annotations::Annotations::open_checked(log.clone())
         } else {
-            rampage_api::annotations::Annotations::open(log)
+            rampage_api::annotations::Annotations::open(log.clone())
         }
         .unwrap();
         annotations.set(rampage_api::annotations::Field::Name, address, Some("inventory_name_a".into())).unwrap();
@@ -297,6 +298,16 @@ fn identical_name_replay_preserves_the_view_but_real_rename_aba_does_not() {
         let view = hit(&fresh, &output);
         let original_nonce = fresh.names_revision().unwrap();
         let before_replay = fresh.annotation_revision().unwrap();
+        // The writer skips its own append; another writer's identical name is replayed without a names change.
+        let mut identical = serde_json::to_vec(&rampage_api::annotations::Edit {
+            field: rampage_api::annotations::Field::Name,
+            address,
+            value: Some("inventory_name_a".into()),
+            previous: Some("inventory_name_a".into()),
+        })
+        .unwrap();
+        identical.push(b'\n');
+        OpenOptions::new().append(true).open(&log).unwrap().write_all(&identical).unwrap();
         assert!(fresh.refresh_annotations().unwrap());
         assert_eq!(fresh.function_name(address), "inventory_name_a");
         assert!(!Arc::ptr_eq(&before_replay, &fresh.annotation_revision().unwrap()));
@@ -312,7 +323,7 @@ fn identical_name_replay_preserves_the_view_but_real_rename_aba_does_not() {
         assert!(!Arc::ptr_eq(&intermediate_nonce, &final_nonce));
         assert_eq!(fresh.function_name(address), "inventory_name_a");
         assert!(view.validate_current_metadata(&fresh).is_err());
-        assert!(fresh.refresh_annotations().unwrap());
+        assert!(!fresh.refresh_annotations().unwrap());
         assert!(Arc::ptr_eq(&final_nonce, &fresh.names_revision().unwrap()));
         assert!(view.validate_current_metadata(&fresh).is_err());
         assert_eq!(hit(&fresh, &output).rows()[0].name, "inventory_name_a");

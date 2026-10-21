@@ -19,7 +19,10 @@ impl Sources {
     fn with_fixture(count: usize, fixture: &str) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let token = NEXT.fetch_add(1, Ordering::Relaxed);
-        let directory = std::env::temp_dir().join(format!("rampage-ui-module-bank-{}-{token}", std::process::id()));
+        let directory = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("rampage-ui-module-bank-{}-{token}", std::process::id()));
         std::fs::create_dir(&directory).unwrap();
         #[cfg(unix)]
         {

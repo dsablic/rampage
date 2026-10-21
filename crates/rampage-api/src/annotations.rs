@@ -1448,9 +1448,10 @@ impl Annotations {
     }
 
     /// Appends `edits` to the log in one write. Several are written as a batch (see `BatchHeader`), which readers
-    /// apply whole or not at all, even if the write is cut short. The appended lines are read back, harmlessly, by
-    /// the next `refresh`. An unterminated tail must be completed by its writer before another edit can append;
-    /// padding an interrupted object with a newline would publish a syntactically invalid physical record.
+    /// apply whole or not at all, even if the write is cut short. A fully refreshed writer advances its cursor past
+    /// its own append; otherwise the appended lines are read back, harmlessly, by the next `refresh`. An unterminated
+    /// tail must be completed by its writer before another edit can append; padding an interrupted object with a
+    /// newline would publish a syntactically invalid physical record.
     fn record(&mut self, edits: &[Edit]) -> Result<(), String> {
         if self.checked_reads
             || self.has_checked_annotations()
@@ -1462,7 +1463,8 @@ impl Annotations {
         let Some(log) = &mut self.log else { return Ok(()) };
         let error = |error: std::io::Error| format!("{}: {error}", log.path.display());
         let mut file = OpenOptions::new().read(true).create(true).append(true).open(&log.path).map_err(error)?;
-        let len = file.metadata().map_err(error)?.len();
+        let before = file.metadata().map_err(error)?;
+        let len = before.len();
         let mut last = *b"\n";
         if len > 0 {
             file.seek(SeekFrom::Start(len - 1)).map_err(error)?;
@@ -1492,8 +1494,21 @@ impl Annotations {
             }
         }
         file.write_all(lines.as_bytes()).map_err(error)?;
+        let after = file.metadata().map_err(error)?.len();
         if new_image.is_some() {
             log.logged_image = new_image;
+        }
+        // As in `record_checked`: `commit` already applies this append, so a fully refreshed writer skips its own
+        // bytes rather than replaying them into a new authority nonce. Only an append observed to land exactly at
+        // the read end of the same file is skipped; anything else is still read back by the next `refresh`.
+        let identity = file_identity(&before);
+        if log.read == len
+            && log.identity.is_none_or(|known| Some(known) == identity)
+            && after == len + lines.len() as u64
+        {
+            log.read = after;
+            log.identity = identity;
+            log.attribute_edits();
         }
         Ok(())
     }
