@@ -568,6 +568,74 @@ fn sleigh_file_schema() -> Value {
     schema
 }
 
+/// Project tools that serve a Raw Project opened with [`crate::Session::open_raw`]: each returns a result or an
+/// explicit typed refusal on Raw input. Clients offer the `raw` selector only on these.
+pub const RAW_CAPABLE_TOOLS: [&str; 16] = [
+    "binary_info",
+    "list_functions",
+    "disassemble",
+    "function_graph",
+    "xrefs",
+    "search",
+    "analysis_diagnostics",
+    "entry_diagnostics",
+    "capabilities",
+    "rename",
+    "set_comment",
+    "annotate_batch",
+    "list_annotations",
+    "undo",
+    "redo",
+    "decompile",
+];
+
+/// Whether the project tool `name` accepts a Raw Project selector.
+pub fn raw_capable(name: &str) -> bool {
+    RAW_CAPABLE_TOOLS.contains(&name)
+}
+
+/// JSON schema of the `raw` selector object MCP and CLI add to raw-capable tools in place of a native binary.
+pub fn raw_selector_schema() -> Value {
+    let mut value = schema::<crate::RawProjectRequest>();
+    let definitions = value.as_object_mut().and_then(|object| object.remove("$defs")).unwrap_or_default();
+    inline_definitions(&mut value, &definitions);
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "description".to_owned(),
+            Value::String(
+                "Open the explicit regular-file range as an ordinary Raw Project with an asserted closed profile. \
+                 offset/length are original-file bytes; base_address, entry and seeds are internal code-space BYTE \
+                 coordinates, even for word-addressed processors. The mapping is an analyst assertion, not header \
+                 admission. Annotations are memory-only for this session and interpretation; no sidecars."
+                    .to_owned(),
+            ),
+        );
+    }
+    value
+}
+
+/// Replaces each local `#/$defs/<name>` reference with its definition, keeping sibling keywords such as
+/// descriptions, so the schema can be embedded inside another tool's input schema.
+fn inline_definitions(value: &mut Value, definitions: &Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(Value::String(reference)) = object.get("$ref")
+                && let Some(Value::Object(definition)) =
+                    reference.strip_prefix("#/$defs/").and_then(|name| definitions.get(name))
+            {
+                let definition = definition.clone();
+                object.remove("$ref");
+                for (key, entry) in definition {
+                    object.entry(key).or_insert(entry);
+                }
+            }
+            object.values_mut().for_each(|entry| inline_definitions(entry, definitions));
+        }
+        Value::Array(entries) => entries.iter_mut().for_each(|entry| inline_definitions(entry, definitions)),
+        _ => {}
+    }
+}
+
 pub fn parse_sleigh_window_request(bytes: &[u8]) -> Result<crate::sleigh_window::SleighWindowRequest, ApiError> {
     if bytes.len() > MAX_SLEIGH_REQUEST_BYTES {
         return Err(ApiError::Invalid("Sleigh request exceeds 1 MiB".to_owned()));

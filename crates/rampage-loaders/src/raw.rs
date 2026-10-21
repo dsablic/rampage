@@ -21,6 +21,8 @@ pub enum RawProfile {
 }
 
 impl RawProfile {
+    pub const ALL: [RawProfile; 3] = [Self::Msp430, Self::Avr8, Self::Mos6502];
+
     pub fn from_language_id(language: &str) -> Result<Self, LoadError> {
         match language {
             "TI_MSP430:LE:16:default" => Ok(Self::Msp430),
