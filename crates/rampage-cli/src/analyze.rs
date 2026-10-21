@@ -213,6 +213,7 @@ pub fn analyze(out: &mut impl Write, args: &AnalyzeArgs, options: &Options) -> R
             json: true,
             arch: Some(arch),
             image: options.image,
+            raw: None,
             packs: std::sync::Arc::clone(&options.packs),
         };
         let project = open(&args.file, &slice_options);

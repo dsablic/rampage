@@ -60,8 +60,8 @@ fields or a failed specification recheck refuse the cache instead of serving it 
 Raw Projects refuse immediate/constant code search (no typed operands) and native decompiler memory images
 (no translator-space binding yet). They also refuse patch V1, capture identity and backing-source proofs.
 Annotations are memory-only, even when a persistent log is supplied. The three pilot architectures have no
-legacy pointer width (`pointer_size()` is `None`) and no native/Capstone decoder. Raw Projects are not yet
-exposed through MCP or CLI. Multi-region maps, HEX/SREC and vector seeding remain Phase 4.2 work.
+legacy pointer width (`pointer_size()` is `None`) and no native/Capstone decoder. The CLI opens Raw
+Projects with `--raw-json`/`--raw-request` ([CLI reference](cli-reference.md#raw-projects)). Multi-region maps, HEX/SREC and vector seeding remain Phase 4.2 work.
 
 ## Window and discovery contract
 
