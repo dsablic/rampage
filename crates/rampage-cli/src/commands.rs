@@ -19,6 +19,8 @@ pub struct Options {
     pub arch: Option<Arch>,
     /// Where the executable to open lies inside the file, for one embedded in a larger file.
     pub image: Option<rampage_loaders::ImageAt>,
+    /// An explicit Raw Project interpretation of the file, in place of native header admission.
+    pub raw: Option<rampage_api::RawProjectRequest>,
     pub packs: Arc<Packs>,
 }
 
@@ -592,7 +594,10 @@ pub fn correlate(
 
 pub(crate) fn open(path: &Path, options: &Options) -> Result<Arc<Project>> {
     let session = Session::default().with_packs(Arc::clone(&options.packs));
-    Ok(session.open_at(path, options.arch, options.image)?)
+    match &options.raw {
+        Some(request) => Ok(session.open_raw(path, request)?),
+        None => Ok(session.open_at(path, options.arch, options.image)?),
+    }
 }
 
 /// The binary at `path`, without its annotations.

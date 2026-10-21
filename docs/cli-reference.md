@@ -208,6 +208,27 @@ MCP serving and runtime correlation/comparison actions that do not open a single
 does accept an embedded view. `diff-builds` applies the global image selection to its first input only;
 use its `--other-image-*` options for the second. MCP tools take `image_offset`/`image_length` per call instead.
 
+### Raw Projects
+
+`--raw-json JSON` or `--raw-request REQUEST` (a regular JSON file of at most 1 MiB) opens the positional file as
+an ordinary Raw Project instead of admitting a native header. The `RawProjectRequest` has `profile` (a closed Raw
+language ID),
+`offset` and `length` (original-file bytes, 1..=131072), `base_address`, and optional `entry` and `seeds`
+(internal code-space BYTE addresses). Unknown fields are rejected. The mapping is an analyst assertion; see
+[Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects-library-pilot) for profiles and limits.
+
+```sh
+raw='{"profile":"TI_MSP430:LE:16:default","offset":0,"length":30,"base_address":"0x4400","seeds":["0x4400","0x4410"]}'
+rampage --json --raw-json "$raw" function list code.bin
+rampage --json --raw-json "$raw" function disassemble code.bin --at 0x4400
+```
+
+The two options exclude each other, `--arch` and `--image-*`. They apply only to `binary inspect`, `binary audit`,
+`binary capabilities`, `binary search`, `function list`, `function disassemble`, `function graph`,
+`function xrefs`, `function decompile` and `annotation list`; other commands refuse them. Raw annotations are
+memory-only and never written beside the source, so annotation edits are refused here; each CLI run would discard
+them.
+
 Native addresses accept `0x` hex, decimal, symbols/exports/import stubs or `sub_<hex>`, except explicit runtime
 comparison slots/ranges and branch windows. JSON addresses are `"0x…"` strings: common consumers lose integer
 precision above 2^53. Managed `--at` is an IL offset, not a native address.

@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use rampage_api::{FunctionsQuery, ListQuery, Packs, StringsQuery};
+use rampage_api::{FunctionsQuery, ListQuery, Packs, RawProjectRequest, StringsQuery};
 use rampage_arch::Arch;
 
 use crate::args::ArchiveInventoryArgs;
@@ -43,6 +43,19 @@ struct Cli {
     /// header tables give, so bytes after that (an overlay) are left out
     #[arg(long, global = true, value_parser = rampage_api::parse_file_offset)]
     image_length: Option<u64>,
+    /// Open FILE as an ordinary Raw Project from a literal JSON RawProjectRequest (closed profile, offset, length,
+    /// base_address, optional entry and seeds): an analyst assertion with memory-only annotations and no sidecars.
+    /// Raw-capable commands only
+    #[arg(
+        long,
+        global = true,
+        value_name = "JSON",
+        conflicts_with_all = ["arch", "image_offset", "image_length", "raw_request"]
+    )]
+    raw_json: Option<String>,
+    /// Like --raw-json, reading the RawProjectRequest from a regular JSON file (at most 1 MiB)
+    #[arg(long, global = true, value_name = "REQUEST", conflicts_with_all = ["arch", "image_offset", "image_length"])]
+    raw_request: Option<PathBuf>,
     /// A data pack directory (holding rampage-pack.toml) layered over the bundled heuristic databases; repeatable,
     /// earlier packs take precedence. Directories in RAMPAGE_PACKS (a path list) load after these
     #[arg(long = "pack", value_name = "DIR")]
@@ -285,6 +298,20 @@ fn main() -> ExitCode {
         eprintln!("rampage: --image-offset does not apply to {command}, which does not open one embedded image");
         return ExitCode::FAILURE;
     }
+    let raw = match raw_request(cli.raw_json.as_deref(), cli.raw_request.as_deref()) {
+        Ok(raw) => raw,
+        Err(error) => {
+            eprintln!("rampage: {error:#}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if raw.is_some() && raw_tool(&command).is_none() {
+        eprintln!(
+            "rampage: --raw-json and --raw-request apply only to {RAW_COMMANDS}; this command does not open a Raw \
+             Project"
+        );
+        return ExitCode::FAILURE;
+    }
     // Loaded on first use, so that commands which consult no heuristic database do not read any pack.
     let packs = Arc::new(Packs::lazy_with_env(&cli.packs));
     let warn = !matches!(command, Command::Packs { .. });
@@ -292,7 +319,7 @@ fn main() -> ExitCode {
         return serve_mcp(all_tools, packs);
     }
     let image = cli.image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, cli.image_length));
-    let options = Options { json: cli.json, arch: cli.arch, image, packs: Arc::clone(&packs) };
+    let options = Options { json: cli.json, arch: cli.arch, image, raw, packs: Arc::clone(&packs) };
     let mut out = BufWriter::new(io::stdout().lock());
     let result = match command {
         Command::ArchiveInventory(args) => {
@@ -542,6 +569,51 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
         Command::ComparePointers(..) => "compare-pointers",
         _ => return None,
     })
+}
+
+/// The largest --raw-json or --raw-request input; a request with the full 8192 seeds is far smaller.
+const MAX_RAW_REQUEST_BYTES: u64 = 1024 * 1024;
+
+/// The commands [`raw_tool`] admits, as `--help` names them.
+const RAW_COMMANDS: &str = "binary inspect, binary audit, binary capabilities, binary search, function list, \
+                            function disassemble, function graph, function xrefs, function decompile and annotation \
+                            list";
+
+fn raw_request(json: Option<&str>, path: Option<&std::path::Path>) -> anyhow::Result<Option<RawProjectRequest>> {
+    let text = match (json, path) {
+        (None, None) => return Ok(None),
+        (Some(json), None) => {
+            anyhow::ensure!(json.len() as u64 <= MAX_RAW_REQUEST_BYTES, "--raw-json exceeds 1 MiB");
+            json.to_owned()
+        }
+        (None, Some(path)) => rampage_api::read_bounded(path, MAX_RAW_REQUEST_BYTES, "Raw Project request")?,
+        (Some(_), Some(_)) => anyhow::bail!("--raw-json conflicts with --raw-request"),
+    };
+    let request =
+        serde_json::from_str(&text).map_err(|error| anyhow::anyhow!("invalid Raw Project request: {error}"))?;
+    Ok(Some(request))
+}
+
+/// The raw-capable project tool a command runs, for the commands that may open a Raw Project. Annotation edits are
+/// left out: Raw annotations are memory-only, so a one-shot CLI process would discard them (the MCP server keeps
+/// them for its session).
+fn raw_tool(command: &Command) -> Option<&'static str> {
+    let tool = match command {
+        Command::Info(..) => "binary_info",
+        Command::Funcs(..) => "list_functions",
+        Command::Disasm(..) => "disassemble",
+        Command::Graph(..) => "function_graph",
+        Command::Xrefs(..) => "xrefs",
+        Command::Search(..) => "search",
+        Command::Audit(args) if args.entries => "entry_diagnostics",
+        Command::Audit(..) => "analysis_diagnostics",
+        Command::Capabilities(..) => "capabilities",
+        Command::Annotations(..) => "list_annotations",
+        Command::Decompile(..) => "decompile",
+        _ => return None,
+    };
+    debug_assert!(rampage_api::tools::raw_capable(tool), "{tool} is not raw-capable");
+    Some(tool)
 }
 
 fn debugger_query(out: &mut impl Write, args: QueryDebuggerArgs) -> anyhow::Result<()> {
