@@ -12,6 +12,7 @@ mod layout_wire;
 #[cfg(test)]
 #[path = "pilot_native_abi_measurements.rs"]
 mod pilot_native_abi_measurements;
+mod raw_bounds;
 pub mod results;
 pub mod sleigh_decode;
 mod specs;
@@ -382,11 +383,10 @@ fn native_address_highest(width: Option<rampage_arch::TargetWidth>) -> Result<u6
         .ok_or_else(|| Error::Ghidra("native machine address bounds are unavailable".to_owned()))
 }
 
-fn validate_regions(arch: Arch, regions: &[MemoryRegion]) -> Result<(), Error> {
+fn validate_regions(highest: u64, regions: &[MemoryRegion]) -> Result<(), Error> {
     if regions.len() > 4096 {
         return Err(Error::Ghidra("memory region limit exceeded (4096)".to_owned()));
     }
-    let highest = native_address_highest(arch.native_address_width())?;
     let mut ranges = Vec::with_capacity(regions.len());
     for region in regions {
         if region.size == 0 || region.bytes.len() as u64 > region.size {
@@ -438,6 +438,7 @@ pub struct Decompiler {
     arch: Arch,
     data_organization: DataOrganization,
     language_id: String,
+    address_highest: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -499,8 +500,13 @@ impl Decompiler {
         let target = unsafe { rampage_decomp_import_target(self.handle, slot) };
         (target != 0).then_some(target)
     }
+    /// Highest admitted code-space byte: the machine width, or a pilot's verified translator code space.
+    pub fn address_highest(&self) -> u64 {
+        self.address_highest
+    }
+
     fn valid_address(&self, address: u64) -> Result<(), Error> {
-        if address > native_address_highest(self.arch.native_address_width())? {
+        if address > self.address_highest {
             return Err(Error::Ghidra("address exceeds target width".to_owned()));
         }
         Ok(())
@@ -582,9 +588,24 @@ impl Decompiler {
         regions: &[MemoryRegion],
         options: &DecompilerOptions,
     ) -> Result<Decompiler, Error> {
-        validate_regions(arch, regions)?;
-        let language_id = language_id_with_options(arch, big_endian, options)?;
-        abi::validate_c_admission(arch.default_pointer_size(), &language_id)?;
+        let (language_id, address_highest) = match arch.native_address_width() {
+            Some(width) => {
+                let highest = native_address_highest(Some(width))?;
+                validate_regions(highest, regions)?;
+                let language_id = language_id_with_options(arch, big_endian, options)?;
+                abi::validate_c_admission(arch.default_pointer_size(), &language_id)?;
+                (language_id, highest)
+            }
+            None => {
+                // No machine width: only an exact reviewed C model over one verified code-space mapping.
+                let language_id = language_id_with_options(arch, big_endian, options)?;
+                abi::validate_c_admission(arch.default_pointer_size(), &language_id)?;
+                let highest = raw_bounds::verified_code_highest(&language_id)?;
+                raw_bounds::validate_code_region(regions, highest)?;
+                validate_regions(highest, regions)?;
+                (language_id, highest)
+            }
+        };
         let home_path = sleigh_home().ok_or(Error::NoSleighHome)?;
         let home_path = home_path.canonicalize().unwrap_or(home_path);
         let home = CString::new(home_path.as_os_str().to_string_lossy().as_bytes()).map_err(|_| Error::NoSleighHome)?;
@@ -648,7 +669,7 @@ impl Decompiler {
                 return Err(error);
             }
         };
-        Ok(Decompiler { handle, arch, data_organization, language_id })
+        Ok(Decompiler { handle, arch, data_organization, language_id, address_highest })
     }
 
     pub fn data_organization(&self) -> DataOrganization {

@@ -237,19 +237,88 @@ fn real_project_code_highest_bytes_do_not_depend_on_a_c_pointer_default() {
     }
 }
 
+fn decompiler_workers() -> Vec<Option<rampage_decompiler::worker::WorkerConfig>> {
+    let mut workers = vec![None];
+    if let Some(executable) = std::env::var_os("RAMPAGE_TEST_DECOMPILER_WORKER") {
+        workers.push(Some(rampage_decompiler::worker::WorkerConfig {
+            executable: Some(executable.into()),
+            ..Default::default()
+        }));
+    }
+    workers
+}
+
+const MSP430_FIXTURE: &[u8] = include_bytes!("../../../tests/fixtures/sleigh/msp430.bin");
+const AVR8_FIXTURE: &[u8] = include_bytes!("../../../tests/fixtures/sleigh/avr8.bin");
+
 #[test]
-fn direct_and_configured_worker_raw_c_stay_explicitly_refused_before_native_preparation() {
-    for (profile, bytes) in [
-        (RawProfile::Msp430, &[0x30, 0x41][..]),
-        (RawProfile::Avr8, &[0x08, 0x95][..]),
-        (RawProfile::Mos6502, &[0x60][..]),
+fn reviewed_raw_profiles_decompile_fixture_functions_directly_and_through_the_worker() {
+    // Each fixture: main calls callee, then loops back on a conditional branch; callee increments and returns.
+    for (profile, bytes, base, language) in [
+        (RawProfile::Msp430, MSP430_FIXTURE, 0x4400, "TI_MSP430:LE:16:default:default"),
+        (RawProfile::Avr8, AVR8_FIXTURE, 0x200, "avr8:LE:16:default:gcc"),
     ] {
-        for worker in [None, Some(rampage_decompiler::worker::WorkerConfig::default())] {
-            let project = project(profile, bytes, 0x1000, Some(0x1000), vec![0x1000]);
+        let mut results = Vec::new();
+        for worker in decompiler_workers() {
+            let supervised = worker.is_some();
+            let project = project(profile, bytes, base, Some(base), vec![base, base + 0x10]);
             project.set_decompiler_worker(worker);
-            let error = project.decompile(0x1000).unwrap_err();
-            assert!(error.to_string().contains("Raw native memory admission"), "{profile:?}: {error}");
+            let main = project.decompile(base).unwrap_or_else(|error| panic!("{profile:?} main: {error}"));
+            let callee = project.decompile(base + 0x10).unwrap_or_else(|error| panic!("{profile:?} callee: {error}"));
+            println!("RAW_C {profile:?} worker={supervised}\n{}\n{}", main.code, callee.code);
+            assert_eq!(main.language_id, language);
+            assert_eq!(callee.language_id, language);
+            assert!(main.code.contains(&format!("sub_{:x}()", base + 0x10)), "{profile:?}: {}", main.code);
+            assert!(main.code.contains("while") || main.code.contains("do {"), "{profile:?}: {}", main.code);
+            let callee_name = format!("sub_{:x}", base + 0x10);
+            assert!(callee.code.contains(&format!("{callee_name}(void)")), "{profile:?}: {}", callee.code);
+            assert!(callee.code.contains("return"), "{profile:?}: {}", callee.code);
+            results.push((main.code, callee.code));
         }
+        assert!(results.windows(2).all(|pair| pair[0] == pair[1]), "{profile:?} direct/worker C differs");
+    }
+}
+
+#[test]
+fn raw_without_a_reviewed_c_model_refuses_directly_and_through_the_worker() {
+    for worker in [None, Some(rampage_decompiler::worker::WorkerConfig::default())] {
+        let project = project(RawProfile::Mos6502, &[0x60], 0x1000, Some(0x1000), vec![0x1000]);
+        project.set_decompiler_worker(worker);
+        let error = project.decompile(0x1000).unwrap_err();
+        assert!(matches!(error, ApiError::Unavailable(_)), "{error:?}");
+        assert_eq!(error.to_string(), "no reviewed C model for 6502:LE:16:default");
+    }
+}
+
+#[test]
+fn distinct_raw_interpretations_never_share_cached_c() {
+    let msp430 = |base: u64| project(RawProfile::Msp430, MSP430_FIXTURE, base, Some(base), vec![base, base + 0x10]);
+    for worker in decompiler_workers() {
+        let low = msp430(0x4400);
+        let high = msp430(0x8000);
+        low.set_decompiler_worker(worker.clone());
+        high.set_decompiler_worker(worker.clone());
+        let low_c = low.decompile(0x4400).unwrap().code;
+        let high_c = high.decompile(0x8000).unwrap().code;
+        // `CALL #0x4410` is absolute: mapped callee at base 0x4400, an unmapped address at base 0x8000.
+        assert!(low_c.contains("sub_4410()"), "{low_c}");
+        assert!(high_c.contains("func_0x4410()") && !high_c.contains("sub_4410"), "{high_c}");
+        assert_ne!(low_c, high_c);
+
+        // Swapping a cached project's interpretation refuses instead of reusing its analysis, engine or C.
+        let mut swapped = msp430(0x4400);
+        swapped.set_decompiler_worker(worker.clone());
+        assert_eq!(swapped.decompile(0x4400).unwrap().code, low_c);
+        swapped.binary = msp430(0x8000).binary;
+        let error = swapped.decompile(0x8000).unwrap_err();
+        assert!(error.to_string().contains("another Raw decoder interpretation"), "{error}");
+
+        // An edited loader field no longer matches its admission facts and refuses instead of serving cached C.
+        let mut edited = msp430(0x4400);
+        edited.set_decompiler_worker(worker);
+        edited.decompile(0x4400).unwrap();
+        edited.binary.segments[0].size -= 2;
+        assert!(edited.decompile(0x4400).is_err());
     }
 }
 
