@@ -121,7 +121,7 @@ impl Owned {
         let mut source = vec![0xab; 7];
         source.extend_from_slice(&bytes);
         source.extend_from_slice(&[0xcd; 3]);
-        let path = self.0.join(format!("{name}.raw"));
+        let path = self.0.join(format!("{}.raw", Path::new(name).file_name().unwrap().to_str().unwrap()));
         std::fs::write(&path, source).unwrap();
         (path, bytes.len())
     }
@@ -330,4 +330,179 @@ async fn outside_calls_are_retained_not_followed_and_bad_bounds_profiles_or_work
     })
     .await
     .expect("MCP Sleigh bounds transport timed out");
+}
+
+fn hex(value: &Value) -> u64 {
+    u64::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap()
+}
+fn operation(name: &str) -> String {
+    name.trim_start_matches("CPUI_").to_ascii_uppercase()
+}
+impl Connection {
+    /// Pages a whole listing at four p-code rows per response; every page is checked against the JSON budget.
+    async fn pages(&self, path: &Path, mut request: Value) -> (Value, Vec<Value>) {
+        request["listing_limit"] = json!(4);
+        let first = body(&self.call(path, request.clone()).await);
+        let mut rows = first["rows"].as_array().unwrap().clone();
+        let mut next = first["listing_next_offset"].clone();
+        while let Some(offset) = next.as_u64() {
+            request["listing_offset"] = json!(offset);
+            let page = body(&self.call(path, request.clone()).await);
+            assert_eq!(page["stops"], first["stops"]);
+            assert_eq!(page["program"], first["program"]);
+            rows.extend(page["rows"].as_array().unwrap().iter().cloned());
+            next = page["listing_next_offset"].clone();
+        }
+        assert_eq!(rows.len() as u64, first["listing_total"].as_u64().unwrap());
+        (first, rows)
+    }
+}
+
+#[tokio::test]
+async fn full_roster_rows_match_the_independent_oracle_with_pcode_and_explicit_gates() {
+    timeout(Duration::from_secs(300), async {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/sleigh");
+        let read = |name: &str| -> Value { serde_json::from_slice(&std::fs::read(root.join(name)).unwrap()).unwrap() };
+        let (pilots, extended, truth) =
+            (read("oracle.json"), read("extended/oracle-current.json"), read("extended/truth-current.json"));
+        let mut roster = Vec::new();
+        for fixture in pilots["fixtures"].as_array().unwrap() {
+            roster.push((
+                fixture["name"].as_str().unwrap().to_owned(),
+                fixture,
+                hex(&fixture["base"]["getOffset_bytes"]),
+                &fixture["rows"],
+                &fixture["program_oracle"]["functions"],
+            ));
+        }
+        for fixture in extended["fixtures"].as_array().unwrap() {
+            let name = fixture["name"].as_str().unwrap();
+            let owned = truth["fixtures"].as_array().unwrap().iter().find(|item| item["name"] == name).unwrap();
+            assert_eq!(owned["language_id"], fixture["language_id"]);
+            roster.push((
+                format!("extended/{name}"),
+                fixture,
+                hex(&owned["base_byte_offset"]),
+                &fixture["oracle"]["standalone_rows"],
+                &fixture["oracle"]["program_oracle"]["functions"],
+            ));
+        }
+        let owned = Owned::new();
+        let connection = Connection::connect().await;
+        let mut profiles = std::collections::BTreeSet::new();
+        let mut compared = 0;
+        for (name, fixture, base, oracle_rows, functions) in roster {
+            let profile = fixture["language_id"].as_str().unwrap();
+            assert!(profiles.insert(profile));
+            let (path, length) = owned.fixture(&name);
+            let before = owned.files();
+            let request = json!({"profile":profile,"offset":7,"length":length,
+                "base_address":format!("{base:#x}"),"include_pcode":true});
+            let (linear, rows) = connection.pages(&path, request.clone()).await;
+            assert!(linear["program"].is_null());
+            let mut gates = Vec::new();
+            for java in oracle_rows.as_array().unwrap().iter().filter(|row| row["status"] == "decoded") {
+                let address = hex(&java["address"]["getOffset_bytes"]);
+                let offset = java["fixture_offset_bytes"].as_u64().unwrap();
+                assert_eq!(address, base + offset);
+                let native = rows
+                    .iter()
+                    .find(|row| row["address"] == format!("{address:#x}"))
+                    .unwrap_or_else(|| panic!("{name}: linear listing skipped oracle row {address:#x}"));
+                assert_eq!(native["source_byte_offset"], 7 + offset);
+                assert_eq!(native["status"], "valid", "{name} {address:#x}: {native}");
+                assert_eq!(native["length"], java["length_bytes"], "{name} {address:#x}");
+                assert!(
+                    native["mnemonic"].as_str().unwrap().eq_ignore_ascii_case(java["mnemonic"].as_str().unwrap()),
+                    "{name} {address:#x}: native {} Java {}",
+                    native["mnemonic"],
+                    java["mnemonic"]
+                );
+                let native_ops: Vec<_> = native["pcode"]
+                    .as_array()
+                    .expect("include_pcode publishes p-code for every valid row")
+                    .iter()
+                    .map(|op| operation(op["name"].as_str().unwrap()))
+                    .collect();
+                let java_ops: Vec<_> = java["raw_pcode"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|op| operation(op["mnemonic"].as_str().unwrap()))
+                    .collect();
+                assert_eq!(native_ops, java_ops, "{name} {address:#x}");
+                if !native["unknown_gate"].is_null() {
+                    assert_eq!(native["flow"]["kind"], "unknown");
+                    assert_eq!(native["unknown_gate"]["profile"], profile);
+                    gates.push((address, native["unknown_gate"]["reason"].as_str().unwrap().to_owned()));
+                }
+                compared += 1;
+            }
+            let seeds: Vec<_> = functions
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|function| hex(&function["entry"]["getOffset_bytes"]))
+                .collect();
+            let mut request = request;
+            request["discover"] = json!(true);
+            request["seeds"] = json!(seeds);
+            let (report, discovered) = connection.pages(&path, request).await;
+            let program = &report["program"];
+            for seed in &seeds {
+                assert!(
+                    program["functions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|function| function["address"] == format!("{seed:#x}")),
+                    "{name}: oracle entry {seed:#x} missing: {report}"
+                );
+            }
+            for row in discovered.iter().filter(|row| row["status"] == "valid") {
+                assert!(row["pcode"].is_array(), "{name} {}", row["address"]);
+                if row["unknown_gate"].is_null() {
+                    assert_ne!(row["flow"]["kind"], "unknown", "{name} {}", row["address"]);
+                }
+            }
+            let program_gates: Vec<_> = program["decode_gates"]
+                .as_array()
+                .map(|gates| {
+                    gates.iter().map(|gate| (gate["gate"]["address"].clone(), gate["gate"]["reason"].clone())).collect()
+                })
+                .unwrap_or_default();
+            let helper = gates.iter().any(|(_, reason)| reason == "processor_helper_required");
+            let delay = gates.iter().any(|(_, reason)| reason == "delay_slot_aggregation");
+            match fixture["family"].as_str() {
+                Some("Hexagon") => {
+                    assert!(helper, "{name}: {gates:?}");
+                    assert!(program_gates.iter().any(|(_, reason)| reason == "processor_helper_required"));
+                    assert!(!linear["profile"]["required_parallel_helper"].as_str().unwrap().is_empty());
+                    assert!(
+                        rows.iter()
+                            .filter(|row| row["unknown_gate"]["reason"] == "processor_helper_required")
+                            .all(|row| row["processor_helper_required"] == true)
+                    );
+                }
+                Some("SuperH") => {
+                    assert!(delay, "{name}: {gates:?}");
+                    assert!(program_gates.iter().any(|(_, reason)| reason == "delay_slot_aggregation"));
+                }
+                _ => assert!(!helper && !delay, "{name}: {gates:?}"),
+            }
+            eprintln!(
+                "{name} {profile}: oracle_rows={} linear_rows={} gates={gates:?} \
+                 functions={} program_gates={program_gates:?}",
+                oracle_rows.as_array().unwrap().len(),
+                rows.len(),
+                program["functions"].as_array().unwrap().len()
+            );
+            assert_eq!(owned.files(), before);
+        }
+        assert_eq!(profiles.len(), 16);
+        eprintln!("compared {compared} oracle rows");
+        connection.shutdown().await;
+    })
+    .await
+    .expect("MCP Sleigh full roster transport timed out");
 }
