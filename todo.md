@@ -331,7 +331,7 @@ The workspace has 3571 passing tests and clean all-targets Clippy. Nine pre-exis
 unchanged at `2b2ead1`: derived-cache refresh, plugin sidecars, MinGW triage, the extended oracle report path,
 the parity agent, the MCP tool list and UI workspace capture. Contention tests need a non-symlinked `TMPDIR`.
 - [ ] Expose Raw Projects through MCP/CLI and cover real unknown-flow ordinary-Project cases.
-- [ ] Triage the nine pre-existing workspace test failures listed above.
+- [x] Triage the nine pre-existing workspace test failures listed above (fixed at `3a82078`; workspace green).
 
 Phases 4.2–4.4, analysis-depth Phase 5 and scale/persistence Phase 6 follow in roadmap order. Implementation
 completion of earlier phases does not close the independent live/N, library-recall or agent-efficiency gates.

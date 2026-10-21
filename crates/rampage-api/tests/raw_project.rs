@@ -232,17 +232,15 @@ fn every_raw_capable_tool_answers_or_refuses_explicitly() {
         let (text, failed) = call_shared(&registry, &mut project, name, input);
         assert!(!text.is_empty(), "{name}");
         assert!(!text.contains("invalid arguments") && !text.contains("unknown tool"), "{name}: {text}");
-        if name == "decompile" {
-            assert!(failed && text.contains("Raw native memory admission"), "explicit Raw C refusal: {text}");
-        } else {
-            assert!(!failed, "{name}: {text}");
-            serde_json::from_str::<Value>(&text).unwrap_or_else(|error| panic!("{name}: {error}: {text}"));
-        }
+        assert!(!failed, "{name}: {text}");
+        serde_json::from_str::<Value>(&text).unwrap_or_else(|error| panic!("{name}: {error}: {text}"));
         outcomes.push((name, failed, text));
     }
     let outcome = |name: &str| &outcomes.iter().find(|(tool, ..)| *tool == name).unwrap().2;
     assert!(outcome("list_functions").contains("0x4410") || outcome("list_functions").contains("17424"));
     assert!(outcome("list_annotations").contains("callee"));
+    // MSP430 has a reviewed C model, so Raw decompilation returns C that uses the analyst's name.
+    assert!(outcome("decompile").contains("callee"), "{}", outcome("decompile"));
     assert!(!raw_capable("triage") && !raw_capable("inspect_sleigh"));
 
     let reopened = session.open_raw(&path, &msp430(&["0x4400", "0x4410"])).unwrap();
