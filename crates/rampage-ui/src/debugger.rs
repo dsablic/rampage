@@ -2277,7 +2277,7 @@ mod tests {
         fn new(bytes: &[u8]) -> Self {
             use std::sync::atomic::{AtomicU64, Ordering};
             static NEXT: AtomicU64 = AtomicU64::new(0);
-            let directory = std::env::temp_dir().join(format!(
+            let directory = std::env::temp_dir().canonicalize().unwrap().join(format!(
                 "rampage-ui-static-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed),
