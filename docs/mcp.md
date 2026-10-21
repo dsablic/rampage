@@ -147,6 +147,35 @@ evaluate expressions or write target memory. Initial session queries return a to
 queries. Stale tokens fail without automatic refresh. Responses retain the backend's error/observation envelope
 and remain non-atomic. See [LLDB queries](lldb-query.md) for request operations, endpoint policy and limits.
 
+## Raw projects
+
+Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_graph`, `xrefs`, `search`,
+`analysis_diagnostics`, `entry_diagnostics`, `capabilities`, `rename`, `set_comment`, `annotate_batch`,
+`list_annotations`, `undo`, `redo`, `decompile`) take an optional `raw` object in place of a native image:
+
+```json
+{
+  "path": "tests/fixtures/sleigh/msp430.bin",
+  "raw": {
+    "profile": "TI_MSP430:LE:16:default",
+    "offset": 0,
+    "length": 30,
+    "base_address": "0x4400",
+    "entry": "0x4400",
+    "seeds": ["0x4400", "0x4410"]
+  }
+}
+```
+
+`profile` is a closed Raw language ID; `offset`/`length` select original-file bytes (1..=131072); `base_address`,
+`entry` and `seeds` (at most 8192) are internal code-space byte offsets, also for word-addressed processors, and
+tool addresses use the same coordinates. The mapping is an analyst assertion, not header admission. `raw` cannot
+be combined with `arch`, `image_offset` or `image_length`, and other tools refuse it with "tool X does not accept
+Raw projects". Tools that cannot answer on Raw code refuse explicitly (immediate search; decompilation where the
+profile has no decompiler memory binding). Annotations are memory-only for the server session and the exact
+interpretation (bytes, profile, mapping, entry, seed set): no sidecar or log is written, changed seeds or bytes
+give a fresh project, and at most 32 interpretations are retained. See [explicit Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects-library-pilot).
+
 ## Edits and session state
 
 Analysis runs once per binary when first needed and is cached for the session. Annotations share the

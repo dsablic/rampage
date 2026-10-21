@@ -1,0 +1,189 @@
+//! Raw Projects over MCP: the optional `raw` selector on raw-capable tools opens an explicit file range as a
+//! headerless code project, with memory-only annotations kept per interpretation.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use rampage_api::tools::RAW_CAPABLE_TOOLS;
+use rampage_mcp::RampageServer;
+use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
+use rmcp::service::{RoleClient, RunningService};
+use rmcp::{ClientHandler, ServiceExt};
+use serde_json::{Value, json};
+
+#[derive(Default)]
+struct Client;
+impl ClientHandler for Client {
+    fn get_info(&self) -> ClientConfig {
+        ClientConfig::default()
+    }
+}
+
+fn fixtures() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/sleigh")
+}
+
+fn names(directory: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A canonical temporary directory holding a copy of the MSP430 fixture, removed on drop.
+struct FixtureCopy(PathBuf);
+
+impl FixtureCopy {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "rampage-mcp-raw-project-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::copy(fixtures().join("msp430.bin"), directory.join("msp430.bin")).unwrap();
+        Self(directory)
+    }
+
+    fn file(&self) -> PathBuf {
+        self.0.join("msp430.bin")
+    }
+}
+
+impl Drop for FixtureCopy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+async fn connect() -> RunningService<RoleClient, Client> {
+    let (server, transport) = tokio::io::duplex(1 << 20);
+    tokio::spawn(async move {
+        RampageServer::default().serve(server).await.unwrap().waiting().await.unwrap();
+    });
+    Client.serve(transport).await.unwrap()
+}
+
+fn raw(seeds: &[&str]) -> Value {
+    let length = std::fs::metadata(fixtures().join("msp430.bin")).unwrap().len();
+    json!({
+        "profile": "TI_MSP430:LE:16:default",
+        "offset": 0,
+        "length": length,
+        "base_address": "0x4400",
+        "entry": "0x4400",
+        "seeds": seeds,
+    })
+}
+
+/// Calls `tool` and returns its text and whether it failed, checking every response stays within the budget.
+async fn call(client: &RunningService<RoleClient, Client>, tool: &str, arguments: Value) -> (String, bool) {
+    let arguments = arguments.as_object().unwrap().clone();
+    let result: CallToolResult =
+        client.call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments)).await.unwrap();
+    let text = result.content[0].as_text().unwrap().text.clone();
+    assert!(text.len() <= 60_000, "{tool}: {} bytes", text.len());
+    (text, result.is_error == Some(true))
+}
+
+#[tokio::test]
+async fn raw_selector_is_offered_only_on_raw_capable_tools() {
+    let client = connect().await;
+    let tools = client.list_all_tools().await.unwrap();
+    for tool in &tools {
+        let properties = tool.input_schema.get("properties").and_then(Value::as_object);
+        let selector = properties.and_then(|properties| properties.get("raw"));
+        assert_eq!(selector.is_some(), RAW_CAPABLE_TOOLS.contains(&tool.name.as_ref()), "{}", tool.name);
+        if let Some(selector) = selector {
+            assert_eq!(selector["additionalProperties"], false);
+            assert!(
+                selector["properties"]["profile"]["enum"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("TI_MSP430:LE:16:default"))
+            );
+            let text = selector.to_string();
+            assert!(!text.contains("$ref") && text.len() < 8_000, "{text}");
+            let required = tool.input_schema["required"].as_array().unwrap();
+            assert!(!required.contains(&json!("raw")) && required.contains(&json!("path")));
+        }
+    }
+    assert!(tools.iter().any(|tool| tool.name == "list_functions"));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn raw_projects_list_disassemble_annotate_and_refuse_explicitly() {
+    let fixture_names = names(&fixtures());
+    let copy = FixtureCopy::new();
+    let path = copy.file();
+    let client = connect().await;
+    let seeded = raw(&["0x4400", "0x4410"]);
+
+    let (text, failed) = call(&client, "list_functions", json!({ "path": path, "raw": seeded })).await;
+    assert!(!failed, "{text}");
+    let listing: Value = serde_json::from_str(&text).unwrap();
+    assert!(text.contains("0x4400") && text.contains("0x4410"), "{listing}");
+
+    let (text, failed) =
+        call(&client, "disassemble", json!({ "path": path, "raw": seeded, "at": "0x4400", "count": 4 })).await;
+    assert!(!failed, "{text}");
+    serde_json::from_str::<Value>(&text).unwrap();
+    assert!(text.contains("0x4400"), "{text}");
+
+    // Raw code has no typed operands, so immediate search refuses instead of guessing from display text.
+    let immediate = json!({ "kind": "immediate", "immediate": { "value": { "kind": "unsigned", "value": 0 } } });
+    let (text, failed) = call(&client, "search", json!({ "path": path, "raw": seeded, "mode": immediate })).await;
+    assert!(failed, "immediate search must refuse on Raw: {text}");
+    assert!(text.contains("no typed operand evidence; immediate search is unsupported"), "{text}");
+
+    let (text, failed) =
+        call(&client, "set_comment", json!({ "path": path, "raw": seeded, "at": "0x4400", "text": "reset" })).await;
+    assert!(!failed, "{text}");
+    // The same interpretation (seeds are a set) keeps its memory-only comment across calls.
+    let reordered = raw(&["0x4410", "0x4400"]);
+    let (text, failed) = call(&client, "list_annotations", json!({ "path": path, "raw": reordered })).await;
+    assert!(!failed && text.contains("reset"), "{text}");
+    // Different seeds are a different interpretation: a fresh project without the comment.
+    let (text, failed) = call(&client, "list_annotations", json!({ "path": path, "raw": raw(&["0x4400"]) })).await;
+    assert!(!failed && !text.contains("reset"), "{text}");
+
+    // Decompilation of Raw MSP430 is refused for now; a later slice enables it. Accept either C or that refusal.
+    let (text, failed) = call(&client, "decompile", json!({ "path": path, "raw": seeded, "at": "0x4400" })).await;
+    if failed {
+        assert!(text.contains("Raw native memory admission"), "explicit Raw decompile refusal: {text}");
+    } else {
+        let output: Value = serde_json::from_str(&text).unwrap();
+        assert!(output.to_string().contains('{'), "{text}");
+    }
+
+    let (text, failed) = call(&client, "list_functions", json!({ "path": path, "raw": seeded, "arch": "x86" })).await;
+    assert!(failed && text.contains("`raw` cannot be combined with `arch`"), "{text}");
+    let (text, failed) =
+        call(&client, "list_functions", json!({ "path": path, "raw": seeded, "image_offset": 0 })).await;
+    assert!(failed && text.contains("`image_offset`"), "{text}");
+    let (text, failed) =
+        call(&client, "list_functions", json!({ "path": path, "raw": seeded, "image_length": "0x10" })).await;
+    assert!(failed && text.contains("`image_length`"), "{text}");
+
+    let (text, failed) = call(&client, "triage", json!({ "path": path, "raw": seeded })).await;
+    assert!(failed && text.contains("tool triage does not accept Raw projects"), "{text}");
+    let (text, failed) = call(&client, "inspect_sleigh", json!({ "path": path, "raw": seeded })).await;
+    assert!(failed && text.contains("tool inspect_sleigh does not accept Raw projects"), "{text}");
+
+    let mut unknown = seeded.clone();
+    unknown["arch"] = json!("x86");
+    let (text, failed) = call(&client, "list_functions", json!({ "path": path, "raw": unknown })).await;
+    assert!(failed && text.contains("`raw`") && text.contains("unknown field"), "{text}");
+    let mut profile = seeded.clone();
+    profile["profile"] = json!("x86:LE:64:default");
+    let (text, failed) = call(&client, "list_functions", json!({ "path": path, "raw": profile })).await;
+    assert!(failed && text.contains("closed Raw language"), "{text}");
+
+    assert_eq!(names(&copy.0), ["msp430.bin"], "Raw projects write no sidecars or logs");
+    assert_eq!(names(&fixtures()), fixture_names, "the fixture directory is untouched");
+    client.cancel().await.unwrap();
+}
