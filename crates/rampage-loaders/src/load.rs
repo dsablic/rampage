@@ -257,10 +257,10 @@ impl Binary {
             slices: vec![arch],
             warnings: Vec::new(),
             details: Details::None,
-            big_endian: false,
+            big_endian: raw.profile().big_endian(),
             thumb: Vec::new(),
             overlay: None,
-            code_big_endian: false,
+            code_big_endian: raw.profile().code_big_endian(),
             code_ranges: vec![raw.range()],
             global_pointer: None,
             got: None,
@@ -312,8 +312,8 @@ impl Binary {
             || self.segments != [raw.segment()]
             || self.sections != [raw.section()]
             || self.slices != [self.arch]
-            || self.big_endian
-            || self.code_big_endian
+            || self.big_endian != raw.profile().big_endian()
+            || self.code_big_endian != raw.profile().code_big_endian()
             || !self.thumb.is_empty()
             || self.code_ranges != [raw.range()]
             || self.image != (0..self.data.len())

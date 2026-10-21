@@ -979,6 +979,10 @@ fn semantic_lookahead(
     work: &mut u64,
 ) -> Result<Option<usize>, SearchStopReason> {
     let arch = project.binary.arch;
+    if project.binary.raw_code_image().is_some() {
+        // Sleigh may translate delay slots past a gated block end; discovery saw those backed bytes too.
+        return Ok(Some(32));
+    }
     match arch {
         rampage_arch::Arch::Aarch64 => Ok(bytes.starts_with(&[0x01, 0x00, 0x00, 0x94]).then_some(20)),
         rampage_arch::Arch::Arm => {

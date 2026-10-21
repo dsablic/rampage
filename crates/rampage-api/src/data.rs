@@ -318,7 +318,22 @@ pub fn inspect_native_data(binary: &Binary, query: &DataQuery) -> Result<DataIns
 pub(crate) fn inspect_static_data(binary: &Binary, query: &DataQuery) -> Result<DataInspection, ApiError> {
     // Existing native-image address bounds are independent of C pointer defaults.
     let code_address_highest = match binary.arch {
-        Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => {
+        Arch::Msp430
+        | Arch::Avr8
+        | Arch::Mos6502
+        | Arch::Mc6805
+        | Arch::I8051
+        | Arch::Pic16
+        | Arch::Sh2
+        | Arch::V850
+        | Arch::Tricore
+        | Arch::Xtensa
+        | Arch::Z80
+        | Arch::Hcs12
+        | Arch::Cr16c
+        | Arch::Ebpf
+        | Arch::Loongarch64
+        | Arch::Hexagon => {
             return Err(ApiError::Unavailable("Raw data-space inspection is not admitted by a code-only image".into()));
         }
         Arch::X86 | Arch::Arm | Arch::Mips | Arch::PowerPc | Arch::Riscv32 | Arch::Sparc | Arch::M68k => {

@@ -37,10 +37,23 @@ pub enum Arch {
     Msp430,
     Avr8,
     Mos6502,
+    Mc6805,
+    I8051,
+    Pic16,
+    Sh2,
+    V850,
+    Tricore,
+    Xtensa,
+    Z80,
+    Hcs12,
+    Cr16c,
+    Ebpf,
+    Loongarch64,
+    Hexagon,
 }
 
 /// Each architecture's name, followed by the other spellings it is known by.
-const NAMES: [(Arch, &[&str]); 17] = [
+const NAMES: [(Arch, &[&str]); 30] = [
     (Arch::X86, &["x86", "i386", "i686"]),
     (Arch::X86_64, &["x86_64", "x64", "amd64"]),
     (Arch::Aarch64, &["aarch64", "arm64"]),
@@ -58,11 +71,24 @@ const NAMES: [(Arch, &[&str]); 17] = [
     (Arch::Msp430, &["msp430"]),
     (Arch::Avr8, &["avr8"]),
     (Arch::Mos6502, &["mos6502", "6502"]),
+    (Arch::Mc6805, &["mc6805", "6805"]),
+    (Arch::I8051, &["i8051", "8051", "mcs51"]),
+    (Arch::Pic16, &["pic16", "pic-16"]),
+    (Arch::Sh2, &["sh2", "sh-2", "superh"]),
+    (Arch::V850, &["v850"]),
+    (Arch::Tricore, &["tricore"]),
+    (Arch::Xtensa, &["xtensa"]),
+    (Arch::Z80, &["z80"]),
+    (Arch::Hcs12, &["hcs12", "hcs-12"]),
+    (Arch::Cr16c, &["cr16c", "cr16"]),
+    (Arch::Ebpf, &["ebpf", "bpf"]),
+    (Arch::Loongarch64, &["loongarch64", "loongarch"]),
+    (Arch::Hexagon, &["hexagon"]),
 ];
 
 impl Arch {
-    pub const ALL: [Arch; 17] = {
-        let mut all = [Arch::X86; 17];
+    pub const ALL: [Arch; 30] = {
+        let mut all = [Arch::X86; 30];
         let mut index = 0;
         while index < NAMES.len() {
             all[index] = NAMES[index].0;
@@ -82,7 +108,22 @@ impl Arch {
             | Arch::Riscv64
             | Arch::Sparc64
             | Arch::S390x => Some(8),
-            Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => None,
+            Arch::Msp430
+            | Arch::Avr8
+            | Arch::Mos6502
+            | Arch::Mc6805
+            | Arch::I8051
+            | Arch::Pic16
+            | Arch::Sh2
+            | Arch::V850
+            | Arch::Tricore
+            | Arch::Xtensa
+            | Arch::Z80
+            | Arch::Hcs12
+            | Arch::Cr16c
+            | Arch::Ebpf
+            | Arch::Loongarch64
+            | Arch::Hexagon => None,
         }
     }
 
@@ -99,7 +140,22 @@ impl Arch {
             | Arch::Riscv64
             | Arch::Sparc64
             | Arch::S390x => Some(TargetWidth::Bits64),
-            Arch::Msp430 | Arch::Avr8 | Arch::Mos6502 => None,
+            Arch::Msp430
+            | Arch::Avr8
+            | Arch::Mos6502
+            | Arch::Mc6805
+            | Arch::I8051
+            | Arch::Pic16
+            | Arch::Sh2
+            | Arch::V850
+            | Arch::Tricore
+            | Arch::Xtensa
+            | Arch::Z80
+            | Arch::Hcs12
+            | Arch::Cr16c
+            | Arch::Ebpf
+            | Arch::Loongarch64
+            | Arch::Hexagon => None,
         }
     }
 
@@ -494,7 +550,7 @@ mod width_tests {
     #[test]
     fn optional_defaults_preserve_all_fourteen_legacy_widths() {
         let expected = [4, 8, 8, 4, 4, 8, 4, 8, 4, 8, 4, 8, 8, 4];
-        assert_eq!(Arch::ALL.len(), 17);
+        assert_eq!(Arch::ALL.len(), 30);
         for (arch, width) in Arch::ALL.into_iter().take(14).zip(expected) {
             assert_eq!(arch.pointer_size(), Some(width), "{arch}");
             assert_eq!(arch.default_pointer_size(), Some(width), "{arch}");
@@ -502,15 +558,43 @@ mod width_tests {
     }
 
     #[test]
-    fn pilots_are_real_identities_without_legacy_widths_or_native_decoders() {
-        for (arch, name) in [(Arch::Msp430, "msp430"), (Arch::Avr8, "avr8"), (Arch::Mos6502, "mos6502")] {
+    fn sleigh_only_identities_have_no_legacy_widths_or_native_decoders() {
+        let names = [
+            "msp430",
+            "avr8",
+            "mos6502",
+            "mc6805",
+            "i8051",
+            "pic16",
+            "sh2",
+            "v850",
+            "tricore",
+            "xtensa",
+            "z80",
+            "hcs12",
+            "cr16c",
+            "ebpf",
+            "loongarch64",
+            "hexagon",
+        ];
+        assert_eq!(Arch::ALL.len(), 14 + names.len());
+        for (arch, name) in Arch::ALL.into_iter().skip(14).zip(names) {
             assert_eq!(name.parse::<Arch>().unwrap(), arch);
             assert_eq!(arch.to_string(), name);
+            assert_eq!(serde_json::to_value(arch).unwrap(), name);
             assert_eq!(arch.pointer_size(), None);
             assert_eq!(arch.default_pointer_size(), None);
             assert_eq!(arch.native_address_width(), None);
+            assert_eq!(arch.delay_slots(), 0);
             assert!(super::decoder_for(arch).is_err());
+            let mut big = super::Target::new(arch);
+            big.big_endian = true;
+            assert!(super::decoder(&big).is_err());
         }
-        assert_eq!("6502".parse::<Arch>().unwrap(), Arch::Mos6502);
+        for (alias, arch) in
+            [("6502", Arch::Mos6502), ("8051", Arch::I8051), ("superh", Arch::Sh2), ("cr16", Arch::Cr16c)]
+        {
+            assert_eq!(alias.parse::<Arch>().unwrap(), arch);
+        }
     }
 }

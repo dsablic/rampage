@@ -70,7 +70,7 @@ fn project(profile: RawProfile, bytes: &[u8], base: u64, entry: Option<u64>, see
 #[test]
 fn actual_native_profile_metadata_matches_raw_admission() {
     let mut matches = Vec::new();
-    for profile in [RawProfile::Msp430, RawProfile::Avr8, RawProfile::Mos6502] {
+    for profile in RawProfile::ALL {
         let binary =
             Binary::from_raw_code(vec![0; 4], RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] })
                 .unwrap();
@@ -79,12 +79,16 @@ fn actual_native_profile_metadata_matches_raw_admission() {
         println!(
             "RAW_PROFILE_METADATA {}",
             serde_json::json!({
-                "profile": profile.language_id(), "admitted": profile.code_space(),
-                "native": decoder.metadata(), "exact_match": matched,
+                "profile": profile.language_id(), "arch": profile.arch(), "admitted": profile.code_space(),
+                "big_endian": profile.big_endian(), "code_big_endian": profile.code_big_endian(),
+                "parallel_helper": profile.parallel_helper(), "native": decoder.metadata(), "exact_match": matched,
             })
         );
+        assert_eq!(decoder.metadata().big_endian, binary.big_endian, "{profile:?}");
+        assert_eq!(decoder.metadata().required_parallel_helper.as_deref(), profile.parallel_helper());
         matches.push(matched);
     }
+    assert_eq!(matches.len(), RawProfile::ALL.len());
     assert!(matches.into_iter().all(|matched| matched), "all exact profile facts must match");
 }
 
@@ -324,7 +328,8 @@ fn distinct_raw_interpretations_never_share_cached_c() {
 
 #[test]
 fn matching_profile_does_not_excuse_any_translator_fact_mismatch() {
-    for profile in [RawProfile::Msp430, RawProfile::Avr8, RawProfile::Mos6502] {
+    let hexagon_helper = RawProfile::Hexagon.parallel_helper().unwrap();
+    for profile in RawProfile::ALL {
         let binary =
             Binary::from_raw_code(vec![0; 4], RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] })
                 .unwrap();
@@ -332,7 +337,7 @@ fn matching_profile_does_not_excuse_any_translator_fact_mismatch() {
         let decoder = SleighDecoder::open(profile.language_id()).unwrap();
         let original = decoder.metadata();
         assert!(validate_raw_metadata(raw, original).is_ok());
-        for dimension in 0..9 {
+        for dimension in 0..12 {
             let mut changed = original.clone();
             let code = changed.spaces.iter_mut().find(|space| space.id == changed.code_space).unwrap();
             match dimension {
@@ -345,6 +350,11 @@ fn matching_profile_does_not_excuse_any_translator_fact_mismatch() {
                 6 => changed.alignment_bytes += 1,
                 7 => changed.required_parallel_helper = Some("unimplemented helper".into()),
                 8 => changed.spaces.clear(),
+                9 => changed.big_endian ^= true,
+                10 => changed.code_big_endian ^= true,
+                // Only the declared helper is admitted: Hexagon without it, or any other profile with it.
+                11 if profile.parallel_helper().is_some() => changed.required_parallel_helper = None,
+                11 => changed.required_parallel_helper = Some(hexagon_helper.into()),
                 _ => unreachable!(),
             }
             assert!(validate_raw_metadata(raw, &changed).is_err(), "{profile:?}/{dimension}");
@@ -371,7 +381,7 @@ fn native_fourteen_keep_their_native_selector_and_raw_is_not_inferred_from_an_ar
     assert_eq!(analysis_binding(&binary).unwrap(), None);
     let mut decoder = decoder_for_project(&binary).unwrap();
     assert_eq!(decoder.decode(&[0xc3], 0x1000).flow, Flow::Return);
-    for arch in [Arch::Msp430, Arch::Avr8, Arch::Mos6502] {
+    for arch in Arch::ALL.into_iter().skip(14) {
         binary.arch = arch;
         assert!(decoder_for_project(&binary).is_err());
     }

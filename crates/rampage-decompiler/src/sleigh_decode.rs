@@ -123,6 +123,10 @@ pub struct ProfileMetadata {
     pub spaces: Vec<Space>,
     /// Trusted processor-spec Java helper requirement, not an assertion that C++ implements that helper.
     pub required_parallel_helper: Option<String>,
+    /// Translator data byte order loaded from the SLA.
+    pub big_endian: bool,
+    /// Byte order of the default code space loaded from the SLA.
+    pub code_big_endian: bool,
 }
 
 #[repr(C)]
@@ -131,6 +135,8 @@ struct NativeMetadata {
     alignment: u32,
     space_count: u32,
     code_space: u32,
+    big_endian: u32,
+    code_big_endian: u32,
     error: [c_char; 256],
     processor_helper: [c_char; 256],
     spaces: [NativeSpace; MAX_SPACES],
@@ -154,6 +160,8 @@ fn metadata_locked(handle: *mut c_void, profile: &str) -> Result<ProfileMetadata
         }));
     }
     if output.alignment == 0
+        || output.big_endian > 1
+        || output.code_big_endian > 1
         || output.space_count == 0
         || output.space_count as usize > MAX_SPACES
         || output.code_space >= output.space_count
@@ -187,6 +195,8 @@ fn metadata_locked(handle: *mut c_void, profile: &str) -> Result<ProfileMetadata
         code_space: output.code_space,
         spaces,
         required_parallel_helper: (!helper.is_empty()).then_some(helper),
+        big_endian: output.big_endian != 0,
+        code_big_endian: output.code_big_endian != 0,
     })
 }
 
