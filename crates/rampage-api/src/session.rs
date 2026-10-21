@@ -40,7 +40,12 @@ struct State {
     ordinary_sources: HashMap<(PathBuf, Option<ImageAt>, Arch), [u8; 32]>,
     /// The file each ordinary project was loaded from, to notice it being rewritten or replaced while cached.
     stamps: HashMap<(PathBuf, Option<ImageAt>, Arch), FileStamp>,
+    /// Raw projects by canonical path and raw interpretation SHA-256, least recently used first.
+    raw: Vec<((PathBuf, String), Arc<Project>)>,
 }
+
+/// Raw interpretations retained per session; the least recently used is evicted beyond this.
+pub const MAX_RAW_PROJECTS: usize = 32;
 
 /// A cheap stand-in for a file's contents: its length, modification time and, on Unix, device and inode. A rewrite
 /// that keeps all of them (same length, within the file system's timestamp granularity) goes unnoticed.
@@ -123,6 +128,48 @@ impl Session {
         admit: &mut dyn FnMut(&[u8]) -> Result<(), ApiError>,
     ) -> Result<Arc<Project>, ApiError> {
         self.unloaded_copy().open_at_policy(path, arch, image, true, Some(admit))
+    }
+
+    /// Opens the Raw interpretation `request` asserts over a range of the regular file at `path`. Projects are
+    /// cached by canonical path and the raw interpretation identity (bytes, profile, mapping, entry and seeds), so
+    /// changed bytes or seeds give a fresh project while the same interpretation keeps its memory-only annotations.
+    /// No sidecar or annotation log is read or written.
+    pub fn open_raw(&self, path: &Path, request: &crate::RawProjectRequest) -> Result<Arc<Project>, ApiError> {
+        let binary = crate::raw_project::open_raw_binary(path, request)?;
+        let identity = binary
+            .raw_interpretation_identity()
+            .map_err(|source| ApiError::Load { path: path.to_owned(), source })?
+            .ok_or_else(|| ApiError::Invalid("Raw admission produced no interpretation identity".to_owned()))?;
+        let canonical = path.canonicalize().map_err(|source| ApiError::Load {
+            path: path.to_owned(),
+            source: rampage_loaders::LoadError::Io { path: path.to_owned(), source },
+        })?;
+        let key = (canonical, identity.sha256);
+        let project = {
+            let mut state = self.state.lock().expect("session lock");
+            if let Some(index) = state.raw.iter().position(|(cached, _)| *cached == key) {
+                let entry = state.raw.remove(index);
+                let project = Arc::clone(&entry.1);
+                state.raw.push(entry);
+                project
+            } else {
+                let project = Project::new(binary);
+                project.set_packs(Arc::clone(&self.packs));
+                if let Some(executable) = decompiler_worker() {
+                    project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
+                        executable: Some(executable),
+                        ..Default::default()
+                    }));
+                }
+                let project = Arc::new(project);
+                if state.raw.len() >= MAX_RAW_PROJECTS {
+                    state.raw.remove(0);
+                }
+                state.raw.push((key, Arc::clone(&project)));
+                project
+            }
+        };
+        project.effective_snapshot()
     }
 
     fn open_at_policy(
@@ -278,10 +325,7 @@ impl Session {
                 None => state.stamps.remove(&key),
             };
         }
-        let worker = std::env::var_os("RAMPAGE_WORKER").map(PathBuf::from).or_else(|| {
-            let sibling = std::env::current_exe().ok()?.with_file_name("rampage-worker");
-            sibling.is_file().then_some(sibling)
-        });
+        let worker = decompiler_worker();
         if checked {
             state.projects.remove(&key);
         }
@@ -302,6 +346,13 @@ impl Session {
         });
         project.effective_snapshot()
     }
+}
+
+fn decompiler_worker() -> Option<PathBuf> {
+    std::env::var_os("RAMPAGE_WORKER").map(PathBuf::from).or_else(|| {
+        let sibling = std::env::current_exe().ok()?.with_file_name("rampage-worker");
+        sibling.is_file().then_some(sibling)
+    })
 }
 
 fn can_reuse_ordinary_input(path: &Path) -> Result<bool, ApiError> {

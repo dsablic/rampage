@@ -44,6 +44,7 @@ mod propagation;
 mod range_source;
 mod raw_code;
 mod raw_file;
+mod raw_project;
 mod rows;
 mod runtime_compare;
 pub mod search;
@@ -192,6 +193,7 @@ pub use raw_code::{
     RawCodeRequest, RawCodeRow, RawCodeStopReason, inspect_raw_code,
 };
 pub use raw_file::{RawByteOrder, RawContinuation, RawFileReport, RawFileRequest, inspect_raw_file};
+pub use raw_project::{RawProjectRequest, open_raw_binary};
 pub use rows::{
     Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page, StringsQuery,
     Summary, label,
@@ -201,7 +203,7 @@ pub use search_request::{
     MAX_SEARCH_REQUEST_BYTES, SearchAddress, SearchRequest, SearchRequestMode, SearchRequestRange,
     SearchRequestReference,
 };
-pub use session::Session;
+pub use session::{MAX_RAW_PROJECTS, Session};
 pub use signature_import::load_signature_database;
 pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};
 pub use summary::FunctionSummary;
