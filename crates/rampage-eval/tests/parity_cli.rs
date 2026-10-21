@@ -99,6 +99,12 @@ fn parity_route_combines_real_static_scores_with_explicitly_unmeasured_tasks() {
     assert_eq!(report["agent_tasks"]["measured_analysis_tasks"], 0);
     assert_eq!(report["agent_tasks"]["transport"], "not_connected");
     assert_eq!(report["agent_tasks"]["fixture_failures"], 0);
+    let roster = &report["processor_roster"];
+    assert_eq!(roster["rows"].as_array().unwrap().len(), 16);
+    assert_eq!(roster["totals"]["manual"], json!({"retained": 32, "exact_extents": 23}));
+    assert_eq!(roster["totals"]["call_only"], json!({"retained": 27, "exact_extents": 20}));
+    let unmeasured = report["unmeasured"].as_array().unwrap();
+    assert!(unmeasured.iter().any(|category| category == "autonomous Ghidra discovery recall per processor"));
     assert_eq!(report["agent_tasks"]["tasks"].as_array().unwrap().len(), 20);
     for task in report["agent_tasks"]["tasks"].as_array().unwrap() {
         assert_eq!(task["check"]["outcome"], "unmeasured");

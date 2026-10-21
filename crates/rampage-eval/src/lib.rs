@@ -19,6 +19,7 @@
 pub mod parity_agent;
 pub mod parity_graph;
 pub mod parity_opencode;
+pub mod parity_processors;
 pub mod parity_tasks;
 mod toolid;
 mod types;

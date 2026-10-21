@@ -70,6 +70,14 @@ The accepted result and its collector revision are recorded in [benchmarks](benc
 can be generated with `jq --arg source_sha256 HASH -f tools/parity-scorecard-summary.jq REPORT.json`; it omits
 model answers, arbitrary reason text, transcripts and absolute paths while preserving outcomes and error counts.
 
+The report's `processor_roster` section measures every Sleigh roster fixture through the ordinary Raw `Project`
+path: per language id, fixture paths and digests, truth and Ghidra seeded-function counts, entries retained and
+exact extents for manual and call-only seeding, misses grouped by decode-gate reason, and whether Raw
+decompilation returns C or refuses. `rampage-eval processor-roster` prints the same section alone. Limits: the
+Ghidra oracle is seeded function creation (autonomous auto-analysis not run, so per-processor autonomous
+discovery recall stays in `unmeasured`), and fixtures are hand-assembled byte ledgers, not compiled code.
+The recorded result is in [benchmarks](benchmarks.md).
+
 Corpus recipes compile once, strip a copy, check observed headers and stripped symbol/debug metadata, and
 verify truth-function byte identity before scoring. Failed commands retain exit codes; missing prerequisites
 and successful-but-empty applicable truth remain unavailable. No target binaries execute or sources download.

@@ -36,6 +36,12 @@ enum Command {
         #[arg(long)]
         ghidra_export: PathBuf,
     },
+    /// Measure the Sleigh processor roster through ordinary Raw Projects (the parity report's processor_roster).
+    ProcessorRoster {
+        /// Repository root holding tests/fixtures/sleigh; recorded fixture paths stay relative to it.
+        #[arg(long)]
+        repository_root: Option<PathBuf>,
+    },
     /// Print the ground truth ({"0x<address>": "<name>"}) taken from a symbolized binary's function symbols.
     Truth {
         symbolized: PathBuf,
@@ -247,6 +253,7 @@ fn main() -> ExitCode {
         Command::GraphAgreement { request, rampage_export, ghidra_export } => {
             parity_graph_files::print(&request, &rampage_export, &ghidra_export)
         }
+        Command::ProcessorRoster { repository_root } => processor_roster(repository_root),
         Command::Truth { symbolized, stripped, library, program, dwarf, dwarf_file } => {
             truth(&symbolized, stripped.as_deref(), &library, &program, dwarf, dwarf_file.as_deref())
         }
@@ -613,6 +620,13 @@ fn manifest(path: &Path) -> Result<Vec<(Option<String>, Slice)>, String> {
             (Some(name), slice)
         })
         .collect())
+}
+
+fn processor_roster(root: Option<PathBuf>) -> Result<ExitCode, String> {
+    let root = root.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let section = rampage_eval::parity_processors::measure(&root)?;
+    println!("{}", serde_json::to_string_pretty(&section).map_err(|error| error.to_string())?);
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run(args: RunArgs) -> Result<ExitCode, String> {
