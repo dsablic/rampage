@@ -215,7 +215,7 @@ an ordinary Raw Project instead of admitting a native header. The `RawProjectReq
 language ID),
 `offset` and `length` (original-file bytes, 1..=131072), `base_address`, and optional `entry` and `seeds`
 (internal code-space BYTE addresses). Unknown fields are rejected. The mapping is an analyst assertion; see
-[Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects-library-pilot) for profiles and limits.
+[Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects) for profiles and limits.
 
 ```sh
 raw='{"profile":"TI_MSP430:LE:16:default","offset":0,"length":30,"base_address":"0x4400","seeds":["0x4400","0x4410"]}'

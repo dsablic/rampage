@@ -1,6 +1,6 @@
 # To do
 
-## Parity roadmap: Phase 0 and 1.1–1.6 implementation completed; live Phase 1 sign-off open
+## Parity roadmap: Phases 0–3 and 4.1 implementation completed; live Phase 1 sign-off open
 
 Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One milestone at a time;
 parallel slices share central builds and undergo fresh-context review before publication.
@@ -275,12 +275,15 @@ One unchanged live helper attempt answered 22 correctly: five calls, 21,518 inpu
 Catalog retention is truncated in both reports, so completeness acceptance fails: no token-improvement credit,
 no call reduction, no causal attribution to compact/batch tools, and no retry. The other 19 tasks remain unrun.
 
-## Active milestone: Phase 4.1, explicit Sleigh-backed processor breadth
+## Phase 4.1: Sleigh-backed processor breadth complete
 
 - [x] Inventory existing native/Capstone/Sleigh paths and published processor-spec licensing/provenance.
-- [ ] Expose bounded Sleigh instruction/flow/p-code decoding for explicitly selected supported processors.
-- [ ] Add owned per-processor fixtures and record disassembly/discovery comparison limits without executing bytes.
-- [ ] Review, test and publish the finite supported processor set before Phase 4.2 raw/firmware loading.
+- [x] Expose bounded Sleigh instruction/flow/p-code decoding for explicitly selected supported processors
+  (`inspect_sleigh` proven over MCP for all 16 profiles against 140 oracle rows, `1d3b24a`).
+- [x] Add owned per-processor fixtures and record disassembly/discovery comparison limits without executing bytes
+  (per-processor scorecard section, `docs/benchmarks/phase4-1-roster-2026-10-21.json`).
+- [x] Review, test and publish the finite supported processor set before Phase 4.2 raw/firmware loading
+  (published table in `docs/sleigh-decoding.md`; independent review findings fixed).
 
 The first MSP430/AVR8/6502 resource closures are a pilot, not completion of the full 16-family roadmap roster.
 All 16 families have resource-admitted closures from the pinned local public SDK and finite native/oracle
@@ -330,7 +333,18 @@ after memimage space isolation. API library: 780 passed, nine ignored. Decompile
 The workspace has 3571 passing tests and clean all-targets Clippy. Nine pre-existing failures reproduce
 unchanged at `2b2ead1`: derived-cache refresh, plugin sidecars, MinGW triage, the extended oracle report path,
 the parity agent, the MCP tool list and UI workspace capture. Contention tests need a non-symlinked `TMPDIR`.
-- [ ] Expose Raw Projects through MCP/CLI and cover real unknown-flow ordinary-Project cases.
+- [x] Expose Raw Projects through MCP/CLI and cover real unknown-flow ordinary-Project cases.
+
+Phase 4.1 completion (2026-10-21): all sixteen families are admitted as ordinary Raw Projects, checked against
+the verified translator including byte order and Hexagon's declared helper (identity schema v2). MCP raw-capable
+tools take a compact `raw` selector (about 0.5 KB per tool; field meanings and the generated profile list appear
+once in the server instructions); the CLI takes `--raw-json`/`--raw-request` for read-only commands. Ordinary
+Project recall: manual seeds 32/32 entries and 23/32 exact extents, caller-only 27/32 and 20/32; every miss is
+gate-attributed. Hexagon's helper-gated entry and SuperH's in-body delay slot are covered in
+`crates/rampage-api/tests/raw_roster.rs`. MSP430 and AVR8 decompile through one code-space-isolated region,
+including analyst renames; the other fourteen refuse C until a model is reviewed. Limits: hand-assembled
+fixtures, seeded Ghidra oracle, autonomous Ghidra recall unmeasured. Parity runs accept
+`--skip-processor-roster`. Phase 4.2 (memory maps, HEX/SREC, vector seeding) is next.
 - [x] Triage the nine pre-existing workspace test failures listed above (fixed at `3a82078`; workspace green).
 
 Phases 4.2–4.4, analysis-depth Phase 5 and scale/persistence Phase 6 follow in roadmap order. Implementation
