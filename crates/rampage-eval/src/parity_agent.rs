@@ -15,6 +15,7 @@ use rmcp::model::{CallToolRequestParams, ClientRequest, ListToolsRequest, Pagina
 use rmcp::service::RoleClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::parity_tasks::{ParityTask, TaskAttempt};
 
@@ -317,12 +318,22 @@ pub struct AgentRun {
     pub tool_errors: usize,
     pub catalog_requests: usize,
     pub catalog_tool_count: usize,
-    /// One snapshot per discovery/refresh, serialized actual MCP tool definitions. Only the total retained budget can
-    /// truncate one; the per-record bound applies to tool I/O and model turns.
+    /// One entry per discovery/refresh, serialized actual MCP tool definitions. The per-record bound applies only to
+    /// tool I/O and model turns; catalogs together may use at most half of the total retained budget, and a catalog
+    /// cut by that share is marked `truncated`. A refresh identical to an earlier discovery (see
+    /// `catalog_repeat_of`) is not stored again: its entry has empty text and `truncated: true`, and
+    /// [`AgentRun::catalog_snapshot`] resolves it to the earlier record.
     pub catalogs: Vec<RetainedText>,
     /// Complete ordered names per successful discovery, within catalog bounds and independent of retention/policy.
     #[serde(default)]
     pub catalog_tool_names: Vec<Vec<String>>,
+    /// SHA-256 (hex) of each discovery's complete serialized snapshot, independent of retention.
+    #[serde(default)]
+    pub catalog_sha256: Vec<String>,
+    /// Per discovery, the index of the first earlier discovery with an identical snapshot, whose `catalogs` entry
+    /// holds the retained text; `None` when this discovery's snapshot was retained in its own entry.
+    #[serde(default)]
+    pub catalog_repeat_of: Vec<Option<usize>>,
     pub turns: Vec<ModelTurn>,
     pub calls: Vec<ToolCall>,
     /// A field is null if any attempted model turn omitted it, including transport failures.
@@ -351,6 +362,8 @@ impl AgentRun {
             catalog_tool_count: 0,
             catalogs: Vec::new(),
             catalog_tool_names: Vec::new(),
+            catalog_sha256: Vec::new(),
+            catalog_repeat_of: Vec::new(),
             turns: Vec::new(),
             calls: Vec::new(),
             usage: ProviderUsage::default(),
@@ -359,6 +372,12 @@ impl AgentRun {
                 server connection, fixture preparation/identity verification and evaluator checking"
                 .into(),
         }
+    }
+
+    /// Retained snapshot for discovery `index`, following `catalog_repeat_of` to the record a repeat refers to.
+    pub fn catalog_snapshot(&self, index: usize) -> Option<&RetainedText> {
+        let source = self.catalog_repeat_of.get(index).copied().flatten().unwrap_or(index);
+        self.catalogs.get(source)
     }
 
     /// Measurement-facing attempt. Scripted runs are always unmeasured, regardless of disposition.
@@ -387,6 +406,8 @@ const MAX_CATALOG_BYTES: usize = 1_000_000;
 struct Retention {
     remaining: usize,
     per_record: usize,
+    /// Catalogs' remaining share of `remaining`, so refreshes cannot starve tool I/O and model turns.
+    catalog_remaining: usize,
 }
 
 impl Retention {
@@ -396,9 +417,12 @@ impl Retention {
     }
 
     /// A catalog snapshot is bounded by discovery itself ([`MAX_CATALOG_BYTES`]), not by the per-record limit for
-    /// tool I/O and model turns, so a complete catalog is never cut short; it still draws from the total budget.
+    /// tool I/O and model turns. It draws from the total budget, limited to the catalogs' share of it.
     fn keep_catalog(&mut self, text: String) -> RetainedText {
-        self.keep_within(text, MAX_CATALOG_BYTES)
+        let before = self.remaining;
+        let retained = self.keep_within(text, MAX_CATALOG_BYTES.min(self.catalog_remaining));
+        self.catalog_remaining -= before - self.remaining;
+        retained
     }
 
     fn keep_within(&mut self, text: String, per_record: usize) -> RetainedText {
@@ -432,7 +456,11 @@ pub async fn run_task<T: Transport + 'static>(
         run.disposition = AgentDisposition::Failed { reason: "fixture path must be nonempty UTF-8".into() };
         return run;
     };
-    let mut retention = Retention { remaining: config.max_retained_bytes, per_record: config.max_record_bytes };
+    let mut retention = Retention {
+        remaining: config.max_retained_bytes,
+        per_record: config.max_record_bytes,
+        catalog_remaining: config.max_retained_bytes / 2,
+    };
     let started = Instant::now();
     let result = answer(client, transport, task, path, config, &mut run, &mut retention).await;
     run.disposition = result.unwrap_or_else(|reason| AgentDisposition::Failed { reason: bounded_reason(&reason) });
@@ -476,8 +504,15 @@ async fn discover(
         cursor = page.next_cursor;
         if cursor.is_none() {
             let snapshot = serde_json::to_string(&tools).map_err(|error| error.to_string())?;
+            let sha256 = rampage_arch::hex::bytes(&Sha256::digest(snapshot.as_bytes()));
+            let repeat_of = run.catalog_sha256.iter().position(|earlier| *earlier == sha256);
+            run.catalogs.push(match repeat_of {
+                Some(_) => RetainedText { text: String::new(), original_bytes: snapshot.len(), truncated: true },
+                None => retention.keep_catalog(snapshot),
+            });
             run.catalog_tool_names.push(tools.iter().map(|tool| tool.name.to_string()).collect());
-            run.catalogs.push(retention.keep_catalog(snapshot));
+            run.catalog_sha256.push(sha256);
+            run.catalog_repeat_of.push(repeat_of);
             return Ok(tools);
         }
     }

@@ -442,6 +442,71 @@ async fn scripted_default_bounds_retain_every_full_catalog_untruncated() {
 }
 
 #[tokio::test]
+async fn scripted_repeated_catalog_refreshes_are_not_duplicated_and_cannot_starve_tool_io() {
+    let client = connect().await;
+    let path = fixture();
+    let mut replies = vec![
+        tool("enable_tools", json!({})),
+        tool("enable_tools", json!({ "groups": ["detection"] })),
+        tool("enable_tools", json!({ "groups": ["detection"] })),
+        tool("enable_tools", json!({ "groups": ["all"] })),
+    ];
+    replies.extend((0..4).map(|_| tool("enable_tools", json!({ "groups": ["all"] }))));
+    replies.push(tool("disassemble", json!({ "path": path, "at": "0x1010518", "count": 2 })));
+    replies.push(final_answer(json!({ "status": "unknown", "reason": "scripted repeated refresh check" })));
+    let (script, _) = Script::new(replies);
+    let bounds = config();
+    let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &path, &bounds).await;
+    assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
+
+    assert_eq!(run.catalogs.len(), 9);
+    assert_eq!(run.catalog_tool_names.len(), 9);
+    assert_eq!(run.catalog_sha256.len(), 9);
+    assert_eq!(run.catalog_repeat_of, vec![None, Some(0), None, Some(2), None, Some(4), Some(4), Some(4), Some(4)]);
+    // Every refresh at full size would exceed the whole retained budget, as it did before repeats were deduplicated.
+    assert!(run.catalogs.iter().map(|entry| entry.original_bytes).sum::<usize>() > bounds.max_retained_bytes);
+    for (index, entry) in run.catalogs.iter().enumerate() {
+        let source = run.catalog_repeat_of[index].unwrap_or(index);
+        assert_eq!(run.catalog_sha256[index], run.catalog_sha256[source]);
+        assert_eq!(run.catalog_tool_names[index], run.catalog_tool_names[source]);
+        if source != index {
+            assert!(entry.text.is_empty() && entry.truncated);
+            assert_eq!(entry.original_bytes, run.catalogs[source].original_bytes);
+        }
+        let snapshot = run.catalog_snapshot(index).unwrap();
+        assert!(std::ptr::eq(snapshot, &run.catalogs[source]));
+        if !snapshot.truncated {
+            let tools: Vec<Value> = serde_json::from_str(&snapshot.text).unwrap();
+            let retained: Vec<_> = tools.iter().map(|tool| tool["name"].as_str().unwrap()).collect();
+            assert_eq!(&retained, &run.catalog_tool_names[index]);
+        }
+    }
+    assert_ne!(run.catalog_sha256[0], run.catalog_sha256[2]);
+    assert_ne!(run.catalog_sha256[2], run.catalog_sha256[4]);
+    let catalog_bytes: usize = run.catalogs.iter().map(|entry| entry.text.len()).sum();
+    assert!(catalog_bytes <= bounds.max_retained_bytes / 2, "{catalog_bytes}");
+    assert!(!run.catalogs[0].truncated && !run.catalogs[2].truncated);
+    // Three distinct catalogs (core, core+detection, all) exceed the catalogs' half of the budget; the part of the
+    // all-group catalog that does not fit is labeled truncated, never silently dropped.
+    let all = &run.catalogs[4];
+    assert!(all.truncated && !all.text.is_empty() && all.text.len() < all.original_bytes, "{}", all.text.len());
+    assert_eq!(catalog_bytes, bounds.max_retained_bytes / 2);
+
+    assert_eq!(run.calls.len(), 9);
+    assert_eq!(run.calls[8].name, "disassemble");
+    assert!(run.calls[8].output.text.contains("add"), "{:?}", run.calls[8]);
+    for call in &run.calls {
+        assert!(!call.input.truncated && !call.output.truncated, "{call:?}");
+        assert!(!call.output.text.is_empty());
+    }
+    assert_eq!(run.turns.len(), 10);
+    for turn in &run.turns {
+        let response = turn.response.as_ref().unwrap();
+        assert!(!response.truncated && !response.text.is_empty(), "{turn:?}");
+    }
+}
+
+#[tokio::test]
 async fn scripted_unsupported_requires_successful_all_group_discovery_and_catalog_refresh() {
     let unsupported = final_answer(json!({ "status": "unsupported", "reason": "scripted missing capability" }));
     let client = connect().await;

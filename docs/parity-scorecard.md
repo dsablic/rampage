@@ -43,11 +43,18 @@ success. Anthropic retains its existing transport; OpenCode uses the metered rou
 
 Each discovered catalog snapshot is retained up to the discovery bound (1,000,000 serialized bytes, beyond which
 discovery fails rather than truncating), not the 32,768-byte default per-record bound that still applies to tool
-inputs/outputs and model turns. Catalogs draw from the same total retained budget (default 512,000 bytes), so a
-report stays bounded and a catalog cut by that budget is still marked `truncated`. The earlier per-record cut
-truncated every catalog: the current core catalog is 70,736 bytes and the all-group catalog 146,583 (77 tools),
-above even the 65,536-byte maximum per-record setting. With default bounds, a core-plus-all-groups run now
-retains both untruncated. Earlier reports, including the Phase 3.3 supplement, keep their truncated records.
+inputs/outputs and model turns. Catalogs draw from the same total retained budget (default 512,000 bytes) but
+together may use at most half of it (256,000 by default), so repeated `enable_tools` refreshes cannot starve later
+tool outputs and model turns; a catalog cut by that share is still marked `truncated`. Every discovery records the
+SHA-256 of its complete snapshot in `catalog_sha256`. A refresh identical to an earlier discovery is not stored
+again: `catalog_repeat_of` names that discovery's index, and the repeat's `catalogs` entry keeps only
+`original_bytes`, with empty text marked `truncated` (readers unaware of the field therefore never mistake it for a
+complete catalog). `catalog_tool_names` stays complete for every discovery. The earlier per-record cut truncated
+every catalog: the current core catalog is 70,736 bytes and the all-group catalog 146,583 (77 tools), above even
+the 65,536-byte maximum per-record setting. With default bounds, a core-plus-all-groups run retains both
+untruncated; a third distinct catalog (for example core plus detection, 85,410 bytes, before all groups) exceeds
+the catalogs' share, and the all-group snapshot is then retained as a labeled truncated prefix. Earlier reports,
+including the Phase 3.3 supplement, keep their truncated records and lack the two new fields.
 
 `--agent-provider opencode --agent-model github-copilot/gpt-6.1-sol` reuses the local authenticated OpenCode API,
 with the explicit `default` variant. A temporary, one-step agent has host tools disabled; generated JSON intents

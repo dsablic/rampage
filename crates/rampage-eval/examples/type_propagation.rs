@@ -828,7 +828,7 @@ fn summary(run: &AgentRun) -> Value {
         .iter()
         .enumerate()
         .map(|(index, names)| {
-            let raw = run.catalogs.get(index);
+            let raw = run.catalog_snapshot(index);
             let definitions =
                 raw.filter(|raw| !raw.truncated).and_then(|raw| serde_json::from_str::<Value>(&raw.text).ok());
             let propagation_schema = definitions.as_ref().and_then(Value::as_array).and_then(|tools| {
