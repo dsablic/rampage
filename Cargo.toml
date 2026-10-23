@@ -55,11 +55,9 @@ toml = { version = "1.1.8", default-features = false, features = ["std", "parse"
 
 [profile.dev]
 debug = 0
-incremental = false
 
 [profile.test]
 debug = 0
-incremental = false
 
 [profile.release]
 lto = "thin"

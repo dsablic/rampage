@@ -136,7 +136,7 @@ tools do not execute the target or arbitrary shell commands.
 `crates/rampage-ui/tests/snapshots`. Refresh intentional snapshot changes with:
 
 ```sh
-UPDATE_SNAPSHOTS=1 cargo test -p rampage-ui --test snapshots
+UPDATE_SNAPSHOTS=1 cargo test -p rampage-ui --test integration -- snapshots::
 ```
 
 Review refreshed images rather than treating an update as a correctness check. Analysis jobs run in the background;

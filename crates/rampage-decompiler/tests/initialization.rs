@@ -65,8 +65,10 @@ fn run_spec_test(name: &str, modify: impl FnOnce(&std::path::Path) -> std::io::R
             std::fs::copy(source.join(name), target.join(name))?;
         }
         modify(&target)?;
+        // Test names are module paths without the crate name.
+        let test = module_path!().split_once("::").map_or(name.to_owned(), |(_, module)| format!("{module}::{name}"));
         std::process::Command::new(std::env::current_exe()?)
-            .args(["--exact", name, "--nocapture"])
+            .args(["--exact", &test, "--nocapture"])
             .env("GHIDRA_INSTALL_DIR", &directory)
             .env("RAMPAGE_SPEC_TEST_CHILD", "1")
             .output()

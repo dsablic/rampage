@@ -1,12 +1,10 @@
 //! Owned fixtures only; no source inputs are executed and no compiler is launched by these tests.
 //! Prepare them separately with `tests/fixtures/debug-types/build.sh /absolute/fixture-directory`, then run:
-//! `RAMPAGE_DEBUG_TYPE_FIXTURES=/absolute/fixture-directory cargo test -p rampage-mcp --test debug_types -- --ignored`.
+//! `RAMPAGE_DEBUG_TYPE_FIXTURES=/absolute/fixture-directory cargo test -p rampage-mcp --test integration debug_types:: -- --ignored`.
 //! The recipe compiles debug-types.c (DWARF and negative C CodeView), debug-types-pdb.cpp
 //! (positive CodeView UniqueNames), and debug-types.cpp (C++ classes), retaining their sizeof/offsetof tables.
 
-#[path = "../../../tests/fixtures/pdb/support.rs"]
-#[allow(dead_code)]
-mod pdb_support;
+use crate::pdb_support;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

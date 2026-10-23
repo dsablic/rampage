@@ -1,8 +1,6 @@
-mod support;
-
 #[cfg(target_arch = "aarch64")]
 mod aarch64 {
-    use super::support;
+    use crate::support;
     use rampage_arch::ir::{self, Effect, FlagOperation, Operation, Value};
     use rampage_arch::{Arch, Target, decoder};
 

@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 
 use rampage_arch::ir::{self, Effect, FlagOperation, LiftedInstruction, Value};
 use rampage_arch::{Arch, Target, decoder};

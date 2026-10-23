@@ -1,6 +1,4 @@
-#[path = "../../../tests/fixtures/pdb/support.rs"]
-#[allow(dead_code)]
-mod support;
+use crate::pdb_support as support;
 
 use rampage_api::Session;
 use rampage_api::tools::Group;

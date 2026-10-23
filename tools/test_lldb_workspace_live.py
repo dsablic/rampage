@@ -39,9 +39,9 @@ def exercise_workspace(tmp_path: Path, architecture: str) -> None:
     """Use SDK Kill on normal unwinding; the outer LLDB timeout is not descendant-cleanup proof."""
     native_arm64 = architecture == "arm64"
     test_name = (
-        "owned_lldb_native_arm64_workspace_readonly_inspection"
+        "debugger_workspace_live::owned_lldb_native_arm64_workspace_readonly_inspection"
         if native_arm64
-        else "owned_lldb_workspace_connect_inspect_prepare_compare_save_open"
+        else "debugger_workspace_live::owned_lldb_workspace_connect_inspect_prepare_compare_save_open"
     )
     opt_in = (
         "RAMPAGE_LLDB_ARM64_WORKSPACE_LIVE"

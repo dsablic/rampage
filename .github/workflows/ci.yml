@@ -133,7 +133,7 @@ jobs:
           export RUST_SYSROOT="$(rustc --print sysroot)"
           export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
           bash tools/ci/module-linkage-oracle.sh --check \
-            cargo test --locked -p rampage-api -p rampage-ui --test module_references -- --include-ignored
+            cargo test --locked -p rampage-api -p rampage-ui --test integration -- module_references:: --include-ignored
       - name: Owned component workflow and resource boundaries
         timeout-minutes: 5
         env:
@@ -142,10 +142,10 @@ jobs:
           cargo test --locked --manifest-path plugins/triage-report/Cargo.toml --target-dir target
           bash tools/ci/plugin-triage-oracle.sh --check \
             cargo test --locked -p rampage-plugin \
-              --test component --test resource_controls --test cancellation -- --ignored
+              --test integration -- component:: resource_controls:: cancellation:: --ignored
           bash tools/ci/plugin-triage-oracle.sh --check \
             bash tools/ci/module-linkage-oracle.sh --check \
-              cargo test --locked -p rampage-api -p rampage-cli --test plugin_triage -- --include-ignored
+              cargo test --locked -p rampage-api -p rampage-cli --test integration -- plugin_triage:: --include-ignored
       - name: Owned DWARF reviewed import surfaces and worker acceptance
         timeout-minutes: 5
         env:
@@ -157,8 +157,8 @@ jobs:
           bash tools/ci/debug-layout-oracle.sh --check \
             cargo test --locked -p rampage-loaders -p rampage-api -p rampage-worker \
             -p rampage-cli -p rampage-mcp -p rampage-ui \
-            --test debug_layouts --test debug_layout_import --test debug_layout_acceptance \
-            --test debug_layout_review --test debug_layout_tools --test debug_layout -- --include-ignored
+            --test integration -- debug_layouts:: debug_layout_import:: debug_layout_acceptance:: \
+            debug_layout_review:: debug_layout_tools:: debug_layout:: --include-ignored
       - name: Owned bounded C++ record and this-method acceptance
         timeout-minutes: 5
         env:
@@ -168,7 +168,7 @@ jobs:
           export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
           bash tools/ci/debug-cpp-layout-oracle.sh --check \
             cargo test --locked -p rampage-loaders -p rampage-api -p rampage-worker \
-            --test debug_cpp_layouts --test debug_cpp_layout_acceptance -- --include-ignored
+            --test integration -- debug_cpp_layouts:: debug_cpp_layout_acceptance:: --include-ignored
       - name: Owned opaque-vptr and exact source-slot acceptance
         timeout-minutes: 5
         env:
@@ -180,10 +180,10 @@ jobs:
       - name: Opt-in native compiled fixture and isolated CLI acceptance
         timeout-minutes: 5
         run: |
-          time cargo test --locked -p rampage-api --test compiled_arm64 -- --ignored
+          time cargo test --locked -p rampage-api --test integration -- compiled_arm64:: --ignored
           export RAMPAGE_TEST_CLI="$PWD/target/debug/rampage"
           test -x "$RAMPAGE_TEST_CLI"
-          time cargo test --locked -p rampage-worker --test cli -- --ignored
+          time cargo test --locked -p rampage-worker --test integration -- cli:: --ignored
 
   linux-core:
     name: Linux core subset (no UI or YARA/Wasmtime)
@@ -232,7 +232,7 @@ jobs:
         run: |
           bash tools/ci/plugin-triage-oracle.sh --check \
             cargo test --locked -p rampage-plugin \
-              --test component --test resource_controls --test cancellation -- --ignored
+              --test integration -- component:: resource_controls:: cancellation:: --ignored
 
 # Step/job timeouts bound CI execution, not individual analysis time or memory.
 # macOS runs the ordinary debug workspace suite once, plus the selected compiled-fixture and isolated gates above.

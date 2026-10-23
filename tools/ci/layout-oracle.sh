@@ -22,4 +22,4 @@ done
 
 export RAMPAGE_LAYOUT_CONSTANTS="$scratch/layout_constants.bin"
 export RAMPAGE_LAYOUT_TEXT="$scratch/layout_use.text"
-cargo test --locked --manifest-path "$root/Cargo.toml" -p rampage-decompiler --test layout -- --ignored
+cargo test --locked --manifest-path "$root/Cargo.toml" -p rampage-decompiler --test integration -- layout:: --ignored

@@ -3,6 +3,7 @@ name = "rampage-worker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
 
 [dependencies]
 rampage-decompiler.workspace = true
@@ -12,3 +13,7 @@ serde_json.workspace = true
 [dev-dependencies]
 rampage-api.workspace = true
 rampage-loaders.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

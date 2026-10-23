@@ -3,6 +3,7 @@ name = "rampage-plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
 
 [dependencies]
 rampage-decompiler.workspace = true
@@ -16,3 +17,7 @@ wasmtime = { version = "=49.0.3", default-features = false, features = [
     "cranelift",
     "component-model",
 ] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

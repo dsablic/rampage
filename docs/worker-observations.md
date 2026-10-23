@@ -150,9 +150,9 @@ From the repository root, with the native toolchain, `shasum` and `timeout` avai
 ```sh
 CARGO_BUILD_JOBS=2 \
 RAMPAGE_ENTRY_MEASUREMENTS=/caller/owned/private/entry-journal.jsonl \
-  timeout 210 cargo test --locked -p rampage-worker --test entry_measurements \
-  owned_full_images_three_repetitions_native_and_isolated_exact_entry \
-  -- --ignored --exact --nocapture --test-threads=1
+  timeout 210 cargo test --locked -p rampage-worker --test integration -- \
+  entry_measurements::owned_full_images_three_repetitions_native_and_isolated_exact_entry \
+  --ignored --exact --nocapture --test-threads=1
 ```
 
 The command selects the planned 18 attempts once. The worker deadline is 15 seconds per isolated attempt and
@@ -161,7 +161,7 @@ The caller owns the finite outer timeout and must inspect the retained journal e
 Pure privacy/progress/size-limit regressions run by default without launching workers or hash tools:
 
 ```sh
-cargo test --locked -p rampage-worker --test entry_measurements -- --test-threads=1
+cargo test --locked -p rampage-worker --test integration -- entry_measurements:: --test-threads=1
 ```
 
 The existing CLI measurement guardian remains inline-only; this API pilot does not weaken its process-group policy.

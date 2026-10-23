@@ -3,6 +3,7 @@ name = "rampage-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
 
 [dependencies]
 rampage-api.workspace = true
@@ -15,3 +16,7 @@ tokio.workspace = true
 [dev-dependencies]
 rmcp = { workspace = true, features = ["client"] }
 tokio = { workspace = true, features = ["sync", "time"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

@@ -3,6 +3,7 @@ name = "rampage-loaders"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
 
 [dependencies]
 gimli = { version = "=0.34.0", default-features = false, features = ["read", "std"] }
@@ -19,3 +20,7 @@ pdb = "0.8.0"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.5", features = ["fs"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

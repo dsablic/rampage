@@ -3,6 +3,7 @@ name = "rampage-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
 
 [[bin]]
 name = "rampage-ui"
@@ -23,3 +24,7 @@ rampage-loaders.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 egui_kittest = { version = "0.36.2", features = ["wgpu", "snapshot", "eframe"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

@@ -27,7 +27,7 @@ stack slots and unknown outcomes. Passing these cases is not full ISA or decompi
 All sixteen condition codes are checked against native execution for all sixteen NZCV combinations.
 An opt-in macOS ARM64 test compiles and executes an optimized C fixture, then executes its lifted arithmetic
 and select operations against fixed boundary results. It requires clang and an SDK and is run explicitly:
-`cargo test -p rampage-api --test compiled_arm64 -- --ignored`.
+`cargo test -p rampage-api --test integration -- compiled_arm64:: --ignored`.
 
 Ghidra and IDA executable comparisons require installations and recorded versions. Recorded Ghidra function/CFG
 comparisons are in [Accuracy benchmarks](benchmarks.md); these do not establish semantic or decompiler parity.

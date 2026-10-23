@@ -3,6 +3,7 @@ name = "rampage-decompiler"
 version.workspace = true
 edition.workspace = true
 license = "Apache-2.0"
+autotests = false
 
 [dependencies]
 rampage-arch.workspace = true
@@ -12,3 +13,7 @@ libc = "0.2"
 
 [build-dependencies]
 cc = "1.2"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

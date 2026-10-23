@@ -173,7 +173,7 @@ the repository's `rampage-componentize` utility, and runs the supplied command:
 ```sh
 bash tools/ci/plugin-triage-oracle.sh --check \
   bash tools/ci/module-linkage-oracle.sh --check \
-    cargo test --locked -p rampage-api -p rampage-cli --test plugin_triage -- --include-ignored --test-threads=1
+    cargo test --locked -p rampage-api -p rampage-cli --test integration -- plugin_triage:: --include-ignored --test-threads=1
 ```
 
 The Rust `wasm32-unknown-unknown` target must already be installed. The wrapper does not install tools. It uses

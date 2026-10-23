@@ -43,7 +43,7 @@ when padding ends a Thumb range; exclusive ends beyond the target address space 
 Failed specification initialization keeps translator ownership with Ghidra until initialization succeeds.
 Mode points are validated before mutation and passed to the C ABI in batches of at most 4,096, without a
 whole-program point-count cutoff. The million-point scale gate runs with
-`cargo test -p rampage-decompiler --test context -- --include-ignored`.
+`cargo test -p rampage-decompiler --test integration -- context:: --include-ignored`.
 
 ## Compiler specifications and prototypes
 

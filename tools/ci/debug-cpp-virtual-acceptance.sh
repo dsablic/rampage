@@ -16,7 +16,7 @@ fi
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-2}
 export RUST_TEST_THREADS=${RUST_TEST_THREADS:-1}
 cd "$root"
-cargo test --locked -p rampage-loaders --test debug_cpp_virtuals -- --include-ignored
+cargo test --locked -p rampage-loaders --test integration -- debug_cpp_virtuals:: --include-ignored
 cargo test --locked -p rampage-api --lib virtual -- --include-ignored
-cargo test --locked -p rampage-worker --test debug_cpp_virtuals -- --include-ignored
-cargo test --locked -p rampage-ui --test debug_cpp_virtuals virtual_review_navigation -- --include-ignored
+cargo test --locked -p rampage-worker --test integration -- debug_cpp_virtuals:: --include-ignored
+cargo test --locked -p rampage-ui --test integration -- debug_cpp_virtuals::virtual_review_navigation --include-ignored

@@ -3,6 +3,7 @@ name = "rampage-eval"
 version.workspace = true
 edition.workspace = true
 license = "Apache-2.0"
+autotests = false
 
 [dependencies]
 clap.workspace = true
@@ -26,3 +27,7 @@ tokio = { workspace = true, features = ["io-util"] }
 
 [dev-dependencies]
 assert_cmd.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
