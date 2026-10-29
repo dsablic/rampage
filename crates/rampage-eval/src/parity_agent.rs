@@ -780,6 +780,7 @@ fn allowed_name(name: &str, config: &AgentConfig) -> bool {
                 | "decode_file_range"
                 | "archive_inventory"
                 | "carve"
+                | "build_info"
                 | "identify_functions"
                 | "import_debug_signatures"
                 | "import_debug_layouts"

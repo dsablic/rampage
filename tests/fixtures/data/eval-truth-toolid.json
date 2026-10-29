@@ -416,6 +416,18 @@
       "toolchain": "go",
       "built": "tests/fixtures/build.sh"
     },
+    "../bin/buildinfo-go-x64.elf": {
+      "toolchain": "go",
+      "built": "tests/fixtures/build-buildinfo.sh"
+    },
+    "../bin/buildinfo-go-arm64.macho": {
+      "toolchain": "go",
+      "built": "tests/fixtures/build-buildinfo.sh"
+    },
+    "../bin/buildinfo-go-x64.exe": {
+      "toolchain": "go",
+      "built": "tests/fixtures/build-buildinfo.sh"
+    },
     "../bin/Microsoft.Bcl.HashCode.dll": {
       "toolchain": "dotnet",
       "built": "nuget.org Microsoft.Bcl.HashCode 1.1.1"
@@ -438,6 +450,9 @@
     }
   },
   "excluded": {
+    "../bin/auditable-arm64.macho": "a stripped carrier for a synthesized cargo-auditable .dep-v0 section; its C toolchain is scored through hello-*",
+    "../bin/auditable-x64.elf": "a stripped carrier for a synthesized cargo-auditable .dep-v0 section; its C toolchain is scored through hello-*",
+    "../bin/auditable-x64.exe": "a stripped carrier for a synthesized cargo-auditable .dep-v0 section; its C toolchain is scored through hello-*",
     "../bin/debug-x64.elf": "no committed build script records its toolchain",
     "../bin/debug-x64.macho": "no committed build script records its toolchain",
     "../bin/hello.lib": "an import-library archive, which no loader opens",

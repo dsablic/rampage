@@ -17,6 +17,7 @@ object.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 pdb = "0.8.0"
+flate2 = "1.1.10"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.5", features = ["fs"] }

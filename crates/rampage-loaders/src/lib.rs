@@ -26,6 +26,7 @@ pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind,
 pub use raw::{
     MAX_RAW_BYTES, MAX_RAW_SEEDS, RawCodeImage, RawCodeOptions, RawCodeSpace, RawInterpretationIdentity, RawProfile,
 };
+pub mod buildinfo;
 mod checked_snapshot;
 pub mod debug;
 pub mod debug_types;

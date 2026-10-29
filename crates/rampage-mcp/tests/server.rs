@@ -79,6 +79,7 @@ async fn lists_all_tools_with_instructions() {
         "assemble",
         "batch",
         "binary_info",
+        "build_info",
         "build_signatures",
         "capa_detect",
         "capabilities",

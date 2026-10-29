@@ -1779,6 +1779,84 @@ fn render_capabilities(
     Ok(())
 }
 
+pub fn build_info(
+    out: &mut impl Write,
+    path: &Path,
+    query: &rampage_api::BuildInfoQuery,
+    options: &Options,
+) -> Result<()> {
+    let info = open(path, options)?.build_info(query);
+    if options.json {
+        return write_json(out, &info);
+    }
+    let module = |module: &rampage_loaders::buildinfo::go::GoModule| {
+        let mut text = format!("{} {}", module.path, module.version);
+        if let Some(replace) = &module.replace {
+            text.push_str(&format!(" => {} {}", replace.path, replace.version));
+        }
+        text.trim_end().to_owned()
+    };
+    let page = |out: &mut dyn Write, what: &str, offset: usize, shown: usize, total: usize| {
+        writeln!(out, "{what:<10} {shown} shown from {offset} of {total} (--offset/--limit page them)")
+    };
+    match &info.go {
+        None => writeln!(out, "go         not present")?,
+        Some(go) => {
+            let at = format!("{} at {:#x}", go.location.section, go.location.address);
+            match &go.reason {
+                Some(reason) => writeln!(out, "go         unreadable ({at}): {reason}")?,
+                None => writeln!(
+                    out,
+                    "go         {} ({} layout, {at})",
+                    go.go_version.as_deref().unwrap_or("?"),
+                    rampage_api::label(&go.layout)
+                )?,
+            }
+            if let Some(path) = &go.path {
+                writeln!(out, "path       {path}")?;
+            }
+            if let Some(main) = &go.main {
+                writeln!(out, "module     {}", module(main))?;
+            }
+            for dep in &go.deps.items {
+                writeln!(out, "dep        {}", module(dep))?;
+            }
+            page(out, "deps", go.deps.offset, go.deps.items.len(), go.deps.total)?;
+            for setting in &go.settings {
+                writeln!(out, "build      {}={}", setting.key, setting.value)?;
+            }
+            if let (Some(table), Some(consistent)) = (go.pclntab.table, go.pclntab.consistent) {
+                let verdict = if consistent { "consistent" } else { "inconsistent" };
+                writeln!(out, "pclntab    {} ({verdict} with the version)", rampage_api::label(&table))?;
+            }
+            for warning in &go.warnings {
+                writeln!(out, "warning: {warning}")?;
+            }
+        }
+    }
+    match &info.rust {
+        None => writeln!(out, "rust       not present")?,
+        Some(rust) => {
+            let at = format!("{} at {:#x}", rust.location.section, rust.location.address);
+            match &rust.reason {
+                Some(reason) => writeln!(out, "rust       unreadable ({at}): {reason}")?,
+                None => writeln!(out, "rust       cargo-auditable format {} ({at})", rust.format)?,
+            }
+            for root in &rust.roots {
+                writeln!(out, "root       {} {}", root.name, root.version)?;
+            }
+            for package in &rust.packages.items {
+                writeln!(out, "crate      {} {} {} {}", package.name, package.version, package.source, package.kind)?;
+            }
+            page(out, "crates", rust.packages.offset, rust.packages.items.len(), rust.packages.total)?;
+            for warning in &rust.warnings {
+                writeln!(out, "warning: {warning}")?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuery, options: &Options) -> Result<()> {
     let Some(summary) = open(path, options)?.dotnet_metadata(query)? else {
         if options.json {

@@ -35,6 +35,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `carve`: `carve`, `archive_inventory`.
+- `formats`: `build_info`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
@@ -134,6 +135,11 @@ not a total; scanning stops at the candidate after the page. It extracts/decompr
 `archive_inventory` similarly needs no image or sidecar, but inventories bounded standalone ZIP32 central-directory
 metadata. Its member ordinals and metadata hashes are not payload validation or extraction-safe paths; whole-record
 JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive inventory](archive-inventory.md).
+`build_info` returns `{go, rust}`: Go build info (toolchain version, main package and module, dependency modules with
+`=>` replacements, build settings, and a cross-check of the version against the pclntab layout) and cargo-auditable
+`.dep-v0` packages. Each is `null` when absent, or has `status` `present` or `unreadable` with a `reason`. `offset`/
+`limit` page `go.deps` and `rust.packages` independently; settings come whole (at most 1024). Both records are
+self-reported by the toolchain, not verified against code. See [toolchain build info](features.md#toolchain-build-info).
 `observe_pointer` exposes a captured slot without modifying discovery or asserting a call edge. See
 [runtime snapshots](runtime-snapshots.md) for runtime evidence limits and [data packs](data-packs.md) for pack warnings.
 

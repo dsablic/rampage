@@ -4,6 +4,7 @@
 mod archive;
 mod arm_exidx;
 mod assembly;
+mod build_info;
 mod debug_layouts;
 mod debug_types;
 mod debugger;

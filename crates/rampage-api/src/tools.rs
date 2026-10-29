@@ -72,11 +72,20 @@ pub enum Group {
     Diagnostics,
     DotNet,
     Carve,
+    Formats,
 }
 
 impl Group {
-    pub const ALL: [Group; 7] =
-        [Group::Core, Group::Detection, Group::Types, Group::Runtime, Group::Diagnostics, Group::DotNet, Group::Carve];
+    pub const ALL: [Group; 8] = [
+        Group::Core,
+        Group::Detection,
+        Group::Types,
+        Group::Runtime,
+        Group::Diagnostics,
+        Group::DotNet,
+        Group::Carve,
+        Group::Formats,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -87,6 +96,7 @@ impl Group {
             Group::Diagnostics => "diagnostics",
             Group::DotNet => "dotnet",
             Group::Carve => "carve",
+            Group::Formats => "formats",
         }
     }
 
@@ -119,6 +129,9 @@ impl Group {
                 "Scan files for embedded executables/containers and inventory ",
                 "standalone ZIP32 metadata without extraction."
             ),
+            Group::Formats => {
+                "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules."
+            }
         }
     }
 }
@@ -1728,6 +1741,16 @@ struct DotNetIlArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct BuildInfoArgs {
+    /// Go dependency modules and Rust packages to skip, for paging (each list independently).
+    #[serde(default)]
+    offset: Option<usize>,
+    /// Entries per page of each list (default 100, at most 1000).
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 struct DotNetArgs {
     /// The list to page: `types` (default), `pinvokes`, `attributes` or `resources`.
     #[serde(default)]
@@ -2257,6 +2280,24 @@ pub fn tools() -> Vec<Tool> {
                     at,
                 };
                 project.dotnet_il(&query)
+            },
+        ),
+        tool(
+            Group::Formats,
+            "build_info",
+            "Toolchain build metadata embedded in the image. go: Go build info (the `go version -m` record) from \
+             .go.buildinfo, __go_buildinfo or a 16-byte aligned scan of PE/data sections, with go_version, main \
+             package path, main module, dependency modules with their => replacements, build settings (-compiler, \
+             CGO_ENABLED, GOOS/GOARCH, vcs.revision, vcs.time...) and a cross-check of the version against the \
+             pclntab layout; go1.18+ inline strings and older pointer layouts are both read. rust: the \
+             cargo-auditable .dep-v0 section (zlib JSON, 8 MiB cap) with root package(s) and every package's \
+             name, version, source, kind and dependency indices. Each is null when not present, or has status \
+             present/unreadable (with a reason) when found. offset/limit page go.deps and rust.packages \
+             independently (default 100, at most 1000). Self-reported build data, not verified against code; no \
+             vulnerability lookup, no network access.",
+            |project, args: BuildInfoArgs| {
+                let query = crate::BuildInfoQuery { offset: args.offset, limit: page_limit(args.limit) };
+                Ok::<_, ApiError>(project.build_info(&query))
             },
         ),
         tool(

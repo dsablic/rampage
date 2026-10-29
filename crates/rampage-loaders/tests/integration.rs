@@ -3,6 +3,7 @@
 
 mod architecture_slices;
 mod archive;
+mod buildinfo;
 mod carve;
 mod checked_images;
 mod container;

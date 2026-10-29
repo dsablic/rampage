@@ -90,6 +90,7 @@ impl RootCommand {
             Self::Binary(BinaryCommand::Analyze(args)) => Command::Analyze(args),
             Self::Binary(BinaryCommand::Detect(args)) => Command::Detect(args),
             Self::Binary(BinaryCommand::Capabilities(args)) => Command::Capabilities(args),
+            Self::Binary(BinaryCommand::BuildInfo(args)) => Command::BuildInfo(args),
             Self::Binary(BinaryCommand::Audit(args)) => Command::Audit(args),
             Self::Binary(BinaryCommand::Carve(args)) => Command::Carve(args),
             Self::Binary(BinaryCommand::Inventory(args)) => Command::Inventory(args),
@@ -181,6 +182,8 @@ pub(crate) enum BinaryCommand {
     Detect(DetectArgs),
     /// Likely behaviors inferred from imports and strings (triage evidence, not proof)
     Capabilities(FileArgs),
+    /// Embedded Go build info and Rust cargo-auditable dependency lists (self-reported build data)
+    BuildInfo(crate::args::BuildInfoArgs),
     /// Decode coverage and evidence that static disassembly may be unreliable
     Audit(AuditArgs),
     /// Scan any file for embedded executables and containers by validated header, without extracting anything

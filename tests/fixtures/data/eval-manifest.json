@@ -41,7 +41,7 @@
     "toolid": {
       "family": "toolid",
       "truth": "eval-truth-toolid.json",
-      "min_recall": 0.7914,
+      "min_recall": 0.7951,
       "min_precision": 1.0
     },
     "types-params-x86_64": {
