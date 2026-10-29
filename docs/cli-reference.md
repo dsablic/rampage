@@ -134,7 +134,9 @@ selectors apply to `FILE`, not the PDB. See [PDB name import](pdb-symbols.md#cli
 
 ### Persistence and shared edits
 
-Names, comments, signatures, types and globals use an append-only JSON Lines log. Ordinary files use
+Names, comments, signatures, types, globals and the investigation ledger (`annotation record-finding` and
+`annotation list-findings`, the CLI forms of the [MCP ledger tools](mcp.md#edits-and-session-state)) use an
+append-only JSON Lines log. Ordinary files use
 `<file>.rampage`; universal slices use `<file>.<arch>.rampage`. Embedded views use
 `<file>@0x<offset>[+0x<length>].rampage-image`, separate from the outer file's annotations. CLI, MCP and UI
 clients opening the same view share its edits; the UI refreshes external annotations within about a second.

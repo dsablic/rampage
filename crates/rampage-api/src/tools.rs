@@ -94,8 +94,8 @@ impl Group {
         match self {
             Group::Core => {
                 "Layout, functions, disassembly, decompilation, xrefs, search, strings, imports, exports, \
-                 annotations with undo/redo and batches, assembly and checked byte patches, raw/Sleigh decode \
-                 inspection, and the guided workflows (triage_report, find_main, network_surface, \
+                 annotations with undo/redo and batches, the findings ledger, assembly and checked byte patches, \
+                 raw/Sleigh decode inspection, and the guided workflows (triage_report, find_main, network_surface, \
                  persistence_surface, string_decoding, diff_builds)."
             }
             Group::Detection => {
@@ -2746,6 +2746,23 @@ pub fn tools() -> Vec<Tool> {
         tool(Group::Core, "list_annotations", "Every user name and comment, by address.", |project, _: Nothing| {
             Ok(project.annotation_list())
         }),
+        tool(
+            Group::Core,
+            "record_finding",
+            "Record what you established, still don't know, or want answered (kind finding/unknown/question), with \
+             the tool calls that support it, in a ledger saved beside the binary for later sessions and other \
+             agents. Without id it creates an entry and returns its stable id; with id it updates only the fields \
+             given (status, resolution, ...). One undo step per call.",
+            |project, arguments: crate::LedgerRequest| project.record_finding(&arguments),
+        )
+        .annotates(),
+        tool(
+            Group::Core,
+            "list_findings",
+            "Page the investigation ledger by kind, status, address, function or text, with open/resolved counts \
+             per kind. Entries recorded on another build of the binary are flagged image_changed.",
+            |project, arguments: crate::LedgerQuery| project.list_findings(&arguments),
+        ),
         tool(
             Group::Core,
             "show_address",

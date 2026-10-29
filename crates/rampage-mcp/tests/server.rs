@@ -119,6 +119,7 @@ async fn lists_all_tools_with_instructions() {
         "language_metadata",
         "list_annotations",
         "list_exports",
+        "list_findings",
         "list_functions",
         "list_imports",
         "list_packs",
@@ -133,6 +134,7 @@ async fn lists_all_tools_with_instructions() {
         "propagate_types",
         "query_debugger",
         "read_data",
+        "record_finding",
         "redo",
         "rename",
         "revert_patch",
@@ -180,7 +182,16 @@ async fn lists_core_tools_and_enable_tools_by_default() {
     let client = connect_to(RampageServer::default()).await;
     let names = tool_names(&client).await;
     assert_eq!(names, core_tool_names());
-    for tool in ["triage_report", "decompile", "xrefs", "annotate_batch", "undo", "list_annotations"] {
+    for tool in [
+        "triage_report",
+        "decompile",
+        "xrefs",
+        "annotate_batch",
+        "undo",
+        "list_annotations",
+        "record_finding",
+        "list_findings",
+    ] {
         assert!(names.iter().any(|name| name == tool), "{tool}");
     }
     for tool in

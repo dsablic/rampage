@@ -412,6 +412,74 @@ pub(crate) struct CommentArgs {
     pub(crate) clear: bool,
 }
 
+/// A lowercase JSON enum name, such as `unknown` for a ledger entry kind.
+fn ledger_value<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, String> {
+    serde_json::from_value(serde_json::Value::String(text.to_owned())).map_err(|error| error.to_string())
+}
+
+fn ledger_evidence(text: &str) -> Result<rampage_api::LedgerEvidence, String> {
+    let (tool, detail) = text.split_once('=').ok_or("evidence must be TOOL=DETAIL")?;
+    Ok(rampage_api::LedgerEvidence { tool: tool.to_owned(), detail: detail.to_owned() })
+}
+
+#[derive(Args)]
+pub(crate) struct RecordFindingArgs {
+    pub(crate) file: PathBuf,
+    /// Update this entry instead of creating one; only the options given change
+    #[arg(long)]
+    pub(crate) id: Option<u64>,
+    /// finding, unknown or question (required when creating)
+    #[arg(long, value_parser = ledger_value::<rampage_api::LedgerKind>)]
+    pub(crate) kind: Option<rampage_api::LedgerKind>,
+    /// What was established or is unknown (required when creating)
+    #[arg(long)]
+    pub(crate) text: Option<String>,
+    /// Address or name it concerns
+    #[arg(long)]
+    pub(crate) address: Option<String>,
+    /// Address or name inside the function it concerns
+    #[arg(long)]
+    pub(crate) function: Option<String>,
+    /// Supporting tool call as TOOL=DETAIL; repeat for several (replaces the list on update)
+    #[arg(long, value_parser = ledger_evidence)]
+    pub(crate) evidence: Vec<rampage_api::LedgerEvidence>,
+    /// low, medium or high
+    #[arg(long, value_parser = ledger_value::<rampage_api::LedgerConfidence>)]
+    pub(crate) confidence: Option<rampage_api::LedgerConfidence>,
+    /// open, resolved or rejected
+    #[arg(long, value_parser = ledger_value::<rampage_api::LedgerStatus>)]
+    pub(crate) status: Option<rampage_api::LedgerStatus>,
+    /// How it was settled; an empty string clears it
+    #[arg(long)]
+    pub(crate) resolution: Option<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct ListFindingsArgs {
+    pub(crate) file: PathBuf,
+    /// finding, unknown or question
+    #[arg(long, value_parser = ledger_value::<rampage_api::LedgerKind>)]
+    pub(crate) kind: Option<rampage_api::LedgerKind>,
+    /// open, resolved or rejected
+    #[arg(long, value_parser = ledger_value::<rampage_api::LedgerStatus>)]
+    pub(crate) status: Option<rampage_api::LedgerStatus>,
+    /// Only entries at this address or name
+    #[arg(long)]
+    pub(crate) address: Option<String>,
+    /// Only entries in the function containing this address or name
+    #[arg(long)]
+    pub(crate) function: Option<String>,
+    /// Case-insensitive substring of the text or resolution
+    #[arg(long)]
+    pub(crate) contains: Option<String>,
+    /// Matching entries to skip
+    #[arg(long)]
+    pub(crate) offset: Option<usize>,
+    /// Entries per page (1..=100, default 50)
+    #[arg(long)]
+    pub(crate) limit: Option<usize>,
+}
+
 #[derive(Args)]
 pub(crate) struct AnnotateBatchArgs {
     pub(crate) file: PathBuf,

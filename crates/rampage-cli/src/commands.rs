@@ -1157,6 +1157,96 @@ pub fn annotations(out: &mut impl Write, path: &Path, options: &Options) -> Resu
     Ok(())
 }
 
+pub fn record_finding(out: &mut impl Write, args: &crate::args::RecordFindingArgs, options: &Options) -> Result<()> {
+    let request = rampage_api::LedgerRequest {
+        id: args.id,
+        kind: args.kind,
+        text: args.text.clone(),
+        address: args.address.clone(),
+        function: args.function.clone(),
+        evidence: (!args.evidence.is_empty()).then(|| args.evidence.clone()),
+        confidence: args.confidence,
+        status: args.status,
+        resolution: args.resolution.clone(),
+    };
+    let record = open(&args.file, options)?.record_finding(&request)?;
+    if options.json {
+        return write_json(out, &record);
+    }
+    let state = match (record.created, record.changed) {
+        (true, _) => "recorded",
+        (false, true) => "updated",
+        (false, false) => "unchanged",
+    };
+    writeln!(out, "{state}")?;
+    write_finding(out, &record.finding)
+}
+
+pub fn list_findings(out: &mut impl Write, args: &crate::args::ListFindingsArgs, options: &Options) -> Result<()> {
+    let query = rampage_api::LedgerQuery {
+        kind: args.kind,
+        status: args.status,
+        address: args.address.clone(),
+        function: args.function.clone(),
+        contains: args.contains.clone(),
+        offset: args.offset,
+        limit: args.limit,
+    };
+    let list = open(&args.file, options)?.list_findings(&query)?;
+    if options.json {
+        return write_json(out, &list);
+    }
+    for warning in &list.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    for counts in &list.counts {
+        writeln!(
+            out,
+            "{:<8} {} open, {} resolved, {} rejected",
+            label(&counts.kind),
+            counts.open,
+            counts.resolved,
+            counts.rejected
+        )?;
+    }
+    for finding in &list.findings {
+        write_finding(out, finding)?;
+    }
+    if let Some(next) = list.next_offset {
+        writeln!(out, "({} of {} shown; next page at --offset {next})", list.returned, list.total)?;
+    }
+    Ok(())
+}
+
+fn write_finding(out: &mut impl Write, finding: &rampage_api::LedgerEntry) -> Result<()> {
+    let mut place = String::new();
+    if let Some(address) = finding.address {
+        place.push_str(&format!(" at {address:#x}"));
+    }
+    if let Some(function) = finding.function {
+        let name = finding.function_name.as_deref().unwrap_or("?");
+        place.push_str(&format!(" in {name} ({function:#x})"));
+    }
+    let confidence = finding.confidence.map(|confidence| format!(", {} confidence", label(&confidence)));
+    let stale = if finding.image_changed { " [recorded on another image]" } else { "" };
+    writeln!(
+        out,
+        "#{} {} [{}{}]{place}{stale}: {}",
+        finding.id,
+        label(&finding.kind),
+        label(&finding.status),
+        confidence.unwrap_or_default(),
+        finding.text
+    )?;
+    for evidence in &finding.evidence {
+        writeln!(out, "    evidence {}: {}", evidence.tool, evidence.detail)?;
+    }
+    if let Some(resolution) = &finding.resolution {
+        writeln!(out, "    resolution: {resolution}")?;
+    }
+    Ok(())
+}
+
 pub fn debug_types(out: &mut impl Write, path: &Path, apply: bool, options: &Options) -> Result<()> {
     let result = open(path, options)?.import_debug_signatures(apply)?;
     if options.json {

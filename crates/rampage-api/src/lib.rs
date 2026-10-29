@@ -24,6 +24,7 @@ mod diagnostics;
 mod dotnet;
 mod fid_signatures;
 mod files;
+mod findings;
 mod frame;
 mod fuzzy_signatures;
 mod graph;
@@ -124,6 +125,11 @@ pub use fid_signatures::{
 pub use files::{
     MAX_CONSTANTS_BYTES, MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MAX_SIGNATURE_DB_BYTES,
     read_bounded,
+};
+pub use findings::{
+    LedgerEntry, LedgerConfidence, LedgerCounts, LedgerEvidence, LedgerKind, LedgerList, LedgerRecord, LedgerRequest,
+    LedgerStatus, LedgerQuery, MAX_LEDGER_EVIDENCE, MAX_LEDGER_RESOLUTION, MAX_LEDGER_TEXT, MAX_LEDGER_ENTRIES,
+    MAX_LEDGER_PAGE,
 };
 pub use frame::{
     FrameCategory, FrameCoordinate, FrameLocation, FrameQuery, FrameRow, FrameSource, FrameTrackerSlot,

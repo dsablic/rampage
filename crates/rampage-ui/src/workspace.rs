@@ -591,6 +591,9 @@ impl Workspace {
             Field::Patch => Err(rampage_api::ApiError::Invalid(
                 "byte patches require the preimage-aware patch_bytes tool".to_owned(),
             )),
+            Field::Finding => Err(rampage_api::ApiError::Invalid(
+                "ledger entries are recorded with the record_finding tool".to_owned(),
+            )),
         };
         match result {
             Ok(edit) => {

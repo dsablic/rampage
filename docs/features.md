@@ -162,6 +162,14 @@ Reduced views retain required identity, diagnostics, source/coordinate and recov
 receipts; oversized output refuses rather than producing cut JSON. The atomic `batch` tool composes checked
 annotation operations in one existing undo/history step. See [tool views and batches](tool-views.md).
 
+## Investigation ledger
+
+`record_finding` and `list_findings` keep what an agent established, what it still does not know and its open
+questions, each with the tool calls that support it, a confidence and an open/resolved/rejected status. Entries
+live in the annotation log, so they survive the session, replay on reopen, undo and redo like comments, and are
+shared with other processes under the log's lock; ids are stable and never reused. Entries made on another build
+of the binary are kept and flagged. See [MCP edits](mcp.md#edits-and-session-state).
+
 ## Checked patches and assembly
 
 Static ELF64 x86-64/AArch64 patches use the existing annotation log, original identity/preimage checks,

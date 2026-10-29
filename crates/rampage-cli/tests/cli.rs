@@ -481,6 +481,59 @@ fn rename_and_comment_persist_beside_the_binary() {
 }
 
 #[test]
+fn the_findings_ledger_persists_beside_the_binary() {
+    let directory = std::env::temp_dir().join(format!("rampage-cli-findings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("hello-x64.elf");
+    std::fs::copy(fixture("hello-x64.elf"), &path).unwrap();
+    let path_text = path.to_str().unwrap();
+    let rampage = |args: &[&str]| assert_cmd::Command::cargo_bin("rampage").unwrap().args(args).assert();
+    rampage(&[
+        "annotation",
+        "record-finding",
+        path_text,
+        "--kind",
+        "unknown",
+        "--text",
+        "where does the greeting come from?",
+        "--address",
+        "main",
+        "--evidence",
+        "decompile=at=main",
+    ])
+    .success()
+    .stdout(predicates::str::contains("recorded\n#1 unknown [open]"));
+    rampage(&[
+        "annotation",
+        "record-finding",
+        path_text,
+        "--id",
+        "1",
+        "--status",
+        "resolved",
+        "--resolution",
+        "rodata",
+    ])
+    .success()
+    .stdout(predicates::str::contains("updated"));
+    rampage(&["annotation", "record-finding", path_text, "--kind", "guess", "--text", "x"]).failure();
+    rampage(&["annotation", "list-findings", path_text, "--status", "resolved"])
+        .success()
+        .stdout(predicates::str::contains("unknown  0 open, 1 resolved, 0 rejected"))
+        .stdout(predicates::str::contains("evidence decompile: at=main"))
+        .stdout(predicates::str::contains("resolution: rodata"));
+    let listed = assert_cmd::Command::cargo_bin("rampage")
+        .unwrap()
+        .args(["--json", "annotation", "list-findings", path_text, "--kind", "finding"])
+        .output()
+        .unwrap();
+    let listed: Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!((listed["total"].as_u64(), listed["counts"][1]["resolved"].as_u64()), (Some(0), Some(1)));
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
 fn annotate_batch_applies_a_json_file_all_or_nothing() {
     let directory = std::env::temp_dir().join(format!("rampage-cli-batch-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&directory);
