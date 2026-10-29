@@ -1,0 +1,37 @@
+# Local nextest settings. CI runs `cargo test`, which ignores this file.
+#
+# The default profile skips the heaviest roster/propagation/Go-decompilation tests, which are about a third of the
+# suite's CPU time; `cargo nextest run --profile full` (or `--ignore-default-filter`) runs everything. Run the full
+# profile before committing. An explicit `-E` filter is intersected with the default filter.
+
+[profile.default]
+default-filter = """
+not (
+    test(=api::generated_go_result_dependencies_replay_before_analyst_signatures_in_both_engines) |
+    test(=api::go_arm64_functions_with_noreturn_calls_stay_structured) |
+    test(=decoder::tests::ordinary_projects_follow_all_six_owned_function_extents_and_match_listing_search_summary) |
+    test(=decompiler_abi::analyst_types_can_supply_generated_go_result_declarations) |
+    test(=decompiler_abi::go_register_abi_binaries_select_the_golang_spec) |
+    test(=decompiler_abi::go_results_inferred_from_callers_flow_into_the_next_call) |
+    test(=decompiler_abi::isolated_go_decompilation_carries_derived_results) |
+    test(=inspect_sleigh::full_roster_rows_match_the_independent_oracle_with_pcode_and_explicit_gates) |
+    test(=parity_cli::parity_route_combines_real_static_scores_with_explicitly_unmeasured_tasks) |
+    test(=parity_processors::tests::roster_section_matches_the_project_matrix) |
+    test(=propagation::tests::apply_rerun_undo_redo_reopen_and_analyst_conflicts_preserve_hard_types) |
+    test(=propagation::tests::direct_return_source_propagates_to_factory_without_hardening_its_signature) |
+    test(=propagation::tests::explicit_caller_argument_changes_callee_fields_without_locking_the_callee_parameter) |
+    test(=propagation::tests::go_explicit_typing_without_durable_hints_keeps_direct_decompilation) |
+    test(=propagation::tests::native_global_value_vs_address_propagates_scalar_vs_pointer_not_just_matching_widths) |
+    test(=propagation::tests::payload_receipt_reports_partial_conflict_replacement_and_metadata_only_updates) |
+    test(=propagation::tests::shared_client_apply_recomputes_from_the_current_locked_source) |
+    test(=propagation::tests::void_pointer_input_and_state_pointer_return_preserve_ordinary_c_at_soft_refinement_boundary) |
+    test(=raw_roster::every_roster_fixture_agrees_across_discovery_listing_and_search_with_gates_reported) |
+    test(=sleigh_window::tests::full_roster_manual_and_call_only_matrix_retains_unknown_entries_and_reports_extent_misses) |
+    test(=type_library::source_header_matches_compiler_sizeof_and_offsetof_table_including_forward_references) |
+    test(=type_library::tests::bundled_c_posix_and_windows_types_use_explicit_target_profiles_and_keep_opaque_layouts_unknown) |
+    test(=type_propagation::native_parameter_propagation_is_read_only_until_apply_durable_and_lower_priority_than_analyst_types)
+)
+"""
+
+[profile.full]
+default-filter = "all()"

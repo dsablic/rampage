@@ -8,7 +8,7 @@ instead of starting competing variants of the whole dependency graph.
 
 ```sh
 cargo build --locked -p rampage-cli -p rampage-worker -p rampage-ui
-cargo nextest run --locked --workspace   # or: cargo test --locked --workspace
+cargo nextest run --locked --workspace   # --profile full before committing; or: cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
@@ -33,6 +33,10 @@ test binaries one at a time, and the `rampage-api` library binary alone took abo
 in its own process across all binaries in parallel. Measured on a 10-core M1 Max (2026-10-21), workspace test
 execution was about 734 s with `cargo test` at `opt-level = 0`, 170 s with nextest, and 92 s with nextest plus the
 optimized dependencies.
+
+The default nextest profile in `.config/nextest.toml` skips 23 of the heaviest tests (roster matrices, type
+propagation, Go decompilation), which take about a third of the suite's CPU time. Run everything with
+`cargo nextest run --profile full` before committing; `cargo test` and CI ignore the file.
 
 ### One integration-test binary per crate
 
