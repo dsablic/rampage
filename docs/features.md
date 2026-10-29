@@ -238,6 +238,30 @@ sizes, CRCs and local-header offsets remain unverified payload declarations. Met
 revalidated but not atomic, and tail search may overlap member data. No member offset is followed, and no extraction,
 decompression, automatic member opening or execution occurs. See [archive inventory](archive-inventory.md).
 
+## PyInstaller archives and WebAssembly modules
+
+`binary pyinstaller-archive` and the `pyinstaller_archive` file tool find a PyInstaller CArchive by its cookie
+(`MEI\x0c\x0b\x0a\x0b\x0e`), searching back through the file's last 8 MiB so a signature appended after the archive
+is stepped over. Both the 24-byte pre-2.1 cookie and the 88-byte cookie with the Python library name are read. The
+result has the cookie offset and layout, the package and TOC extents, the Python version (312 is 3.12) and library,
+per-typecode counts and paged TOC entries: record and data file offsets, compressed and uncompressed sizes,
+compression flag, typecode and its meaning (script, module, package, PYZ, zipfile, binary, data, runtime option,
+dependency, nested package, splash, symlink) and name. An uncompressed PYZ entry's header gives the pyc magic and
+its Python version; the PYZ TOC is not decompressed. Magic matches that do not validate (a bootloader holds the
+magic as a constant) are skipped; the walk stops at a malformed TOC record with a warning. Nothing is extracted,
+decompressed, decrypted or decompiled: hand the data offsets to `decode_file_range` or `carve`.
+
+`binary wasm-module` and the `wasm_module` file tool summarise a core WebAssembly module with `wasmparser`: header
+version and layer, up to 64 sections with offsets and sizes, index-space counts (types, imports, functions, tables,
+memories, globals, tags, exports, data and element segments), the start function, custom-section names, the `name`
+section's module name and the `producers` section. `list` pages imports (module, name, kind, type), exports (name,
+kind, index) or functions (imports first, with type signature, body offset and size, and `name`-section name).
+Project loading accepts native executables only and rejects `.wasm`, so these work on the raw file without a
+Project. A component-model binary (layer 1) is reported as unsupported without reading its sections. Parsing is
+bounded (1,048,576 decoded items, 65,536 retained per list, names cut at 256 bytes); malformed input returns what
+parsed before the error with `complete` false and the error offset in `limitations`. Modules are not validated,
+compiled, executed or disassembled.
+
 ## Managed assemblies
 
 ECMA-335 metadata includes assembly identity, references, entry point and one paged list:

@@ -25,3 +25,4 @@ mod report;
 mod runtime_compare;
 mod search;
 mod signature_import;
+mod wasm_pyinstaller;

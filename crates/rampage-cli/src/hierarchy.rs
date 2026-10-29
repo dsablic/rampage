@@ -94,6 +94,8 @@ impl RootCommand {
             Self::Binary(BinaryCommand::Carve(args)) => Command::Carve(args),
             Self::Binary(BinaryCommand::Inventory(args)) => Command::Inventory(args),
             Self::Binary(BinaryCommand::ArchiveInventory(args)) => Command::ArchiveInventory(args),
+            Self::Binary(BinaryCommand::PyinstallerArchive(args)) => Command::PyInstallerArchive(args),
+            Self::Binary(BinaryCommand::WasmModule(args)) => Command::WasmModule(args),
             Self::Binary(BinaryCommand::ListImports(args)) => Command::Imports(args),
             Self::Binary(BinaryCommand::ListExports(args)) => Command::Exports(args),
             Self::Binary(BinaryCommand::ScanYara(args)) => Command::Yara(args),
@@ -189,6 +191,10 @@ pub(crate) enum BinaryCommand {
     Inventory(DirectoryArgs),
     /// Inventory standalone single-disk ZIP32 metadata, without opening, extracting or probing members
     ArchiveInventory(ArchiveInventoryArgs),
+    /// Inspect a PyInstaller CArchive (cookie, Python version, TOC entries), without extracting anything
+    PyinstallerArchive(crate::args::PyInstallerArchiveArgs),
+    /// Summarise a core WebAssembly module and page its imports, exports or functions
+    WasmModule(crate::args::WasmModuleArgs),
     /// List imported functions with their libraries and import slots
     ListImports(ImportsArgs),
     /// List exported symbols

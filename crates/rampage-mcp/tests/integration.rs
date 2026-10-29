@@ -28,3 +28,4 @@ mod signature_paging;
 mod type_library;
 mod type_propagation;
 mod typed_data;
+mod wasm_pyinstaller;

@@ -131,6 +131,7 @@ async fn lists_all_tools_with_instructions() {
         "patch_bytes",
         "persistence_surface",
         "propagate_types",
+        "pyinstaller_archive",
         "query_debugger",
         "read_data",
         "redo",
@@ -145,6 +146,7 @@ async fn lists_all_tools_with_instructions() {
         "triage",
         "triage_report",
         "undo",
+        "wasm_module",
         "xrefs",
         "yara_scan",
     ];
