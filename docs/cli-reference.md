@@ -145,9 +145,13 @@ append-only JSON Lines log. Ordinary files use
 clients opening the same view share its edits; the UI refreshes external annotations within about a second.
 
 Each edit records its replaced value; undo is another edit, leaving a full history. Every reader opens a log of at
-most 16 MiB and 8,192 lines, so an edit that would grow the log past either is refused and the log stays readable;
-ledger writes stop earlier, at three quarters (see [the ledger's limits](mcp.md#edits-and-session-state)). A batch
-is stored under a header and replayed only once all its edits are present. Typed edits participate in dependency-checked undo/redo.
+most 16 MiB and 8,192 lines. A log that holds or held checked state (patches, type hints, data or operand types,
+type libraries, debug types or layouts), or that a checked client writes, is read checked on every open, which
+also allows at most 65,536 JSON separators and 8,192 records and 8 MiB of edit text to replay. An edit that would
+take the log past the limits that apply to it is refused, so the log stays readable. There is no compaction yet:
+a log at its limits can still be read, but takes no more edits, including undo. Ledger writes stop earlier, at
+three quarters (see [the ledger's limits](mcp.md#edits-and-session-state)). A batch is stored under a header and
+replayed only once all its edits are present. Typed edits participate in dependency-checked undo/redo.
 MCP and UI provide undo/redo; the CLI has no separate undo verb. See
 [MCP undo behavior](mcp.md#edits-and-session-state).
 

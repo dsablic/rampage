@@ -870,7 +870,8 @@ const CHECKED_SEPARATORS: usize = 65536;
 const CHECKED_ERROR: &str = "checked annotation input is malformed, unstable, or exceeds its bounded ingestion budget";
 
 /// What edits cost the checked budget, counted as `CheckedBudget::edit` counts them but without refusing.
-#[derive(Default)]
+#[derive(Clone, Default)]
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 struct EditLoad {
     records: usize,
     bytes: usize,
@@ -886,29 +887,57 @@ impl EditLoad {
     }
 }
 
-/// What a log holds, counted as a reader opening it from the start counts it.
-#[derive(Default)]
+/// What a log holds, counted as a reader opening it from the start counts it: its bytes, lines and JSON separators,
+/// what its edits cost the checked replay budget, and whether any of them makes every later open a checked one.
+#[derive(Clone, Default)]
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 struct LogLoad {
     bytes: usize,
     lines: usize,
     separators: usize,
     edits: EditLoad,
+    checked: bool,
 }
 
 impl LogLoad {
-    fn add_line(&mut self, line: &[u8]) {
-        self.bytes += line.len();
-        self.lines += 1;
-        let mut scanner = JsonScanner::default();
-        self.separators +=
-            line.iter().filter(|&&byte| matches!(scanner.structural(byte), Some(b'{' | b'[' | b',' | b':'))).count();
-        if let Ok(edit) = serde_json::from_slice::<Edit>(line) {
-            self.edits.add(&edit);
+    /// Counts the raw shape of `bytes`, whole lines as a reader reads them.
+    fn add_bytes(&mut self, bytes: &[u8]) {
+        self.bytes += bytes.len();
+        for line in bytes.split_inclusive(|&byte| byte == b'\n') {
+            self.lines += usize::from(line.ends_with(b"\n"));
+            let mut scanner = JsonScanner::default();
+            self.separators += line
+                .iter()
+                .filter(|&&byte| matches!(scanner.structural(byte), Some(b'{' | b'[' | b',' | b':')))
+                .count();
         }
+    }
+
+    fn add_edit(&mut self, edit: &Edit) {
+        self.edits.add(edit);
+        self.checked |= replays_checked(edit);
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.bytes += other.bytes;
+        self.lines += other.lines;
+        self.separators += other.separators;
+        self.edits.records += other.edits.records;
+        self.edits.bytes += other.edits.bytes;
+        self.checked |= other.checked;
     }
 }
 
-/// Measures the log at `path` (nothing, when there is none), refusing one no reader could open.
+/// Whether a log holding `edit` is read checked from its start on every later open: a checked field, or a managed
+/// layout, makes `refresh_inner` replay the whole log under the checked budget.
+fn replays_checked(edit: &Edit) -> bool {
+    checked_annotation_field(edit.field)
+        || (matches!(edit.field, Field::Types | Field::Signature)
+            && [&edit.value, &edit.previous].into_iter().flatten().any(|value| value.starts_with('!')))
+}
+
+/// Measures the log at `path` from its start (nothing, when there is none), refusing one no reader could open. Only
+/// needed when a writer has not read the log to its end, as its running totals then do not cover all of it.
 fn log_load(path: &std::path::Path) -> Result<LogLoad, String> {
     let opened = if cfg!(unix) { checked_log_file(path) } else { File::open(path) };
     let mut file = match opened {
@@ -917,51 +946,71 @@ fn log_load(path: &std::path::Path) -> Result<LogLoad, String> {
         Err(problem) => return Err(format!("{}: {problem}", path.display())),
     };
     let bytes = read_bounded_log(&mut file).map_err(|_| {
-        format!("the annotation log {} is already larger than a reader opens; nothing was recorded", path.display())
+        format!("the annotation log {} is already larger than a reader opens; nothing was changed", path.display())
     })?;
     let mut load = LogLoad::default();
+    load.add_bytes(&bytes);
     for line in bytes.split_inclusive(|&byte| byte == b'\n') {
-        load.add_line(line);
+        if let Ok(edit) = serde_json::from_slice::<Edit>(line) {
+            load.add_edit(&edit);
+        }
     }
     Ok(load)
 }
 
-/// Refuses an append of `appended` to a log of `len` bytes that no reader could open again: every reader, legacy
-/// included, refuses a log of more than `CHECKED_READ_BYTES` bytes, `CHECKED_RECORDS` lines, or a line longer than
-/// `CHECKED_LINE_BYTES`, so writing past them would lose every edit in it on the next open.
-fn ensure_reopenable(file: &mut File, len: u64, appended: &[u8]) -> Result<(), String> {
-    let refuse = |what: &str| {
+/// The lines a write appends for `edits`: `image`'s identity line first when given, then the edit, or a batch.
+fn encode_append(image: Option<&str>, edits: &[Edit]) -> Result<Vec<u8>, String> {
+    let mut lines = Vec::new();
+    let mut push = |line: Result<Vec<u8>, serde_json::Error>| -> Result<(), String> {
+        lines.extend(line.map_err(|error| error.to_string())?);
+        lines.push(b'\n');
+        Ok(())
+    };
+    if let Some(image) = image {
+        push(serde_json::to_vec(&ImageLine { image }))?;
+    }
+    if let [edit] = edits {
+        push(serde_json::to_vec(edit))?;
+    } else {
+        let batch = batch_id();
+        push(serde_json::to_vec(&BatchHeader { batch: batch.clone(), edits: edits.len() }))?;
+        for edit in edits {
+            push(serde_json::to_vec(&BatchMember { edit, batch: &batch }))?;
+        }
+    }
+    Ok(lines)
+}
+
+/// Refuses a log that `load` describes when a reader could not open it again. Every reader, legacy included, refuses
+/// more than `CHECKED_READ_BYTES` bytes or `CHECKED_RECORDS` lines from the start. A `checked` log (it holds or held
+/// checked state, or a checked client writes it) is read checked, which also refuses more than `CHECKED_SEPARATORS`
+/// separators, or edits costing more than `CHECKED_RECORDS` records or `CHECKED_CACHE_BYTES` of text to replay.
+/// Writing past any of them would lose every edit in the log on the next open.
+fn ensure_reopenable(load: &LogLoad, checked: bool) -> Result<(), String> {
+    let refuse = |what: String| {
         Err(format!(
-            "this edit would leave the annotation log {what}, which no reader opens; its existing edits are \
-             untouched, and nothing was changed"
+            "this edit would leave the annotation log {what}, which no reader opens; there is no compaction yet, so \
+             the log can now only be read. Its existing edits are untouched, and nothing was changed"
         ))
     };
-    let total = len.saturating_add(appended.len() as u64);
-    if total > CHECKED_READ_BYTES as u64 {
-        return refuse(&format!("{total} bytes long, past {CHECKED_READ_BYTES}"));
+    if load.bytes > CHECKED_READ_BYTES {
+        return refuse(format!("{} bytes long, past {CHECKED_READ_BYTES}", load.bytes));
     }
-    if appended.split_inclusive(|&byte| byte == b'\n').any(|line| line.len() > CHECKED_LINE_BYTES) {
-        return refuse(&format!("with a line longer than {CHECKED_LINE_BYTES} bytes"));
+    if load.lines > CHECKED_RECORDS {
+        return refuse(format!("{} lines long, past {CHECKED_RECORDS}", load.lines));
     }
-    // A line takes at least one byte, so a log this short cannot hold too many.
-    if total <= CHECKED_RECORDS as u64 {
-        return Ok(());
+    if checked && load.separators > CHECKED_SEPARATORS {
+        return refuse(format!(
+            "holding {} JSON separators, past the {CHECKED_SEPARATORS} a checked read accepts",
+            load.separators
+        ));
     }
-    let mut lines = appended.iter().filter(|&&byte| byte == b'\n').count();
-    file.seek(SeekFrom::Start(0)).map_err(|error| error.to_string())?;
-    let mut chunk = vec![0u8; 64 * 1024];
-    let mut remaining = len;
-    while remaining > 0 {
-        let want = chunk.len().min(usize::try_from(remaining).unwrap_or(usize::MAX));
-        let read = file.read(&mut chunk[..want]).map_err(|error| error.to_string())?;
-        if read == 0 {
-            break;
-        }
-        remaining -= read as u64;
-        lines += chunk[..read].iter().filter(|&&byte| byte == b'\n').count();
-    }
-    if lines > CHECKED_RECORDS {
-        return refuse(&format!("{lines} lines long, past {CHECKED_RECORDS}"));
+    if checked && (load.edits.records > CHECKED_RECORDS || load.edits.bytes > CHECKED_CACHE_BYTES) {
+        return refuse(format!(
+            "with edits costing {} records and {} bytes to replay, past the {CHECKED_RECORDS} and \
+             {CHECKED_CACHE_BYTES} of a checked read",
+            load.edits.records, load.edits.bytes
+        ));
     }
     Ok(())
 }
@@ -1050,6 +1099,9 @@ struct Log {
     unattributed: bool,
     /// An image other than `image` that some edits read were made on.
     other_image: Option<String>,
+    /// What the file holds up to `read`, kept as it is read and written, so a writer checks that its append leaves
+    /// the log openable without rescanning it. A replaced file is read from its start, which resets them.
+    totals: LogLoad,
 }
 
 impl Log {
@@ -1059,14 +1111,58 @@ impl Log {
     /// the cursor must equal the pre-write length, the file identity must match, and the post-write length must be
     /// exactly the pre-write length plus the bytes written. Anything else, such as a lock-ignoring appender racing
     /// the write, leaves the cursor in place so the next `refresh` reads the appended lines back.
-    fn adopt_own_append(&mut self, before: u64, identity: Option<(u64, u64)>, written: u64, after: Option<u64>) {
+    fn adopt_own_append(&mut self, before: u64, identity: Option<(u64, u64)>, appended: &LogLoad, after: Option<u64>) {
+        let written = appended.bytes as u64;
         if self.read == before
             && self.identity.is_none_or(|known| Some(known) == identity)
             && after.is_some_and(|after| before.checked_add(written) == Some(after))
         {
             self.read = before + written;
             self.identity = identity;
+            self.totals.merge(appended);
             self.attribute_edits();
+        }
+    }
+
+    /// The identity line a write must log first: this image's, unless it is the last one logged.
+    fn new_image(&self) -> Option<String> {
+        self.image.clone().filter(|image| self.logged_image.as_ref() != Some(image))
+    }
+
+    /// What appending `appended` (the lines of `edits`) to the file, now `len` bytes, adds, and what the file would
+    /// then hold. The running totals cover the file when this log has read it to its end, as a writer under the lock
+    /// has; otherwise the file is measured from its start.
+    fn projected(&self, len: u64, appended: &[u8], edits: &[Edit]) -> Result<(LogLoad, LogLoad), String> {
+        let mut own = LogLoad::default();
+        own.add_bytes(appended);
+        for edit in edits {
+            own.add_edit(edit);
+        }
+        let mut total = if self.read == len { self.totals.clone() } else { log_load(&self.path)? };
+        total.merge(&own);
+        Ok((own, total))
+    }
+
+    /// Refuses appending `appended` (the lines of `edits`) to the file, now `len` bytes, unless every reader can still
+    /// open it; `checked` when the writer reads it checked. Returns what the append adds, for `adopt_own_append`.
+    fn ensure_append(&self, len: u64, appended: &[u8], edits: &[Edit], checked: bool) -> Result<LogLoad, String> {
+        if appended.split_inclusive(|&byte| byte == b'\n').any(|line| line.len() > CHECKED_LINE_BYTES) {
+            return Err(format!(
+                "this edit would log a line longer than the {CHECKED_LINE_BYTES} bytes a reader accepts; nothing was \
+                 changed"
+            ));
+        }
+        let (own, total) = self.projected(len, appended, edits)?;
+        ensure_reopenable(&total, checked || total.checked)?;
+        Ok(own)
+    }
+
+    /// The file's length, or 0 when there is none yet.
+    fn file_len(&self) -> Result<u64, String> {
+        match std::fs::metadata(&self.path) {
+            Ok(metadata) => Ok(metadata.len()),
+            Err(problem) if problem.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(problem) => Err(format!("{}: {problem}", self.path.display())),
         }
     }
 
@@ -1210,6 +1306,11 @@ impl Annotations {
         self.managed_layouts != 0
     }
 
+    /// Whether this instance reads and writes its log checked: it was opened so, or holds checked state.
+    fn checked_client(&self) -> bool {
+        self.checked_reads || self.has_checked_layouts() || self.has_checked_annotations()
+    }
+
     fn has_checked_annotations(&self) -> bool {
         !self.type_library.is_empty()
             || !self.debug_types.is_empty()
@@ -1329,9 +1430,10 @@ impl Annotations {
 
     /// Refuses `edit`, a ledger write, unless the log and the cache it leaves keep a quarter of every budget a
     /// reader or a checked edit enforces free for names, comments and other edits. The log is measured as a checked
-    /// reader opening it from the start counts it (the strictest reader, which workspace restores and every project
-    /// with patches or checked type edits use), and the cache as `preflight_checked` counts it, with this session's
-    /// undo history and the new step. Call it holding the log's lock, after refreshing.
+    /// reader opening it from the start counts it (the strictest reader, which workspace saves and restores, and every
+    /// project with patches or checked type edits use). When this instance reads its log checked, its cache and undo
+    /// history are measured too, as `preflight_checked` counts them with the new step; ordinary sessions have no such
+    /// budget. Call it holding the log's lock, after refreshing.
     pub(crate) fn ledger_headroom(&self, edit: &Edit) -> Result<(), String> {
         let share = |limit: usize| limit / 4 * 3;
         let full = |what: String| {
@@ -1342,14 +1444,8 @@ impl Annotations {
             ))
         };
         if let Some(log) = &self.log {
-            let mut load = log_load(&log.path)?;
-            let mut line = serde_json::to_vec(edit).map_err(|error| error.to_string())?;
-            line.push(b'\n');
-            load.add_line(&line);
-            // The write may log this image's identity line first: `{"image":"<hex>"}`.
-            if let Some(image) = &log.image {
-                load.add_line(format!("{{\"image\":\"{image}\"}}\n").as_bytes());
-            }
+            let appended = encode_append(log.new_image().as_deref(), std::slice::from_ref(edit))?;
+            let (_, load) = log.projected(log.file_len()?, &appended, std::slice::from_ref(edit))?;
             if load.bytes > share(CHECKED_READ_BYTES) {
                 return full(format!("it would hold {} bytes, of the {CHECKED_READ_BYTES} a reader opens", load.bytes));
             }
@@ -1370,11 +1466,14 @@ impl Annotations {
                 ));
             }
         }
+        if !self.checked_client() {
+            return Ok(());
+        }
         let steps = self.done.len() + self.undone.len() + 1;
         if steps > share(CHECKED_HISTORY_STEPS) {
             return full(format!(
                 "this session's undo history would hold {steps} steps, of the {CHECKED_HISTORY_STEPS} checked edits \
-                 allow; reopen the project to start a new history"
+                 allow; the history lasts as long as this process"
             ));
         }
         let mut candidate = self.snapshot();
@@ -1717,6 +1816,7 @@ impl Annotations {
         {
             return self.record_checked(edits);
         }
+        let checked = self.checked_client();
         let Some(log) = &mut self.log else { return Ok(()) };
         let error = |error: std::io::Error| format!("{}: {error}", log.path.display());
         let mut file = OpenOptions::new().read(true).create(true).append(true).open(&log.path).map_err(error)?;
@@ -1730,40 +1830,23 @@ impl Annotations {
         if last[0] != b'\n' {
             return Err("unterminated annotation tail; complete the existing record before appending".into());
         }
-        let mut lines = String::new();
-        let mut push = |line: Result<String, serde_json::Error>| -> Result<(), String> {
-            lines.push_str(&line.map_err(|error| error.to_string())?);
-            lines.push('\n');
-            Ok(())
-        };
         // Every caller has read the log up to now under its lock, so the last identity line is current.
-        let new_image = log.image.clone().filter(|image| log.logged_image.as_ref() != Some(image));
-        if let Some(image) = &new_image {
-            push(serde_json::to_string(&ImageLine { image }))?;
-        }
-        if let [edit] = edits {
-            push(serde_json::to_string(edit))?;
-        } else {
-            let batch = batch_id();
-            push(serde_json::to_string(&BatchHeader { batch: batch.clone(), edits: edits.len() }))?;
-            for edit in edits {
-                push(serde_json::to_string(&BatchMember { edit, batch: &batch }))?;
-            }
-        }
-        ensure_reopenable(&mut file, len, lines.as_bytes())?;
-        file.write_all(lines.as_bytes()).map_err(error)?;
+        let new_image = log.new_image();
+        let lines = encode_append(new_image.as_deref(), edits)?;
+        let appended = log.ensure_append(len, &lines, edits, checked)?;
+        file.write_all(&lines).map_err(error)?;
         let after = file.metadata().map_err(error)?.len();
         if new_image.is_some() {
             log.logged_image = new_image;
         }
-        log.adopt_own_append(len, file_identity(&before), lines.len() as u64, Some(after));
+        log.adopt_own_append(len, file_identity(&before), &appended, Some(after));
         Ok(())
     }
 
     fn record_checked(&mut self, edits: &[Edit]) -> Result<(), String> {
         let full_prefix = edits.iter().any(|edit| self.introduces_checked_state(edit.field, edit.value.as_deref()));
         let Some(log) = &mut self.log else { return Ok(()) };
-        let new_image = log.image.clone().filter(|image| log.logged_image.as_ref() != Some(image));
+        let new_image = log.new_image();
         let mut encoded = CheckedLogBuffer::default();
         if let Some(image) = &new_image {
             encoded.line(&ImageLine { image })?;
@@ -1807,7 +1890,7 @@ impl Annotations {
         file.read_exact(&mut combined).map_err(|_| CHECKED_ERROR.to_owned())?;
         combined.extend_from_slice(&encoded.bytes);
         checked_outer_preflight(&combined)?;
-        ensure_reopenable(&mut file, before.len(), &encoded.bytes)?;
+        let appended = log.ensure_append(before.len(), &encoded.bytes, edits, true)?;
         let after = file.metadata().map_err(|_| CHECKED_ERROR.to_owned())?;
         let pathname = std::fs::symlink_metadata(&log.path).map_err(|_| CHECKED_ERROR.to_owned())?;
         if pathname.file_type().is_symlink()
@@ -1822,7 +1905,7 @@ impl Annotations {
             log.logged_image = new_image;
         }
         let after = file.metadata().ok().map(|metadata| metadata.len());
-        log.adopt_own_append(before.len(), file_identity(&before), encoded.bytes.len() as u64, after);
+        log.adopt_own_append(before.len(), file_identity(&before), &appended, after);
         Ok(())
     }
 
@@ -2138,6 +2221,17 @@ impl Annotations {
         }
         candidate.validate_local_collections()?;
         validate(&candidate)?;
+        // Each signature is its own undo step and append, so check that the log has room for all of them first: the
+        // import then commits whole, or not at all.
+        if let Some(log) = &self.log {
+            let mut image = log.new_image();
+            let mut appended = Vec::new();
+            for edit in &edits {
+                appended.extend(encode_append(image.take().as_deref(), std::slice::from_ref(edit))?);
+            }
+            let checked = self.checked_client() || edits.iter().any(replays_checked);
+            log.ensure_append(log.file_len()?, &appended, &edits, checked)?;
+        }
         let mut applied = Vec::new();
         for edit in edits {
             self.commit(std::slice::from_ref(&edit))?;
@@ -2631,6 +2725,10 @@ fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), Str
         }
     }
     log.read += read as u64;
+    log.totals.add_bytes(&bytes[..read]);
+    for edit in &edits {
+        log.totals.add_edit(edit);
+    }
     Ok((restart, edits))
 }
 
@@ -3308,6 +3406,177 @@ mod tests {
         reader.set(Field::Name, 0x40, Some("after".into())).unwrap();
         assert_eq!(Annotations::open(path.clone()).unwrap().name(0x40), Some("after"));
         cleanup(path);
+    }
+
+    fn write_lines(path: &std::path::Path, lines: impl IntoIterator<Item = String>) {
+        let text: String = lines.into_iter().map(|line| line + "\n").collect();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn edit_line(edit: &Edit) -> String {
+        serde_json::to_string(edit).unwrap()
+    }
+
+    fn data_type_edit() -> Edit {
+        let value = encode_data_type(&DataTypeAnnotation {
+            type_name: Some("uint32_t".into()),
+            count: 2,
+            byte_length: 8,
+            encoding: None,
+        })
+        .unwrap();
+        Edit { field: Field::DataType, address: 0x9000, value: Some(value), previous: None }
+    }
+
+    /// A log holding checked state is replayed under the checked budget on every open, so ordinary edits stop where
+    /// that replay would; the log then still opens, checked, with every edit in it.
+    #[test]
+    fn ordinary_edits_stop_where_a_checked_replay_of_the_log_would() {
+        let path = temporary_log("checked-replay");
+        // The data type and each first-time comment cost two replay records; leave room for two more comments.
+        let comments = (CHECKED_RECORDS - 2 - 4) / 2;
+        write_lines(
+            &path,
+            std::iter::once(edit_line(&data_type_edit()))
+                .chain((0..comments as u64).map(|address| edit_line(&own_comment_edit(address, "c")))),
+        );
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        annotations.set(Field::Comment, 0x100000, Some("fits".into())).unwrap();
+        annotations.set(Field::Name, 0x100004, Some("fits_too".into())).unwrap();
+        let error = annotations.set(Field::Comment, 0x100008, Some("refused".into())).unwrap_err();
+        assert!(error.contains("to replay") && error.contains("no compaction"), "{error}");
+        let reopened = Annotations::open_checked(path.clone()).unwrap();
+        assert_eq!(reopened.comments().len(), comments + 1);
+        assert_eq!((reopened.name(0x100004), reopened.comment(0x100008)), (Some("fits_too"), None));
+        assert_eq!(reopened.data_types().len(), 1);
+        cleanup(path);
+
+        // A log with no checked state keeps the whole legacy capacity: the same edits there are not refused.
+        let path = temporary_log("legacy-replay");
+        write_lines(&path, (0..comments as u64).map(|address| edit_line(&own_comment_edit(address, "c"))));
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        for address in 0..4 {
+            annotations.set(Field::Comment, 0x100000 + address, Some("legacy".into())).unwrap();
+        }
+        assert_eq!(Annotations::open(path.clone()).unwrap().comments().len(), comments + 4);
+        cleanup(path);
+    }
+
+    #[test]
+    fn ordinary_edits_stop_where_a_checked_read_would_count_too_many_separators() {
+        let path = temporary_log("checked-separators");
+        // Batch members that clear nothing cost one replay record but ten separators each.
+        let members = 6550;
+        let empty = |address| Edit { field: Field::Comment, address, value: None, previous: None };
+        let header = format!(r#"{{"batch":"b","edits":{members}}}"#);
+        write_lines(
+            &path,
+            [edit_line(&data_type_edit()), header].into_iter().chain(
+                (0..members as u64)
+                    .map(|address| serde_json::to_string(&BatchMember { edit: &empty(address), batch: "b" }).unwrap()),
+            ),
+        );
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        let mut written = 0;
+        let error = loop {
+            match annotations.set(Field::Comment, 0x200000 + written, Some("c".into())) {
+                Ok(_) => written += 1,
+                Err(error) => break error,
+            }
+            assert!(written < 10, "never refused");
+        };
+        assert!(written > 0 && error.contains("separators"), "{error}");
+        let reopened = Annotations::open_checked(path.clone()).unwrap();
+        assert_eq!(reopened.comments().len(), written as usize);
+        cleanup(path);
+    }
+
+    /// Signatures import as one undo step each, so a refusal part way would have committed some and reported none.
+    #[test]
+    fn a_signature_import_with_no_room_commits_nothing() {
+        let path = temporary_log("import-room");
+        write_lines(&path, (0..CHECKED_RECORDS as u64 - 3).map(|address| edit_line(&own_comment_edit(address, "c"))));
+        let before = std::fs::read(&path).unwrap();
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        let candidates: Vec<(u64, String)> =
+            (0..5).map(|index| (0x7000 + index * 0x10, format!("int f{index}(void)"))).collect();
+        let error = annotations
+            .import_signatures(&candidates, |_, _, declaration| declaration.to_owned(), |_| Ok(()))
+            .unwrap_err();
+        assert!(error.contains("lines long"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(annotations.signatures().is_empty() && annotations.undo().unwrap().is_empty());
+        let applied = annotations
+            .import_signatures(&candidates[..3], |_, _, declaration| declaration.to_owned(), |_| Ok(()))
+            .unwrap();
+        assert_eq!(applied.len(), 3);
+        assert_eq!(Annotations::open(path.clone()).unwrap().signatures().len(), 3);
+        cleanup(path);
+    }
+
+    fn ledger(id: u64) -> Edit {
+        Edit { field: Field::Finding, address: id, value: Some("entry".into()), previous: None }
+    }
+
+    #[test]
+    fn ledger_writes_keep_a_quarter_of_each_log_budget() {
+        let refused = |annotations: &Annotations, what: &str| {
+            let error = annotations.ledger_headroom(&ledger(1)).unwrap_err();
+            assert!(error.contains("no room left for ledger writes") && error.contains(what), "{error}");
+        };
+        let path = temporary_log("headroom-lines");
+        // Identity lines cost a line and two separators each, and nothing to replay.
+        write_lines(&path, (0..CHECKED_RECORDS / 4 * 3).map(|_| r#"{"image":"ab"}"#.to_owned()));
+        refused(&Annotations::open(path.clone()).unwrap(), "lines");
+        write_lines(&path, (0..CHECKED_RECORDS / 4 * 3 - 1).map(|_| r#"{"image":"ab"}"#.to_owned()));
+        Annotations::open(path.clone()).unwrap().ledger_headroom(&ledger(1)).unwrap();
+        cleanup(path);
+
+        let path = temporary_log("headroom-bytes");
+        let image = "a".repeat(CHECKED_LINE_BYTES - 100);
+        write_lines(&path, (0..7).map(|_| format!(r#"{{"image":"{image}"}}"#)));
+        refused(&Annotations::open(path.clone()).unwrap(), "bytes");
+        cleanup(path);
+
+        let path = temporary_log("headroom-separators");
+        let empty = |address| Edit { field: Field::Comment, address, value: None, previous: None };
+        write_lines(
+            &path,
+            std::iter::once(r#"{"batch":"b","edits":5000}"#.to_owned()).chain(
+                (0..5000)
+                    .map(|address| serde_json::to_string(&BatchMember { edit: &empty(address), batch: "b" }).unwrap()),
+            ),
+        );
+        refused(&Annotations::open(path.clone()).unwrap(), "separators");
+        cleanup(path);
+    }
+
+    /// Undo history and the annotation cache have a budget only for checked edits; an ordinary session's ledger
+    /// writes are not held to it.
+    #[test]
+    fn ledger_writes_count_history_and_cache_only_where_checked_edits_do() {
+        let path = temporary_log("headroom-history");
+        for checked in [false, true] {
+            let mut annotations = if checked {
+                Annotations::open_checked(path.clone()).unwrap()
+            } else {
+                Annotations::open(path.clone()).unwrap()
+            };
+            annotations.done = vec![vec![own_comment_edit(1, "c")]; CHECKED_HISTORY_STEPS / 4 * 3];
+            let result = annotations.ledger_headroom(&ledger(1));
+            assert_eq!(result.is_err(), checked, "{result:?}");
+            if let Err(error) = result {
+                assert!(error.contains("undo history") && error.contains("lasts as long as this process"), "{error}");
+            }
+            annotations.done.clear();
+            annotations.comments = (0..CHECKED_RECORDS as u64 / 4 * 3).map(|address| (address, "c".into())).collect();
+            let result = annotations.ledger_headroom(&ledger(1));
+            assert_eq!(result.is_err(), checked, "{result:?}");
+            if let Err(error) = result {
+                assert!(error.contains("the annotations and this session's undo history"), "{error}");
+            }
+        }
+        cleanup_lock(path);
     }
 
     #[test]
