@@ -228,9 +228,11 @@ The ledger holds at most 1,024 entries and 2 MiB of entry JSON. The log is appen
 whole entry twice (new and replaced value), so updates spend the log's budget too. `record_finding` refuses, with
 a message saying which limit, any write that would leave the log past three quarters of what a reader opens or a
 checked edit allows: 16 MiB, 8,192 lines and 65,536 JSON separators read; 8,192 records and 8 MiB of edit text
-replayed; 8 MiB of cached annotations and undo history, and 1,024 undo steps per session. The remaining quarter
-stays for names, comments and other edits, so a full ledger never makes the log unreadable. Separately, every
-edit refuses a write that would leave the log past the read limits themselves.
+replayed; and, in a session that reads its log checked, 8 MiB of cached annotations and undo history and 1,024
+undo steps. The remaining quarter stays for names, comments and other edits, so a full ledger never makes the log
+unreadable. Separately, every edit refuses a write that would leave the log past the limits its readers enforce
+(see [persistence](cli-reference.md#persistence-and-shared-edits)). There is no compaction yet, so a log at its
+limits can only be read.
 
 `list_findings` filters by `kind`, `status`, `address`, `function` and `contains`, pages with `offset`/`limit`
 (default 50, at most 100, and at most 48 KB of JSON), and reports open/resolved/rejected counts per kind over the
