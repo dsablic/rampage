@@ -11,7 +11,10 @@ confidence and limitations; producing C is not proof of correct recovery.
 
 - Native executable analysis: ELF, PE and Mach-O, including universal slices and selected embedded images.
 - Instruction decoding: x86/x86-64, AArch64, ARM/Thumb and several additional architectures.
-- Investigation: library identification, heuristic/rule scans, guided workflows and bounded multi-slice analysis.
+- Investigation: library identification, heuristic/rule scans, guided workflows, a durable findings ledger and
+  bounded multi-slice analysis.
+- Toolchain and container metadata: Go build info and cargo-auditable dependencies, PE resources and load config,
+  PyInstaller archives and WebAssembly modules.
 - Managed code: .NET metadata, method/property signatures, attributes and paged CIL disassembly;
   CIL remains separate from native analysis.
 
@@ -19,7 +22,7 @@ Use rampage for files and captures you own or have permission to inspect. Analys
 launch/attach/resume a target process or bypass protections. Snapshot capture and the LLDB query bridge operate only
 inside an existing authorized stopped debugger session. Native decompiler supervision is not an OS sandbox.
 See the [feature reference](docs/features.md) for architecture coverage and limits, and
-[the design](docs/plans/2026-10-10-rampage-design.md) for the roadmap.
+[the parity roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) for planned work.
 
 [Development and cleanup](docs/development.md) describes the smaller build profiles, validation and worktree lifecycle.
 
@@ -115,7 +118,7 @@ Additional focused guides:
 - [Plugins and extension points](docs/plugins.md): experimental explicit triage components and builtin registries.
 - [Plugin security boundaries](docs/plugin-security.md): admission, resource limits, claim provenance and exclusions.
 
-The [development reference](docs/features.md#measurements-and-development) covers crate layout, fixture rebuilding
+The [development reference](docs/features.md#measurements-and-development) covers measurements, fixture rebuilding
 and decoder-table generation. Existing benchmark measurements are sample-specific, not general accuracy or
 latency guarantees.
 

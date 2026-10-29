@@ -50,7 +50,7 @@ SHA-256 of its complete snapshot in `catalog_sha256`. A refresh identical to an 
 again: `catalog_repeat_of` names that discovery's index, and the repeat's `catalogs` entry keeps only
 `original_bytes`, with empty text marked `truncated` (readers unaware of the field therefore never mistake it for a
 complete catalog). `catalog_tool_names` stays complete for every discovery. The earlier per-record cut truncated
-every catalog: the current core catalog is 70,736 bytes and the all-group catalog 146,583 (77 tools), above even
+every catalog: as measured at `c8f44b9`, the core catalog was 70,736 bytes and the all-group catalog 146,583 (77 tools), above even
 the 65,536-byte maximum per-record setting. With default bounds, a core-plus-all-groups run retains both
 untruncated; a third distinct catalog (for example core plus detection, 85,410 bytes, before all groups) exceeds
 the catalogs' share, and the all-group snapshot is then retained as a labeled truncated prefix. Earlier reports,

@@ -16,7 +16,8 @@ no signature is rebound from a debug entry to another containing function.
 
 Preview is read-only. Application validates the merged snapshot under the shared annotation log lock; existing
 signatures remain untouched. Multiple imported entries are recorded individually and can be undone separately.
-An I/O failure during append can leave earlier validated entries applied; import is not a single atomic edit.
+The log's room for every signature is checked before the first append, so a size-limit refusal applies none. An
+I/O failure during append can still leave earlier validated entries applied; import is not a single atomic edit.
 
 Limits include 64 MiB total debug-section bytes, 256 units, one million DIEs, bounded attributes/nesting, 1,024-byte
 identifiers, 4,095-byte parser lines and 65,536-byte declarations. These limits do not guarantee semantic

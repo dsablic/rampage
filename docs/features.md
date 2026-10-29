@@ -405,6 +405,12 @@ took milliseconds. Timings depend on the binary, machine, build and query, and a
 | `rampage-api` | Session/query layer shared by clients |
 | `rampage-mcp`, `rampage-cli`, `rampage-ui` | MCP server, CLI and desktop clients |
 | `rampage-decompiler`, `rampage-worker` | Embedded native engine/specifications and supervised worker |
+| `rampage-decode` | Bounded decoder providers for explicitly requested file ranges |
+| `rampage-signatures` | FLIRT/Function ID-style library-function signatures |
+| `rampage-detect`, `rampage-capabilities`, `rampage-constants`, `rampage-yara` | Toolchain/packer detection, capability tags, crypto-constant scanning, YARA rules |
+| `rampage-agent` | Desktop assistant conversation over rampage tools |
+| `rampage-eval` | Strip-and-compare evaluation of heuristics and the parity scorecard |
+| `rampage-plugin`, `rampage-plugin-contract`, `rampage-plugin-worker`, `rampage-componentize` | Experimental component plugins: runtime, schema, worker and build helper |
 
 `tools/armgen` regenerates decoder tables from an AARCHMRS release, one instruction set at a time:
 

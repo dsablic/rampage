@@ -30,6 +30,15 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | `binary list-exports FILE [--contains TEXT]` | `exports` | Exported symbols |
 | `binary scan-yara FILE [--rules FILE_OR_DIR]` | `yara` | Embedded yara-x rule scan |
 | `binary scan-capa FILE [--rules DIR]` | `capa` | Mandiant capa file-scope feature subset |
+| `binary inspect-data FILE --at ADDRESS [--size N]` | `inspect-data` | Bounded image bytes and pointer candidates ([data inspection](data-inspection.md)) |
+| `binary inspect-sleigh FILE [OPTIONS]` | `inspect-sleigh` | Raw byte windows through the bundled Sleigh IDs ([Sleigh decoding](sleigh-decoding.md)) |
+| `binary inspect-raw FILE --request JSON` | `inspect-raw` | An explicitly mapped raw-code window ([raw code](raw-code.md)) |
+| `binary decode FILE --codec C --offset N --length N --expected-output-size N` | `decode-file` | Transient decoded bytes of a file range ([decoding](decoding.md)) |
+| `binary assemble FILE --at ADDRESS --source TEXT` | `assemble` | Read-only assembly proposal; nothing applied ([assembly](assembly.md)) |
+| `binary patch-bytes FILE --at A --original-hex H --replacement-hex H --allow-data B --source-sha256 S --expected-revision R` | `patch-bytes` | Persist one reviewed equal-length patch ([patching](patching.md)) |
+| `binary revert-patch FILE --at A --source-sha256 S --expected-revision R` | `revert-patch` | Remove one reviewed patch through annotation history |
+| `binary list-patches FILE` | `list-patches` | Active patches with source/effective/revision receipts |
+| `binary export-patched FILE --destination PATH --source-sha256 S --expected-revision R` | `export-patched` | Effective bytes to a new file only |
 
 Compatibility entries showing only a command name take the same operands and flags as the primary route.
 `--rules` is optional when a [data pack](data-packs.md) supplies that kind of rule. YARA `include` statements
@@ -63,6 +72,8 @@ rampage binary analyze module.dylib --all-architectures --workflow triage-report
 | `function build-signatures FILE [--output DB]` | `signatures` | Named-function JSON; separate fuzzy mode with `--fuzzy-request` |
 | `function compare FILE --reference JSON` | `compare` | Versioned, image-matched function-start comparison |
 | `function inspect-table FILE --at ADDRESS --count N` | `jump-table` | Explicit immutable ARM64 table validation |
+| `function graph FILE --at ADDRESS` | `graph` | Native control-flow graph, complete or as a summary projection ([tool views](tool-views.md)) |
+| `function batch FILE [OPTIONS]` | `batch` | Atomic checked rename/comment/signature/type/global operations from JSON |
 | `string list FILE [--min-len N] [--contains TEXT]` | `strings` | ASCII and UTF-16LE strings; minimum defaults to 4 |
 | `language inspect FILE` | `metadata` | Demangled symbols, named RTTI/vtables and ObjC metadata |
 
@@ -123,6 +134,9 @@ which also conflicts with `--contains`/`--parent-token`. IL `--at` requires `--i
 | `annotation check-names FILE NAME...` | `check-names` |
 | `type import-debug FILE [--apply]` | `debug-types` |
 | `type import-pdb-names FILE --pdb PDB [--apply]` | — |
+| `type import-debug-layouts IMAGE [--apply --review-sha256 SHA]` | — |
+| `annotation record-finding FILE --kind KIND --text TEXT [--id N] [--address A] [--function A] [--evidence TOOL=DETAIL]... [--confidence C] [--status S] [--resolution TEXT]` | — |
+| `annotation list-findings FILE [--kind K] [--status S] [--address A] [--function A] [--contains TEXT] [--offset N] [--limit N]` | — |
 
 Rename/comment take positional operands, not `--at`. `--clear` replaces the new name/text operand and cannot
 be combined with it. A batch is a JSON array of `{at, name?, comment?}` entries, at most 1000, applied all or

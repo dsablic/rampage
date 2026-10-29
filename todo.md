@@ -747,7 +747,8 @@ on held-out, per-slice improvement with provenance and rollback.
   byte-fitted through one shared helper in `rows.rs`.
 - [x] Durable findings ledger: `record_finding` / `list_findings` in the annotation log, with stable ids, undo/redo
   and image-change flags. Writes keep a quarter of every reader limit free; every annotation writer now refuses an
-  append that would leave the log unopenable, and debug signature import is all-or-nothing.
+  append that would leave the log unopenable, and debug signature import checks room for every signature before
+  the first append (an I/O failure partway can still apply some).
 - [ ] Annotation log compaction. Without it, a log at its limits can only be read: renames, undo and the ledger
   are refused. Compaction would also close the remaining gap: a log whose checked state was cleared is still
   replayed checked on open, but ordinary sessions don't apply the checked cache budget, so more than about 2,000
@@ -1340,8 +1341,9 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] First bounded static multi-module workspace slice is implemented below; broader type/ABI recovery and
   runtime cross-module resolution still require independent acceptance.
 - [ ] Future: read-only GDB and Windows debugger inspection backends, each with separate platform acceptance.
-- [ ] Any execution-control debugger integration requires separate design/review; launch, attach, resume, step,
-  breakpoints, expressions and target writes are not part of the read-only workspace milestone.
+- [x] Execution-control design approved 2026-10-29 (`docs/plans/2026-10-29-debugger-control.md`); Phase 9.1
+  (read-only GDB remote protocol tools) is in progress. Launch, attach, resume, step, breakpoints, expressions and
+  target writes are not part of the read-only workspace milestone.
 
 ### Deferred exact-entry UI and reviewed static workspaces
 

@@ -47,7 +47,7 @@ nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a
 Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
 without group gating, plus the interactive `show_address`; it does not offer file tools
 `carve`/`archive_inventory`/`list_packs`/`query_debugger`/`inspect_data`/`decode_file_range`/`inspect_raw_code`/
-`pyinstaller_archive`/`wasm_module`.
+`inspect_sleigh`/`pyinstaller_archive`/`wasm_module`.
 `show_address` is not an MCP tool because the server has no interactive listing to navigate.
 
 The [parity scorecard](parity-scorecard.md) records static metrics and task definitions separately from
