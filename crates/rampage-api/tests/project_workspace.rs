@@ -611,6 +611,31 @@ fn in_memory_edits_and_unrecognized_annotation_paths_are_not_silently_discarded(
 }
 
 #[test]
+fn ledger_entries_alone_count_as_analyst_state_when_saving() {
+    let directory = Directory::new();
+    let ledger = |text: &str| rampage_api::LedgerRequest {
+        kind: Some(rampage_api::LedgerKind::Finding),
+        text: Some(text.to_owned()),
+        ..rampage_api::LedgerRequest::default()
+    };
+    let input = directory.ordinary("module", "a");
+    input.project.record_finding(&ledger("only in memory")).unwrap();
+    assert!(capture_project_workspace(&[input], "a").is_err());
+
+    let mut input = directory.ordinary("second", "b");
+    let writer = Session::default().open(&input.source_path, None).unwrap();
+    writer.record_finding(&ledger("saved beside the binary")).unwrap();
+    input.project = writer;
+    let manifest = capture_project_workspace(&[input], "b").unwrap();
+    let loaded = preview_project_workspace(&directory.manifest_path(&manifest))
+        .unwrap()
+        .open_reviewed(&Session::default())
+        .unwrap();
+    let list = loaded.modules()[0].project().list_findings(&rampage_api::LedgerQuery::default()).unwrap();
+    assert_eq!(list.findings.iter().map(|entry| entry.text.as_str()).collect::<Vec<_>>(), ["saved beside the binary"]);
+}
+
+#[test]
 fn fresh_restore_keeps_current_capture_annotation_directory_and_data_packs() {
     let directory = Directory::new();
     let mut input = directory.snapshot("capture.json", "capture", "capture", "0x1");

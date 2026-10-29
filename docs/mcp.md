@@ -214,13 +214,28 @@ names as one undoable batch only with `apply: true`. Detail pagination does not 
 `record_finding` keeps an investigation ledger in the same log: `kind` (`finding`, `unknown` or `question`), `text`
 (at most 2000 bytes), optional `address`, `function` (stored as the containing function's start), up to 8
 `evidence` references `{tool, detail}`, `confidence` (`low`/`medium`/`high`), `status` (`open` by default,
-`resolved`, `rejected`) and `resolution`. Without `id` it creates an entry and returns its id, which is never
-reused, even after an undo; with `id` it changes only the fields given. Each call is one undo step, and ids are
-allocated under the log's cross-process lock. `list_findings` filters by `kind`, `status`, `address`, `function`
-and `contains`, pages with `offset`/`limit` (default 50, at most 100, and at most 48 KB of JSON), and reports
-open/resolved/rejected counts per kind over the whole ledger. Entries recorded on another build of the binary are
-kept and flagged `image_changed`; giving an entry a new `address` or `function` re-records it on this build.
-Raw Projects do not offer the ledger, as their annotations are not persisted.
+`resolved`, `rejected`) and `resolution`. Without `id` it creates an entry and returns its id, which is not
+reused within the log, even after an undo; with `id` it changes only the fields given. Each call is one undo step,
+and ids are allocated under the log's cross-process lock. Restoring an older copy of the log forgets the ids its
+discarded tail used, so a process that opens the restored log can hand them out again.
+
+The ledger holds at most 1,024 entries and 2 MiB of entry JSON. The log is append-only, and each update logs the
+whole entry twice (new and replaced value), so updates spend the log's budget too. `record_finding` refuses, with
+a message saying which limit, any write that would leave the log past three quarters of what a reader opens or a
+checked edit allows: 16 MiB, 8,192 lines and 65,536 JSON separators read; 8,192 records and 8 MiB of edit text
+replayed; 8 MiB of cached annotations and undo history, and 1,024 undo steps per session. The remaining quarter
+stays for names, comments and other edits, so a full ledger never makes the log unreadable. Separately, every
+edit refuses a write that would leave the log past the read limits themselves.
+
+`list_findings` filters by `kind`, `status`, `address`, `function` and `contains`, pages with `offset`/`limit`
+(default 50, at most 100, and at most 48 KB of JSON), and reports open/resolved/rejected counts per kind over the
+whole ledger. Entries recorded on another build of the binary are kept and flagged `image_changed`; giving an
+entry a new `address` or `function` re-records it on this build. Entries with neither record no build and are
+never flagged. Raw Projects do not offer the ledger, as their annotations are not persisted.
+
+Builds that predate the ledger skip its log lines when the log holds only ordinary edits, but refuse to open a
+log that also holds checked edits (patches, type hints, data or operand types, type libraries or debug layouts)
+and ledger entries. Builds from this one on skip edits of fields they do not know in both cases.
 
 `undo`/`redo` revert/reapply one session step, including a whole batch. When another client's edit blocks undo,
 `discard_undo` drops the blocked step from session history, leaving its edits in effect and the log unchanged,

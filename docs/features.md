@@ -167,8 +167,10 @@ annotation operations in one existing undo/history step. See [tool views and bat
 `record_finding` and `list_findings` keep what an agent established, what it still does not know and its open
 questions, each with the tool calls that support it, a confidence and an open/resolved/rejected status. Entries
 live in the annotation log, so they survive the session, replay on reopen, undo and redo like comments, and are
-shared with other processes under the log's lock; ids are stable and never reused. Entries made on another build
-of the binary are kept and flagged. See [MCP edits](mcp.md#edits-and-session-state).
+shared with other processes under the log's lock; ids are stable and not reused within the log. Entries made on
+another build of the binary are kept and flagged. The ledger holds at most 1,024 entries and 2 MiB, and stops
+taking writes while a quarter of the log's read and cache budgets is still free, so it never crowds out names and
+comments or makes the log unreadable. See [MCP edits](mcp.md#edits-and-session-state).
 
 ## Checked patches and assembly
 

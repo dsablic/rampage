@@ -594,6 +594,9 @@ impl Workspace {
             Field::Finding => Err(rampage_api::ApiError::Invalid(
                 "ledger entries are recorded with the record_finding tool".to_owned(),
             )),
+            Field::Unknown => {
+                Err(rampage_api::ApiError::Invalid("this build does not know that annotation field".to_owned()))
+            }
         };
         match result {
             Ok(edit) => {
@@ -636,10 +639,12 @@ impl Workspace {
         self.step_changed(result);
     }
 
-    /// Refreshes after an undo or redo: just the address one edit touched, or everything after a batch.
+    /// Refreshes after an undo or redo: just the address one edit touched, or everything after a batch. A ledger
+    /// entry's id is not an address, so undoing one names none.
     fn step_changed(&mut self, result: Result<Vec<Edit>, ApiError>) {
         match result.as_deref() {
             Ok([]) => {}
+            Ok([edit]) if edit.field == Field::Finding => self.annotations_changed(None),
             Ok([edit]) => self.annotations_changed(Some(edit.address)),
             Ok(_) => self.annotations_changed(None),
             Err(error) => self.notice = Some(error.to_string()),

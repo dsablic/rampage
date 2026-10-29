@@ -134,7 +134,7 @@ pub use files::{
 pub use findings::{
     LedgerEntry, LedgerConfidence, LedgerCounts, LedgerEvidence, LedgerKind, LedgerList, LedgerRecord, LedgerRequest,
     LedgerStatus, LedgerQuery, MAX_LEDGER_EVIDENCE, MAX_LEDGER_RESOLUTION, MAX_LEDGER_TEXT, MAX_LEDGER_ENTRIES,
-    MAX_LEDGER_PAGE,
+    MAX_LEDGER_BYTES, MAX_LEDGER_PAGE,
 };
 pub use frame::{
     FrameCategory, FrameCoordinate, FrameLocation, FrameQuery, FrameRow, FrameSource, FrameTrackerSlot,

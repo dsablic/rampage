@@ -43,6 +43,11 @@ pub enum Field {
     Patch,
     /// An investigation ledger entry (see `crate::findings`), keyed by its id rather than an address.
     Finding,
+    /// A field written by a later build. Readers, checked or not, skip its edits rather than refuse the log; it is
+    /// never applied, and never written.
+    #[serde(other)]
+    #[schemars(skip)]
+    Unknown,
 }
 
 /// An exact named data type or explicitly encoded string at an image address.
@@ -578,6 +583,13 @@ fn validate_debug_types_text(value: &serde_json::Value, depth: usize) -> Result<
     Ok(())
 }
 
+fn validate_writable_field(field: Field) -> Result<(), String> {
+    if field == Field::Unknown {
+        return Err("this build does not know that annotation field, so it cannot write it".to_owned());
+    }
+    Ok(())
+}
+
 fn validate_project_address(field: Field, address: u64) -> Result<(), String> {
     if field == Field::TypeLibrary && address != 0 {
         return Err("the project-wide type library requires address 0".to_owned());
@@ -824,7 +836,8 @@ pub struct Annotations {
     data_types: BTreeMap<u64, String>,
     operand_types: BTreeMap<u64, String>,
     patches: BTreeMap<u64, String>,
-    /// Ledger entries by id, and the highest id any logged edit has used, so an id is never handed out twice.
+    /// Ledger entries by id, and the highest id any edit this instance read or made has used, so neither the log nor
+    /// this process hands an id out twice (a process opening a log restored from an older copy can, though).
     findings: BTreeMap<u64, String>,
     finding_high: u64,
     patch_validator: Option<PatchValidator>,
@@ -846,13 +859,140 @@ pub struct Annotations {
 type PatchValidator = std::sync::Arc<dyn Fn(&Annotations) -> Result<(), String> + Send + Sync>;
 type PatchFreezer = std::sync::Arc<dyn Fn(&Annotations) + Send + Sync>;
 
-const CHECKED_CACHE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const CHECKED_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const CHECKED_VALUE_BYTES: usize = 1024 * 1024;
-const CHECKED_RECORDS: usize = 8192;
+pub(crate) const CHECKED_RECORDS: usize = 8192;
 const CHECKED_HISTORY_STEPS: usize = 1024;
 const CHECKED_READ_BYTES: usize = 16 * 1024 * 1024;
 const CHECKED_LINE_BYTES: usize = 2 * 1024 * 1024;
+/// Most JSON separators (`{ [ , :` outside strings) one checked read accepts.
+const CHECKED_SEPARATORS: usize = 65536;
 const CHECKED_ERROR: &str = "checked annotation input is malformed, unstable, or exceeds its bounded ingestion budget";
+
+/// What edits cost the checked budget, counted as `CheckedBudget::edit` counts them but without refusing.
+#[derive(Default)]
+struct EditLoad {
+    records: usize,
+    bytes: usize,
+}
+
+impl EditLoad {
+    fn add(&mut self, edit: &Edit) {
+        self.records += 1;
+        for text in [&edit.value, &edit.previous].into_iter().flatten() {
+            self.records += 1;
+            self.bytes += text.len();
+        }
+    }
+}
+
+/// What a log holds, counted as a reader opening it from the start counts it.
+#[derive(Default)]
+struct LogLoad {
+    bytes: usize,
+    lines: usize,
+    separators: usize,
+    edits: EditLoad,
+}
+
+impl LogLoad {
+    fn add_line(&mut self, line: &[u8]) {
+        self.bytes += line.len();
+        self.lines += 1;
+        let mut scanner = JsonScanner::default();
+        self.separators +=
+            line.iter().filter(|&&byte| matches!(scanner.structural(byte), Some(b'{' | b'[' | b',' | b':'))).count();
+        if let Ok(edit) = serde_json::from_slice::<Edit>(line) {
+            self.edits.add(&edit);
+        }
+    }
+}
+
+/// Measures the log at `path` (nothing, when there is none), refusing one no reader could open.
+fn log_load(path: &std::path::Path) -> Result<LogLoad, String> {
+    let opened = if cfg!(unix) { checked_log_file(path) } else { File::open(path) };
+    let mut file = match opened {
+        Ok(file) => file,
+        Err(problem) if problem.kind() == std::io::ErrorKind::NotFound => return Ok(LogLoad::default()),
+        Err(problem) => return Err(format!("{}: {problem}", path.display())),
+    };
+    let bytes = read_bounded_log(&mut file).map_err(|_| {
+        format!("the annotation log {} is already larger than a reader opens; nothing was recorded", path.display())
+    })?;
+    let mut load = LogLoad::default();
+    for line in bytes.split_inclusive(|&byte| byte == b'\n') {
+        load.add_line(line);
+    }
+    Ok(load)
+}
+
+/// Refuses an append of `appended` to a log of `len` bytes that no reader could open again: every reader, legacy
+/// included, refuses a log of more than `CHECKED_READ_BYTES` bytes, `CHECKED_RECORDS` lines, or a line longer than
+/// `CHECKED_LINE_BYTES`, so writing past them would lose every edit in it on the next open.
+fn ensure_reopenable(file: &mut File, len: u64, appended: &[u8]) -> Result<(), String> {
+    let refuse = |what: &str| {
+        Err(format!(
+            "this edit would leave the annotation log {what}, which no reader opens; its existing edits are \
+             untouched, and nothing was changed"
+        ))
+    };
+    let total = len.saturating_add(appended.len() as u64);
+    if total > CHECKED_READ_BYTES as u64 {
+        return refuse(&format!("{total} bytes long, past {CHECKED_READ_BYTES}"));
+    }
+    if appended.split_inclusive(|&byte| byte == b'\n').any(|line| line.len() > CHECKED_LINE_BYTES) {
+        return refuse(&format!("with a line longer than {CHECKED_LINE_BYTES} bytes"));
+    }
+    // A line takes at least one byte, so a log this short cannot hold too many.
+    if total <= CHECKED_RECORDS as u64 {
+        return Ok(());
+    }
+    let mut lines = appended.iter().filter(|&&byte| byte == b'\n').count();
+    file.seek(SeekFrom::Start(0)).map_err(|error| error.to_string())?;
+    let mut chunk = vec![0u8; 64 * 1024];
+    let mut remaining = len;
+    while remaining > 0 {
+        let want = chunk.len().min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        let read = file.read(&mut chunk[..want]).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        remaining -= read as u64;
+        lines += chunk[..read].iter().filter(|&&byte| byte == b'\n').count();
+    }
+    if lines > CHECKED_RECORDS {
+        return refuse(&format!("{lines} lines long, past {CHECKED_RECORDS}"));
+    }
+    Ok(())
+}
+
+/// Tracks whether a JSON byte stream is inside a string, to find its structural bytes.
+#[derive(Default)]
+struct JsonScanner {
+    string: bool,
+    escaped: bool,
+}
+
+impl JsonScanner {
+    /// `byte`, when it lies outside every string (quotes included in neither).
+    fn structural(&mut self, byte: u8) -> Option<u8> {
+        if self.string {
+            if self.escaped {
+                self.escaped = false;
+            } else if byte == b'\\' {
+                self.escaped = true;
+            } else if byte == b'"' {
+                self.string = false;
+            }
+            return None;
+        }
+        if byte == b'"' {
+            self.string = true;
+            return None;
+        }
+        Some(byte)
+    }
+}
 
 #[derive(Default)]
 struct CheckedBudget {
@@ -1122,25 +1262,7 @@ impl Annotations {
         {
             return Err(CHECKED_ERROR.to_owned());
         }
-        for text in self
-            .names
-            .values()
-            .chain(self.comments.values())
-            .chain(self.signatures.values())
-            .chain(self.types.values())
-            .chain(self.type_library.values())
-            .chain(self.debug_types.values())
-            .chain(self.globals.values())
-            .chain(self.local_names.values())
-            .chain(self.local_types.values())
-            .chain(self.type_hints.values())
-            .chain(self.data_types.values())
-            .chain(self.operand_types.values())
-            .chain(self.patches.values())
-            .chain(self.findings.values())
-            .chain(self.addresses.keys())
-            .chain(self.name_owners.keys())
-        {
+        for text in self.cached_texts() {
             budget.text(text)?;
         }
         self.validate_local_collections()?;
@@ -1180,6 +1302,102 @@ impl Annotations {
         }
         if budget.records > CHECKED_RECORDS || budget.bytes > CHECKED_CACHE_BYTES {
             return Err(CHECKED_ERROR.to_owned());
+        }
+        Ok(())
+    }
+
+    /// Every text the checked cache budget counts: each field's values, and the name indexes' keys.
+    fn cached_texts(&self) -> impl Iterator<Item = &String> {
+        self.names
+            .values()
+            .chain(self.comments.values())
+            .chain(self.signatures.values())
+            .chain(self.types.values())
+            .chain(self.type_library.values())
+            .chain(self.debug_types.values())
+            .chain(self.globals.values())
+            .chain(self.local_names.values())
+            .chain(self.local_types.values())
+            .chain(self.type_hints.values())
+            .chain(self.data_types.values())
+            .chain(self.operand_types.values())
+            .chain(self.patches.values())
+            .chain(self.findings.values())
+            .chain(self.addresses.keys())
+            .chain(self.name_owners.keys())
+    }
+
+    /// Refuses `edit`, a ledger write, unless the log and the cache it leaves keep a quarter of every budget a
+    /// reader or a checked edit enforces free for names, comments and other edits. The log is measured as a checked
+    /// reader opening it from the start counts it (the strictest reader, which workspace restores and every project
+    /// with patches or checked type edits use), and the cache as `preflight_checked` counts it, with this session's
+    /// undo history and the new step. Call it holding the log's lock, after refreshing.
+    pub(crate) fn ledger_headroom(&self, edit: &Edit) -> Result<(), String> {
+        let share = |limit: usize| limit / 4 * 3;
+        let full = |what: String| {
+            Err(format!(
+                "the annotation log has no room left for ledger writes: {what}. Ledger writes stop at three quarters \
+                 of each limit, so names, comments and other edits keep the rest and the log stays readable; nothing \
+                 was recorded"
+            ))
+        };
+        if let Some(log) = &self.log {
+            let mut load = log_load(&log.path)?;
+            let mut line = serde_json::to_vec(edit).map_err(|error| error.to_string())?;
+            line.push(b'\n');
+            load.add_line(&line);
+            // The write may log this image's identity line first: `{"image":"<hex>"}`.
+            if let Some(image) = &log.image {
+                load.add_line(format!("{{\"image\":\"{image}\"}}\n").as_bytes());
+            }
+            if load.bytes > share(CHECKED_READ_BYTES) {
+                return full(format!("it would hold {} bytes, of the {CHECKED_READ_BYTES} a reader opens", load.bytes));
+            }
+            if load.lines > share(CHECKED_RECORDS) {
+                return full(format!("it would hold {} lines, of the {CHECKED_RECORDS} a reader opens", load.lines));
+            }
+            if load.separators > share(CHECKED_SEPARATORS) {
+                return full(format!(
+                    "it would hold {} JSON separators, of the {CHECKED_SEPARATORS} a checked reader opens",
+                    load.separators
+                ));
+            }
+            if load.edits.records > share(CHECKED_RECORDS) || load.edits.bytes > share(CHECKED_CACHE_BYTES) {
+                return full(format!(
+                    "its edits would count {} records and {} bytes, of the {CHECKED_RECORDS} and \
+                     {CHECKED_CACHE_BYTES} a checked reader replays",
+                    load.edits.records, load.edits.bytes
+                ));
+            }
+        }
+        let steps = self.done.len() + self.undone.len() + 1;
+        if steps > share(CHECKED_HISTORY_STEPS) {
+            return full(format!(
+                "this session's undo history would hold {steps} steps, of the {CHECKED_HISTORY_STEPS} checked edits \
+                 allow; reopen the project to start a new history"
+            ));
+        }
+        let mut candidate = self.snapshot();
+        candidate.apply(edit);
+        let mut cache = EditLoad::default();
+        for text in candidate.cached_texts() {
+            cache.records += 1;
+            cache.bytes += text.len();
+        }
+        cache.records += candidate.name_owners.values().map(std::collections::BTreeSet::len).sum::<usize>();
+        let step = std::slice::from_ref(edit);
+        for step in self.done.iter().chain(&self.undone).map(Vec::as_slice).chain([step]) {
+            cache.records += 1;
+            for edit in step {
+                cache.add(edit);
+            }
+        }
+        if cache.records > share(CHECKED_RECORDS) || cache.bytes > share(CHECKED_CACHE_BYTES) {
+            return full(format!(
+                "the annotations and this session's undo history would count {} records and {} bytes, of the \
+                 {CHECKED_RECORDS} and {CHECKED_CACHE_BYTES} checked edits allow",
+                cache.records, cache.bytes
+            ));
         }
         Ok(())
     }
@@ -1376,8 +1594,8 @@ impl Annotations {
                 self.patches_revision = std::sync::Arc::new(());
             }
             self.patches.clear();
+            // `finding_high` survives: ids this process saw handed out stay retired even if the log was replaced.
             self.findings.clear();
-            self.finding_high = 0;
             self.managed_layouts = 0;
         }
         for edit in &edits {
@@ -1388,6 +1606,9 @@ impl Annotations {
     }
 
     fn apply(&mut self, edit: &Edit) {
+        if edit.field == Field::Unknown {
+            return;
+        }
         if edit.field == Field::Patch && edit.value.is_some() {
             self.freeze_unpatched_view();
         }
@@ -1446,6 +1667,7 @@ impl Annotations {
                     None => drop(self.findings.remove(&edit.address)),
                 }
             }
+            Field::Unknown => {}
             Field::Signature
             | Field::Types
             | Field::TypeLibrary
@@ -1528,6 +1750,7 @@ impl Annotations {
                 push(serde_json::to_string(&BatchMember { edit, batch: &batch }))?;
             }
         }
+        ensure_reopenable(&mut file, len, lines.as_bytes())?;
         file.write_all(lines.as_bytes()).map_err(error)?;
         let after = file.metadata().map_err(error)?.len();
         if new_image.is_some() {
@@ -1584,6 +1807,7 @@ impl Annotations {
         file.read_exact(&mut combined).map_err(|_| CHECKED_ERROR.to_owned())?;
         combined.extend_from_slice(&encoded.bytes);
         checked_outer_preflight(&combined)?;
+        ensure_reopenable(&mut file, before.len(), &encoded.bytes)?;
         let after = file.metadata().map_err(|_| CHECKED_ERROR.to_owned())?;
         let pathname = std::fs::symlink_metadata(&log.path).map_err(|_| CHECKED_ERROR.to_owned())?;
         if pathname.file_type().is_symlink()
@@ -1779,6 +2003,7 @@ impl Annotations {
         value: Option<String>,
         validate: impl FnOnce(&Self) -> Result<(), String>,
     ) -> Result<bool, String> {
+        validate_writable_field(field)?;
         validate_project_address(field, address)?;
         let _lock = self.log_lock()?;
         if self.introduces_checked_state(field, value.as_deref()) {
@@ -1826,6 +2051,7 @@ impl Annotations {
         validate: impl FnOnce(&Self) -> Result<(), String>,
     ) -> Result<Vec<bool>, String> {
         for (field, address, _) in changes {
+            validate_writable_field(*field)?;
             validate_project_address(*field, *address)?;
         }
         let _lock = self.log_lock()?;
@@ -2046,7 +2272,7 @@ impl Annotations {
         let mut conflicts = Vec::new();
         for edit in edits {
             if !self.is_unchanged(edit) {
-                conflicts.push(edit.address);
+                conflicts.push((edit.field == Field::Finding, edit.address));
             }
             self.apply(edit);
         }
@@ -2054,7 +2280,7 @@ impl Annotations {
             conflicts.sort_unstable();
             conflicts.dedup();
             let verb = if conflicts.len() == 1 { "was" } else { "were" };
-            return Some(format!("{} {verb} edited by another client since; not changed", address_list(&conflicts)));
+            return Some(format!("{} {verb} edited by another client since; not changed", target_list(&conflicts)));
         }
         let mut taken = Vec::new();
         for edit in edits.iter().filter(|edit| edit.field == Field::Name) {
@@ -2089,6 +2315,10 @@ impl Annotations {
             Field::OperandType => &self.operand_types,
             Field::Patch => &self.patches,
             Field::Finding => &self.findings,
+            Field::Unknown => {
+                static NONE: BTreeMap<u64, String> = BTreeMap::new();
+                &NONE
+            }
         }
     }
 
@@ -2158,9 +2388,9 @@ impl Annotations {
     }
 
     /// The id the next new ledger entry takes: one past every id any logged edit has used, including entries
-    /// since undone, so a later session never sees one id name two different entries.
-    pub(crate) fn next_finding_id(&self) -> u64 {
-        self.finding_high.saturating_add(1)
+    /// since undone, so a later session never sees one id name two different entries. `None` once ids run out.
+    pub(crate) fn next_finding_id(&self) -> Option<u64> {
+        self.finding_high.checked_add(1).filter(|id| !self.findings.contains_key(id))
     }
 
     /// The SHA-256 (hex) of the image these annotations are applied to, when known.
@@ -2172,23 +2402,58 @@ impl Annotations {
         &self.patches
     }
 
+    /// Whether both hold the same analyst state: every field's values. Destructured without `..`, so a field added
+    /// to `Annotations` cannot be left out of the comparison silently.
     pub(crate) fn values_equal(&self, other: &Self) -> bool {
-        const FIELDS: [Field; 13] = [
-            Field::Name,
-            Field::Comment,
-            Field::Signature,
-            Field::Types,
-            Field::TypeLibrary,
-            Field::DebugTypes,
-            Field::Global,
-            Field::LocalName,
-            Field::LocalType,
-            Field::TypeHint,
-            Field::DataType,
-            Field::OperandType,
-            Field::Patch,
-        ];
-        FIELDS.into_iter().all(|field| self.field_map(field) == other.field_map(field))
+        let Self {
+            revision: _,
+            names_revision: _,
+            patches_revision: _,
+            names,
+            addresses: _,
+            name_owners: _,
+            comments,
+            signatures,
+            types,
+            type_library,
+            debug_types,
+            globals,
+            local_names,
+            local_types,
+            type_hints,
+            data_types,
+            operand_types,
+            patches,
+            findings,
+            finding_high: _,
+            patch_validator: _,
+            patch_freezer: _,
+            unpatched_view: _,
+            done: _,
+            undone: _,
+            log: _,
+            held: _,
+            checked_reads: _,
+            managed_layouts: _,
+        } = self;
+        [
+            (names, &other.names),
+            (comments, &other.comments),
+            (signatures, &other.signatures),
+            (types, &other.types),
+            (type_library, &other.type_library),
+            (debug_types, &other.debug_types),
+            (globals, &other.globals),
+            (local_names, &other.local_names),
+            (local_types, &other.local_types),
+            (type_hints, &other.type_hints),
+            (data_types, &other.data_types),
+            (operand_types, &other.operand_types),
+            (patches, &other.patches),
+            (findings, &other.findings),
+        ]
+        .into_iter()
+        .all(|(mine, theirs)| mine == theirs)
     }
 
     fn validate_local_collections(&self) -> Result<(), String> {
@@ -2510,34 +2775,23 @@ fn checked_json_preflight(bytes: &[u8], json_lines: bool) -> Result<(), String> 
             return Err(CHECKED_ERROR.to_owned());
         }
         let mut depth = 0usize;
-        let mut string = false;
-        let mut escaped = false;
+        let mut scanner = JsonScanner::default();
         for &byte in line {
-            if string {
-                if escaped {
-                    escaped = false;
-                } else if byte == b'\\' {
-                    escaped = true;
-                } else if byte == b'"' {
-                    string = false;
+            let Some(byte) = scanner.structural(byte) else { continue };
+            match byte {
+                b'{' | b'[' => {
+                    depth += 1;
+                    separators += 1;
                 }
-            } else {
-                match byte {
-                    b'"' => string = true,
-                    b'{' | b'[' => {
-                        depth += 1;
-                        separators += 1;
-                    }
-                    b'}' | b']' => depth = depth.checked_sub(1).ok_or(CHECKED_ERROR)?,
-                    b',' | b':' => separators += 1,
-                    _ => {}
-                }
-                if depth > 8 || separators > 65536 {
-                    return Err(CHECKED_ERROR.to_owned());
-                }
+                b'}' | b']' => depth = depth.checked_sub(1).ok_or(CHECKED_ERROR)?,
+                b',' | b':' => separators += 1,
+                _ => {}
+            }
+            if depth > 8 || separators > CHECKED_SEPARATORS {
+                return Err(CHECKED_ERROR.to_owned());
             }
         }
-        if (!json_lines || line.ends_with(b"\n")) && (depth != 0 || string) {
+        if (!json_lines || line.ends_with(b"\n")) && (depth != 0 || scanner.string) {
             return Err(CHECKED_ERROR.to_owned());
         }
     }
@@ -2553,14 +2807,18 @@ fn batch_member(line: &[u8], batch: &str) -> Option<Edit> {
     serde_json::from_slice(line).ok()
 }
 
-/// The most addresses an error lists before counting the rest.
+/// The most edit targets an error lists before counting the rest.
 const LISTED_ADDRESSES: usize = 20;
 
-fn address_list(addresses: &[u64]) -> String {
-    let mut list: Vec<String> =
-        addresses.iter().take(LISTED_ADDRESSES).map(|address| format!("{address:#x}")).collect();
-    if addresses.len() > LISTED_ADDRESSES {
-        list.push(format!("{} more", addresses.len() - LISTED_ADDRESSES));
+/// Edit targets as `(is a ledger entry, address or id)`: addresses in hex, ledger entries as `finding #id`.
+fn target_list(targets: &[(bool, u64)]) -> String {
+    let mut list: Vec<String> = targets
+        .iter()
+        .take(LISTED_ADDRESSES)
+        .map(|&(finding, at)| if finding { format!("finding #{at}") } else { format!("{at:#x}") })
+        .collect();
+    if targets.len() > LISTED_ADDRESSES {
+        list.push(format!("{} more", targets.len() - LISTED_ADDRESSES));
     }
     list.join(", ")
 }
@@ -3049,6 +3307,115 @@ mod tests {
         assert_eq!(reader.name(0x30), Some("late"));
         reader.set(Field::Name, 0x40, Some("after".into())).unwrap();
         assert_eq!(Annotations::open(path.clone()).unwrap().name(0x40), Some("after"));
+        cleanup(path);
+    }
+
+    #[test]
+    fn a_write_is_refused_rather_than_leave_a_log_no_reader_opens() {
+        let path = temporary_log("reopen-lines");
+        let lines: String = (0..CHECKED_RECORDS as u64 - 1)
+            .map(|address| format!("{}\n", serde_json::to_string(&own_comment_edit(address, "c")).unwrap()))
+            .collect();
+        std::fs::write(&path, lines).unwrap();
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        // The last line a reader accepts can still be written; the one past it cannot.
+        annotations.set(Field::Name, 0x10, Some("kept".into())).unwrap();
+        let error = annotations.set(Field::Name, 0x20, Some("refused".into())).unwrap_err();
+        assert!(error.contains("which no reader opens"), "{error}");
+        let reopened = Annotations::open(path.clone()).unwrap();
+        assert_eq!((reopened.comments().len(), reopened.name(0x10)), (CHECKED_RECORDS - 1, Some("kept")));
+        assert_eq!(reopened.name(0x20), None);
+        cleanup(path);
+
+        let path = temporary_log("reopen-bytes");
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        let error = annotations.set(Field::Comment, 0x100, Some("c".repeat(CHECKED_LINE_BYTES))).unwrap_err();
+        assert!(error.contains("longer than"), "{error}");
+        // Eight lines just under the per-line limit leave a few hundred bytes of the whole-log limit.
+        let comment = "c".repeat(CHECKED_LINE_BYTES - 100);
+        let lines: String = (0..8)
+            .map(|address| format!("{}\n", serde_json::to_string(&own_comment_edit(address, &comment)).unwrap()))
+            .collect();
+        std::fs::write(&path, lines).unwrap();
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        let error = annotations.set(Field::Comment, 0x100, Some("c".repeat(1000))).unwrap_err();
+        assert!(error.contains("bytes long"), "{error}");
+        annotations.set(Field::Name, 0x100, Some("fits".into())).unwrap();
+        let reopened = Annotations::open(path.clone()).unwrap();
+        assert_eq!((reopened.comments().len(), reopened.name(0x100)), (8, Some("fits")));
+        cleanup(path);
+    }
+
+    fn own_comment_edit(address: u64, value: &str) -> Edit {
+        Edit { field: Field::Comment, address, value: Some(value.to_owned()), previous: None }
+    }
+
+    #[test]
+    fn edits_of_fields_from_a_later_build_are_skipped_by_every_reader() {
+        let path = temporary_log("unknown-field");
+        let future = r#"{"field":"bookmark","address":"0x40","value":"later","previous":null}"#;
+        let member = r#"{"field":"bookmark","address":"0x44","value":"later","previous":null,"batch":"b1"}"#;
+        let comment = r#"{"field":"comment","address":"0x48","value":"in the batch","previous":null,"batch":"b1"}"#;
+        let header = r#"{"batch":"b1","edits":2}"#;
+        let name = serde_json::to_string(&name_edit(0x10, "known")).unwrap();
+        std::fs::write(&path, format!("{name}\n{future}\n{header}\n{member}\n{comment}\n")).unwrap();
+        for annotations in [Annotations::open(path.clone()).unwrap(), Annotations::open_checked(path.clone()).unwrap()]
+        {
+            assert_eq!(annotations.name(0x10), Some("known"));
+            // The batch applies whole, its unknown member skipped.
+            assert_eq!(annotations.comment(0x48), Some("in the batch"));
+            assert_eq!(annotations.comment(0x40), None);
+        }
+        let mut annotations = Annotations::open_checked(path.clone()).unwrap();
+        assert!(annotations.set(Field::Unknown, 0x40, Some("x".into())).unwrap_err().contains("does not know"));
+        assert!(annotations.set_batch_validated(&[(Field::Unknown, 0x40, None)], |_| Ok(())).is_err());
+        assert_eq!(serde_json::from_str::<Field>(r#""bookmark""#).unwrap(), Field::Unknown);
+        cleanup(path);
+    }
+
+    #[test]
+    fn a_blocked_ledger_undo_names_the_entry_not_an_address() {
+        let path = temporary_log("ledger-conflict");
+        let mut ui = Annotations::open(path.clone()).unwrap();
+        let mut agent = Annotations::open(path.clone()).unwrap();
+        ui.set(Field::Finding, 3, Some("a".into())).unwrap();
+        ui.set(Field::Comment, 3, Some("a".into())).unwrap();
+        agent.set(Field::Finding, 3, Some("b".into())).unwrap();
+        agent.set(Field::Comment, 3, Some("b".into())).unwrap();
+        ui.undo().unwrap_err();
+        // Discard the blocked comment step to reach the ledger step.
+        ui.discard_undo_step(false).unwrap();
+        let error = ui.undo().unwrap_err();
+        assert!(error.starts_with("finding #3 was edited by another client"), "{error}");
+        assert_eq!(target_list(&[(false, 3), (true, 3)]), "0x3, finding #3");
+        cleanup(path);
+    }
+
+    #[test]
+    fn ledger_entries_are_analyst_state_when_comparing() {
+        let mut ledger = Annotations::in_memory();
+        ledger.set(Field::Finding, 1, Some("entry".into())).unwrap();
+        assert!(!ledger.values_equal(&Annotations::in_memory()));
+        assert!(ledger.values_equal(&ledger.snapshot()));
+    }
+
+    #[test]
+    fn ids_handed_out_stay_retired_when_the_log_is_replaced() {
+        let path = temporary_log("ledger-restore");
+        let mut annotations = Annotations::open(path.clone()).unwrap();
+        annotations.set(Field::Finding, 1, Some("a".into())).unwrap();
+        annotations.set(Field::Finding, 2, Some("b".into())).unwrap();
+        let replacement = path.with_extension("restored");
+        let first =
+            serde_json::to_string(&Edit { field: Field::Finding, address: 1, value: Some("a".into()), previous: None })
+                .unwrap();
+        std::fs::write(&replacement, format!("{first}\n")).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        annotations.refresh().unwrap();
+        assert_eq!(annotations.findings().len(), 1);
+        assert_eq!(annotations.next_finding_id(), Some(3));
+        annotations.set(Field::Finding, u64::MAX, Some("hostile".into())).unwrap();
+        assert_eq!(annotations.next_finding_id(), None);
         cleanup(path);
     }
 

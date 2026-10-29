@@ -2,10 +2,10 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use rampage_api::annotations::{Edit, Field};
+use rampage_api::annotations::{Annotations, Edit, Field};
 use rampage_api::{
-    LedgerConfidence, LedgerEvidence, LedgerKind, LedgerQuery, LedgerRequest, LedgerStatus, MAX_LEDGER_EVIDENCE,
-    MAX_LEDGER_TEXT, Session,
+    LedgerConfidence, LedgerEvidence, LedgerKind, LedgerQuery, LedgerRequest, LedgerStatus, MAX_LEDGER_BYTES,
+    MAX_LEDGER_ENTRIES, MAX_LEDGER_EVIDENCE, MAX_LEDGER_RESOLUTION, MAX_LEDGER_TEXT, Session,
 };
 
 fn scratch_copy(test: &str, fixture: &str) -> PathBuf {
@@ -326,13 +326,152 @@ fn entries_made_on_another_build_are_kept_and_flagged() {
     let rebuilt = Session::default().open(&path, None).unwrap();
     let list = all(&rebuilt);
     assert_eq!(ids(&list), [1, 2]);
-    assert!(list.findings.iter().all(|finding| finding.image_changed));
+    // Only an entry with an address or function can stop fitting; one without records no image at all.
+    let flags: Vec<_> =
+        list.findings.iter().map(|finding| (finding.image_changed, finding.image_sha256.is_some())).collect();
+    assert_eq!(flags, [(true, true), (false, false)]);
     assert!(list.warnings.iter().any(|warning| warning.contains("different image")), "{:?}", list.warnings);
-    // Re-anchoring an entry on this build clears its flag; a status change alone does not.
+    // A status change alone keeps the flag; re-anchoring an entry on this build clears it.
+    let resolved =
+        rebuilt.record_finding(&LedgerRequest { status: Some(LedgerStatus::Resolved), ..update(1) }).unwrap();
+    assert!(resolved.finding.image_changed);
     let moved = rebuilt.record_finding(&LedgerRequest { address: Some("0x1004".into()), ..update(1) }).unwrap();
     assert!(!moved.finding.image_changed);
-    let resolved =
-        rebuilt.record_finding(&LedgerRequest { status: Some(LedgerStatus::Resolved), ..update(2) }).unwrap();
-    assert!(resolved.finding.image_changed);
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+fn log_of(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.rampage", path.display()))
+}
+
+/// Appends `edits` to the log as a writer logs them, much faster than recording each through the API.
+fn append_edits(log: &Path, edits: impl IntoIterator<Item = Edit>) {
+    let lines: String = edits.into_iter().map(|edit| format!("{}\n", serde_json::to_string(&edit).unwrap())).collect();
+    OpenOptions::new().create(true).append(true).open(log).unwrap().write_all(lines.as_bytes()).unwrap();
+}
+
+fn finding_edit(id: u64, value: &str, previous: Option<&str>) -> Edit {
+    Edit { field: Field::Finding, address: id, value: Some(value.to_owned()), previous: previous.map(str::to_owned) }
+}
+
+/// An entry as large as a request can make it.
+fn largest() -> LedgerRequest {
+    LedgerRequest {
+        evidence: Some(vec![LedgerEvidence { tool: "t".repeat(64), detail: "d".repeat(300) }; MAX_LEDGER_EVIDENCE]),
+        resolution: Some("r".repeat(MAX_LEDGER_RESOLUTION)),
+        ..create(LedgerKind::Finding, &"x".repeat(MAX_LEDGER_TEXT))
+    }
+}
+
+fn toggled(status: LedgerStatus) -> LedgerStatus {
+    if status == LedgerStatus::Open { LedgerStatus::Resolved } else { LedgerStatus::Open }
+}
+
+/// The log is append-only, so every update of a large entry spends its replay budget for good. Ledger writes stop
+/// with a quarter of every budget left, and the log still opens, legacy and checked, with every name and comment.
+#[test]
+fn ledger_writes_stop_with_headroom_and_the_log_opens_with_every_name_and_comment() {
+    let path = scratch_copy("headroom", "hello-arm64.macho");
+    let log = log_of(&path);
+    let project = Session::default().open(&path, None).unwrap();
+    let main = project.resolve("_main").unwrap();
+    project.rename(main, Some("entry_point")).unwrap();
+    for index in 0..32 {
+        project.comment(main + index, Some(&format!("note {index}"))).unwrap();
+    }
+    let id = project.record_finding(&largest()).unwrap().finding.id;
+    let open = Annotations::open(log.clone()).unwrap().findings()[&id].clone();
+    let resolved = open.replace(r#""status":"open""#, r#""status":"resolved""#);
+    assert_ne!(open, resolved);
+    // Toggle its status as record_finding logs it, to a few updates short of three quarters of the 8 MiB of edit
+    // text a checked reader replays.
+    let updates = 6 * 1024 * 1024 / (2 * open.len()) - 6;
+    append_edits(
+        &log,
+        (0..updates).map(|index| {
+            let (from, to) = if index.is_multiple_of(2) { (&open, &resolved) } else { (&resolved, &open) };
+            finding_edit(id, to, Some(from))
+        }),
+    );
+    let mut status = if updates.is_multiple_of(2) { LedgerStatus::Open } else { LedgerStatus::Resolved };
+    let mut recorded = 0;
+    let error = loop {
+        match project.record_finding(&LedgerRequest { status: Some(toggled(status)), ..update(id) }) {
+            Ok(record) => assert!(record.changed),
+            Err(error) => break error.to_string(),
+        }
+        status = toggled(status);
+        recorded += 1;
+        assert!(recorded < 20, "ledger writes never stopped");
+    };
+    assert!(recorded > 0);
+    assert!(error.contains("no room left for ledger writes") && error.contains("replays"), "{error}");
+    // The rest of the budget stays for the analyst's own edits.
+    project.comment(main + 64, Some("after the ledger stopped")).unwrap();
+    project.rename(main, Some("entry_point_renamed")).unwrap();
+
+    let reopened = Session::default().open(&path, None).unwrap();
+    assert_eq!(reopened.name_at(main).as_deref(), Some("entry_point_renamed"));
+    for index in 0..32 {
+        assert_eq!(reopened.comment_at(main + index), Some(format!("note {index}")));
+    }
+    assert_eq!(reopened.comment_at(main + 64).as_deref(), Some("after the ledger stopped"));
+    assert_eq!(all(&reopened).findings[0].status, status);
+    let checked = Annotations::open_checked(log).unwrap();
+    assert_eq!((checked.names().len(), checked.comments().len(), checked.findings().len()), (1, 33, 1));
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn the_ledger_holds_at_most_its_byte_and_entry_caps() {
+    let path = scratch_copy("ledger-bytes", "hello-arm64.macho");
+    let log = log_of(&path);
+    let project = Session::default().open(&path, None).unwrap();
+    project.comment(0x1000, Some("kept")).unwrap();
+    let first = project.record_finding(&largest()).unwrap().finding.id;
+    let value = Annotations::open(log.clone()).unwrap().findings()[&first].clone();
+    let entries = (MAX_LEDGER_BYTES / value.len() - 3) as u64;
+    append_edits(&log, (first + 1..first + entries).map(|id| finding_edit(id, &value, None)));
+    let mut created = 0;
+    let error = loop {
+        match project.record_finding(&largest()) {
+            Ok(record) => assert!(record.created),
+            Err(error) => break error.to_string(),
+        }
+        created += 1;
+        assert!(created < 10, "ledger writes never stopped");
+    };
+    assert!(created > 0);
+    assert!(error.contains(&format!("past its maximum of {MAX_LEDGER_BYTES}")), "{error}");
+    // Shrinking an entry still fits.
+    let smaller = project.record_finding(&LedgerRequest { resolution: Some(String::new()), ..update(first) }).unwrap();
+    assert!(smaller.changed);
+    assert_eq!(Session::default().open(&path, None).unwrap().comment_at(0x1000).as_deref(), Some("kept"));
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+
+    let path = scratch_copy("ledger-entries", "hello-arm64.macho");
+    let log = log_of(&path);
+    let project = Session::default().open(&path, None).unwrap();
+    project.record_finding(&create(LedgerKind::Finding, "first")).unwrap();
+    let value = r#"{"kind":"unknown","status":"open","text":"bulk"}"#;
+    append_edits(&log, (2..MAX_LEDGER_ENTRIES as u64).map(|id| finding_edit(id, value, None)));
+    let last = project.record_finding(&create(LedgerKind::Finding, "last")).unwrap();
+    assert_eq!(last.finding.id, MAX_LEDGER_ENTRIES as u64);
+    let error = project.record_finding(&create(LedgerKind::Finding, "one too many")).unwrap_err().to_string();
+    assert!(error.contains(&format!("maximum of {MAX_LEDGER_ENTRIES} entries")), "{error}");
+    assert!(project.record_finding(&LedgerRequest { status: Some(LedgerStatus::Resolved), ..update(1) }).is_ok());
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+/// A logged entry at the last id (a corrupt or hostile line) must not make every new entry reuse, and overwrite, it.
+#[test]
+fn creating_refuses_once_ids_run_out() {
+    let path = scratch_copy("ids-exhausted", "hello-arm64.macho");
+    let last = r#"{"kind":"finding","status":"open","text":"last"}"#;
+    append_edits(&log_of(&path), [finding_edit(u64::MAX, last, None)]);
+    let project = Session::default().open(&path, None).unwrap();
+    let error = project.record_finding(&create(LedgerKind::Finding, "next")).unwrap_err().to_string();
+    assert!(error.contains("used every id"), "{error}");
+    assert_eq!(all(&project).findings.iter().map(|finding| finding.text.as_str()).collect::<Vec<_>>(), ["last"]);
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

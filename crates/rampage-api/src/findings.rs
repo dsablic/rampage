@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::annotations::{Annotations, Field};
+use crate::annotations::{Annotations, CHECKED_CACHE_BYTES, CHECKED_RECORDS, Edit, Field};
 use crate::rows::Matcher;
 use crate::{ApiError, Project};
 
@@ -17,8 +17,10 @@ pub const MAX_LEDGER_RESOLUTION: usize = 1000;
 pub const MAX_LEDGER_EVIDENCE: usize = 8;
 const MAX_EVIDENCE_TOOL: usize = 64;
 const MAX_EVIDENCE_DETAIL: usize = 300;
-/// Most entries one ledger holds.
-pub const MAX_LEDGER_ENTRIES: usize = 4096;
+/// Most entries one ledger holds: an eighth of the rows a checked annotation cache holds.
+pub const MAX_LEDGER_ENTRIES: usize = CHECKED_RECORDS / 8;
+/// Most bytes of entry JSON one ledger holds: a quarter of the checked annotation cache.
+pub const MAX_LEDGER_BYTES: usize = CHECKED_CACHE_BYTES / 4;
 /// Most entries per `list_findings` page.
 pub const MAX_LEDGER_PAGE: usize = 100;
 const DEFAULT_LEDGER_PAGE: usize = 50;
@@ -236,6 +238,11 @@ impl StoredFinding {
     fn encode(&self) -> String {
         serde_json::to_string(self).expect("ledger entry JSON")
     }
+
+    /// Whether it names an address or a function, which may stop fitting another image.
+    fn anchored(&self) -> bool {
+        self.address.is_some() || self.function.is_some()
+    }
 }
 
 impl Project {
@@ -270,7 +277,10 @@ impl Project {
                     if annotations.findings().len() >= MAX_LEDGER_ENTRIES {
                         return Err(invalid(format!("the ledger holds its maximum of {MAX_LEDGER_ENTRIES} entries")));
                     }
-                    (annotations.next_finding_id(), None)
+                    let id = annotations
+                        .next_finding_id()
+                        .ok_or_else(|| invalid("the ledger has used every id; no entry can be created"))?;
+                    (id, None)
                 }
             };
             let created = previous.is_none();
@@ -309,9 +319,29 @@ impl Project {
             if address.is_some() || function.is_some() || created {
                 entry.address = address.or(entry.address);
                 entry.function = function.or(entry.function);
-                entry.image.clone_from(&image);
+                // Only an address or function can stop fitting another image.
+                entry.image = if entry.anchored() { image.clone() } else { None };
             }
-            let changed = annotations.set(Field::Finding, id, Some(entry.encode())).map_err(ApiError::Invalid)?;
+            let edit = Edit {
+                field: Field::Finding,
+                address: id,
+                value: Some(entry.encode()),
+                previous: annotations.findings().get(&id).cloned(),
+            };
+            if edit.value != edit.previous {
+                let length = |value: &Option<String>| value.as_ref().map_or(0, String::len);
+                let (before, after) = (length(&edit.previous), length(&edit.value));
+                let total = annotations.findings().values().map(String::len).sum::<usize>() - before + after;
+                // A ledger already past the cap (from an older build) can still shrink.
+                if total > MAX_LEDGER_BYTES && after > before {
+                    return Err(invalid(format!(
+                        "the ledger's entries would hold {total} bytes, past its maximum of {MAX_LEDGER_BYTES}; \
+                         nothing was recorded"
+                    )));
+                }
+                annotations.ledger_headroom(&edit).map_err(ApiError::Invalid)?;
+            }
+            let changed = annotations.set(Field::Finding, id, edit.value).map_err(ApiError::Invalid)?;
             Ok((id, entry, created, changed))
         })?;
         let finding = self.finding_row(&annotations, image.as_deref(), id, entry);
@@ -418,7 +448,8 @@ impl Project {
         id: u64,
         entry: StoredFinding,
     ) -> LedgerEntry {
-        let image_changed = entry.image.as_deref().is_some_and(|image| current.is_some_and(|now| now != image));
+        let image_changed =
+            entry.anchored() && entry.image.as_deref().is_some_and(|image| current.is_some_and(|now| now != image));
         LedgerEntry {
             id,
             kind: entry.kind,

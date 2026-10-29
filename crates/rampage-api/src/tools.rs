@@ -2917,7 +2917,9 @@ pub fn tools() -> Vec<Tool> {
             "Record what you established, still don't know, or want answered (kind finding/unknown/question), with \
              the tool calls that support it, in a ledger saved beside the binary for later sessions and other \
              agents. Without id it creates an entry and returns its stable id; with id it updates only the fields \
-             given (status, resolution, ...). One undo step per call.",
+             given (status, resolution, ...). One undo step per call. The ledger holds at most 1024 entries and 2 MiB; \
+             a write that would leave the shared annotation log under a quarter of its budget free is refused, so \
+             names and comments keep room. There is no delete: reject an entry instead.",
             |project, arguments: crate::LedgerRequest| project.record_finding(&arguments),
         )
         .annotates(),
@@ -2925,7 +2927,8 @@ pub fn tools() -> Vec<Tool> {
             Group::Core,
             "list_findings",
             "Page the investigation ledger by kind, status, address, function or text, with open/resolved counts \
-             per kind. Entries recorded on another build of the binary are flagged image_changed.",
+             per kind. Entries with an address or function recorded on another build of the binary are flagged \
+             image_changed.",
             |project, arguments: crate::LedgerQuery| project.list_findings(&arguments),
         ),
         tool(

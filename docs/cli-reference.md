@@ -144,8 +144,10 @@ append-only JSON Lines log. Ordinary files use
 `<file>@0x<offset>[+0x<length>].rampage-image`, separate from the outer file's annotations. CLI, MCP and UI
 clients opening the same view share its edits; the UI refreshes external annotations within about a second.
 
-Each edit records its replaced value; undo is another edit, leaving a full history. A batch is stored under
-a header and replayed only once all its edits are present. Typed edits participate in dependency-checked undo/redo.
+Each edit records its replaced value; undo is another edit, leaving a full history. Every reader opens a log of at
+most 16 MiB and 8,192 lines, so an edit that would grow the log past either is refused and the log stays readable;
+ledger writes stop earlier, at three quarters (see [the ledger's limits](mcp.md#edits-and-session-state)). A batch
+is stored under a header and replayed only once all its edits are present. Typed edits participate in dependency-checked undo/redo.
 MCP and UI provide undo/redo; the CLI has no separate undo verb. See
 [MCP undo behavior](mcp.md#edits-and-session-state).
 
