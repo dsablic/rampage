@@ -10,7 +10,7 @@ fn fixture(name: &str) -> PathBuf {
 fn build_info(name: &str, offset: usize, limit: usize) -> serde_json::Value {
     let project = Session::default().open(&fixture(name), None).unwrap();
     let query = BuildInfoQuery { offset: Some(offset), limit: Some(limit) };
-    serde_json::to_value(project.build_info(&query)).unwrap()
+    serde_json::to_value(project.build_info(&query).unwrap()).unwrap()
 }
 
 #[test]
@@ -32,14 +32,24 @@ fn go_build_info_pages_deps_and_cross_checks_the_pclntab() {
                 "version": "v0.1.0",
                 "replace": { "path": "./greet", "version": "(devel)" },
             }],
+            "next_offset": null,
+            "byte_capped": false,
         })
+    );
+    let settings = go["settings"].as_array().unwrap();
+    assert_eq!(
+        (go["settings_total"].as_u64(), go["settings_byte_capped"].as_bool()),
+        (Some(settings.len() as u64), Some(false))
     );
     assert_eq!(go["pclntab"], json!({ "table": "go120", "expected": "go120", "consistent": true }));
     assert!(go["settings"].as_array().unwrap().contains(&json!({ "key": "GOARCH", "value": "amd64" })));
     assert!(!info["limitations"].as_array().unwrap().is_empty());
 
     let past = build_info("buildinfo-go-x64.elf", 5, 10);
-    assert_eq!(past["go"]["deps"], json!({ "total": 1, "offset": 1, "items": [] }));
+    assert_eq!(
+        past["go"]["deps"],
+        json!({ "total": 1, "offset": 1, "items": [], "next_offset": null, "byte_capped": false })
+    );
 }
 
 #[test]
@@ -49,11 +59,13 @@ fn rust_audit_data_pages_packages_and_keeps_the_root() {
     let rust = &info["rust"];
     assert_eq!(rust["status"], "present");
     assert_eq!(rust["roots"][0]["name"], "auditable-fixture");
+    assert_eq!(rust["roots_total"], 1);
     let packages = &rust["packages"];
     assert_eq!((packages["total"].as_u64(), packages["offset"].as_u64()), (Some(4), Some(1)));
     let names: Vec<&str> =
         packages["items"].as_array().unwrap().iter().map(|item| item["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["serde", "cc"]);
+    assert_eq!((packages["next_offset"].as_u64(), packages["byte_capped"].as_bool()), (Some(3), Some(false)));
     assert_eq!(packages["items"][1]["kind"], "build");
 }
 

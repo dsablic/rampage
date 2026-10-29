@@ -25,6 +25,7 @@ fn wasm_module_prints_a_summary_and_pages_a_list_as_text_or_json() {
     let text = stdout(&run(&["wasm-module", "--list", "exports"], "module.wasm"));
     assert!(text.contains("module name: module.wasm"), "{text}");
     assert!(text.contains("export add func"), "{text}");
+    assert!(text.contains("3 of 3 items from 0\n"), "{text}");
     let json: Value = serde_json::from_str(&stdout(&run(
         &["wasm-module", "--json", "--list", "functions", "--limit", "1"],
         "module.wasm",
@@ -42,6 +43,7 @@ fn pyinstaller_archive_reports_the_cookie_and_toc_and_refuses_image_selectors() 
     let text = stdout(&run(&["pyinstaller-archive", "--limit", "5"], "pyinstaller-312.elf"));
     assert!(text.contains("Python 3.12 (312), library libpython3.12.so.1.0"), "{text}");
     assert!(text.contains("z pyz"), "{text}");
+    assert!(text.contains("bytes, with_python_library); package"), "{text}");
     assert!(text.contains("continue with --offset 5"), "{text}");
     let legacy: Value =
         serde_json::from_str(&stdout(&run(&["pyinstaller-archive", "--json"], "pyinstaller-27.macho"))).unwrap();

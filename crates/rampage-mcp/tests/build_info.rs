@@ -55,12 +55,20 @@ async fn build_info_is_a_formats_tool_reading_go_and_rust_records() {
     assert_eq!(go["go"]["status"], "present");
     assert_eq!(go["go"]["location"]["section"], "__go_buildinfo");
     assert_eq!(go["go"]["deps"]["items"][0]["path"], "example.com/greet");
+    assert_eq!(
+        (go["go"]["deps"]["next_offset"].clone(), go["go"]["deps"]["byte_capped"].clone()),
+        (json!(null), json!(false))
+    );
 
     let rust = json_of(&call(&client, json!({ "path": fixture("auditable-arm64.macho"), "limit": 1 })).await);
     assert_eq!(rust["go"], json!(null));
     assert_eq!(rust["rust"]["packages"]["total"], 4);
     assert_eq!(rust["rust"]["packages"]["items"].as_array().unwrap().len(), 1);
     assert_eq!(rust["rust"]["roots"][0]["version"], "0.1.0");
+    assert_eq!(
+        (rust["rust"]["roots_total"].as_u64(), rust["rust"]["packages"]["next_offset"].as_u64()),
+        (Some(1), Some(1))
+    );
 
     let none = json_of(&call(&client, json!({ "path": fixture("hello-x64.exe") })).await);
     assert_eq!((&none["go"], &none["rust"]), (&json!(null), &json!(null)));

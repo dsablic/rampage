@@ -64,7 +64,8 @@ async fn pe_resources_pages_filters_and_decodes() {
     let path = fixture("pe-metadata-x64.exe");
     let all = json_of(&call(&client, "pe_resources", json!({ "path": path })).await);
     assert_eq!(all["total_leaves"], 4);
-    assert_eq!(all["types"][0], json!({ "type_name": "BLOB", "count": 1 }));
+    assert_eq!(all["types"][0], json!({ "type": "BLOB", "type_name": "BLOB", "count": 1 }));
+    assert_eq!((all["types_total"].as_u64(), all["types_truncated"].as_bool()), (Some(4), Some(false)));
     let rows = all["resources"]["items"].as_array().unwrap();
     assert_eq!(rows[0]["type"], "BLOB");
     assert_eq!(rows[0]["name"], "FIXTURE");
@@ -86,6 +87,12 @@ async fn pe_resources_pages_filters_and_decodes() {
 
     let page = json_of(&call(&client, "pe_resources", json!({ "path": path, "offset": 1, "limit": 2 })).await);
     assert_eq!((page["resources"]["offset"].as_u64(), page["returned"].as_u64()), (Some(1), Some(2)));
+    assert_eq!(
+        (page["resources"]["next_offset"].as_u64(), page["resources"]["byte_capped"].as_bool()),
+        (Some(3), Some(false))
+    );
+    let version = json_of(&call(&client, "pe_resources", json!({ "path": path, "type": "#16" })).await);
+    assert_eq!(version["resources"]["total"], 1);
 
     let native = json_of(&call(&client, "pe_resources", json!({ "path": fixture("hello-x64.elf") })).await);
     assert!(native.is_null());

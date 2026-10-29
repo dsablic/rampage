@@ -35,7 +35,7 @@ pub const MAX_RESOURCE_NAME_UNITS: usize = 256;
 const WARNINGS: CappedWarnings = CappedWarnings::new(64, "PE resource");
 
 /// A directory entry's identity: a numeric id or a string name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(untagged)]
 pub enum ResourceKey {
     Id(u16),
@@ -64,18 +64,25 @@ pub struct ResourceLeaf {
 }
 
 impl ResourceLeaf {
-    /// Whether `filter` names this leaf's type: `RT_ICON`, `ICON`, `3` or a string type name, ignoring case.
+    /// Whether `filter` names this leaf's type: `RT_ICON`, `ICON`, `3` or `#3` for a numeric type (predefined or
+    /// not), or a string type's name, ignoring case.
     pub fn matches_type(&self, filter: &str) -> bool {
         let filter = filter.trim();
-        let bare = |name: &str| name.strip_prefix("RT_").unwrap_or(name).to_owned();
         match &self.type_key {
             ResourceKey::Id(id) => {
-                filter.parse::<u16>().ok() == Some(*id)
-                    || self.type_name.eq_ignore_ascii_case(filter)
-                    || bare(&self.type_name).eq_ignore_ascii_case(filter)
+                let number = filter.strip_prefix('#').unwrap_or(filter);
+                number.parse::<u16>().ok() == Some(*id)
+                    || type_name(*id).is_some_and(|name| {
+                        name.eq_ignore_ascii_case(filter) || name["RT_".len()..].eq_ignore_ascii_case(filter)
+                    })
             }
             ResourceKey::Name(name) => name.eq_ignore_ascii_case(filter),
         }
+    }
+
+    /// Whether [`decode`] interprets this leaf's type (RT_VERSION or RT_MANIFEST).
+    pub fn is_decodable(&self) -> bool {
+        matches!(self.type_key, ResourceKey::Id(RT_VERSION | RT_MANIFEST))
     }
 
     /// The leaf's bytes, when they are all in `image`.
@@ -191,7 +198,19 @@ fn walk<Pe: ImageNtHeaders>(image: &[u8]) -> Result<PeResources, LoadError> {
     report.directory_rva = Some(rva);
     report.directory_size = Some(size);
     let sections = file.section_table();
-    let directory = match entry.data(image, &sections) {
+    // Windows reads the tree from the RVA and ignores the declared size, which packers leave too large; so when
+    // the size overruns the section's file data, the directory runs to the end of that data instead.
+    let data = entry.data(image, &sections).or_else(|error| {
+        let data = sections.pe_data_at(image, rva).ok_or(error)?;
+        let warning = format!(
+            "resource directory size {size:#x} overruns its section's file data; read the {:#x} bytes from RVA \
+             {rva:#x} to the section's end",
+            data.len()
+        );
+        WARNINGS.push(&mut report.warnings, warning);
+        Ok::<_, object::read::Error>(data)
+    });
+    let directory = match data {
         Ok(data) => ResourceDirectory::new(data),
         Err(error) => {
             WARNINGS.push(&mut report.warnings, format!("resource directory at RVA {rva:#x} is unreadable: {error}"));

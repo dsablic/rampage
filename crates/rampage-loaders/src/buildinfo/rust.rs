@@ -27,6 +27,7 @@ pub struct RustAudit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub location: BlobLocation,
+    /// The zlib stream's length (bytes the decompressor consumed), excluding any section padding after it.
     pub compressed_bytes: usize,
     pub decompressed_bytes: usize,
     /// The schema's `format` field; absent means format 0.
@@ -106,17 +107,21 @@ fn unreadable(location: BlobLocation, compressed_bytes: usize, reason: String) -
 pub fn decode(compressed: &[u8], location: BlobLocation) -> RustAudit {
     let mut json = Vec::new();
     let limit = MAX_DECOMPRESSED_BYTES as u64 + 1;
-    if let Err(error) = flate2::read::ZlibDecoder::new(compressed).take(limit).read_to_end(&mut json) {
-        return unreadable(location, compressed.len(), format!("zlib decompression failed: {error}"));
+    let mut decoder = flate2::read::ZlibDecoder::new(compressed);
+    let inflated = decoder.by_ref().take(limit).read_to_end(&mut json);
+    // The zlib stream's own length: the section is usually padded past it.
+    let stream_bytes = usize::try_from(decoder.total_in()).unwrap_or(compressed.len());
+    if let Err(error) = inflated {
+        return unreadable(location, stream_bytes, format!("zlib decompression failed: {error}"));
     }
     if json.len() > MAX_DECOMPRESSED_BYTES {
         let reason = format!("the decompressed JSON exceeds the {MAX_DECOMPRESSED_BYTES}-byte cap");
-        return unreadable(location, compressed.len(), reason);
+        return unreadable(location, stream_bytes, reason);
     }
     let raw: RawAudit = match serde_json::from_slice(&json) {
         Ok(raw) => raw,
         Err(error) => {
-            let mut audit = unreadable(location, compressed.len(), format!("the JSON is malformed: {error}"));
+            let mut audit = unreadable(location, stream_bytes, format!("the JSON is malformed: {error}"));
             audit.decompressed_bytes = json.len();
             return audit;
         }
@@ -142,7 +147,10 @@ pub fn decode(compressed: &[u8], location: BlobLocation) -> RustAudit {
         let dependencies_total = package.dependencies.len();
         let dangling = package.dependencies.iter().filter(|&&dependency| dependency >= count).count();
         if dangling > 0 {
-            warn(format!("package {index} ({name}): {dangling} dependency indices are out of range"));
+            warn(format!(
+                "package {index} ({}): {dangling} dependency indices are out of range",
+                crate::text::clip(&name, 64).0
+            ));
         }
         let mut dependencies = package.dependencies;
         dependencies.truncate(MAX_DEPENDENCIES_LISTED);
@@ -167,7 +175,7 @@ pub fn decode(compressed: &[u8], location: BlobLocation) -> RustAudit {
         status: BlobStatus::Present,
         reason: None,
         location,
-        compressed_bytes: compressed.len(),
+        compressed_bytes: stream_bytes,
         decompressed_bytes: json.len(),
         format: raw.format.unwrap_or(0),
         roots,
@@ -236,6 +244,15 @@ mod tests {
 
         let audit = decode(&zlib(br#"{"packages":[{"name":"a","version":"1","source":"local"}]}"#), location());
         assert_eq!(audit.warnings, ["no package is marked as the root"]);
+    }
+
+    #[test]
+    fn compressed_bytes_is_the_stream_without_section_padding() {
+        let stream = zlib(br#"{"packages":[{"name":"a","version":"1","source":"local","root":true}]}"#);
+        let padded = [stream.as_slice(), &[0; 64]].concat();
+        let audit = decode(&padded, location());
+        assert_eq!(audit.status, BlobStatus::Present);
+        assert_eq!(audit.compressed_bytes, stream.len());
     }
 
     #[test]

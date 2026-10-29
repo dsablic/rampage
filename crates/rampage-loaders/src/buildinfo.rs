@@ -34,14 +34,8 @@ pub const MAX_FIELD_BYTES: usize = 4096;
 
 /// `text` cut to [`MAX_FIELD_BYTES`], and whether it was cut.
 pub(crate) fn clip(text: &str) -> (String, bool) {
-    if text.len() <= MAX_FIELD_BYTES {
-        return (text.to_owned(), false);
-    }
-    let mut end = MAX_FIELD_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    (text[..end].to_owned(), true)
+    let (text, truncated) = crate::text::clip(text, MAX_FIELD_BYTES);
+    (text.to_owned(), truncated)
 }
 
 /// The image's sections named one of `names`, in section order.

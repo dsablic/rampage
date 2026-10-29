@@ -132,12 +132,14 @@ Resources preserve raw metadata and offset/reference availability, with independ
 Embedded mapping evidence does not validate payload extents; external targets and resource payloads are not read.
 `parent_token` is an attribute-target filter, not a resource-owner selector.
 
-`pe_resources` pages PE resource leaves with `offset`/`limit`, filtered by `type` (`RT_VERSION`, `VERSION`, `16` or a
-string type name). Each leaf carries its type, name, language, data RVA, size, code page, image offset and whether
-its bytes are in the file. RT_VERSION and RT_MANIFEST leaves on the page are decoded until 24,000 payload bytes are
-spent (`decode_skipped` counts the rest); other payloads are located only. `pe_load_config` reads the load config
-up to its own declared Size, listing later fields in `absent_fields`, and adds CET flags and findings against the
-DllCharacteristics that triage reports. Both return null for a non-PE image. See
+`pe_resources` pages PE resource leaves with `offset`/`limit`, filtered by `type` (`RT_VERSION`, `VERSION`, `16`,
+`#16` or a string type name). Each leaf carries its type, name, language, data RVA, size, code page, image offset and
+whether its bytes are in the file. The page holds whole rows within 60,000 JSON bytes (`resources.next_offset`,
+`resources.byte_capped`); `types` counts leaves per numeric or string type, at most 256 rows (`types_total`,
+`types_truncated`). The page's first RT_VERSION or RT_MANIFEST payload is always decoded, later ones until 24,000
+payload bytes are spent (`decode_skipped` counts the rest); other payloads are located only. `pe_load_config` reads
+the load config up to its own declared Size, listing later fields in `absent_fields`, and adds CET flags and findings
+against the DllCharacteristics that triage reports. Both return null for a non-PE image. See
 [PE resources and load config](features.md#pe-resources-and-load-config).
 
 `carve` accepts any file path rather than requiring a loadable binary. Pages use `offset`/`limit` and `more`,
@@ -148,13 +150,16 @@ JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive 
 `build_info` returns `{go, rust}`: Go build info (toolchain version, main package and module, dependency modules with
 `=>` replacements, build settings, and a cross-check of the version against the pclntab layout) and cargo-auditable
 `.dep-v0` packages. Each is `null` when absent, or has `status` `present` or `unreadable` with a `reason`. `offset`/
-`limit` page `go.deps` and `rust.packages` independently; settings come whole (at most 1024). Both records are
-self-reported by the toolchain, not verified against code. See [toolchain build info](features.md#toolchain-build-info).
+`limit` page `go.deps` and `rust.packages` independently, each page holding whole items within the 60,000-byte result
+(`next_offset`, `byte_capped`). Build settings are listed up to a byte share (`settings_total`,
+`settings_byte_capped`) and roots up to 16 (`roots_total`). Both records are self-reported by the toolchain, not
+verified against code. See [toolchain build info](features.md#toolchain-build-info).
 
 `pyinstaller_archive` and `wasm_module` are file tools too: they take any file path and open no project. The first
-returns the CArchive cookie, package, Python version and a page of TOC entries (null without a cookie); the second
-returns a core WebAssembly module summary and, with `list`, a page of imports, exports or functions (null without
-the `\0asm` magic). Both pages hold whole items within 60,000 JSON bytes and report `next_offset`. See
+returns the CArchive cookie, package, Python version and a page of TOC entries (null without cookie magic, and
+`{archive: null, rejected_candidates}` when magic matches but none validates as a cookie); the second returns a core
+WebAssembly module summary and, with `list`, a page of imports, exports or functions (null without the `\0asm`
+magic). Both pages hold whole items within 60,000 JSON bytes and report `next_offset` and `byte_capped`. See
 [PyInstaller and WebAssembly](features.md#pyinstaller-archives-and-webassembly-modules).
 `observe_pointer` exposes a captured slot without modifying discovery or asserting a call edge. See
 [runtime snapshots](runtime-snapshots.md) for runtime evidence limits and [data packs](data-packs.md) for pack warnings.

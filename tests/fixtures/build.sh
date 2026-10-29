@@ -50,3 +50,5 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/hello-go-
 python3 craft.py malformed
 # Go build info and cargo-auditable `.dep-v0` fixtures.
 ./build-buildinfo.sh
+# WebAssembly and PyInstaller fixtures.
+./build-formats.sh

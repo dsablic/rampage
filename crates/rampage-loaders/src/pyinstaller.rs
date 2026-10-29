@@ -127,9 +127,19 @@ pub struct PyInstallerArchive {
     pub entries: Vec<TocEntry>,
 }
 
-/// Finds and walks the CArchive of the regular file at `path`; `None` when no cookie magic lies in the last
-/// [`MAX_COOKIE_SEARCH`] bytes.
-pub fn pyinstaller_file(path: &Path) -> Result<Option<PyInstallerArchive>, LoadError> {
+/// The outcome of a cookie search: the archive, when a cookie validated, and why magic matches did not.
+#[derive(Debug, Clone)]
+pub struct CookieSearch {
+    pub archive: Option<PyInstallerArchive>,
+    /// One reason per magic match that did not validate as a cookie, newest first, up to
+    /// [`MAX_COOKIE_CANDIDATES`]; empty when the search window holds no magic at all.
+    pub rejected: Vec<String>,
+}
+
+/// Finds and walks the CArchive of the regular file at `path`. A file whose last [`MAX_COOKIE_SEARCH`] bytes hold no
+/// magic, or only magic that does not validate as a cookie (a bootloader holds the magic as a constant), has no
+/// archive; the search then says why each match was rejected.
+pub fn pyinstaller_file(path: &Path) -> Result<CookieSearch, LoadError> {
     let mut file = open_regular_file(path)?;
     archive(&mut file).map_err(|error| match error {
         Error::Io(source) => LoadError::Io { path: path.to_owned(), source },
@@ -149,33 +159,30 @@ impl From<std::io::Error> for Error {
     }
 }
 
-/// [`pyinstaller_file`] over any seekable reader. Magic matches that do not validate as a cookie are skipped (a
-/// bootloader holds the magic as a constant); when none validates, the last reason is the error.
-pub fn archive(input: &mut (impl Read + Seek)) -> Result<Option<PyInstallerArchive>, Error> {
+/// [`pyinstaller_file`] over any seekable reader. Only reading the archive a validated cookie describes can fail.
+pub fn archive(input: &mut (impl Read + Seek)) -> Result<CookieSearch, Error> {
     let file_size = input.seek(SeekFrom::End(0))?;
     let window = file_size.min(MAX_COOKIE_SEARCH);
     let base = file_size - window;
     let tail = read_at(input, base, window as usize)?;
-    let mut rejected = None;
-    let mut examined = 0;
+    let mut rejected = Vec::new();
     let mut end = tail.len();
     while let Some(at) = tail[..end].windows(MAGIC.len()).rposition(|bytes| bytes == MAGIC) {
         end = at + MAGIC.len() - 1;
-        if examined == MAX_COOKIE_CANDIDATES {
-            rejected = Some(format!("{MAX_COOKIE_CANDIDATES} cookie magic matches examined without a valid cookie"));
+        if rejected.len() == MAX_COOKIE_CANDIDATES {
+            rejected.push(format!("search stopped after {MAX_COOKIE_CANDIDATES} magic matches without a valid cookie"));
             break;
         }
-        examined += 1;
         let offset = base + at as u64;
         match cookie(&tail[at..], offset, file_size) {
-            Ok(cookie) => return walk(input, cookie, file_size, examined).map(Some),
-            Err(reason) => rejected = Some(format!("cookie magic at {offset:#x}: {reason}")),
+            Ok(cookie) => {
+                let archive = walk(input, cookie, file_size, rejected.len() + 1)?;
+                return Ok(CookieSearch { archive: Some(archive), rejected });
+            }
+            Err(reason) => rejected.push(format!("cookie magic at {offset:#x}: {reason}")),
         }
     }
-    match rejected {
-        Some(reason) => Err(Error::Malformed(reason)),
-        None => Ok(None),
-    }
+    Ok(CookieSearch { archive: None, rejected })
 }
 
 struct Cookie {
@@ -417,14 +424,8 @@ pub fn typecode_kind(typecode: char) -> &'static str {
 
 fn clip_name(raw: &[u8]) -> (String, bool) {
     let text = String::from_utf8_lossy(raw);
-    if text.len() <= MAX_NAME_BYTES {
-        return (text.into_owned(), false);
-    }
-    let mut end = MAX_NAME_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    (text[..end].to_owned(), true)
+    let (text, truncated) = crate::text::clip(&text, MAX_NAME_BYTES);
+    (text.to_owned(), truncated)
 }
 
 /// Exactly `length` bytes at `offset`; a short file is malformed, not an I/O failure.
@@ -491,7 +492,7 @@ mod tests {
             [(CookieLayout::WithPythonLibrary, Some("libpython3.12.so.1.0")), (CookieLayout::Legacy, None)]
         {
             let bytes = archive_bytes(layout, 100);
-            let archive = archive(&mut Cursor::new(&bytes)).unwrap().unwrap();
+            let archive = archive(&mut Cursor::new(&bytes)).unwrap().archive.unwrap();
             assert_eq!(archive.cookie_layout, layout);
             assert_eq!(archive.python_library.as_deref(), library);
             assert_eq!((archive.python_version.as_str(), archive.trailing_bytes), ("3.12", 100));
@@ -509,11 +510,20 @@ mod tests {
     }
 
     #[test]
-    fn no_cookie_is_none_and_a_lone_magic_is_an_error() {
-        assert!(archive(&mut Cursor::new(b"\x7fELF plain")).unwrap().is_none());
-        assert!(archive(&mut Cursor::new(Vec::<u8>::new())).unwrap().is_none());
-        let error = archive(&mut Cursor::new(b"stub MEI\x0c\x0b\x0a\x0b\x0e garbage")).unwrap_err();
-        assert!(matches!(error, Error::Malformed(text) if text.contains("cookie magic at 0x5")));
+    fn no_cookie_is_none_and_a_lone_magic_is_a_rejected_candidate() {
+        for bytes in [&b"\x7fELF plain"[..], &[]] {
+            let search = archive(&mut Cursor::new(bytes)).unwrap();
+            assert!(search.archive.is_none() && search.rejected.is_empty());
+        }
+        let search = archive(&mut Cursor::new(b"stub MEI\x0c\x0b\x0a\x0b\x0e garbage")).unwrap();
+        assert!(search.archive.is_none());
+        assert_eq!(search.rejected.len(), 1);
+        assert!(search.rejected[0].contains("cookie magic at 0x5"), "{:?}", search.rejected);
+
+        let many = MAGIC.repeat(MAX_COOKIE_CANDIDATES + 10);
+        let search = archive(&mut Cursor::new(&many)).unwrap();
+        assert_eq!(search.rejected.len(), MAX_COOKIE_CANDIDATES + 1);
+        assert!(search.rejected.last().unwrap().contains("search stopped"));
     }
 
     #[test]
@@ -526,7 +536,7 @@ mod tests {
             for value in [0x00, 0x7f, 0xff] {
                 let mut corrupt = bytes.clone();
                 corrupt[at] = value;
-                if let Ok(Some(archive)) = archive(&mut Cursor::new(&corrupt)) {
+                if let Ok(CookieSearch { archive: Some(archive), .. }) = archive(&mut Cursor::new(&corrupt)) {
                     assert!(archive.entries.len() <= 3);
                 }
             }
@@ -536,12 +546,48 @@ mod tests {
     #[test]
     fn a_bad_toc_entry_stops_the_walk_with_a_warning() {
         let mut bytes = archive_bytes(CookieLayout::Legacy, 0);
-        let archive = archive(&mut Cursor::new(&bytes)).unwrap().unwrap();
+        let archive = archive(&mut Cursor::new(&bytes)).unwrap().archive.unwrap();
         let second = archive.entries[1].record_offset as usize;
         bytes[second..second + 4].copy_from_slice(&0xffffu32.to_be_bytes());
-        let cut = super::archive(&mut Cursor::new(&bytes)).unwrap().unwrap();
+        let cut = super::archive(&mut Cursor::new(&bytes)).unwrap().archive.unwrap();
         assert_eq!((cut.entries_total, cut.toc_complete), (1, false));
         assert!(cut.warnings[0].contains("invalid length"), "{:?}", cut.warnings);
+    }
+
+    #[test]
+    fn a_compressed_or_out_of_bounds_pyz_is_reported_not_read() {
+        let bytes = archive_bytes(CookieLayout::Legacy, 0);
+        let record = archive(&mut Cursor::new(&bytes)).unwrap().archive.unwrap().entries[1].record_offset as usize;
+
+        let mut compressed = bytes.clone();
+        compressed[record + 16] = 1;
+        let found = archive(&mut Cursor::new(&compressed)).unwrap().archive.unwrap();
+        assert!(found.pyz.is_none());
+        assert!(
+            found.warnings.iter().any(|warning| warning.contains("PYZ entry 1 is compressed")),
+            "{:?}",
+            found.warnings
+        );
+
+        let mut outside = bytes;
+        outside[record + 4..record + 8].copy_from_slice(&0x7fff_0000u32.to_be_bytes());
+        let found = archive(&mut Cursor::new(&outside)).unwrap().archive.unwrap();
+        assert!(found.pyz.is_none() && !found.entries[1].data_in_bounds);
+        assert!(found.warnings.iter().any(|warning| warning.contains("outside the package")), "{:?}", found.warnings);
+    }
+
+    #[test]
+    fn a_toc_longer_than_the_cap_is_read_only_to_it() {
+        let toc_length = MAX_TOC_BYTES as u32 + 32;
+        let mut bytes = entry(0, 0, 0, b'x', "data");
+        bytes.resize(toc_length as usize, 0);
+        bytes.extend(MAGIC);
+        for value in [toc_length + 24, 0, toc_length, 312] {
+            bytes.extend(value.to_be_bytes());
+        }
+        let found = archive(&mut Cursor::new(&bytes)).unwrap().archive.unwrap();
+        assert_eq!((found.entries_total, found.toc_complete), (1, false));
+        assert!(found.warnings[0].contains("read only to 0x1000000"), "{:?}", found.warnings);
     }
 
     #[test]

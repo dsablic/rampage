@@ -80,6 +80,13 @@ async fn format_tools_are_gated_by_the_formats_group_and_need_no_binary() {
     assert_eq!(archive["pyz"]["python_version"], "3.12");
     let none = json_of(&call(&client, "pyinstaller_archive", json!({ "path": fixture("module.wasm") })).await);
     assert!(none.is_null());
+    let stray = std::env::temp_dir().join(format!("rampage-mcp-stray-magic-{}.bin", std::process::id()));
+    std::fs::write(&stray, b"stub MEI\x0c\x0b\x0a\x0b\x0e and no cookie").unwrap();
+    let rejected = call(&client, "pyinstaller_archive", json!({ "path": stray })).await;
+    std::fs::remove_file(&stray).unwrap();
+    let rejected = json_of(&rejected);
+    assert!(rejected["archive"].is_null());
+    assert!(rejected["rejected_candidates"][0].as_str().unwrap().contains("cookie magic at 0x5"), "{rejected}");
     let missing = call(&client, "pyinstaller_archive", json!({ "path": fixture("does-not-exist") })).await;
     assert_eq!(missing.is_error, Some(true));
     client.cancel().await.unwrap();

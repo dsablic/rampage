@@ -8,7 +8,7 @@ use rampage_loaders::wasm::{WasmExport, WasmFunction, WasmImport, WasmModule};
 use serde::{Deserialize, Serialize};
 
 use crate::ApiError;
-use crate::pyinstaller::fit_page;
+use crate::rows::{fit_window, item_budget};
 
 /// The most list items one page returns.
 pub const MAX_WASM_PAGE: usize = 100;
@@ -107,18 +107,21 @@ pub fn wasm_module(
     };
     match list {
         None => {}
-        Some(WasmList::Imports) => page.imports = Some(page_of(&mut page, &imports)?),
-        Some(WasmList::Exports) => page.exports = Some(page_of(&mut page, &exports)?),
-        Some(WasmList::Functions) => page.functions = Some(page_of(&mut page, &functions)?),
+        Some(WasmList::Imports) => page.imports = Some(page_of(&mut page, imports)?),
+        Some(WasmList::Exports) => page.exports = Some(page_of(&mut page, exports)?),
+        Some(WasmList::Functions) => page.functions = Some(page_of(&mut page, functions)?),
     }
     page.next_offset = page.more.then_some(offset + page.returned);
     Ok(Some(page))
 }
 
 /// One page of `items`, recording its paging facts in `page`.
-fn page_of<T: Serialize + Clone>(page: &mut WasmModulePage, items: &[T]) -> Result<Vec<T>, ApiError> {
-    let window = fit_page(items, page.offset, page.limit, page)?;
+fn page_of<T: Serialize>(page: &mut WasmModulePage, items: Vec<T>) -> Result<Vec<T>, ApiError> {
     page.total = Some(items.len());
-    (page.returned, page.more, page.byte_capped) = (window.items.len(), window.more, window.byte_capped);
+    let total = items.len();
+    let window = fit_window(items.into_iter().skip(page.offset), page.limit, item_budget(page)?)?;
+    page.returned = window.items.len();
+    page.more = page.offset.saturating_add(page.returned) < total;
+    page.byte_capped = window.byte_capped;
     Ok(window.items)
 }

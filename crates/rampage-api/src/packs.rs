@@ -770,36 +770,29 @@ fn builtin() -> PackInfo {
     };
     let mut contents: Vec<ContentInfo> = Arch::ALL
         .into_iter()
-        .filter_map(|arch| {
-            match rampage_signatures::SignatureDb::bundled_metadata(arch) {
-                Ok(Some(metadata)) => {
-                    let detail = format!(
-                        "{} public-source corpus signatures and {} callee keys; {} shipped build profiles; \
+        .filter_map(|arch| match rampage_signatures::SignatureDb::bundled_metadata(arch) {
+            Ok(Some(metadata)) => {
+                let detail = format!(
+                    "{} public-source corpus signatures and {} callee keys; {} shipped build profiles; \
                          same-build recognition, not version identification; gzip SHA-256 {}; \
                          {} compressed bytes, {} JSON bytes; provenance/license declarations are not authentication",
-                        metadata.signatures,
-                        metadata.callee_keys,
-                        metadata.profiles.len(),
-                        metadata.gzip_sha256,
-                        metadata.compressed_bytes,
-                        metadata.json_bytes,
-                    );
-                    Some(loaded(
-                        "signatures",
-                        format!("bundled:{}", metadata.asset),
-                        Some(arch.to_string()),
-                        detail,
-                    ))
-                }
-                Ok(None) => None,
-                Err(error) => Some(ContentInfo {
-                    kind: "signatures",
-                    path: format!("bundled:index-{arch}"),
-                    arch: Some(arch.to_string()),
-                    status: ContentStatus::Error,
-                    detail: format!("invalid builtin corpus index: {error}"),
-                }),
+                    metadata.signatures,
+                    metadata.callee_keys,
+                    metadata.profiles.len(),
+                    metadata.gzip_sha256,
+                    metadata.compressed_bytes,
+                    metadata.json_bytes,
+                );
+                Some(loaded("signatures", format!("bundled:{}", metadata.asset), Some(arch.to_string()), detail))
             }
+            Ok(None) => None,
+            Err(error) => Some(ContentInfo {
+                kind: "signatures",
+                path: format!("bundled:index-{arch}"),
+                arch: Some(arch.to_string()),
+                status: ContentStatus::Error,
+                detail: format!("invalid builtin corpus index: {error}"),
+            }),
         })
         .collect();
     let tools = rampage_detect::SignatureDb::bundled().signatures.len();

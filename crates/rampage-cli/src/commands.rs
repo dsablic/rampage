@@ -417,17 +417,27 @@ pub fn pyinstaller_archive(
     if options.json {
         return write_json(out, &page);
     }
-    let Some(page) = page else {
-        writeln!(out, "no PyInstaller cookie in the last 8 MiB of {}", path.display())?;
-        return Ok(());
+    let page = match page {
+        None => {
+            writeln!(out, "no PyInstaller cookie in the last 8 MiB of {}", path.display())?;
+            return Ok(());
+        }
+        Some(rampage_api::PyInstallerResult::NoCookie(miss)) => {
+            writeln!(out, "no valid PyInstaller cookie in the last 8 MiB of {}", path.display())?;
+            for reason in &miss.rejected_candidates {
+                writeln!(out, "rejected: {reason}")?;
+            }
+            return Ok(());
+        }
+        Some(rampage_api::PyInstallerResult::Archive(page)) => page,
     };
     let archive = &page.archive;
     writeln!(
         out,
-        "cookie at {:#x} ({} bytes, {:?}); package {:#x}+{:#x}; TOC {:#x}+{:#x}; {} trailing bytes",
+        "cookie at {:#x} ({} bytes, {}); package {:#x}+{:#x}; TOC {:#x}+{:#x}; {} trailing bytes",
         archive.cookie_offset,
         archive.cookie_size,
-        archive.cookie_layout,
+        rampage_api::label(&archive.cookie_layout),
         archive.package_offset,
         archive.package_length,
         archive.toc_offset,
@@ -468,7 +478,14 @@ pub fn pyinstaller_archive(
             if entry.name_truncated { " [name truncated]" } else { "" }
         )?;
     }
-    writeln!(out, "{} of {} entries from {}", page.returned, archive.entries_total, page.offset)?;
+    writeln!(
+        out,
+        "{} of {} entries from {}{}",
+        page.returned,
+        archive.entries_total,
+        page.offset,
+        if page.byte_capped { " (cut to the output byte budget)" } else { "" }
+    )?;
     if let Some(next) = page.next_offset {
         writeln!(out, "more entries; continue with --offset {next}")?;
     }
@@ -552,6 +569,15 @@ pub fn wasm_module(
             if function.imported { " (imported)" } else { "" },
             function.signature.as_deref().unwrap_or("?"),
             function.body_size.map(|size| format!(" body {size:#x}")).unwrap_or_default()
+        )?;
+    }
+    if let Some(total) = page.total {
+        writeln!(
+            out,
+            "{} of {total} items from {}{}",
+            page.returned,
+            page.offset,
+            if page.byte_capped { " (cut to the output byte budget)" } else { "" }
         )?;
     }
     if let Some(next) = page.next_offset {
@@ -2032,7 +2058,7 @@ pub fn build_info(
     query: &rampage_api::BuildInfoQuery,
     options: &Options,
 ) -> Result<()> {
-    let info = open(path, options)?.build_info(query);
+    let info = open(path, options)?.build_info(query)?;
     if options.json {
         return write_json(out, &info);
     }
@@ -2043,8 +2069,9 @@ pub fn build_info(
         }
         text.trim_end().to_owned()
     };
-    let page = |out: &mut dyn Write, what: &str, offset: usize, shown: usize, total: usize| {
-        writeln!(out, "{what:<10} {shown} shown from {offset} of {total} (--offset/--limit page them)")
+    let page = |out: &mut dyn Write, what: &str, offset: usize, shown: usize, total: usize, capped: bool| {
+        let capped = if capped { ", cut to the output byte budget" } else { "" };
+        writeln!(out, "{what:<10} {shown} shown from {offset} of {total} (--offset/--limit page them{capped})")
     };
     match &info.go {
         None => writeln!(out, "go         not present")?,
@@ -2068,9 +2095,23 @@ pub fn build_info(
             for dep in &go.deps.items {
                 writeln!(out, "dep        {}", module(dep))?;
             }
-            page(out, "deps", go.deps.offset, go.deps.items.len(), go.deps.total)?;
+            page(out, "deps", go.deps.offset, go.deps.items.len(), go.deps.total, go.deps.byte_capped)?;
+            if go.deps_truncated {
+                writeln!(out, "deps       truncated: modinfo lists more modules than were kept")?;
+            }
             for setting in &go.settings {
                 writeln!(out, "build      {}={}", setting.key, setting.value)?;
+            }
+            if go.settings_byte_capped {
+                writeln!(
+                    out,
+                    "build      {} of {} settings shown (byte budget)",
+                    go.settings.len(),
+                    go.settings_total
+                )?;
+            }
+            if go.settings_truncated {
+                writeln!(out, "build      truncated: modinfo lists more settings than were kept")?;
             }
             if let (Some(table), Some(consistent)) = (go.pclntab.table, go.pclntab.consistent) {
                 let verdict = if consistent { "consistent" } else { "inconsistent" };
@@ -2092,10 +2133,14 @@ pub fn build_info(
             for root in &rust.roots {
                 writeln!(out, "root       {} {}", root.name, root.version)?;
             }
+            if rust.roots.len() < rust.roots_total {
+                writeln!(out, "root       {} of {} roots shown", rust.roots.len(), rust.roots_total)?;
+            }
             for package in &rust.packages.items {
                 writeln!(out, "crate      {} {} {} {}", package.name, package.version, package.source, package.kind)?;
             }
-            page(out, "crates", rust.packages.offset, rust.packages.items.len(), rust.packages.total)?;
+            let packages = &rust.packages;
+            page(out, "crates", packages.offset, packages.items.len(), packages.total, packages.byte_capped)?;
             for warning in &rust.warnings {
                 writeln!(out, "warning: {warning}")?;
             }
@@ -2141,6 +2186,9 @@ pub fn pe_resources(
         let types: Vec<String> =
             summary.types.iter().map(|count| format!("{} {}", count.type_name, count.count)).collect();
         writeln!(out, "types      {}", types.join(", "))?;
+        if summary.types_truncated {
+            writeln!(out, "types      {} of {} types shown", summary.types.len(), summary.types_total)?;
+        }
     }
     for entry in &summary.resources.items {
         let leaf = &entry.leaf;
@@ -2192,9 +2240,9 @@ pub fn pe_resources(
             None => {}
         }
     }
-    let shown = summary.resources.offset + summary.resources.items.len();
-    if shown < summary.resources.total {
-        writeln!(out, "\n... {} more (page with --offset {shown})", summary.resources.total - shown)?;
+    if let Some(next) = summary.resources.next_offset {
+        let capped = if summary.resources.byte_capped { "; this page was cut to the output byte budget" } else { "" };
+        writeln!(out, "\n... {} more (page with --offset {next}{capped})", summary.resources.total - next)?;
     }
     if summary.decode_skipped > 0 {
         writeln!(out, "{} payloads left undecoded by the page budget; filter with --type", summary.decode_skipped)?;

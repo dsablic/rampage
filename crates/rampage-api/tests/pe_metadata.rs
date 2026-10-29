@@ -66,8 +66,20 @@ fn reads_the_compiled_load_config() {
     assert_eq!(report.bits, 64);
     let config = report.load_config.as_ref().unwrap();
     assert_eq!((config.declared_size, config.read_size), (Some(320), 320));
-    assert!(config.absent_fields.is_empty() && config.security_cookie.is_some());
+    assert!(config.absent_fields.is_empty());
+    // The fields hold VAs of the source's `cookie`, `guard_check_pointer` and `guard_dispatch_pointer` globals.
+    let binary = rampage_loaders::Binary::open(fixture("pe-metadata-x64.exe")).unwrap();
+    let word = |va: u64| u64::from_le_bytes(binary.read(va, 8).unwrap().try_into().unwrap());
+    assert_eq!(word(config.security_cookie.unwrap()), 0x2B99_2DDF_A232);
     let guard = config.guard.as_ref().unwrap();
+    let (check, dispatch) = (guard.check_function_pointer.unwrap(), guard.dispatch_function_pointer.unwrap());
+    assert_ne!(check, dispatch);
+    for pointer in [check, dispatch] {
+        let target = word(pointer);
+        let section =
+            binary.sections.iter().find(|section| (section.address..section.address + section.size).contains(&target));
+        assert_eq!(section.map(|section| section.kind), Some(rampage_loaders::SectionKind::Code), "{pointer:#x}");
+    }
     assert!(
         guard.flag_names.contains(&"cf_instrumented") && guard.flag_names.contains(&"eh_continuation_table_present")
     );

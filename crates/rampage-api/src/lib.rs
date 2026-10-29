@@ -132,9 +132,9 @@ pub use files::{
     read_bounded,
 };
 pub use findings::{
-    LedgerEntry, LedgerConfidence, LedgerCounts, LedgerEvidence, LedgerKind, LedgerList, LedgerRecord, LedgerRequest,
-    LedgerStatus, LedgerQuery, MAX_LEDGER_EVIDENCE, MAX_LEDGER_RESOLUTION, MAX_LEDGER_TEXT, MAX_LEDGER_ENTRIES,
-    MAX_LEDGER_PAGE,
+    LedgerConfidence, LedgerCounts, LedgerEntry, LedgerEvidence, LedgerKind, LedgerList, LedgerQuery, LedgerRecord,
+    LedgerRequest, LedgerStatus, MAX_LEDGER_ENTRIES, MAX_LEDGER_EVIDENCE, MAX_LEDGER_PAGE, MAX_LEDGER_RESOLUTION,
+    MAX_LEDGER_TEXT,
 };
 pub use frame::{
     FrameCategory, FrameCoordinate, FrameLocation, FrameQuery, FrameRow, FrameSource, FrameTrackerSlot,
@@ -188,7 +188,7 @@ pub use propagation::{
     PropagationConflict, PropagationCounts, PropagationHintEdit, PropagationRequest, PropagationResult,
     PropagationSkip,
 };
-pub use pyinstaller::{MAX_FORMAT_RESULT_BYTES, MAX_PYINSTALLER_PAGE, PyInstallerPage, pyinstaller_archive};
+pub use pyinstaller::{MAX_PYINSTALLER_PAGE, PyInstallerMiss, PyInstallerPage, PyInstallerResult, pyinstaller_archive};
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
 pub use rampage_decompiler::VariableStorage;
@@ -210,8 +210,8 @@ pub use raw_code::{
 pub use raw_file::{RawByteOrder, RawContinuation, RawFileReport, RawFileRequest, inspect_raw_file};
 pub use raw_project::{RawProjectRequest, open_raw_binary};
 pub use rows::{
-    Annotation, AnnotationList, EditResult, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page, StringsQuery,
-    Summary, label,
+    Annotation, AnnotationList, EditResult, FittedPage, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page,
+    StringsQuery, Summary, label,
 };
 pub use runtime_compare::{ByteComparison, ComparedSpan, RuntimeComparison, RuntimeRange};
 pub use search_request::{

@@ -18,7 +18,7 @@ use serde::Serialize;
 use super::{BlobLocation, BlobStatus, clip};
 use crate::gopclntab::GoTableVersion;
 use crate::warnings::CappedWarnings;
-use crate::{Binary, SectionKind};
+use crate::{Binary, Section, SectionKind};
 
 pub const MAGIC: &[u8; 14] = b"\xff Go buildinf:";
 const HEADER_BYTES: usize = 32;
@@ -109,41 +109,60 @@ pub fn read(binary: &Binary) -> Option<GoBuildInfo> {
                 first.get_or_insert_with(|| unreadable(location, "the build info section has no file bytes"));
                 continue;
             };
-            match find_magic(bytes, section.address) {
-                Some(start) => {
-                    let location = BlobLocation { section: section.name.clone(), address: section.address + start };
-                    return Some(decode(&bytes[start as usize..], location, &memory));
-                }
-                None => {
-                    first.get_or_insert_with(|| unreadable(location, "the build info section lacks the Go magic"));
-                }
+            if let Some(info) = scan(section, bytes, &memory, &mut first) {
+                return Some(info);
             }
+            first.get_or_insert_with(|| unreadable(location, "the build info section lacks the Go magic"));
         }
         return first;
     }
-    for section in &binary.sections {
-        if !matches!(section.kind, SectionKind::Data | SectionKind::ReadOnlyData) {
-            continue;
+    scan_data(
+        binary.sections.iter().filter_map(|section| Some((section, binary.section_file_bytes(section)?))),
+        &memory,
+    )
+}
+
+/// The build info found by scanning writable data, as Go's `debug/buildinfo` does for images without a dedicated
+/// section: read-only data and code are skipped, since a program (rampage itself) may hold the magic as a constant.
+/// The first record that decodes wins; failing that, the first one found, unreadable.
+fn scan_data<'a>(
+    sections: impl Iterator<Item = (&'a Section, &'a [u8])>,
+    memory: &dyn Fn(u64, u64) -> Option<&'a [u8]>,
+) -> Option<GoBuildInfo> {
+    let mut first = None;
+    for (section, bytes) in sections.filter(|(section, _)| section.kind == SectionKind::Data) {
+        if let Some(info) = scan(section, bytes, memory, &mut first) {
+            return Some(info);
         }
-        let Some(bytes) = binary.section_file_bytes(section) else { continue };
-        if let Some(start) = find_magic(bytes, section.address) {
-            let location = BlobLocation { section: section.name.clone(), address: section.address + start };
-            return Some(decode(&bytes[start as usize..], location, &memory));
+    }
+    first
+}
+
+/// The first record at a magic in `bytes` (the contents of `section`) that decodes; the first that does not is
+/// kept in `unreadable`, so a decoy magic before the real record does not hide it.
+fn scan<'a>(
+    section: &Section,
+    bytes: &'a [u8],
+    memory: &dyn Fn(u64, u64) -> Option<&'a [u8]>,
+    unreadable: &mut Option<GoBuildInfo>,
+) -> Option<GoBuildInfo> {
+    for start in magic_offsets(bytes, section.address) {
+        let location = BlobLocation { section: section.name.clone(), address: section.address + start as u64 };
+        let info = decode(&bytes[start..], location, memory);
+        if info.status == BlobStatus::Present {
+            return Some(info);
         }
+        unreadable.get_or_insert(info);
     }
     None
 }
 
-/// The offset of the first 16-byte aligned (by virtual address) magic in `bytes`, which start at `address`.
-fn find_magic(bytes: &[u8], address: u64) -> Option<u64> {
-    let mut offset = (ALIGN - address % ALIGN) % ALIGN;
-    while let Some(window) = usize::try_from(offset).ok().and_then(|start| bytes.get(start..start + MAGIC.len())) {
-        if window == MAGIC {
-            return Some(offset);
-        }
-        offset += ALIGN;
-    }
-    None
+/// The offsets of every 16-byte aligned (by virtual address) magic in `bytes`, which start at `address`.
+fn magic_offsets(bytes: &[u8], address: u64) -> impl Iterator<Item = usize> + '_ {
+    let first = ((ALIGN - address % ALIGN) % ALIGN) as usize;
+    (first..bytes.len())
+        .step_by(ALIGN as usize)
+        .filter(|&start| bytes.get(start..start + MAGIC.len()) == Some(MAGIC.as_slice()))
 }
 
 fn unreadable(location: BlobLocation, reason: &str) -> GoBuildInfo {
@@ -212,6 +231,13 @@ pub fn decode<'a>(
     if version.len() > MAX_VERSION_BYTES {
         info.status = BlobStatus::Unreadable;
         info.reason = Some(format!("the Go version string is {} bytes, over {MAX_VERSION_BYTES}", version.len()));
+        return info;
+    }
+    // Releases are `go1.N...`; development toolchains write `devel ...` (and newer ones `go1.N-devel_...`).
+    if !(version.starts_with(b"go") || version.starts_with(b"devel")) {
+        let shown = String::from_utf8_lossy(&version[..version.len().min(32)]).into_owned();
+        info.status = BlobStatus::Unreadable;
+        info.reason = Some(format!("the version string {shown:?} does not start with `go` or `devel`"));
         return info;
     }
     info.status = BlobStatus::Present;
@@ -366,7 +392,7 @@ fn parse_modinfo(text: &str, info: &mut GoBuildInfo) {
                     None => warn("a malformed build setting; skipped".to_owned()),
                 }
             }
-            _ => warn(format!("unknown record `{}`; skipped", clip(kind).0)),
+            _ => warn(format!("unknown record `{}`; skipped", crate::text::clip(kind, 64).0)),
         }
     }
     info.warnings = warnings;
@@ -392,9 +418,11 @@ fn module(rest: &str, warn: &mut impl FnMut(String)) -> Option<GoModule> {
     Some(GoModule { path: field(fields[0], warn), version: field(fields[1], warn), sum, replace: None })
 }
 
-/// A `key=value` build setting, either side possibly a Go-quoted string.
+/// A `key=value` build setting, either side possibly a Go-quoted (`"..."` or `` `...` ``) string, as
+/// `runtime/debug.ParseBuildInfo` reads it.
 fn setting(text: &str) -> Option<(String, String)> {
-    let (key, value) = if text.starts_with('"') {
+    let quoted = |text: &str| text.starts_with(['"', '`']);
+    let (key, value) = if quoted(text) {
         let end = quoted_prefix(text)?;
         (unquote(&text[..end])?, text[end..].strip_prefix('=')?)
     } else {
@@ -404,12 +432,15 @@ fn setting(text: &str) -> Option<(String, String)> {
     if key.is_empty() {
         return None;
     }
-    let value = if value.starts_with('"') { unquote(value)? } else { value.to_owned() };
+    let value = if quoted(value) { unquote(value)? } else { value.to_owned() };
     Some((key, value))
 }
 
-/// The length of the double-quoted Go string literal at the start of `text`.
+/// The length of the Go string literal at the start of `text`, as `strconv.QuotedPrefix` finds it.
 fn quoted_prefix(text: &str) -> Option<usize> {
+    if let Some(raw) = text.strip_prefix('`') {
+        return raw.find('`').map(|end| end + 2);
+    }
     let mut chars = text.char_indices();
     if chars.next()?.1 != '"' {
         return None;
@@ -427,9 +458,13 @@ fn quoted_prefix(text: &str) -> Option<usize> {
     None
 }
 
-/// Decodes one whole double-quoted Go string literal, as `strconv.Unquote` does; byte escapes that do not form
-/// UTF-8 become U+FFFD.
+/// Decodes one whole Go string literal, as `strconv.Unquote` does: a raw (backquoted) one loses its carriage
+/// returns, and in a double-quoted one byte escapes that do not form UTF-8 become U+FFFD.
 fn unquote(literal: &str) -> Option<String> {
+    if let Some(raw) = literal.strip_prefix('`') {
+        let inner = raw.strip_suffix('`').filter(|inner| !inner.contains('`'))?;
+        return Some(inner.replace('\r', ""));
+    }
     let inner = literal.strip_prefix('"')?.strip_suffix('"')?;
     let mut bytes = Vec::with_capacity(inner.len());
     let mut chars = inner.chars();
@@ -453,7 +488,6 @@ fn unquote(literal: &str) -> Option<String> {
             'v' => Some(0x0b),
             '\\' => Some(b'\\'),
             '"' => Some(b'"'),
-            '\'' => Some(b'\''),
             _ => None,
         };
         if let Some(byte) = simple {
@@ -666,13 +700,62 @@ mod tests {
 
     #[test]
     fn magic_is_found_only_at_aligned_addresses() {
+        let found = |bytes: &[u8], address| magic_offsets(bytes, address).collect::<Vec<usize>>();
         let mut bytes = vec![0u8; 64];
         bytes[8..22].copy_from_slice(MAGIC);
-        assert_eq!(find_magic(&bytes, 0x1000), None);
-        assert_eq!(find_magic(&bytes, 0x1008), Some(8));
+        assert!(found(&bytes, 0x1000).is_empty());
+        assert_eq!(found(&bytes, 0x1008), [8]);
         bytes[48..62].copy_from_slice(MAGIC);
-        assert_eq!(find_magic(&bytes, 0x1000), Some(48));
-        assert_eq!(find_magic(&bytes[..60], 0x1000), None);
+        assert_eq!(found(&bytes, 0x1000), [48]);
+        assert!(found(&bytes[..60], 0x1000).is_empty());
+        bytes[16..30].copy_from_slice(MAGIC);
+        assert_eq!(found(&bytes, 0x1000), [16, 48]);
+    }
+
+    fn data_section(name: &str, kind: SectionKind, size: usize) -> Section {
+        Section {
+            name: name.to_owned(),
+            address: 0x1000,
+            size: size as u64,
+            kind,
+            file_offset: Some(0x1000),
+            file_size: size as u64,
+        }
+    }
+
+    #[test]
+    fn the_data_scan_skips_read_only_data_and_decoys() {
+        let record = inline_blob("go1.22.4", &wrapped(MODINFO));
+        let rodata = data_section(".rodata", SectionKind::ReadOnlyData, record.len());
+        // An aligned decoy (the magic with a non-Go version) before the real record.
+        let mut decoy_bytes = inline_blob("not a version", b"");
+        decoy_bytes.resize(decoy_bytes.len().next_multiple_of(16), 0);
+        let decoy = data_section(".data", SectionKind::Data, decoy_bytes.len());
+        let bytes = [decoy_bytes.as_slice(), &record].concat();
+        let data = data_section(".data", SectionKind::Data, bytes.len());
+        let memory = no_memory();
+
+        // A valid record in .rodata is a constant the program holds, not its build info.
+        assert!(scan_data([(&rodata, record.as_slice())].into_iter(), &memory).is_none());
+
+        // The decoy does not hide the real record after it.
+        let info = scan_data([(&rodata, record.as_slice()), (&data, bytes.as_slice())].into_iter(), &memory).unwrap();
+        assert_eq!(info.status, BlobStatus::Present);
+        assert_eq!(info.location.address, 0x1000 + decoy_bytes.len() as u64);
+        assert_eq!(info.go_version.as_deref(), Some("go1.22.4"));
+
+        // With only the decoy, the first unreadable candidate is reported, with why.
+        let info = scan_data([(&decoy, decoy_bytes.as_slice())].into_iter(), &memory).unwrap();
+        assert_eq!(info.status, BlobStatus::Unreadable);
+        assert!(info.reason.unwrap().contains("does not start with `go` or `devel`"));
+    }
+
+    #[test]
+    fn devel_versions_are_accepted() {
+        for version in ["devel go1.23-abc", "go1.24-devel_1234"] {
+            let info = decode(&inline_blob(version, b""), location(), &no_memory());
+            assert_eq!(info.status, BlobStatus::Present, "{version}");
+        }
     }
 
     #[test]
@@ -680,6 +763,13 @@ mod tests {
         assert_eq!(unquote(r#""a\tb\x41\101é\U0001F600\\""#).as_deref(), Some("a\tbAAé😀\\"));
         assert_eq!(unquote(r#""bad\q""#), None);
         assert_eq!(unquote(r#""x"y""#), None);
+        // `\'` escapes only inside a rune literal, so a double-quoted string rejects it.
+        assert_eq!(unquote(r#""it\'s""#), None);
+        assert_eq!(unquote("`raw \\n\r`").as_deref(), Some("raw \\n"));
+        assert_eq!(unquote("`a`b`"), None);
+        assert_eq!(setting("`-ldflags`=`-X main.v=1`"), Some(("-ldflags".to_owned(), "-X main.v=1".to_owned())));
+        assert_eq!(setting("k=`v`"), Some(("k".to_owned(), "v".to_owned())));
+        assert_eq!(setting("`open=v"), None);
         assert_eq!(setting("\"k=1\"=v"), Some(("k=1".to_owned(), "v".to_owned())));
         assert_eq!(setting("=v"), None);
     }

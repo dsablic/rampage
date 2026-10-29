@@ -10,6 +10,7 @@ mod raw;
 mod slots;
 pub mod snapshot;
 mod starts;
+mod text;
 mod warnings;
 
 pub use details::{

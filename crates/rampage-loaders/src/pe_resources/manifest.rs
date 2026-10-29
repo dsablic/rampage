@@ -112,11 +112,7 @@ fn attribute(element: &str, name: &str) -> Option<String> {
         }
         let value = &rest[1..];
         let value = &value[..value.find(quote).unwrap_or(value.len())];
-        let mut end = value.len().min(MAX_ATTRIBUTE_BYTES);
-        while !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        return Some(value[..end].to_owned());
+        return Some(crate::text::clip(value, MAX_ATTRIBUTE_BYTES).0.to_owned());
     }
     None
 }
